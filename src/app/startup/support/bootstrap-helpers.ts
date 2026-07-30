@@ -35,6 +35,8 @@ import {
 import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
 import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings-overlay.js';
 import { assertModelPurposeSelectionResolvable } from '../../../system/config/model-selection-config.js';
+import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -180,6 +182,7 @@ export function installPromotedToolsPersistenceHook(
   config: SubstrateConfig,
   options: {
     configStore?: ConfigStorePort;
+    systemDataWriter?: GatewaySystemDataWriterPort;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
@@ -193,12 +196,28 @@ export function installPromotedToolsPersistenceHook(
   });
   config.runtimeHooks = {
     ...existingHooks,
-    persistPromotedExtendedTools: (toolNames) => {
+    persistPromotedExtendedTools: async (toolNames) => {
       const current = configStore.loadRuntimeSettings();
-      configStore.saveRuntimeSettings({
+      const next = {
         ...current,
         promotedExtendedTools: [...toolNames],
-      });
+      };
+      if (options.systemDataWriter) {
+        try {
+          await options.systemDataWriter.writeSystemData({
+            kind: 'owner_file',
+            ownerFile: 'settings',
+            payload: next,
+          });
+        } catch (error) {
+          throw new Error(
+            'The authenticated gateway system-data writer could not persist tool preferences: '
+            + toErrorMessage(error),
+          );
+        }
+      } else {
+        configStore.saveRuntimeSettings(next);
+      }
     },
   };
 }

@@ -100,13 +100,13 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(data.broadcastPrefixes).toContain('twitter:');
   });
 
-  it('write-gates operator_confirmed: the label editor cannot set it (jp36.6.2)', () => {
+  it('write-gates operator_confirmed: the label editor cannot set it (jp36.6.2)', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
     // jp36.6.1 review gate: the operator_confirmed marker must NOT be settable
     // through the generic label editor — only the click-to-accept demotion flow.
-    const rejected = service.saveChannelEnvelopeLabel('room:confirmed', {
+    const rejected = await service.saveChannelEnvelopeLabel('room:confirmed', {
       privacy: 'public',
       classificationSource: 'operator_confirmed',
     });
@@ -119,16 +119,16 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(data.channels.find(row => row.channelId === 'room:confirmed')).toBeUndefined();
   });
 
-  it('blocks generic non-public → public edits and preserves prior confirmation authority', () => {
+  it('blocks generic non-public → public edits and preserves prior confirmation authority', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
-    expect(service.saveChannelEnvelopeLabel('room:friends', {
+    expect((await service.saveChannelEnvelopeLabel('room:friends', {
       privacy: 'invite_only',
       contactTracking: 'auto',
-    }).ok).toBe(true);
+    })).ok).toBe(true);
 
-    const bypass = service.saveChannelEnvelopeLabel('room:friends', {
+    const bypass = await service.saveChannelEnvelopeLabel('room:friends', {
       privacy: 'public',
       contactTracking: 'auto',
     });
@@ -136,13 +136,13 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(bypass.message).toMatch(/click-to-accept/i);
     expect(bypass.message).toMatch(/fresh disclosure epoch/i);
 
-    const accepted = service.acceptChannelDemotion({
+    const accepted = await service.acceptChannelDemotion({
       channelId: 'room:friends',
       acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
     });
     expect(accepted.ok).toBe(true);
 
-    const edited = service.saveChannelEnvelopeLabel('room:friends', {
+    const edited = await service.saveChannelEnvelopeLabel('room:friends', {
       privacy: 'public',
       contactTracking: 'approval',
     });
@@ -157,11 +157,11 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(written.contextEnvelope.classificationEpochs).toHaveLength(1);
   });
 
-  it('upserts and removes channel labels through the validated owner-file path', () => {
+  it('upserts and removes channel labels through the validated owner-file path', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
-    const saved = service.saveChannelEnvelopeLabel('room:new-place', {
+    const saved = await service.saveChannelEnvelopeLabel('room:new-place', {
       privacy: 'private',
       contactTracking: 'approval',
     });
@@ -181,37 +181,37 @@ describe('AdminSettingsDataService channel envelope surface', () => {
       source: 'channel_label',
     });
 
-    const removed = service.saveChannelEnvelopeLabel('room:new-place', null);
+    const removed = await service.saveChannelEnvelopeLabel('room:new-place', null);
     expect(removed.ok).toBe(true);
     expect(service.getChannelEnvelopeData().channels).toEqual([]);
   });
 
-  it('rejects invalid labels fail-closed without writing the owner file', () => {
+  it('rejects invalid labels fail-closed without writing the owner file', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
     // Retired vocabulary.
-    const retired = service.saveChannelEnvelopeLabel('room:x', { privacy: 'semi_private' });
+    const retired = await service.saveChannelEnvelopeLabel('room:x', { privacy: 'semi_private' });
     expect(retired.ok).toBe(false);
     expect(retired.message).toContain('privacy');
 
     // Contract rule: broadcast surfaces are always public.
-    const contradictory = service.saveChannelEnvelopeLabel('room:x', { privacy: 'private', broadcast: true });
+    const contradictory = await service.saveChannelEnvelopeLabel('room:x', { privacy: 'private', broadcast: true });
     expect(contradictory.ok).toBe(false);
     expect(contradictory.message).toContain('broadcast');
 
     // Unknown keys fail closed.
-    const unknown = service.saveChannelEnvelopeLabel('room:x', { privacy: 'public', extra: true });
+    const unknown = await service.saveChannelEnvelopeLabel('room:x', { privacy: 'public', extra: true });
     expect(unknown.ok).toBe(false);
 
     expect(service.getChannelEnvelopeData().channels).toEqual([]);
 
     // Removing a label that does not exist is an error, not a silent no-op.
-    const missing = service.saveChannelEnvelopeLabel('room:x', null);
+    const missing = await service.saveChannelEnvelopeLabel('room:x', null);
     expect(missing.ok).toBe(false);
   });
 
-  it('preserves unrelated channels.json sections when editing labels', () => {
+  it('preserves unrelated channels.json sections when editing labels', async () => {
     const root = makeTempDir();
     writeFileSync(join(root, 'channels.json'), JSON.stringify({
       telegram: { enabled: false },
@@ -219,7 +219,7 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     }, null, 2));
 
     const service = buildService(root);
-    const result = service.saveChannelEnvelopeLabel('room:added', { privacy: 'invite_only' });
+    const result = await service.saveChannelEnvelopeLabel('room:added', { privacy: 'invite_only' });
     expect(result.ok).toBe(true);
 
     const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
@@ -266,18 +266,18 @@ describe('AdminSettingsDataService invite-only -> public demotion flow (jp36.6.2
     expect(notice.reason).toMatch(/not invite-only/i);
   });
 
-  it('blocks demotion without an acknowledged notice version (fail closed)', () => {
+  it('blocks demotion without an acknowledged notice version (fail closed)', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
-    const missing = service.acceptChannelDemotion({
+    const missing = await service.acceptChannelDemotion({
       channelId: 'discord:group-room',
       acknowledgedNoticeVersion: undefined,
     });
     expect(missing.ok).toBe(false);
     expect(missing.message).toMatch(/blocked/i);
 
-    const wrong = service.acceptChannelDemotion({
+    const wrong = await service.acceptChannelDemotion({
       channelId: 'discord:group-room',
       acknowledgedNoticeVersion: 'not-the-version',
     });
@@ -290,12 +290,12 @@ describe('AdminSettingsDataService invite-only -> public demotion flow (jp36.6.2
     expect(data.epochs).toEqual([]);
   });
 
-  it('stamps operator_confirmed and records an epoch on acceptance', () => {
+  it('stamps operator_confirmed and records an epoch on acceptance', async () => {
     const root = makeTempDir();
     const service = buildService(root);
 
     const before = Date.now();
-    const result = service.acceptChannelDemotion({
+    const result = await service.acceptChannelDemotion({
       channelId: 'discord:group-room',
       acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
       actor: 'operator:alice',
@@ -330,7 +330,7 @@ describe('AdminSettingsDataService invite-only -> public demotion flow (jp36.6.2
     expect(data.epochs).toHaveLength(1);
   });
 
-  it('preserves contactTracking from the pre-demotion label and drops needsReview', () => {
+  it('preserves contactTracking from the pre-demotion label and drops needsReview', async () => {
     const root = makeTempDir();
     writeFileSync(join(root, 'channels.json'), JSON.stringify({
       contextEnvelope: {
@@ -341,7 +341,7 @@ describe('AdminSettingsDataService invite-only -> public demotion flow (jp36.6.2
     }, null, 2));
     const service = buildService(root);
 
-    const result = service.acceptChannelDemotion({
+    const result = await service.acceptChannelDemotion({
       channelId: 'room:seeded',
       acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
     });

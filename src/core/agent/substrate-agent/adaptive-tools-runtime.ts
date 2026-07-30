@@ -214,9 +214,9 @@ interface ToolsetToolRuntime {
   getPromotedExtendedToolsLimit: () => number;
   getPromotedExtendedTools: () => readonly string[];
   setPromotedExtendedTools: (next: readonly string[]) => string[];
-  persistPromotedExtendedTools: (next: readonly string[]) => string | null;
-  addPromotedExtendedTool: (toolName: string) => PromotedToolMutationResult;
-  removePromotedExtendedTool: (toolName: string) => PromotedToolMutationResult;
+  persistPromotedExtendedTools: (next: readonly string[]) => Promise<string | null>;
+  addPromotedExtendedTool: (toolName: string) => Promise<PromotedToolMutationResult>;
+  removePromotedExtendedTool: (toolName: string) => Promise<PromotedToolMutationResult>;
   getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
   applyActiveToolsToAgent: () => void;
 }
@@ -319,7 +319,7 @@ async function maybeRecordToolsetMutationMemory(input: {
     });
     return null;
   } catch (error) {
-    const rollbackError = input.runtime.persistPromotedExtendedTools(input.before);
+    const rollbackError = await input.runtime.persistPromotedExtendedTools(input.before);
     input.runtime.setPromotedExtendedTools(input.before);
     input.runtime.applyActiveToolsToAgent();
     return `Failed to persist autonomous-action memory for toolset ${input.action}; rolled back change. ${toErrorMessage(error)}`
@@ -478,8 +478,8 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): SubstrateAgentTo
 
       const before = [...runtime.getPromotedExtendedTools()];
       const result = action === 'pin'
-        ? runtime.addPromotedExtendedTool(toolName)
-        : runtime.removePromotedExtendedTool(toolName);
+        ? await runtime.addPromotedExtendedTool(toolName)
+        : await runtime.removePromotedExtendedTool(toolName);
       if (result.ok && result.changed) {
         const memoryError = await maybeRecordToolsetMutationMemory({
           runtime,

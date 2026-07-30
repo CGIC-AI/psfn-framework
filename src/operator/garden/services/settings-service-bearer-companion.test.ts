@@ -79,10 +79,10 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
     expect(pin.companions).toEqual([{ companionId: COMPANION_A, displayName: COMPANION_A }]);
   });
 
-  it('rejects a companion id that is not a registered companion (fail closed)', () => {
+  it('rejects a companion id that is not a registered companion (fail closed)', async () => {
     const root = makeTempDir();
     const service = buildFleetService(root);
-    const result = service.setBearerApiCompanionPin(COMPANION_UNKNOWN);
+    const result = await service.setBearerApiCompanionPin(COMPANION_UNKNOWN);
     expect(result.ok).toBe(false);
     expect(result.message).toContain('is not a registered companion');
     // no partial write
@@ -90,19 +90,19 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
     expect(service.getBearerApiCompanionPin().pinnedCompanionId).toBeNull();
   });
 
-  it('rejects a missing or non-string companion id', () => {
+  it('rejects a missing or non-string companion id', async () => {
     const root = makeTempDir();
     const service = buildFleetService(root);
-    expect(service.setBearerApiCompanionPin('').ok).toBe(false);
-    expect(service.setBearerApiCompanionPin(undefined).ok).toBe(false);
-    expect(service.setBearerApiCompanionPin(42).ok).toBe(false);
+    expect((await service.setBearerApiCompanionPin('')).ok).toBe(false);
+    expect((await service.setBearerApiCompanionPin(undefined)).ok).toBe(false);
+    expect((await service.setBearerApiCompanionPin(42)).ok).toBe(false);
   });
 
-  it('pins a registered companion through the channels.json owner-file and round-trips', () => {
+  it('pins a registered companion through the channels.json owner-file and round-trips', async () => {
     const root = makeTempDir();
     const service = buildFleetService(root);
 
-    const result = service.setBearerApiCompanionPin(COMPANION_B);
+    const result = await service.setBearerApiCompanionPin(COMPANION_B);
     expect(result.ok).toBe(true);
     expect(result.message).toContain('Restart the gateway');
 
@@ -114,11 +114,11 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
     expect(service.getBearerApiCompanionPin().pinnedCompanionId).toBe(COMPANION_B);
 
     // re-pin overwrites cleanly
-    expect(service.setBearerApiCompanionPin(COMPANION_A).ok).toBe(true);
+    expect((await service.setBearerApiCompanionPin(COMPANION_A)).ok).toBe(true);
     expect(service.getBearerApiCompanionPin().pinnedCompanionId).toBe(COMPANION_A);
   });
 
-  it('preserves unrelated channels.json sections when writing the pin', () => {
+  it('preserves unrelated channels.json sections when writing the pin', async () => {
     const root = makeTempDir();
     writeFileSync(join(root, 'channels.json'), JSON.stringify({
       contextEnvelope: {
@@ -127,7 +127,7 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
     }, null, 2));
 
     const service = buildFleetService(root);
-    expect(service.setBearerApiCompanionPin(COMPANION_A).ok).toBe(true);
+    expect((await service.setBearerApiCompanionPin(COMPANION_A)).ok).toBe(true);
 
     const persisted = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
     expect(persisted.api.companionId).toBe(COMPANION_A);

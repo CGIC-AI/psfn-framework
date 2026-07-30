@@ -72,32 +72,44 @@ export function buildAdminChannelEnvelopeRoutes(options: {
           const label = Object.prototype.hasOwnProperty.call(parsed.value, 'label')
             ? parsed.value.label
             : undefined;
-          const result = settingsService.saveChannelEnvelopeLabel(channelId, label ?? null);
-          if (!result.ok) {
-            appendChannelEnvelopeMutationAudit(
-              'denied',
-              'Operator channel envelope label update failed.',
-              [
-                `channelId=${channelId}`,
-                `message=${toSanitizedMessage(result.message, 'channel envelope label save failed')}`,
-              ],
-            );
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
+          void settingsService.saveChannelEnvelopeLabel(channelId, label ?? null)
+            .then((result) => {
+              if (!result.ok) {
+                appendChannelEnvelopeMutationAudit(
+                  'denied',
+                  'Operator channel envelope label update failed.',
+                  [
+                    `channelId=${channelId}`,
+                    `message=${toSanitizedMessage(result.message, 'channel envelope label save failed')}`,
+                  ],
+                );
+                sendJson(res, 400, { error: result.message });
+                return;
+              }
 
-          appendChannelEnvelopeMutationAudit(
-            'allowed',
-            label === undefined || label === null
-              ? 'Operator removed a channel-owned envelope label via /api/admin/channels/context-envelope.'
-              : 'Operator saved a channel-owned envelope label via /api/admin/channels/context-envelope.',
-            [`channelId=${channelId}`],
-          );
-          sendJson(res, 200, {
-            ok: true,
-            message: result.message,
-            data: settingsService.getChannelEnvelopeData(),
-          });
+              appendChannelEnvelopeMutationAudit(
+                'allowed',
+                label === undefined || label === null
+                  ? 'Operator removed a channel-owned envelope label via /api/admin/channels/context-envelope.'
+                  : 'Operator saved a channel-owned envelope label via /api/admin/channels/context-envelope.',
+                [`channelId=${channelId}`],
+              );
+              sendJson(res, 200, {
+                ok: true,
+                message: result.message,
+                data: settingsService.getChannelEnvelopeData(),
+              });
+            })
+            .catch((error: unknown) => {
+              appendChannelEnvelopeMutationAudit(
+                'denied',
+                'Operator channel envelope label update failed with a server error.',
+                [`channelId=${channelId}`, `error=${toSanitizedMessage(error, 'server error')}`],
+              );
+              sendJson(res, 500, {
+                error: toSanitizedMessage(error, 'Failed to update the channel envelope label'),
+              });
+            });
         });
       },
     },
@@ -143,35 +155,45 @@ export function buildAdminChannelEnvelopeRoutes(options: {
           }
 
           const channelId = parsed.value.channelId;
-          const result = settingsService.acceptChannelDemotion({
+          void settingsService.acceptChannelDemotion({
             channelId,
             acknowledgedNoticeVersion: parsed.value.acknowledgedNoticeVersion,
             ...(typeof parsed.value.actor === 'string' ? { actor: parsed.value.actor } : {}),
-          });
-          if (!result.ok) {
+          }).then((result) => {
+            if (!result.ok) {
+              appendChannelEnvelopeMutationAudit(
+                'denied',
+                'Operator channel demotion (invite-only → public) blocked.',
+                [
+                  `channelId=${channelId}`,
+                  `message=${toSanitizedMessage(result.message, 'channel demotion blocked')}`,
+                ],
+              );
+              sendJson(res, 400, { error: result.message });
+              return;
+            }
+
+            appendChannelEnvelopeMutationAudit(
+              'allowed',
+              'Operator accepted an invite-only → public channel demotion via '
+                + '/api/admin/channels/context-envelope/demote; fresh disclosure epoch recorded.',
+              [`channelId=${channelId}`, `epochAt=${result.epoch?.at ?? 'unknown'}`],
+            );
+            sendJson(res, 200, {
+              ok: true,
+              message: result.message,
+              epoch: result.epoch,
+              data: result.data ?? settingsService.getChannelEnvelopeData(),
+            });
+          }).catch((error: unknown) => {
             appendChannelEnvelopeMutationAudit(
               'denied',
-              'Operator channel demotion (invite-only → public) blocked.',
-              [
-                `channelId=${channelId}`,
-                `message=${toSanitizedMessage(result.message, 'channel demotion blocked')}`,
-              ],
+              'Operator channel demotion failed with a server error.',
+              [`channelId=${channelId}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
-
-          appendChannelEnvelopeMutationAudit(
-            'allowed',
-            'Operator accepted an invite-only → public channel demotion via '
-              + '/api/admin/channels/context-envelope/demote; fresh disclosure epoch recorded.',
-            [`channelId=${channelId}`, `epochAt=${result.epoch?.at ?? 'unknown'}`],
-          );
-          sendJson(res, 200, {
-            ok: true,
-            message: result.message,
-            epoch: result.epoch,
-            data: result.data ?? settingsService.getChannelEnvelopeData(),
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to accept channel demotion'),
+            });
           });
         });
       },

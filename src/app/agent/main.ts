@@ -112,6 +112,7 @@ import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
+import { installPromotedToolsPersistenceHook } from '../startup/support/bootstrap-helpers.js';
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
@@ -272,6 +273,7 @@ async function main(): Promise<void> {
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.
   await gateway.identifyAsAgent();
+  installPromotedToolsPersistenceHook(config, { systemDataWriter: gateway });
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   log.info('Connected to gateway', {

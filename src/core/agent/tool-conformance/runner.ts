@@ -11,6 +11,7 @@ import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { runToolConformanceSweep, DEFAULT_PER_PROBE_TIMEOUT_MS } from './harness.js';
 import { readToolConformanceLatest, writeToolConformanceResult } from './store.js';
 import type { ToolConformanceRunResult, ToolConformanceTrigger } from './types.js';
+import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 
 export interface ToolConformanceRunOptions {
   /**
@@ -36,12 +37,15 @@ export interface ToolConformanceRunnerDeps {
   getToolCatalog: () => { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] };
   /** System-owned data root; results land under <systemDataDir>/state. */
   systemDataDir: string;
+  /** Fleet mode routes writes to the gateway while this process keeps a read-only mount. */
+  systemDataWriter?: GatewaySystemDataWriterPort;
   perProbeTimeoutMs?: number;
   now?: () => number;
 }
 
 export function createToolConformanceRunner(deps: ToolConformanceRunnerDeps): ToolConformanceRunner {
   const perProbeTimeoutMs = deps.perProbeTimeoutMs ?? DEFAULT_PER_PROBE_TIMEOUT_MS;
+  let latestInProcess: ToolConformanceRunResult | null = null;
   return {
     async run(trigger: ToolConformanceTrigger, options?: ToolConformanceRunOptions): Promise<ToolConformanceRunResult> {
       const catalog = deps.getToolCatalog();
@@ -54,11 +58,24 @@ export function createToolConformanceRunner(deps: ToolConformanceRunnerDeps): To
         ...(options?.extended ? { extended: true } : {}),
         ...(options?.allowScopedMutations ? { allowScopedMutations: true } : {}),
       });
-      writeToolConformanceResult(deps.systemDataDir, result);
+      if (deps.systemDataWriter) {
+        await deps.systemDataWriter.writeSystemData({
+          kind: 'tool_conformance',
+          payload: result,
+        });
+      } else {
+        writeToolConformanceResult(deps.systemDataDir, result);
+      }
+      latestInProcess = result;
       return result;
     },
     getLatest(): ToolConformanceRunResult | null {
-      return readToolConformanceLatest(deps.systemDataDir);
+      const persisted = readToolConformanceLatest(deps.systemDataDir);
+      if (!persisted) return latestInProcess;
+      if (!latestInProcess) return persisted;
+      return persisted.ranAt >= latestInProcess.ranAt
+        ? persisted
+        : latestInProcess;
     },
   };
 }

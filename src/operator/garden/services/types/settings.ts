@@ -216,11 +216,18 @@ export interface AdminIntakeSourceListMutationInput {
 export interface AdminSettingsService {
   getSettingsData(context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminSettingsData>;
   getSettingsContractData(context?: import('../../garden-request-context.js').GardenRequestContext): SettingsContractData;
-  updateSettings(body: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
+  updateSettings(
+    body: string,
+    context?: import('../../garden-request-context.js').GardenRequestContext,
+  ): Promise<ConfigUpdateResult>;
   getSubConfigJson(key: string, context?: import('../../garden-request-context.js').GardenRequestContext): string | null;
-  saveSubConfigJson(key: string, json: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
+  saveSubConfigJson(
+    key: string,
+    json: string,
+    context?: import('../../garden-request-context.js').GardenRequestContext,
+  ): Promise<ConfigUpdateResult>;
   getChannelEnvelopeData(): AdminChannelEnvelopeData;
-  saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
+  saveChannelEnvelopeLabel(channelId: string, label: unknown): Promise<ConfigUpdateResult>;
   /**
    * Companion Cluster (vknn): read the Bearer API pinned companion and the
    * registered-companion roster the operator may pin.
@@ -232,7 +239,7 @@ export interface AdminSettingsService {
    * owner-file contract. Fails closed when the id is not a registered companion.
    * This is a single pin, never per-request companion selection.
    */
-  setBearerApiCompanionPin(companionId: unknown): ConfigUpdateResult;
+  setBearerApiCompanionPin(companionId: unknown): Promise<ConfigUpdateResult>;
   /**
    * Read the invite-only → public click-to-accept demotion notice for a channel
    * (jp36.6.2). Reports whether the channel is currently demotable so the Garden
@@ -246,13 +253,13 @@ export interface AdminSettingsService {
    * the operator-signed classification epoch. This is the ONLY write path for
    * the operator_confirmed marker.
    */
-  acceptChannelDemotion(input: AdminChannelDemotionAcceptInput): AdminChannelDemotionResult;
+  acceptChannelDemotion(input: AdminChannelDemotionAcceptInput): Promise<AdminChannelDemotionResult>;
   /** Intake-policy source lists (htm9.13); the htm9.11 Garden tab builds on these. */
   getIntakeSourceLists(context?: import('../../garden-request-context.js').GardenRequestContext): IntakeSourceListsConfig;
   mutateIntakeSourceList(
     input: AdminIntakeSourceListMutationInput,
     context?: import('../../garden-request-context.js').GardenRequestContext,
-  ): ConfigUpdateResult;
+  ): Promise<ConfigUpdateResult>;
   /**
    * Read-only typed view of intake-policy.json (mode, tiers, thresholds,
    * quarantine limits, sink gates) for the Garden Cognitive Security firewall

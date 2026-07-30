@@ -40,6 +40,7 @@ import type {
   ShardBackendRequestBackend,
   ShardBackendRequestResult,
 } from '../protocol.js';
+import type { GatewaySystemDataWriterPort } from '../system-data-writer.js';
 
 /**
  * Gateway-created authority passed to a shard backend executor only after the
@@ -111,6 +112,8 @@ export interface GatewayMethodRuntime {
   kubeSelfManagement?: KubeSelfManagementController;
   /** Gateway-owned contact authority; companion identity remains connection-derived. */
   contactLifecycleAuthority?: GatewayContactLifecycleAuthorityPort;
+  /** The gateway-owned, audited single writer for the system-data PVC. */
+  systemDataWriter?: GatewaySystemDataWriterPort;
   /**
    * Authoritative capability tier resolved from the gateway's own
    * CapabilityRuntime (never the caller-declared value). Gateway methods that

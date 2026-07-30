@@ -201,7 +201,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
   });
 
   it('POST :id/decide executes with the token and audits the full decision context', async () => {
-    const resolveDecision = vi.fn().mockReturnValue({
+    const resolveDecision = vi.fn().mockResolvedValue({
       ok: true,
       item: { ...SAMPLE_ITEM, status: 'released_raw' },
       message: 'Applied release_raw',
@@ -244,7 +244,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
   });
 
   it('propagates service refusals with their status and a denied audit entry', async () => {
-    const resolveDecision = vi.fn().mockReturnValue({
+    const resolveDecision = vi.fn().mockResolvedValue({
       ok: false,
       status: 403,
       message: 'Missing or invalid confirm token; request a fresh confirmation first',

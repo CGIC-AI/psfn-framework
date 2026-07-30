@@ -127,7 +127,7 @@ describe('promoted tools settings helpers', () => {
       getPromotedExtendedTools: () => ['repo_status'],
       setPromotedExtendedTools: () => ['repo_status'],
       persistPromotedExtendedTools: () => null,
-      addPromotedExtendedTool: () => ({
+      addPromotedExtendedTool: async () => ({
         ok: false,
         changed: false,
         promotedTools: ['repo_status'],
@@ -160,13 +160,13 @@ describe('promoted tools settings helpers', () => {
       getPromotedExtendedTools: () => ['repo_status', 'session_list'],
       setPromotedExtendedTools: (next: readonly string[]) => [...next],
       persistPromotedExtendedTools: () => null,
-      addPromotedExtendedTool: () => ({
+      addPromotedExtendedTool: async () => ({
         ok: true,
         changed: true,
         promotedTools: ['repo_status'],
         message: 'added',
       }),
-      removePromotedExtendedTool: (toolName: string) => {
+      removePromotedExtendedTool: async (toolName: string) => {
         removed.push(toolName);
         return {
           ok: true,
@@ -175,7 +175,7 @@ describe('promoted tools settings helpers', () => {
           message: 'removed',
         };
       },
-      swapPromotedExtendedTools: (fromSlot: number, toSlot: number) => {
+      swapPromotedExtendedTools: async (fromSlot: number, toSlot: number) => {
         swapped.push([fromSlot, toSlot]);
         return {
           ok: true,

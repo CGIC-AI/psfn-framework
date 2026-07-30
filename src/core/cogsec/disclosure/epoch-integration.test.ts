@@ -199,7 +199,7 @@ describe('deriveChannelClassificationEpoch (monotonic count model)', () => {
 });
 
 describe('classification-epoch enforcement end-to-end through production composition', () => {
-  it('denies pre-demotion content and flows post-acceptance content, byte-identical when untracked', () => {
+  it('denies pre-demotion content and flows post-acceptance content, byte-identical when untracked', async () => {
     const root = makeRoot({ [PROJECT_CHANNEL]: { privacy: 'invite_only' } });
     const service = buildService(root);
 
@@ -216,7 +216,7 @@ describe('classification-epoch enforcement end-to-end through production composi
     expect(preDemotionDestination).toEqual({ kind: 'invite_only_room', channelId: PROJECT_CHANNEL });
 
     // ── Operator demotes invite_only → public through the real Garden flow.
-    const accepted = service.acceptChannelDemotion({
+    const accepted = await service.acceptChannelDemotion({
       channelId: PROJECT_CHANNEL,
       acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
       actor: 'operator:test',

@@ -194,7 +194,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
       .toBe(24 * 60 * 60_000);
   });
 
-  it('persists an operator tier-change notice into the companion latest conversation', () => {
+  it('persists an operator tier-change notice into the companion latest conversation', async () => {
     const services = buildContract();
     sessionManager.recordUserMessage(
       'api:companion-home',
@@ -203,7 +203,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
       'Person',
     );
 
-    const result = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+    const result = await services.settings.saveSubConfigJson('capabilities', JSON.stringify({
       tier: 'custom',
       customTokens: ['identity.read', 'memory.delete'],
     }));
@@ -221,10 +221,10 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     expect(notices[0]?.content).toContain('not a fault in you');
   });
 
-  it('delivers a pre-conversation tier notice into the next conversation on any channel', () => {
+  it('delivers a pre-conversation tier notice into the next conversation on any channel', async () => {
     const services = buildContract();
 
-    const result = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+    const result = await services.settings.saveSubConfigJson('capabilities', JSON.stringify({
       tier: 'apprentice',
       customTokens: [],
     }));

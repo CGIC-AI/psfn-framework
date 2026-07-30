@@ -1,9 +1,14 @@
-import type { EditableSettings, SettingsDomainSplit } from './contracts.js';
+import {
+  RUNTIME_SETTINGS_KEYS,
+  type EditableSettings,
+  type SettingsDomainSplit,
+} from './contracts.js';
 import { normalizeContextControlSettings, toPromotedToolList } from './schema-runtime-normalization.js';
 import {
   normalizeCanonicalModelRegistry,
   projectCanonicalModelRegistry,
 } from './schema-model-registry.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 
 const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
   'modelRegistry',
@@ -106,4 +111,24 @@ export function normalizeEditableSettings(
     modelRegistry: normalizedRegistry,
   };
   return normalized;
+}
+
+/**
+ * Parse an untrusted whole-file settings.json payload before it crosses into
+ * the typed config-store API. Runtime settings normalization validates the
+ * known values; this exact-key check prevents normalization's object spreads
+ * from carrying unowned keys into the canonical owner file.
+ */
+export function parseRuntimeSettingsOwnerPayload(value: unknown): EditableSettings {
+  if (!isRecord(value)) {
+    throw new Error('settings.json payload must be an object');
+  }
+  assertNoUnknownKeys(
+    value,
+    RUNTIME_SETTINGS_KEYS,
+    'settings.json payload',
+  );
+  const settings: EditableSettings = {};
+  Object.assign(settings, value);
+  return normalizeEditableSettings(settings);
 }

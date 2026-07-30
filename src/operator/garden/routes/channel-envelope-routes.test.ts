@@ -85,7 +85,7 @@ describe('admin channel context-envelope routes', () => {
   });
 
   it('saves a channel label through the settings service and returns the refreshed view', async () => {
-    const saveChannelEnvelopeLabel = vi.fn().mockReturnValue({
+    const saveChannelEnvelopeLabel = vi.fn().mockResolvedValue({
       ok: true,
       message: 'Channel envelope label saved for room:friends',
     });
@@ -102,7 +102,7 @@ describe('admin channel context-envelope routes', () => {
   });
 
   it('routes label removal (null label) through the settings service', async () => {
-    const saveChannelEnvelopeLabel = vi.fn().mockReturnValue({ ok: true, message: 'removed' });
+    const saveChannelEnvelopeLabel = vi.fn().mockResolvedValue({ ok: true, message: 'removed' });
     const result = await invokeRoute({
       saveChannelEnvelopeLabel,
       getChannelEnvelopeData: () => SAMPLE_DATA,
@@ -119,7 +119,7 @@ describe('admin channel context-envelope routes', () => {
   });
 
   it('propagates validation failures from the owner-file path as 400s', async () => {
-    const saveChannelEnvelopeLabel = vi.fn().mockReturnValue({
+    const saveChannelEnvelopeLabel = vi.fn().mockResolvedValue({
       ok: false,
       message: "Invalid channel envelope label: contextEnvelope.channels.room:x.privacy must be one of: private, invite_only, public",
     });
@@ -190,7 +190,7 @@ describe('admin channel demotion routes (jp36.6.2)', () => {
   });
 
   it('accepts a demotion and returns the epoch + refreshed view', async () => {
-    const acceptChannelDemotion = vi.fn().mockReturnValue({
+    const acceptChannelDemotion = vi.fn().mockResolvedValue({
       ok: true,
       message: 'demoted',
       epoch: { channelId: 'room:friends', from: 'invite_only', to: 'public', at: '2026-07-19T00:00:00.000Z', acceptedBy: 'operator', noticeVersion: '2026-07-19.1' },
@@ -211,7 +211,7 @@ describe('admin channel demotion routes (jp36.6.2)', () => {
   });
 
   it('returns 400 when the service blocks an unacknowledged demotion', async () => {
-    const acceptChannelDemotion = vi.fn().mockReturnValue({
+    const acceptChannelDemotion = vi.fn().mockResolvedValue({
       ok: false,
       message: 'Demotion blocked: operator must acknowledge the current demotion notice',
     });

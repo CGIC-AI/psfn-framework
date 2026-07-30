@@ -380,11 +380,11 @@ export class ToolRuntimeFacade {
     return [...this.getPromotedExtendedToolNamesInternal()];
   }
 
-  persistPromotedExtendedTools(next: readonly string[]): string | null {
+  persistPromotedExtendedTools(next: readonly string[]): Promise<string | null> {
     return this.persistPromotedExtendedToolNames(next);
   }
 
-  addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+  async addPromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult> {
     if (this.isCandidateTurn()) return this.candidateToolMutationDenied(toolName);
     return addPromotedExtendedTool(toolName, {
       getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
@@ -396,7 +396,7 @@ export class ToolRuntimeFacade {
     });
   }
 
-  removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+  async removePromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult> {
     if (this.isCandidateTurn()) return this.candidateToolMutationDenied(toolName);
     return removePromotedExtendedTool(toolName, {
       getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
@@ -408,7 +408,7 @@ export class ToolRuntimeFacade {
     });
   }
 
-  swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
+  async swapPromotedExtendedTools(fromSlot: number, toSlot: number): Promise<PromotedToolMutationResult> {
     if (this.isCandidateTurn()) return this.candidateToolMutationDenied(`${fromSlot}:${toSlot}`);
     return swapPromotedExtendedTools(fromSlot, toSlot, {
       getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
@@ -818,7 +818,7 @@ export class ToolRuntimeFacade {
     return this.setPromotedExtendedToolNamesInternal(next);
   }
 
-  private persistPromotedExtendedToolNames(next: readonly string[]): string | null {
+  private async persistPromotedExtendedToolNames(next: readonly string[]): Promise<string | null> {
     if (this.isCandidateTurn()) return CANDIDATE_TOOL_MUTATION_DENIAL;
     return persistPromotedExtendedToolNames(this.config, next);
   }

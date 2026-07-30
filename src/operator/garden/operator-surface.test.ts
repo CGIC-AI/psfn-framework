@@ -767,7 +767,7 @@ function createTestServices(): GardenAdminDomainServices {
     settings: {
       getSettingsData: vi.fn(),
       getSettingsContractData: vi.fn(),
-      updateSettings: vi.fn(),
+      updateSettings: vi.fn(async () => ({ ok: true, message: 'Settings updated' })),
       getSubConfigJson: vi.fn((key: string) => {
         if (key !== 'providers') return null;
         return JSON.stringify({
@@ -783,7 +783,7 @@ function createTestServices(): GardenAdminDomainServices {
           ],
         });
       }),
-      saveSubConfigJson: vi.fn(() => ({ ok: true, message: 'providers.json saved' })),
+      saveSubConfigJson: vi.fn(async () => ({ ok: true, message: 'providers.json saved' })),
     } as GardenAdminDomainServices['settings'],
     identity: {} as GardenAdminDomainServices['identity'],
     prompts: {} as GardenAdminDomainServices['prompts'],

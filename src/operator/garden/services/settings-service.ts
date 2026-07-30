@@ -104,6 +104,10 @@ import {
 import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-projection.js';
+import type {
+  GatewaySystemDataWriterPort,
+  SystemOwnerWriteKey,
+} from '../../../boundary/gateway/system-data-writer.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -201,14 +205,21 @@ function invalidatePromptCacheAfterOwnerMutation(config: SubstrateConfig, reason
   }
 }
 
-export function applyAdminModelsConfigMutation(options: {
+export async function applyAdminModelsConfigMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
   payload: unknown;
-}): SettingsMutationResult {
-  const { config, configStore, payload } = options;
+  systemDataWriter?: GatewaySystemDataWriterPort;
+}): Promise<SettingsMutationResult> {
+  const { config, configStore, payload, systemDataWriter } = options;
   try {
-    const saved = configStore.saveModels(payload);
+    const saved = systemDataWriter
+      ? await systemDataWriter.writeSystemData({
+          kind: 'owner_file',
+          ownerFile: 'models',
+          payload,
+        }).then(() => configStore.loadModels())
+      : configStore.saveModels(payload);
     applySettings(config, saved);
     const divergence = refreshModels(config);
     invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:models');
@@ -314,17 +325,19 @@ export function applyAdminCapabilityTierMutation(options: {
   }
 }
 
-export function applyAdminSettingsMutation(options: {
+export async function applyAdminSettingsMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
   settings: EditableSettings;
+  systemDataWriter?: GatewaySystemDataWriterPort;
   capabilityCustomTokens?: readonly CapabilityToken[];
   onCapabilityTierChanged?: CapabilityTierChangeHandler;
-}): SettingsMutationResult {
+}): Promise<SettingsMutationResult> {
   const {
     config,
     configStore,
     settings,
+    systemDataWriter,
     capabilityCustomTokens,
     onCapabilityTierChanged,
   } = options;
@@ -341,7 +354,15 @@ export function applyAdminSettingsMutation(options: {
   );
 
   if (Object.keys(settingsByScope.global).length > 0) {
-    configStore.saveRuntimeSettings(mergedRuntimeSettings);
+    if (systemDataWriter) {
+      await systemDataWriter.writeSystemData({
+        kind: 'owner_file',
+        ownerFile: 'settings',
+        payload: mergedRuntimeSettings,
+      });
+    } else {
+      configStore.saveRuntimeSettings(mergedRuntimeSettings);
+    }
   }
   if (Object.keys(settingsByScope.companion).length > 0) {
     const currentOverlay = configStore.loadCompanionSettingsOverlay() ?? {};
@@ -363,7 +384,13 @@ export function applyAdminSettingsMutation(options: {
       const nextUrl = mergedRuntimeSettings.openRouterModelsApiUrl?.trim();
       if (openrouterProvider && nextUrl) {
         openrouterProvider.modelsApiUrl = nextUrl;
-        const savedProviders = configStore.saveProviders(nextRegistry);
+        const savedProviders = systemDataWriter
+          ? await systemDataWriter.writeSystemData({
+              kind: 'owner_file',
+              ownerFile: 'providers',
+              payload: nextRegistry,
+            }).then(() => configStore.loadProviders())
+          : configStore.saveProviders(nextRegistry);
         applyProvidersRuntimeConfig(config, savedProviders);
         invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:providers');
       }
@@ -414,9 +441,10 @@ export function applyAdminSettingsMutation(options: {
         },
         { defaultContextWindow: config.defaultContextWindow },
       );
-      const modelMutation = applyAdminModelsConfigMutation({
+      const modelMutation = await applyAdminModelsConfigMutation({
         config,
         configStore,
+        ...(systemDataWriter ? { systemDataWriter } : {}),
         payload: {
           modelCatalog: mergedModelSettings.modelCatalog ?? currentModels.modelCatalog,
           modelRoleAssignments: mergedModelSettings.modelRoleAssignments ?? currentModels.modelRoleAssignments,
@@ -482,10 +510,45 @@ export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
     configStore: ConfigStorePort;
+    systemDataWriter?: GatewaySystemDataWriterPort;
     getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
     effectiveSchedulerConfig?: import('../../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
     onCapabilityTierChanged?: CapabilityTierChangeHandler;
   }) {}
+
+  private async persistSystemOwner<T>(
+    ownerFile: SystemOwnerWriteKey,
+    payload: unknown,
+    loadPersisted: () => T,
+    saveLocally: () => T,
+  ): Promise<T> {
+    if (!this.deps.systemDataWriter) return saveLocally();
+    await this.deps.systemDataWriter.writeSystemData({
+      kind: 'owner_file',
+      ownerFile,
+      payload,
+    });
+    return loadPersisted();
+  }
+
+  private ownerWriteFailure(error: unknown): ConfigUpdateResult {
+    const message = toErrorMessage(error);
+    const errorCode = isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
+    if (errorCode === 'EROFS' || /\bEROFS\b|read-only file system/iu.test(message)) {
+      return {
+        ok: false,
+        message:
+          'This deployment does not permit direct system-scope owner-file writes. '
+          + 'The authenticated gateway system-data writer is unavailable.',
+      };
+    }
+    return {
+      ok: false,
+      message: this.deps.systemDataWriter
+        ? `Gateway system-data write failed: ${message}`
+        : message,
+    };
+  }
 
   private updateDivergences(
     refreshedKeys: readonly AdminSettingsDivergence['key'][],
@@ -1133,7 +1196,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     });
   }
 
-  updateSettings(body: string): ConfigUpdateResult {
+  async updateSettings(body: string): Promise<ConfigUpdateResult> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(body);
@@ -1161,22 +1224,25 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
 
       const payload = parsed as EditableSettings;
-      const mutationResult = applyAdminSettingsMutation({
+      const mutationResult = await applyAdminSettingsMutation({
         config: this.deps.config,
         configStore: this.deps.configStore,
         settings: payload,
+        ...(this.deps.systemDataWriter
+          ? { systemDataWriter: this.deps.systemDataWriter }
+          : {}),
         capabilityCustomTokens: this.parseCapabilityCustomTokens(parsed),
         ...(this.deps.onCapabilityTierChanged
           ? { onCapabilityTierChanged: this.deps.onCapabilityTierChanged }
           : {}),
       });
       if (!mutationResult.ok) {
-        return { ok: false, message: mutationResult.message };
+        return this.ownerWriteFailure(new Error(mutationResult.message));
       }
       const status = this.updateDivergences(mutationResult.refreshedKeys, mutationResult.divergences);
       return this.buildSuccessfulSaveResult('Settings updated', status);
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 
@@ -1261,7 +1327,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * epoch record. A label carrying it here is rejected fail-closed, and this
    * generic path cannot change any non-public channel to public/broadcast.
    */
-  saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): ConfigUpdateResult {
+  async saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): Promise<ConfigUpdateResult> {
     const channelId = channelIdRaw.trim();
     if (!channelId) {
       return { ok: false, message: 'channelId must be a non-empty string' };
@@ -1337,7 +1403,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
         section.classificationEpochs,
       );
       // saveChannelsOwnerFile re-validates the contextEnvelope section fail-closed.
-      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      await this.persistSystemOwner(
+        'channels',
+        nextRoot,
+        () => this.deps.configStore.loadChannelsOwnerFile(),
+        () => this.deps.configStore.saveChannelsOwnerFile(nextRoot),
+      );
       invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
       return {
         ok: true,
@@ -1346,7 +1417,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
           : `Channel envelope label saved for ${channelId}`,
       };
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 
@@ -1394,7 +1465,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * re-validates the api section (UUID format) fail-closed. This only writes
    * `api.companionId` — it never enables per-request companion selection.
    */
-  setBearerApiCompanionPin(companionId: unknown): ConfigUpdateResult {
+  async setBearerApiCompanionPin(companionId: unknown): Promise<ConfigUpdateResult> {
     if (typeof companionId !== 'string' || companionId.trim().length === 0) {
       return { ok: false, message: 'companionId must be a non-empty string' };
     }
@@ -1412,7 +1483,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
       const nextScoped = { ...scopedRoot, api: { ...existingApi, companionId: requested } };
       const nextRoot = hasWrapper ? { ...root, channels: nextScoped } : nextScoped;
       // saveChannelsOwnerFile re-validates the api section fail-closed.
-      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      await this.persistSystemOwner(
+        'channels',
+        nextRoot,
+        () => this.deps.configStore.loadChannelsOwnerFile(),
+        () => this.deps.configStore.saveChannelsOwnerFile(nextRoot),
+      );
       invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
       return {
         ok: true,
@@ -1420,7 +1496,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
           + 'channel to pick up the new pin.',
       };
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 
@@ -1489,7 +1565,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * operator-signed classification-epoch record. This is the ONLY write path
    * for the operator_confirmed marker.
    */
-  acceptChannelDemotion(input: AdminChannelDemotionAcceptInput): AdminChannelDemotionResult {
+  async acceptChannelDemotion(
+    input: AdminChannelDemotionAcceptInput,
+  ): Promise<AdminChannelDemotionResult> {
     const channelId = input.channelId.trim();
     if (!channelId) {
       return { ok: false, message: 'channelId must be a non-empty string' };
@@ -1552,7 +1630,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
       const nextRoot = this.buildNextChannelsRoot(root, scopedRoot, hasWrapper, nextChannels, nextEpochs);
       // saveChannelsOwnerFile re-validates fail-closed: the confirmed label is
       // now backed by the matching epoch record so the write-gate invariant holds.
-      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      await this.persistSystemOwner(
+        'channels',
+        nextRoot,
+        () => this.deps.configStore.loadChannelsOwnerFile(),
+        () => this.deps.configStore.saveChannelsOwnerFile(nextRoot),
+      );
       invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
       return {
         ok: true,
@@ -1561,7 +1644,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         data: this.getChannelEnvelopeData(),
       };
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 
@@ -1612,7 +1695,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * Validates and saves a named settings subsystem from raw JSON.
    * Returns a ConfigUpdateResult.
    */
-  saveSubConfigJson(key: string, json: string): ConfigUpdateResult {
+  async saveSubConfigJson(key: string, json: string): Promise<ConfigUpdateResult> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(json);
@@ -1628,17 +1711,20 @@ export class AdminSettingsDataService implements AdminSettingsService {
             message: 'fleet-auth.json is read-only in Garden; edit the canonical system owner file outside Garden',
           };
         case 'models': {
-          const result = applyAdminModelsConfigMutation({
+          const result = await applyAdminModelsConfigMutation({
             config: this.deps.config,
             configStore: this.deps.configStore,
             payload: parsed,
+            ...(this.deps.systemDataWriter
+              ? { systemDataWriter: this.deps.systemDataWriter }
+              : {}),
           });
           return result.ok
             ? this.buildSuccessfulSaveResult(
               'models.json saved',
               this.updateDivergences(result.refreshedKeys, result.divergences),
             )
-            : { ok: false, message: result.message };
+            : this.ownerWriteFailure(new Error(result.message));
         }
         case 'scheduler': {
           const saved = this.deps.configStore.saveScheduler(parsed);
@@ -1698,11 +1784,21 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return { ok: true, message: 'charge-policy.json saved' };
         }
         case 'backup': {
-          this.deps.configStore.saveBackup(parsed);
+          await this.persistSystemOwner(
+            'backup',
+            parsed,
+            () => this.deps.configStore.loadBackup(),
+            () => this.deps.configStore.saveBackup(parsed),
+          );
           return { ok: true, message: 'backup.json saved' };
         }
         case 'providers': {
-          const saved = this.deps.configStore.saveProviders(parsed);
+          const saved = await this.persistSystemOwner(
+            'providers',
+            parsed,
+            () => this.deps.configStore.loadProviders(),
+            () => this.deps.configStore.saveProviders(parsed),
+          );
           applyProvidersRuntimeConfig(this.deps.config, saved);
           const refreshDivergence = refreshModels(this.deps.config);
           invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:providers');
@@ -1710,7 +1806,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return this.buildSuccessfulSaveResult('providers.json saved', status);
         }
         case 'channels': {
-          this.deps.configStore.saveChannelsOwnerFile(parsed);
+          await this.persistSystemOwner(
+            'channels',
+            parsed,
+            () => this.deps.configStore.loadChannelsOwnerFile(),
+            () => this.deps.configStore.saveChannelsOwnerFile(parsed),
+          );
           invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
           return { ok: true, message: 'channels.json saved' };
         }
@@ -1720,23 +1821,38 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return { ok: true, message: 'skills.json saved' };
         }
         case 'trust-policy': {
-          this.deps.configStore.saveTrustPolicy(parsed);
+          await this.persistSystemOwner(
+            'trust-policy',
+            parsed,
+            () => this.deps.configStore.loadTrustPolicy(),
+            () => this.deps.configStore.saveTrustPolicy(parsed),
+          );
           invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:trust-policy');
           return { ok: true, message: 'trust-policy.json saved' };
         }
         case 'intake-policy': {
-          this.deps.configStore.saveIntakePolicy(parsed);
+          await this.persistSystemOwner(
+            'intake-policy',
+            parsed,
+            () => this.deps.configStore.loadIntakePolicy(),
+            () => this.deps.configStore.saveIntakePolicy(parsed),
+          );
           return { ok: true, message: 'intake-policy.json saved' };
         }
         case 'partner-affect-shadow': {
-          this.deps.configStore.savePartnerAffectShadow(parsed);
+          await this.persistSystemOwner(
+            'partner-affect-shadow',
+            parsed,
+            () => this.deps.configStore.loadPartnerAffectShadow(),
+            () => this.deps.configStore.savePartnerAffectShadow(parsed),
+          );
           return { ok: true, message: 'partner-affect-shadow.json saved' };
         }
         default:
           return { ok: false, message: `Unknown settings subsystem: ${key}` };
       }
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 
@@ -1754,10 +1870,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * owner-file path: pattern normalization, duplicate/contradiction checks,
    * and full config re-validation all fail closed before the save.
    */
-  mutateIntakeSourceList(
+  async mutateIntakeSourceList(
     input: AdminIntakeSourceListMutationInput,
     _context?: import('../garden-request-context.js').GardenRequestContext,
-  ): ConfigUpdateResult {
+  ): Promise<ConfigUpdateResult> {
     try {
       const current = this.deps.configStore.loadIntakePolicy();
       const next = applyIntakeSourceListMutation(current, {
@@ -1768,7 +1884,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
         addedBy: 'operator',
         atMs: Date.now(),
       });
-      this.deps.configStore.saveIntakePolicy(next);
+      await this.persistSystemOwner(
+        'intake-policy',
+        next,
+        () => this.deps.configStore.loadIntakePolicy(),
+        () => this.deps.configStore.saveIntakePolicy(next),
+      );
       return {
         ok: true,
         message: input.action === 'add'
@@ -1776,7 +1897,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
           : `intake-policy.json: removed entry from sourceLists.${input.list}`,
       };
     } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
+      return this.ownerWriteFailure(error);
     }
   }
 

@@ -291,7 +291,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       throw new Error('scheduler.json does not contain canonical icpAutonomy settings');
     }
     updated.icpAutonomy.enabled = false;
-    const saved = this.deps.settingsService.saveSubConfigJson(
+    const saved = await this.deps.settingsService.saveSubConfigJson(
       'scheduler',
       JSON.stringify(updated),
     );

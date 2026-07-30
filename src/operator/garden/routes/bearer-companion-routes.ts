@@ -54,31 +54,43 @@ export function buildAdminBearerCompanionRoutes(options: {
           sendJson(res, 403, { error: 'Companion-bound request context is required' });
           return;
         }
-        const result = settingsService.setBearerApiCompanionPin(companionId);
-        if (!result.ok) {
-          appendPinMutationAudit(
-            'denied',
-            'Operator Bearer API companion pin update rejected.',
-            [
-              `companionId=${companionId}`,
-              `message=${toSanitizedMessage(result.message, 'bearer companion pin rejected')}`,
-            ],
-          );
-          sendJson(res, 400, { error: result.message });
-          return;
-        }
+        void settingsService.setBearerApiCompanionPin(companionId)
+          .then((result) => {
+            if (!result.ok) {
+              appendPinMutationAudit(
+                'denied',
+                'Operator Bearer API companion pin update rejected.',
+                [
+                  `companionId=${companionId}`,
+                  `message=${toSanitizedMessage(result.message, 'bearer companion pin rejected')}`,
+                ],
+              );
+              sendJson(res, 400, { error: result.message });
+              return;
+            }
 
-        appendPinMutationAudit(
-          'allowed',
-          'Operator pinned the Bearer API to the request-bound Companion Cluster member via '
-            + '/api/admin/channels/bearer-companion.',
-          [`companionId=${companionId}`],
-        );
-        sendJson(res, 200, {
-          ok: true,
-          message: result.message,
-          data: settingsService.getBearerApiCompanionPin(),
-        });
+            appendPinMutationAudit(
+              'allowed',
+              'Operator pinned the Bearer API to the request-bound Companion Cluster member via '
+                + '/api/admin/channels/bearer-companion.',
+              [`companionId=${companionId}`],
+            );
+            sendJson(res, 200, {
+              ok: true,
+              message: result.message,
+              data: settingsService.getBearerApiCompanionPin(),
+            });
+          })
+          .catch((error: unknown) => {
+            appendPinMutationAudit(
+              'denied',
+              'Operator Bearer API companion pin update failed with a server error.',
+              [`companionId=${companionId}`, `error=${toSanitizedMessage(error, 'server error')}`],
+            );
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to update the Bearer API companion pin'),
+            });
+          });
       },
     },
   ];

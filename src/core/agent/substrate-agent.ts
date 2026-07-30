@@ -1022,15 +1022,15 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getPromotedExtendedTools();
   }
 
-  addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+  addPromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult> {
     return this.toolRuntimeFacade.addPromotedExtendedTool(toolName);
   }
 
-  removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+  removePromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult> {
     return this.toolRuntimeFacade.removePromotedExtendedTool(toolName);
   }
 
-  swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
+  swapPromotedExtendedTools(fromSlot: number, toSlot: number): Promise<PromotedToolMutationResult> {
     return this.toolRuntimeFacade.swapPromotedExtendedTools(fromSlot, toSlot);
   }
 

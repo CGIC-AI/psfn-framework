@@ -7,6 +7,14 @@ import { buildAdminBearerCompanionRoutes } from './bearer-companion-routes.js';
 class CapturingResponse {
   statusCode = 0;
   body = '';
+  readonly done: Promise<void>;
+  private resolveDone!: () => void;
+
+  constructor() {
+    this.done = new Promise(resolve => {
+      this.resolveDone = resolve;
+    });
+  }
 
   writeHead(statusCode: number): this {
     this.statusCode = statusCode;
@@ -15,6 +23,7 @@ class CapturingResponse {
 
   end(chunk?: string): void {
     this.body = chunk ?? '';
+    this.resolveDone();
   }
 }
 
@@ -35,8 +44,8 @@ function postRoute(service: Partial<AdminSettingsService>) {
 }
 
 describe('Bearer API companion pin route', () => {
-  it('pins only the companion bound by the trusted request context', () => {
-    const setBearerApiCompanionPin = vi.fn().mockReturnValue({
+  it('pins only the companion bound by the trusted request context', async () => {
+    const setBearerApiCompanionPin = vi.fn().mockResolvedValue({
       ok: true,
       message: 'Pinned',
     });
@@ -54,6 +63,7 @@ describe('Bearer API companion pin route', () => {
       {},
       requestContext(),
     );
+    await response.done;
 
     expect(response.statusCode).toBe(200);
     expect(setBearerApiCompanionPin).toHaveBeenCalledWith(requestBoundCompanionId);
@@ -63,7 +73,7 @@ describe('Bearer API companion pin route', () => {
     });
   });
 
-  it('fails closed when no authoritative companion context exists', () => {
+  it('fails closed when no authoritative companion context exists', async () => {
     const setBearerApiCompanionPin = vi.fn();
     const route = postRoute({ setBearerApiCompanionPin });
     const response = new CapturingResponse();
@@ -73,6 +83,7 @@ describe('Bearer API companion pin route', () => {
       response as unknown as ServerResponse,
       {},
     );
+    await response.done;
 
     expect(response.statusCode).toBe(403);
     expect(setBearerApiCompanionPin).not.toHaveBeenCalled();

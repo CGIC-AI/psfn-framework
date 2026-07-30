@@ -75,7 +75,7 @@ function settings(onDiskEnabled = true): AdminSettingsService {
       },
     }) as never),
     getSubConfigJson: vi.fn(() => JSON.stringify({ icpAutonomy: { enabled: true } })),
-    saveSubConfigJson: vi.fn(() => ({ ok: true, message: 'saved' })),
+    saveSubConfigJson: vi.fn(async () => ({ ok: true, message: 'saved' })),
   } as unknown as AdminSettingsService;
 }
 

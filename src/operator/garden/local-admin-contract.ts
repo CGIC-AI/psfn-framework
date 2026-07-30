@@ -134,6 +134,7 @@ import {
 } from './services/subsystem-health-service.js';
 import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
+import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService, reloadOwnerModelsFromDisk } from './services/settings-service.js';
 import {
@@ -241,6 +242,7 @@ export interface InProcessGardenAdminContractOptions {
   toolHealthProvider?: AdminToolHealthProvider | null;
   getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
   toolConformanceRunner?: ToolConformanceRunner | null;
+  systemDataWriter?: GatewaySystemDataWriterPort;
   postTurnActions?: PostTurnActionRuntime | null;
   outreachOutbox?: OutreachOutboxStore | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
@@ -431,6 +433,7 @@ export function createInProcessGardenAdminContract(
   const settingsService = new AdminSettingsDataService({
     config: options.config,
     configStore,
+    ...(options.systemDataWriter ? { systemDataWriter: options.systemDataWriter } : {}),
     onCapabilityTierChanged: (change) => {
       const targetSessionId = readLastActiveSession(companionDataDir)?.sessionId
         ?? options.sessionManager.listRecentSessions(1).at(0)?.sessionId;

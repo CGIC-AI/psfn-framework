@@ -81,7 +81,7 @@ describe('admin intake source-list routes (htm9.13)', () => {
   });
 
   it('adds an entry through the settings service and audit-logs it', async () => {
-    const mutateIntakeSourceList = vi.fn().mockReturnValue({ ok: true, message: 'added' });
+    const mutateIntakeSourceList = vi.fn().mockResolvedValue({ ok: true, message: 'added' });
     const auditCalls: AuditCall[] = [];
     const result = await invokeRoute({
       mutateIntakeSourceList,
@@ -106,7 +106,7 @@ describe('admin intake source-list routes (htm9.13)', () => {
   });
 
   it('removes an entry and audit-logs it', async () => {
-    const mutateIntakeSourceList = vi.fn().mockReturnValue({ ok: true, message: 'removed' });
+    const mutateIntakeSourceList = vi.fn().mockResolvedValue({ ok: true, message: 'removed' });
     const auditCalls: AuditCall[] = [];
     const result = await invokeRoute({
       mutateIntakeSourceList,
@@ -135,7 +135,7 @@ describe('admin intake source-list routes (htm9.13)', () => {
   });
 
   it('propagates owner-file validation failures as 400s with a denied audit entry', async () => {
-    const mutateIntakeSourceList = vi.fn().mockReturnValue({
+    const mutateIntakeSourceList = vi.fn().mockResolvedValue({
       ok: false,
       message: "sourceLists.trustedSites pattern 'not a host' is malformed: exact host or '*.domain.tld' suffix only (no schemes, ports, paths, or regex)",
     });

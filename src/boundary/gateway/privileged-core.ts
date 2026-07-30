@@ -36,6 +36,8 @@ import { resolveKubeSelfManagementController } from './kube-self-management-runt
 import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-authority.js';
 import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
+import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
+import { GatewaySystemDataWriter } from './system-data-writer.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -219,6 +221,14 @@ export async function buildGatewayPrivilegedCore(
   const cogSecEvents = new CogSecEventStore(
     resolveCogSecEventsPath(input.startupHydration.companionDataDir),
   );
+  const systemDataWriter = new GatewaySystemDataWriter({
+    configStore: createOwnerFileConfigStore({
+      dataDir: input.startupHydration.systemDataDir,
+      companionDataDir: input.startupHydration.companionDataDir,
+      defaultContextWindow: input.config.defaultContextWindow,
+    }),
+    systemDataDir: input.startupHydration.systemDataDir,
+  });
 
   return {
     eventBus,
@@ -248,6 +258,7 @@ export async function buildGatewayPrivilegedCore(
       ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
       ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
       ...(sharedSatelliteQuietHoursAllows ? { sharedSatelliteQuietHoursAllows } : {}),
+      systemDataWriter,
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,

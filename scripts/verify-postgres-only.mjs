@@ -38,7 +38,6 @@ const SCAN_TARGETS = [
   'docs/architecture.md',
   'docs/operations.md',
   'docs/development-status.md',
-  'docs/CODEBASE_MAP.md',
   'docs/specifications.md',
   'docs/PSFN_PROJECT_CHARTER.md',
   'docs/context-envelope.md',
@@ -105,12 +104,6 @@ const TEXT_REFERENCE_ALLOWLIST = [
     contains: '| SQLite retirement | SQLite implementations, migration readers, native packages, and dead adapter tests are removed',
     classification: 'cutover-history',
     reason: 'The shipped milestone states exactly what was retired.',
-  },
-  {
-    path: 'docs/CODEBASE_MAP.md',
-    contains: 'SQLite (`better-sqlite3`/`sqlite-vec`) implementations and packages are removed.',
-    classification: 'cutover-contract',
-    reason: 'The codebase map prevents agents from looking for deleted adapters.',
   },
   {
     path: 'docs/specifications.md',

@@ -117,7 +117,6 @@ and [`docs/helm-upgrades.md`](./docs/helm-upgrades.md).
 - [`docs/development-status.md`](./docs/development-status.md) — where the project stands
 - [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents (process, beads, gates)
 - [`CLAUDE.md`](./CLAUDE.md) — Claude-specific orientation; AGENTS.md wins on process
-- [`docs/CODEBASE_MAP.md`](./docs/CODEBASE_MAP.md) — generated module map for navigation
 
 **Companion-facing material** lives in [`companion_docs/`](./companion_docs/):
 welcome documentation, philosophy, and privacy references for companions built

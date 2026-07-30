@@ -16,13 +16,17 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { writeJsonAtomic } from '../../src/shared/utils/fs.js';
 import { verifyStartupOwnerFiles } from '../../src/system/config/startup-owner-files.js';
 import { PER_COMPANION_OWNER_FILES } from '../../src/system/config/settings-contract.js';
-import { DEFAULT_COMPANION_CARD_FILE_NAME } from '../../src/core/identity/companion-naming.js';
+import {
+  DEFAULT_COMPANION_CARD_FILE_NAME,
+  DEFAULT_COMPANION_NAME,
+} from '../../src/core/identity/companion-naming.js';
 import { assertValidCharacterCard } from '../../src/core/identity/loader.js';
 import { isRecord } from '../../src/shared/utils/types.js';
+import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
 import type { OnboardingPlan } from './types.js';
 
 /** Owner files whose whole content this flow synthesizes rather than copies. */
@@ -61,8 +65,62 @@ interface OwnerFileEntry {
   value: unknown;
 }
 
+function nearestCommonAncestor(firstPath: string, secondPath: string): string {
+  const first = resolve(firstPath);
+  const second = resolve(secondPath);
+  let candidate = first;
+  for (;;) {
+    const relativeSecond = relative(candidate, second);
+    if (relativeSecond !== '..' && !relativeSecond.startsWith('../')) {
+      break;
+    }
+    const parent = dirname(candidate);
+    if (parent === candidate) {
+      throw new Error(`Cannot derive a common runtime root for ${first} and ${second}`);
+    }
+    candidate = parent;
+  }
+  return candidate;
+}
+
+/**
+ * Runtime root against which companions.json paths are interpreted.
+ *
+ * A shared DATA_DIR cannot itself be the runtime root: fleet entries must be
+ * strict descendants of that root and the runtime workspace must remain a
+ * sibling of mutable data. Split roots naturally share their parent.
+ */
+export function resolveOnboardingRuntimeRoot(plan: Pick<OnboardingPlan, 'roots'>): string {
+  const systemDataDir = resolve(plan.roots.systemDataDir);
+  const companionDataDir = resolve(plan.roots.companionDataDir);
+  const common = nearestCommonAncestor(systemDataDir, companionDataDir);
+  return common === systemDataDir || common === companionDataDir
+    ? dirname(common)
+    : common;
+}
+
+/** Canonical one-entry fleet data root generated beneath the configured base. */
+export function resolveOnboardingCompanionDataDir(plan: Pick<OnboardingPlan, 'roots'>): string {
+  return plan.roots.shared
+    ? resolve(plan.roots.companionDataDir, 'companions', 'main')
+    : resolve(plan.roots.companionDataDir, 'main');
+}
+
+function manifestPath(plan: OnboardingPlan, absolutePath: string, field: string): string {
+  const runtimeRoot = resolveOnboardingRuntimeRoot(plan);
+  const path = relative(runtimeRoot, absolutePath);
+  if (!path || path === '.' || path === '..' || path.startsWith('../')) {
+    throw new Error(
+      `Cannot generate ${field}: ${absolutePath} must be beneath runtime root ${runtimeRoot}`,
+    );
+  }
+  return path;
+}
+
 function ownerFileRoot(plan: OnboardingPlan, name: string): string {
-  return PER_COMPANION_OWNER_FILES.has(name) ? plan.roots.companionDataDir : plan.roots.systemDataDir;
+  return PER_COMPANION_OWNER_FILES.has(name)
+    ? resolveOnboardingCompanionDataDir(plan)
+    : plan.roots.systemDataDir;
 }
 
 function readSeed(seedDir: string, name: string): unknown {
@@ -148,17 +206,13 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
 /**
  * Single-companion fleet manifest naming this deployment's companion id.
  *
- * The manifest describes the ACTUAL on-disk layout this flow generates: the
- * per-companion owner files and the character card land at the companion-data
- * ROOT (that is where the single-companion runtime reads them from —
- * `{companionDataDir}/{DEFAULT_COMPANION_CARD_FILE_NAME}` and the per-companion
- * owners directly under the companion root). So the manifest points its
- * companionDataDir/characterCardPath at that root, keeping the generated
- * manifest self-consistent if a later operator flips the deployment to the
- * fleet control plane (wckv.1.3 review rider). A genuine multi-companion split
- * would re-lay each companion under its own subdir.
+ * The manifest describes the actual on-disk layout this flow generates. Even a
+ * fleet of one gets a strict companion subdirectory, because the fleet resolver
+ * rejects the persistence root itself as a companion-owned root.
  */
 export function buildCompanionsManifest(plan: OnboardingPlan): unknown {
+  const companionDataDir = resolveOnboardingCompanionDataDir(plan);
+  const characterCardPath = join(companionDataDir, DEFAULT_COMPANION_CARD_FILE_NAME);
   return {
     postgres: {
       sharedMigrationRole: 'shared_schema_migration',
@@ -170,12 +224,20 @@ export function buildCompanionsManifest(plan: OnboardingPlan): unknown {
     companions: [
       {
         companionId: plan.companionId,
-        companionDataDir: '.',
-        characterCardPath: DEFAULT_COMPANION_CARD_FILE_NAME,
+        companionDataDir: manifestPath(
+          plan,
+          companionDataDir,
+          'companions[0].companionDataDir',
+        ),
+        characterCardPath: manifestPath(
+          plan,
+          characterCardPath,
+          'companions[0].characterCardPath',
+        ),
         postgresSchema: 'companion_main',
         postgresRole: 'companion_main_runtime',
         postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_MAIN_DATABASE_URL' },
-        displayName: 'Companion',
+        displayName: plan.card?.data.name ?? DEFAULT_COMPANION_NAME,
       },
     ],
   };
@@ -222,7 +284,7 @@ export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
  * (`{companionDataDir}/{DEFAULT_COMPANION_CARD_FILE_NAME}` in load-config).
  */
 export function characterCardTargetPath(plan: OnboardingPlan): string {
-  return join(plan.roots.companionDataDir, DEFAULT_COMPANION_CARD_FILE_NAME);
+  return join(resolveOnboardingCompanionDataDir(plan), DEFAULT_COMPANION_CARD_FILE_NAME);
 }
 
 /** The character-card write entry, when the plan carries a resolved card. */
@@ -265,10 +327,21 @@ export function stageAndValidate(plan: OnboardingPlan): void {
     assertValidCharacterCard(plan.card, characterCardTargetPath(plan));
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), 'psfn-onboard-stage-'));
-  const stagingSystem = join(stagingRoot, 'system-data');
-  const stagingCompanion = plan.roots.shared ? stagingSystem : join(stagingRoot, 'companion-data');
+  const plannedRuntimeRoot = resolveOnboardingRuntimeRoot(plan);
+  const stagingSystem = join(
+    stagingRoot,
+    relative(plannedRuntimeRoot, resolve(plan.roots.systemDataDir)),
+  );
+  const stagingCompanionBase = join(
+    stagingRoot,
+    relative(plannedRuntimeRoot, resolve(plan.roots.companionDataDir)),
+  );
+  const stagingCompanion = plan.roots.shared
+    ? join(stagingCompanionBase, 'companions', 'main')
+    : join(stagingCompanionBase, 'main');
   try {
     mkdirSync(stagingSystem, { recursive: true });
+    mkdirSync(stagingCompanionBase, { recursive: true });
     mkdirSync(stagingCompanion, { recursive: true });
     for (const entry of ownerFileEntries(plan)) {
       const root = PER_COMPANION_OWNER_FILES.has(entry.name) ? stagingCompanion : stagingSystem;
@@ -284,6 +357,27 @@ export function stageAndValidate(plan: OnboardingPlan): void {
     if (!result.ok) {
       throw new Error(
         `Generated owner files failed settings-contract validation:\n- ${result.errors.join('\n- ')}`,
+      );
+    }
+    const fleet = resolveConfiguredCompanionFleet({
+      PSFN_RUNTIME_ROOT: stagingRoot,
+      CONFIG_DIR: plan.seedDir,
+      ...(plan.roots.shared
+        ? { DATA_DIR: stagingSystem }
+        : {
+          SYSTEM_DATA_DIR: stagingSystem,
+          COMPANION_DATA_DIR: stagingCompanionBase,
+        }),
+    });
+    const generatedCompanion = fleet.companions[0];
+    const expectedCardPath = join(stagingCompanion, DEFAULT_COMPANION_CARD_FILE_NAME);
+    if (
+      fleet.companions.length !== 1
+      || generatedCompanion?.companionDataDir !== stagingCompanion
+      || generatedCompanion.characterCardPath !== expectedCardPath
+    ) {
+      throw new Error(
+        'Generated companions.json did not resolve to the staged companion owner/card layout',
       );
     }
   } finally {

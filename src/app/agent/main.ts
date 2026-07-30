@@ -153,6 +153,7 @@ import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
+import { wireAgentVaultRuntime } from './vault-runtime.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -966,6 +967,16 @@ async function main(): Promise<void> {
     log.info('Beads issue-management tools enabled');
   } else {
     log.info('Beads issue-management tools disabled by policy (gateway denies beads.*)');
+  }
+
+  if (wireAgentVaultRuntime({
+    target: agentLoop,
+    gateway,
+    config,
+  })) {
+    log.info('External Obsidian vault tool enabled (gateway vault.* policy path)');
+  } else {
+    log.info('External Obsidian vault tool disabled by policy (gateway denies vault.*)');
   }
 
   // World tool — perceive/list/control physical & virtual affordances via the

@@ -610,6 +610,15 @@ function selectSourcePath(spec: PersistenceCutoverSpec): {
   const existingSources = spec.sourceCandidates
     .filter(candidate => resolve(candidate) !== resolve(spec.targetPath))
     .filter(candidate => existsSync(candidate))
+    // In split mode, runtime startup can defensively recreate the historical
+    // backups directory. Treat only that proven empty shell as converged; any
+    // child entry remains actionable through the normal copy/conflict checks.
+    .filter(candidate => !(
+      spec.id === 'companion.backups'
+      && spec.kind === 'dir'
+      && statSync(candidate).isDirectory()
+      && readdirSync(candidate).length === 0
+    ))
     .map((candidate) => ({
       candidate,
       signature: summarizePath(candidate),

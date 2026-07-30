@@ -48,4 +48,17 @@ describe('runtime credential sources', () => {
     })).toBe('postgresql://psfn:fd-secret@postgres/psfn');
     expect(() => fstatSync(fd)).toThrow(/EBADF/);
   });
+
+  it('names a broken descriptor handover instead of surfacing a bare platform read error', () => {
+    expect(() => resolveRuntimeCredentialFromEnvironment({
+      POSTGRES_DATABASE_URL_FD: '999999',
+    }, {
+      description: 'PostgreSQL database URL',
+      inlineEnvName: 'POSTGRES_DATABASE_URL',
+      fileEnvName: 'POSTGRES_DATABASE_URL_FILE',
+      fdEnvName: 'POSTGRES_DATABASE_URL_FD',
+    })).toThrow(
+      /PostgreSQL database URL credential file descriptor 999999 could not be read.*EBADF/u,
+    );
+  });
 });

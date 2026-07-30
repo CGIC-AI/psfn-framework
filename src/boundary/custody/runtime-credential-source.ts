@@ -48,10 +48,20 @@ function readDescriptorCredential(fd: number, description: string): string {
   const chunks: Buffer[] = [];
   let byteCount = 0;
   let bytesRead: number;
+  let readFailure: Error | undefined;
   try {
     do {
       const buffer = Buffer.allocUnsafe(Math.min(4096, MAX_RUNTIME_CREDENTIAL_BYTES + 1 - byteCount));
-      bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      try {
+        bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        readFailure = new Error(
+          `${description} credential file descriptor ${fd} could not be read: ${reason}`,
+          { cause: error },
+        );
+        throw readFailure;
+      }
       if (bytesRead > 0) {
         byteCount += bytesRead;
         if (byteCount > MAX_RUNTIME_CREDENTIAL_BYTES) {
@@ -61,7 +71,20 @@ function readDescriptorCredential(fd: number, description: string): string {
       }
     } while (bytesRead > 0);
   } finally {
-    closeSync(fd);
+    try {
+      closeSync(fd);
+    } catch (error) {
+      // A failed read of an invalid/platform-incompatible descriptor commonly
+      // also makes close fail. Preserve the actionable read error instead of
+      // replacing it with a bare EBADF/EINVAL from close.
+      if (!readFailure) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${description} credential file descriptor ${fd} could not be closed: ${reason}`,
+          { cause: error },
+        );
+      }
+    }
   }
   const value = normalizeCredentialValue(Buffer.concat(chunks).toString('utf8'));
   if (!value) {

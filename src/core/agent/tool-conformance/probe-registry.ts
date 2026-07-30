@@ -16,10 +16,13 @@
 //     toolset, tool_search, self_status) → read_only.
 //   - boundary/external/side-effecting surfaces (fs, repo, shell, web,
 //     analysis_workbench sandbox, notify, generate_image, selfie_create, subagent,
-//     vault, beads, world, response_control) → schema_only. Their only "read"
+//     beads, world, response_control) → schema_only. Their only "read"
 //     actions depend on a live gateway, external processes, or arguments that
 //     do not belong in a hermetic handler smoke, and several have no read
 //     action at all.
+//   - the optional vault surface is the deliberate external exception: when it
+//     is live, a bounded no-match search verifies the gateway/Obsidian bridge
+//     without requiring a pre-existing note or mutating the vault.
 //
 // The static coverage test (probe-registry.test.ts) fails when a canonical tool
 // is added without a classification here, and the runtime harness fails closed
@@ -96,7 +99,15 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // read-only probe exists, so validate schema only.
   publication: { kind: 'schema_only' },
   subagent: { kind: 'schema_only' },
-  vault: { kind: 'schema_only' },
+  vault: {
+    kind: 'read_only',
+    action: 'search',
+    args: {
+      action: 'search',
+      query: '__psfn_tool_conformance_no_match__',
+      limit: 1,
+    },
+  },
   beads: { kind: 'schema_only' },
   // world's read actions (perceive/list) require live gateway ops against the
   // Home Assistant places registry, and move/control mutate world state, so no
@@ -428,7 +439,11 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
   vault: {
     write: SCHEMA_ASSERT,
     read: SCHEMA_ASSERT,
-    search: SCHEMA_ASSERT,
+    search: safeRead({
+      action: 'search',
+      query: '__psfn_tool_conformance_no_match__',
+      limit: 1,
+    }),
     daily: SCHEMA_ASSERT,
   },
   journal: {

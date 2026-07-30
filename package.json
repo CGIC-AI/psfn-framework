@@ -106,6 +106,7 @@
     "lint": "eslint .",
     "lint:changed": "node scripts/ci/lint-changed.mjs",
     "verify:change-budget": "node scripts/ci/check-change-budget.mjs",
+    "verify:commit-identities": "node scripts/ci/commit-identity-check.mjs",
     "preflight:startup-owner-files": "tsx scripts/preflight-startup-owner-files.ts",
     "verify:startup-owner-files": "tsx scripts/verify-startup-owner-files.ts",
     "resolve:companion-fleet": "tsx scripts/resolve-companion-fleet.ts",

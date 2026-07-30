@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStructuredToolErrorDetails,
   classifyToolError,
+  CompanionVisibleOperationalError,
   INTERNAL_TOOL_FAILURE_NOTICE,
   internalToolFailureResult,
   sanitizeToolErrorDiagnostic,
@@ -101,22 +102,49 @@ describe('structured tool error results', () => {
 
   it('shows allowlisted capacity, health, rate-limit, and capability blocks but withholds invariants', () => {
     const visibleFailures = [
-      'Shard limit reached (3 concurrent). Wait for active shards to complete.',
-      'Shard routing denied: "research" is offline.',
-      'Shard routing denied: "research" is missing required capability tokens (web.read).',
-      'Shard launch denied: parent companion "artemis" does not grant shard.spawn',
-      'HTTP 429 rate limit reached; retry after 10 seconds',
+      new CompanionVisibleOperationalError({
+        companionMessage: 'Shard limit reached (3 concurrent). Wait for active shards to complete.',
+        errorClass: 'unavailable',
+        retryHint: 'retry_after_delay',
+      }),
+      new CompanionVisibleOperationalError({
+        companionMessage: 'Shard routing denied: "research" is offline.',
+        errorClass: 'unavailable',
+        retryHint: 'retry_after_delay',
+      }),
+      new CompanionVisibleOperationalError({
+        companionMessage:
+          'Shard routing denied: "research" is missing required capability tokens (web.read).',
+        errorClass: 'policy_blocked',
+        retryHint: 'try_alternative_input',
+      }),
+      new CompanionVisibleOperationalError({
+        companionMessage: 'Shard launch denied: the parent capability grant lacks shard.spawn.',
+        errorClass: 'policy_blocked',
+        retryHint: 'try_alternative_input',
+      }),
     ];
 
-    for (const message of visibleFailures) {
-      expect(internalToolFailureResult(new Error(message)).content[0]?.text).toContain(message);
+    for (const error of visibleFailures) {
+      expect(internalToolFailureResult(error).content[0]?.text).toContain(error.companionMessage);
     }
 
-    const invariant = internalToolFailureResult(
-      new Error('SessionManager captured owner mismatch at /home/operator/private'),
-    );
-    expect(invariant.content[0]?.text).toBe(INTERNAL_TOOL_FAILURE_NOTICE);
-    expect(invariant.content[0]?.text).not.toContain('SessionManager');
+    const rateLimit = internalToolFailureResult({
+      status: 429,
+      message: 'HTTP 429 for alice@example.test while processing private-correlation-id',
+    });
+    expect(rateLimit.content[0]?.text).toContain('Provider rate limit reached');
+    expect(rateLimit.content[0]?.text).not.toContain('alice@example.test');
+
+    for (const message of [
+      'SessionManager captured owner mismatch at /home/operator/private',
+      'SessionManager owner invariant failed for partner record 429: alice@example.test',
+      'Shard routing denied: "research" is offline (private-correlation-id alice@example.test).',
+    ]) {
+      const invariant = internalToolFailureResult(new Error(message));
+      expect(invariant.content[0]?.text).toBe(INTERNAL_TOOL_FAILURE_NOTICE);
+      expect(invariant.content[0]?.text).not.toContain('alice@example.test');
+    }
   });
 
   it('marks free-text-derived error classes as inferred and structured ones as declared (bead sqsz)', () => {

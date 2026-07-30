@@ -3,6 +3,12 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveIntakeScreenerModels } from '../../src/boundary/gateway/intake/screener-model-selection.js';
+import type { SubstrateConfig } from '../../src/system/config/runtime-config-contracts.js';
+import {
+  normalizeCanonicalModelRegistry,
+  projectCanonicalModelRegistry,
+} from '../../src/system/settings/schema-model-registry.js';
 import type { OnboardingPlan } from './types.js';
 import {
   buildModelsRegistry,
@@ -29,7 +35,11 @@ function makePlan(overrides: Partial<OnboardingPlan> = {}): OnboardingPlan {
       apiKeyEnvName: 'OPENROUTER_API_KEY',
       apiKeyValue: 'sk-or-secret-value',
     },
-    models: { primaryModelSlug: 'z-ai/glm-5', extractionModelSlug: 'deepseek/deepseek-v3.2' },
+    models: {
+      primaryModelSlug: 'z-ai/glm-5',
+      extractionModelSlug: 'deepseek/deepseek-v3.2',
+      visionModelSlug: 'google/gemini-3.1-flash',
+    },
     voice: { enabled: false, secrets: [] },
     companionId: '11111111-1111-4111-8111-111111111111',
     envEntries: [],
@@ -73,12 +83,16 @@ describe('config generation passes the real settings-contract guard', () => {
         apiKeyEnvName: 'OPENAI_API_KEY',
         apiKeyValue: 'sk-openai-secret',
       },
-      models: { primaryModelSlug: 'gpt-5.4', extractionModelSlug: 'gpt-5.4-mini' },
+      models: {
+        primaryModelSlug: 'gpt-5.4',
+        extractionModelSlug: 'gpt-5.4-mini',
+        visionModelSlug: 'gpt-5.4-vision',
+      },
     });
     expect(() => stageAndValidate(plan)).not.toThrow();
   });
 
-  it('re-points both selected models and assigns vision to the chosen primary', () => {
+  it('re-points all selected models and preserves an explicit vision capability', () => {
     const plan = makePlan({
       provider: {
         id: 'anthropic',
@@ -88,21 +102,46 @@ describe('config generation passes the real settings-contract guard', () => {
         apiKeyEnvName: 'ANTHROPIC_API_KEY',
         apiKeyValue: 'sk-ant',
       },
-      models: { primaryModelSlug: 'claude-x', extractionModelSlug: 'claude-y' },
+      models: {
+        primaryModelSlug: 'claude-x',
+        extractionModelSlug: 'claude-y',
+        visionModelSlug: 'claude-vision',
+      },
     });
     const registry = buildModelsRegistry(plan) as {
       models: Array<{
         id: string;
         identity: { provider: string; model: string };
         purposes: Array<{ purpose: string; primary: boolean }>;
+        capabilities?: { supportsVision?: boolean };
       }>;
     };
-    expect(registry.models).toHaveLength(2);
+    expect(registry.models).toHaveLength(3);
     expect(registry.models.every((m) => m.identity.provider === 'anthropic')).toBe(true);
-    expect(registry.models.map((m) => m.identity.model).sort()).toEqual(['claude-x', 'claude-y']);
-    expect(registry.models.find((m) => m.id === 'primary')?.purposes).toContainEqual({
+    expect(registry.models.map((m) => m.identity.model).sort()).toEqual([
+      'claude-vision',
+      'claude-x',
+      'claude-y',
+    ]);
+    const vision = registry.models.find((m) => m.identity.model === 'claude-vision');
+    expect(vision?.purposes).toContainEqual({
       purpose: 'vision',
       primary: true,
+    });
+    expect(vision?.capabilities?.supportsVision).toBe(true);
+  });
+
+  it('feeds generated OpenRouter roles through the startup screener resolver', () => {
+    const registry = normalizeCanonicalModelRegistry(buildModelsRegistry(makePlan()));
+    const runtime = projectCanonicalModelRegistry(registry) as SubstrateConfig;
+
+    expect(resolveIntakeScreenerModels(runtime, {
+      l3DualModel: false,
+      visionEnabled: true,
+    })).toEqual({
+      l2: 'deepseek/deepseek-v3.2',
+      l3: ['z-ai/glm-5'],
+      vision: 'google/gemini-3.1-flash',
     });
   });
 
@@ -117,7 +156,10 @@ describe('config generation passes the real settings-contract guard', () => {
 describe('commit is abort-safe', () => {
   it('leaves zero files when validation fails (empty model slug)', () => {
     const roots = freshRoot(true);
-    const plan = makePlan({ roots, models: { primaryModelSlug: '', extractionModelSlug: 'x' } });
+    const plan = makePlan({
+      roots,
+      models: { primaryModelSlug: '', extractionModelSlug: 'x', visionModelSlug: 'z' },
+    });
     expect(() => commitOwnerFiles(plan)).toThrow();
     // Fresh mode + validation-before-write => nothing landed.
     const present = existsSync(roots.systemDataDir) ? readdirSync(roots.systemDataDir) : [];
@@ -142,7 +184,11 @@ describe('idempotent re-run', () => {
     const updated = makePlan({
       roots,
       updateExisting: true,
-      models: { primaryModelSlug: 'z-ai/glm-5.1', extractionModelSlug: 'deepseek/deepseek-v3.2' },
+      models: {
+        primaryModelSlug: 'z-ai/glm-5.1',
+        extractionModelSlug: 'deepseek/deepseek-v3.2',
+        visionModelSlug: 'google/gemini-3.1-flash',
+      },
     });
     expect(() => commitOwnerFiles(updated)).not.toThrow();
     const models = JSON.parse(readFileSync(join(roots.systemDataDir, 'models.json'), 'utf-8')) as {

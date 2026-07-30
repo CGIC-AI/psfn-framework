@@ -82,6 +82,7 @@ import { ShardToolSyncHelper } from './tool-sync.js';
 import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { CompanionVisibleOperationalError } from '../../core/tools/results.js';
 import { LiveShardDirectory } from './directory.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
@@ -589,9 +590,12 @@ export class ShardManager implements ShardExecutionPort {
         reason: 'concurrency_limit',
         error: `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
       });
-      throw new Error(
-        `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
-      );
+      throw new CompanionVisibleOperationalError({
+        companionMessage:
+          `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
+        errorClass: 'unavailable',
+        retryHint: 'retry_after_delay',
+      });
     }
 
     const startTime = Date.now();
@@ -609,10 +613,13 @@ export class ShardManager implements ShardExecutionPort {
         error: `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
       });
-      throw new Error(
-        `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
-        + `(${missingCapabilities.join(', ')}).`,
-      );
+      throw new CompanionVisibleOperationalError({
+        companionMessage:
+          `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
+          + `(${missingCapabilities.join(', ')}).`,
+        errorClass: 'policy_blocked',
+        retryHint: 'try_alternative_input',
+      });
     }
     const heartbeatStaleAfterMs = this.resolveHeartbeatStaleAfterMs(shardConfig.heartbeatStaleAfterMs);
     const heartbeatDisconnectAfterMs = this.resolveHeartbeatDisconnectAfterMs(
@@ -1455,23 +1462,35 @@ export class ShardManager implements ShardExecutionPort {
   private assertShardRoutable(shardId: string, requiredCapabilities: readonly string[]): void {
     const shard = this.activeShards.get(shardId);
     if (!shard) {
-      throw new Error(`Shard routing denied: "${shardId}" is offline.`);
+      throw new CompanionVisibleOperationalError({
+        companionMessage: 'Shard routing denied: the requested shard is offline.',
+        errorClass: 'unavailable',
+        retryHint: 'retry_after_delay',
+      });
     }
     if (shard.state !== 'ready' || shard.health !== 'healthy') {
       const detail = shard.failureReason
         ? `${shard.stateReason}; ${shard.failureReason}`
         : shard.stateReason;
-      throw new Error(
-        `Shard routing denied: "${shard.name}" is ${shard.state}/${shard.health} (${detail}).`,
-      );
+      throw new CompanionVisibleOperationalError({
+        companionMessage:
+          `Shard routing denied: "${shard.name}" is ${shard.state}/${shard.health}.`,
+        errorClass: 'unavailable',
+        retryHint: 'retry_after_delay',
+        operatorDiagnostic:
+          `Shard routing denied: "${shard.name}" is ${shard.state}/${shard.health} (${detail}).`,
+      });
     }
 
     const missing = requiredCapabilities.filter(capability => !shard.capabilities.includes(capability));
     if (missing.length > 0) {
-      throw new Error(
-        `Shard routing denied: "${shard.name}" is missing required capability tokens `
-        + `(${missing.join(', ')}).`,
-      );
+      throw new CompanionVisibleOperationalError({
+        companionMessage:
+          `Shard routing denied: "${shard.name}" is missing required capability tokens `
+          + `(${missing.join(', ')}).`,
+        errorClass: 'policy_blocked',
+        retryHint: 'try_alternative_input',
+      });
     }
   }
 

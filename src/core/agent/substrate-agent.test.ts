@@ -62,6 +62,7 @@ import {
   TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
 } from './background-work/recovery-contract.js';
+import { CompanionVisibleOperationalError } from '../tools/results.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -1733,7 +1734,11 @@ describe('SubstrateAgent.registerTool', () => {
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async (toolCallId: string) => {
         if (toolCallId === 'call-2') {
-          throw new Error('Shard limit reached: health guard rejected spawn');
+          throw new CompanionVisibleOperationalError({
+            companionMessage: 'Shard limit reached: health guard rejected spawn',
+            errorClass: 'unavailable',
+            retryHint: 'retry_after_delay',
+          });
         }
         await new Promise((resolve) => setTimeout(resolve, 20));
         return {

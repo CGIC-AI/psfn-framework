@@ -103,7 +103,7 @@ export interface ModelSuggestion {
   id: string;
   slug: string;
   provider: string;
-  role: 'primary' | 'extraction' | 'catalog';
+  role: 'primary' | 'extraction' | 'vision' | 'catalog';
 }
 
 /**
@@ -121,22 +121,31 @@ export function discoverModelSuggestions(seedDir: string): ModelSuggestion[] {
     const slug = identity && typeof identity.model === 'string' ? identity.model : undefined;
     const provider = identity && typeof identity.provider === 'string' ? identity.provider : 'openrouter';
     if (!id || !slug) continue;
+    const purposes = Array.isArray(raw.purposes) ? raw.purposes : [];
+    const isPrimaryVision = purposes.some(purpose => isRecord(purpose)
+      && purpose.purpose === 'vision'
+      && purpose.primary === true);
     const role: ModelSuggestion['role'] = id === 'primary'
       ? 'primary'
       : id === 'extraction'
         ? 'extraction'
-        : 'catalog';
+        : isPrimaryVision
+          ? 'vision'
+          : 'catalog';
     suggestions.push({ id, slug, provider, role });
   }
   return suggestions;
 }
 
-/** Default primary/extraction slugs from the seed, falling back to known-good values. */
-export function defaultModelSlugs(seedDir: string): { primary: string; extraction: string } {
+/** Default role slugs from the seed, falling back to known-good values. */
+export function defaultModelSlugs(
+  seedDir: string,
+): { primary: string; extraction: string; vision: string } {
   const suggestions = discoverModelSuggestions(seedDir);
   const primary = suggestions.find((s) => s.role === 'primary')?.slug ?? 'z-ai/glm-5';
   const extraction = suggestions.find((s) => s.role === 'extraction')?.slug ?? 'deepseek/deepseek-v3.2';
-  return { primary, extraction };
+  const vision = suggestions.find((s) => s.role === 'vision')?.slug ?? 'google/gemini-3.1-flash';
+  return { primary, extraction, vision };
 }
 
 export interface VoiceProviderSurface {

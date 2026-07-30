@@ -531,7 +531,7 @@ describe('AdminServer Garden routing', () => {
         }));
 
         const target = compileGatewayGardenRequestTarget({
-          rawTarget: '/session-recovery',
+          rawTarget: '/api/admin/session-routes',
           method: 'GET',
           companionId: FLEET_COMPANION_ID,
           body: Buffer.alloc(0),
@@ -553,7 +553,7 @@ describe('AdminServer Garden routing', () => {
         const subjectDenied = await request(
           fleetHarness.port,
           'GET',
-          '/session-recovery',
+          '/api/admin/session-routes',
           undefined,
           { ...buildGardenCapabilityHeaders({
             token: capability,
@@ -566,8 +566,8 @@ describe('AdminServer Garden routing', () => {
           component: 'GardenAdminRoutes',
           context: expect.objectContaining({
             reasonCode: 'subject_bound_session_required',
-            routeId: 'GET /session-recovery',
-            action: 'recovery.begin',
+            routeId: 'GET /api/admin/session-routes',
+            action: 'sessions.read',
             principalId: 'principal-a',
             status: 403,
           }),

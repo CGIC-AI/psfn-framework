@@ -23,8 +23,10 @@ import {
 } from './garden-admission.js';
 import {
   createFleetGardenRequestContext,
+  createPublicGardenRequestContext,
   type GardenRequestContext,
 } from './garden-request-context.js';
+import { recordGardenDenial } from './garden-denial-observability.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -186,10 +188,38 @@ export class AdminServer implements Lifecycle {
       return;
     }
     this.bufferedFleetBodies.set(req, body.toString('utf8'));
-    const context = createFleetGardenRequestContext({
-      target: admitted.target,
-      verified: admitted.verified,
-    });
+    if (!admitted.verified && admitted.target.authorization.publicAccess !== 'always') {
+      recordGardenDenial(log, {
+        reasonCode: 'capability_required',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        response: res,
+      });
+      sendText(res, 403, 'Invalid Fleet Garden capability');
+      return;
+    }
+    let context: GardenRequestContext;
+    try {
+      context = admitted.verified
+        ? createFleetGardenRequestContext({
+          target: admitted.target,
+          verified: admitted.verified,
+        })
+        : createPublicGardenRequestContext(admitted.target);
+    } catch (error) {
+      recordGardenDenial(log, {
+        reasonCode: 'capability_invalid',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.verified?.authContext.principalId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        response: res,
+      });
+      sendText(res, 403, 'Invalid Fleet Garden capability');
+      return;
+    }
     this.dispatchRequest(req, res, undefined, context);
   }
 

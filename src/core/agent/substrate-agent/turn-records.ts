@@ -26,6 +26,7 @@ import {
   isToolCallErrorOutcome,
   isToolCallOutcome,
 } from '../../../shared/contracts/tool-call-outcome.js';
+import { buildTurnRecordInternalStateSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 
 export type TurnSessionWriteManager = Pick<
   SessionManager,
@@ -427,14 +428,14 @@ export function buildTurnRecord(input: {
       : {}),
     toolCalls,
     contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
-    internalStateSnapshotRef: [
-      `trust:${input.trustLevel}`,
-      `contact:${input.canonicalContactKey ?? 'none'}`,
-      `prompt:${input.turnSnapshot?.prompt?.versionPointer ?? 'none'}`,
-      `memory:${input.turnSnapshot?.memory?.versionPointer ?? 'none'}`,
-      `session:${input.turnSnapshot?.sessionContext?.versionPointer ?? 'none'}`,
-      `self:${input.internalStateSnapshotRef ?? 'none'}`,
-    ].join('|'),
+    internalStateSnapshotRef: buildTurnRecordInternalStateSnapshotRef({
+      trust: input.trustLevel,
+      contact: input.canonicalContactKey,
+      prompt: input.turnSnapshot?.prompt?.versionPointer,
+      memory: input.turnSnapshot?.memory?.versionPointer,
+      session: input.turnSnapshot?.sessionContext?.versionPointer,
+      self: input.internalStateSnapshotRef,
+    }),
     extractedMemoryIds: [],
     concernDeltaRefs: [],
     contactDeltaRefs: [],

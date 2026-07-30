@@ -23,6 +23,7 @@ import {
 } from './types.js';
 import type { BackgroundWorkPostTurnTuning } from './config.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
+import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
 
@@ -343,7 +344,10 @@ async function runPostTurnBackgroundWork(
         await input.effects.assertOwned();
         const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
-        if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
+        if (
+          extractTurnRecordSelfSnapshotRef(record.internalStateSnapshotRef)
+          !== payload.internalStateSnapshotRef
+        ) {
           throw new BackgroundWorkPermanentError('source_mismatch');
         }
         await input.effects.run('emotion-appraisal', async (assertOwned) => {

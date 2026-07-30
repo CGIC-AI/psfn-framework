@@ -3,6 +3,7 @@ import { backfillLegacyTurnId } from '../turns/id.js';
 import {
   buildSessionMetadataWithTurn,
   resolveSessionEntryActorKind,
+  resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
 
 function entryWithMetadata(metadata?: string) {
@@ -38,5 +39,29 @@ describe('session turn actor provenance', () => {
     expect(() => resolveSessionEntryActorKind(entryWithMetadata(JSON.stringify({
       turn: { actorKind: 'person' },
     })))).toThrow('actorKind');
+  });
+
+  it('distinguishes persisted TurnIDs from legacy backfills and rejects corrupt explicit IDs', () => {
+    expect(resolveSessionEntryTurnContext(entryWithMetadata())).toMatchObject({
+      turnIdSource: 'backfilled',
+    });
+    expect(resolveSessionEntryTurnContext(entryWithMetadata(buildSessionMetadataWithTurn(
+      undefined,
+      {
+        turnId: backfillLegacyTurnId('persisted-source'),
+        requestId: 'persisted-source',
+        role: 'user',
+      },
+    )))).toMatchObject({
+      turnIdSource: 'persisted',
+    });
+    expect(() => resolveSessionEntryTurnContext(entryWithMetadata(JSON.stringify({
+      turn: {
+        schemaVersion: 1,
+        turnId: 42,
+        requestId: 'corrupt-source',
+        role: 'user',
+      },
+    })))).toThrow('turnId');
   });
 });

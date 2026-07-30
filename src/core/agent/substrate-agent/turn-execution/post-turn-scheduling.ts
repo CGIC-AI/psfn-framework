@@ -310,8 +310,13 @@ export async function schedulePostTurnWork(input: {
   };
   const icpCorrelation = message.routing?.icpCorrelation;
   const placeId = resolveMessagePlaceId(message);
+  // Memory, emotion, and compaction consume an L0 snapshot anchored to one of
+  // these IDs. Ephemeral reflection channels persist neither entry, so only
+  // their source-record-only intention hook is a valid background contract.
+  const hasBoundedSessionSource = userSessionEntryId !== null
+    || assistantSessionEntryId !== null;
   const payloads: BackgroundWorkPayload[] = [];
-  if (runtime.memoryExtractor) {
+  if (runtime.memoryExtractor && hasBoundedSessionSource) {
     payloads.push({
       schemaVersion: 1,
       kind: 'memory_extraction',
@@ -328,7 +333,9 @@ export async function schedulePostTurnWork(input: {
       source,
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
     },
-    {
+  );
+  if (hasBoundedSessionSource) {
+    payloads.push({
       schemaVersion: 1,
       kind: 'emotion_appraisal',
       source,
@@ -338,8 +345,7 @@ export async function schedulePostTurnWork(input: {
       personalityOwnerRef: 'character-card',
       personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection(templateVariables),
       ...(icpCorrelation ? { icpCorrelation } : {}),
-    },
-    {
+    }, {
       schemaVersion: 1,
       kind: 'auto_compaction',
       source,
@@ -350,8 +356,8 @@ export async function schedulePostTurnWork(input: {
       ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
       ...(Object.keys(persistedChannelMeta).length > 0 ? { channelMeta: persistedChannelMeta } : {}),
       ...(icpCorrelation ? { icpCorrelation } : {}),
-    },
-  );
+    });
+  }
   const backgroundWorkInputs = payloads.map(payload => createBackgroundWorkInput({
     kind: payload.kind,
     payload,

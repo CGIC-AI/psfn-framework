@@ -16,6 +16,10 @@
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import {
+  BACKGROUND_WORK_HEALTH_LANES,
+  BackgroundWorkHealthAccumulator,
+} from './background-work-health.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -175,6 +179,7 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
     description: 'Self-directed free time (E8.1); pre-spend gate skips carry a reason, '
       + 'block runs carry turns + background-lane charge spend. Charter 8.8/8.9.',
   },
+  ...BACKGROUND_WORK_HEALTH_LANES,
 ];
 
 /**
@@ -238,6 +243,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   private readonly processStartedAt: number;
   private readonly scheduler: SubsystemSchedulerStateProvider | null;
   private readonly lanes = new Map<string, LaneAccumulator>();
+  private readonly backgroundWorkHealth = new BackgroundWorkHealthAccumulator();
   private readonly unsubscribers: Array<() => void> = [];
 
   constructor(deps: {
@@ -261,7 +267,6 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     for (const def of EVENT_LANE_DEFINITIONS) {
       this.lanes.set(def.id, { lastEvent: null, observedEventCount: 0, recent: [] });
     }
-
     this.subscribe(deps.eventBus);
   }
 
@@ -395,6 +400,15 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
             ['deduped', trimNumber(payload.deduped)],
           ]),
         });
+      }),
+    );
+
+    this.unsubscribers.push(
+      eventBus.on('agent.turn.performance', (payload) => {
+        const update = this.backgroundWorkHealth.observe(payload, this.now());
+        if (!update) return;
+        const { laneId, ...event } = update;
+        this.record(laneId, event);
       }),
     );
 

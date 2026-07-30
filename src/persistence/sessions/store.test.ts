@@ -408,6 +408,38 @@ describe('SessionStore', () => {
     expect(withTurnRecordEligibilityFences).not.toHaveBeenCalled();
   });
 
+  it('fails closed when a current snapshot entry has an explicit TurnID but no TurnRecord', async () => {
+    const fencedStore = new SessionStore(join(dir, 'missing-current-record'), {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+      },
+    });
+    const turnId = createTurnId();
+    const snapshot: SessionEntry[] = [{
+      id: 1,
+      channelId: 'api:missing-current-record',
+      role: 'user',
+      content: 'current content whose canonical record is unexpectedly missing',
+      timestamp: 1_700_000_000_000,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId,
+        requestId: 'request-current',
+        role: 'user',
+        actorKind: 'human',
+      }),
+    }];
+    const operation = vi.fn(async () => undefined);
+
+    await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
+      'api:missing-current-record',
+      [turnId],
+      () => snapshot,
+      operation,
+    )).rejects.toThrow('Consumed TurnRecord is missing');
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it('accepts system-attributed turn records for internal scheduler prompts', () => {
     const turnId = createTurnId();
 

@@ -288,7 +288,7 @@ export async function wireWikiRuntime(
   } | undefined;
   if (multiCompanion) {
     if (!deps.databaseUrl || !deps.companionId || !deps.systemDataDir
-      || !deps.embedding || !sharedProjection || !knownSiteIds) {
+      || !deps.embedding || !sharedProjection || !knownSiteIds || !systemDataWriter) {
       throw new Error('Multi-companion shared-world wiki caretaker dependencies are incomplete');
     }
     proposalStore = new SharedWorldWikiProposalStore(deps.databaseUrl);

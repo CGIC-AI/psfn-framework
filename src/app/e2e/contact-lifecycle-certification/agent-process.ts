@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     keepaliveIntervalMs: 60_000,
   });
   await gateway.identifyAsAgent();
+  await gateway.declareRuntimeReady();
   reply({ type: 'ready', ok: true, companionId });
 
   process.on('message', (raw: Command) => {

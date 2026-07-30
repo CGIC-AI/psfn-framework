@@ -262,6 +262,8 @@ async function startServer(options: GatewayServerOptions): Promise<{
     companionId: PARENT,
   });
   expect(identify.error).toBeUndefined();
+  const ready = await invokeRpc(conn, 'gateway.client.ready', {});
+  expect(ready.error).toBeUndefined();
   return { server, conn };
 }
 

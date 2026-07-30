@@ -273,6 +273,7 @@ async function setupServer(
         keepaliveIntervalMs: 60_000,
       });
       await client.identifyAsAgent();
+      await client.declareRuntimeReady();
       return client;
     },
   };
@@ -309,11 +310,13 @@ async function identifyAgent(
   companionId: string,
   rpcId = 900,
 ): Promise<any> {
-  return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
+  const identified = await invokeRpc(conn, rpcId, 'gateway.client.identify', {
     role: 'agent',
     companionId,
     authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
   });
+  await invokeRpc(conn, rpcId + 10_000, 'gateway.client.ready', {});
+  return identified;
 }
 
 async function identifySessionIntegrityWorker(
@@ -2376,18 +2379,25 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     connA._emitClose();
     await new Promise(r => setTimeout(r, 5));
 
-    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }))
-      .toThrow('No agent connection for companion "11111111-1111-4111-8111-111111111111"');
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm1' } },
+    )).toBe(1);
     expect(methodFrames(connB, 'discord.message')).toHaveLength(0);
 
-    await new Promise(r => setTimeout(r, 10));
-    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+    const connReplacement = await connect();
+    await identifyAgent(connReplacement, '11111111-1111-4111-8111-111111111111', 3);
+
+    expect(methodFrames(connReplacement, 'discord.message')).toEqual([
+      expect.objectContaining({ params: { message: { id: 'm1' } } }),
+    ]);
+    expect(auditAppend).not.toHaveBeenCalledWith(expect.objectContaining({
       method: 'gateway.companion.companion_not_connected',
-      decision: 'DENY',
     }));
   });
 
-  it('keeps a surface unrouted after a gateway bounce until the agent re-identifies on the new connection (imlb)', async () => {
+  it('queues a deploy-window burst and replays it in order after the agent re-identifies', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
@@ -2406,20 +2416,93 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await new Promise(r => setTimeout(r, 5));
     const connReplacement = await connect();
 
-    // Surface routing (companionConnections) was cleared on close and the
-    // replacement connection never re-registered its surfaces, so inbound
-    // routing must fail closed rather than deliver to a stale/absent agent.
-    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm2' } }))
-      .toThrow('No agent connection for companion "11111111-1111-4111-8111-111111111111"');
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm2' } },
+    )).toBe(1);
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm3' } },
+    )).toBe(1);
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm4' } },
+    )).toBe(1);
     expect(methodFrames(connReplacement, 'discord.message')).toHaveLength(0);
 
-    // Re-identify on the replacement connection is what repopulates surface
-    // routing; after it, inbound routing succeeds again with no change to the
-    // static channel routing. This is the contract the agent must satisfy on
-    // reconnect (guaranteed by the fail-closed restart in app/agent/main.ts).
-    await identifyAgent(connReplacement, '11111111-1111-4111-8111-111111111111', 3);
-    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm3' } });
-    expect(methodFrames(connReplacement, 'discord.message')).toHaveLength(1);
+    await identifyAgent(connReplacement, '11111111-1111-4111-8111-111111111111', 5);
+    expect(methodFrames(connReplacement, 'discord.message').map(frame => frame.params.message.id))
+      .toEqual(['m2', 'm3', 'm4']);
+  });
+
+  it('replays messages queued while an identified connection is healthcheck-stale', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
+    });
+    const conn = await connect();
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
+    const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+    const status = statuses.get(conn.conn);
+    status.state = 'degraded';
+    status.health = 'stale';
+    status.stateReason = 'healthcheck_stale';
+
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'stale-1' } },
+    )).toBe(1);
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'stale-2' } },
+    )).toBe(1);
+    expect(methodFrames(conn, 'discord.message')).toHaveLength(0);
+
+    conn._emitHeartbeat();
+
+    expect(methodFrames(conn, 'discord.message').map(frame => frame.params.message.id))
+      .toEqual(['stale-1', 'stale-2']);
+  });
+
+  it('drops the oldest message at the bounded replay limit and pages every operator sink', async () => {
+    const telegramSend = vi.fn(async () => undefined);
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      telegramDock: {
+        id: 'telegram',
+        outbound: {
+          textChunkLimit: 4_096,
+          sendText: telegramSend,
+        },
+      } as any,
+      operatorTelegramChatId: '123456',
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
+    });
+
+    for (let index = 1; index <= 101; index += 1) {
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: `overflow-${index}` } },
+      )).toBe(1);
+    }
+    await vi.waitFor(() => {
+      expect(telegramSend).toHaveBeenCalledOnce();
+    });
+    expect(telegramSend.mock.calls[0]?.[1]).toContain('overflow-1');
+
+    const conn = await connect();
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
+    const replayedIds = methodFrames(conn, 'discord.message')
+      .map(frame => frame.params.message.id);
+    expect(replayedIds).toHaveLength(100);
+    expect(replayedIds[0]).toBe('overflow-2');
+    expect(replayedIds.at(-1)).toBe('overflow-101');
   });
 
   it('drops api.stream.delta frames from connections that are not the routed api companion', async () => {
@@ -2557,7 +2640,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     expect(bFrames[0].params.message.id).toBe('m-b');
   });
 
-  it('reports zero when the exact routed companion rejects the frame without rerouting', async () => {
+  it('queues when the exact routed companion rejects the frame without rerouting', async () => {
     const { options } = createMultiAccountOptions();
     const { server, connect } = await setupServer(options);
     const connA = await connect();
@@ -2571,12 +2654,53 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
       'discord.message',
       { message: { id: 'm-rejected' } },
       'acct-a',
-    )).toBe(0);
+    )).toBe(1);
     expect(rejectedSend).toHaveBeenCalledWith(expect.objectContaining({
       method: 'discord.message',
       params: { message: { id: 'm-rejected' } },
     }));
     expect(methodFrames(connB, 'discord.message')).toHaveLength(0);
+  });
+
+  it('does not replay queued traffic after authentication until runtime readiness is declared', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
+    });
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'startup-race' } },
+    )).toBe(1);
+
+    const conn = await connect();
+    await invokeRpc(conn, 1, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      authToken: deriveCompanionAuthToken(
+        '11111111-1111-4111-8111-111111111111',
+        'agent',
+        TEST_SESSION_HMAC_KEYRING,
+      ),
+    });
+    expect(methodFrames(conn, 'discord.message')).toHaveLength(0);
+
+    const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+    const status = statuses.get(conn.conn);
+    status.state = 'degraded';
+    status.health = 'stale';
+    status.stateReason = 'healthcheck_stale';
+    conn._emitHeartbeat();
+
+    expect(status.state).toBe('registering');
+    expect(status.health).toBe('healthy');
+    expect(status.stateReason).toBe('healthcheck_recovered_pending_runtime_ready');
+    expect(methodFrames(conn, 'discord.message')).toHaveLength(0);
+
+    await invokeRpc(conn, 2, 'gateway.client.ready', {});
+    expect(methodFrames(conn, 'discord.message')).toEqual([
+      expect.objectContaining({ params: { message: { id: 'startup-race' } } }),
+    ]);
   });
 
   it('fails closed when the inbound discord message carries no accountId', async () => {

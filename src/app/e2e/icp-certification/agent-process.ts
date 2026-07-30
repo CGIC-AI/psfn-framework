@@ -430,6 +430,7 @@ async function main(): Promise<void> {
   let compactionMarkerIndex = 0;
   await startup.eventBus.emit('system.init', {});
   await startup.eventBus.emit('system.ready', {});
+  await gateway.declareRuntimeReady();
   backgroundScheduler.start();
   reply({
     ok: true,

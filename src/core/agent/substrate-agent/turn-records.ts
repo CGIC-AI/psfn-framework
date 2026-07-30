@@ -28,6 +28,8 @@ import {
 } from '../../../shared/contracts/tool-call-outcome.js';
 import { buildTurnRecordInternalStateSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import { getToolResultIntakeScreening } from '../tool-call-scheduler.js';
+import { redactSecretsInValue } from '../../../shared/diagnostics/redaction.js';
+import { getToolResultInvocationAudit } from '../tool-call-scheduler.js';
 
 export type TurnSessionWriteManager = Pick<
   SessionManager,
@@ -593,6 +595,14 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
 
     if (!isToolResultAgentMessage(entry)) continue;
     const target = toolCallsById.get(entry.toolCallId);
+    const invocationAudit = getToolResultInvocationAudit(entry);
+    const fallbackArguments = invocationAudit
+      ? redactSecretBearingToolArguments(
+          normalizeToolArguments(entry.toolName, invocationAudit.arguments),
+        )
+      : undefined;
+    const fallbackRationale = sanitizePersistedReasoningText(invocationAudit?.rationale);
+    const fallbackThoughtSignature = invocationAudit?.thoughtSignature?.trim();
     const resultText = extractToolResultText(entry).trim();
     const outcome = resolveToolResultMessageOutcome(entry);
     const toolResultFields = {
@@ -607,6 +617,7 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
     const provenanceRefs = collectToolProvenanceRefs({
       toolName: entry.toolName,
       toolCallId: entry.toolCallId,
+      argumentsValue: fallbackArguments,
       details: entry.details,
       existing: target?.provenanceRefs,
     });
@@ -622,7 +633,12 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
     toolCalls.push({
       toolName: entry.toolName,
       toolCallId: entry.toolCallId,
+      ...(hasOwnKeys(fallbackArguments)
+        ? { arguments: cloneUnknownValue(fallbackArguments) as Record<string, unknown> }
+        : {}),
       ...(provenanceRefs.length > 0 ? { provenanceRefs } : {}),
+      ...(fallbackRationale ? { rationale: fallbackRationale } : {}),
+      ...(fallbackThoughtSignature ? { thoughtSignature: fallbackThoughtSignature } : {}),
       ...toolResultFields,
     });
   }
@@ -723,6 +739,13 @@ function stripDerivableTurnSnapshotDuplicates(snapshot: TurnSnapshotRecord): voi
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {
   return Object.keys(value ?? {}).length > 0;
+}
+
+function redactSecretBearingToolArguments(
+  argumentsValue: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!argumentsValue) return undefined;
+  return redactSecretsInValue(argumentsValue) as Record<string, unknown>;
 }
 
 function collectToolProvenanceRefs(input: {

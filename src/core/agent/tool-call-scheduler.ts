@@ -83,6 +83,36 @@ export interface ToolCallSchedulerOptions {
   toolResultScreener?: ToolResultIntakeScreener;
 }
 
+export interface ToolResultInvocationAudit {
+  arguments?: unknown;
+  rationale?: string;
+  thoughtSignature?: string;
+}
+
+const toolResultInvocationAudits = new WeakMap<ToolResultMessage, ToolResultInvocationAudit>();
+
+export function getToolResultInvocationAudit(
+  message: ToolResultMessage,
+): ToolResultInvocationAudit | undefined {
+  const record = toolResultInvocationAudits.get(message);
+  if (!record) return undefined;
+  return {
+    ...(Object.hasOwn(record, 'arguments') ? { arguments: record.arguments } : {}),
+    ...(record.rationale ? { rationale: record.rationale } : {}),
+    ...(record.thoughtSignature
+      ? { thoughtSignature: record.thoughtSignature }
+      : {}),
+  };
+}
+
+function attachToolResultInvocationAudit<T extends ToolResultMessage>(
+  message: T,
+  invocationAudit: ToolResultInvocationAudit,
+): T {
+  toolResultInvocationAudits.set(message, invocationAudit);
+  return message;
+}
+
 export interface ToolCallExecutionGuard {
   inFlightSignatures: Set<string>;
   successfulSignatures: Set<string>;
@@ -110,6 +140,7 @@ export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
 
 interface ToolCallDescriptor {
   toolCall: ToolCall;
+  invocationAudit: ToolResultInvocationAudit;
   tool: AgentTool<any> | undefined;
   resolveTool: (toolName: string) => AgentTool<any> | undefined;
   resolveAvailableToolNames: () => string[];
@@ -198,6 +229,13 @@ export async function executeToolCallsWithScheduler(
   options: ToolCallSchedulerOptions,
 ): Promise<ToolExecutionResult> {
   const toolCalls = assistantMessage.content.filter((content): content is ToolCall => content.type === 'toolCall');
+  const rationale = assistantMessage.content
+    .filter((content): content is Extract<AssistantMessage['content'][number], { type: 'thinking' }> => (
+      content.type === 'thinking' && typeof content.thinking === 'string'
+    ))
+    .map(content => content.thinking.trim())
+    .filter(Boolean)
+    .join('\n\n');
   const resolveTools = typeof tools === 'function' ? tools : () => tools;
   const resolveTool = (toolName: string) => resolveTools()?.find((entry) => entry.name === toolName);
   const resolveAvailableToolNames = () => (resolveTools() ?? []).map((entry) => entry.name);
@@ -206,6 +244,7 @@ export async function executeToolCallsWithScheduler(
     const resolved = resolveToolConcurrencyMetadata(tool);
     return {
       toolCall,
+      invocationAudit: buildToolResultInvocationAudit(toolCall, rationale),
       tool,
       resolveTool,
       resolveAvailableToolNames,
@@ -274,6 +313,7 @@ export async function executeToolCallsWithScheduler(
             context.stream,
             resultText,
             'dependency_skip',
+            descriptor.invocationAudit,
           ));
         }
       }
@@ -294,6 +334,7 @@ export async function executeToolCallsWithScheduler(
           context.stream,
           attribution.resultText,
           'dependency_skip',
+          descriptor.invocationAudit,
         ));
       }
       break;
@@ -361,6 +402,7 @@ async function executeSingleToolCall(
   options: ToolCallSchedulerOptions,
 ): Promise<ToolResultMessage> {
   const { toolCall } = descriptor;
+  const { invocationAudit } = descriptor;
   const tool = descriptor.resolveTool(toolCall.name) ?? descriptor.tool;
   const guard = options.guard;
   const signature = buildToolCallSignature(toolCall);
@@ -381,6 +423,7 @@ async function executeSingleToolCall(
         context.stream,
         `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.missingRequirement}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
         'validation_rejection',
+        invocationAudit,
       );
     }
     if (guard.inFlightSignatures.has(signature)) {
@@ -393,6 +436,7 @@ async function executeSingleToolCall(
         context.stream,
         'Internal tool status: skipped duplicate tool call because the same tool/action/input is already in flight. This is not a user-facing message.',
         'duplicate_skip',
+        invocationAudit,
       );
     }
     if (guard.successfulSignatures.has(signature)) {
@@ -405,6 +449,7 @@ async function executeSingleToolCall(
         context.stream,
         DUPLICATE_TOOL_CALL_SKIP_RESULT,
         'duplicate_skip',
+        invocationAudit,
       );
     }
     const failures = guard.failureCountsBySignature.get(signature) ?? 0;
@@ -419,6 +464,7 @@ async function executeSingleToolCall(
         context.stream,
         `Internal tool status: ${toolCall.name} is degraded for this action/input after ${failures} failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.`,
         'dependency_skip',
+        invocationAudit,
       );
     }
     guard.inFlightSignatures.add(signature);
@@ -612,7 +658,7 @@ async function executeSingleToolCall(
     outcome,
   });
 
-  const toolResultMessage: ToolResultMessage & { outcome: ToolCallOutcome } = {
+  const toolResultMessage = attachToolResultInvocationAudit({
     role: 'toolResult',
     toolCallId: toolCall.id,
     toolName: toolCall.name,
@@ -625,7 +671,7 @@ async function executeSingleToolCall(
     // session manager) reuses the SAME envelope instead of re-running a
     // side-effecting screen (double quarantine hold).
     ...(intakeScreening ? { [TOOL_RESULT_INTAKE_SCREENING_KEY]: intakeScreening } : {}),
-  };
+  }, invocationAudit);
   context.stream.push({ type: 'message_start', message: toolResultMessage });
   context.stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;
@@ -661,6 +707,7 @@ function skipToolCall(
   stream: { push: (event: ScheduledAgentEvent) => void },
   reasonText: string,
   outcome: Extract<ToolCallOutcome, 'validation_rejection' | 'duplicate_skip' | 'dependency_skip'>,
+  invocationAudit = buildToolResultInvocationAudit(toolCall),
 ): ToolResultMessage {
   const result = {
     content: [{ type: 'text' as const, text: reasonText }],
@@ -681,7 +728,7 @@ function skipToolCall(
     outcome,
   });
 
-  const toolResultMessage: ToolResultMessage & { outcome: ToolCallOutcome } = {
+  const toolResultMessage = attachToolResultInvocationAudit({
     role: 'toolResult',
     toolCallId: toolCall.id,
     toolName: toolCall.name,
@@ -690,10 +737,25 @@ function skipToolCall(
     isError: true,
     outcome,
     timestamp: Date.now(),
-  };
+  } satisfies ToolResultMessage & { outcome: ToolCallOutcome }, invocationAudit);
   stream.push({ type: 'message_start', message: toolResultMessage });
   stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;
+}
+
+function buildToolResultInvocationAudit(
+  toolCall: ToolCall,
+  rationale = '',
+): ToolResultInvocationAudit {
+  return {
+    ...(Object.hasOwn(toolCall, 'arguments')
+      ? { arguments: structuredClone(toolCall.arguments) }
+      : {}),
+    ...(rationale.trim() ? { rationale: rationale.trim() } : {}),
+    ...(toolCall.thoughtSignature?.trim()
+      ? { thoughtSignature: toolCall.thoughtSignature.trim() }
+      : {}),
+  };
 }
 
 function buildToolCallSignature(toolCall: ToolCall): string {

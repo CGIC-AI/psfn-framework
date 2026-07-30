@@ -167,4 +167,16 @@ describe('agent gateway-disconnect wiring', () => {
     expect(identifyIndex).toBeGreaterThanOrEqual(0);
     expect(registrationIndex).toBeLessThan(identifyIndex);
   });
+
+  it('declares gateway readiness only after inbound message handlers are registered', () => {
+    const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+    const handlerRegistrationIndex = mainSource.indexOf(
+      'registerGatewayMessageHandlers({',
+    );
+    const readyIndex = mainSource.indexOf('await gateway.declareRuntimeReady()');
+
+    expect(handlerRegistrationIndex).toBeGreaterThanOrEqual(0);
+    expect(readyIndex).toBeGreaterThanOrEqual(0);
+    expect(handlerRegistrationIndex).toBeLessThan(readyIndex);
+  });
 });

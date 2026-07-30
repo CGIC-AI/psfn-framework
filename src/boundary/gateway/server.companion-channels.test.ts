@@ -205,11 +205,13 @@ async function invokeRpc(
 }
 
 async function identifyAgent(conn: MockConnection, companionId: string, rpcId = 900): Promise<any> {
-  return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
+  const identified = await invokeRpc(conn, rpcId, 'gateway.client.identify', {
     role: 'agent',
     companionId,
     authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
   });
+  await invokeRpc(conn, rpcId + 10_000, 'gateway.client.ready', {});
+  return identified;
 }
 
 function methodFrames(conn: MockConnection, method: string): any[] {

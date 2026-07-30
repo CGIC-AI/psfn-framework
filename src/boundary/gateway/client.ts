@@ -651,6 +651,20 @@ export class GatewayClient implements
   }
 
   /**
+   * Publish the application-level readiness boundary after every inbound
+   * notification handler is installed. Identification authenticates the
+   * process; it does not mean the runtime can safely consume partner traffic.
+   */
+  async declareRuntimeReady(): Promise<void> {
+    const result = await this.rpcInstance.request('gateway.client.ready', {});
+    if (!isRecord(result)
+      || result.success !== true
+      || Object.keys(result).length !== 1) {
+      throw new Error('Gateway returned an invalid runtime-ready acknowledgement');
+    }
+  }
+
+  /**
    * Attach the agent-owned deterministic welfare posture after its charge and
    * fatigue runtimes are ready. The initial report is acknowledged so invalid
    * wiring fails startup instead of silently leaving a fabricated healthy view.

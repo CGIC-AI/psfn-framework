@@ -4,6 +4,7 @@ import {
   resolveTurnRecordAuditPrivacy,
   sanitizePersistedReasoningText,
 } from './turn-records.js';
+import { executeToolCallsWithScheduler } from '../tool-call-scheduler.js';
 
 const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
 const AUDIT_REQUEST_ID = 'request-audit-privacy';
@@ -17,6 +18,77 @@ function sensitivityDecision(sensitivity: 'non_intimate' | 'intimate') {
       requestId: AUDIT_REQUEST_ID,
     },
   };
+}
+
+function buildFallbackToolRecord(toolResult: Record<string, unknown>) {
+  return buildTurnRecord({
+    message: {
+      id: 'source-message-fallback',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Use the tool.',
+      timestamp: new Date(1_700_000_000_000),
+    },
+    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+    requestId: 'req-turn-record-fallback',
+    startedAt: 1_700_000_000_000,
+    completedAt: 1_700_000_000_250,
+    userSessionEntryId: 1,
+    assistantSessionEntryId: 2,
+    response: {
+      content: 'Done.',
+      channelId: 'api:test',
+      metadata: {
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        durationMs: 250,
+      },
+    },
+    turnMessages: [toolResult as any],
+    promptMode: 'default',
+    promptText: 'system prompt',
+    contextMessageCount: 1,
+    memoryContextChars: 0,
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    retrievalProvenanceRefs: [],
+    hashPromptText: () => 'prompt-hash',
+  });
+}
+
+async function buildScheduledFallbackToolRecord(input: {
+  toolName: string;
+  arguments: Record<string, unknown>;
+  rationale?: string;
+  thoughtSignature?: string;
+}) {
+  const content = [
+    ...(input.rationale
+      ? [{ type: 'thinking' as const, thinking: input.rationale }]
+      : []),
+    {
+      type: 'toolCall' as const,
+      id: `call-${input.toolName}`,
+      name: input.toolName,
+      arguments: input.arguments,
+      ...(input.thoughtSignature ? { thoughtSignature: input.thoughtSignature } : {}),
+    },
+  ];
+  const execution = await executeToolCallsWithScheduler(
+    [],
+    {
+      role: 'assistant',
+      content,
+      stopReason: 'toolUse',
+    } as Parameters<typeof executeToolCallsWithScheduler>[1],
+    undefined,
+    { stream: { push: () => undefined } },
+    { maxParallelToolCalls: 1 },
+  );
+  return buildFallbackToolRecord(execution.toolResults[0]! as unknown as Record<string, unknown>);
 }
 
 describe('turn-records tool persistence', () => {
@@ -331,6 +403,60 @@ describe('turn-records tool persistence', () => {
     });
 
     expect(record.location).toBeUndefined();
+  });
+
+  it('persists invocation arguments, rationale, and provenance from a result-only live transcript', async () => {
+    const record = await buildScheduledFallbackToolRecord({
+      toolName: 'world',
+      arguments: { action: 'list', place_id: 'living_room' },
+      rationale: 'Need to inspect the available world state.',
+      thoughtSignature: 'sig-world-list',
+    });
+
+    expect(record.toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: 'world',
+        toolCallId: 'call-world',
+        arguments: { action: 'list', place_id: 'living_room' },
+        rationale: 'Need to inspect the available world state.',
+        thoughtSignature: 'sig-world-list',
+        provenanceRefs: ['source:tool:world|invocation:call-world'],
+      }),
+    ]);
+  });
+
+  it('redacts secret-bearing result-only invocation arguments before persistence', async () => {
+    const record = await buildScheduledFallbackToolRecord({
+      toolName: 'connector',
+      arguments: {
+        action: 'connect',
+        api_key: 'sk-live-secret-value',
+        openaiApiKey: 'sk-live-compound-secret',
+        code: 'oauth-secret-code',
+        nested: {
+          authorization: 'Bearer live-secret-token',
+          header: 'Bearer nested-value-secret',
+          value: 'ghp_1234567890abcdef',
+          safe: 'keep-me',
+        },
+      },
+    });
+
+    expect(record.toolCalls[0]?.arguments).toEqual({
+      action: 'connect',
+      api_key: '[REDACTED_SECRET]',
+      openaiApiKey: '[REDACTED_SECRET]',
+      code: '[REDACTED_SECRET]',
+      nested: {
+        authorization: '[REDACTED_SECRET]',
+        header: 'Bearer [REDACTED_SECRET]',
+        value: '[REDACTED_SECRET]',
+        safe: 'keep-me',
+      },
+    });
+    expect(JSON.stringify(record.toolCalls)).not.toContain('live-secret');
+    expect(JSON.stringify(record.toolCalls)).not.toContain('oauth-secret-code');
+    expect(JSON.stringify(record.toolCalls)).not.toContain('1234567890abcdef');
   });
 
   it('preserves tool arguments, results, and rationale in the turn record', () => {

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "seams": [
+    {
+      "path": "src/boundary/gateway/server.ts",
+      "label": "Gateway server"
+    },
+    {
+      "path": "src/core/session/manager.ts",
+      "label": "Session manager"
+    },
+    {
+      "path": "src/faculties/memory/writer.ts",
+      "label": "Memory writer"
+    }
+  ]
+}

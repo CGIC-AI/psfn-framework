@@ -75,6 +75,12 @@ jobs:
         if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true'
         run: npm ci
 
+      - name: Report import-graph impact for changed seam files
+        if: steps.scope.outputs.root_runtime == 'true'
+        run: |
+          ./node_modules/.bin/tsx scripts/report-import-graph-impact.ts --base "$BASE_SHA" --head "$HEAD_SHA" \
+            || echo "::warning title=Import-graph impact unavailable::Reporter process failed; informational check will not block CI."
+
       - name: Build root runtime in the clean environment
         if: steps.scope.outputs.root_runtime == 'true'
         env:

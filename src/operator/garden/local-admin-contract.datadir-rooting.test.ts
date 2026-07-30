@@ -20,6 +20,8 @@ import {
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
+import { createSessionActivityTracker } from '../../app/agent/session-activity.js';
 
 /**
  * Regression guard for psfn-framework-dnll.4: per-companion state files owned by
@@ -50,6 +52,8 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
   let systemDataDir: string;
   let companionDataDir: string;
   let sessionsDir: string;
+  let sessionStore: SessionStore;
+  let sessionManager: SessionManager;
 
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'dnll4-rooting-'));
@@ -62,6 +66,11 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     writeFileSync(
       join(companionDataDir, 'character.json'),
       `${JSON.stringify(testCard, null, 2)}\n`,
+      'utf-8',
+    );
+    writeFileSync(
+      join(companionDataDir, 'capability-tier.json'),
+      `${JSON.stringify({ tier: 'nursery', customTokens: [] }, null, 2)}\n`,
       'utf-8',
     );
   });
@@ -104,8 +113,8 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
     const eventBus = new EventBus();
     const memoryStore = new InMemoryMemoryStore().asPort();
-    const sessionStore = new SessionStore(sessionsDir);
-    const sessionManager = new SessionManager(sessionStore, config, eventBus);
+    sessionStore = new SessionStore(sessionsDir);
+    sessionManager = new SessionManager(sessionStore, config, eventBus);
     const scheduler = new Scheduler(eventBus);
     scheduler.registerHeartbeat(() => {});
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
@@ -183,5 +192,68 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
     expect(definitions.find(definition => definition.processor === 'wiki_pass')?.intervalMs)
       .toBe(24 * 60 * 60_000);
+  });
+
+  it('persists an operator tier-change notice into the companion latest conversation', () => {
+    const services = buildContract();
+    sessionManager.recordUserMessage(
+      'api:companion-home',
+      'Please tell me if your capabilities change.',
+      'person-1',
+      'Person',
+    );
+
+    const result = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'custom',
+      customTokens: ['identity.read', 'memory.delete'],
+    }));
+
+    expect(result.ok).toBe(true);
+    const notices = sessionStore.getRecent('api:companion-home', 10)
+      .filter(entry => entry.role === 'system' && entry.authorId === 'system:capability-policy');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.content).toContain('[System notice: capability access changed]');
+    expect(notices[0]?.content).toContain('from "nursery" to "custom"');
+    expect(notices[0]?.content).toContain('Newly granted: memory.delete.');
+    expect(notices[0]?.content).toContain(
+      'Withdrawn: identity.write.runtime, memory.write, git.read, issue.read, repl.execute.',
+    );
+    expect(notices[0]?.content).toContain('not a fault in you');
+  });
+
+  it('delivers a pre-conversation tier notice into the next conversation on any channel', () => {
+    const services = buildContract();
+
+    const result = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'apprentice',
+      customTokens: [],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(readLastActiveSession(companionDataDir)).toBeNull();
+    expect(sessionManager.listRecentSessions()).toHaveLength(0);
+
+    const trackSessionActivity = createSessionActivityTracker(
+      sessionManager,
+      companionDataDir,
+    );
+    trackSessionActivity({
+      channelId: 'discord:123456789012345',
+      channelType: 'discord',
+      authorId: 'person-1',
+      authorName: 'Person',
+      content: 'Hello',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    });
+
+    const notices = sessionStore.getRecent('discord:123456789012345', 10)
+      .filter(entry => entry.role === 'system' && entry.authorId === 'system:capability-policy');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.content).toContain('from "nursery" to "apprentice"');
+    expect(notices[0]?.content).toContain('Current granted capabilities:');
+    expect(readLastActiveSession(companionDataDir)).toMatchObject({
+      sessionId: 'discord:123456789012345',
+      channelType: 'discord',
+    });
   });
 });

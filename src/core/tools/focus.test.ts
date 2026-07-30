@@ -8,7 +8,11 @@ import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { createSessionTool } from './session.js';
-import { executeCompleteFocusAction, type FocusSessionManager } from './focus.js';
+import {
+  executeCompleteFocusAction,
+  executeStartFocusAction,
+  type FocusSessionManager,
+} from './focus.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 function makeConfig(dataDir: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -104,6 +108,19 @@ describe('focus tools', () => {
     );
     expect(toolText(second as any)).toContain('focus session already active');
     expect((second.details as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('propagates the captured-owner invariant from a foreign API focus target to the outer tool boundary', async () => {
+    manager.setActiveContextSession('api:other-session');
+    const sessionReads = manager.createCapturedSessionReads({
+      logicalSessionId: 'api:captured-owner',
+      sourceChannelId: 'api:captured-owner',
+    });
+
+    await expect(sessionReads.run(() => executeStartFocusAction(manager, {
+      scope: 'Probe an explicitly selected focus target',
+      channelId: 'api:other-session',
+    }))).rejects.toThrow('cannot apply mutable active-context resolution');
   });
 
   it('completes focus by persisting durable knowledge and pruning compacted focus range from context', async () => {

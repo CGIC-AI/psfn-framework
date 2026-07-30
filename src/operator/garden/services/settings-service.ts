@@ -51,6 +51,12 @@ import {
   resolveMemorySalienceFloor,
 } from '../../../system/config/memory-retrieval-policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
+import {
+  buildCapabilityTierChange,
+  type CapabilityTierChange,
+} from '../../../system/capabilities/change-notice.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
@@ -123,6 +129,19 @@ const log = createComponentLogger('AdminSettingsService');
 type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
+
+export type CapabilityTierChangeHandler = (change: CapabilityTierChange) => void;
+
+function toCapabilityGrantSnapshot(input: {
+  tier: CapabilityGrantSnapshot['tier'];
+  customTokens: readonly CapabilityToken[];
+}): CapabilityGrantSnapshot {
+  return {
+    tier: input.tier,
+    customTokens: [...input.customTokens],
+    grantedTokens: resolveTierCapabilityTokens(input.tier, input.customTokens),
+  };
+}
 
 function splitCompanionModelSelectionSettings(
   settings: EditableSettings,
@@ -240,17 +259,52 @@ export function applyAdminCapabilityTierMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
   payload: unknown;
+  onCapabilityTierChanged?: CapabilityTierChangeHandler;
 }): SettingsMutationResult {
   const { config, configStore, payload } = options;
   try {
+    const previous = toCapabilityGrantSnapshot(configStore.loadCapabilityTier());
     const saved = configStore.saveCapabilityTier(payload);
+    const current = toCapabilityGrantSnapshot(saved);
     config.capabilityTier = saved.tier;
-    const divergence = refreshCapabilities(config);
+    const divergences: AdminSettingsDivergence[] = [];
+    const refreshDivergence = refreshCapabilities(config);
+    if (refreshDivergence) divergences.push(refreshDivergence);
     invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:capability-tier');
+    const change = buildCapabilityTierChange(previous, current);
+    if (change && options.onCapabilityTierChanged) {
+      try {
+        options.onCapabilityTierChanged(change);
+      } catch (error) {
+        const message = toErrorMessage(error);
+        log.warn('Companion capability-tier change notice failed after owner mutation', {
+          error: message,
+        });
+        const existingCapabilityDivergenceIndex = divergences.findIndex(
+          divergence => divergence.key === 'capabilities',
+        );
+        const noticeDivergence: AdminSettingsDivergence = {
+          key: 'capabilities',
+          state: 'diverged',
+          detail: `capability-tier.json persisted but companion notice delivery failed: ${message}`,
+          updatedAt: Date.now(),
+        };
+        if (existingCapabilityDivergenceIndex === -1) {
+          divergences.push(noticeDivergence);
+        } else {
+          const existing = divergences[existingCapabilityDivergenceIndex]!;
+          divergences[existingCapabilityDivergenceIndex] = {
+            ...existing,
+            detail: `${existing.detail} ${noticeDivergence.detail}`,
+            updatedAt: noticeDivergence.updatedAt,
+          };
+        }
+      }
+    }
     return {
       ok: true,
       refreshedKeys: ['capabilities'],
-      divergences: divergence ? [divergence] : [],
+      divergences,
     };
   } catch (error) {
     return {
@@ -265,8 +319,15 @@ export function applyAdminSettingsMutation(options: {
   configStore: ConfigStorePort;
   settings: EditableSettings;
   capabilityCustomTokens?: readonly CapabilityToken[];
+  onCapabilityTierChanged?: CapabilityTierChangeHandler;
 }): SettingsMutationResult {
-  const { config, configStore, settings, capabilityCustomTokens } = options;
+  const {
+    config,
+    configStore,
+    settings,
+    capabilityCustomTokens,
+    onCapabilityTierChanged,
+  } = options;
   const refreshedKeys = new Set<AdminSettingsDivergence['key']>();
   const divergences: AdminSettingsDivergence[] = [];
 
@@ -392,6 +453,7 @@ export function applyAdminSettingsMutation(options: {
             ? [...(capabilityCustomTokens ?? [])]
             : currentCapabilities.customTokens,
         },
+        ...(onCapabilityTierChanged ? { onCapabilityTierChanged } : {}),
       });
       if (!capabilityMutation.ok) {
         return {
@@ -422,6 +484,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     configStore: ConfigStorePort;
     getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
     effectiveSchedulerConfig?: import('../../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
+    onCapabilityTierChanged?: CapabilityTierChangeHandler;
   }) {}
 
   private updateDivergences(
@@ -1103,6 +1166,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
         configStore: this.deps.configStore,
         settings: payload,
         capabilityCustomTokens: this.parseCapabilityCustomTokens(parsed),
+        ...(this.deps.onCapabilityTierChanged
+          ? { onCapabilityTierChanged: this.deps.onCapabilityTierChanged }
+          : {}),
       });
       if (!mutationResult.ok) {
         return { ok: false, message: mutationResult.message };
@@ -1616,6 +1682,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
             config: this.deps.config,
             configStore: this.deps.configStore,
             payload: parsed,
+            ...(this.deps.onCapabilityTierChanged
+              ? { onCapabilityTierChanged: this.deps.onCapabilityTierChanged }
+              : {}),
           });
           return result.ok
             ? this.buildSuccessfulSaveResult(

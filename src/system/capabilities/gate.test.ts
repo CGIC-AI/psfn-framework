@@ -130,6 +130,29 @@ describe('capability tool gating', () => {
     expect(system.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('lets every tier inspect its own capability grant without opening the broader self snapshot', async () => {
+    for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom'] as const) {
+      const selfStatus = createTool('self_status');
+      const gated = gateToolWithCapabilities(
+        selfStatus.tool,
+        () => accessForTier(tier, tier === 'custom' ? ['identity.read'] : []),
+      );
+
+      const capabilities = await gated.execute(`capabilities-${tier}`, { action: 'capabilities' });
+      expect((capabilities.details as any).capabilityDenied).not.toBe(true);
+      expect(selfStatus.executeSpy).toHaveBeenCalledTimes(1);
+    }
+
+    const nurserySnapshot = createTool('self_status');
+    const snapshotGated = gateToolWithCapabilities(
+      nurserySnapshot.tool,
+      () => accessForTier('nursery'),
+    );
+    const denied = await snapshotGated.execute('snapshot-nursery', { action: 'snapshot' });
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(nurserySnapshot.executeSpy).not.toHaveBeenCalled();
+  });
+
   it('gates unified memory delete-like actions by memory.delete capability token', async () => {
     const memoryDelete = createTool('memory');
     const nurseryGated = gateToolWithCapabilities(
@@ -244,6 +267,10 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('web_fetch').tool, {})).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('settings_get').tool, {})).toEqual(['internal.read']);
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, {})).toEqual(['internal.read']);
+    expect(resolveToolRequiredCapabilities(
+      createTool('self_status').tool,
+      { action: 'capabilities' },
+    )).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_list_peers' })).toEqual(['internal.read']);
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_publish' })).toEqual(['external.companion']);
     expect(resolveToolRequiredCapabilities(createTool('notify').tool, {

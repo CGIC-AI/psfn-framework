@@ -15,7 +15,10 @@ import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memor
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
-import { AdminSettingsDataService } from './settings-service.js';
+import {
+  AdminSettingsDataService,
+  type CapabilityTierChangeHandler,
+} from './settings-service.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 
 let tempDir: string | null = null;
@@ -95,6 +98,7 @@ function buildConfig(
 function buildService(
   config: SubstrateConfig,
   getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>,
+  onCapabilityTierChanged?: CapabilityTierChangeHandler,
 ): AdminSettingsDataService {
   return new AdminSettingsDataService({
     config,
@@ -104,6 +108,7 @@ function buildService(
     }),
     effectiveSchedulerConfig: loadSchedulerConfig(config.dataDir),
     ...(getCredentialPresence ? { getCredentialPresence } : {}),
+    ...(onCapabilityTierChanged ? { onCapabilityTierChanged } : {}),
   });
 }
 
@@ -869,6 +874,77 @@ describe('AdminSettingsDataService', () => {
       tier: 'custom',
       customTokens: capabilitiesPayload.customTokens,
     }));
+  });
+
+  it('reports the exact effective grant delta after a capability-tier mutation', () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const onCapabilityTierChanged = vi.fn<CapabilityTierChangeHandler>();
+    const service = buildService(config, undefined, onCapabilityTierChanged);
+
+    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'custom',
+      customTokens: ['identity.read', 'memory.delete'],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(onCapabilityTierChanged).toHaveBeenCalledWith({
+      previous: {
+        tier: 'nursery',
+        grantedTokens: [
+          'identity.read',
+          'identity.write.runtime',
+          'memory.write',
+          'git.read',
+          'issue.read',
+          'repl.execute',
+        ],
+      },
+      current: {
+        tier: 'custom',
+        grantedTokens: ['identity.read', 'memory.delete'],
+      },
+      granted: ['memory.delete'],
+      withdrawn: [
+        'identity.write.runtime',
+        'memory.write',
+        'git.read',
+        'issue.read',
+        'repl.execute',
+      ],
+    });
+  });
+
+  it('retains both live-refresh and companion-notice divergence details', () => {
+    const root = makeTempDir();
+    const config = buildConfig(root, {
+      refreshCapabilities: () => {
+        throw new Error('live capability refresh failed');
+      },
+    });
+    const service = buildService(config, undefined, () => {
+      throw new Error('companion notice failed');
+    });
+
+    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'apprentice',
+      customTokens: [],
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: {
+        status: 'degraded',
+        divergences: [{ key: 'capabilities', state: 'diverged' }],
+      },
+    });
+    if (!result.ok || !result.status) {
+      throw new Error('expected a degraded successful save result');
+    }
+    expect(result.status.divergences).toHaveLength(1);
+    expect(result.status.detail).toContain('live capability refresh failed');
+    expect(result.status.detail).toContain('companion notice delivery failed');
+    expect(result.status.detail).toContain('companion notice failed');
   });
 
   it('governs durable background-work tuning through scheduler.json and rejects malformed edits', async () => {

@@ -455,6 +455,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   agentLoop.registerTool(createSelfStatusTool({
     config,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+    getCapabilityGrantSnapshot: () => capabilityRuntime.snapshotOwnerGrant(),
     getAdaptiveToolRuntimeState: () => agentLoop.getAdaptiveToolRuntimeState(),
     getToolCatalogSnapshot: () => agentLoop.getToolCatalogSnapshot(),
     getToolHealthStatusByName: () => agentLoop.getToolHealthStatusByName(),

@@ -203,7 +203,7 @@ export function wireSessionToolsRuntime(
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
     seedSession: (sessionId) => {
-      sessionManager.appendSystemNote(
+      sessionManager.initializeExplicitSession(
         sessionId,
         'Session initialized via session action=new.',
       );

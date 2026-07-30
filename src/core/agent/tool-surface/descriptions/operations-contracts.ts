@@ -2,16 +2,16 @@ import { action, type CanonicalToolSurfaceContract } from './contracts.js';
 
 export const OPERATIONS_TOOL_CONTRACTS = {
   self_status: {
-    purpose: 'Read bounded runtime state and manage this companion\'s coarse availability lease.',
+    purpose: 'Read this companion\'s capability grant and bounded runtime state, and manage this companion\'s coarse availability lease.',
     actions: [
-      action('snapshot', [], ['recentChannelLimit']), action('diagnose'),
+      action('capabilities'), action('snapshot', [], ['recentChannelLimit']), action('diagnose'),
       action('logs', [], ['windowMs', 'sinceMs', 'limit', 'includeFileLogs']), action('conformance'),
       action('availability_read'), action('availability_publish', ['state', 'expires_at_ms', 'revision']),
       action('availability_clear', ['expected_revision']), action('availability_list_peers'),
     ],
-    output: 'It returns bounded operational or already-known peer state and never returns message content or lifecycle controls.',
+    output: 'It returns the current tier and effective granted capability tokens, bounded operational state, or already-known peer state; it never returns message content or lifecycle controls.',
     guidance: 'Do not use it to change settings, restart, or rebuild; use system.',
-    example: { action: 'snapshot', recentChannelLimit: 3 },
+    example: { action: 'capabilities' },
   },
   system: {
     purpose: 'Read safe runtime settings and request guarded lifecycle operations; under Kubernetes it also reports deployment mode and routes restart/rebuild through the approval-gated kube pipeline.',

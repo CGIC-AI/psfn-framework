@@ -141,6 +141,30 @@ describe('session tool action=new', () => {
     }
   });
 
+  it('withholds unexpected initialization diagnostics from companion-visible output', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-error-'));
+    try {
+      const tool = makeSessionToolForNewAction(dataDir, {
+        idFactory: () => 'api:session-error',
+        seedSession: () => {
+          throw new Error('EACCES writing /private/runtime/session-index');
+        },
+      });
+
+      const result = await tool.execute('call-internal-error', { action: 'new' });
+      const text = toolText(result as any);
+
+      expect(text).toContain('[System notice]');
+      expect(text).toContain('internal runtime problem');
+      expect(text).toContain('tell your person');
+      expect(text).not.toContain('EACCES');
+      expect(text).not.toContain('/private/runtime');
+    } finally {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when invoked from background continuation context', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-background-'));
     try {
@@ -475,7 +499,10 @@ class InMemoryTranscriptSearch {
       idFactory: () => 'api:session-unified-new',
       setActiveSession: (sessionId) => manager.setActiveContextSession(sessionId),
       seedSession: (sessionId) => {
-        manager.appendSystemNote(sessionId, 'Session initialized via session action=new.');
+        manager.initializeExplicitSession(
+          sessionId,
+          'Session initialized via session action=new.',
+        );
       },
     });
 
@@ -520,6 +547,39 @@ class InMemoryTranscriptSearch {
     expect(resumedPayload.previousSessionId).toBe('api:session-unified-new');
     expect(resumedPayload.session.sessionId).toBe('api:session-two');
     expect(manager.getActiveContextSession()).toBe('api:session-two');
+  });
+
+  it('session_new initializes its explicit target without crossing the captured turn owner', async () => {
+    manager.setActiveContextSession('api:owner-session');
+    const tool = createSessionTool({
+      manager,
+      llmProvider: { complete: vi.fn() } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      now: () => 10_000,
+      idFactory: () => 'api:session-captured-new',
+      setActiveSession: (sessionId) => manager.setActiveContextSession(sessionId),
+      seedSession: (sessionId) => {
+        manager.initializeExplicitSession(
+          sessionId,
+          'Session initialized via session action=new.',
+        );
+      },
+    });
+    const sessionReads = manager.createCapturedSessionReads({
+      logicalSessionId: 'api:owner-session',
+      sourceChannelId: 'api:owner-session',
+    });
+
+    const result = await sessionReads.run(
+      () => tool.execute('new-captured', { action: 'new' }),
+    );
+
+    expect((result.details as { newSessionId?: string }).newSessionId)
+      .toBe('api:session-captured-new');
+    expect(store.getLastEntry('api:session-captured-new')?.content)
+      .toBe('Session initialized via session action=new.');
+    expect(store.count('api:owner-session')).toBe(0);
   });
 
   it('records wake-return continuity artifacts through the unified tool', async () => {

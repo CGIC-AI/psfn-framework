@@ -7,6 +7,7 @@ import {
   readLastActiveSession,
   writeLastActiveSession,
 } from '../../system/lifecycle/notifications.js';
+import { deliverPendingCapabilityTierChangeNotices } from '../../system/capabilities/change-notice.js';
 
 const log = createComponentLogger('Agent');
 
@@ -64,5 +65,27 @@ export function createSessionActivityTracker(
         ? message.timestamp.getTime()
         : Date.now(),
     });
+    const deliveredNoticeCount = deliverPendingCapabilityTierChangeNotices(
+      companionDataDir,
+      (notice) => {
+        const entryId = sessionManager.recordSystemMessage(
+          sessionId,
+          notice,
+          'system:capability-policy',
+          'Capability policy',
+        );
+        if (entryId === null) {
+          throw new Error(
+            `session "${sessionId}" cannot persist a pending companion capability-tier notice`,
+          );
+        }
+      },
+    );
+    if (deliveredNoticeCount > 0) {
+      log.info('Delivered pending capability-tier notices into active conversation', {
+        sessionId,
+        deliveredNoticeCount,
+      });
+    }
   };
 }

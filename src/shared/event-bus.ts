@@ -998,6 +998,25 @@ export interface EventMap {
     minimumTier?: string;
     timestamp: number;
   };
+  'capability.tier.changed': {
+    companionId: string;
+    previousTier: string;
+    currentTier: string;
+    currentGrantedTokens: string[];
+    grantedTokens: string[];
+    withdrawnTokens: string[];
+    sessionId?: string;
+    delivery: 'immediate' | 'pending';
+    timestamp: number;
+  };
+  'agent.tools.execution.failed': {
+    toolName: string;
+    toolCallId: string;
+    errorName: string;
+    errorMessage: string;
+    errorStack?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'session.created': { channelId: string };
   'session.compacted': { channelId: string; before: number; after: number };
   'session.authorship_guard.retagged': {

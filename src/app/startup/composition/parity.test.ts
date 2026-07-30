@@ -73,7 +73,7 @@ describe('wireSessionToolsRuntime', () => {
       registerTool: vi.fn(),
     };
     const sessionManager = {
-      appendSystemNote: vi.fn(),
+      initializeExplicitSession: vi.fn(),
       listRecentSessions: vi.fn(() => []),
       searchTranscripts: vi.fn(() => []),
       getSessionActivity: vi.fn(() => null),
@@ -121,7 +121,7 @@ describe('wireSessionToolsRuntime', () => {
     expect(details.previousSessionId).toBe(null);
     expect(details.newSessionId.startsWith('api:session-')).toBe(true);
     expect(sessionManager.setActiveContextSession).toHaveBeenCalledWith(details.newSessionId);
-    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
+    expect(sessionManager.initializeExplicitSession).toHaveBeenCalledWith(
       details.newSessionId,
       'Session initialized via session action=new.',
     );

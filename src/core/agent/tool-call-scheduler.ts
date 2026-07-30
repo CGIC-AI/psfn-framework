@@ -22,6 +22,13 @@ import {
   isMalformedToolArguments,
   type ToolCallCorrection,
 } from './tool-call-correction.js';
+import {
+  internalToolFailureResult,
+  textResultWithError,
+} from '../tools/results.js';
+const TOOL_CANCELLED_NOTICE =
+  '[System notice] This tool operation was cancelled before it completed. No internal diagnostic '
+  + 'needs interpreting. You can tell your person the operation did not complete.';
 
 export interface ToolCallSchedulerOptions {
   maxParallelToolCalls: number;
@@ -424,10 +431,22 @@ async function executeSingleToolCall(
     } else {
       cancelled = context.signal?.aborted === true
         || (error instanceof Error && /abort(ed)?/i.test(error.message));
-      result = {
-        content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
-        details: {},
-      };
+      if (!cancelled) {
+        options.onTelemetry?.('agent.tools.execution.failed', {
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+        });
+      }
+      result = cancelled
+        ? textResultWithError(TOOL_CANCELLED_NOTICE, true, {
+            errorClass: 'unavailable',
+            retryHint: 'do_not_retry',
+            companionMessage: TOOL_CANCELLED_NOTICE,
+          })
+        : internalToolFailureResult();
       isError = true;
       outcome = 'execution_failure';
     }

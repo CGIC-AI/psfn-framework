@@ -3,9 +3,13 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
-import { textResultWithError } from './results.js';
+import { internalToolFailureResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isCapturedSessionOwnerInvariantError } from '../session/manager/captured-session-owner.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { createComponentLogger } from '../../shared/logger.js';
+
+const log = createComponentLogger('FocusTool');
 
 export interface FocusSessionManager {
   getActiveContextSessionForTool(): string | null;
@@ -167,6 +171,12 @@ export async function executeStartFocusAction(
   if (!channelId) {
     return textResultWithError('start_focus failed: unable to resolve channelId for this turn.', true);
   }
+  if (sessionManager.getFocusSessionContext(channelId)) {
+    return textResultWithError(
+      `start_focus failed: focus session already active for "${channelId}".`,
+      true,
+    );
+  }
 
   try {
     const started = sessionManager.startFocusSession(channelId, params.scope);
@@ -193,7 +203,9 @@ export async function executeStartFocusAction(
       },
     };
   } catch (error) {
-    return textResultWithError(`start_focus failed: ${toErrorMessage(error)}.`, true);
+    if (isCapturedSessionOwnerInvariantError(error)) throw error;
+    log.error('start_focus failed', { error: toErrorMessage(error) });
+    return internalToolFailureResult();
   }
 }
 
@@ -302,6 +314,8 @@ export async function executeCompleteFocusAction(
       },
     };
   } catch (error) {
-    return textResultWithError(`complete_focus failed: ${toErrorMessage(error)}.`, true);
+    if (isCapturedSessionOwnerInvariantError(error)) throw error;
+    log.error('complete_focus failed', { error: toErrorMessage(error) });
+    return internalToolFailureResult();
   }
 }

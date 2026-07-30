@@ -1400,6 +1400,7 @@ describe('Garden operator surface', () => {
     expect(JSON.parse(initializing.body)).toEqual({
       status: 'initializing',
       mode: 'network',
+      gardenDenialsLastHour: expect.any(Number),
     });
     const nonHealth = await requestTransportPort(
       harness.transportPort!,

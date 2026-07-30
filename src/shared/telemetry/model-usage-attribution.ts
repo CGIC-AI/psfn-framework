@@ -38,6 +38,35 @@ export const MODEL_USAGE_CHARGE_SURFACES = [
   MODEL_USAGE_UNKNOWN_DIMENSION,
 ] as const;
 
+const MODEL_USAGE_CHARGE_ATTRIBUTION_KEYS = [
+  'chargeLane',
+  'chargeSurface',
+  'chargeEventId',
+  'chargeRunId',
+  'chargeRootRunId',
+  'chargeParentRunId',
+] as const;
+
+type ModelUsageChargeAttributionKey =
+  (typeof MODEL_USAGE_CHARGE_ATTRIBUTION_KEYS)[number];
+
+/**
+ * Native baseline work may retain provider-cost telemetry, but Law 38 forbids
+ * attaching it to the charge roll. Strip both the charge classification and
+ * its lineage before crossing a native usage boundary.
+ */
+export function stripChargeAttribution<T extends object>(
+  input: T,
+): Omit<T, ModelUsageChargeAttributionKey> {
+  const stripped = {
+    ...input,
+  } as T & Partial<Record<ModelUsageChargeAttributionKey, unknown>>;
+  for (const key of MODEL_USAGE_CHARGE_ATTRIBUTION_KEYS) {
+    delete stripped[key];
+  }
+  return stripped;
+}
+
 /**
  * mmo9.7.3: per-lane spend attribution. `runtimeLaneClass` records the SINGLE
  * gate-resolved `RuntimeLaneClass` (`resolveRuntimeLaneClassForModelCall`) the

@@ -11,10 +11,6 @@ export const CHARGE_POLICY_RUNTIME_LANE_VALUES = [
 ] as const;
 
 export const CHARGE_POLICY_SURFACE_VALUES = [
-  'ownerFileInspection',
-  'localFilesystem',
-  'localEmbedding',
-  'externalEmbedding',
   'localImageGeneration',
   'paidImageGeneration',
   'analysisWorkbenchExtensionBand',

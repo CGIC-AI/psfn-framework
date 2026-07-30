@@ -625,12 +625,6 @@ function makeVisionChargePolicy(): ChargePolicyConfig {
       shard: 10,
     },
     surfaceCosts: {
-      ownerFileInspection: 0,
-      localFilesystem: 0,
-      memoryRead: 0,
-      memoryWrite: 0,
-      localEmbedding: 0,
-      externalEmbedding: 1,
       localImageGeneration: 0,
       paidImageGeneration: 1,
       analysisWorkbenchExtensionBand: 1,
@@ -885,7 +879,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         eventId: 'charge-non-model',
         timestampMs: nowMs - 900,
         lane: 'interactive',
-        surface: 'memoryRead',
+        surface: 'subagentLaunch',
         amount: 2,
         quota: 10,
         spentAfter: 5,
@@ -1399,7 +1393,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         channelId: sourceChannelId,
         conversationId: reset.newLogicalSessionId,
         rootInitiationId: 'root-initiation-1',
-        chargeSurface: 'externalEmbedding',
+        chargeSurface: 'unknown',
       });
       expect(usage.groupedBy.sessionId?.[0]?.key).toBe(reset.newLogicalSessionId);
       expect(usage.groupedBy.channelId?.[0]?.key).toBe(sourceChannelId);

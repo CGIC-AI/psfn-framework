@@ -16,10 +16,6 @@ import {
 import type { RunChargeSnapshot } from '../../../../shared/telemetry/run-charge.js';
 
 const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
-  ownerFileInspection: 'owner-file inspection',
-  localFilesystem: 'local filesystem read',
-  localEmbedding: 'local embedding',
-  externalEmbedding: 'external embedding',
   localImageGeneration: 'local image generation',
   paidImageGeneration: 'paid image/video generation',
   analysisWorkbenchExtensionBand: 'analysis_workbench extension pass after the first iteration',

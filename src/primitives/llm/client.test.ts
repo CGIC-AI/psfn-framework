@@ -80,10 +80,6 @@ function makeModelChargePolicy(): ChargePolicyConfig {
       shard: 10,
     },
     surfaceCosts: {
-      ownerFileInspection: 0,
-      localFilesystem: 0,
-      localEmbedding: 0,
-      externalEmbedding: 1,
       localImageGeneration: 0,
       paidImageGeneration: 1,
       analysisWorkbenchExtensionBand: 1,

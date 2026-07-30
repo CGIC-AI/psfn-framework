@@ -6,8 +6,6 @@ import type { RunChargeLedgerEntry } from './charge-ledger.js';
 import type { ModelUsageEvent } from './model-usage.js';
 
 export const MODEL_BEARING_CHARGE_SURFACES = [
-  'localEmbedding',
-  'externalEmbedding',
   'localImageGeneration',
   'paidImageGeneration',
   'analysisWorkbenchExtensionBand',

@@ -2,10 +2,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ChargePolicySurface } from './charge-policy-config.js';
 import {
   CHARGE_POLICY_FILE_NAME,
   CHARGE_POLICY_SEED_FILE_NAME,
+  CHARGE_POLICY_SURFACE_VALUES,
   loadChargePolicyConfig,
   loadChargePolicySeedDefaults,
   saveChargePolicyConfig,
@@ -14,10 +14,6 @@ import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
-}
-
-function repeatSurface(surface: ChargePolicySurface, count: number): ChargePolicySurface[] {
-  return Array.from({ length: count }, () => surface);
 }
 
 function getDefaultSeedPolicy() {
@@ -32,10 +28,6 @@ function getDefaultSeedPolicy() {
       shard: 12,
     },
     surfaceCosts: {
-      ownerFileInspection: 0,
-      localFilesystem: 0,
-      localEmbedding: 0,
-      externalEmbedding: 0,
       localImageGeneration: 0,
       paidImageGeneration: 6,
       analysisWorkbenchExtensionBand: 4,
@@ -80,39 +72,54 @@ function getDefaultSeedPolicy() {
 }
 
 describe('charge policy config', () => {
-  it('declares no selfhood charge surfaces (charter Law 38: memory read/write are never metered)', async () => {
-    const { CHARGE_POLICY_SURFACE_VALUES } = await import('../../shared/contracts/charge-policy.js');
-    expect(CHARGE_POLICY_SURFACE_VALUES).not.toContain('memoryRead');
-    expect(CHARGE_POLICY_SURFACE_VALUES).not.toContain('memoryWrite');
-  });
-
-  it('fails closed with a Law 38 message when an owner file carries retired memory charge surfaces', () => {
-    const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-'));
-    const dataDir = join(root, 'data');
-    const seedDir = join(root, 'seed');
-    mkdirSync(dataDir, { recursive: true });
-    mkdirSync(seedDir, { recursive: true });
-
-    try {
-      const seed = getDefaultSeedPolicy();
-      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), seed);
-      const staleOwnerFile = {
-        ...seed,
-        surfaceCosts: {
-          ...seed.surfaceCosts,
-          memoryRead: 0,
-          memoryWrite: 0,
-        },
-      };
-      writeJson(join(dataDir, CHARGE_POLICY_FILE_NAME), staleOwnerFile);
-
-      expect(() => loadChargePolicyConfig(dataDir, { seedDir })).toThrow(
-        /memoryRead, memoryWrite are retired charge surfaces.*Law 38.*delete these keys/s,
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+  it('declares no native baseline charge surfaces (charter Law 38)', () => {
+    const retiredNativeSurfaces = [
+      'memoryRead',
+      'memoryWrite',
+      'ownerFileInspection',
+      'localFilesystem',
+      'localEmbedding',
+      'externalEmbedding',
+    ] as const;
+    for (const surface of retiredNativeSurfaces) {
+      expect(CHARGE_POLICY_SURFACE_VALUES).not.toContain(surface);
     }
   });
+
+  it.each(['surfaceCosts', 'surfaceRationales'] as const)(
+    'fails closed with a Law 38 remedy when owner-file %s carries retired native surfaces',
+    (field) => {
+      const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-'));
+      const dataDir = join(root, 'data');
+      const seedDir = join(root, 'seed');
+      mkdirSync(dataDir, { recursive: true });
+      mkdirSync(seedDir, { recursive: true });
+
+      try {
+        const seed = getDefaultSeedPolicy();
+        writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), seed);
+        const staleOwnerFile = {
+          ...seed,
+          [field]: {
+            ...seed[field],
+            memoryRead: field === 'surfaceCosts' ? 0 : 'Retired.',
+            memoryWrite: field === 'surfaceCosts' ? 0 : 'Retired.',
+            ownerFileInspection: field === 'surfaceCosts' ? 0 : 'Retired.',
+            localFilesystem: field === 'surfaceCosts' ? 0 : 'Retired.',
+            localEmbedding: field === 'surfaceCosts' ? 0 : 'Retired.',
+            externalEmbedding: field === 'surfaceCosts' ? 0 : 'Retired.',
+          },
+        };
+        writeJson(join(dataDir, CHARGE_POLICY_FILE_NAME), staleOwnerFile);
+
+        expect(() => loadChargePolicyConfig(dataDir, { seedDir })).toThrow(
+          /memoryRead, memoryWrite, ownerFileInspection, localFilesystem, localEmbedding, externalEmbedding are retired charge surfaces.*Law 38.*delete these keys/s,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('fails closed when the owner file is missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-'));
@@ -207,21 +214,7 @@ describe('charge policy config', () => {
       const seed = loadChargePolicySeedDefaults({ seedDir });
       expect(seed).toEqual(defaultSeed);
 
-      const representativeRun: ChargePolicySurface[] = [
-        ...repeatSurface('ownerFileInspection', 8),
-        ...repeatSurface('localFilesystem', 8),
-        ...repeatSurface('localEmbedding', 4),
-        ...repeatSurface('externalEmbedding', 4),
-        ...repeatSurface('localImageGeneration', 4),
-        'paidImageGeneration',
-        'analysisWorkbenchExtensionBand',
-        'subagentLaunch',
-        'shardLaunch',
-        'externalModelConsult',
-        'moaRoundBase',
-      ];
-      const zeroCostCalls = representativeRun.filter(surface => seed.surfaceCosts[surface] === 0).length;
-      expect(zeroCostCalls / representativeRun.length).toBeGreaterThan(0.8);
+      expect(Object.keys(seed.surfaceCosts)).toEqual(CHARGE_POLICY_SURFACE_VALUES);
       const surfaceRationales = seed.surfaceRationales ?? {};
       expect(Object.entries(seed.surfaceCosts).filter(([, amount]) => amount > 0).every(([surface]) => {
         const rationale = surfaceRationales[surface as keyof typeof surfaceRationales];

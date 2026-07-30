@@ -35,12 +35,6 @@ function makeChargePolicy(): ChargePolicyConfig {
       shard: 50,
     },
     surfaceCosts: {
-      ownerFileInspection: 1,
-      localFilesystem: 1,
-      memoryRead: 1,
-      memoryWrite: 2,
-      localEmbedding: 1,
-      externalEmbedding: 2,
       localImageGeneration: 1,
       paidImageGeneration: 3,
       analysisWorkbenchExtensionBand: 2,
@@ -307,7 +301,7 @@ describe('createSelfStatusTool', () => {
       lane: 'interactive',
       runId: 'run-status-test',
     }, async () => {
-      chargeSurface('memoryRead');
+      chargeSurface('localImageGeneration');
       const payload = await buildSelfStatusSnapshot({
         ...runtime,
         now: undefined,

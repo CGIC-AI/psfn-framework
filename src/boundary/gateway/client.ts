@@ -86,6 +86,7 @@ import type { ConfirmationResolveResult } from '../../system/capabilities/confir
 import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import { isGardenQueueName, type GardenQueueName } from '../../shared/event-bus.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { stripChargeAttribution } from '../../shared/telemetry/model-usage-attribution.js';
 import type {
   GitCommitResult,
   GitDiffResult,
@@ -983,7 +984,9 @@ export class GatewayClient implements
       'llm.embed',
       {
         texts,
-        ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
+        ...stripChargeAttribution(
+          buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
+        ),
       },
       options.signal,
       // zn2iy: like llm.chat/llm.complete, mint a cancellationId and fire

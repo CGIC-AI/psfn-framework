@@ -1211,10 +1211,6 @@ describe('AdminSettingsDataService', () => {
         shard: 11,
       },
       surfaceCosts: {
-        ownerFileInspection: 0,
-        localFilesystem: 0,
-        localEmbedding: 0,
-        externalEmbedding: 0,
         localImageGeneration: 0,
         paidImageGeneration: 5,
         analysisWorkbenchExtensionBand: 4,

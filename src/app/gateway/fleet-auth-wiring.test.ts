@@ -1,9 +1,39 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { startOptionalGatewayApiServer } from './api-surface.js';
+import {
+  assertGatewayApiIntakeScreeningOwnership,
+  startOptionalGatewayApiServer,
+} from './api-surface.js';
 import { FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 
 describe('gateway fleet authorization context wiring', () => {
+  it('fails closed when fleet API intake ownership is missing or mode-mismatched', () => {
+    const base = {
+      multiCompanion: true,
+      intakeScreeningMode: 'off',
+      intakeScreening: null,
+      config: {
+        companionFleet: {
+          companions: [{
+            companionId: '11111111-1111-4111-8111-111111111111',
+          }],
+        },
+      },
+    } as unknown as Parameters<typeof assertGatewayApiIntakeScreeningOwnership>[0];
+
+    expect(() => assertGatewayApiIntakeScreeningOwnership(base))
+      .toThrow(/requires a companion-owned resolver/u);
+    expect(() => assertGatewayApiIntakeScreeningOwnership({
+      ...base,
+      intakeScreeningMode: 'enforce',
+      intakeScreeningForCompanion: () => null,
+    })).toThrow(/mode=enforce has no matching service/u);
+    expect(() => assertGatewayApiIntakeScreeningOwnership({
+      ...base,
+      intakeScreeningForCompanion: () => null,
+    })).not.toThrow();
+  });
+
   it('passes exact manifest companion IDs and enables only the complete principal composition', () => {
     const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
     const apiSurfaceSource = readFileSync(new URL('./api-surface.ts', import.meta.url), 'utf8');

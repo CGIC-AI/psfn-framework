@@ -84,6 +84,8 @@ export interface LoadGatewayChannelSurfacesInput {
    * attachment text at ingest. Null when intake-policy mode is 'off'.
    */
   intakeScreening: IntakeScreeningService | null;
+  /** Explicit owner-file posture shared by every companion composition. */
+  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
   /**
    * Fleet-only exact owner resolver. Every routed channel adapter receives
    * its owning companion's screening/quarantine composition; missing or
@@ -100,23 +102,54 @@ export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogg
   info(message: string, meta?: Record<string, unknown>): void;
 }
 
-function resolveChannelIntakeScreening(
-  input: LoadGatewayChannelSurfacesInput,
+export interface GatewayChannelIntakeScreeningRouting {
+  multiCompanion: boolean;
+  mode: 'off' | 'shadow' | 'enforce';
+  singleton: IntakeScreeningService | null;
+  forCompanion?: (companionId: CompanionId) => IntakeScreeningService | null;
+}
+
+export function resolveChannelIntakeScreening(
+  input: GatewayChannelIntakeScreeningRouting,
   companionId: CompanionId | undefined,
   surface: string,
 ): IntakeScreeningService | null {
-  if (!input.bootstrap.server.multiCompanion.enabled) {
-    return input.intakeScreening;
+  if (!input.multiCompanion) {
+    if (input.mode === 'off') {
+      if (input.singleton) {
+        throw new Error(`Single-companion ${surface} intake mode=off resolved a service`);
+      }
+    } else if (
+      !input.singleton
+      || input.singleton.mode !== input.mode
+    ) {
+      throw new Error(
+        `Single-companion ${surface} intake mode=${input.mode} has no matching service`,
+      );
+    }
+    return input.singleton;
   }
   if (!companionId) {
     throw new Error(`Multi-companion ${surface} surface is missing companionId routing`);
   }
-  if (!input.intakeScreeningForCompanion) {
+  if (!input.forCompanion) {
     throw new Error(
       `Multi-companion ${surface} surface has no companion-owned intake screening resolver`,
     );
   }
-  return input.intakeScreeningForCompanion(companionId);
+  const screening = input.forCompanion(companionId);
+  if (input.mode === 'off') {
+    if (screening !== null) {
+      throw new Error(
+        `Multi-companion ${surface} intake mode=off resolved a service for ${companionId}`,
+      );
+    }
+  } else if (!screening || screening.mode !== input.mode) {
+    throw new Error(
+      `Multi-companion ${surface} intake mode=${input.mode} has no matching service for ${companionId}`,
+    );
+  }
+  return screening;
 }
 
 export async function initGatewayChannelSurfaces(
@@ -133,6 +166,14 @@ export async function initGatewayChannelSurfaces(
 export async function loadGatewayChannelSurfaces(
   input: LoadGatewayChannelSurfacesInput,
 ): Promise<GatewayChannelSurfaces> {
+  const intakeScreeningRouting: GatewayChannelIntakeScreeningRouting = {
+    multiCompanion: input.bootstrap.server.multiCompanion.enabled,
+    mode: input.intakeScreeningMode,
+    singleton: input.intakeScreening,
+    ...(input.intakeScreeningForCompanion
+      ? { forCompanion: input.intakeScreeningForCompanion }
+      : {}),
+  };
   const discordChannelConfig = input.bootstrap.channelsConfig.discord;
   const accountConfigs = discordChannelConfig.accounts ?? [];
   const multiAccount = accountConfigs.length > 0;
@@ -157,7 +198,7 @@ export async function loadGatewayChannelSurfaces(
           `discord account ${account.accountId}`,
         ),
         intakeScreening: resolveChannelIntakeScreening(
-          input,
+          intakeScreeningRouting,
           account.companionId,
           `discord account ${account.accountId}`,
         ),
@@ -192,7 +233,7 @@ export async function loadGatewayChannelSurfaces(
           'discord',
         ),
         intakeScreening: resolveChannelIntakeScreening(
-          input,
+          intakeScreeningRouting,
           discordChannelConfig.companionId,
           'discord',
         ),
@@ -210,7 +251,7 @@ export async function loadGatewayChannelSurfaces(
         'telegram',
       ),
       intakeScreening: resolveChannelIntakeScreening(
-        input,
+        intakeScreeningRouting,
         input.bootstrap.channelsConfig.telegram.companionId,
         'telegram',
       ),

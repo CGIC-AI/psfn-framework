@@ -452,6 +452,7 @@ async function main(): Promise<void> {
     bootstrap,
     eventBus,
     eligibilityGate,
+    intakeScreeningMode: privilegedCore.intakeScreening.mode,
     intakeScreening: bootstrap.server.multiCompanion.enabled
       ? null
       : privilegedCore.intakeScreening.screeningFor(),
@@ -766,12 +767,14 @@ async function main(): Promise<void> {
     env: process.env,
     eligibilityGate,
     gateway,
+    multiCompanion: bootstrap.server.multiCompanion.enabled,
     channelsConfig: bootstrap.channelsConfig,
     fleetPortalChannelHealth,
     satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
       startupHydration.pathSnapshot.systemDataDir,
     ),
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
+    intakeScreeningMode: privilegedCore.intakeScreening.mode,
     intakeScreening: bootstrap.server.multiCompanion.enabled
       ? null
       : privilegedCore.intakeScreening.screeningFor(),

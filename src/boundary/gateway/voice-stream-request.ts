@@ -59,6 +59,16 @@ export interface VoiceStreamRequestOptions {
   streamId?: string;
   metadata?: VoiceStreamMetadata;
   signal?: AbortSignal;
+  /**
+   * Gateway-owned ingress transform that runs only after routing has selected
+   * the exact companion receiving this attempt. Shared-satellite retries run
+   * it again for the new lease owner, so quarantine writes never use a
+   * pre-arbitration fallback identity.
+   */
+  screenMessageForCompanion?: (
+    message: SubstrateMessage,
+    companionId: CompanionId,
+  ) => Promise<SubstrateMessage>;
 }
 
 export interface RequestAgentVoiceStreamOptions extends CompanionRoutingBinding {

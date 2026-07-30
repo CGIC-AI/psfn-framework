@@ -66,6 +66,34 @@ function compositionMode(
   return composition.screening?.mode ?? 'off';
 }
 
+async function disposeCompositions(
+  compositions: readonly GatewayIntakeScreeningComposition[],
+  primaryError?: unknown,
+): Promise<void> {
+  const cleanupErrors: unknown[] = [];
+  for (const composition of [...compositions].reverse()) {
+    try {
+      await composition.dispose();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length === 0) {
+    if (primaryError !== undefined) throw primaryError;
+    return;
+  }
+  if (primaryError !== undefined) {
+    throw new AggregateError(
+      [primaryError, ...cleanupErrors],
+      'Gateway intake screening composition failed and cleanup also failed',
+    );
+  }
+  throw new AggregateError(
+    cleanupErrors,
+    'One or more gateway intake screening compositions failed to dispose',
+  );
+}
+
 export async function composeGatewayIntakeScreeningRuntime(
   input: GatewayIntakeScreeningRuntimeInput,
 ): Promise<GatewayIntakeScreeningRuntime> {
@@ -128,7 +156,7 @@ export async function composeGatewayIntakeScreeningRuntime(
       }
     }
   } catch (error) {
-    await Promise.allSettled([...compositions].reverse().map(composition => composition.dispose()));
+    await disposeCompositions(compositions, error);
     throw error;
   }
 
@@ -139,10 +167,10 @@ export async function composeGatewayIntakeScreeningRuntime(
   const mode = compositionMode(firstComposition);
   for (const composition of compositions) {
     if (compositionMode(composition) !== mode) {
-      await Promise.allSettled(
-        [...compositions].reverse().map(item => item.dispose()),
+      await disposeCompositions(
+        compositions,
+        new Error('Fleet intake screening compositions resolved inconsistent firewall modes'),
       );
-      throw new Error('Fleet intake screening compositions resolved inconsistent firewall modes');
     }
   }
   const quarantineStores = compositions
@@ -181,10 +209,6 @@ export async function composeGatewayIntakeScreeningRuntime(
     quarantinedArtifactGuard,
     resolve,
     screeningFor: companionId => resolve(companionId).screening,
-    dispose: async () => {
-      for (const composition of [...compositions].reverse()) {
-        await composition.dispose();
-      }
-    },
+    dispose: () => disposeCompositions(compositions),
   };
 }

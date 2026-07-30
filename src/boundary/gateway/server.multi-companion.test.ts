@@ -143,6 +143,9 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: {
       workspacePath: '/workspace',
     },
+    intakeScreeningMode: 'off',
+    intakeScreeningProvider: () => null,
+    visionIntakeProvider: () => null,
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
@@ -801,6 +804,21 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('fails construction when fleet intake ownership providers are missing or mode-mismatched', () => {
+    expect(() => new GatewayServer({
+      ...createMinimalOptions(),
+      intakeScreeningProvider: undefined,
+      multiCompanion: multiCompanion({}),
+    })).toThrow(/requires companion-owned text and vision intake screening providers/u);
+
+    expect(() => new GatewayServer({
+      ...createMinimalOptions(),
+      intakeScreeningMode: 'enforce',
+      intakeScreeningProvider: () => null,
+      multiCompanion: multiCompanion({}),
+    })).toThrow(/mode=enforce has no matching service/u);
+  });
+
   it('validates and attributes posture by authenticated connection across reconnects', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
@@ -893,14 +911,14 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     const stream = vi.mocked(options.llmProvider.stream);
     const { connect } = await setupServer({
       ...options,
-      visionIntake: {
+      visionIntakeProvider: () => ({
         screenImage: vi.fn(async () => ({
           kind: 'screened' as const,
           mode: 'enforce' as const,
           flagged: false,
           withheld: false,
         })),
-      },
+      }),
       multiCompanion: multiCompanion({}),
     });
     const connA = await connect();
@@ -967,6 +985,9 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       if (companionId === '22222222-2222-4222-8222-222222222222') {
         return { screenImage: screenB };
       }
+      if (companionId === '33333333-3333-4333-8333-333333333333') {
+        return null;
+      }
       throw new Error(`unknown screening owner ${String(companionId)}`);
     });
     const { connect } = await setupServer({
@@ -1009,14 +1030,14 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     const stream = vi.mocked(options.llmProvider.stream);
     const { connect } = await setupServer({
       ...options,
-      visionIntake: {
+      visionIntakeProvider: () => ({
         screenImage: vi.fn(async () => ({
           kind: 'screened' as const,
           mode: 'enforce' as const,
           flagged: false,
           withheld: false,
         })),
-      },
+      }),
       multiCompanion: multiCompanion({}),
     });
     const original = await connect();
@@ -2088,6 +2109,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('routes a shared satellite voice lease only to its Primary', async () => {
     const routed = { messages: new Array<SubstrateMessage>() };
     const auditAppend = vi.fn(async () => 1);
+    const screenMessageForCompanion = vi.fn(
+      async (message: SubstrateMessage, companionId: string): Promise<SubstrateMessage> => ({
+        ...message,
+        content: `screened for ${companionId}`,
+      }),
+    );
     const { server, connect } = await setupServer({
       ...withSharedSatelliteEligibility(createMinimalOptions()),
       auditStore: createMockAuditStore({ append: auditAppend }),
@@ -2099,9 +2126,16 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
     const result = await server.requestAgentVoiceStream(
       makeSatelliteVoiceMessage('sat-app', '22222222-2222-4222-8222-222222222222'),
+      { screenMessageForCompanion },
     );
 
     expect(result.content).toBe('voice response');
+    expect(screenMessageForCompanion).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'hello there' }),
+      '22222222-2222-4222-8222-222222222222',
+    );
+    expect(methodFrames(connB, 'voice.transcript.chunk').map(frame => frame.params.text))
+      .toEqual(['screened for 22222222-2222-4222-8222-222222222222']);
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
     expect(routed.messages[0]?.routing?.gateway?.companionId).toBe('22222222-2222-4222-8222-222222222222');
@@ -2133,6 +2167,16 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const activeRouted = { messages: new Array<SubstrateMessage>() };
     const primaryResponder = voiceStreamResponder(primaryRouted);
     const activeDefaultResponder = voiceStreamResponder(activeRouted);
+    const screeningOwners: string[] = [];
+    const screenMessageForCompanion = vi.fn(
+      async (message: SubstrateMessage, companionId: string): Promise<SubstrateMessage> => {
+        screeningOwners.push(companionId);
+        return {
+          ...message,
+          content: `screened for ${companionId}`,
+        };
+      },
+    );
     let activeEndRequests = 0;
     const activeResponder = (message: any, emit: (response: unknown) => void): void => {
       if (message.method === 'voice.transcript.end') {
@@ -2165,15 +2209,33 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       return message;
     };
 
-    await expect(server.requestAgentVoiceStream(makeTurn(true), { timeoutMs: 100 }))
+    await expect(server.requestAgentVoiceStream(makeTurn(true), {
+      timeoutMs: 100,
+      screenMessageForCompanion,
+    }))
       .resolves.toMatchObject({ content: 'voice response' });
-    await expect(server.requestAgentVoiceStream(makeTurn(false), { timeoutMs: 25 }))
+    await expect(server.requestAgentVoiceStream(makeTurn(false), {
+      timeoutMs: 25,
+      screenMessageForCompanion,
+    }))
       .resolves.toMatchObject({ content: 'voice response' });
 
     expect(methodFrames(activeConnection, 'voice.transcript.begin')).toHaveLength(2);
     expect(methodFrames(primaryConnection, 'voice.transcript.begin')).toHaveLength(1);
     expect(activeEndRequests).toBe(2);
     expect(primaryRouted.messages).toHaveLength(1);
+    expect(screeningOwners).toEqual([
+      activeCompanionId,
+      activeCompanionId,
+      primaryCompanionId,
+    ]);
+    expect(methodFrames(activeConnection, 'voice.transcript.chunk').map(frame => frame.params.text))
+      .toEqual([
+        `screened for ${activeCompanionId}`,
+        `screened for ${activeCompanionId}`,
+      ]);
+    expect(methodFrames(primaryConnection, 'voice.transcript.chunk').map(frame => frame.params.text))
+      .toEqual([`screened for ${primaryCompanionId}`]);
   });
 
   it('falls back to an eligible peer when the active chat owner times out', async () => {

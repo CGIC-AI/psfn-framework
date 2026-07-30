@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  loadGatewayChannelSurfaces,
-  stopGatewayChannelSurfaces,
+  resolveChannelIntakeScreening,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
 } from './channel-surfaces.js';
-import { EventBus } from '../../shared/event-bus.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 
 function createInput(): {
   input: WireGatewayChannelMessagesInput;
@@ -181,8 +180,18 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
   });
 });
 
-describe('loadGatewayChannelSurfaces fleet intake ownership', () => {
-  it('injects each multi-account adapter with its owning companion screening service', async () => {
+describe('gateway channel intake ownership', () => {
+  const screeningService = (): IntakeScreeningService => ({
+    mode: 'enforce',
+    screen: async () => {
+      throw new Error('screening invocation is outside this routing test');
+    },
+    screenSync: () => {
+      throw new Error('screening invocation is outside this routing test');
+    },
+  });
+
+  it('resolves each fleet surface to its exact companion service', () => {
     const companionA = createCompanionId(
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'test companion A',
@@ -191,81 +200,43 @@ describe('loadGatewayChannelSurfaces fleet intake ownership', () => {
       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       'test companion B',
     );
-    const screeningA = { mode: 'enforce', screen: vi.fn() };
-    const screeningB = { mode: 'enforce', screen: vi.fn() };
-    const screeningForCompanion = vi.fn((companionId: string) => {
+    const screeningA = screeningService();
+    const screeningB = screeningService();
+    const screeningForCompanion = vi.fn((companionId: typeof companionA) => {
       if (companionId === companionA) return screeningA;
       if (companionId === companionB) return screeningB;
       throw new Error(`unknown companion ${companionId}`);
     });
-    const bootstrap = {
-      workspaceRoot: '/single-workspace-must-not-be-used',
-      server: {
-        multiCompanion: {
-          enabled: true,
-          personalWorkspaceByCompanionId: {
-            [companionA]: '/workspaces/a',
-            [companionB]: '/workspaces/b',
-          },
-        },
-      },
-      channelsConfig: {
-        discord: {
-          heartbeatChannelId: '',
-          allowedBotUserIds: [],
-          groupMemory: {},
-          accounts: [
-            {
-              accountId: 'account-a',
-              companionId: companionA,
-              tokenEnvVar: 'DISCORD_A',
-              token: 'token-a',
-              heartbeatChannelId: '',
-              allowedBotUserIds: [],
-              groupMemory: {},
-            },
-            {
-              accountId: 'account-b',
-              companionId: companionB,
-              tokenEnvVar: 'DISCORD_B',
-              token: 'token-b',
-              heartbeatChannelId: '',
-              allowedBotUserIds: [],
-              groupMemory: {},
-            },
-          ],
-        },
-        telegram: {
-          enabled: false,
-          token: '',
-          allowedUsers: [],
-          mode: 'polling',
-          pollIntervalMs: 1_000,
-          webhook: { url: '', secret: '', host: '', port: 1, path: '' },
-          companionId: companionB,
-        },
-      },
+    const routing = {
+      multiCompanion: true,
+      mode: 'enforce' as const,
+      singleton: null,
+      forCompanion: screeningForCompanion,
     };
 
-    const surfaces = await loadGatewayChannelSurfaces({
-      config: {
-        discordBackfillOnStartup: false,
-        sttProvider: 'disabled',
-        ttsProvider: 'disabled',
-      } as any,
-      bootstrap: bootstrap as any,
-      eventBus: new EventBus(),
-      eligibilityGate: undefined as any,
-      intakeScreening: null,
-      intakeScreeningForCompanion: screeningForCompanion as any,
-      log: { error: vi.fn(), warn: vi.fn() },
-    });
-
-    expect((surfaces.discordAccounts?.[0]?.adapter as any).intakeScreening).toBe(screeningA);
-    expect((surfaces.discordAccounts?.[1]?.adapter as any).intakeScreening).toBe(screeningB);
+    expect(resolveChannelIntakeScreening(routing, companionA, 'discord account A'))
+      .toBe(screeningA);
+    expect(resolveChannelIntakeScreening(routing, companionB, 'discord account B'))
+      .toBe(screeningB);
     expect(screeningForCompanion).toHaveBeenCalledWith(companionA);
     expect(screeningForCompanion).toHaveBeenCalledWith(companionB);
+  });
 
-    await stopGatewayChannelSurfaces(surfaces);
+  it('fails closed when fleet routing lacks an owner resolver or matching mode', () => {
+    const companion = createCompanionId(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'test companion',
+    );
+    expect(() => resolveChannelIntakeScreening({
+      multiCompanion: true,
+      mode: 'enforce',
+      singleton: null,
+    }, companion, 'discord')).toThrow(/no companion-owned intake screening resolver/u);
+    expect(() => resolveChannelIntakeScreening({
+      multiCompanion: true,
+      mode: 'enforce',
+      singleton: null,
+      forCompanion: () => null,
+    }, companion, 'discord')).toThrow(/mode=enforce has no matching service/u);
   });
 });

@@ -42,6 +42,7 @@ function createServerOptions(
     policyConfig: {
       workspacePath: process.cwd(),
     },
+    intakeScreeningMode: 'off',
     sessionHmacKeyring: {
       activeVersion: 'v1',
       keys: {

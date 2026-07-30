@@ -5,4 +5,3 @@ export const REFLECTION_EVIDENCE_GROUNDING_UNAVAILABLE_TAG =
 export const REFLECTION_DEGRADED_TAG = 'degraded';
 export const REFLECTION_EVIDENCE_GROUNDING_DEGRADED_HEADING =
   '[Evidence Grounding Degraded]';
-

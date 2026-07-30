@@ -9,6 +9,10 @@ import {
 } from './operator-alerts.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
 import type { NotificationPort } from '../../../core/tools/ntfy.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 function makeEvent(): StreamTerminalFailureEvent {
   return {
@@ -76,7 +80,8 @@ describe('operator alerts', () => {
     }));
   });
 
-  it('skips prompt-generation alerts when ntfy is not configured', async () => {
+  it('records a local operator alert when ntfy is not configured', async () => {
+    clearDiagnosticLogRingBufferForTests();
     const notifier: NotificationPort = {
       notify: vi.fn().mockRejectedValue(new Error('ntfy is not configured')),
     };
@@ -87,6 +92,15 @@ describe('operator alerts', () => {
     await handler(makeEvent());
 
     expect(notifier.notify).not.toHaveBeenCalled();
+    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+      level: 'error',
+      component: 'OperatorAlerts',
+      message: expect.stringContaining('Prompt generation failure operator alert recorded locally for agent.turn.prompt'),
+      context: expect.objectContaining({
+        attempt: 2,
+        reason: '403 Key limit exceeded (total limit)',
+      }),
+    }));
   });
 
   it('fails closed instead of inventing an operator alert identity', () => {

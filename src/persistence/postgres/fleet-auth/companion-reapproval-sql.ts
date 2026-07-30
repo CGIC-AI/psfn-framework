@@ -238,9 +238,7 @@ BEGIN
   -- granting access to the newly active companion lineage.
   UPDATE fleet_auth.browser_sessions SET global_auth_epoch = v_new_epoch
   WHERE global_auth_epoch = v_epoch;
-  UPDATE fleet_auth.jit_authorization_grants SET global_auth_epoch = v_new_epoch
-  WHERE global_auth_epoch = v_epoch;
-  UPDATE fleet_auth.step_up_challenges SET global_auth_epoch = v_new_epoch
+  UPDATE fleet_auth.escalation_grants SET global_auth_epoch = v_new_epoch
   WHERE global_auth_epoch = v_epoch;
   UPDATE fleet_auth.provider_token_custody SET global_auth_epoch = v_new_epoch
   WHERE global_auth_epoch = v_epoch;

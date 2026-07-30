@@ -162,7 +162,7 @@ describe('unified Fleet SSO origin provenance', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it('issues a browser-principal capability after successful JIT binding without opening a socket', async () => {
+  it('issues a browser-principal capability after a consumed escalation grant without opening a socket', async () => {
     const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const nowSeconds = 1_783_000_000;
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -192,7 +192,7 @@ describe('unified Fleet SSO origin provenance', () => {
         provider: 'discord',
         providerSubjectId: 'subject-a',
       }),
-      authorization: Object.freeze({ action: 'memory.jit.self', decision: 'allow' }),
+      authorization: Object.freeze({ action: 'memory.reveal', decision: 'allow' }),
       authority: Object.freeze({ authorityGeneration: 1, globalAuthEpoch: 1 }),
       provenance: Object.freeze({
         source: 'gateway_fleet_authorization_snapshot',
@@ -204,8 +204,11 @@ describe('unified Fleet SSO origin provenance', () => {
       grantId: '99999999-9999-4999-8999-999999999999',
       principalId: authorization.principalId,
       browserSessionId: authorization.session.recordId,
-      assurance: 'webauthn_uv' as const,
-      credentialFloorGeneration: 2,
+      companionId: companionId as string,
+      action: 'memory.reveal' as const,
+      routeId: 'POST /api/admin/memory/:id/reveal',
+      scopeDigest: 'c'.repeat(64),
+      assuranceRequirement: 'escalated' as const,
       expiresAt: new Date((nowSeconds + 300) * 1_000),
     }));
     const replay = vi.fn(async () => ({ outcome: 'mismatch' as const }));
@@ -233,18 +236,14 @@ describe('unified Fleet SSO origin provenance', () => {
         }],
       }),
       replay: { consume: replay },
-      jitStepUp: { consumeGrant },
+      escalation: { consumeGrant },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
       upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
       nowSeconds: () => nowSeconds,
     });
-    const body = Buffer.from(JSON.stringify({
-      subjectScopeDigest: 'a'.repeat(64),
-      purpose: 'Review my own memory',
-      memoryRevision: 3,
-      classifierVersion: 1,
-      classifierEvidenceDigest: 'b'.repeat(64),
-    }));
+    // The reveal surface carries no request body: the audited grant, not a
+    // browser-supplied envelope, is what opens it.
+    const body = Buffer.alloc(0);
     const incoming = Readable.from([body]) as IncomingMessage;
     incoming.method = 'POST';
     incoming.url = `/companions/${companionId}/garden/api/admin/memory/memory-a/reveal`;
@@ -255,7 +254,7 @@ describe('unified Fleet SSO origin provenance', () => {
       'x-forwarded-port': '443',
       'x-forwarded-for': '198.51.100.9',
       cookie: `__Host-psfn_session=${'s'.repeat(43)}`,
-      'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999',
+      'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999',
       'content-type': 'application/json',
       'content-length': String(body.byteLength),
     };
@@ -378,7 +377,10 @@ describe('unified Fleet SSO origin provenance', () => {
         principalId: 'testing-harness',
         provider: 'testing_harness',
         operatorGrantId: 'testing-harness-garden-grant',
-        sessionAssurance: 'webauthn_uv',
+        // A plain oauth-assurance route never gets a silently elevated tier from
+        // the synthetic door, and an absent roster fails closed to multi_admin.
+        sessionAssurance: 'oauth',
+        fleetAccessMode: 'multi_admin',
       }),
     }));
     expect(replay).toHaveBeenCalledOnce();

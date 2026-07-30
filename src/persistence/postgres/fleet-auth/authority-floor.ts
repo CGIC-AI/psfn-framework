@@ -7,22 +7,13 @@ import {
   isCanonicalIsoTimestamp,
   isRecord,
   isRfc4122Uuid,
-  toRecordView,
 } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
-import type {
-  PasskeyAuthorityCandidate,
-  PasskeyAuthorityEntry,
-  PasskeyAuthorityFloor,
-  PasskeyAuthorityTombstone,
-  PasskeyVerificationResult,
-} from '../../../boundary/fleet-auth/passkey-authority.js';
 import { withCrossProcessWriteLock } from '../../sessions/cross-process-write-lock.js';
 
 export const FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME = 'fleet-auth-authority-floor.json';
 const LOCK_DIR_NAME = '.fleet-auth-authority-floor.lock';
 const HASH_PATTERN = /^[0-9a-f]{64}$/u;
-const PROVIDER_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
 
 export type AccountAuthorityTombstoneKind =
   | 'provider_subject'
@@ -86,7 +77,6 @@ export interface TrustedHostAuthorityFloor {
 export interface FleetAuthAuthorityFloor {
   schemaVersion: 2;
   trustedHost: TrustedHostAuthorityFloor;
-  passkeys: PasskeyAuthorityFloor;
   updatedAt: string;
 }
 
@@ -279,134 +269,9 @@ function parseAccountTombstone(value: unknown, index: number): AccountAuthorityT
   };
 }
 
-function parsePasskeyCandidate(
-  raw: Record<string, unknown>,
-  field: string,
-): PasskeyAuthorityCandidate {
-  const credentialIdHash = assertString(raw.credentialIdHash, `${field}.credentialIdHash`);
-  if (!HASH_PATTERN.test(credentialIdHash)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.credentialIdHash must be SHA-256 hex`);
-  }
-  const principalId = assertString(raw.principalId, `${field}.principalId`);
-  if (!isRfc4122Uuid(principalId)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.principalId must be an RFC-4122 UUID`);
-  }
-  if (raw.expectedProvider !== 'discord') {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.expectedProvider must be discord`);
-  }
-  const expectedProviderSubjectId = assertString(
-    raw.expectedProviderSubjectId,
-    `${field}.expectedProviderSubjectId`,
-  );
-  if (!PROVIDER_SUBJECT_PATTERN.test(expectedProviderSubjectId)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.expectedProviderSubjectId is invalid`);
-  }
-  if (typeof raw.backupEligible !== 'boolean' || typeof raw.backupState !== 'boolean') {
-    throw new Error(`Invalid fleet auth authority floor: ${field} backup signals must be booleans`);
-  }
-  if (raw.backupState && !raw.backupEligible) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.backupState requires backupEligible`);
-  }
-  return {
-    credentialIdHash,
-    publicKeyVerifier: assertString(raw.publicKeyVerifier, `${field}.publicKeyVerifier`),
-    rpId: assertString(raw.rpId, `${field}.rpId`),
-    principalId,
-    expectedProvider: 'discord',
-    expectedProviderSubjectId,
-    signCount: assertInteger(raw.signCount, `${field}.signCount`),
-    backupEligible: raw.backupEligible,
-    backupState: raw.backupState,
-  };
-}
-
-function parsePasskeyEntry(value: unknown, index: number): PasskeyAuthorityEntry {
-  const field = `passkeys.credentials[${index}]`;
-  const raw = assertRecord(value, field);
-  assertNoUnknownKeys(raw, [
-    'credentialIdHash',
-    'publicKeyVerifier',
-    'rpId',
-    'principalId',
-    'expectedProvider',
-    'expectedProviderSubjectId',
-    'signCount',
-    'backupEligible',
-    'backupState',
-    'generation',
-    'status',
-    'createdAt',
-    'revokedAt',
-    'replacedByCredentialIdHash',
-  ], field, { errorPrefix: 'Invalid fleet auth authority floor' });
-  for (const required of [
-    'credentialIdHash', 'publicKeyVerifier', 'rpId', 'principalId', 'expectedProvider',
-    'expectedProviderSubjectId', 'signCount', 'backupEligible', 'backupState', 'generation',
-    'status', 'createdAt',
-  ]) {
-    if (!Object.hasOwn(raw, required)) {
-      throw new Error(`Invalid fleet auth authority floor: ${field}.${required} is required`);
-    }
-  }
-  if (raw.status !== 'current' && raw.status !== 'revoked'
-    && raw.status !== 'replaced' && raw.status !== 'compromised') {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.status is unknown`);
-  }
-  const candidate = parsePasskeyCandidate(raw, field);
-  const replacedByCredentialIdHash = raw.replacedByCredentialIdHash === undefined
-    ? undefined
-    : assertString(raw.replacedByCredentialIdHash, `${field}.replacedByCredentialIdHash`);
-  if (replacedByCredentialIdHash !== undefined && !HASH_PATTERN.test(replacedByCredentialIdHash)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.replacedByCredentialIdHash is invalid`);
-  }
-  return {
-    ...candidate,
-    generation: assertInteger(raw.generation, `${field}.generation`, 1),
-    status: raw.status,
-    createdAt: assertTimestamp(raw.createdAt, `${field}.createdAt`),
-    ...(raw.revokedAt === undefined
-      ? {}
-      : { revokedAt: assertTimestamp(raw.revokedAt, `${field}.revokedAt`) }),
-    ...(replacedByCredentialIdHash ? { replacedByCredentialIdHash } : {}),
-  };
-}
-
-function parsePasskeyTombstone(value: unknown, index: number): PasskeyAuthorityTombstone {
-  const field = `passkeys.tombstones[${index}]`;
-  const raw = assertRecord(value, field);
-  assertNoUnknownKeys(raw, [
-    'credentialIdHash', 'generation', 'status', 'at', 'replacedByCredentialIdHash',
-  ], field, { errorPrefix: 'Invalid fleet auth authority floor' });
-  for (const required of ['credentialIdHash', 'generation', 'status', 'at']) {
-    if (!Object.hasOwn(raw, required)) {
-      throw new Error(`Invalid fleet auth authority floor: ${field}.${required} is required`);
-    }
-  }
-  const credentialIdHash = assertString(raw.credentialIdHash, `${field}.credentialIdHash`);
-  if (!HASH_PATTERN.test(credentialIdHash)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.credentialIdHash is invalid`);
-  }
-  if (raw.status !== 'revoked' && raw.status !== 'replaced' && raw.status !== 'compromised') {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.status is unknown`);
-  }
-  const replacedByCredentialIdHash = raw.replacedByCredentialIdHash === undefined
-    ? undefined
-    : assertString(raw.replacedByCredentialIdHash, `${field}.replacedByCredentialIdHash`);
-  if (replacedByCredentialIdHash !== undefined && !HASH_PATTERN.test(replacedByCredentialIdHash)) {
-    throw new Error(`Invalid fleet auth authority floor: ${field}.replacedByCredentialIdHash is invalid`);
-  }
-  return {
-    credentialIdHash,
-    generation: assertInteger(raw.generation, `${field}.generation`, 1),
-    status: raw.status,
-    at: assertTimestamp(raw.at, `${field}.at`),
-    ...(replacedByCredentialIdHash ? { replacedByCredentialIdHash } : {}),
-  };
-}
-
 export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthorityFloor {
   const root = assertRecord(value, 'root');
-  strictKeys(root, ['schemaVersion', 'trustedHost', 'passkeys', 'updatedAt'], 'root');
+  strictKeys(root, ['schemaVersion', 'trustedHost', 'updatedAt'], 'root');
   if (root.schemaVersion !== 2) {
     throw new Error('Invalid fleet auth authority floor: schemaVersion must be 2');
   }
@@ -464,64 +329,6 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
     );
   }
 
-  const passkeys = assertRecord(root.passkeys, 'passkeys');
-  strictKeys(passkeys, ['generation', 'credentials', 'tombstones'], 'passkeys');
-  if (!Array.isArray(passkeys.credentials) || !Array.isArray(passkeys.tombstones)) {
-    throw new Error('Invalid fleet auth authority floor: passkey credentials/tombstones must be arrays');
-  }
-  const credentials = passkeys.credentials.map(parsePasskeyEntry);
-  const credentialIds = credentials.map(entry => entry.credentialIdHash);
-  if (new Set(credentialIds).size !== credentialIds.length) {
-    throw new Error('Invalid fleet auth authority floor: duplicate passkey credential');
-  }
-  const currentPrincipals = credentials.filter(entry => entry.status === 'current')
-    .map(entry => entry.principalId);
-  if (new Set(currentPrincipals).size !== currentPrincipals.length) {
-    throw new Error('Invalid fleet auth authority floor: multiple current credentials for one principal');
-  }
-  const passkeyTombstones = passkeys.tombstones.map(parsePasskeyTombstone);
-  const tombstoneIds = passkeyTombstones.map(entry => entry.credentialIdHash);
-  if (new Set(tombstoneIds).size !== tombstoneIds.length) {
-    throw new Error('Invalid fleet auth authority floor: duplicate passkey tombstone');
-  }
-  const passkeyGeneration = assertInteger(passkeys.generation, 'passkeys.generation');
-  const maximumCredentialGeneration = Math.max(
-    0,
-    ...credentials.map(entry => entry.generation),
-    ...passkeyTombstones.map(entry => entry.generation),
-  );
-  if (maximumCredentialGeneration !== passkeyGeneration) {
-    throw new Error('Invalid fleet auth authority floor: passkey generation does not match its ledger');
-  }
-  const tombstonesByCredential = new Map(
-    passkeyTombstones.map(entry => [entry.credentialIdHash, entry]),
-  );
-  for (const credential of credentials) {
-    const tombstone = tombstonesByCredential.get(credential.credentialIdHash);
-    if (credential.status === 'current') {
-      if (credential.revokedAt || credential.replacedByCredentialIdHash || tombstone) {
-        throw new Error('Invalid fleet auth authority floor: current passkey carries revocation state');
-      }
-      continue;
-    }
-    if (!credential.revokedAt || !tombstone
-      || tombstone.status !== credential.status
-      || tombstone.generation !== credential.generation
-      || tombstone.at !== credential.revokedAt
-      || tombstone.replacedByCredentialIdHash !== credential.replacedByCredentialIdHash) {
-      throw new Error('Invalid fleet auth authority floor: passkey revocation ledger is inconsistent');
-    }
-    if (credential.status === 'replaced' && !credential.replacedByCredentialIdHash) {
-      throw new Error('Invalid fleet auth authority floor: replaced passkey lacks its replacement identity');
-    }
-    if (credential.status !== 'replaced' && credential.replacedByCredentialIdHash) {
-      throw new Error('Invalid fleet auth authority floor: non-replaced passkey names a replacement');
-    }
-  }
-  if (passkeyTombstones.some(entry => !credentialIds.includes(entry.credentialIdHash))) {
-    throw new Error('Invalid fleet auth authority floor: passkey tombstone has no credential ledger entry');
-  }
-
   return {
     schemaVersion: 2,
     trustedHost: {
@@ -533,11 +340,6 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
       revocationCheckpoint: assertInteger(trustedHost.revocationCheckpoint, 'trustedHost.revocationCheckpoint'),
       lastLifecycleTransitionId,
       tombstones: accountTombstones,
-    },
-    passkeys: {
-      generation: passkeyGeneration,
-      credentials,
-      tombstones: passkeyTombstones,
     },
     updatedAt: assertTimestamp(root.updatedAt, 'updatedAt'),
   };
@@ -557,27 +359,8 @@ function initialFloor(activationGeneration: number): FleetAuthAuthorityFloor {
       lastLifecycleTransitionId: null,
       tombstones: [],
     },
-    passkeys: {
-      generation: 0,
-      credentials: [],
-      tombstones: [],
-    },
     updatedAt: new Date().toISOString(),
   };
-}
-
-function samePasskeyMetadata(
-  stored: PasskeyAuthorityEntry,
-  candidate: PasskeyAuthorityCandidate,
-): boolean {
-  return stored.credentialIdHash === candidate.credentialIdHash
-    && stored.publicKeyVerifier === candidate.publicKeyVerifier
-    && stored.rpId === candidate.rpId
-    && stored.principalId === candidate.principalId
-    && stored.expectedProviderSubjectId === candidate.expectedProviderSubjectId
-    && stored.signCount === candidate.signCount
-    && stored.backupEligible === candidate.backupEligible
-    && stored.backupState === candidate.backupState;
 }
 
 export class FleetAuthAuthorityFloorStore {
@@ -611,10 +394,6 @@ export class FleetAuthAuthorityFloorStore {
       throw new Error(`Fleet auth authority floor is unreadable: ${String(error)}`);
     }
     return validateFleetAuthAuthorityFloor(value);
-  }
-
-  readPasskeys(): PasskeyAuthorityFloor {
-    return this.read().passkeys;
   }
 
   readTrustedHost(): TrustedHostAuthorityFloor {
@@ -774,97 +553,6 @@ export class FleetAuthAuthorityFloorStore {
               reasonHash: digest(input.reason),
             },
           ],
-        },
-        updatedAt: input.at,
-      };
-      this.write(next);
-      return next;
-    });
-  }
-
-  recoverProviderAuthority(input: {
-    principalId: string;
-    currentProviderSubjectId: string;
-    expectedNewProviderSubjectId: string;
-    credentialIdHash: string;
-    credentialGeneration: number;
-    credentialFloorGeneration: number;
-    expectedAuthorityGeneration: number;
-    reasonDigest: string;
-    at: string;
-  }): FleetAuthAuthorityFloor {
-    assertUuid(input.principalId, 'recoverProviderAuthority.principalId');
-    assertTimestamp(input.at, 'recoverProviderAuthority.at');
-    assertInteger(
-      input.credentialGeneration,
-      'recoverProviderAuthority.credentialGeneration',
-      1,
-    );
-    assertInteger(
-      input.credentialFloorGeneration,
-      'recoverProviderAuthority.credentialFloorGeneration',
-      1,
-    );
-    assertInteger(
-      input.expectedAuthorityGeneration,
-      'recoverProviderAuthority.expectedAuthorityGeneration',
-      1,
-    );
-    if (!PROVIDER_SUBJECT_PATTERN.test(input.currentProviderSubjectId)
-      || !PROVIDER_SUBJECT_PATTERN.test(input.expectedNewProviderSubjectId)
-      || input.currentProviderSubjectId === input.expectedNewProviderSubjectId
-      || !HASH_PATTERN.test(input.credentialIdHash)
-      || !HASH_PATTERN.test(input.reasonDigest)) {
-      throw new Error('Provider recovery authority binding is invalid');
-    }
-    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
-      const current = this.read();
-      if (current.trustedHost.authorityGeneration !== input.expectedAuthorityGeneration
-        || current.passkeys.generation !== input.credentialFloorGeneration) {
-        throw new Error('Provider recovery authority floor changed before publication');
-      }
-      const credentialIndex = current.passkeys.credentials.findIndex(entry => (
-        entry.status === 'current'
-          && timingSafeStringEqual(entry.credentialIdHash, input.credentialIdHash)
-          && entry.principalId === input.principalId
-          && entry.expectedProviderSubjectId === input.currentProviderSubjectId
-          && entry.generation === input.credentialGeneration
-      ));
-      if (credentialIndex < 0) {
-        throw new Error('Provider recovery passkey authority is not exact and current');
-      }
-      const accountGeneration = current.trustedHost.authorityGeneration + 1;
-      const passkeyGeneration = current.passkeys.generation + 1;
-      const credentials = [...current.passkeys.credentials];
-      credentials[credentialIndex] = {
-        ...credentials[credentialIndex]!,
-        expectedProviderSubjectId: input.expectedNewProviderSubjectId,
-        generation: passkeyGeneration,
-      };
-      const resourceHash = digest(`discord:${input.currentProviderSubjectId}`);
-      const next: FleetAuthAuthorityFloor = {
-        ...current,
-        trustedHost: {
-          ...current.trustedHost,
-          authorityGeneration: accountGeneration,
-          revocationCheckpoint: current.trustedHost.revocationCheckpoint + 1,
-          tombstones: [
-            ...current.trustedHost.tombstones.filter(entry => (
-              entry.kind !== 'provider_subject' || entry.resourceHash !== resourceHash
-            )),
-            {
-              kind: 'provider_subject',
-              resourceHash,
-              generation: accountGeneration,
-              revokedAt: input.at,
-              reasonHash: digest(input.reasonDigest),
-            },
-          ],
-        },
-        passkeys: {
-          ...current.passkeys,
-          generation: passkeyGeneration,
-          credentials,
         },
         updatedAt: input.at,
       };
@@ -1081,234 +769,10 @@ export class FleetAuthAuthorityFloorStore {
           restoreCheckpoint: current.trustedHost.restoreCheckpoint + 1,
           tombstones: [...tombstones.values()],
         },
-        // PasskeyAuthorityFloor is deliberately copied byte-for-byte. Restored
-        // passkey projections can never replace or promote this verifier state.
-        passkeys: current.passkeys,
         updatedAt: input.at,
       };
       this.write(next);
       return next;
     });
-  }
-
-  enrollPasskey(candidate: PasskeyAuthorityCandidate, at: string): FleetAuthAuthorityFloor {
-    assertTimestamp(at, 'enrollPasskey.at');
-    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
-      const current = this.read();
-      // Reuse the strict parser for caller-provided credential metadata.
-      const validated = parsePasskeyCandidate(toRecordView(candidate), 'candidate');
-      if (current.passkeys.credentials.some(entry => entry.credentialIdHash === validated.credentialIdHash)
-        || current.passkeys.tombstones.some(entry => entry.credentialIdHash === validated.credentialIdHash)) {
-        throw new Error('Passkey credential identity is already present or tombstoned');
-      }
-      if (current.passkeys.credentials.some(entry => (
-        entry.principalId === validated.principalId && entry.status === 'current'
-      ))) {
-        throw new Error('Passkey enrollment requires explicit replacement of the current credential');
-      }
-      const generation = current.passkeys.generation + 1;
-      const next: FleetAuthAuthorityFloor = {
-        ...current,
-        passkeys: {
-          ...current.passkeys,
-          generation,
-          credentials: [...current.passkeys.credentials, {
-            ...validated,
-            generation,
-            status: 'current',
-            createdAt: at,
-          }],
-        },
-        updatedAt: at,
-      };
-      this.write(next);
-      return next;
-    });
-  }
-
-  replacePasskey(input: {
-    priorCredentialIdHash: string;
-    replacement: PasskeyAuthorityCandidate;
-    at: string;
-    faultInjection?: (stage: 'after_prior_fenced') => void;
-  }): FleetAuthAuthorityFloor {
-    assertTimestamp(input.at, 'replacePasskey.at');
-    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
-      const current = this.read();
-      const priorIndex = current.passkeys.credentials.findIndex(entry => (
-        entry.credentialIdHash === input.priorCredentialIdHash && entry.status === 'current'
-      ));
-      if (priorIndex < 0) throw new Error('Passkey replacement requires an exact current prior credential');
-      const replacement = parsePasskeyCandidate(
-        toRecordView(input.replacement),
-        'replacement',
-      );
-      if (current.passkeys.credentials.some(entry => entry.credentialIdHash === replacement.credentialIdHash)
-        || current.passkeys.tombstones.some(entry => entry.credentialIdHash === replacement.credentialIdHash)) {
-        throw new Error('Replacement passkey identity is already present or tombstoned');
-      }
-      const prior = current.passkeys.credentials[priorIndex]!;
-      if (prior.principalId !== replacement.principalId
-        || prior.expectedProviderSubjectId !== replacement.expectedProviderSubjectId
-        || prior.rpId !== replacement.rpId) {
-        throw new Error('Replacement passkey must preserve principal/provider/RP binding');
-      }
-
-      // Publish the prior tombstone first. If replacement publication fails,
-      // the old credential remains denied (over-fenced) rather than usable.
-      const fencedGeneration = current.passkeys.generation + 1;
-      const fencedCredentials = [...current.passkeys.credentials];
-      fencedCredentials[priorIndex] = {
-        ...prior,
-        generation: fencedGeneration,
-        status: 'replaced',
-        revokedAt: input.at,
-        replacedByCredentialIdHash: replacement.credentialIdHash,
-      };
-      const fenced: FleetAuthAuthorityFloor = {
-        ...current,
-        passkeys: {
-          generation: fencedGeneration,
-          credentials: fencedCredentials,
-          tombstones: [...current.passkeys.tombstones, {
-            credentialIdHash: prior.credentialIdHash,
-            generation: fencedGeneration,
-            status: 'replaced',
-            at: input.at,
-            replacedByCredentialIdHash: replacement.credentialIdHash,
-          }],
-        },
-        updatedAt: input.at,
-      };
-      this.write(fenced);
-      input.faultInjection?.('after_prior_fenced');
-
-      const replacementGeneration = fencedGeneration + 1;
-      const completed: FleetAuthAuthorityFloor = {
-        ...fenced,
-        passkeys: {
-          ...fenced.passkeys,
-          generation: replacementGeneration,
-          credentials: [...fenced.passkeys.credentials, {
-            ...replacement,
-            generation: replacementGeneration,
-            status: 'current',
-            createdAt: input.at,
-          }],
-        },
-        updatedAt: input.at,
-      };
-      this.write(completed);
-      return completed;
-    });
-  }
-
-  revokePasskey(input: {
-    credentialIdHash: string;
-    status: 'revoked' | 'compromised';
-    at: string;
-  }): FleetAuthAuthorityFloor {
-    assertTimestamp(input.at, 'revokePasskey.at');
-    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
-      const current = this.read();
-      const credentialIndex = current.passkeys.credentials.findIndex(entry => (
-        entry.credentialIdHash === input.credentialIdHash && entry.status === 'current'
-      ));
-      if (credentialIndex < 0) {
-        throw new Error('Passkey revocation requires an exact current credential');
-      }
-      const generation = current.passkeys.generation + 1;
-      const credentials = [...current.passkeys.credentials];
-      credentials[credentialIndex] = {
-        ...credentials[credentialIndex]!,
-        generation,
-        status: input.status,
-        revokedAt: input.at,
-      };
-      const next: FleetAuthAuthorityFloor = {
-        ...current,
-        passkeys: {
-          generation,
-          credentials,
-          tombstones: [...current.passkeys.tombstones, {
-            credentialIdHash: input.credentialIdHash,
-            generation,
-            status: input.status,
-            at: input.at,
-          }],
-        },
-        updatedAt: input.at,
-      };
-      this.write(next);
-      return next;
-    });
-  }
-
-  updateCurrentPasskeySignals(input: {
-    credentialIdHash: string;
-    expectedGeneration: number;
-    signCount: number;
-    backupEligible: boolean;
-    backupState: boolean;
-    at: string;
-  }): FleetAuthAuthorityFloor {
-    assertTimestamp(input.at, 'updateCurrentPasskeySignals.at');
-    assertInteger(input.expectedGeneration, 'updateCurrentPasskeySignals.expectedGeneration', 1);
-    assertInteger(input.signCount, 'updateCurrentPasskeySignals.signCount');
-    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
-      const current = this.read();
-      const credentialIndex = current.passkeys.credentials.findIndex(entry => (
-        entry.credentialIdHash === input.credentialIdHash && entry.status === 'current'
-      ));
-      if (credentialIndex < 0) {
-        throw new Error('Passkey signal update requires an exact current credential');
-      }
-      const credential = current.passkeys.credentials[credentialIndex]!;
-      if (credential.generation !== input.expectedGeneration) {
-        throw new Error('Passkey signal update generation is stale');
-      }
-      if (input.signCount < credential.signCount) {
-        throw new Error('Passkey sign counter cannot move backward');
-      }
-      if (input.backupEligible !== credential.backupEligible) {
-        throw new Error('Passkey backup eligibility cannot change');
-      }
-      if (input.signCount === credential.signCount
-        && input.backupState === credential.backupState) {
-        return current;
-      }
-      const generation = current.passkeys.generation + 1;
-      const credentials = [...current.passkeys.credentials];
-      credentials[credentialIndex] = {
-        ...credential,
-        generation,
-        signCount: input.signCount,
-        backupState: input.backupState,
-      };
-      const next: FleetAuthAuthorityFloor = {
-        ...current,
-        passkeys: {
-          ...current.passkeys,
-          generation,
-          credentials,
-        },
-        updatedAt: input.at,
-      };
-      this.write(next);
-      return next;
-    });
-  }
-
-  verifyCurrentPasskey(candidate: PasskeyAuthorityCandidate): PasskeyVerificationResult {
-    const current = this.read();
-    const stored = current.passkeys.credentials.find(entry => (
-      entry.credentialIdHash === candidate.credentialIdHash
-    ));
-    if (!stored) return { allowed: false, reason: 'not_found' };
-    if (stored.status !== 'current') return { allowed: false, reason: 'not_current' };
-    if (!samePasskeyMetadata(stored, candidate)) {
-      return { allowed: false, reason: 'metadata_mismatch' };
-    }
-    return { allowed: true, generation: stored.generation };
   }
 }

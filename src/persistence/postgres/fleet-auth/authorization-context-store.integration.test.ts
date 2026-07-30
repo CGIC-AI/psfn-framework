@@ -112,8 +112,7 @@ function fleetConfig(): FleetAuthConfig {
       sessionIdleMs: 1_800_000,
       sessionAbsoluteMs: 28_800_000,
       discordEvidenceMs: 60_000,
-      jitGrantMs: 300_000,
-      stepUpChallengeMs: 300_000,
+      escalationGrantMs: 900_000,
       internalAssertionMs: 30_000,
     },
     rolePolicy: {

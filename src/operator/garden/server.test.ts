@@ -49,7 +49,8 @@ const FLEET_AUTH_CONTEXT = Object.freeze({
   principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
   companionId: FLEET_COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
   operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
-  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  sessionAssurance: 'oauth' as const, fleetAccessMode: 'multi_admin' as const,
+  authorizationEventId: 'event-a',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });
 

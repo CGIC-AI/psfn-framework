@@ -250,6 +250,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+        29,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -267,11 +268,10 @@ describe('fleet_auth Postgres authority boundary', () => {
         'discord_evidence_lifecycle_fences',
         'discord_evidence_snapshots',
         'human_principals',
+        'escalation_grants',
         'hub_device_assertion_replays',
-        'jit_authorization_grants',
         'lifecycle_decision_receipts',
         'oauth_transactions',
-        'passkey_credentials',
         'principal_contact_bindings',
         'principal_merge_aliases',
         'principal_role_grants',
@@ -282,6 +282,11 @@ describe('fleet_auth Postgres authority boundary', () => {
         'primary_embodiment_authority',
         'primary_embodiment_handoff_decisions',
         'schema_migrations',
+      ]));
+      // The passkey/JIT step-up stack is gone, not merely unused.
+      expect(tables.rows.map(row => row.table_name)).toEqual(expect.not.arrayContaining([
+        'jit_authorization_grants',
+        'passkey_credentials',
         'step_up_challenges',
       ]));
     } finally {
@@ -1590,7 +1595,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
-  it('enforces immutable history/audit and forbids authoritative passkey state in fleet_auth', async () => {
+  it('enforces immutable history/audit and keeps the passkey authority tables dropped', async () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
@@ -1623,22 +1628,25 @@ describe('fleet_auth Postgres authority boundary', () => {
         [randomUUID(), 'c'.repeat(64)],
       )).rejects.toThrow(/bounded fleet_auth procedure|authorization_audit_hub_mutated_replay_shape/);
 
+      // D2 dropped the WebAuthn authority tables outright: no residual row can
+      // be written into fleet_auth at all, valid shape or not.
+      for (const table of ['passkey_credentials', 'step_up_challenges', 'jit_authorization_grants']) {
+        await expect(runtime.query(
+          `SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.${table} LIMIT 1`,
+        )).rejects.toThrow(/does not exist/);
+      }
+      // The surviving escalation grant table refuses an unknown assurance tier.
       await expect(runtime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
-           public_key_projection, credential_generation, state, authority_floor_generation)
-         VALUES ($1, $2, '123456789012345678', 'fleet.example.test', 'verifier', 1, 'current', 1)`,
-        ['a'.repeat(64), principalId],
-      )).rejects.toThrow(/check constraint/);
-      await runtime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
-           public_key_projection, credential_generation, state, authority_floor_generation,
-           restore_state)
-         VALUES ($1, $2, '123456789012345678', 'fleet.example.test', 'verifier', 1,
-                 'quarantined', 1, 'quarantined')`,
-        ['b'.repeat(64), principalId],
-      );
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
+          (grant_id, principal_id, browser_session_id, companion_id, action, route_id,
+           scope_digest, reason_digest, assurance_requirement, exact_origin,
+           authz_version, binding_version, grant_version, policy_version,
+           global_auth_epoch, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, 'memory.reveal', 'POST /api/admin/memory/:id/reveal',
+                 $5, $6, 'webauthn_uv', 'https://fleet.example.test', 1, 1, 1, 1, 1,
+                 clock_timestamp(), clock_timestamp() + interval '5 minutes')`,
+        [randomUUID(), principalId, randomUUID(), randomUUID(), 'a'.repeat(64), 'b'.repeat(64)],
+      )).rejects.toThrow(/check constraint|violates/);
     } finally {
       await runtime.end();
     }
@@ -1896,21 +1904,15 @@ describe('fleet_auth Postgres authority boundary', () => {
         [randomUUID(), principalId, companionId, '5'.repeat(64), '6'.repeat(64)],
       );
       await runtime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-          (challenge_id, principal_id, browser_session_id, challenge_digest, kind, action,
-           resource_digest, global_auth_epoch, expires_at)
-         VALUES ($1, $2, $3, $4, 'webauthn_uv', 'settings.write', $5, 1,
-                 clock_timestamp() + interval '5 minutes')`,
-        [randomUUID(), principalId, sessionId, '7'.repeat(64), '8'.repeat(64)],
-      );
-      await runtime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
-          (grant_id, principal_id, browser_session_id, companion_id, subject_scope, action,
-           resource_selector, purpose, assurance, memory_revision, classifier_evidence_digest,
-           authz_version, binding_version, global_auth_epoch, expires_at)
-         VALUES ($1, $2, $3, $4, '{}', 'memory.read.self', '{}', 'test', 'webauthn_uv',
-                 1, $5, 1, 1, 1, clock_timestamp() + interval '5 minutes')`,
-        [randomUUID(), principalId, sessionId, companionId, '9'.repeat(64)],
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
+          (grant_id, principal_id, browser_session_id, companion_id, action, route_id,
+           scope_digest, reason_digest, assurance_requirement, exact_origin,
+           authz_version, binding_version, grant_version, policy_version,
+           global_auth_epoch, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, 'memory.reveal', 'POST /api/admin/memory/:id/reveal',
+                 $5, $6, 'escalated', 'https://fleet.example.test', 1, 1, 1, 1, 1,
+                 clock_timestamp(), clock_timestamp() + interval '5 minutes')`,
+        [randomUUID(), principalId, sessionId, companionId, '9'.repeat(64), '7'.repeat(64)],
       );
       await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
@@ -2076,8 +2078,7 @@ describe('fleet_auth Postgres authority boundary', () => {
            ('provider_token_custody', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody)),
            ('discord_evidence_lifecycle_fences', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences)),
            ('discord_evidence_snapshots', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots)),
-           ('step_up_challenges', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges)),
-           ('jit_authorization_grants', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants)),
+           ('escalation_grants', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants)),
            ('trusted_host_ceremonies', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies))
          ) AS counts(table_name, count)`,
       );
@@ -2189,7 +2190,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
-  it('restores durable rows quarantined while old passkey A stays denied and replacement B stays current', async () => {
+  it('restores durable rows quarantined and fences every reactivation bypass', async () => {
     const source = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: source.migrationUrl, roles: ROLES });
     const sourceMigration = createPostgresPool(source.migrationUrl, { max: 1 });
@@ -2209,18 +2210,6 @@ describe('fleet_auth Postgres authority boundary', () => {
     const contactAuditId = randomUUID();
     const hubReplayJti = randomUUID();
     const hubReplayDigest = (value: string): string => createHash('sha256').update(value).digest('hex');
-    const keyA = {
-      credentialIdHash: 'a'.repeat(64),
-      publicKeyVerifier: 'verifier-a',
-      rpId: 'fleet.example.test',
-      principalId,
-      expectedProvider: 'discord' as const,
-      expectedProviderSubjectId: '123456789012345678',
-      signCount: 0,
-      backupEligible: false,
-      backupState: false,
-    };
-    const keyB = { ...keyA, credentialIdHash: 'b'.repeat(64), publicKeyVerifier: 'verifier-b' };
     try {
       writeFleetAuthTestConfig(systemDataDir);
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
@@ -2269,14 +2258,6 @@ describe('fleet_auth Postgres authority boundary', () => {
           (grant_id, principal_id, companion_id, role, lifecycle, authority_generation)
          VALUES ($1, $2, '11111111-1111-4111-8111-111111111111', 'owner', 'active', 1)`,
         [grantId, principalId],
-      );
-      await sourceRuntime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
-           public_key_projection, credential_generation, state, authority_floor_generation)
-         VALUES ($1, $2, '123456789012345678', 'fleet.example.test', 'verifier-a', 1,
-                 'pending', 1)`,
-        [keyA.credentialIdHash, principalId],
       );
       await sourceCoordinator.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
@@ -2345,12 +2326,6 @@ describe('fleet_auth Postgres authority boundary', () => {
         backupDir,
       });
 
-      floors.enrollPasskey(keyA, '2026-07-15T10:00:00.000Z');
-      floors.replacePasskey({
-        priorCredentialIdHash: keyA.credentialIdHash,
-        replacement: keyB,
-        at: '2026-07-15T11:00:00.000Z',
-      });
       const browserStore = new PostgresFleetAuthBrokerStore({
         pool: sourceRuntime,
         providerAuthorityPool: sourceCoordinator,
@@ -2529,13 +2504,6 @@ describe('fleet_auth Postgres authority boundary', () => {
            SET state = 'active'
            WHERE provider = 'discord' AND subject_id = '123456789012345678'`,
         )).rejects.toThrow(/permanently tombstoned|provider subject authority is fenced/i);
-        const passkey = await targetRuntime.query<{ state: string; restore_state: string }>(
-          `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-           WHERE credential_id_hash = $1`,
-          [keyA.credentialIdHash],
-        );
-        expect(passkey.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
-
         // The raw restore-quarantine bypass is now impossible: ordinary runtime
         // SQL cannot reactivate a quarantined restore candidate. Every attempt
         // is fenced by restore_quarantine_activation_guard.
@@ -2589,9 +2557,11 @@ describe('fleet_auth Postgres authority boundary', () => {
         );
         expect(afterDenial.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
 
-        // Reapproval never touches the non-restored passkey floor.
-        expect(floors.verifyCurrentPasskey(keyA)).toEqual({ allowed: false, reason: 'not_current' });
-        expect(floors.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
+        // Reapproval never touches the non-restored trusted-host floor.
+        expect(floors.isAccountAuthorityTombstoned(
+          'provider_subject',
+          'discord:123456789012345678',
+        )).toBe(true);
       } finally {
         await targetRuntime.end();
         await targetMigration.end();
@@ -3167,7 +3137,8 @@ describe('fleet_auth Postgres authority boundary', () => {
     const grantId = randomUUID();
     const companionId = randomUUID();
     const subjectId = '123456789012345678';
-    const passkeyHash = 'd'.repeat(64);
+    // Opaque reapproval-credential digest carried by the retained ceremony row.
+    const reapprovalCredentialHash = 'd'.repeat(64);
     const contactOwnershipIntentId = randomUUID();
     const contactOwnershipRequestDigest = '8'.repeat(64);
     const actorPrincipalId = randomUUID();
@@ -3218,7 +3189,7 @@ describe('fleet_auth Postgres authority boundary', () => {
              provider_subject_id, audience, assurance, authn_version, authz_version,
              binding_version, grant_version, policy_version, global_auth_epoch,
              idle_expires_at, absolute_expires_at)
-          VALUES ($1, $2, $3, $4, 'discord', $5, 'fleet', 'webauthn_uv',
+          VALUES ($1, $2, $3, $4, 'discord', $5, 'fleet', 'escalated',
                   1, 1, 1, 1, 1, $6, clock_timestamp() + interval '5 minutes',
                   clock_timestamp() + interval '1 hour')
         `, [
@@ -3275,7 +3246,7 @@ describe('fleet_auth Postgres authority boundary', () => {
           sessionId,
           oauthTransactionId,
           oauthProofDigest,
-          passkeyHash,
+          reapprovalCredentialHash,
         ]);
       };
 
@@ -3312,15 +3283,6 @@ describe('fleet_auth Postgres authority boundary', () => {
          VALUES ($1, $2, $3, 'owner', 'quarantined', 1, 'quarantined')`,
         [grantId, principalId, companionId],
       );
-      await runtime.query(
-        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
-           public_key_projection, credential_generation, state, authority_floor_generation,
-           restore_state)
-         VALUES ($1, $2, $3, 'fleet.example.test', 'verifier', 1, 'quarantined', 1, 'quarantined')`,
-        [passkeyHash, principalId, subjectId],
-      );
-
       const prooflessCeremonyId = randomUUID();
       await migration.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
@@ -3457,10 +3419,6 @@ describe('fleet_auth Postgres authority boundary', () => {
          SET authority_generation = authority_generation + 5 WHERE principal_id = $1`,
         [principalId],
       )).rejects.toThrow(/reapprove_account_authority/);
-      await expect(runtime.query(
-        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials SET state = 'pending' WHERE credential_id_hash = $1`,
-        [passkeyHash],
-      )).rejects.toThrow(/passkey projection cannot be reactivated/);
 
       // A ceremony bound to a different provider subject cannot promote this account.
       const wrongCeremonyId = randomUUID();
@@ -3747,11 +3705,6 @@ describe('fleet_auth Postgres authority boundary', () => {
         [ceremonyId],
       );
       expect(consumed.rows[0]?.status).toBe('consumed');
-      const passkey = await runtime.query<{ state: string; restore_state: string }>(
-        `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials WHERE credential_id_hash = $1`,
-        [passkeyHash],
-      );
-      expect(passkey.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
 
       // Replay is denied: the ceremony is consumed and the epoch has advanced.
       await expect(executeAccountReapproval(runtime, {

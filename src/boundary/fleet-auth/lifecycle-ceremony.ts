@@ -3,11 +3,8 @@ import type { Pool } from 'pg';
 import type {
   VerifiedDiscordContactAuthoritySnapshot,
 } from '../../shared/contracts/contact-authority-snapshot.js';
-import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
-  findFleetAuthAccountRosterEntry,
-  type FleetAuthAccountRosterEntry,
   type FleetAuthAction,
   type FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
@@ -19,15 +16,11 @@ import type {
 } from '../../persistence/postgres/fleet-auth/authority-lifecycle-types.js';
 import type { GatewayFleetAuthAuthorityLifecycleStore } from '../../persistence/postgres/fleet-auth/authority-lifecycle-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from '../../persistence/postgres/fleet-auth/schema.js';
-import type { FleetJitRequestBinding, FleetJitStepUpCoordinator } from './jit-step-up.js';
-import { compileGatewayGardenRequestTarget } from './request-capability-target.js';
 import { fleetAuthRoleAllowsAction } from './role-action-policy.js';
 
 const SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
-export const FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH =
-  '/v1/fleet-auth/lifecycle/assurance/start';
 export const FLEET_AUTH_BINDING_COMPLETE_PATH =
   '/v1/fleet-auth/lifecycle/binding/complete';
 export const FLEET_AUTH_PROVIDER_COMPLETE_PATH =
@@ -103,9 +96,7 @@ export type FleetLifecycleCeremonyDenialReason =
   | 'session_unavailable'
   | 'target_unavailable'
   | 'contact_authority_unavailable'
-  | 'provider_binding_changed'
-  | 'strong_assurance_denied'
-  | 'strong_assurance_binding_changed';
+  | 'provider_binding_changed';
 
 export interface FleetLifecycleCeremonyDenialAuditPort {
   record(input: {
@@ -346,17 +337,7 @@ export function parseFleetAuthLifecycleCeremonyRequest(
   throw new Error('Lifecycle ceremony action is unknown');
 }
 
-function canonicalRequest(request: FleetAuthLifecycleCeremonyRequest): Uint8Array {
-  return Buffer.from(JSON.stringify(request), 'utf8');
-}
 
-function compiledTargetBody(request: FleetAuthLifecycleCeremonyRequest): Uint8Array {
-  return Buffer.from(JSON.stringify({
-    schemaVersion: 1,
-    ceremonyDigest: digest(request.ceremonyId),
-    lifecycleRequestDigest: digest(canonicalRequest(request)),
-  }), 'utf8');
-}
 
 function claim(row: PrincipalRow): PrincipalAuthorityClaim {
   return {
@@ -375,28 +356,17 @@ function actionFor(request: FleetAuthLifecycleCeremonyRequest): FleetAuthAction 
   return 'provider.link';
 }
 
-function completePathFor(request: FleetAuthLifecycleCeremonyRequest): string {
-  if (request.action === 'binding.activate') return FLEET_AUTH_BINDING_COMPLETE_PATH;
-  if (request.action.startsWith('role.')) return FLEET_AUTH_ROLE_COMPLETE_PATH;
-  return FLEET_AUTH_PROVIDER_COMPLETE_PATH;
-}
 
 export class GatewayFleetAuthLifecycleCeremonyService {
   private readonly origin: string;
-  private readonly stepUpRoster: readonly FleetAuthAccountRosterEntry[];
 
   constructor(private readonly options: {
     pool: Pool;
     sessionPepper: string;
     canonicalOrigin: string;
     lifecycle: Pick<GatewayFleetAuthAuthorityLifecycleStore, 'execute'>;
-    jitStepUp: Pick<FleetJitStepUpCoordinator, 'startWebAuthn' | 'consumeGrant'>;
     contactAuthority: FleetContactAuthorityPort;
     denialAudit: FleetLifecycleCeremonyDenialAuditPort;
-    /** Admin-unconditional roster; consulted only when the opt-in below is set. */
-    accountRoster?: readonly FleetAuthAccountRosterEntry[];
-    /** Explicit owner-file opt-in: a rostered OWNER satisfies webauthn_uv step-up. */
-    accountRosterSatisfiesStepUp?: boolean;
     now?: () => Date;
   }) {
     const origin = new URL(options.canonicalOrigin);
@@ -404,64 +374,19 @@ export class GatewayFleetAuthLifecycleCeremonyService {
       throw new FleetAuthLifecycleCeremonyError('invalid_request', 'Lifecycle origin is invalid');
     }
     this.origin = origin.origin;
-    this.stepUpRoster = options.accountRosterSatisfiesStepUp === true
-      ? Object.freeze((options.accountRoster ?? []).map(entry => Object.freeze({ ...entry })))
-      : Object.freeze([]);
   }
 
   /**
-   * True only when the explicit opt-in is on AND the session's token-verified
-   * Discord subject is rostered as OWNER for exactly this companion. Default
-   * (opt-in absent or false) is an empty roster, so this always returns false
-   * and the WebAuthn step-up path below stays byte-for-byte unchanged.
+   * Authority mutations complete directly under the authenticated Discord SSO
+   * session (operator ruling D2): the session's role must allow the action and
+   * every denial is audited. There is no step-up ceremony.
    */
-  private rosterSatisfiesStepUp(providerSubjectId: string, companionId: string): boolean {
-    const entry = findFleetAuthAccountRosterEntry(
-      this.stepUpRoster,
-      'discord',
-      providerSubjectId,
-      companionId,
-    );
-    return entry !== undefined && entry.role === 'owner';
-  }
-
-  async startStrongAssurance(input: {
-    token: string;
-    csrfToken: string;
-    requestOrigin: string;
-    request: unknown;
-  }): ReturnType<FleetJitStepUpCoordinator['startWebAuthn']> {
-    this.assertOrigin(input.requestOrigin);
-    const request = parseFleetAuthLifecycleCeremonyRequest(input.request);
-    try {
-      await this.readSession(input.token, request.companionId, actionFor(request));
-    } catch (error) {
-      await this.auditDenial(request, 'session_unavailable');
-      throw error;
-    }
-    try {
-      return await this.options.jitStepUp.startWebAuthn({
-        token: input.token,
-        csrfToken: input.csrfToken,
-        requestOrigin: input.requestOrigin,
-        binding: this.binding(request),
-      });
-    } catch (error) {
-      await this.auditDenial(request, 'strong_assurance_denied');
-      throw error;
-    }
-  }
-
   async complete(input: {
     token: string;
     requestOrigin: string;
-    jitGrantId: string;
     request: unknown;
   }): Promise<FleetAuthLifecycleResult> {
     this.assertOrigin(input.requestOrigin);
-    if (!isRfc4122Uuid(input.jitGrantId)) {
-      throw new FleetAuthLifecycleCeremonyError('invalid_request', 'JIT grant is invalid');
-    }
     const request = parseFleetAuthLifecycleCeremonyRequest(input.request);
     let session: SessionRow;
     try {
@@ -504,29 +429,6 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         throw new FleetAuthLifecycleCeremonyError(
           'contact_authority_unavailable',
           'Exact current companion contact authority is unavailable',
-        );
-      }
-    }
-    if (!this.rosterSatisfiesStepUp(session.provider_subject_id, request.companionId)) {
-      let grant: Awaited<ReturnType<FleetJitStepUpCoordinator['consumeGrant']>>;
-      try {
-        grant = await this.options.jitStepUp.consumeGrant({
-          grantId: input.jitGrantId,
-          token: input.token,
-          requestOrigin: input.requestOrigin,
-          binding: this.binding(request),
-        });
-      } catch (error) {
-        await this.auditDenial(request, 'strong_assurance_denied');
-        throw error;
-      }
-      if (grant.assurance !== 'webauthn_uv'
-        || grant.principalId !== session.principal_id
-        || grant.browserSessionId !== session.record_id) {
-        await this.auditDenial(request, 'strong_assurance_binding_changed');
-        throw new FleetAuthLifecycleCeremonyError(
-          'lifecycle_denied',
-          'Lifecycle strong assurance binding changed',
         );
       }
     }
@@ -622,30 +524,6 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         { cause: error },
       );
     }
-  }
-
-  private binding(request: FleetAuthLifecycleCeremonyRequest): FleetJitRequestBinding {
-    const bytes = compiledTargetBody(request);
-    const target = compileGatewayGardenRequestTarget({
-      rawTarget: completePathFor(request),
-      method: 'POST',
-      companionId: createCompanionId(request.companionId),
-      body: bytes,
-    });
-    return {
-      target,
-      subjectScopeDigest: digest(JSON.stringify({
-        ceremonyId: request.ceremonyId,
-        companionId: request.companionId,
-        action: request.action,
-        ...('targetPrincipalId' in request
-          ? { targetPrincipalId: request.targetPrincipalId, contactId: request.contactId }
-          : {}),
-      })),
-      purpose: `fleet-auth lifecycle ${request.action}`,
-      memoryRevision: 1,
-      classifierEvidenceDigest: digest('fleet-auth-lifecycle-policy-v1'),
-    };
   }
 
   private async readSession(

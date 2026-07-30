@@ -162,7 +162,7 @@ export const FLEET_AUTH_ACTIONS = [
   'wiki.manage',
   'roles.manage',
   'memory.read.self',
-  'memory.jit.self',
+  'memory.reveal',
   'privacy.break_glass',
   'devices.manage',
   'provider.link',
@@ -211,8 +211,7 @@ export interface FleetAuthConfig {
     sessionIdleMs: number;
     sessionAbsoluteMs: number;
     discordEvidenceMs: number;
-    jitGrantMs: number;
-    stepUpChallengeMs: number;
+    escalationGrantMs: number;
     internalAssertionMs: number;
   };
   rolePolicy: {
@@ -226,11 +225,6 @@ export interface FleetAuthConfig {
   }>;
   /** Optional admin-unconditional roster. Absent means no roster bypass exists. */
   accountRoster?: FleetAuthAccountRosterEntry[];
-  /**
-   * Explicit opt-in: a rostered owner also satisfies webauthn_uv-class step-up
-   * for lifecycle ceremonies. Default off; invalid without a non-empty roster.
-   */
-  accountRosterSatisfiesStepUp?: boolean;
 }
 
 export interface FleetAuthVerifierConfig {
@@ -506,8 +500,7 @@ function parseTtls(value: unknown): FleetAuthConfig['ttls'] {
     'sessionIdleMs',
     'sessionAbsoluteMs',
     'discordEvidenceMs',
-    'jitGrantMs',
-    'stepUpChallengeMs',
+    'escalationGrantMs',
     'internalAssertionMs',
   ] as const;
   requireExactKeys(record, keys, 'ttls');
@@ -516,23 +509,18 @@ function parseTtls(value: unknown): FleetAuthConfig['ttls'] {
     sessionIdleMs: requireInteger(record.sessionIdleMs, 'ttls.sessionIdleMs', 60_000, 86_400_000),
     sessionAbsoluteMs: requireInteger(record.sessionAbsoluteMs, 'ttls.sessionAbsoluteMs', 300_000, 604_800_000),
     discordEvidenceMs: requireInteger(record.discordEvidenceMs, 'ttls.discordEvidenceMs', 30_000, 3_600_000),
-    jitGrantMs: requireInteger(record.jitGrantMs, 'ttls.jitGrantMs', 30_000, 900_000),
-    stepUpChallengeMs: requireInteger(record.stepUpChallengeMs, 'ttls.stepUpChallengeMs', 30_000, 600_000),
+    escalationGrantMs: requireInteger(record.escalationGrantMs, 'ttls.escalationGrantMs', 30_000, 3_600_000),
     internalAssertionMs: requireInteger(record.internalAssertionMs, 'ttls.internalAssertionMs', 1_000, 60_000),
   };
   if (result.sessionIdleMs >= result.sessionAbsoluteMs) {
     fail('ttls.sessionIdleMs must be less than sessionAbsoluteMs');
   }
-  if (result.internalAssertionMs >= result.stepUpChallengeMs) {
-    fail('ttls.internalAssertionMs must be less than stepUpChallengeMs');
-  }
   if (result.internalAssertionMs % 1_000 !== 0) {
     fail('ttls.internalAssertionMs must resolve to whole seconds');
   }
-  if (result.stepUpChallengeMs > result.oauthTransactionMs) {
-    fail('ttls.stepUpChallengeMs must not exceed oauthTransactionMs');
+  if (result.escalationGrantMs > result.sessionIdleMs) {
+    fail('ttls.escalationGrantMs must not exceed sessionIdleMs');
   }
-  if (result.jitGrantMs > result.sessionIdleMs) fail('ttls.jitGrantMs must not exceed sessionIdleMs');
   return result;
 }
 
@@ -665,7 +653,7 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   ] as const;
   assertNoUnknownKeys(
     root,
-    [...requiredRootKeys, 'accountRoster', 'accountRosterSatisfiesStepUp'],
+    [...requiredRootKeys, 'accountRoster'],
     'root',
     { errorPrefix: ERROR_PREFIX },
   );
@@ -677,14 +665,6 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   const accountRoster = Object.hasOwn(root, 'accountRoster')
     ? parseAccountRoster(root.accountRoster)
     : undefined;
-  if (Object.hasOwn(root, 'accountRosterSatisfiesStepUp')
-    && typeof root.accountRosterSatisfiesStepUp !== 'boolean') {
-    fail('accountRosterSatisfiesStepUp must be a boolean');
-  }
-  const accountRosterSatisfiesStepUp = root.accountRosterSatisfiesStepUp === true;
-  if (accountRosterSatisfiesStepUp && (!accountRoster || accountRoster.length === 0)) {
-    fail('accountRosterSatisfiesStepUp requires a non-empty accountRoster');
-  }
 
   const provider = requireRecord(root.provider, 'provider');
   requireExactKeys(provider, ['kind', 'clientId', 'scopes', 'clientSecretRef', 'tokenCustody'], 'provider');
@@ -764,9 +744,6 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     rolePolicy: parseRolePolicy(root.rolePolicy),
     discordEvidenceMappings,
     ...(accountRoster !== undefined ? { accountRoster } : {}),
-    ...(Object.hasOwn(root, 'accountRosterSatisfiesStepUp')
-      ? { accountRosterSatisfiesStepUp }
-      : {}),
   };
 }
 

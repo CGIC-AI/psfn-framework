@@ -92,7 +92,7 @@ export interface FleetAuthorizationSnapshot {
     provider: 'discord' | null;
     providerSubjectId: string | null;
     audience: string;
-    assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+    assurance: 'oauth' | 'escalated' | 'break_glass';
     authnVersion: number;
     authzVersion: number;
     bindingVersion: number;
@@ -197,7 +197,7 @@ export interface FleetAuthorizationFacts {
   session: {
     recordId: string;
     audience: 'fleet';
-    assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+    assurance: 'oauth' | 'escalated' | 'break_glass';
     authnVersion: number;
     authzVersion: number;
     bindingVersion: number;
@@ -723,7 +723,7 @@ export function createImmutableFleetAuthorizationContext(input: {
 /** Select the exact signed actor projection used by Garden request capabilities. */
 export function toRequestCapabilityAuthContext(
   context: FleetAuthorizationContext,
-): RequestCapabilityAuthContext {
+): Omit<RequestCapabilityAuthContext, 'fleetAccessMode'> {
   return Object.freeze({
     principalId: context.principalId,
     provider: context.providerSubject.provider,

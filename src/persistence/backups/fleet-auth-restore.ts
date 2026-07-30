@@ -40,7 +40,6 @@ interface FleetAuthDurableSnapshot {
   principalContactBindings: SnapshotRow[];
   principalRoleGrants: SnapshotRow[];
   principalMergeAliases: SnapshotRow[];
-  passkeyCredentials: SnapshotRow[];
   authorizationAuditEvents: SnapshotRow[];
   contactAuthorityIntents: SnapshotRow[];
   contactAuthorityResources: SnapshotRow[];
@@ -49,7 +48,7 @@ interface FleetAuthDurableSnapshot {
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 5;
+  schemaVersion: 6;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
@@ -95,7 +94,6 @@ const SNAPSHOT_COLLECTION_KEYS = [
   'principalContactBindings',
   'principalRoleGrants',
   'principalMergeAliases',
-  'passkeyCredentials',
   'authorizationAuditEvents',
   'contactAuthorityIntents',
   'contactAuthorityResources',
@@ -143,12 +141,6 @@ const ROW_KEYS = {
   principalMergeAliases: [
     'source_principal_id', 'canonical_principal_id', 'decision_id',
     'authority_generation', 'reason_digest', 'restore_state', 'created_at',
-  ],
-  passkeyCredentials: [
-    'credential_id_hash', 'principal_id', 'expected_provider',
-    'expected_provider_subject_id', 'rp_id', 'public_key_projection',
-    'credential_generation', 'state', 'sign_count', 'backup_eligible', 'backup_state',
-    'authority_floor_generation', 'restore_state', 'imported_at', 'updated_at',
   ],
   authorizationAuditEvents: [
     'event_id', 'actor_context', 'action', 'resource', 'decision', 'reason_code',
@@ -227,7 +219,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
     'root',
   );
-  if (value.schemaVersion !== 5
+  if (value.schemaVersion !== 6
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
@@ -274,11 +266,6 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       'principalMergeAliases',
       ROW_KEYS.principalMergeAliases,
     ),
-    passkeyCredentials: parseCollection(
-      durable.passkeyCredentials,
-      'passkeyCredentials',
-      ROW_KEYS.passkeyCredentials,
-    ),
     authorizationAuditEvents: parseCollection(
       durable.authorizationAuditEvents,
       'authorizationAuditEvents',
@@ -315,7 +302,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
@@ -977,44 +964,6 @@ async function importDurableRows(
       `,
       compatibilityValues: values.slice(0, 8),
       description: 'principal role grant',
-    }));
-  }
-
-  for (const row of durable.passkeyCredentials) {
-    const values = [
-      row.credential_id_hash, row.principal_id, row.expected_provider,
-      row.expected_provider_subject_id, row.rp_id, row.public_key_projection,
-      row.credential_generation, row.sign_count, row.backup_eligible, row.backup_state,
-      Math.max(1, floor.passkeys.generation), restoredAt,
-    ];
-    await record(insertOrAssertCompatibleConflict({
-      client,
-      insertSql: `
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          (credential_id_hash, principal_id, expected_provider,
-           expected_provider_subject_id, rp_id, public_key_projection,
-           credential_generation, state, sign_count, backup_eligible, backup_state,
-           authority_floor_generation, restore_state, imported_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'quarantined', $8, $9, $10,
-                $11, 'quarantined', $12, $12)
-        ON CONFLICT DO NOTHING
-      `,
-      insertValues: values,
-      compatibilitySql: `
-        SELECT EXISTS (
-          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-          WHERE credential_id_hash = $1 AND principal_id = $2::uuid
-            AND expected_provider = $3 AND expected_provider_subject_id = $4
-            AND rp_id = $5 AND public_key_projection = $6
-            AND credential_generation >= $7::bigint AND sign_count >= $8::bigint
-            AND backup_eligible = $9::boolean AND backup_state = $10::boolean
-            AND $11::bigint >= 1 AND $12::timestamptz IS NOT NULL
-            AND authority_floor_generation >= $13::bigint
-          FOR UPDATE
-        ) AS compatible
-      `,
-      compatibilityValues: [...values, row.authority_floor_generation],
-      description: 'passkey projection',
     }));
   }
 

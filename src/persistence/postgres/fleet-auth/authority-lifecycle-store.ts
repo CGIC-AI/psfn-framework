@@ -33,7 +33,6 @@ import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fin
 import type { CompanionAuthorityLineageFloor } from './authority-floor.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
-import { lockAndConsumeProviderRecoveryCeremony } from './authority-lifecycle-provider-recovery.js';
 
 interface AuthorityRow {
   authority_generation: string;
@@ -177,9 +176,6 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       await this.consumeReceipts(client, decision);
       await this.lockAndValidateClaims(client, decision);
       await this.lockAndValidateActorSession(client, decision);
-      if (decision.action === 'provider.recover') {
-        await lockAndConsumeProviderRecoveryCeremony(client, decision);
-      }
       const mutation = await prepareLifecycleMutation(client, decision);
       await this.lockAffectedPrincipals(client, mutation.affectedPrincipalIds);
       const principalIds = [...new Set([
@@ -229,23 +225,11 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
           companionLineage.entry.companionReadd.decisionId,
         );
       } else if (mutation.revocations.length > 0) {
-        const fenced = decision.action === 'provider.recover'
-          ? await this.accountAuthority.recoverProvider({
-              principalId: decision.target.principalId,
-              currentProviderSubjectId: decision.unavailableProvider.subjectId,
-              expectedNewProviderSubjectId: decision.newProvider.subjectId,
-              credentialIdHash: decision.recovery.credentialIdHash,
-              credentialGeneration: decision.recovery.credentialGeneration,
-              credentialFloorGeneration: decision.recovery.credentialFloorGeneration,
-              expectedAuthorityGeneration: decision.authorityGeneration,
-              reasonDigest: decision.reasonDigest,
-              at: decision.decidedAt,
-            })
-          : await this.accountAuthority.fenceMany({
-              resources: mutation.revocations,
-              reasonDigest: decision.reasonDigest,
-              at: decision.decidedAt,
-            });
+        const fenced = await this.accountAuthority.fenceMany({
+          resources: mutation.revocations,
+          reasonDigest: decision.reasonDigest,
+          at: decision.decidedAt,
+        });
         authorityGeneration = fenced.authorityGeneration;
         if (authorityGeneration !== decision.authorityGeneration + 1) {
           throw new FleetAuthLifecycleDeniedError('non_restored_authority_race');
@@ -640,15 +624,10 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       WHERE principal_id = ANY($1::uuid[])
     `, [unique, at]);
     await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
       SET revoked_at = COALESCE(revoked_at, $2)
       WHERE principal_id = ANY($1::uuid[])
     `, [unique, at]);
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-      SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-      WHERE principal_id = ANY($1::uuid[])
-    `, [unique]);
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
       SET revoked_at = COALESCE(revoked_at, $2)
@@ -680,8 +659,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
     const affected = [...new Set(affectedPrincipalIds)];
     for (const table of [
       'browser_sessions',
-      'jit_authorization_grants',
-      'step_up_challenges',
+      'escalation_grants',
       'provider_token_custody',
       'discord_evidence_snapshots',
       'discord_evidence_lifecycle_fences',

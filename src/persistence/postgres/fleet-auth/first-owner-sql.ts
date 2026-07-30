@@ -205,11 +205,8 @@ BEGIN
   UPDATE fleet_auth.browser_sessions
   SET revoked_at = COALESCE(revoked_at, v_now)
   WHERE principal_id = p_principal_id;
-  UPDATE fleet_auth.jit_authorization_grants
+  UPDATE fleet_auth.escalation_grants
   SET revoked_at = COALESCE(revoked_at, v_now)
-  WHERE principal_id = p_principal_id;
-  UPDATE fleet_auth.step_up_challenges
-  SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
   WHERE principal_id = p_principal_id;
   DELETE FROM fleet_auth.discord_evidence_snapshots
   WHERE principal_id = p_principal_id;

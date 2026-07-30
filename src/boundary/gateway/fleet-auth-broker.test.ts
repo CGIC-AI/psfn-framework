@@ -10,7 +10,6 @@ import {
   type FleetAuthBrokerStore,
   type FleetAuthSessionRecord,
   type OAuthTransactionInput,
-  type FirstOwnerAssurancePort,
 } from './fleet-auth-broker.js';
 
 const config: FleetAuthConfig = {
@@ -53,8 +52,7 @@ const config: FleetAuthConfig = {
     sessionIdleMs: 1_800_000,
     sessionAbsoluteMs: 28_800_000,
     discordEvidenceMs: 300_000,
-    jitGrantMs: 300_000,
-    stepUpChallengeMs: 180_000,
+    escalationGrantMs: 900_000,
     internalAssertionMs: 30_000,
   },
   rolePolicy: {
@@ -252,7 +250,6 @@ function response(status: number, body: unknown): Response {
 function makeBroker(
   store = new FakeStore(),
   fetchImpl = vi.fn<typeof fetch>(),
-  firstOwnerAssurance?: FirstOwnerAssurancePort,
   options: {
     config?: FleetAuthConfig;
     discordEvidenceLifecycle?: DiscordEvidenceLifecyclePort;
@@ -275,23 +272,6 @@ function makeBroker(
       randomOffset += 1;
       return result;
     },
-    ...(firstOwnerAssurance ? {
-      firstOwnerAssurance,
-      firstOwnerContactAuthority: {
-        verify: vi.fn(async input => ({
-          schemaVersion: 1 as const,
-          contactId: input.contactId,
-          channel: 'discord' as const,
-          providerSubjectId: input.providerSubjectId,
-          identityVersion: 3,
-          verificationId: '00000000-0000-4000-8000-000000000119',
-          verificationDigest: 'a'.repeat(64),
-          contactAuthorityVersion: 4,
-          ownershipState: 'verified' as const,
-          restoreState: 'live' as const,
-        })),
-      },
-    } : {}),
     ...(options.discordEvidenceLifecycle
       ? { discordEvidenceLifecycle: options.discordEvidenceLifecycle }
       : {}),
@@ -442,7 +422,7 @@ describe('gateway fleet auth broker', () => {
     store.principalStatus = 'active';
     const fetchImpl = mappedLoginFetch();
     const recordActiveOAuthSession = vi.fn(async () => ({ status: 'admitted' as const }));
-    const { broker } = makeBroker(store, fetchImpl, undefined, {
+    const { broker } = makeBroker(store, fetchImpl, {
       config: mappedConfig,
       discordEvidenceLifecycle: {
         recordActiveOAuthSession,
@@ -492,7 +472,7 @@ describe('gateway fleet auth broker', () => {
     const recordActiveOAuthSession = vi.fn(async () => ({
       status: 'reauthentication_required' as const,
     }));
-    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+    const { broker } = makeBroker(store, mappedLoginFetch(), {
       config: mappedConfig,
       discordEvidenceLifecycle: {
         recordActiveOAuthSession,
@@ -519,7 +499,7 @@ describe('gateway fleet auth broker', () => {
   it('compensates a callback lifecycle failure by revoking the issued session', async () => {
     const store = new FakeStore();
     store.principalStatus = 'active';
-    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+    const { broker } = makeBroker(store, mappedLoginFetch(), {
       config: mappedConfig,
       discordEvidenceLifecycle: {
         recordActiveOAuthSession: vi.fn(async () => {
@@ -667,7 +647,7 @@ describe('gateway fleet auth broker', () => {
     const recordSessionRotation = vi.fn(async () => ({
       status: 'reauthentication_required' as const,
     }));
-    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+    const { broker } = makeBroker(store, mappedLoginFetch(), {
       config: mappedConfig,
       discordEvidenceLifecycle: {
         recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
@@ -713,7 +693,7 @@ describe('gateway fleet auth broker', () => {
       absoluteExpiresAt: new Date('2026-07-15T20:00:00.000Z'),
     };
     store.session = originalSession;
-    const { broker } = makeBroker(store, vi.fn<typeof fetch>(), undefined, {
+    const { broker } = makeBroker(store, vi.fn<typeof fetch>(), {
       config: mappedConfig,
       discordEvidenceLifecycle: lifecycle,
     });
@@ -738,7 +718,7 @@ describe('gateway fleet auth broker', () => {
     const failedStore = new FakeStore();
     failedStore.session = { ...originalSession, token: 'c'.repeat(43), csrfToken: 'd'.repeat(43) };
     failedStore.providerRevocationError = new Error('transaction rolled back');
-    const failed = makeBroker(failedStore, vi.fn<typeof fetch>(), undefined, {
+    const failed = makeBroker(failedStore, vi.fn<typeof fetch>(), {
       config: mappedConfig,
       discordEvidenceLifecycle: failedLifecycle,
     });
@@ -750,88 +730,5 @@ describe('gateway fleet auth broker', () => {
     })).rejects.toThrow('transaction rolled back');
     expect(failedLifecycle.commitGlobalAuthorityReset).toHaveBeenCalledOnce();
     expect(failedRetirement).not.toHaveBeenCalled();
-  });
-
-  it('activates first owner only from gateway-verified exact trusted-host and WebAuthn assurance', async () => {
-    const store = new FakeStore();
-    const fetchImpl = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response(200, {
-        access_token: 'access-secret', token_type: 'Bearer', expires_in: 3600, scope: 'identify',
-      }))
-      .mockResolvedValueOnce(response(200, { id: '123456789012345679' }));
-    const assurance: FirstOwnerAssurancePort = {
-      verify: vi.fn(async () => ({
-        ceremonyId: '00000000-0000-4000-8000-000000000110',
-        principalId: '00000000-0000-4000-8000-000000000102',
-        providerSubjectId: '123456789012345679',
-        companionId: '00000000-0000-4000-8000-000000000111',
-        contactId: 'owner-contact',
-      })),
-    };
-    const { broker } = makeBroker(store, fetchImpl, assurance);
-    const started = await broker.beginLogin({ returnPath: '/fleet' });
-    const login = await broker.completeCallback({
-      state: new URL(started.authorizationUrl).searchParams.get('state')!,
-      code: 'code',
-      requestOrigin: config.canonicalOrigin,
-      initiatingBrowserToken: started.initiatingBrowserToken,
-    });
-
-    const elevated = await broker.completeFirstOwnerBootstrap({
-      token: login.session.token,
-      csrfToken: login.session.csrfToken,
-      requestOrigin: config.canonicalOrigin,
-      assuranceEvidence: { opaqueWebAuthnAndTrustedHostResponse: true },
-    });
-    expect(assurance.verify).toHaveBeenCalledWith({
-      evidence: { opaqueWebAuthnAndTrustedHostResponse: true },
-      expectedOrigin: config.canonicalOrigin,
-    });
-    expect(elevated.principalStatus).toBe('active');
-    expect(elevated.token).not.toBe(login.session.token);
-
-    const unavailable = makeBroker(new FakeStore(), vi.fn<typeof fetch>());
-    await expect(unavailable.broker.completeFirstOwnerBootstrap({
-      token: 'a'.repeat(43),
-      csrfToken: 'b'.repeat(43),
-      requestOrigin: config.canonicalOrigin,
-      assuranceEvidence: {},
-    })).rejects.toMatchObject({ code: 'strong_assurance_unavailable' });
-  });
-
-  it('fences first-owner activation until a mapped fresh OAuth ceremony is admitted', async () => {
-    const store = new FakeStore();
-    const assurance: FirstOwnerAssurancePort = {
-      verify: vi.fn(async () => ({
-        ceremonyId: '00000000-0000-4000-8000-000000000110',
-        principalId: '00000000-0000-4000-8000-000000000102',
-        providerSubjectId: '123456789012345679',
-        companionId: '00000000-0000-4000-8000-000000000111',
-        contactId: 'owner-contact',
-      })),
-    };
-    const { broker } = makeBroker(store, mappedLoginFetch(), assurance, {
-      config: mappedConfig,
-      discordEvidenceLifecycle: {
-        recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
-        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
-        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
-      },
-    });
-    const started = await broker.beginLogin({ returnPath: '/fleet' });
-    const login = await broker.completeCallback({
-      state: new URL(started.authorizationUrl).searchParams.get('state')!,
-      code: 'code',
-      requestOrigin: mappedConfig.canonicalOrigin,
-      initiatingBrowserToken: started.initiatingBrowserToken,
-    });
-
-    await expect(broker.completeFirstOwnerBootstrap({
-      token: login.session.token,
-      csrfToken: login.session.csrfToken,
-      requestOrigin: mappedConfig.canonicalOrigin,
-      assuranceEvidence: { opaqueWebAuthnAndTrustedHostResponse: true },
-    })).rejects.toMatchObject({ code: 'reauthentication_required', status: 401 });
-    expect(store.session).toBeNull();
   });
 });

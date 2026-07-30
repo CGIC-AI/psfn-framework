@@ -52,15 +52,14 @@ after which the next login creates a session from the new values.
 Routine cluster login now enforces the exact-one-session invariant at creation.
 In the same transaction that inserts a replacement, the broker atomically
 supersedes every active session for the same principal and audience, revokes
-its pending step-up challenges and JIT grants, and leaves exactly the new
-session active. The authorization check remains strict; multiple active
+its live escalation grants, and leaves exactly the new session active. The authorization check remains strict; multiple active
 sessions are prevented instead of accepted.
 
 ## Reconciliation quarantine and recovery
 
 When the trusted-host authority floor advances, reconciliation treats restored
 durable authority as untrusted by default. Regular principals and their
-provider subjects, bindings, grants, and passkey projections enter quarantine.
+provider subjects, bindings, and grants enter quarantine.
 A companion-authority row also enters quarantine unless a current owner for
 that shared companion carries it forward under the exception below. Ephemeral
 sessions, OAuth transactions, token custody, challenges, grants, evidence,
@@ -123,6 +122,10 @@ row exists, the optional roster `contactId` is the configuration-owned
 canonical fallback. The synthetic roster contact identifier remains only for
 older entries that provide neither source; it does not correspond to a stored
 contact and cannot project existing subject-owned data.
+bypasses database principal activation and the nested child-authority
+generation/version chain. Non-roster subjects remain fail-closed. The roster must be validated
+strictly and must never use display names, contacts, or partial identifiers as
+fallback identity.
 
 Because roster authorization bypasses the authority-generation staleness gate,
 its revocation trust anchor is the browser-session row itself
@@ -130,3 +133,35 @@ its revocation trust anchor is the browser-session row itself
 also deletes or revokes sessions directly; any future revocation path that
 advances the generation or floor **without** touching session rows would
 silently leave a rostered subject live and must revoke sessions as well.
+
+## Authentication and escalation doctrine (operator rulings D1/D2, 2026-07-30)
+
+Discord SSO is the ONLY authentication. There are no passkeys, no WebAuthn,
+and no just-in-time step-up ceremonies; the former `webauthn_uv` assurance
+tier, JIT challenge/grant tables, and trusted-host passkey ceremonies were
+removed (migration `discord_sso_only_authority`). SSO exists to unify auth
+across surfaces — it never gates the operator from their own information.
+
+Deployment access mode is derived from the roster, per companion
+(`resolveFleetAccessMode`):
+
+- **Sole admin** (exactly one rostered human): nothing is subject-gated. The
+  admin sees all settings, sessions, contacts, and memories, including
+  companion-private and multi-contact classes. The only barriers that remain
+  are the audited high-intimacy body escalation and the companion-privacy
+  break-glass consent boundary.
+- **Multi admin** (zero or two-plus rostered humans): every admin sees
+  everything EXCEPT sensitive/intimate memories derived from OTHER humans'
+  chats with the companion. Group-chat memories stay visible to admins.
+  Other-humans' sensitive memories open only through an audited escalation.
+
+Escalation is an audited SSO action, not a ceremony: the authenticated admin
+states a reason (`POST /v1/fleet-auth/escalation/grant`), a single-use grant
+with a bounded TTL (`ttls.escalationGrantMs`) is recorded in
+`fleet_auth.escalation_grants` together with an `escalation.grant.issue` audit
+event naming actor, scope, and reason, and the exact gated request consumes it
+via the `x-psfn-escalation-grant` header (audited again on consume). Routes
+declaring the `escalated` assurance — memory elevation/reveal, cogsec
+remediation actions, and the privacy break-glass confirm phase — fail closed
+with `403 Audited escalation grant required` when no valid grant accompanies
+the request.

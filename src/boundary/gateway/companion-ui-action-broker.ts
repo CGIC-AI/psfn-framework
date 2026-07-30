@@ -146,7 +146,12 @@ export class GatewayCompanionUiActionBroker {
       target: compiled.target,
       requestId: parentRequestId,
       decisionId: context.provenance.authorizationEventId,
-      authContext: toRequestCapabilityAuthContext(context),
+      // Companion-UI actions are not a human admin surface; sign the
+      // restrictive multi-admin access mode unconditionally (fail closed).
+      authContext: Object.freeze({
+        ...toRequestCapabilityAuthContext(context),
+        fleetAccessMode: 'multi_admin' as const,
+      }),
       versions,
     });
     const parentToken = this.options.signer.signOperator(parent);

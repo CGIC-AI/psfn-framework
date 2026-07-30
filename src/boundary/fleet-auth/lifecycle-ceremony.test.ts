@@ -28,7 +28,10 @@ function proof(subjectId = '223456789012345679') {
   };
 }
 
-function bindingRequest(): FleetAuthLifecycleCeremonyRequest {
+function bindingRequest(): Extract<
+  FleetAuthLifecycleCeremonyRequest,
+  { action: 'binding.activate' }
+> {
   return {
     action: 'binding.activate',
     ceremonyId: randomUUID(),
@@ -44,12 +47,6 @@ function bindingRequest(): FleetAuthLifecycleCeremonyRequest {
 function harness(options: {
   role?: string;
   contact?: boolean;
-  accountRoster?: ReadonlyArray<{
-    providerSubjectId: string;
-    companionId: string;
-    role: 'owner' | 'admin' | 'member' | 'guest';
-  }>;
-  accountRosterSatisfiesStepUp?: boolean;
 } = {}) {
   const session = {
     record_id: SESSION_ID,
@@ -82,19 +79,6 @@ function harness(options: {
         : { rowCount: 1, rows: [target] }
     )),
   };
-  const startWebAuthn = vi.fn(async () => ({
-    challengeId: randomUUID(),
-    requestNonce: 'a'.repeat(43),
-    assurance: 'webauthn_uv' as const,
-  }));
-  const consumeGrant = vi.fn(async (input: { grantId: string }) => ({
-    grantId: input.grantId,
-    principalId: ACTOR_ID,
-    browserSessionId: SESSION_ID,
-    assurance: 'webauthn_uv' as const,
-    credentialFloorGeneration: 2,
-    expiresAt: new Date('2026-07-16T23:00:00.000Z'),
-  }));
   const execute = vi.fn(async (decision: any) => ({
     decisionId: decision.decisionId,
     action: decision.action,
@@ -123,45 +107,35 @@ function harness(options: {
     sessionPepper: 'session-pepper',
     canonicalOrigin: ORIGIN,
     lifecycle: { execute },
-    jitStepUp: { startWebAuthn, consumeGrant },
     contactAuthority: { read },
     denialAudit: { record: recordDenial },
-    ...(options.accountRoster ? { accountRoster: options.accountRoster } : {}),
-    ...(options.accountRosterSatisfiesStepUp !== undefined
-      ? { accountRosterSatisfiesStepUp: options.accountRosterSatisfiesStepUp }
-      : {}),
     now: () => new Date('2026-07-16T22:00:00.000Z'),
   });
-  return { service, startWebAuthn, consumeGrant, execute, read, recordDenial };
+  return { service, execute, read, recordDenial };
 }
 
 describe('gateway fleet-auth lifecycle ceremony', () => {
-  it('compiles binding activation into the declared strong-assurance target', async () => {
-    const request = bindingRequest();
-    const { service, startWebAuthn } = harness();
-    await service.startStrongAssurance({
+  it('gates binding activation on the session role declared for contacts.bind', async () => {
+    // binding.activate compiles to the contacts.bind action, whose base role is
+    // admin: a member session must never reach the authority store.
+    const { service, execute, recordDenial } = harness({ role: 'member' });
+    await expect(service.complete({
       token: 'session-token',
-      csrfToken: 'csrf-token',
       requestOrigin: ORIGIN,
-      request,
-    });
-    expect(startWebAuthn).toHaveBeenCalledWith(expect.objectContaining({
-      binding: expect.objectContaining({
-        target: expect.objectContaining({
-          canonicalPath: '/v1/fleet-auth/lifecycle/binding/complete',
-          action: 'contacts.bind',
-        }),
-      }),
+      request: bindingRequest(),
+    })).rejects.toMatchObject({ code: 'session_unavailable' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session_unavailable',
     }));
   });
 
-  it('binds live contact versions and one-shot UV grant into the atomic decision', async () => {
+  it('binds live contact versions into the atomic decision', async () => {
     const request = bindingRequest();
-    const { service, consumeGrant, execute, read } = harness();
+    const { service, execute, read } = harness();
     const result = await service.complete({
       token: 'session-token',
       requestOrigin: ORIGIN,
-      jitGrantId: randomUUID(),
       request,
     });
     expect(read).toHaveBeenCalledWith({
@@ -169,7 +143,6 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
       contactId: request.contactId,
       providerSubjectId: request.newProvider.subjectId,
     });
-    expect(consumeGrant).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
       verification: 'gateway_verified',
       action: 'binding.activate',
@@ -186,26 +159,23 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
     expect(result.action).toBe('binding.activate');
   });
 
-  it('fails before consuming assurance when current companion contact truth is absent', async () => {
-    const { service, consumeGrant, execute, recordDenial } = harness({ contact: false });
+  it('fails before executing when current companion contact truth is absent', async () => {
+    const { service, execute, recordDenial } = harness({ contact: false });
     await expect(service.complete({
       token: 'session-token',
       requestOrigin: ORIGIN,
-      jitGrantId: randomUUID(),
       request: bindingRequest(),
     })).rejects.toBeInstanceOf(FleetAuthLifecycleCeremonyError);
-    expect(consumeGrant).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
     expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
       reasonCode: 'contact_authority_unavailable',
     }));
   });
 
-  it('requires owner authority for provider mutation even with a valid passkey', async () => {
-    const { service, startWebAuthn } = harness({ role: 'admin' });
-    await expect(service.startStrongAssurance({
+  it('requires owner authority for provider mutation under an authenticated admin session', async () => {
+    const { service, execute, read, recordDenial } = harness({ role: 'admin' });
+    await expect(service.complete({
       token: 'session-token',
-      csrfToken: 'csrf-token',
       requestOrigin: ORIGIN,
       request: {
         action: 'provider.add',
@@ -216,7 +186,11 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
         reason: 'add backup sign-in subject',
       },
     })).rejects.toMatchObject({ code: 'session_unavailable' });
-    expect(startWebAuthn).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session_unavailable',
+    }));
   });
 
   it('rechecks the exact current contact against the new provider before linking', async () => {
@@ -233,7 +207,6 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
     await service.complete({
       token: 'session-token',
       requestOrigin: ORIGIN,
-      jitGrantId: randomUUID(),
       request,
     });
     expect(read).toHaveBeenCalledWith({
@@ -252,7 +225,7 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
     }));
   });
 
-  it('binds an exact role grant and target principal into owner-only strong assurance', async () => {
+  it('binds an exact role grant and target principal into the owner-only decision', async () => {
     const request: FleetAuthLifecycleCeremonyRequest = {
       action: 'role.grant',
       ceremonyId: randomUUID(),
@@ -262,25 +235,10 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
       role: 'member',
       reason: 'grant ordinary companion access',
     };
-    const { service, startWebAuthn, execute } = harness();
-    await service.startStrongAssurance({
-      token: 'session-token',
-      csrfToken: 'csrf-token',
-      requestOrigin: ORIGIN,
-      request,
-    });
-    expect(startWebAuthn).toHaveBeenCalledWith(expect.objectContaining({
-      binding: expect.objectContaining({
-        target: expect.objectContaining({
-          canonicalPath: '/v1/fleet-auth/lifecycle/role/complete',
-          action: 'roles.manage',
-        }),
-      }),
-    }));
+    const { service, execute } = harness();
     await service.complete({
       token: 'session-token',
       requestOrigin: ORIGIN,
-      jitGrantId: randomUUID(),
       request,
     });
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
@@ -292,81 +250,24 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
     }));
   });
 
-  describe('account roster step-up opt-in', () => {
-    const ownerEntry = {
-      providerSubjectId: SUBJECT,
-      companionId: COMPANION_ID,
-      role: 'owner' as const,
-    };
-
-    it('lets a rostered owner complete without consuming a WebAuthn grant when opted in', async () => {
-      const { service, consumeGrant, execute } = harness({
-        accountRoster: [ownerEntry],
-        accountRosterSatisfiesStepUp: true,
-      });
-      const result = await service.complete({
-        token: 'session-token',
-        requestOrigin: ORIGIN,
-        jitGrantId: randomUUID(),
-        request: bindingRequest(),
-      });
-      expect(consumeGrant).not.toHaveBeenCalled();
-      expect(execute).toHaveBeenCalledOnce();
-      expect(result.action).toBe('binding.activate');
-    });
-
-    it.each([
-      ['the opt-in is absent', { accountRoster: [ownerEntry] }],
-      ['the opt-in is explicitly off', {
-        accountRoster: [ownerEntry],
-        accountRosterSatisfiesStepUp: false,
-      }],
-      ['the session subject is not rostered', {
-        accountRoster: [{ ...ownerEntry, providerSubjectId: '999999999999999999' }],
-        accountRosterSatisfiesStepUp: true,
-      }],
-      ['the roster entry names a different companion', {
-        accountRoster: [{ ...ownerEntry, companionId: '00000000-0000-4000-8000-0000000000ff' }],
-        accountRosterSatisfiesStepUp: true,
-      }],
-      ['the rostered role is below owner', {
-        accountRoster: [{ ...ownerEntry, role: 'admin' as const }],
-        accountRosterSatisfiesStepUp: true,
-      }],
-    ] as const)('still consumes WebAuthn strong assurance when %s', async (_label, options) => {
-      const { service, consumeGrant } = harness({ ...options });
-      await service.complete({
-        token: 'session-token',
-        requestOrigin: ORIGIN,
-        jitGrantId: randomUUID(),
-        request: bindingRequest(),
-      });
-      expect(consumeGrant).toHaveBeenCalledOnce();
-    });
-
-    it('fails closed when strong assurance is required and the grant is not webauthn_uv', async () => {
-      const { service, consumeGrant, execute, recordDenial } = harness({
-        accountRoster: [{ ...ownerEntry, providerSubjectId: '999999999999999999' }],
-        accountRosterSatisfiesStepUp: true,
-      });
-      consumeGrant.mockResolvedValueOnce({
+  it('refuses a role grant from an admin session because roles.manage is owner-only', async () => {
+    const { service, execute, recordDenial } = harness({ role: 'admin' });
+    await expect(service.complete({
+      token: 'session-token',
+      requestOrigin: ORIGIN,
+      request: {
+        action: 'role.grant',
+        ceremonyId: randomUUID(),
+        companionId: COMPANION_ID,
+        targetPrincipalId: TARGET_ID,
         grantId: randomUUID(),
-        principalId: ACTOR_ID,
-        browserSessionId: SESSION_ID,
-        assurance: 'oauth' as never,
-        credentialFloorGeneration: 2,
-        expiresAt: new Date('2026-07-16T23:00:00.000Z'),
-      });
-      await expect(service.complete({
-        token: 'session-token',
-        requestOrigin: ORIGIN,
-        jitGrantId: randomUUID(),
-        request: bindingRequest(),
-      })).rejects.toMatchObject({ code: 'lifecycle_denied' });
-      expect(execute).not.toHaveBeenCalled();
-      expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
-        reasonCode: 'strong_assurance_binding_changed',
-      }));
-    });
+        role: 'member',
+        reason: 'grant ordinary companion access',
+      },
+    })).rejects.toMatchObject({ code: 'session_unavailable' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session_unavailable',
+    }));
   });
 });

@@ -102,10 +102,11 @@ test('hardening catalog authors only the probe-supported hardening rows', () => 
   const ids = new Set(buildHardeningCases(context, services).map((entry) => entry.id));
   assert.ok(ids.has('model_lane_attribution'), 'boundary spend / model-lane attribution (mmo9.7.3)');
   assert.ok(ids.has('backup_encryption_roundtrip'), 'backup.json encryption round-trip (irzz.1)');
-  // Voice, passkey ceremonies, PWA, and the DNLL migration path stay
-  // operator-eyes / staged-session dispositions, never authored cases.
+  // Voice, PWA, and the DNLL migration path stay operator-eyes / staged-session
+  // dispositions, never authored cases. The passkey ceremony surface was deleted
+  // outright by the Discord-SSO-only rebuild and must never be re-authored.
   assert.ok(!ids.has('voice_reply_streaming'), 'voice stays operator-eyes');
-  assert.ok(!ids.has('fleet_passkey_ceremony'), 'passkey ceremony stays operator-eyes');
+  assert.ok(!ids.has('fleet_passkey_ceremony'), 'passkey ceremony no longer exists');
   assert.ok(!ids.has('dnll_owner_migration'), 'DNLL migration is a staged session, not a case');
 });
 

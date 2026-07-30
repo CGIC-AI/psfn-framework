@@ -15,7 +15,20 @@ export type GardenSubjectRelation =
   | 'self'
   | 'self_or_co_subject';
 
-export type GardenAssuranceRequirement = 'none' | 'oauth' | 'webauthn_uv' | 'privacy_break_glass';
+/**
+ * Assurance tiers under the Discord-SSO-only doctrine (operator rulings D1/D2,
+ * 2026-07-30):
+ * - `oauth`: an authenticated Discord SSO browser session. This is the only
+ *   authentication tier; mutation routes gate on role + explicit confirmation.
+ * - `escalated`: the route additionally requires a consumed audited escalation
+ *   grant (reason + TTL, one audit event per grant). Reserved for the D1
+ *   escalation surfaces: other-humans' sensitive memories and cogsec
+ *   remediation actions.
+ * - `privacy_break_glass`: the companion-privacy disclosure confirm phase; the
+ *   gateway mints the `break_glass` session assurance from the same audited
+ *   escalation grant path.
+ */
+export type GardenAssuranceRequirement = 'none' | 'oauth' | 'escalated' | 'privacy_break_glass';
 export type GardenApprovalRequirement = 'contact_approval' | 'cogsec' | 'independent_reviewer';
 export type GardenPublicAccess = 'never' | 'always' | 'feature_off_only';
 export type GardenRecoveryAccess = 'forbidden' | 'trusted_host_exact_scope';
@@ -65,17 +78,17 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'contacts.bind', area: 'contacts',
     routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/binding/complete']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'provider.link', area: 'identity',
     routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/provider/complete']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'roles.manage', area: 'identity',
     routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/role/complete']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'public.read', area: 'garden_ui', routeIds: [
@@ -119,7 +132,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       '/api/admin/tool-conformance/run',
       '/api/admin/action-pipe/actions/:actionRef/acknowledge',
       '/api/admin/action-pipe/actions/:actionRef/cancel',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit',
+    ]), confirmation: 'explicit',
   },
   {
     action: 'audit.read', area: 'audit', routeIds: [
@@ -168,7 +181,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       '/api/admin/channels/context-envelope',
       '/api/admin/channels/context-envelope/demote',
     ]),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     // Subject-bound session reads (88u3): fleet principals reach these only
@@ -195,7 +208,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'sessions.repair', area: 'sessions', routeIds: ids('POST', [
       '/api/admin/session-routes/cogsec/apply', '/api/admin/session-routes/cogsec/preview',
       '/api/admin/session-routes/reset',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['cogsec'],
+    ]), assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {
     action: 'cogsec.read', area: 'cognitive_security', routeIds: [
@@ -220,7 +233,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/intake/drift-reviews/:id/resolve', '/api/admin/intake/quarantine/:id/confirm',
         '/api/admin/intake/quarantine/:id/decide',
       ]),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['cogsec'],
+    ], assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {
     action: 'confirmations.read', area: 'confirmations', routeIds: [
@@ -230,7 +243,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'confirmations.manage', area: 'confirmations',
     routeIds: ids('POST', ['/api/admin/confirmations/resolve']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'contact_approvals.read', area: 'contacts', routeIds: [
@@ -241,7 +254,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'contact_approvals.manage', area: 'contacts', routeIds: ids('POST', [
       '/api/admin/contact-approvals/:id/approve', '/api/admin/contact-approvals/:id/deny',
       '/api/admin/contact-approvals/:id/reset',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['contact_approval'],
+    ]), confirmation: 'explicit', approvals: ['contact_approval'],
   },
   {
     action: 'contacts.read', area: 'contacts', routeIds: [
@@ -260,7 +273,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/contacts/:id/conversation-channel/delete',
       ]),
       ...ids(['PUT', 'PATCH', 'DELETE'], ['/api/admin/contacts/:id']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['contact_approval'],
+    ], confirmation: 'explicit', approvals: ['contact_approval'],
   },
   {
     action: 'devices.read', area: 'devices', routeIds: [
@@ -271,7 +284,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'devices.manage', area: 'devices', routeIds: [
       ...ids('POST', ['/api/admin/enrollments']),
       ...ids('DELETE', ['/api/admin/enrollments/:hubIdentityId']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'graph.read', area: 'graph', routeIds: [
@@ -281,7 +294,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'graph.manage', area: 'graph', routeIds: ids('POST', [
       '/api/admin/graph-proposals/:id/approve', '/api/admin/graph-proposals/:id/reject',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['contact_approval'],
+    ]), confirmation: 'explicit', approvals: ['contact_approval'],
   },
   {
     action: 'identity.read', area: 'identity', routeIds: [
@@ -295,7 +308,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/identity/rollback', '/api/admin/identity/upload',
       ]),
       ...ids('PATCH', ['/api/admin/identity/fields']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'images.read', area: 'images', routeIds: [
@@ -319,7 +332,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'images.manage', area: 'images', routeIds: ids('DELETE', ['/api/admin/image-references/:id']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'memory.read.self', area: 'memory', routeIds: [
@@ -338,11 +351,11 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ], subjectRelation: 'self_or_co_subject',
   },
   {
-    action: 'memory.jit.self', area: 'memory', routeIds: [
+    action: 'memory.reveal', area: 'memory', routeIds: [
       ...ids('GET', ['/api/admin/memory/elevation']),
       ...ids('POST', ['/api/admin/memory/elevation', '/api/admin/memory/:id/reveal']),
       ...ids('DELETE', ['/api/admin/memory/elevation']),
-    ], subjectRelation: 'self_or_co_subject', assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], subjectRelation: 'self_or_co_subject', assurance: 'escalated', confirmation: 'explicit',
   },
   {
     action: 'privacy.break_glass', area: 'memory', routeIds: ids('POST', [
@@ -389,7 +402,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ]),
       ...ids('DELETE', ['/api/admin/memory/link', '/api/admin/memory/:id']),
       ...ids('PATCH', ['/api/admin/memory/:id/patch']),
-    ], subjectRelation: 'self_or_co_subject', assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], subjectRelation: 'self_or_co_subject', confirmation: 'explicit',
   },
   {
     action: 'models.read', area: 'models', routeIds: [
@@ -413,7 +426,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'places.manage', area: 'places',
     routeIds: ids('PATCH', ['/api/admin/places/satellites/:satelliteId/binding']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'prompts.read', area: 'prompts', routeIds: [
@@ -437,7 +450,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/prompts/north-star', '/api/admin/prompts/runtime-blocks',
       ]),
       ...ids('PATCH', ['/api/admin/prompts/:layerId']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'scheduler.read', area: 'scheduler', routeIds: [
@@ -452,7 +465,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/scheduler/reflections/:reflectionId', '/api/admin/scheduler/tasks/:taskId',
       ]),
       ...ids('DELETE', ['/api/admin/scheduler/tasks/:taskId']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'shared_workspace.read', area: 'shared_workspace',
@@ -468,13 +481,13 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'shared_workspace.manage', area: 'shared_workspace',
     scope: 'governed_shared_workspace',
     routeIds: ids('POST', ['/api/admin/shared-workspace/reviews/:reviewId/cogsec']),
-    assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['cogsec'],
+    assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {
     action: 'shared_workspace.manage', area: 'shared_workspace',
     scope: 'governed_shared_workspace',
     routeIds: ids('POST', ['/api/admin/shared-workspace/reviews/:reviewId/decision']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    assurance: 'escalated', confirmation: 'explicit',
     approvals: ['cogsec', 'independent_reviewer'],
   },
   {
@@ -487,7 +500,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ...ids(['POST', 'PATCH'], ['/api/admin/skills']),
       ...ids('POST', ['/api/admin/skills/toggle']),
       ...ids('DELETE', ['/api/admin/skills/:name']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'settings.read', area: 'personal_settings', routeIds: [
@@ -502,7 +515,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'settings.write', area: 'personal_settings', routeIds: [
       ...ids('PATCH', ['/api/admin/settings']),
       ...ids('POST', ['/api/admin/settings/models', '/api/admin/settings/:key', '/api/settings/:key']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], confirmation: 'explicit',
   },
   {
     action: 'autonomy.read', area: 'autonomy', routeIds: [
@@ -514,7 +527,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'autonomy.manage', area: 'autonomy', routeIds: ids('POST', [
       '/api/admin/icp-autonomy/do-not-disturb', '/api/admin/icp-autonomy/emergency-disable',
       '/api/admin/icp-autonomy/candidates/:candidateId/cancel',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit',
+    ]), confirmation: 'explicit',
   },
   {
     action: 'audit.read', area: 'audit', routeIds: [
@@ -529,12 +542,12 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'settings.write', area: 'personal_settings',
     routeIds: ids('PATCH', ['/api/admin/shards/:shardId/configuration']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'memory.manage', area: 'memory',
     routeIds: ids('POST', ['/api/admin/shards/:shardId/review']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'values.read', area: 'values', routeIds: [
@@ -560,7 +573,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       '/api/admin/wishlist/:wishId/respond',
       '/api/admin/wishlist/:wishId/convert-to-bead',
       '/api/admin/wishlist/:wishId/done',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit',
+    ]), confirmation: 'explicit',
   },
   {
     action: 'wiki.read', area: 'wiki', scope: 'governed_shared_workspace',
@@ -577,7 +590,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       '/api/admin/wiki/shared-world-proposals/cleanup',
       '/api/admin/wiki/shared-world-proposals/:proposalId/approve',
       '/api/admin/wiki/shared-world-proposals/:proposalId/reject',
-    ]), assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['cogsec'],
+    ]), assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {
     action: 'models.read', area: 'models',
@@ -586,7 +599,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'models.manage', area: 'models',
     routeIds: ids(['PATCH', 'POST'], ['/api/admin/chat/bootstrap']),
-    assurance: 'webauthn_uv', confirmation: 'explicit',
+    confirmation: 'explicit',
   },
   {
     action: 'telemetry.read', area: 'telemetry', routeIds: [

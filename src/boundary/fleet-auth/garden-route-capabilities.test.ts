@@ -67,7 +67,7 @@ describe('Garden route capability catalogue', () => {
         action: 'contacts.manage',
         baseRole: 'admin',
         requirements: {
-          assurance: 'webauthn_uv',
+          assurance: 'oauth',
           confirmation: 'explicit',
           approvals: ['contact_approval'],
         },
@@ -81,7 +81,7 @@ describe('Garden route capability catalogue', () => {
       action: 'shared_workspace.manage',
       baseRole: 'admin',
       requirements: {
-        assurance: 'webauthn_uv',
+        assurance: 'escalated',
         confirmation: 'explicit',
         approvals: ['cogsec', 'independent_reviewer'],
       },
@@ -111,7 +111,7 @@ describe('Garden route capability catalogue', () => {
         action: 'wiki.manage',
         resource: { scope: 'governed_shared_workspace' },
         requirements: {
-          assurance: 'webauthn_uv',
+          assurance: 'escalated',
           confirmation: 'explicit',
           approvals: ['cogsec'],
         },
@@ -166,7 +166,7 @@ describe('Garden route capability catalogue', () => {
         action: 'settings.write',
         baseRole: 'admin',
         requirements: {
-          assurance: 'webauthn_uv',
+          assurance: 'oauth',
           confirmation: 'explicit',
         },
       },
@@ -186,7 +186,7 @@ describe('Garden route capability catalogue', () => {
         authorization: {
           action: 'channels.manage',
           baseRole: 'admin',
-          requirements: { assurance: 'webauthn_uv', confirmation: 'explicit' },
+          requirements: { assurance: 'oauth', confirmation: 'explicit' },
         },
       });
   });

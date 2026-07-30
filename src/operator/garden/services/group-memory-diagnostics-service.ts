@@ -384,7 +384,15 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     if (context?.kind !== 'fleet_principal') return this.deps.memoryStore;
     return createSubjectAuthorizedMemoryStore(
       this.deps.fleetMemoryStore ?? this.deps.memoryStore,
-      Object.freeze({ viewerContactId: context.actor.contactId }),
+      Object.freeze({
+        viewerContactId: context.actor.contactId,
+        ...(context.actor.role === 'owner' || context.actor.role === 'admin'
+          ? {
+              adminAccessMode: context.actor.accessMode,
+              ...(context.actor.sessionAssurance === 'escalated' ? { escalated: true } : {}),
+            }
+          : {}),
+      }),
     );
   }
 }

@@ -19,7 +19,6 @@ import type {
   AdminMemorySessionService,
 } from './services/types.js';
 import type { GardenRequestContext } from './garden-request-context.js';
-import { parseMemorySubjectJitRequest } from '../../shared/contracts/memory-subject-jit.js';
 
 /**
  * Per-browser admin session cookie keying Garden memory body-gate grants.
@@ -505,26 +504,11 @@ export function buildAdminMemoryRoutes(options: {
         const sessionKey = context?.kind === 'legacy_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
-        withBody(req, res, (body) => {
-          let jitRequest;
-          if (context?.kind === 'fleet_principal') {
-            const parsed = parseAdminJsonBody(body);
-            if (!parsed.ok) {
-              sendJson(res, 400, { error: parsed.error });
-              return;
-            }
-            try {
-              jitRequest = parseMemorySubjectJitRequest(parsed.value);
-            } catch {
-              sendJson(res, 400, { error: 'Invalid memory subject JIT request' });
-              return;
-            }
-          }
+        withBody(req, res, () => {
+          // Fleet reveals carry their authority in the gateway-consumed
+          // escalation grant (x-psfn-escalation-grant); the body is unused.
           const service = bindMemoryRequest(memoryService, context, sessionKey);
-          const revealed = jitRequest
-            ? service.revealMemory(id, jitRequest)
-            : service.revealMemory(id);
-          revealed.then(
+          service.revealMemory(id).then(
             (detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Memory not found' });

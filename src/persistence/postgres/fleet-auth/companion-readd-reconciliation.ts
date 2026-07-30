@@ -122,7 +122,7 @@ export async function reconcilePendingCompanionReadd(
 
   for (const table of [
     'browser_sessions',
-    'jit_authorization_grants',
+    'escalation_grants',
     'provider_token_custody',
   ]) {
     await client.query(`
@@ -131,11 +131,6 @@ export async function reconcilePendingCompanionReadd(
       WHERE principal_id = $1
     `, [readd.target.principalId, marker.revokedAt]);
   }
-  await client.query(`
-    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-    SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-    WHERE principal_id = $1
-  `, [readd.target.principalId]);
   await client.query(`
     DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
     WHERE principal_id = $1
@@ -152,8 +147,7 @@ export async function reconcilePendingCompanionReadd(
   `, [readd.target.principalId]);
   for (const table of [
     'browser_sessions',
-    'jit_authorization_grants',
-    'step_up_challenges',
+    'escalation_grants',
     'provider_token_custody',
     'discord_evidence_snapshots',
     'discord_evidence_lifecycle_fences',

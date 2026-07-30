@@ -75,7 +75,7 @@ function context(phase: 'confirm' | 'decide'): FleetGardenRequestContext {
 }
 
 const auditEvidence: PrivacyBreakGlassAuditEvidence = {
-  assurance: 'webauthn_uv',
+  assurance: 'escalated',
   resourceKind: 'memory',
   resourceSelectorDigest: '1'.repeat(64),
   reasonCategory: BODY.reasonCategory,

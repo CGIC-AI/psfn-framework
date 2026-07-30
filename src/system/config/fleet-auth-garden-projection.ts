@@ -18,8 +18,7 @@ interface FleetAuthGardenProjectionInput {
     sessionIdleMs: number;
     sessionAbsoluteMs: number;
     discordEvidenceMs: number;
-    jitGrantMs: number;
-    stepUpChallengeMs: number;
+    escalationGrantMs: number;
     internalAssertionMs: number;
   };
   rolePolicy: {

@@ -1,10 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { FleetAuthBrokerError } from '../../../boundary/gateway/fleet-auth-broker.js';
 import {
-  FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH,
   FLEET_AUTH_PROVIDER_COMPLETE_PATH,
   FLEET_AUTH_ROLE_COMPLETE_PATH,
 } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
@@ -48,38 +46,24 @@ function roleRequest() {
 }
 
 describe('fleet-auth lifecycle ceremony HTTP routes', () => {
-  it('starts exact strong assurance without accepting undeclared envelope fields', async () => {
-    const startStrongAssurance = vi.fn(async () => ({
-      challengeId: '00000000-0000-4000-8000-000000000405',
-      requestNonce: 'a'.repeat(43),
-      assurance: 'webauthn_uv' as const,
-    }));
-    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({
-      startStrongAssurance,
-      complete: vi.fn(),
-    });
-    const res = response();
-    await routes.handle({
-      request: request({ request: roleRequest() }),
-      response: res,
-      path: FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH,
+  it('rejects undeclared envelope fields on a completion route', async () => {
+    const complete = vi.fn();
+    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({ complete });
+    await expect(routes.handle({
+      request: request({ request: roleRequest(), jitGrantId: '00000000-0000-4000-8000-000000000405' }),
+      response: response(),
+      path: FLEET_AUTH_ROLE_COMPLETE_PATH,
       token: 'session-token',
       csrfToken: 'csrf-token',
       requestOrigin: 'https://fleet.example.test',
-    });
-    expect(startStrongAssurance).toHaveBeenCalledWith(expect.objectContaining({
-      request: expect.objectContaining({ action: 'role.grant' }),
-    }));
-    expect(JSON.parse(res.body)).toMatchObject({ assurance: 'webauthn_uv' });
+    })).rejects.toBeInstanceOf(FleetAuthBrokerError);
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it('rejects a role request presented to the provider completion route', async () => {
-    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({
-      startStrongAssurance: vi.fn(),
-      complete: vi.fn(),
-    });
+    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({ complete: vi.fn() });
     await expect(routes.handle({
-      request: request({ request: roleRequest(), jitGrantId: randomUUID() }),
+      request: request({ request: roleRequest() }),
       response: response(),
       path: FLEET_AUTH_PROVIDER_COMPLETE_PATH,
       token: 'session-token',
@@ -103,13 +87,10 @@ describe('fleet-auth lifecycle ceremony HTTP routes', () => {
         policyVersion: 1,
       },
     }));
-    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({
-      startStrongAssurance: vi.fn(),
-      complete,
-    });
+    const routes = new FleetAuthLifecycleCeremonyHttpRoutes({ complete });
     const res = response();
     await routes.handle({
-      request: request({ request: roleRequest(), jitGrantId: randomUUID() }),
+      request: request({ request: roleRequest() }),
       response: res,
       path: FLEET_AUTH_ROLE_COMPLETE_PATH,
       token: 'session-token',

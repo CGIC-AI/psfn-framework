@@ -19,7 +19,7 @@ const FULLY_POPULATED_ROW = {
   provider: 'discord',
   provider_subject_id: 'provider-subject-id',
   audience: 'fleet',
-  assurance: 'webauthn_uv',
+  assurance: 'escalated',
   session_authn_version: '1',
   session_authz_version: '2',
   binding_version: '3',
@@ -48,7 +48,7 @@ const EXPECTED_SESSION = {
   provider: 'discord',
   providerSubjectId: 'provider-subject-id',
   audience: 'fleet',
-  assurance: 'webauthn_uv',
+  assurance: 'escalated',
   authnVersion: 1,
   authzVersion: 2,
   bindingVersion: 3,
@@ -85,7 +85,7 @@ describe('fleet-auth row utilities', () => {
     expect(positiveInteger('3')).toBe(3);
     expect(positiveInteger('0')).toBeUndefined();
     expect(positiveInteger('not-a-number')).toBeUndefined();
-    expect(positiveInteger('0', 'counter', 'jit-step-up', true)).toBe(0);
+    expect(positiveInteger('0', 'counter', 'escalation-grant', true)).toBe(0);
 
     expect(() => positiveInteger('0', 'version', 'authorization-context'))
       .toThrow('Invalid fleet_auth authorization context version');
@@ -93,7 +93,7 @@ describe('fleet-auth row utilities', () => {
       .toThrow('Invalid fleet portal authorization version');
     expect(() => positiveInteger('0', 'version', 'hub-device-attachment'))
       .toThrow('Invalid hub device attachment version');
-    expect(() => positiveInteger('0', 'version', 'jit-step-up'))
+    expect(() => positiveInteger('0', 'version', 'escalation-grant'))
       .toThrow('Invalid fleet_auth version');
     expect(() => positiveInteger('0', 'version', 'lifecycle-audit'))
       .toThrow('Invalid fleet_auth lifecycle audit version');

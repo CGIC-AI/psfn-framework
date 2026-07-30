@@ -124,7 +124,13 @@ async function parseErrorResponse(res: Response): Promise<{ message: string; bod
   return { message: body, body };
 }
 
-async function throwIfNotOk(res: Response): Promise<void> {
+/**
+ * Shared failure translation. Exported so same-origin gateway ceremonies that
+ * cannot ride `apiFetch` (the `/v1/fleet-auth/*` routes are not companion-scoped
+ * Garden data paths) still surface the server's own error text as an `ApiError`
+ * and still redirect a dead session to login.
+ */
+export async function throwIfNotOk(res: Response): Promise<void> {
   if (res.status === 401) {
     redirectToLogin();
     throw new ApiError(401, 'Unauthorized');
@@ -210,6 +216,23 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     headers: serializedBody === undefined
       ? authHeaders()
       : { ...authHeaders(), 'Content-Type': 'application/json' },
+export interface ApiPostOptions {
+  /**
+   * Extra request headers for one call (e.g. a single-use audited escalation
+   * grant id). Applied beneath the auth/content-type defaults, so a caller can
+   * only add headers the default set does not already own.
+   */
+  headers?: Record<string, string>;
+}
+
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  options?: ApiPostOptions,
+): Promise<T> {
+  const res = await apiFetch(path, {
+    method: 'POST',
+    headers: { ...options?.headers, ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
     body: serializedBody,
   });

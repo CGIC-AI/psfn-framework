@@ -11,10 +11,6 @@ const entries = {
       'src/app/maintenance/migrate-required-settings-blocks.ts',
     'migrate-intake-policy-owner':
       'src/app/maintenance/migrate-intake-policy-owner.ts',
-    'create-passkey-ceremony': 'src/app/maintenance/create-passkey-ceremony.ts',
-    'create-account-reapproval-ceremony':
-      'src/app/maintenance/create-account-reapproval-ceremony.ts',
-    'create-provider-recovery': 'src/app/maintenance/create-provider-recovery.ts',
     'migrate-system-owner-fleet': 'src/app/maintenance/migrate-system-owner-fleet.ts',
     'system-owner-fleet-snapshot': 'src/app/maintenance/system-owner-fleet-snapshot.ts',
     'owner-upgrade-readiness-probe': 'src/app/maintenance/owner-upgrade-readiness-probe.ts',

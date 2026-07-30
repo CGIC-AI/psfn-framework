@@ -8,8 +8,7 @@ const CONTACT_ID_MAX_LENGTH = 256;
 /**
  * Exact trusted-host account/binding/role reapproval request. Every identity is
  * bound: the ceremony, the principal, its Discord provider subject, the
- * per-companion contact binding, and the role grant. Nothing here can promote a
- * passkey — passkey authority is governed solely by the non-restored floor.
+ * per-companion contact binding, and the role grant.
  */
 export interface AccountReapprovalRequest {
   ceremonyId: string;

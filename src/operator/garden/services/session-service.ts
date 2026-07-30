@@ -84,9 +84,10 @@ import {
 } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { assertGardenRequestCompanionScope } from '../garden-companion-scope.js';
-import type {
-  FleetGardenRequestContext,
-  GardenRequestContext,
+import {
+  soleAdminFleetActor,
+  type FleetGardenRequestContext,
+  type GardenRequestContext,
 } from '../garden-request-context.js';
 import {
   getLinkedContactForSession,
@@ -572,6 +573,9 @@ export class AdminSessionDataService implements AdminSessionService {
   ): FleetGardenRequestContext | null {
     if (!context || context.kind !== 'fleet_principal') return null;
     assertGardenRequestCompanionScope(context, this.deps.config?.companionId);
+    // D1 sole-admin doctrine: the deployment's single rostered admin is never
+    // subject-partitioned from their own deployment's sessions.
+    if (soleAdminFleetActor(context)) return null;
     if (
       context.resource.area !== 'sessions'
       || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')
@@ -590,7 +594,7 @@ export class AdminSessionDataService implements AdminSessionService {
    * for fleet principals even if a dispatch-level gate is bypassed.
    */
   private denyUnpartitionedFleetAccess(context: GardenRequestContext | undefined): void {
-    if (context?.kind === 'fleet_principal') {
+    if (context?.kind === 'fleet_principal' && !soleAdminFleetActor(context)) {
       throw new Error(FLEET_SESSION_BOUNDARY_MESSAGE);
     }
   }

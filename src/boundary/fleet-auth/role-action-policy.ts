@@ -82,7 +82,7 @@ export const FLEET_AUTH_ACTION_BASE_ROLE: Readonly<Record<FleetAuthAction, Fleet
     'wiki.manage': 'admin',
     'roles.manage': 'owner',
     'memory.read.self': 'member',
-    'memory.jit.self': 'member',
+    'memory.reveal': 'member',
     'privacy.break_glass': 'admin',
     'devices.manage': 'admin',
     'provider.link': 'owner',

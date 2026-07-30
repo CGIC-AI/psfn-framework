@@ -39,6 +39,7 @@ export function buildMemorySubjectAuthorizationPredicate(
   const viewerContactsParameter = `$${firstParameter + 2}`;
   const viewerRelationsParameter = `$${firstParameter + 3}`;
   const grantBindingsParameter = `$${firstParameter + 4}`;
+  const excludeHighSensitivityOtherParameter = `$${firstParameter + 5}`;
 
   return {
     sql: `EXISTS (
@@ -105,6 +106,21 @@ export function buildMemorySubjectAuthorizationPredicate(
           )
         )
         AND (
+          ${excludeHighSensitivityOtherParameter}::boolean = FALSE
+          OR NOT (
+            COALESCE(${memoryAlias}.sensitivity, 'personal') IN ('intimate', 'confidential')
+            AND EXISTS (
+              SELECT 1 FROM l2_memory_subject_contacts subject_contact
+              WHERE subject_contact.memory_id = classification.memory_id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM l2_memory_subject_contacts subject_contact
+              WHERE subject_contact.memory_id = classification.memory_id
+                AND subject_contact.contact_id = ANY(${viewerContactsParameter}::text[])
+            )
+          )
+        )
+        AND (
           ${grantBindingsParameter}::jsonb = '[]'::jsonb
           OR EXISTS (
             SELECT 1
@@ -127,6 +143,7 @@ export function buildMemorySubjectAuthorizationPredicate(
       authorization.viewerContactIds,
       authorization.allowedViewerRelations,
       JSON.stringify(authorization.grantBindings),
+      authorization.excludeHighSensitivityOtherRelation === true,
     ],
   };
 }

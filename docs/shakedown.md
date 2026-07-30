@@ -408,7 +408,7 @@ Any missing or partial control fails closed. The maximum supported action set is
 `confirmations.read`, `confirmations.manage`, `devices.manage`, `models.read`,
 `prompts.read`, `settings.read`, and `settings.write`. Privacy break-glass is
 always excluded. The gateway gives each route only its minimum required
-assurance (`oauth` for ordinary reads, `webauthn_uv` where the route demands
+assurance (`oauth` for ordinary reads, `escalated` where the route demands
 it), never break-glass assurance.
 
 This door replaces only browser session authentication. The gateway consumes
@@ -486,7 +486,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | Performance (`mmo9`) | local + kube | SSE first-chunk, background supervisor, admission controller; voice cancellation kube; compaction cliff Pi-class | epic still open — coordinate before certifying |
 | Tool-stack audit (`generate_image` rename, core/extended re-tiering) | local, all tiers | tool-conformance sweep per tier | watch `fpiu` attachment-claim bug |
 | Garden UX overhaul | both | behavioral sweep over new SPA routes | |
-| July hardening — `fleet-auth`, SSO, and passkey administration (opl1) | kube + local, autonomous | SSO subject-scoped admin via Garden partner walk; WebAuthn passkey register/authenticate ceremony run by hand | operator-eyes; passkey ceremony cannot run headless |
+| July hardening — `fleet-auth` SSO administration (opl1, reshaped by D2 2026-07-30) | kube + local, autonomous | SSO admin via Garden partner walk; audited escalation grant issue→consume on a memory reveal and a cogsec remediation action | passkeys/WebAuthn removed — Discord SSO is the only auth; escalation is scriptable (no ceremony) |
 | July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
 | July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
 | July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |

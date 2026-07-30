@@ -28,6 +28,7 @@ const authContext: RequestCapabilityAuthContext = Object.freeze({
   role: 'member',
   sessionRecordId: '55555555-5555-4555-8555-555555555555',
   sessionAssurance: 'oauth',
+  fleetAccessMode: 'multi_admin',
   authorizationEventId: '66666666-6666-4666-8666-666666666666',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });

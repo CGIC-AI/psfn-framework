@@ -121,12 +121,6 @@
       "value": "16 * 1024"
     },
     {
-      "file": "src/boundary/fleet-auth/webauthn-uv.ts",
-      "name": "MAX_CREDENTIAL_FIELD_BYTES",
-      "value": "1_048_576",
-      "note": "Code-owned WebAuthn credential allocation ceiling at the untrusted authentication boundary."
-    },
-    {
       "file": "src/boundary/gateway/attachment-materialization.ts",
       "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
       "value": "25 * 1024 * 1024"

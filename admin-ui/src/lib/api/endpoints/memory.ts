@@ -1,4 +1,5 @@
-import { apiDelete, apiFetch, apiGet, apiPost } from '$lib/api/client';
+import { apiDelete, apiFetch, apiGet, apiPost, throwIfNotOk } from '$lib/api/client';
+import { currentCompanionGardenScope } from '$lib/fleet/companion-scope';
 import type {
   AdminBulkMutationResult,
   AdminMemoryElevationStatus,
@@ -54,10 +55,95 @@ export function getMemoryDetail(id: string): Promise<AdminMemoryDetailData> {
 
 // Reveals a single high-intimacy memory body. Audit-logged server-side.
 export function revealMemory(id: string): Promise<AdminMemoryDetailData> {
-  return apiPost<AdminMemoryDetailData>(
-    `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
-    {}
-  );
+  return apiPost<AdminMemoryDetailData>(revealMemoryPath(id), {});
+}
+
+// Gateway fleet-auth ceremony routes. These are NOT Garden data paths: they
+// must never be rewritten into a companion-scoped prefix, so they use raw
+// same-origin fetch rather than apiFetch.
+const FLEET_CSRF_PATH = '/v1/fleet-auth/session/csrf';
+const FLEET_ESCALATION_GRANT_PATH = '/v1/fleet-auth/escalation/grant';
+const FLEET_CSRF_HEADER = 'X-PSFN-CSRF';
+const FLEET_ESCALATION_GRANT_HEADER = 'x-psfn-escalation-grant';
+const FLEET_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+// Mirrors the server's checkedEscalationReason contract so an unusable reason
+// is refused before it reaches the audit trail.
+const ESCALATION_REASON_MAX_LENGTH = 512;
+const ESCALATION_REASON_CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
+
+function revealMemoryPath(id: string): string {
+  return `/api/admin/memory/${encodeURIComponent(id)}/reveal`;
+}
+
+function checkedEscalationReason(reason: string): string {
+  const normalized = reason.trim();
+  if (!normalized
+    || normalized.length > ESCALATION_REASON_MAX_LENGTH
+    || ESCALATION_REASON_CONTROL_CHARS.test(normalized)) {
+    throw new Error(
+      `An escalation reason of 1-${ESCALATION_REASON_MAX_LENGTH} printable characters is required`,
+    );
+  }
+  return normalized;
+}
+
+async function issueFleetCsrfToken(): Promise<string> {
+  const res = await fetch(FLEET_CSRF_PATH, {
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  await throwIfNotOk(res);
+  const payload = await res.json() as { csrfToken?: unknown };
+  if (typeof payload.csrfToken !== 'string' || !FLEET_CSRF_TOKEN_PATTERN.test(payload.csrfToken)) {
+    throw new Error('Cluster escalation ceremony unavailable');
+  }
+  return payload.csrfToken;
+}
+
+/**
+ * Reveals one high-intimacy memory body for a fleet SSO principal.
+ *
+ * Fleet principals have no session-wide elevation: each reveal names its own
+ * reason, mints one single-use audited escalation grant bound to exactly this
+ * reveal route, and spends it on the immediately following request. Every step
+ * fails closed -- no grant, no reveal.
+ */
+export async function revealMemoryEscalated(
+  id: string,
+  reason: string,
+): Promise<AdminMemoryDetailData> {
+  const scope = currentCompanionGardenScope();
+  if (!scope) {
+    throw new Error('Audited escalation requires an authorized companion Garden route');
+  }
+  const target = revealMemoryPath(id);
+  const auditedReason = checkedEscalationReason(reason);
+  const csrfToken = await issueFleetCsrfToken();
+  const grantResponse = await fetch(FLEET_ESCALATION_GRANT_PATH, {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      [FLEET_CSRF_HEADER]: csrfToken,
+    },
+    body: JSON.stringify({
+      companionId: scope.companionId,
+      method: 'POST',
+      target,
+      reason: auditedReason,
+    }),
+  });
+  await throwIfNotOk(grantResponse);
+  const grant = await grantResponse.json() as { grantId?: unknown };
+  if (typeof grant.grantId !== 'string' || !grant.grantId) {
+    throw new Error('Escalation grant response is malformed');
+  }
+  return apiPost<AdminMemoryDetailData>(target, {}, {
+    headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
+  });
 }
 
 export function getMemoryElevation(): Promise<AdminMemoryElevationStatus> {

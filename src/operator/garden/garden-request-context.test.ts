@@ -72,6 +72,7 @@ function context(
     pathParams?: Readonly<Record<string, string>>;
     assurance?: FleetGardenRequestContext['actor']['sessionAssurance'];
     role?: FleetGardenRequestContext['actor']['role'];
+    accessMode?: FleetGardenRequestContext['actor']['accessMode'];
   } = {},
 ): FleetGardenRequestContext {
   const area = overrides.area ?? 'memory';
@@ -116,6 +117,7 @@ function context(
       operatorGrantId: `grant-${principalId}`,
       sessionRecordId: `session-${principalId}`,
       sessionAssurance: overrides.assurance ?? 'oauth',
+      accessMode: overrides.accessMode ?? 'multi_admin',
     }),
     action: overrides.action ?? 'memory.read.self',
     resource: Object.freeze({
@@ -227,13 +229,14 @@ describe('request-bound Garden principal isolation', () => {
     expect(owner.withheldBySubjectAuthorizationCount).toBe(4);
   });
 
-  it('keeps strong JIT and non-subject relations fail closed', () => {
+  it('keeps session-wide elevation and non-subject relations fail closed', () => {
     const rawStore = {
       queryAuthorizedMemorySubjects: vi.fn(async () => ({ memories: [], total: 0 })),
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
-    const jit = context('principal-a', 'contact-a', { action: 'memory.jit.self', subjectRelation: 'self' });
-    expect(() => service.forRequest(jit).elevateBodyAccess()).toThrow(/JIT is unavailable/u);
+    const reveal = context('principal-a', 'contact-a', { action: 'memory.reveal', subjectRelation: 'self' });
+    expect(() => service.forRequest(reveal).elevateBodyAccess())
+      .toThrow(/audited escalation/u);
     expect(() => service.forRequest(context('principal-a', 'contact-a', {
       subjectRelation: 'current_companion',
     }))).toThrow(/exact request-local subject relation/u);
@@ -276,7 +279,7 @@ describe('request-bound Garden principal isolation', () => {
       action: 'sessions.repair', area: 'sessions',
       subjectRelation: 'self_or_co_subject',
       routeId: 'POST /api/admin/session-routes/cogsec/apply',
-      assurance: 'webauthn_uv',
+      assurance: 'escalated',
     });
     expect(gardenRequestServiceBoundaryDenial(cogsecApply)).toMatch(/subject-bound/u);
 
@@ -326,7 +329,7 @@ describe('request-bound Garden principal isolation', () => {
       action: 'memory.manage',
       routeId: 'POST /api/admin/shards/:shardId/review',
       pathParams: { shardId: 'shard-1' },
-      assurance: 'webauthn_uv',
+      assurance: 'escalated',
     });
     expect(gardenRequestServiceBoundaryDenial(shardReview)).toMatch(/subject-authorized/u);
   });
@@ -377,8 +380,13 @@ describe('request-bound Garden principal isolation', () => {
     expect(aggregateAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
       authorization: expect.objectContaining({
         viewerContactIds: ['contact-a'],
-        allowedSubjectClasses: ['single_contact'],
-        allowedViewerRelations: ['self'],
+        // D1 multi-admin projection: every class visible in SQL, with the
+        // high-sensitivity other-human carve-out active until escalation.
+        allowedSubjectClasses: [
+          'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+        ],
+        allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+        excludeHighSensitivityOtherRelation: true,
       }),
       selector: expect.objectContaining({ kind: 'admin_page' }),
     }));
@@ -439,7 +447,7 @@ describe('request-bound Garden principal isolation', () => {
 
     for (const sensitivity of sensitivities) {
       await expect(routine.getMemoryDetail(`memory-${sensitivity}`))
-        .rejects.toThrow(/subject projection|current proven single-contact subject/u);
+        .rejects.toThrow(/subject projection|current subject classification|current proven single-contact subject/u);
     }
   });
 
@@ -467,7 +475,7 @@ describe('request-bound Garden principal isolation', () => {
     expect(getLinkedMemories).not.toHaveBeenCalled();
   });
 
-  it('reveals one current intimate self memory only with the exact consumed UV JIT binding', async () => {
+  it('reveals one current intimate self memory only under a consumed audited escalation', async () => {
     const intimate = { ...memory('contact-a'), text: 'private body', sensitivity: 'intimate' as const };
     const classification: MemorySubjectClassification = {
       memoryId: intimate.id,
@@ -501,47 +509,130 @@ describe('request-bound Garden principal isolation', () => {
       getMemorySubjectClassification: vi.fn(async () => classification),
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
+
+    // Routine detail: the body stays redacted and no reveal token of any kind
+    // is attached — escalation happens against the gateway, not this payload.
     const routine = context('principal-a', 'contact-a');
     const detail = await service.forRequest(routine).getMemoryDetail(intimate.id);
-    expect(detail?.memory).toMatchObject({
-      bodyRedacted: true,
-      subjectJitBinding: {
-        memoryRevision: 3,
-        classifierVersion: 1,
-      },
-    });
+    expect(detail?.memory).toMatchObject({ bodyRedacted: true });
     expect(detail?.memory.text).not.toBe('private body');
 
-    const binding = detail!.memory.subjectJitBinding!;
-    const jit = context('principal-a', 'contact-a', {
-      action: 'memory.jit.self',
+    // A reveal without the escalated session assurance fails closed.
+    const unescalated = context('principal-a', 'contact-a', {
+      action: 'memory.reveal',
       subjectRelation: 'self_or_co_subject',
       routeId: 'POST /api/admin/memory/:id/reveal',
       pathParams: { id: intimate.id },
-      assurance: 'webauthn_uv',
       expiresAt: Math.floor(Date.now() / 1_000) + 60,
     });
-    await expect(service.forRequest(jit).revealMemory(intimate.id, {
-      ...binding,
-      purpose: 'Review my own memory',
-    })).resolves.toMatchObject({ memory: { text: 'private body' } });
+    await expect(service.forRequest(unescalated).revealMemory(intimate.id))
+      .rejects.toThrow(/audited escalation grant/u);
 
-    await expect(service.forRequest(jit).revealMemory(intimate.id, {
-      ...binding,
-      memoryRevision: 2,
-      purpose: 'Use a stale binding',
-    })).resolves.toBeNull();
-    await expect(service.forRequest(context('principal-other', 'contact-other', {
-      action: 'memory.jit.self',
+    // With the gateway-minted escalated assurance the exact reveal succeeds.
+    const escalated = context('principal-a', 'contact-a', {
+      action: 'memory.reveal',
       subjectRelation: 'self_or_co_subject',
       routeId: 'POST /api/admin/memory/:id/reveal',
       pathParams: { id: intimate.id },
-      assurance: 'webauthn_uv',
-      role: 'owner',
+      assurance: 'escalated',
       expiresAt: Math.floor(Date.now() / 1_000) + 60,
-    })).revealMemory(intimate.id, {
-      ...binding,
-      purpose: 'Owner attempts non-subject access',
-    })).resolves.toBeNull();
+    });
+    await expect(service.forRequest(escalated).revealMemory(intimate.id))
+      .resolves.toMatchObject({ memory: { text: 'private body' } });
+
+    // A signed path param that disagrees with the requested id fails closed.
+    const mismatched = context('principal-a', 'contact-a', {
+      action: 'memory.reveal',
+      subjectRelation: 'self_or_co_subject',
+      routeId: 'POST /api/admin/memory/:id/reveal',
+      pathParams: { id: 'memory-other' },
+      assurance: 'escalated',
+      expiresAt: Math.floor(Date.now() / 1_000) + 60,
+    });
+    await expect(service.forRequest(mismatched).revealMemory(intimate.id))
+      .rejects.toThrow(/audited escalation grant/u);
+
+    // A different member principal outside the subject cannot reveal even
+    // when escalated: the subject-authorized store returns no row.
+    await expect(service.forRequest(context('principal-other', 'contact-other', {
+      action: 'memory.reveal',
+      subjectRelation: 'self_or_co_subject',
+      routeId: 'POST /api/admin/memory/:id/reveal',
+      pathParams: { id: intimate.id },
+      assurance: 'escalated',
+      expiresAt: Math.floor(Date.now() / 1_000) + 60,
+    })).revealMemory(intimate.id)).resolves.toBeNull();
+  });
+
+  it('D1 sole-admin mode lifts every service boundary denial for the rostered admin', () => {
+    const soleAdmin = { role: 'admin' as const, accessMode: 'sole_admin' as const };
+    const deniedForMultiAdmin = [
+      context('principal-a', 'contact-a', {
+        action: 'sessions.read', area: 'sessions',
+        subjectRelation: 'current_companion',
+        routeId: 'GET /api/admin/session-routes',
+        ...soleAdmin,
+      }),
+      context('principal-a', 'contact-a', {
+        action: 'sessions.repair', area: 'sessions',
+        subjectRelation: 'self_or_co_subject',
+        routeId: 'POST /api/admin/session-routes/cogsec/apply',
+        assurance: 'escalated',
+        ...soleAdmin,
+      }),
+      context('principal-a', 'contact-a', {
+        action: 'recovery.begin', area: 'sessions',
+        subjectRelation: 'none',
+        routeId: 'GET /session-recovery',
+        ...soleAdmin,
+      }),
+      context('principal-a', 'contact-a', {
+        routeId: 'GET /api/admin/group-memory',
+        ...soleAdmin,
+      }),
+      context('principal-a', 'contact-a', {
+        subjectRelation: 'none',
+        routeId: 'GET /api/admin/episodic-memory/episodes',
+        ...soleAdmin,
+      }),
+    ];
+    for (const soleAdminContext of deniedForMultiAdmin) {
+      expect(gardenRequestServiceBoundaryDenial(soleAdminContext)).toBeNull();
+    }
+
+    // The bypass is admin-class only: a sole-roster deployment with a member
+    // session keeps the subject boundary.
+    const memberInSoleAdminDeployment = context('principal-a', 'contact-a', {
+      routeId: 'GET /api/admin/group-memory',
+      accessMode: 'sole_admin',
+      role: 'member',
+    });
+    expect(gardenRequestServiceBoundaryDenial(memberInSoleAdminDeployment))
+      .toMatch(/subject-authorized/u);
+  });
+
+  it('D1 sole-admin listing keeps every subject class visible without the sensitivity carve-out', async () => {
+    const aggregateAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAdminQuery) => (
+      adminAggregateFromMemories(input, [])
+    ));
+    const rawStore = {
+      queryAuthorizedMemorySubjects: vi.fn(async () => ({ memories: [], total: 0 })),
+      aggregateAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
+    await service.forRequest(context('principal-a', 'contact-a', {
+      role: 'admin',
+      accessMode: 'sole_admin',
+    })).listMemories();
+    expect(aggregateAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({
+        allowedSubjectClasses: [
+          'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+        ],
+        allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+      }),
+    }));
+    const authorization = aggregateAuthorizedMemorySubjects.mock.calls[0]![0]!.authorization;
+    expect(authorization.excludeHighSensitivityOtherRelation).toBeUndefined();
   });
 });

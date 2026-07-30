@@ -145,7 +145,18 @@ describe('GatewaySystemDataWriter', () => {
       operation: 'publish_site',
       siteId: 'home',
       updatedBy: 'garden-operator',
-    })).resolves.toEqual({ ok: true });
+    })).resolves.toEqual({
+      ok: true,
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      report: {
+        siteId: 'home',
+        created: ['site-overview'],
+        updated: [],
+        unchanged: [],
+        deleted: [],
+      },
+    });
     expect(existsSync(join(
       systemDataDir,
       'shared-world',
@@ -185,6 +196,12 @@ describe('GatewaySystemDataWriter', () => {
       },
       companionId: 'spoofed',
     })).toThrow(/unknown keys/);
+    expect(() => parseSystemDataWriteRequest({
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      siteId: 'home',
+      updatedBy: '   ',
+    })).toThrow(/updatedBy must be non-empty/);
   });
 
   it('accepts an empty conformance error string from the canonical harness contract', () => {

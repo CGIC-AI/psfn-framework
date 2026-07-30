@@ -108,8 +108,6 @@ export interface WikiImportOptions {
   updatedBy?: string;
   /** When true, run the guard + resolve ids but do NOT write (preview). */
   dryRun?: boolean;
-  /** Gateway execution fails the whole RPC if an accepted file cannot be written. */
-  failOnWriteError?: boolean;
 }
 
 export interface WikiImportFilesOptions extends WikiImportOptions {
@@ -158,7 +156,6 @@ export function importMarkdownFiles(options: WikiImportFilesOptions): WikiImport
       });
       report.imported.push({ file: entry.file, id: written.id, title: written.title });
     } catch (error) {
-      if (options.failOnWriteError) throw error;
       report.rejected.push({
         file: entry.file,
         reason: error instanceof Error ? error.message : String(error),

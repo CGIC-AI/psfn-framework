@@ -115,15 +115,19 @@ function buildCaretaker(input: {
   proposalStore: SharedWorldWikiProposalStorePort;
   isKnownSite?: SharedWorldWikiCaretakerOptions['isKnownSite'];
   openSharedStore?: SharedWorldWikiCaretakerOptions['openSharedStore'];
+  writeSharedDocument?: SharedWorldWikiCaretakerOptions['writeSharedDocument'];
   projection?: SharedWorldWikiProjectionPort;
 }): SharedWorldWikiCaretakerService {
+  const openSharedStore = input.openSharedStore ?? (() => ({
+    get: () => null,
+    upsert: () => documentFixture(),
+  }));
   return new SharedWorldWikiCaretakerService({
     proposalStore: input.proposalStore,
     isKnownSite: input.isKnownSite ?? (() => true),
-    openSharedStore: input.openSharedStore ?? (() => ({
-      get: () => null,
-      upsert: () => documentFixture(),
-    })),
+    openSharedStore,
+    writeSharedDocument: input.writeSharedDocument ?? (async (siteId, documentInput) =>
+      openSharedStore(siteId).upsert(documentInput)),
     projection: input.projection ?? successfulProjection(),
     now: () => 1_000,
   });
@@ -152,6 +156,26 @@ function expectSanitizedFailure(phase: string): void {
 describe('SharedWorldWikiCaretakerService failure diagnostics', () => {
   beforeEach(() => clearDiagnosticLogRingBufferForTests());
   afterEach(() => clearDiagnosticLogRingBufferForTests());
+
+  it('routes the canonical document mutation through the required writer', async () => {
+    const { store } = createProposalStore();
+    const localUpsert = vi.fn(() => documentFixture());
+    const writeSharedDocument = vi.fn(async () => documentFixture());
+    const caretaker = buildCaretaker({
+      proposalStore: store,
+      openSharedStore: () => ({
+        get: () => null,
+        upsert: localUpsert,
+      }),
+      writeSharedDocument,
+    });
+
+    await expect(caretaker.applyApproved('proposal-diagnostics')).resolves.toMatchObject({
+      status: 'applied',
+    });
+    expect(writeSharedDocument).toHaveBeenCalledOnce();
+    expect(localUpsert).not.toHaveBeenCalled();
+  });
 
   it('records a content-free deterministic guard failure and preserves retry state', async () => {
     const { store, markRetryable } = createProposalStore();
@@ -326,6 +350,8 @@ describe('SharedWorldWikiCaretakerService cleanup', () => {
         proposalStore,
         isKnownSite: siteId => siteId === 'studio',
         openSharedStore: () => sharedStore,
+        writeSharedDocument: async (_siteId, documentInput) =>
+          sharedStore.upsert(documentInput),
         projection: { syncDocument },
         now: () => 500,
       });

@@ -180,6 +180,8 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
         proposalStore,
         isKnownSite,
         openSharedStore: siteId => new SharedWorldWikiStore(systemDataDir, siteId),
+        writeSharedDocument: async (siteId, documentInput) =>
+          new SharedWorldWikiStore(systemDataDir, siteId).upsert(documentInput),
         projection: resumableProjection,
         now: () => nowMs++,
       });

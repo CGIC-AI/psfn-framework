@@ -96,10 +96,10 @@ export class SharedWorldWikiProposalService implements SharedWorldWikiProposalSu
 export interface SharedWorldWikiCaretakerOptions extends SharedWorldWikiProposalServiceOptions {
   openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
   /**
-   * Optional remote canonical writer. Agent runtimes supply the gateway-backed
-   * implementation; host-side maintenance and focused store tests may omit it.
+   * Required canonical writer. Agent runtimes supply the gateway-backed
+   * implementation; host-side callers must inject an explicit local writer.
    */
-  writeSharedDocument?: (
+  writeSharedDocument: (
     siteId: string,
     input: WikiDocumentUpsertInput,
   ) => Promise<WikiDocument>;
@@ -110,7 +110,7 @@ export class SharedWorldWikiCaretakerService {
   private readonly proposalStore: SharedWorldWikiProposalStorePort;
   private readonly isKnownSite: (siteId: string) => boolean;
   private readonly openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
-  private readonly writeSharedDocument?: SharedWorldWikiCaretakerOptions['writeSharedDocument'];
+  private readonly writeSharedDocument: SharedWorldWikiCaretakerOptions['writeSharedDocument'];
   private readonly projection: SharedWorldWikiProjectionPort;
   private readonly now: () => number;
 
@@ -237,9 +237,7 @@ export class SharedWorldWikiCaretakerService {
           summary: undefined,
           updatedBy: `wiki-caretaker:${claim.reviewedBy ?? 'operator'}`,
         };
-        document = this.writeSharedDocument
-          ? await this.writeSharedDocument(claim.siteId, input)
-          : store.upsert(input);
+        document = await this.writeSharedDocument(claim.siteId, input);
       }
 
       failurePhase = 'projection';

@@ -104,5 +104,7 @@ describe('AdminWikiDataService scope memo', () => {
 
     await expect(service.publishSharedWorldSite('home'))
       .rejects.toThrow(/gateway system-data writer.*system\.data\.write/iu);
+    await expect(service.approveSharedWorldWikiProposal('proposal-id', 'garden-operator'))
+      .rejects.toThrow(/gateway system-data writer.*system\.data\.write/iu);
   });
 });

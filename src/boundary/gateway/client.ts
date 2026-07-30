@@ -24,6 +24,7 @@ import type {
   SystemDataWriteRequest,
   SystemDataWriteResult,
 } from './system-data-writer.js';
+import { parseSystemDataWriteResult } from './system-data-writer.js';
 import {
   createSocketClient,
   createWebSocketRpcClient,
@@ -1634,12 +1635,7 @@ export class GatewayClient implements
 
   async writeSystemData(request: SystemDataWriteRequest): Promise<SystemDataWriteResult> {
     const result = await this.rpcInstance.request('system.data.write', request) as unknown;
-    if (!isRecord(result)
-      || Object.keys(result).length !== 1
-      || result.ok !== true) {
-      throw new Error('Gateway system-data writer returned an invalid response');
-    }
-    return { ok: true };
+    return parseSystemDataWriteResult(request, result);
   }
 
   async kubeSelfManagement(

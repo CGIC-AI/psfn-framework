@@ -15,7 +15,9 @@ import {
 } from '../../channels/backplane/satellite-registry.js';
 import {
   executeSharedWorldWikiWrite,
+  parseSharedWorldWikiWriteResult,
   parseSharedWorldWikiWriteRequest,
+  type SharedWorldWikiWriteResult,
   type SharedWorldWikiWriteRequest,
 } from './system-data-writer-wiki.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
@@ -52,9 +54,7 @@ export type SystemDataWriteRequest =
     }
   | SharedWorldWikiWriteRequest;
 
-export interface SystemDataWriteResult {
-  ok: true;
-}
+export type SystemDataWriteResult = { ok: true } | SharedWorldWikiWriteResult;
 
 export interface GatewaySystemDataWriterPort {
   writeSystemData(request: SystemDataWriteRequest): Promise<SystemDataWriteResult>;
@@ -246,6 +246,21 @@ export function parseSystemDataWriteRequest(value: unknown): SystemDataWriteRequ
   throw new Error('system.data.write kind is unsupported');
 }
 
+export function parseSystemDataWriteResult(
+  request: SystemDataWriteRequest,
+  value: unknown,
+): SystemDataWriteResult {
+  if (request.kind === 'shared_world_wiki') {
+    return parseSharedWorldWikiWriteResult(request, value);
+  }
+  if (!isRecord(value)
+    || Object.keys(value).length !== 1
+    || value.ok !== true) {
+    throw new Error('Gateway system-data writer returned an invalid response');
+  }
+  return { ok: true };
+}
+
 export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
   constructor(private readonly deps: {
     configStore: Pick<
@@ -273,8 +288,7 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
       return { ok: true };
     }
     if (request.kind === 'shared_world_wiki') {
-      executeSharedWorldWikiWrite(request, this.deps.systemDataDir);
-      return { ok: true };
+      return executeSharedWorldWikiWrite(request, this.deps.systemDataDir);
     }
 
     const ownerFile = request.ownerFile;

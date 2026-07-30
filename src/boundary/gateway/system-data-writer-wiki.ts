@@ -3,8 +3,14 @@ import { loadPlacesRegistryConfig } from '../../channels/backplane/places-regist
 import {
   importMarkdownFiles,
   type MarkdownImportFile,
+  type WikiImportEntry,
+  type WikiImportRejection,
+  type WikiImportReport,
 } from '../../faculties/wiki/bulk-import.js';
-import { publishSiteWiki } from '../../faculties/wiki/places-wiki-publication.js';
+import {
+  publishSiteWiki,
+  type PlacesWikiPublicationReport,
+} from '../../faculties/wiki/places-wiki-publication.js';
 import { sharedWorldScope } from '../../faculties/wiki/scope.js';
 import { SharedWorldWikiStore, normalizeWikiDocumentId } from '../../faculties/wiki/store.js';
 import {
@@ -53,6 +59,25 @@ export type SharedWorldWikiWriteRequest =
       document: SharedWorldWikiDocumentWriteInput;
     };
 
+export type SharedWorldWikiWriteResult =
+  | {
+      ok: true;
+      kind: 'shared_world_wiki';
+      operation: 'publish_site';
+      report: PlacesWikiPublicationReport;
+    }
+  | {
+      ok: true;
+      kind: 'shared_world_wiki';
+      operation: 'import_files';
+      report: WikiImportReport;
+    }
+  | {
+      ok: true;
+      kind: 'shared_world_wiki';
+      operation: 'upsert_document';
+    };
+
 const SHARED_WORLD_WIKI_PROTOCOL_BOUNDS = Object.freeze({
   stringLength: 4_096,
   stringListCount: 4_096,
@@ -80,7 +105,11 @@ function parseUpdatedBy(value: unknown): string {
   if (!isBoundedString(value)) {
     throw new Error('system.data.write shared-world wiki updatedBy must be a bounded string');
   }
-  return value.trim();
+  const updatedBy = value.trim();
+  if (!updatedBy) {
+    throw new Error('system.data.write shared-world wiki updatedBy must be non-empty');
+  }
+  return updatedBy;
 }
 
 function parseStringList(
@@ -166,7 +195,7 @@ function parseDocument(value: unknown): SharedWorldWikiDocumentWriteInput {
       ? { sensitivity: value.sensitivity as SensitivityLevel }
       : {}),
     ...(value.summary !== undefined ? { summary: value.summary.trim() } : {}),
-    ...(value.updatedBy !== undefined ? { updatedBy: value.updatedBy.trim() } : {}),
+    ...(value.updatedBy !== undefined ? { updatedBy: parseUpdatedBy(value.updatedBy) } : {}),
   };
 }
 
@@ -262,30 +291,197 @@ export function parseSharedWorldWikiWriteRequest(
 export function executeSharedWorldWikiWrite(
   request: SharedWorldWikiWriteRequest,
   systemDataDir: string,
-): void {
+): SharedWorldWikiWriteResult {
   const store = new SharedWorldWikiStore(systemDataDir, request.siteId);
   switch (request.operation) {
-    case 'publish_site':
-      publishSiteWiki(
+    case 'publish_site': {
+      const report = publishSiteWiki(
         store,
         loadPlacesRegistryConfig(systemDataDir),
         request.siteId,
         { updatedBy: request.updatedBy },
       );
-      break;
-    case 'import_files':
-      importMarkdownFiles({
+      return {
+        ok: true,
+        kind: 'shared_world_wiki',
+        operation: 'publish_site',
+        report,
+      };
+    }
+    case 'import_files': {
+      const report = importMarkdownFiles({
         directory: request.directory,
         files: request.files,
         store,
         scope: store.scope,
         personalFactGuard: true,
         updatedBy: request.updatedBy,
-        failOnWriteError: true,
       });
-      break;
+      return {
+        ok: true,
+        kind: 'shared_world_wiki',
+        operation: 'import_files',
+        report,
+      };
+    }
     case 'upsert_document':
       store.upsert(request.document);
-      break;
+      return {
+        ok: true,
+        kind: 'shared_world_wiki',
+        operation: 'upsert_document',
+      };
   }
+}
+
+function parseStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)
+    || value.length > SHARED_WORLD_WIKI_PROTOCOL_BOUNDS.stringListCount
+    || !value.every(isBoundedString)) {
+    throw new Error(`Gateway shared-world wiki ${field} is invalid`);
+  }
+  return value;
+}
+
+function parsePublicationReport(
+  value: unknown,
+  siteId: string,
+): PlacesWikiPublicationReport {
+  if (!isRecord(value)) {
+    throw new Error('Gateway shared-world wiki publication report is invalid');
+  }
+  assertNoUnknownKeys(
+    value,
+    ['siteId', 'created', 'updated', 'unchanged', 'deleted'],
+    'Gateway shared-world wiki publication report',
+  );
+  if (value.siteId !== siteId) {
+    throw new Error('Gateway shared-world wiki publication report has the wrong siteId');
+  }
+  return {
+    siteId,
+    created: parseStringArray(value.created, 'created'),
+    updated: parseStringArray(value.updated, 'updated'),
+    unchanged: parseStringArray(value.unchanged, 'unchanged'),
+    deleted: parseStringArray(value.deleted, 'deleted'),
+  };
+}
+
+function parseImportEntries(value: unknown): WikiImportEntry[] {
+  if (!Array.isArray(value)
+    || value.length > SHARED_WORLD_WIKI_PROTOCOL_BOUNDS.importFileCount) {
+    throw new Error('Gateway shared-world wiki imported entries are invalid');
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error('Gateway shared-world wiki imported entry is invalid');
+    }
+    assertNoUnknownKeys(
+      entry,
+      ['file', 'id', 'title'],
+      'Gateway shared-world wiki imported entry',
+    );
+    if (!isBoundedString(entry.file)
+      || !isBoundedString(entry.id)
+      || !isBoundedString(entry.title)) {
+      throw new Error('Gateway shared-world wiki imported entry is invalid');
+    }
+    return { file: entry.file, id: entry.id, title: entry.title };
+  });
+}
+
+function parseImportRejections(value: unknown): WikiImportRejection[] {
+  if (!Array.isArray(value)
+    || value.length > SHARED_WORLD_WIKI_PROTOCOL_BOUNDS.importFileCount) {
+    throw new Error('Gateway shared-world wiki import rejections are invalid');
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error('Gateway shared-world wiki import rejection is invalid');
+    }
+    assertNoUnknownKeys(
+      entry,
+      ['file', 'reason'],
+      'Gateway shared-world wiki import rejection',
+    );
+    if (!isBoundedString(entry.file) || !isBoundedString(entry.reason)) {
+      throw new Error('Gateway shared-world wiki import rejection is invalid');
+    }
+    return { file: entry.file, reason: entry.reason };
+  });
+}
+
+function parseImportReport(
+  value: unknown,
+  request: Extract<SharedWorldWikiWriteRequest, { operation: 'import_files' }>,
+): WikiImportReport {
+  if (!isRecord(value)) {
+    throw new Error('Gateway shared-world wiki import report is invalid');
+  }
+  assertNoUnknownKeys(
+    value,
+    ['directory', 'scope', 'personalFactGuard', 'imported', 'rejected'],
+    'Gateway shared-world wiki import report',
+  );
+  const expectedScope = sharedWorldScope(request.siteId);
+  if (value.directory !== request.directory
+    || value.scope !== expectedScope
+    || value.personalFactGuard !== true) {
+    throw new Error('Gateway shared-world wiki import report metadata is invalid');
+  }
+  return {
+    directory: request.directory,
+    scope: expectedScope,
+    personalFactGuard: true,
+    imported: parseImportEntries(value.imported),
+    rejected: parseImportRejections(value.rejected),
+  };
+}
+
+export function parseSharedWorldWikiWriteResult(
+  request: SharedWorldWikiWriteRequest,
+  value: unknown,
+): SharedWorldWikiWriteResult {
+  if (!isRecord(value)
+    || value.ok !== true
+    || value.kind !== 'shared_world_wiki'
+    || value.operation !== request.operation) {
+    throw new Error('Gateway shared-world wiki writer returned an invalid response');
+  }
+  if (request.operation === 'publish_site') {
+    assertNoUnknownKeys(
+      value,
+      ['ok', 'kind', 'operation', 'report'],
+      'Gateway shared-world wiki publish response',
+    );
+    return {
+      ok: true,
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      report: parsePublicationReport(value.report, request.siteId),
+    };
+  }
+  if (request.operation === 'import_files') {
+    assertNoUnknownKeys(
+      value,
+      ['ok', 'kind', 'operation', 'report'],
+      'Gateway shared-world wiki import response',
+    );
+    return {
+      ok: true,
+      kind: 'shared_world_wiki',
+      operation: 'import_files',
+      report: parseImportReport(value.report, request),
+    };
+  }
+  assertNoUnknownKeys(
+    value,
+    ['ok', 'kind', 'operation'],
+    'Gateway shared-world wiki upsert response',
+  );
+  return {
+    ok: true,
+    kind: 'shared_world_wiki',
+    operation: 'upsert_document',
+  };
 }

@@ -84,7 +84,6 @@ const PLACES = {
 };
 
 let dataDir: string;
-let gatewayDataDir: string;
 
 function seedRoot(
   root: string,
@@ -137,13 +136,11 @@ function createPlacesService(
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'psfn-places-'));
-  gatewayDataDir = mkdtempSync(join(tmpdir(), 'psfn-places-gateway-'));
 });
 
 afterEach(() => {
   chmodSync(dataDir, 0o755);
   rmSync(dataDir, { recursive: true, force: true });
-  rmSync(gatewayDataDir, { recursive: true, force: true });
 });
 
 class CapturingResponse {
@@ -316,9 +313,18 @@ describe('buildAdminPlacesRoutes', () => {
 
   it('re-binds through the gateway when the agent system-data root is read-only', async () => {
     seed();
-    seedRoot(gatewayDataDir);
     chmodSync(dataDir, 0o555);
-    const systemDataWriter = createSystemDataWriter(gatewayDataDir);
+    const gatewayWriter = createSystemDataWriter(dataDir);
+    const systemDataWriter = {
+      writeSystemData: async (request: Parameters<typeof gatewayWriter.writeSystemData>[0]) => {
+        chmodSync(dataDir, 0o755);
+        try {
+          return await gatewayWriter.writeSystemData(request);
+        } finally {
+          chmodSync(dataDir, 0o555);
+        }
+      },
+    };
     const routes = buildAdminPlacesRoutes({
       placesService: createAdminPlacesService({
         dataDir,
@@ -340,12 +346,9 @@ describe('buildAdminPlacesRoutes', () => {
       satelliteId: 'sat-roamer',
       placeId: 'place-living',
     });
-    expect(JSON.parse(readFileSync(join(gatewayDataDir, 'satellites.json'), 'utf8'))
-      .satellites.find((satellite: { satelliteId: string }) => satellite.satelliteId === 'sat-roamer'))
-      .toMatchObject({ placeId: 'place-living' });
     expect(readSatellites().satellites.find(
       satellite => satellite.satelliteId === 'sat-roamer',
-    )?.placeId).toBeUndefined();
+    )?.placeId).toBe('place-living');
   });
 
   it('rejects the retired companionId binding field via PATCH', async () => {

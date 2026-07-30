@@ -9,10 +9,7 @@ import {
   sharedWorldScope,
 } from '../../../faculties/wiki/scope.js';
 import type { WikiDocumentListEntry } from '../../../faculties/wiki/types.js';
-import {
-  planSiteWikiPublication,
-  type PlacesWikiPublicationReport,
-} from '../../../faculties/wiki/places-wiki-publication.js';
+import type { PlacesWikiPublicationReport } from '../../../faculties/wiki/places-wiki-publication.js';
 import {
   importMarkdownFiles,
   readMarkdownDirectory,
@@ -27,6 +24,7 @@ import {
 } from '../../../faculties/wiki/shared-pgvector-projection.js';
 import { SharedWorldWikiProposalStore } from '../../../faculties/wiki/shared-world-caretaker-store.js';
 import { SharedWorldWikiCaretakerService } from '../../../faculties/wiki/shared-world-caretaker.js';
+import { createGatewaySharedWorldWikiDocumentWriter } from '../../../faculties/wiki/gateway-shared-world-writer.js';
 import type {
   SharedWorldWikiProposalApplyResult,
   SharedWorldWikiProposalListQuery,
@@ -87,6 +85,39 @@ function withResolvedScope(entries: WikiDocumentListEntry[]): WikiDocumentListEn
 
 function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function assertPublicationVisible(
+  store: SharedWorldWikiStore,
+  report: PlacesWikiPublicationReport,
+): void {
+  for (const documentId of [...report.created, ...report.updated, ...report.unchanged]) {
+    if (!store.get(documentId)) {
+      throw new Error(
+        `Gateway published shared-world wiki document "${documentId}", but the agent cannot read it. `
+        + 'Verify the gateway and agent share the same system-data volume.',
+      );
+    }
+  }
+  for (const documentId of report.deleted) {
+    if (store.get(documentId)) {
+      throw new Error(
+        `Gateway deleted shared-world wiki document "${documentId}", but the agent still sees it. `
+        + 'Verify the gateway and agent share the same system-data volume.',
+      );
+    }
+  }
+}
+
+function assertImportVisible(store: SharedWorldWikiStore, report: WikiImportReport): void {
+  for (const entry of report.imported) {
+    if (!store.get(entry.id)) {
+      throw new Error(
+        `Gateway imported shared-world wiki document "${entry.id}", but the agent cannot read it. `
+        + 'Verify the gateway and agent share the same system-data volume.',
+      );
+    }
+  }
 }
 
 export class AdminWikiDataService implements AdminWikiService {
@@ -234,12 +265,7 @@ export class AdminWikiDataService implements AdminWikiService {
       throw new Error(`unknown siteId "${siteId}" — not present in places.json sites (fail closed)`);
     }
     const store = new SharedWorldWikiStore(this.systemDataDir, siteId);
-    const plan = planSiteWikiPublication(
-      store,
-      registry,
-      siteId,
-      { updatedBy: 'garden-operator' },
-    );
+    const systemDataWriter = this.requireSystemDataWriter();
     // s10f9: write + shared-schema projection run together so filesystem and
     // shared.shared_wiki_chunks cannot drift silently. Multi-companion fails
     // closed BEFORE the write when the projection is unavailable.
@@ -248,13 +274,17 @@ export class AdminWikiDataService implements AdminWikiService {
         context: this.sharedProjectionContext,
         store,
         write: async (): Promise<PlacesWikiPublicationReport> => {
-          await this.requireSystemDataWriter().writeSystemData({
+          const result = await systemDataWriter.writeSystemData({
             kind: 'shared_world_wiki',
             operation: 'publish_site',
             siteId,
             updatedBy: 'garden-operator',
           });
-          return plan.report;
+          if (!('kind' in result) || result.operation !== 'publish_site') {
+            throw new Error('Gateway shared-world wiki writer returned an invalid publish response');
+          }
+          assertPublicationVisible(store, result.report);
+          return result.report;
         },
       });
       return { ...report, projection };
@@ -300,12 +330,13 @@ export class AdminWikiDataService implements AdminWikiService {
         } satisfies SharedWikiProjectionOutcome,
       };
     }
+    const systemDataWriter = this.requireSystemDataWriter();
     try {
       const { report, projection } = await runSharedWorldWikiWrite({
         context: this.sharedProjectionContext,
         store,
         write: async (): Promise<WikiImportReport> => {
-          await this.requireSystemDataWriter().writeSystemData({
+          const result = await systemDataWriter.writeSystemData({
             kind: 'shared_world_wiki',
             operation: 'import_files',
             siteId,
@@ -313,7 +344,11 @@ export class AdminWikiDataService implements AdminWikiService {
             files,
             updatedBy: 'garden-operator',
           });
-          return plannedReport;
+          if (!('kind' in result) || result.operation !== 'import_files') {
+            throw new Error('Gateway shared-world wiki writer returned an invalid import response');
+          }
+          assertImportVisible(store, result.report);
+          return result.report;
         },
       });
       return { ...report, projection };
@@ -334,11 +369,16 @@ export class AdminWikiDataService implements AdminWikiService {
     proposalId: string,
     operatorActorId: string,
   ): Promise<SharedWorldWikiProposalApplyResult> {
+    const systemDataWriter = this.requireSystemDataWriter();
     const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
     const embedding = this.sharedProjectionContext.embedding;
     if (!databaseUrl || !embedding) {
       throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
     }
+    const writeSharedDocument = createGatewaySharedWorldWikiDocumentWriter({
+      systemDataDir: this.systemDataDir,
+      systemDataWriter,
+    });
     const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
       ...(this.sharedProjectionContext.eventBus
         ? { eventBus: this.sharedProjectionContext.eventBus }
@@ -349,24 +389,7 @@ export class AdminWikiDataService implements AdminWikiService {
         proposalStore: this.requireProposalStore(),
         isKnownSite: siteId => this.isKnownSite(siteId),
         openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
-        writeSharedDocument: async (siteId, documentInput) => {
-          const store = new SharedWorldWikiStore(this.systemDataDir, siteId);
-          await this.requireSystemDataWriter().writeSystemData({
-            kind: 'shared_world_wiki',
-            operation: 'upsert_document',
-            siteId,
-            document: documentInput,
-          });
-          const documentId = documentInput.id;
-          const written = documentId ? store.get(documentId) : null;
-          if (!written) {
-            throw new Error(
-              'Gateway wrote the shared-world wiki document, but the agent cannot read it. '
-              + 'Verify the gateway and agent share the same system-data volume.',
-            );
-          }
-          return written;
-        },
+        writeSharedDocument,
         projection,
       });
       return await caretaker.approve(proposalId, operatorActorId);
@@ -387,11 +410,16 @@ export class AdminWikiDataService implements AdminWikiService {
   }
 
   async cleanupSharedWorldWikiProposals(limit: number): Promise<SharedWorldWikiCleanupResult> {
+    const systemDataWriter = this.requireSystemDataWriter();
     const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
     const embedding = this.sharedProjectionContext.embedding;
     if (!databaseUrl || !embedding) {
       throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
     }
+    const writeSharedDocument = createGatewaySharedWorldWikiDocumentWriter({
+      systemDataDir: this.systemDataDir,
+      systemDataWriter,
+    });
     const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
       ...(this.sharedProjectionContext.eventBus
         ? { eventBus: this.sharedProjectionContext.eventBus }
@@ -402,6 +430,7 @@ export class AdminWikiDataService implements AdminWikiService {
         proposalStore: this.requireProposalStore(),
         isKnownSite: siteId => this.isKnownSite(siteId),
         openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        writeSharedDocument,
         projection,
       });
       return await caretaker.cleanupChangedContent(limit);

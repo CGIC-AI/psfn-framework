@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { toIsoInstant } from '../../../shared/utils/timing.js';
 import type {
   Episode,
   EpisodeArc,
@@ -72,6 +73,8 @@ export interface EpisodicSynthesisOptions {
   maxPriorCandidates?: number;
   gapSplitMinutes?: number;
   maxEntriesPerEpisode?: number;
+  /** Injectable runtime clock used to keep durable watermarks out of the future. */
+  now?: () => number;
   /** Salience minimum: conversational entries required for a group to count. */
   minConversationalEntries?: number;
   /** Salience minimum: single-entry character floor for one-entry groups. */
@@ -632,6 +635,7 @@ export class EpisodicSynthesizer {
   private readonly segmentationPersonaPreamble: PersonaPreamblePort | null;
   private readonly onSegmentationEvent?: (event: EpisodeSegmentationEvent) => void;
   private readonly segmentationNow: () => number;
+  private readonly now: () => number;
   private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
 
   constructor(
@@ -679,6 +683,7 @@ export class EpisodicSynthesizer {
       options.maxThreadEpisodes,
       DEFAULT_MAX_THREAD_EPISODES,
     );
+    this.now = options.now ?? (() => Date.now());
     this.onThreadAssignment = options.onThreadAssignment;
     const segmentation = options.topicSegmentation;
     this.segmentationEnabled = segmentation?.enabled === true;
@@ -716,7 +721,8 @@ export class EpisodicSynthesizer {
       .filter(isConversational)
       .sort(compareEntries);
     const watermarkScope = this.buildProcessingWatermarkScope(input, rawEntries[0]?.channelId ?? input.sessionId);
-    const durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
+    let durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
+    durableWatermark = await this.repairFutureProcessingWatermark(rawEntries, durableWatermark);
     if (durableWatermark) this.rememberProcessingWatermark(durableWatermark);
 
     const lookbackEntries = this.applyWatermarkLookback(rawEntries, durableWatermark);
@@ -1117,8 +1123,80 @@ export class EpisodicSynthesizer {
     watermark: EpisodicProcessingWatermark | undefined,
   ): SessionEntry[] {
     if (!watermark?.processedEndedAt) return [...entries];
-    const lookbackStart = Date.parse(watermark.processedEndedAt) - Math.max(this.gapSplitMs, WATERMARK_LOOKBACK_MS);
+    const processedEndedAtMs = Date.parse(watermark.processedEndedAt);
+    if (!Number.isFinite(processedEndedAtMs)) {
+      throw new Error(`Episodic synthesis watermark has invalid processedEndedAt "${watermark.processedEndedAt}"`);
+    }
+    if (processedEndedAtMs > this.now()) {
+      log.warn('Ignoring future episodic synthesis watermark for lookback recovery', {
+        watermarkId: watermark.id,
+        processedEndedAt: watermark.processedEndedAt,
+      });
+      return [...entries];
+    }
+    const lookbackStart = processedEndedAtMs - Math.max(this.gapSplitMs, WATERMARK_LOOKBACK_MS);
     return entries.filter(entry => entry.timestamp >= lookbackStart);
+  }
+
+  private async repairFutureProcessingWatermark(
+    entries: readonly SessionEntry[],
+    watermark: EpisodicProcessingWatermark | undefined,
+  ): Promise<EpisodicProcessingWatermark | undefined> {
+    if (!watermark?.processedEndedAt) return watermark;
+    const processedEndedAtMs = Date.parse(watermark.processedEndedAt);
+    if (!Number.isFinite(processedEndedAtMs)) {
+      throw new Error(`Episodic synthesis watermark has invalid processedEndedAt "${watermark.processedEndedAt}"`);
+    }
+    const nowMs = this.now();
+    if (processedEndedAtMs <= nowMs) return watermark;
+
+    const firstRetainedEntryAt = entries.at(0)?.timestamp;
+    if (firstRetainedEntryAt !== undefined && !Number.isFinite(firstRetainedEntryAt)) {
+      throw new Error('Episodic synthesis retained entry has an invalid timestamp');
+    }
+    // Rewind just before the oldest retained entry so Gate 1 cannot mistake
+    // that entry for already-processed work. With no retained transcript, now
+    // is a safe boundary: there is no earlier visible work to consume.
+    const rewindBoundaryMs = firstRetainedEntryAt === undefined
+      ? nowMs
+      : Math.min(nowMs, Math.max(0, firstRetainedEntryAt - 1));
+    const rewindBoundary = toIsoInstant(rewindBoundaryMs);
+    const repairedAt = toIsoInstant(nowMs);
+    const priorStartedAtMs = watermark.processedStartedAt
+      ? Date.parse(watermark.processedStartedAt)
+      : Number.NaN;
+    if (watermark.processedStartedAt && !Number.isFinite(priorStartedAtMs)) {
+      throw new Error(
+        `Episodic synthesis watermark has invalid processedStartedAt "${watermark.processedStartedAt}"`,
+      );
+    }
+    const processedStartedAt = Number.isFinite(priorStartedAtMs)
+      && priorStartedAtMs <= rewindBoundaryMs
+      ? watermark.processedStartedAt
+      : rewindBoundary;
+    const repaired = await this.store.upsertProcessingWatermark({
+      ...watermark,
+      processedStartedAt,
+      processedEndedAt: rewindBoundary,
+      lastProcessedAt: rewindBoundary,
+      updatedAt: repairedAt,
+      artifactsJson: {
+        ...watermark.artifactsJson,
+        futureWatermarkRepair: {
+          repairedAt,
+          rewindBoundary,
+          previousProcessedStartedAt: watermark.processedStartedAt,
+          previousProcessedEndedAt: watermark.processedEndedAt,
+          previousLastProcessedAt: watermark.lastProcessedAt,
+        },
+      },
+    });
+    log.warn('Rewound future episodic synthesis watermark to the retained transcript boundary', {
+      watermarkId: watermark.id,
+      processedEndedAt: watermark.processedEndedAt,
+      rewindBoundary,
+    });
+    return repaired;
   }
 
   private rememberProcessingWatermark(watermark: EpisodicProcessingWatermark): void {
@@ -1212,24 +1290,46 @@ export class EpisodicSynthesizer {
       ? mergeStringSets(previousDecisionIds, [candidateDecisionId])
       : previousDecisionIds;
     const candidateSpan = candidate.spanRefs[0];
+    const watermarkCeilingMs = this.now();
+    const watermarkCeiling = toIsoInstant(watermarkCeilingMs);
+    const clampCandidateInstant = (instant: string): string => {
+      const instantMs = Date.parse(instant);
+      if (!Number.isFinite(instantMs)) {
+        throw new Error(`Episodic synthesis candidate has invalid instant "${instant}"`);
+      }
+      return instantMs > watermarkCeilingMs ? watermarkCeiling : instant;
+    };
+    const retainPastWatermarkInstant = (instant: string | undefined): string | undefined => {
+      if (!instant) return undefined;
+      const instantMs = Date.parse(instant);
+      if (!Number.isFinite(instantMs)) {
+        throw new Error(`Episodic synthesis watermark has invalid instant "${instant}"`);
+      }
+      return instantMs <= watermarkCeilingMs ? instant : undefined;
+    };
+    const candidateStartedAt = clampCandidateInstant(candidate.startedAt);
+    const candidateEndedAt = clampCandidateInstant(candidate.endedAt);
+    const previousProcessedStartedAt = retainPastWatermarkInstant(previous?.processedStartedAt);
+    const previousProcessedEndedAt = retainPastWatermarkInstant(previous?.processedEndedAt);
+    const previousLastProcessedAt = retainPastWatermarkInstant(previous?.lastProcessedAt);
     // During the 'reserve' phase the row only needs to exist as the decision's
     // FK target; the processed span carries forward the previous watermark so a
     // failed decision write cannot mark this candidate's span processed. The
     // 'commit' phase (after the decision persists) advances the span.
     const advanceSpan = phase === 'commit';
     const processedStartedAt = advanceSpan
-      ? (previous?.processedStartedAt && previous.processedStartedAt <= candidate.startedAt
-        ? previous.processedStartedAt
-        : candidate.startedAt)
-      : previous?.processedStartedAt ?? candidate.startedAt;
+      ? (previousProcessedStartedAt && previousProcessedStartedAt <= candidateStartedAt
+        ? previousProcessedStartedAt
+        : candidateStartedAt)
+      : previousProcessedStartedAt ?? candidateStartedAt;
     const processedEndedAt = advanceSpan
-      ? (previous?.processedEndedAt && previous.processedEndedAt >= candidate.endedAt
-        ? previous.processedEndedAt
-        : candidate.endedAt)
-      : previous?.processedEndedAt ?? candidate.startedAt;
+      ? (previousProcessedEndedAt && previousProcessedEndedAt >= candidateEndedAt
+        ? previousProcessedEndedAt
+        : candidateEndedAt)
+      : previousProcessedEndedAt ?? candidateStartedAt;
     const lastProcessedAt = advanceSpan
-      ? candidate.endedAt
-      : previous?.lastProcessedAt ?? candidate.startedAt;
+      ? candidateEndedAt
+      : previousLastProcessedAt ?? candidateStartedAt;
     const watermark = await this.store.upsertProcessingWatermark({
       id: stableId('l01-processing-watermark', [
         scope.processor,
@@ -1266,7 +1366,7 @@ export class EpisodicSynthesizer {
         ...(candidateDecisionId ? { lastCandidateDecisionId: candidateDecisionId } : {}),
       },
       lastProcessedAt,
-      updatedAt: candidate.endedAt,
+      updatedAt: candidateEndedAt,
     });
     this.rememberProcessingWatermark(watermark);
     return watermark;

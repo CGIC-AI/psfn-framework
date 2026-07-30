@@ -21,6 +21,9 @@ import {
   BACKGROUND_WORK_HEALTH_LANES,
   BackgroundWorkHealthAccumulator,
 } from './background-work-health.js';
+import type {
+  EpisodicProcessingWatermarkHealthSummary,
+} from '../../../faculties/memory/episodic/store-port.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -35,7 +38,7 @@ export type SubsystemLaneStatus =
   | 'paused' // scheduler lane explicitly paused by operator
   | 'never'; // no data since process start / never run
 
-export type SubsystemLaneSource = 'event_bus' | 'scheduler';
+export type SubsystemLaneSource = 'event_bus' | 'scheduler' | 'watermark';
 
 /** A single recorded lane observation (ring-buffer entry). */
 export interface SubsystemLaneEvent {
@@ -64,7 +67,7 @@ export interface SubsystemLaneHealth {
   observedEventCount: number;
   /** Most recent observations, newest first (bounded ring buffer). */
   recent: SubsystemLaneEvent[];
-  // Scheduler-only fields (undefined for event-bus lanes):
+  // Durable scheduler/watermark fields (undefined for event-bus lanes):
   intervalMs?: number;
   lastRunAt?: number | null;
   nextRunDueAt?: number | null;
@@ -80,7 +83,7 @@ export interface SubsystemHealthSnapshot {
 }
 
 export interface AdminSubsystemHealthService {
-  getSnapshot(): SubsystemHealthSnapshot;
+  getSnapshot(): Promise<SubsystemHealthSnapshot>;
 }
 
 /** Minimal read view of scheduler task state the health service consumes. */
@@ -101,6 +104,19 @@ export interface SubsystemSchedulerTaskView {
 
 export interface SubsystemSchedulerStateProvider {
   getFullData(): { tasks: SubsystemSchedulerTaskView[] };
+}
+
+export interface EpisodicWatermarkStateProvider {
+  listProcessingWatermarkHealth():
+    | Promise<EpisodicProcessingWatermarkHealthSummary[]>
+    | EpisodicProcessingWatermarkHealthSummary[];
+}
+
+export interface EpisodicWatermarkLaneDefinition {
+  processor: string;
+  label: string;
+  description: string;
+  intervalMs: number;
 }
 
 const DEFAULT_RING_LIMIT = 50;
@@ -245,6 +261,8 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   private readonly processStartedAt: number;
   private readonly scheduler: SubsystemSchedulerStateProvider | null;
   private readonly operatorAlerting: SubsystemHealthSnapshot['operatorAlerting'];
+  private readonly watermarkProvider: EpisodicWatermarkStateProvider | null;
+  private readonly watermarkDefinitionProvider: () => readonly EpisodicWatermarkLaneDefinition[];
   private readonly lanes = new Map<string, LaneAccumulator>();
   private readonly backgroundWorkHealth = new BackgroundWorkHealthAccumulator();
   private readonly unsubscribers: Array<() => void> = [];
@@ -252,6 +270,10 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   constructor(deps: {
     eventBus: EventBus;
     scheduler?: SubsystemSchedulerStateProvider | null;
+    watermarkProvider?: EpisodicWatermarkStateProvider | null;
+    watermarkDefinitions?:
+      | readonly EpisodicWatermarkLaneDefinition[]
+      | (() => readonly EpisodicWatermarkLaneDefinition[]);
     ringLimit?: number;
     staleIntervalFactor?: number;
     now?: () => number;
@@ -268,6 +290,11 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     this.processStartedAt = deps.processStartedAt ?? this.now();
     this.scheduler = deps.scheduler ?? null;
     this.operatorAlerting = deps.operatorAlerting;
+    this.watermarkProvider = deps.watermarkProvider ?? null;
+    const watermarkDefinitions = deps.watermarkDefinitions;
+    this.watermarkDefinitionProvider = typeof watermarkDefinitions === 'function'
+      ? watermarkDefinitions
+      : () => watermarkDefinitions ?? [];
 
     for (const def of EVENT_LANE_DEFINITIONS) {
       this.lanes.set(def.id, { lastEvent: null, observedEventCount: 0, recent: [] });
@@ -283,7 +310,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     }
   }
 
-  getSnapshot(): SubsystemHealthSnapshot {
+  async getSnapshot(): Promise<SubsystemHealthSnapshot> {
     const generatedAt = this.now();
     const lanes: SubsystemLaneHealth[] = [];
 
@@ -292,6 +319,9 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     }
 
     for (const laneView of this.buildSchedulerLanes(generatedAt)) {
+      lanes.push(laneView);
+    }
+    for (const laneView of await this.buildWatermarkLanes(generatedAt)) {
       lanes.push(laneView);
     }
 
@@ -608,6 +638,101 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         nextRunDueAt,
         deniedReason: denied ? task.lastDeniedReason ?? null : null,
       };
+    });
+  }
+
+  private async buildWatermarkLanes(generatedAt: number): Promise<SubsystemLaneHealth[]> {
+    if (!this.watermarkProvider) return [];
+    let definitions: readonly EpisodicWatermarkLaneDefinition[];
+    let summaries: EpisodicProcessingWatermarkHealthSummary[];
+    try {
+      definitions = this.validateWatermarkDefinitions(this.watermarkDefinitionProvider());
+      if (definitions.length === 0) return [];
+      summaries = await this.watermarkProvider.listProcessingWatermarkHealth();
+    } catch (error) {
+      const message = toErrorMessage(error);
+      log.warn('Failed to read episodic processor watermarks for subsystem health', { error: message });
+      return [{
+        id: 'watermark:health-read',
+        label: 'Episodic watermark health',
+        description: 'Durable episodic processor watermark inspection.',
+        source: 'watermark',
+        sinceProcessStart: false,
+        status: 'failed',
+        lastEventAt: generatedAt,
+        lastOutcome: 'failed',
+        lastReason: null,
+        lastError: message,
+        counts: {},
+        observedEventCount: 0,
+        recent: [],
+      }];
+    }
+
+    return definitions.map((definition) => {
+      const summary = summaries.find(entry => entry.processor === definition.processor);
+      const latestWatermark = summary?.latestWatermark;
+      const parsedLastRunAt = latestWatermark
+        ? Date.parse(latestWatermark.lastProcessedAt)
+        : Number.NaN;
+      const invalid = latestWatermark !== undefined && !Number.isFinite(parsedLastRunAt);
+      const lastRunAt = Number.isFinite(parsedLastRunAt) ? parsedLastRunAt : null;
+      const isFuture = lastRunAt !== null && lastRunAt > generatedAt;
+      const blockedCount = summary?.blockedScopeCount ?? 0;
+      const stale = lastRunAt !== null
+        && generatedAt - lastRunAt > definition.intervalMs * this.staleFactor;
+      const status: SubsystemLaneStatus = invalid || isFuture || blockedCount > 0
+        ? 'failed'
+        : lastRunAt === null
+          ? 'never'
+          : stale
+            ? 'stale'
+            : 'ok';
+      const error = invalid
+        ? `Invalid lastProcessedAt "${latestWatermark.lastProcessedAt}"`
+        : isFuture
+          ? `lastProcessedAt "${latestWatermark?.lastProcessedAt ?? ''}" is ahead of the runtime clock`
+          : blockedCount > 0
+            ? `${String(blockedCount)} watermark scope(s) are blocked`
+            : null;
+      return {
+        id: `watermark:${definition.processor}`,
+        label: definition.label,
+        description: definition.description,
+        source: 'watermark' as const,
+        sinceProcessStart: false,
+        status,
+        lastEventAt: lastRunAt,
+        lastOutcome: status === 'failed' ? 'failed' as const : lastRunAt === null ? null : 'ran' as const,
+        lastReason: stale ? 'watermark_overdue' : null,
+        lastError: error,
+        counts: {
+          scopeCount: summary?.scopeCount ?? 0,
+          blockedScopeCount: blockedCount,
+        },
+        observedEventCount: 0,
+        recent: [],
+        intervalMs: definition.intervalMs,
+        lastRunAt,
+        nextRunDueAt: lastRunAt === null ? null : lastRunAt + definition.intervalMs,
+        deniedReason: null,
+      };
+    });
+  }
+
+  private validateWatermarkDefinitions(
+    definitions: readonly EpisodicWatermarkLaneDefinition[],
+  ): readonly EpisodicWatermarkLaneDefinition[] {
+    return definitions.map((definition) => {
+      if (!definition.processor.trim()) {
+        throw new Error('Episodic watermark health processor must be non-empty');
+      }
+      if (!Number.isFinite(definition.intervalMs) || definition.intervalMs <= 0) {
+        throw new Error(
+          `Episodic watermark health interval for "${definition.processor}" must be positive`,
+        );
+      }
+      return { ...definition, processor: definition.processor.trim() };
     });
   }
 }

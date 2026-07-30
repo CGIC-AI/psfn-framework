@@ -11,6 +11,10 @@ import {
   type ArcFormationOutcomeEvent,
 } from './arc-formation.js';
 import type { ThreadAssignmentEvent } from './thread-assignment.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
@@ -95,12 +99,14 @@ describe('EpisodeArcWeaver', () => {
     const weaver = new EpisodeArcWeaver(store, { complete }, { now: () => NOW });
 
     const first = await weaver.run({ sessionId: 'discord:main' });
+    clearDiagnosticLogRingBufferForTests();
     const second = await weaver.run({ sessionId: 'discord:main' });
 
     expect(first.ran).toBe(true);
     expect(second.ran).toBe(false);
     expect(second.skippedReason).toBe('cadence');
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('cadence has not elapsed');
   });
 
   it('skips when there are not enough episodes to weave', async () => {
@@ -115,6 +121,7 @@ describe('EpisodeArcWeaver', () => {
     expect(result.ran).toBe(false);
     expect(result.skippedReason).toBe('not_enough_episodes');
     expect(complete).not.toHaveBeenCalled();
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('not enough canonical episodes');
   });
 
   it('rejects low-confidence proposals and survives invalid LLM output', async () => {

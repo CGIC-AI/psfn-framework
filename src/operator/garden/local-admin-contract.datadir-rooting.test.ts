@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
-import { createInProcessGardenAdminContract } from './local-admin-contract.js';
+import {
+  buildEpisodicWatermarkLaneDefinitions,
+  createInProcessGardenAdminContract,
+} from './local-admin-contract.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
@@ -170,5 +173,15 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
     expect(existsSync(join(companionDataDir, 'garden-audit-history.jsonl'))).toBe(true);
     expect(existsSync(join(systemDataDir, 'garden-audit-history.jsonl'))).toBe(false);
+  });
+
+  it('uses nightly cadence rather than the wiki review window for watermark staleness', () => {
+    const definitions = buildEpisodicWatermarkLaneDefinitions({
+      episodeSynthesis: { timerIntervalMinutes: 30 },
+      arcFormation: { passIntervalDays: 6 },
+    });
+
+    expect(definitions.find(definition => definition.processor === 'wiki_pass')?.intervalMs)
+      .toBe(24 * 60 * 60_000);
   });
 });

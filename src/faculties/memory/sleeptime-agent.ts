@@ -695,37 +695,57 @@ export class SleeptimeMemoryAgent {
       return;
     }
 
-    const sleepConsolidation = this.sleepConsolidator
-      ? await this.sleepConsolidator.run({
+    const sleepConsolidation = await this.runIsolatedEpisodicPass(
+      'sleep_consolidation',
+      sessionId,
+      action.id,
+      this.sleepConsolidator
+        ? () => this.sleepConsolidator!.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
-      : null;
+        : null,
+    );
 
-    const arcFormation = this.arcWeaver
-      ? await this.arcWeaver.run({
+    const arcFormation = await this.runIsolatedEpisodicPass(
+      'arc_formation',
+      sessionId,
+      action.id,
+      this.arcWeaver
+        ? () => this.arcWeaver!.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
-      : null;
+        : null,
+    );
 
-    const dreamMeaning = this.dreamMeaningPass
-      ? await this.dreamMeaningPass.run({
+    const dreamMeaning = await this.runIsolatedEpisodicPass(
+      'dream_meaning',
+      sessionId,
+      action.id,
+      this.dreamMeaningPass
+        ? () => this.dreamMeaningPass!.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
-      : null;
+        : null,
+    );
 
     // Sleeptime wiki update pass (E8.2): runs here, AFTER episodes/memories
     // settle, with its OWN deterministic gate + watermark. It is independent of
     // the orient-rewrite gate below, so quiet-orientation nights that still
     // produced wiki-shaped world knowledge are not skipped.
-    const wikiPass = this.sleeptimeWikiPass
-      ? await this.sleeptimeWikiPass.run({
+    const wikiPass = await this.runIsolatedEpisodicPass(
+      'wiki_pass',
+      sessionId,
+      action.id,
+      this.sleeptimeWikiPass
+        ? () => this.sleeptimeWikiPass!.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
-      : null;
+        : null,
+    );
 
     const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
     const currentSnapshot = this.coreMemoryStore.getSnapshot({ scope: coreMemoryScope });
@@ -870,6 +890,26 @@ export class SleeptimeMemoryAgent {
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });
+  }
+
+  private async runIsolatedEpisodicPass<T>(
+    processor: 'sleep_consolidation' | 'arc_formation' | 'dream_meaning' | 'wiki_pass',
+    sessionId: string,
+    actionId: string,
+    run: (() => Promise<T>) | null,
+  ): Promise<T | null> {
+    if (!run) return null;
+    try {
+      return await run();
+    } catch (error) {
+      log.error(`Sleeptime ${processor} pass failed; continuing independent processors`, {
+        sessionId,
+        actionId,
+        processor,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   private evaluateOrientationRewriteGate(

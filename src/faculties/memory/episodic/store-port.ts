@@ -161,6 +161,13 @@ export interface EpisodicProcessingWatermark extends EpisodicProcessingWatermark
   updatedAt: string;
 }
 
+export interface EpisodicProcessingWatermarkHealthSummary {
+  processor: string;
+  latestWatermark: EpisodicProcessingWatermark;
+  scopeCount: number;
+  blockedScopeCount: number;
+}
+
 export type EpisodicProcessingWatermarkWriteInput = EpisodicProcessingWatermarkScope & {
   id?: string;
   highWaterTurnId?: string;
@@ -435,6 +442,7 @@ export interface EpisodicStorePort {
   getProcessingWatermark(
     scope: EpisodicProcessingWatermarkScope,
   ): EpisodicStoreResult<EpisodicProcessingWatermark | undefined>;
+  listProcessingWatermarkHealth(): EpisodicStoreResult<EpisodicProcessingWatermarkHealthSummary[]>;
   upsertProcessingWatermark(
     input: EpisodicProcessingWatermarkWriteInput,
   ): EpisodicStoreResult<EpisodicProcessingWatermark>;

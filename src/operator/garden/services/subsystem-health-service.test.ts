@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { buildTurnPerformanceEvent } from '../../../shared/telemetry/turn-performance.js';
@@ -14,7 +15,7 @@ function laneById(lanes: SubsystemLaneHealth[], id: string): SubsystemLaneHealth
 }
 
 describe('AdminSubsystemHealthDataService', () => {
-  it('surfaces zero configured operator-alert sinks as a degraded Garden banner', () => {
+  it('surfaces zero configured operator-alert sinks as a degraded Garden banner', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({
       eventBus: bus,
@@ -25,14 +26,14 @@ describe('AdminSubsystemHealthDataService', () => {
       },
     });
 
-    expect(service.getSnapshot().operatorAlerting).toEqual({
+    expect((await service.getSnapshot()).operatorAlerting).toEqual({
       configuredSinks: [],
       status: 'unconfigured',
       warning: 'Operator alerting has zero configured sinks; alerts cannot leave the runtime.',
     });
   });
 
-  it('reports never-fired event lanes as "never" with no fabricated data', () => {
+  it('reports never-fired event lanes as "never" with no fabricated data', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({
       eventBus: bus,
@@ -40,7 +41,7 @@ describe('AdminSubsystemHealthDataService', () => {
       now: () => 5_000,
     });
 
-    const snapshot = service.getSnapshot();
+    const snapshot = await service.getSnapshot();
     expect(snapshot.processStartedAt).toBe(1_000);
     expect(snapshot.generatedAt).toBe(5_000);
 
@@ -80,7 +81,7 @@ describe('AdminSubsystemHealthDataService', () => {
       timestamp: 10,
     });
 
-    const lane = laneById(service.getSnapshot().lanes, 'episode_synthesis');
+    const lane = laneById((await service.getSnapshot()).lanes, 'episode_synthesis');
     expect(lane.status).toBe('skipped');
     expect(lane.lastOutcome).toBe('skipped');
     expect(lane.lastReason).toBe('below_relevance_minimum');
@@ -104,7 +105,7 @@ describe('AdminSubsystemHealthDataService', () => {
       newEntryCount: 5, relevantTurnCount: 4, minRelevantTurns: 2, timestamp: 2,
     });
 
-    const lane = laneById(service.getSnapshot().lanes, 'episode_synthesis');
+    const lane = laneById((await service.getSnapshot()).lanes, 'episode_synthesis');
     expect(lane.status).toBe('ok');
     expect(lane.lastOutcome).toBe('ran');
     expect(lane.lastReason).toBeNull();
@@ -121,7 +122,7 @@ describe('AdminSubsystemHealthDataService', () => {
     await bus.emit('memory.active_context.refresh', {
       channelId: 'c1', key: 'k', phase: 'degraded', error: 'retrieval timeout', timestamp: 1,
     });
-    let lane = laneById(service.getSnapshot().lanes, 'active_context');
+    let lane = laneById((await service.getSnapshot()).lanes, 'active_context');
     expect(lane.status).toBe('failed');
     expect(lane.lastError).toBe('retrieval timeout');
 
@@ -129,7 +130,7 @@ describe('AdminSubsystemHealthDataService', () => {
       channelId: 'c1', key: 'k', reason: 'stale', refreshStatus: 'refreshing',
       turnId: 't1', requestId: 'r1', timestamp: 2,
     });
-    lane = laneById(service.getSnapshot().lanes, 'active_context');
+    lane = laneById((await service.getSnapshot()).lanes, 'active_context');
     expect(lane.status).toBe('degraded');
     expect(lane.lastReason).toBe('stale');
   });
@@ -142,7 +143,7 @@ describe('AdminSubsystemHealthDataService', () => {
       channelId: 'c1', count: 4, acceptedCount: 3, rejectedCount: 1, writeCount: 3,
     });
 
-    const lane = laneById(service.getSnapshot().lanes, 'extraction');
+    const lane = laneById((await service.getSnapshot()).lanes, 'extraction');
     expect(lane.status).toBe('ok');
     expect(lane.counts.extracted).toBe(4);
     expect(lane.counts.accepted).toBe(3);
@@ -211,7 +212,7 @@ describe('AdminSubsystemHealthDataService', () => {
       5,
     );
 
-    expect(laneById(service.getSnapshot().lanes, 'background_work:auto_compaction'))
+    expect(laneById((await service.getSnapshot()).lanes, 'background_work:auto_compaction'))
       .toMatchObject({
         status: 'failed',
         lastOutcome: 'failed',
@@ -223,7 +224,7 @@ describe('AdminSubsystemHealthDataService', () => {
           successRatePct: 0,
         },
       });
-    expect(laneById(service.getSnapshot().lanes, 'background_work:memory_extraction'))
+    expect(laneById((await service.getSnapshot()).lanes, 'background_work:memory_extraction'))
       .toMatchObject({
         status: 'degraded',
         counts: {
@@ -233,7 +234,7 @@ describe('AdminSubsystemHealthDataService', () => {
           successRatePct: 50,
         },
       });
-    expect(laneById(service.getSnapshot().lanes, 'background_work:emotion_appraisal'))
+    expect(laneById((await service.getSnapshot()).lanes, 'background_work:emotion_appraisal'))
       .toMatchObject({
         status: 'ok',
         counts: {
@@ -244,7 +245,7 @@ describe('AdminSubsystemHealthDataService', () => {
         },
       });
     expect(laneById(
-      service.getSnapshot().lanes,
+      (await service.getSnapshot()).lanes,
       'background_work:intention_post_turn_hooks',
     ).status).toBe('never');
   });
@@ -260,7 +261,7 @@ describe('AdminSubsystemHealthDataService', () => {
       });
     }
 
-    const lane = laneById(service.getSnapshot().lanes, 'near_turn');
+    const lane = laneById((await service.getSnapshot()).lanes, 'near_turn');
     expect(lane.observedEventCount).toBe(5);
     expect(lane.recent).toHaveLength(2);
     // Newest first: turnCount 4 then 3.
@@ -268,7 +269,7 @@ describe('AdminSubsystemHealthDataService', () => {
     expect(lane.recent[1].counts?.turnCount).toBe(3);
   });
 
-  it('derives scheduler lanes: failed, stale, paused, never, and ok', () => {
+  it('derives scheduler lanes: failed, stale, paused, never, and ok', async () => {
     const bus = new EventBus();
     const now = 1_000_000;
     const scheduler: SubsystemSchedulerStateProvider = {
@@ -285,7 +286,7 @@ describe('AdminSubsystemHealthDataService', () => {
     };
     const service = new AdminSubsystemHealthDataService({ eventBus: bus, scheduler, now: () => now });
 
-    const lanes = service.getSnapshot().lanes;
+    const lanes = (await service.getSnapshot()).lanes;
     expect(laneById(lanes, 'scheduler:ok-task').status).toBe('ok');
     expect(laneById(lanes, 'scheduler:stale-task').status).toBe('stale');
 
@@ -301,7 +302,7 @@ describe('AdminSubsystemHealthDataService', () => {
     expect(denied.lastReason).toBe('tier_denied');
   });
 
-  it('surfaces scheduler inspection failures as an explicit failed lane', () => {
+  it('surfaces scheduler inspection failures as an explicit failed lane', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({
       eventBus: bus,
@@ -313,7 +314,7 @@ describe('AdminSubsystemHealthDataService', () => {
       now: () => 1_000_000,
     });
 
-    const lane = laneById(service.getSnapshot().lanes, 'scheduler:health-read');
+    const lane = laneById((await service.getSnapshot()).lanes, 'scheduler:health-read');
     expect(lane).toMatchObject({
       source: 'scheduler',
       sinceProcessStart: false,
@@ -336,6 +337,134 @@ describe('AdminSubsystemHealthDataService', () => {
       newEntriesSinceLastRun: 1, firedAtMs: 1, firesLastHour: 1, timestamp: 1,
     });
 
-    expect(laneById(service.getSnapshot().lanes, 'near_turn').status).toBe('never');
+    expect(laneById((await service.getSnapshot()).lanes, 'near_turn').status).toBe('never');
+  });
+
+  it('reports persisted episodic processor watermarks as current, stale, or never at twice their interval', async () => {
+    const bus = new EventBus();
+    const now = Date.parse('2026-07-30T12:00:00.000Z');
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: bus,
+      now: () => now,
+      watermarkProvider: {
+        listProcessingWatermarkHealth: async () => [
+          {
+            processor: 'episodic_synthesis',
+            latestWatermark: {
+              id: 'watermark-synthesis',
+              processor: 'episodic_synthesis',
+              sourceRef: 'discord:main',
+              previousWatermarkJson: {},
+              nextWatermarkJson: {},
+              status: 'active',
+              reconciliationStatus: 'clean',
+              artifactsJson: {},
+              lastProcessedAt: '2026-07-30T11:40:00.000Z',
+              updatedAt: '2026-07-30T11:40:00.000Z',
+            },
+            scopeCount: 1,
+            blockedScopeCount: 0,
+          },
+          {
+            processor: 'arc_formation',
+            latestWatermark: {
+              id: 'watermark-arc',
+              processor: 'arc_formation',
+              sourceRef: 'discord:main',
+              previousWatermarkJson: {},
+              nextWatermarkJson: {},
+              status: 'active',
+              reconciliationStatus: 'clean',
+              artifactsJson: {},
+              lastProcessedAt: '2026-07-15T00:00:00.000Z',
+              updatedAt: '2026-07-15T00:00:00.000Z',
+            },
+            scopeCount: 1,
+            blockedScopeCount: 0,
+          },
+        ],
+      },
+      watermarkDefinitions: [
+        {
+          processor: 'episodic_synthesis',
+          label: 'Episode synthesis watermark',
+          description: 'Candidate synthesis progress.',
+          intervalMs: 30 * 60_000,
+        },
+        {
+          processor: 'arc_formation',
+          label: 'Arc formation watermark',
+          description: 'Cross-day arc formation progress.',
+          intervalMs: 6 * 24 * 60 * 60_000,
+        },
+        {
+          processor: 'wiki_pass',
+          label: 'Wiki pass watermark',
+          description: 'Wiki synthesis progress.',
+          intervalMs: 36 * 60 * 60_000,
+        },
+      ],
+    });
+
+    const lanes = (await service.getSnapshot()).lanes;
+    expect(laneById(lanes, 'watermark:episodic_synthesis')).toMatchObject({
+      source: 'watermark',
+      sinceProcessStart: false,
+      status: 'ok',
+      lastRunAt: Date.parse('2026-07-30T11:40:00.000Z'),
+      intervalMs: 30 * 60_000,
+      counts: { scopeCount: 1 },
+    });
+    expect(laneById(lanes, 'watermark:arc_formation')).toMatchObject({
+      source: 'watermark',
+      status: 'stale',
+      lastRunAt: Date.parse('2026-07-15T00:00:00.000Z'),
+    });
+    expect(laneById(lanes, 'watermark:wiki_pass')).toMatchObject({
+      source: 'watermark',
+      status: 'never',
+      lastRunAt: null,
+      counts: { scopeCount: 0 },
+    });
+  });
+
+  it('surfaces episodic watermark inspection failures as an explicit failed lane', async () => {
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: new EventBus(),
+      now: () => 1_000_000,
+      watermarkProvider: {
+        listProcessingWatermarkHealth: async () => {
+          throw new Error('watermark store unavailable');
+        },
+      },
+      watermarkDefinitions: [{
+        processor: 'episodic_synthesis',
+        label: 'Episode synthesis watermark',
+        description: 'Candidate synthesis progress.',
+        intervalMs: 60_000,
+      }],
+    });
+
+    expect(laneById((await service.getSnapshot()).lanes, 'watermark:health-read')).toMatchObject({
+      source: 'watermark',
+      sinceProcessStart: false,
+      status: 'failed',
+      lastEventAt: 1_000_000,
+      lastOutcome: 'failed',
+      lastError: 'watermark store unavailable',
+    });
+  });
+});
+
+describe('subsystem health page contract', () => {
+  it('renders durable episodic watermark lanes instead of filtering them out', () => {
+    const page = readFileSync(
+      new URL('../../../../admin-ui/src/routes/subsystem-health/+page.svelte', import.meta.url),
+      'utf8',
+    );
+
+    expect(page).toContain("lane.source === 'watermark'");
+    expect(page).toContain('{#each watermarkLanes as lane (lane.id)}');
+    expect(page).toContain('Episodic processor watermarks');
   });
 });

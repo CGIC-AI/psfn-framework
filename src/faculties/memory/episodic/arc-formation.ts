@@ -271,6 +271,11 @@ export class EpisodeArcWeaver {
     const watermark = await this.store.getProcessingWatermark(watermarkScope);
     const lastRunAtMs = watermark?.lastProcessedAt ? Date.parse(watermark.lastProcessedAt) : Number.NaN;
     if (Number.isFinite(lastRunAtMs) && nowMs - lastRunAtMs < this.passIntervalMs) {
+      log.warn('Arc formation skipped because the pass cadence has not elapsed', {
+        sessionId: input.sessionId,
+        lastProcessedAt: watermark?.lastProcessedAt,
+        passIntervalMs: this.passIntervalMs,
+      });
       return {
         ran: false,
         skippedReason: 'cadence',
@@ -307,6 +312,11 @@ export class EpisodeArcWeaver {
     if (episodes.length < MIN_EPISODES_FOR_PASS) {
       result.ran = false;
       result.skippedReason = 'not_enough_episodes';
+      log.warn('Arc formation skipped because there are not enough canonical episodes', {
+        sessionId: input.sessionId,
+        reviewedEpisodes: episodes.length,
+        minimumEpisodes: MIN_EPISODES_FOR_PASS,
+      });
       return result;
     }
 

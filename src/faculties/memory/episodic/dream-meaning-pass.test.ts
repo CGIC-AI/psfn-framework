@@ -16,6 +16,10 @@ import {
   parseEpisode,
   type Episode,
 } from '../../../shared/contracts/episodic-memory.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 const NOW = new Date('2026-06-10T07:30:00.000Z');
 
@@ -198,11 +202,14 @@ describe('DreamMeaningPass', () => {
     const first = await pass.run({ sessionId: 'discord:main' });
     expect(first.ran).toBe(true);
 
+    clearDiagnosticLogRingBufferForTests();
     const second = await pass.run({ sessionId: 'discord:main' });
     expect(second.ran).toBe(false);
     expect(second.skippedReason).toBe('cadence');
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('cadence has not elapsed');
 
     // Even past the cadence, an episode with meaning is not re-reviewed.
+    clearDiagnosticLogRingBufferForTests();
     const later = new DreamMeaningPass(store, { handleMessage }, {
       now: () => new Date('2026-06-11T07:30:00.000Z'),
     });
@@ -210,6 +217,7 @@ describe('DreamMeaningPass', () => {
     expect(third.ran).toBe(false);
     expect(third.skippedReason).toBe('no_episodes');
     expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('no eligible episodes');
   });
 
   it('grounds the review in the real turns behind each episode, not just title/landmark (bead dtym)', async () => {

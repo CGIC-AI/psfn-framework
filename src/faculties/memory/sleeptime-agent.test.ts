@@ -894,6 +894,42 @@ describe('SleeptimeMemoryAgent', () => {
     });
   });
 
+  it('isolates each episodic pass failure so every downstream pass still runs', async () => {
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user' as const,
+          content: 'Keep the nightly processors moving independently.',
+          timestamp: Date.now(),
+        },
+      ]),
+    };
+    const sleepConsolidator = { run: vi.fn().mockRejectedValue(new Error('consolidation failed')) };
+    const arcWeaver = { run: vi.fn().mockRejectedValue(new Error('arc formation failed')) };
+    const dreamMeaningPass = { run: vi.fn().mockRejectedValue(new Error('dream meaning failed')) };
+    const sleeptimeWikiPass = { run: vi.fn().mockRejectedValue(new Error('wiki pass failed')) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      sessionManager,
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+      sleeptimeWikiPass,
+    }));
+
+    await expect(agent.execute(makeSleeptimeAction({
+      payload: { sessionId: 'terminal:test' },
+      sourceMessageId: 'msg-78',
+    }))).resolves.toBeUndefined();
+
+    expect(sleepConsolidator.run).toHaveBeenCalledTimes(1);
+    expect(arcWeaver.run).toHaveBeenCalledTimes(1);
+    expect(dreamMeaningPass.run).toHaveBeenCalledTimes(1);
+    expect(sleeptimeWikiPass.run).toHaveBeenCalledTimes(1);
+  });
+
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {
     const coreMemoryStore = makeCoreMemoryStore();
     const reviewAgent = makeReviewAgent(JSON.stringify({

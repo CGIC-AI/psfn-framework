@@ -121,7 +121,7 @@ export interface DreamMeaningPassRunResult {
   endedEarly: boolean;
 }
 
-const DEFAULT_PASS_INTERVAL_MS = 20 * 60 * 60_000;
+export const DEFAULT_PASS_INTERVAL_MS = 20 * 60 * 60_000;
 const DEFAULT_REVIEW_WINDOW_MS = 48 * 60 * 60_000;
 const DEFAULT_MAX_EPISODES_PER_PASS = 8;
 const DEFAULT_MAX_TURNS = 4;
@@ -514,6 +514,11 @@ export class DreamMeaningPass {
       : Number.MAX_SAFE_INTEGER;
     const cadence = evaluateDeterministicGate(this.cadenceGate, { msSinceLastRun });
     if (!cadence.open) {
+      log.warn('Dream meaning pass skipped because the cadence has not elapsed', {
+        sessionId: input.sessionId,
+        msSinceLastRun,
+        passIntervalMs: this.passIntervalMs,
+      });
       this.emitGateEvent(input.sessionId, 'skipped', cadence.reason, cadence.inputs);
       return {
         ran: false,
@@ -569,6 +574,11 @@ export class DreamMeaningPass {
       episodesWithoutMeaning: episodes.length,
     });
     if (!episodesGate.open) {
+      log.warn('Dream meaning pass skipped because there are no eligible episodes', {
+        sessionId: input.sessionId,
+        unreviewedEpisodes: unreviewed.length,
+        selectedEpisodes: episodes.length,
+      });
       this.emitGateEvent(input.sessionId, 'skipped', episodesGate.reason, episodesGate.inputs);
       return {
         ran: false,

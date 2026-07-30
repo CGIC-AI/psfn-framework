@@ -161,6 +161,103 @@ describe('EpisodicSynthesizer', () => {
     ]);
   });
 
+  it('recovers from a future durable watermark and rewrites its processed span behind the run clock', async () => {
+    const store = makeStore();
+    let entries = [
+      entry(1, '2026-04-01T08:00:00.000Z', 'user', 'Review the morning garden notes and watering plan.'),
+      entry(2, '2026-04-01T08:02:00.000Z', 'assistant', 'I reviewed the garden notes and recorded the watering plan.'),
+    ];
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => entries,
+    }, {
+      now: () => Date.parse('2026-04-02T08:00:00.000Z'),
+    });
+    await synthesizer.run({ sessionId: 'terminal:daily' });
+    const originalWatermark = await store.getProcessingWatermark({
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+    });
+    if (!originalWatermark) throw new Error('Expected initial synthesis watermark');
+    await store.upsertProcessingWatermark({
+      ...originalWatermark,
+      processedStartedAt: '2026-07-15T00:00:00.000Z',
+      processedEndedAt: '2026-07-15T00:05:00.000Z',
+      lastProcessedAt: '2026-07-15T00:05:00.000Z',
+      updatedAt: '2026-07-15T00:05:00.000Z',
+    });
+    entries = [
+      ...entries,
+      entry(3, '2026-04-01T10:00:00.000Z', 'user', 'Discuss the atlas recovery plan and tests.'),
+      entry(4, '2026-04-01T10:02:00.000Z', 'assistant', 'I will implement the recovery plan and regression tests.'),
+    ];
+
+    const result = await synthesizer.run({ sessionId: 'terminal:daily' });
+
+    expect(result.createdEpisodes).toHaveLength(1);
+    const watermark = await store.getProcessingWatermark({
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+    });
+    expect(watermark?.processedEndedAt).toBe('2026-04-01T10:02:00.000Z');
+    expect(watermark?.lastProcessedAt).toBe('2026-04-01T10:02:00.000Z');
+    expect(Date.parse(watermark?.updatedAt ?? '')).toBeLessThanOrEqual(
+      Date.parse('2026-04-02T08:00:00.000Z'),
+    );
+  });
+
+  it('durably rewinds a future watermark even when every retained entry is already claimed', async () => {
+    const store = makeStore();
+    const entries = [
+      entry(1, '2026-04-01T08:00:00.000Z', 'user', 'Review the morning garden notes and watering plan.'),
+      entry(2, '2026-04-01T08:02:00.000Z', 'assistant', 'I reviewed the garden notes and recorded the watering plan.'),
+    ];
+    const now = Date.parse('2026-04-02T08:00:00.000Z');
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => entries,
+    }, {
+      now: () => now,
+    });
+    await synthesizer.run({ sessionId: 'terminal:daily' });
+    const scope = {
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+    };
+    const originalWatermark = await store.getProcessingWatermark(scope);
+    if (!originalWatermark) throw new Error('Expected initial synthesis watermark');
+    await store.upsertProcessingWatermark({
+      ...originalWatermark,
+      processedStartedAt: '2026-07-15T00:00:00.000Z',
+      processedEndedAt: '2026-07-15T00:05:00.000Z',
+      lastProcessedAt: '2026-07-15T00:05:00.000Z',
+      updatedAt: '2026-07-15T00:05:00.000Z',
+    });
+
+    const result = await synthesizer.run({ sessionId: 'terminal:daily' });
+
+    expect(result).toMatchObject({
+      claimedEntriesSkipped: 2,
+      candidateEpisodeCount: 0,
+      createdEpisodes: [],
+    });
+    const repaired = await store.getProcessingWatermark(scope);
+    expect(Date.parse(repaired?.processedEndedAt ?? '')).toBeLessThan(entries[0].timestamp);
+    expect(Date.parse(repaired?.lastProcessedAt ?? '')).toBeLessThanOrEqual(now);
+    expect(repaired?.artifactsJson).toMatchObject({
+      futureWatermarkRepair: {
+        previousProcessedEndedAt: '2026-07-15T00:05:00.000Z',
+      },
+    });
+  });
+
   it('extends an overlapping canonical episode when claims are absent (legacy defense in depth)', async () => {
     const store = makeStore();
     let entries = [

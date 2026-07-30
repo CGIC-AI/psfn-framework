@@ -528,11 +528,6 @@
     },
     {
       "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_READ_CHARS",
-      "value": "20_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
       "name": "MAX_SEARCH_MAX_BYTES_PER_FILE",
       "value": "200_000"
     },

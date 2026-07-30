@@ -513,7 +513,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     // server-tool path instead of the local-crawler LLM planner.
     backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',
   });
-  registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
+  registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), {
+    gatewayMode: true,
+    ...(config.fsReadMaxBytes !== undefined
+      ? { defaultReadMaxBytes: config.fsReadMaxBytes }
+      : {}),
+  });
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
     databaseUrl: postgresDatabaseUrl,
     ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),

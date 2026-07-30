@@ -551,9 +551,9 @@ describe('GatewayServer', () => {
     }
   });
 
-  it('caps optionless fs.read RPC pages and rejects larger direct page requests', async () => {
+  it('defaults fs.read RPC pages to 100,000 bytes and accepts the 200,000-byte ceiling', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-direct-cap-'));
-    writeFileSync(join(workspace, 'large.txt'), 'x'.repeat(20_001), 'utf-8');
+    writeFileSync(join(workspace, 'large.txt'), 'x'.repeat(200_001), 'utf-8');
 
     try {
       const { conn } = await setupServerConnection({
@@ -566,16 +566,23 @@ describe('GatewayServer', () => {
       const bounded = await invokeRpc(conn, 979, 'fs.read', { path: 'large.txt' });
       expect(bounded.error).toBeUndefined();
       expect(bounded.result).toMatchObject({
-        content: 'x'.repeat(20_000),
+        content: 'x'.repeat(100_000),
         offsetBytes: 0,
-        nextOffsetBytes: 20_000,
+        nextOffsetBytes: 100_000,
         eof: false,
         truncated: true,
       });
 
-      const overCap = await invokeRpc(conn, 980, 'fs.read', {
+      const atCap = await invokeRpc(conn, 980, 'fs.read', {
         path: 'large.txt',
-        maxBytes: 20_001,
+        maxBytes: 200_000,
+      });
+      expect(atCap.error).toBeUndefined();
+      expect(atCap.result.content).toHaveLength(200_000);
+
+      const overCap = await invokeRpc(conn, 981, 'fs.read', {
+        path: 'large.txt',
+        maxBytes: 200_001,
       });
       expect(overCap.result).toBeUndefined();
       expect(overCap.error).toBeDefined();
@@ -646,6 +653,39 @@ describe('GatewayServer', () => {
       expect(response.error?.message).toContain(`personal root is ${workspace}`);
       expect(response.error?.message).toContain('Missing parent directory');
       expect(response.error?.message).toContain('retry with "docs/note.txt"');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('marks a failed fs.write audit completion with the provider error', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-write-audit-'));
+    const auditStore = createMockAuditStore();
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore,
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const response = await invokeRpc(conn, 963, 'fs.write', {
+        path: 'missing/note.txt',
+        content: 'cannot be written',
+      });
+
+      expect(response.error).toBeDefined();
+      expect(auditStore.append).toHaveBeenCalledWith(expect.objectContaining({
+        method: 'fs.write',
+        decision: 'ALLOW',
+      }));
+      expect(auditStore.complete).toHaveBeenCalledWith(
+        1,
+        expect.any(Number),
+        expect.stringContaining('fs.write failed'),
+      );
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

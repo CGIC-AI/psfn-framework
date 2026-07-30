@@ -1,4 +1,5 @@
 import { action, type CanonicalToolSurfaceContract } from './contracts.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../../shared/contracts/filesystem.js';
 
 export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
   tool_search: {
@@ -33,7 +34,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
   },
   fs: {
     purpose:
-      'Read and safely mutate files within the configured personal-file boundary; one direct read has a hard cap of 20,000 bytes.',
+      `Read and safely mutate files within the configured personal-file boundary; one direct read has a hard cap of ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes.`,
     actions: [
       action('list', [], ['path', 'glob', 'max_entries', 'max_scanned_entries']),
       action('read', ['path'], ['max_bytes', 'offset_bytes']),
@@ -43,7 +44,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     ],
     output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
     guidance:
-      'Do not request more than 20,000 bytes from one read. Inspect larger files sequentially by passing each returned '
+      `Do not request more than ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes from one read. Inspect larger files sequentially by passing each returned `
       + 'next_offset_bytes as the next offset_bytes until eof. For a long document or evidence job, prefer a bounded '
       + 'automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
       + 'analysis_workbench use is still permitted but may occupy the primary turn for several minutes. Require '
@@ -116,7 +117,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     actions: [action('analyze', ['task'], ['maxIterations', 'maxTokens'], { id: 'analyze', actionField: false })],
     output: 'It returns a bounded synthesis and does not mutate source state.',
     guidance:
-      'Use it when material is too large for the fs 20,000-byte direct-read cap. Prefer delegating long analyses to a '
+      `Use it when material is too large for the fs ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')}-byte direct-read cap. Prefer delegating long analyses to a `
       + 'bounded automaton so the primary channel stays responsive; direct use is permitted when capability '
       + 'policy allows it, but the call may occupy the primary turn for several minutes. Bring only the bounded answer '
       + 'plus source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '

@@ -37,6 +37,27 @@ describe('settings contract guard', () => {
     });
   });
 
+  it('exposes the filesystem read page default as an advanced runtime setting', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.fsReadMaxBytes).toEqual({
+      key: 'fsReadMaxBytes',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'integer',
+      scope: 'global',
+      minimum: 1,
+      maximum: 200_000,
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.fsReadMaxBytes).toEqual({
+      sectionId: 'analysis-workbench',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS['analysis-workbench'])
+      .toContain('fsReadMaxBytes');
+    expect(readSettingsSeed().fsReadMaxBytes).toBe(100_000);
+  });
+
   it('keeps the fleet Garden listener process-owned and out of companions settings authority', () => {
     const contractData = buildSettingsContractData();
     const companionsSeed: unknown = JSON.parse(

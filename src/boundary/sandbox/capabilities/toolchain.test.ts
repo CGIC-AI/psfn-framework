@@ -19,13 +19,13 @@ describe('createToolchainCapabilities read_file', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-workbench-read-file-'));
     roots.push(root);
     const filePath = join(root, 'large.md');
-    const expected = 'prefix🙂漢字 café e\u0301 — line\n'.repeat(2_500);
+    const expected = 'prefix🙂漢字 café e\u0301 — line\n'.repeat(15_000);
     writeFileSync(filePath, expected, 'utf8');
 
     const fileRead = vi.fn<SandboxFileRead>(
       async (_path, options) => readUtf8TextFilePage(
         filePath,
-        options?.maxBytes ?? 20_000,
+        options?.maxBytes ?? 200_000,
         options?.offsetBytes ?? 0,
       ),
     );
@@ -60,7 +60,7 @@ describe('createToolchainCapabilities read_file', () => {
 
     expect(pages.length).toBeGreaterThanOrEqual(3);
     expect(pages.map(page => page.content).join('')).toBe(expected);
-    expect(pages.every(page => Buffer.byteLength(page.content, 'utf8') <= 20_000)).toBe(true);
+    expect(pages.every(page => Buffer.byteLength(page.content, 'utf8') <= 200_000)).toBe(true);
     expect(
       pages
         .filter(page => !page.eof)
@@ -72,10 +72,10 @@ describe('createToolchainCapabilities read_file', () => {
       nextOffsetBytes: null,
     });
     expect(fileRead.mock.calls.map(([, options]) => options)).toEqual([
-      { maxBytes: 20_000, offsetBytes: 0 },
-      { maxBytes: 20_000, offsetBytes: 0 },
+      { maxBytes: 200_000, offsetBytes: 0 },
+      { maxBytes: 200_000, offsetBytes: 0 },
       ...pages.slice(1).map(page => ({
-        maxBytes: 20_000,
+        maxBytes: 200_000,
         offsetBytes: page.offsetBytes,
       })),
     ]);

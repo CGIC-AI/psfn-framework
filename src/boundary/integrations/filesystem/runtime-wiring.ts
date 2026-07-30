@@ -21,6 +21,7 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 
 export interface RegisterFilesystemToolsOptions {
   gatewayMode?: boolean;
+  defaultReadMaxBytes?: number;
 }
 
 export function registerFilesystemTools(
@@ -28,7 +29,11 @@ export function registerFilesystemTools(
   ops: FilesystemOperations,
   options?: RegisterFilesystemToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = [createFsTool(ops)];
+  const tools: AgentTool<any>[] = [createFsTool(ops, {
+    ...(options?.defaultReadMaxBytes !== undefined
+      ? { defaultMaxBytes: options.defaultReadMaxBytes }
+      : {}),
+  })];
 
   for (const tool of tools) {
     if (options?.gatewayMode) {
@@ -41,8 +46,9 @@ export function registerFilesystemTools(
 export function wireFilesystemRuntime(
   target: FilesystemRuntimeTarget,
   workspacePath: string,
+  options?: RegisterFilesystemToolsOptions,
 ): WorkspaceFilesystemOps {
   const ops = new WorkspaceFilesystemOps(workspacePath);
-  registerFilesystemTools(target, ops);
+  registerFilesystemTools(target, ops, options);
   return ops;
 }

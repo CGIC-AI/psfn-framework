@@ -297,6 +297,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
+  'fsReadMaxBytes',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'embeddingDims',

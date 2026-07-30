@@ -394,6 +394,8 @@ export interface SubstrateConfig {
   analysisWorkbenchExecutionTimeoutMs?: number;
   /** Character cap on a single analysis-workbench code execution's output. */
   analysisWorkbenchOutputTruncation?: number;
+  /** Default byte page size for the unified filesystem read tool. */
+  fsReadMaxBytes?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];

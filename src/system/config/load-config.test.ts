@@ -448,6 +448,7 @@ describe('loadConfig path defaults', () => {
     expect(config.analysisWorkbenchMaxTokens).toBe(76_000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
     expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
+    expect(config.fsReadMaxBytes).toBe(100_000);
     expect(config.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
     expect(config.sessionTailCache).toEqual(createDefaultSessionTailCacheSettings());
     expect(config.deepgramModel).toBeUndefined();

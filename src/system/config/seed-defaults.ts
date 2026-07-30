@@ -39,6 +39,7 @@ export interface RuntimeSettingsSeedDefaults {
   analysisWorkbenchMaxTokens: number;
   analysisWorkbenchMaxWallTimeMs: number;
   analysisWorkbenchMaxSubQueries: number;
+  fsReadMaxBytes: number;
   voiceEnabled: boolean;
   voiceTargetGuildId: string;
   voiceTargetUserId: string;
@@ -273,6 +274,7 @@ function parseRuntimeSettingsDefaults(seedDir: string): RuntimeSettingsSeedDefau
     analysisWorkbenchMaxTokens: asPositiveInteger(root.analysisWorkbenchMaxTokens, `${settingsSeedPath}.analysisWorkbenchMaxTokens`),
     analysisWorkbenchMaxWallTimeMs: asPositiveInteger(root.analysisWorkbenchMaxWallTimeMs, `${settingsSeedPath}.analysisWorkbenchMaxWallTimeMs`),
     analysisWorkbenchMaxSubQueries: asPositiveInteger(root.analysisWorkbenchMaxSubQueries, `${settingsSeedPath}.analysisWorkbenchMaxSubQueries`),
+    fsReadMaxBytes: asPositiveInteger(root.fsReadMaxBytes, `${settingsSeedPath}.fsReadMaxBytes`),
     voiceEnabled: asBoolean(root.voiceEnabled, `${settingsSeedPath}.voiceEnabled`),
     voiceTargetGuildId: asString(root.voiceTargetGuildId, `${settingsSeedPath}.voiceTargetGuildId`),
     voiceTargetUserId: asString(root.voiceTargetUserId, `${settingsSeedPath}.voiceTargetUserId`),

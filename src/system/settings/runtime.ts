@@ -134,6 +134,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
+  'fsReadMaxBytes',
   'shellExec',
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
@@ -329,6 +330,12 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
   >;
+}
+
+function getFilesystemSettingsSnapshot(config: SubstrateConfig) {
+  return {
+    fsReadMaxBytes: config.fsReadMaxBytes ?? null,
+  } satisfies SnapshotSection<'fsReadMaxBytes'>;
 }
 
 function getProviderSettingsSnapshot(config: SubstrateConfig) {
@@ -646,6 +653,7 @@ export function getRuntimeSettingsSnapshot(
     ...getModelSettingsSnapshot(config),
     ...getContextSettingsSnapshot(config),
     ...getMemorySettingsSnapshot(config),
+    ...getFilesystemSettingsSnapshot(config),
     ...getProviderSettingsSnapshot(config),
     ...getWebAndGardenSettingsSnapshot(config),
     ...getVoiceSettingsSnapshot(config),

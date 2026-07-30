@@ -30,6 +30,7 @@ import {
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
 import { createEmptySubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
@@ -527,6 +528,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     analysisWorkbenchMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
     analysisWorkbenchExecutionTimeoutMs: DEFAULT_THINK_EXECUTION_TIMEOUT_MS,
     analysisWorkbenchOutputTruncation: DEFAULT_THINK_OUTPUT_TRUNCATION,
+    fsReadMaxBytes: FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes,
     subagentMaxConcurrent: DEFAULT_SUBAGENT_MAX_CONCURRENT,
     shardMaxConcurrent: DEFAULT_SHARD_MAX_CONCURRENT,
     shardHeartbeatStaleAfterMs: DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,

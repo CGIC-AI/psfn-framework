@@ -6,6 +6,7 @@ import {
   resolveWorkspaceFsPathFromRoot,
 } from '../../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,
@@ -402,7 +403,11 @@ export async function readTextFile(
     };
   }
 
-  return readUtf8TextFilePage(path, maxBytes ?? 20_000, offsetBytes ?? 0);
+  return readUtf8TextFilePage(
+    path,
+    maxBytes ?? FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes,
+    offsetBytes ?? 0,
+  );
 }
 
 export async function listWorkspaceFiles(

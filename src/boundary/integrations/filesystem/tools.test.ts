@@ -34,7 +34,7 @@ describe('fs tool', () => {
 
   it('lists, reads, and searches through the unified fs surface', async () => {
     writeFileSync(join(workspace, 'docs', 'long.txt'), 'x'.repeat(25_000), 'utf-8');
-    const tool = createFsTool(ops);
+    const tool = createFsTool(ops, { defaultMaxBytes: 20_000 });
 
     const listed = JSON.parse(resultText(await tool.execute('list', {
       action: 'list',
@@ -100,17 +100,17 @@ describe('fs tool', () => {
     ]);
   });
 
-  it('advertises the hard read cap and the provenance-preserving large-document path', () => {
+  it('advertises the shared hard read cap and the provenance-preserving large-document path', () => {
     const tool = createFsTool(ops);
 
-    expect(tool.description).toContain('20,000 bytes');
+    expect(tool.description).toContain('200,000 bytes');
     expect(tool.description).toContain('analysis_workbench');
     expect(tool.description).toContain('bounded automaton');
     expect(tool.description).toContain('provenance-bearing excerpts');
     expect(tool.parameters).toMatchObject({
       properties: {
         max_bytes: {
-          maximum: 20_000,
+          maximum: 200_000,
           description: expect.stringContaining('hard cap'),
         },
         offset_bytes: {
@@ -185,19 +185,54 @@ describe('fs tool', () => {
     expect(resultText(result)).toContain('4 bytes');
   });
 
-  it('fails closed when a direct read tries to exceed the 20,000-byte page cap', async () => {
+  it('reads a 200,000-byte page and fails closed above the shared ceiling', async () => {
+    writeFileSync(join(workspace, 'docs', 'large-page.txt'), 'x'.repeat(200_001), 'utf-8');
     const tool = createFsTool(ops);
+
+    const page = JSON.parse(resultText(await tool.execute('page-at-cap', {
+      action: 'read',
+      path: 'docs/large-page.txt',
+      max_bytes: 200_000,
+      offset_bytes: 0,
+    })));
+    expect(page).toMatchObject({
+      next_offset_bytes: 200_000,
+      eof: false,
+      truncated: true,
+    });
+    expect(String(page.content)).toHaveLength(200_000);
 
     const result = await tool.execute('page-over-cap', {
       action: 'read',
       path: 'docs/notes.txt',
-      max_bytes: 20_001,
+      max_bytes: 200_001,
       offset_bytes: 0,
     });
 
     expect(result.details).toMatchObject({ isError: true });
     expect(resultText(result)).toContain('max_bytes');
-    expect(resultText(result)).toContain('20000');
+    expect(resultText(result)).toContain('200000');
+  });
+
+  it('uses the operator-configured read page default within the shared ceiling', async () => {
+    writeFileSync(join(workspace, 'docs', 'configured-page.txt'), 'x'.repeat(150_000), 'utf-8');
+    const tool = createFsTool(ops, { defaultMaxBytes: 125_000 });
+
+    const page = JSON.parse(resultText(await tool.execute('configured-default', {
+      action: 'read',
+      path: 'docs/configured-page.txt',
+    })));
+
+    expect(page).toMatchObject({
+      next_offset_bytes: 125_000,
+      eof: false,
+      truncated: true,
+    });
+    expect(String(page.content)).toHaveLength(125_000);
+
+    expect(() => createFsTool(ops, { defaultMaxBytes: 250_000 })).toThrow(
+      'fsReadMaxBytes must be a safe integer between 1 and 200000',
+    );
   });
 
   it('retargets broad searches to working folders and skips directories', async () => {

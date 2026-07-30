@@ -992,26 +992,31 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
   it('confines filesystem reads and writes to the authenticated Personal Workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-isolation-'));
-    const personalA = join(root, 'personal', '11111111-1111-4111-8111-111111111111');
-    const personalB = join(root, 'personal', '22222222-2222-4222-8222-222222222222');
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'workspaces', 'personal', companionA);
+    const personalB = join(root, 'workspaces', 'personal', companionB);
     mkdirSync(personalA, { recursive: true });
     mkdirSync(personalB, { recursive: true });
     writeFileSync(join(personalA, 'note.txt'), 'alpha');
     writeFileSync(join(personalB, 'note.txt'), 'beta');
     try {
+      const auditAppend = vi.fn(async () => 31);
       const routing = multiCompanion({});
       routing.personalWorkspaceByCompanionId = {
-        '11111111-1111-4111-8111-111111111111': personalA,
-        '22222222-2222-4222-8222-222222222222': personalB,
-        '33333333-3333-4333-8333-333333333333': join(root, 'personal', '33333333-3333-4333-8333-333333333333'),
+        [companionA]: personalA,
+        [companionB]: personalB,
+        '33333333-3333-4333-8333-333333333333': join(root, 'workspaces', 'personal', '33333333-3333-4333-8333-333333333333'),
       };
       const { connect } = await setupServer({
         ...createMinimalOptions(),
         multiCompanion: routing,
         capabilityTierProvider: () => 'autonomous',
+        auditStore: createMockAuditStore({ append: auditAppend }),
       });
       const conn = await connect();
-      await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
+      await identifyAgent(conn, companionA, 1);
+      auditAppend.mockClear();
 
       expect((await invokeRpc(conn, 2, 'fs.read', { path: 'note.txt' })).result.content)
         .toBe('alpha');
@@ -1021,6 +1026,95 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
         path: join(personalB, 'intrusion.txt'),
         content: 'nope',
       })).error).toBeDefined();
+      const prefixedCrossover = await invokeRpc(conn, 5, 'fs.write', {
+        path: `workspaces/personal/${companionB}/prefixed-intrusion.txt`,
+        content: 'nope',
+      });
+      expect(prefixedCrossover.error?.code).toBe(GatewayErrors.POLICY_DENIED);
+      expect(existsSync(join(personalB, 'prefixed-intrusion.txt'))).toBe(false);
+      expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+        method: 'fs.write',
+        decision: 'DENY',
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizes personal-root-prefixed filesystem paths without weakening traversal checks', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-prefix-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'workspaces', 'personal', companionA);
+    const personalB = join(root, 'workspaces', 'personal', companionB);
+    mkdirSync(personalA, { recursive: true });
+    mkdirSync(personalB, { recursive: true });
+    const workspacePrefixA = `workspaces/personal/${companionA}`;
+
+    try {
+      const routing = multiCompanion({});
+      routing.personalWorkspaceByCompanionId = {
+        [companionA]: personalA,
+        [companionB]: personalB,
+        '33333333-3333-4333-8333-333333333333': join(
+          root,
+          'workspaces',
+          'personal',
+          '33333333-3333-4333-8333-333333333333',
+        ),
+      };
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: routing,
+        capabilityTierProvider: () => 'autonomous',
+      });
+      const conn = await connect();
+      await identifyAgent(conn, companionA, 1);
+
+      const bare = await invokeRpc(conn, 2, 'fs.write', {
+        path: 'bare.txt',
+        content: 'bare',
+      });
+      const prefixed = await invokeRpc(conn, 3, 'fs.write', {
+        path: `${workspacePrefixA}/prefixed.txt`,
+        content: 'prefixed',
+      });
+      const absoluteish = await invokeRpc(conn, 4, 'fs.write', {
+        path: `/${workspacePrefixA}/absoluteish.txt`,
+        content: 'absolute-ish',
+      });
+
+      expect(bare.error).toBeUndefined();
+      expect(prefixed.error).toBeUndefined();
+      expect(absoluteish.error).toBeUndefined();
+      expect(readFileSync(join(personalA, 'bare.txt'), 'utf8')).toBe('bare');
+      expect(readFileSync(join(personalA, 'prefixed.txt'), 'utf8')).toBe('prefixed');
+      expect(readFileSync(join(personalA, 'absoluteish.txt'), 'utf8')).toBe('absolute-ish');
+      expect((await invokeRpc(conn, 5, 'fs.read', {
+        path: `${workspacePrefixA}/prefixed.txt`,
+      })).result.content).toBe('prefixed');
+      expect((await invokeRpc(conn, 6, 'fs.read', {
+        path: `/${workspacePrefixA}/absoluteish.txt`,
+      })).result.content).toBe('absolute-ish');
+
+      mkdirSync(join(personalA, workspacePrefixA), { recursive: true });
+      const ambiguous = await invokeRpc(conn, 7, 'fs.write', {
+        path: `${workspacePrefixA}/ambiguous.txt`,
+        content: 'nope',
+      });
+      expect(ambiguous.error?.code).toBe(GatewayErrors.POLICY_DENIED);
+      expect(ambiguous.error?.message).toBe('Policy denied');
+      expect(existsSync(join(personalA, 'ambiguous.txt'))).toBe(false);
+      expect(
+        existsSync(join(personalA, workspacePrefixA, 'ambiguous.txt')),
+      ).toBe(false);
+
+      const traversal = await invokeRpc(conn, 8, 'fs.write', {
+        path: `${workspacePrefixA}/../../../../escape.txt`,
+        content: 'nope',
+      });
+      expect(traversal.error?.code).toBe(GatewayErrors.POLICY_DENIED);
+      expect(existsSync(join(root, 'escape.txt'))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

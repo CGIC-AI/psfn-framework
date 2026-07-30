@@ -1,4 +1,5 @@
 import { open } from 'node:fs/promises';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
 import type { FilesystemReadResult } from './ops.js';
 
 function requireSafeByteInteger(
@@ -54,7 +55,12 @@ export async function readUtf8TextFilePage(
   maxBytes: number,
   offsetBytes = 0,
 ): Promise<FilesystemReadResult> {
-  requireSafeByteInteger(maxBytes, 'max_bytes', 1, 200_000);
+  requireSafeByteInteger(
+    maxBytes,
+    'max_bytes',
+    FILESYSTEM_READ_PAGE_CONTRACT.minBytes,
+    FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
+  );
   requireSafeByteInteger(offsetBytes, 'offset_bytes', 0, Number.MAX_SAFE_INTEGER);
 
   const handle = await open(path, 'r');

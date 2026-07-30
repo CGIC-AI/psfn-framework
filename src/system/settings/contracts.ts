@@ -189,6 +189,7 @@ export interface EditableSettings {
   analysisWorkbenchMaxSubQueries?: number;
   analysisWorkbenchExecutionTimeoutMs?: number;
   analysisWorkbenchOutputTruncation?: number;
+  fsReadMaxBytes?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
@@ -357,6 +358,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
+  'fsReadMaxBytes',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'openRouterProviderOrder',

@@ -26,6 +26,7 @@ import {
   normalizeImageProviderSetting,
 } from '../../primitives/images/types.js';
 import { PARENT_TURN_MAX_WALL_TIME_MS } from '../../core/agent/turn-limits.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
 import {
   COMPACTION_THRESHOLD_PCT_RANGE,
   EXTRACTION_THRESHOLD_PCT_RANGE,
@@ -70,6 +71,10 @@ export const SETTINGS_VALIDATION = {
   analysisWorkbenchMaxSubQueries: { min: 1, max: 100 },
   analysisWorkbenchExecutionTimeoutMs: { min: 500, max: 600000 },
   analysisWorkbenchOutputTruncation: { min: 256, max: 1000000 },
+  fsReadMaxBytes: {
+    min: FILESYSTEM_READ_PAGE_CONTRACT.minBytes,
+    max: FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
+  },
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
   embeddingDims: { min: 1, max: 1_000_000 },

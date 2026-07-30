@@ -85,13 +85,10 @@ export function isIntakeL2FailClosedAction(value: unknown): value is IntakeL2Fai
  * Below-threshold trusted-tier items skip L2 entirely — the fast path must not
  * pay this latency.
  *
- * Model choice is config, never hardcoded: pick a fast, cheap model (Gemini
- * Flash-Lite / Gemma / Qwen ~27B class, under ~50-100B); speed is the gating
- * criterion.
+ * Model choice follows the canonical `background` purpose in models.json and
+ * modelPurposeSelection. intake-policy.json owns screening behavior only.
  */
 export interface IntakeL2ScreenerPolicyConfig {
-  /** OpenRouter model slug for the L2 screener (e.g. 'google/gemini-2.5-flash-lite'). */
-  model: string;
   /**
    * Per-source-risk-tier prior-score threshold (max of L1/L1.5 scores) at/above
    * which an item escalates to the L2 API screener. Every tier must be mapped
@@ -120,16 +117,15 @@ export interface IntakeL2ScreenerPolicyConfig {
  * src/boundary/gateway/intake/l3-screener.ts). L3 is the deep second/third
  * pass for items the L2 screener flags — or for high-risk source tiers that
  * mandate deep screening regardless of L2's verdict. It is reached rarely and
- * may be slow: model choice is a larger open model (GLM / Kimi / MiniMax /
- * heavy Gemma / GPT-mini class), never hardcoded.
+ * may be slow. Its primary model follows the canonical `reasoning` purpose;
+ * dual mode adds the canonical `background` purpose as the independent second
+ * verdict. intake-policy.json never owns model slugs.
  *
  * There is NO per-tier fail-closed action for L3: anything that reached L3 is
  * already suspect, so an L3 failure always holds the item in quarantine
  * (enforce mode) — never a silent pass.
  */
 export interface IntakeL3ScreenerPolicyConfig {
-  /** OpenRouter model slug for the primary L3 verdict (e.g. 'z-ai/glm-4.5-air'). */
-  model: string;
   /**
    * Dual-vs-single verdict knob. Default single (false): one heavy model.
    * When true, TWO different models each produce an independent verdict and
@@ -137,11 +133,6 @@ export interface IntakeL3ScreenerPolicyConfig {
    * single-model quality before enabling dual.
    */
   dualModel: boolean;
-  /**
-   * Second, DIFFERENT model for dual-verdict mode. Must be null when unused;
-   * required (and distinct from `model`) when `dualModel` is true.
-   */
-  secondaryModel: string | null;
   /**
    * Per-source-risk-tier L2 injection-confidence threshold at/above which an
    * L2-classified item escalates to L3 even without a flagged risk label.
@@ -167,9 +158,8 @@ export interface IntakeL3ScreenerPolicyConfig {
  * that OCRs AND describes an inbound image in ONE tool-less call. The
  * resulting transcript is itself untrusted (taint rule) and runs through the
  * L1 text scanners + L1.5 before anything image-derived becomes
- * prompt-visible. Model choice is CONFIG, never hardcoded — a cheap capable
- * multimodal model (Gemini Flash-Lite class); one call costs a fraction of a
- * cent.
+ * prompt-visible. Model choice follows the canonical `vision` purpose in
+ * models.json and modelPurposeSelection.
  *
  * `enabled: false` restores the pre-htm9.8 behavior (images bypass VLM
  * screening entirely); with `enabled: true` the pipeline fails CLOSED in
@@ -178,8 +168,6 @@ export interface IntakeL3ScreenerPolicyConfig {
  */
 export interface IntakeVisionScreenerPolicyConfig {
   enabled: boolean;
-  /** OpenRouter model slug for the vision screener (must be multimodal). */
-  model: string;
   /** Per-call timeout for one vision screen, in milliseconds. */
   timeoutMs: number;
   /** Max completion tokens for the OCR+description verdict (output cap). */
@@ -829,11 +817,22 @@ function validateInjectionClassifier(
   };
 }
 
-function validateNonEmptyString(value: unknown, sourcePath: string, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw invalid(sourcePath, `${field} must be a non-empty string`);
-  }
-  return value.trim();
+function assertNoRetiredScreenerModelKeys(
+  raw: Record<string, unknown>,
+  sourcePath: string,
+  section: 'l2Screener' | 'l3Screener' | 'visionScreener',
+  retiredKeys: readonly string[],
+): void {
+  const retired = retiredKeys.filter((key) => Object.hasOwn(raw, key));
+  if (retired.length === 0) return;
+  throw invalid(
+    sourcePath,
+    `${section}.${retired.join(` and ${section}.`)} are retired free-text model keys. `
+    + 'Run `npm run migrate:intake-policy-owner -- --data-dir <system-data-dir>` '
+    + 'and then apply it, or delete these keys from intake-policy.json; screener models now use the standard '
+    + 'purpose-based model selection in models.json/settings.json '
+    + '(L2=background, L3=reasoning with background for dual mode, vision=vision).',
+  );
 }
 
 function validateFailClosedAction(
@@ -873,8 +872,9 @@ function validateL2Screener(raw: unknown, sourcePath: string): IntakeL2ScreenerP
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'l2Screener must be an object');
   }
+  assertNoRetiredScreenerModelKeys(raw, sourcePath, 'l2Screener', ['model']);
   const knownKeys = [
-    'model', 'escalationThresholdsByTier', 'mandatoryTiers',
+    'escalationThresholdsByTier', 'mandatoryTiers',
     'failClosedActionByTier', 'timeoutMs', 'maxContentChars',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
@@ -882,7 +882,6 @@ function validateL2Screener(raw: unknown, sourcePath: string): IntakeL2ScreenerP
     throw invalid(sourcePath, `l2Screener has unsupported keys: ${unknownKeys.join(', ')}`);
   }
   return {
-    model: validateNonEmptyString(raw.model, sourcePath, 'l2Screener.model'),
     escalationThresholdsByTier: validateTierRecord(
       raw.escalationThresholdsByTier,
       sourcePath,
@@ -905,39 +904,20 @@ function validateL3Screener(raw: unknown, sourcePath: string): IntakeL3ScreenerP
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'l3Screener must be an object');
   }
+  assertNoRetiredScreenerModelKeys(raw, sourcePath, 'l3Screener', ['model', 'secondaryModel']);
   const knownKeys = [
-    'model', 'dualModel', 'secondaryModel', 'escalationConfidenceThresholdsByTier',
+    'dualModel', 'escalationConfidenceThresholdsByTier',
     'mandatoryTiers', 'timeoutMs', 'maxContentChars', 'maxOutputTokens',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `l3Screener has unsupported keys: ${unknownKeys.join(', ')}`);
   }
-  const model = validateNonEmptyString(raw.model, sourcePath, 'l3Screener.model');
   if (typeof raw.dualModel !== 'boolean') {
     throw invalid(sourcePath, 'l3Screener.dualModel must be a boolean (no implicit default)');
   }
-  if (raw.secondaryModel === undefined) {
-    throw invalid(sourcePath, 'l3Screener.secondaryModel is required (use null for single-verdict mode)');
-  }
-  let secondaryModel: string | null = null;
-  if (raw.secondaryModel !== null) {
-    secondaryModel = validateNonEmptyString(raw.secondaryModel, sourcePath, 'l3Screener.secondaryModel');
-    if (secondaryModel === model) {
-      throw invalid(
-        sourcePath,
-        'l3Screener.secondaryModel must be a DIFFERENT model than l3Screener.model '
-        + '(dual mode exists for independent perspectives)',
-      );
-    }
-  }
-  if (raw.dualModel && secondaryModel === null) {
-    throw invalid(sourcePath, 'l3Screener.dualModel=true requires a non-null l3Screener.secondaryModel');
-  }
   return {
-    model,
     dualModel: raw.dualModel,
-    secondaryModel,
     escalationConfidenceThresholdsByTier: validateTierRecord(
       raw.escalationConfidenceThresholdsByTier,
       sourcePath,
@@ -958,7 +938,8 @@ function validateVisionScreener(
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'visionScreener must be an object');
   }
-  const knownKeys = ['enabled', 'model', 'timeoutMs', 'maxOutputTokens'];
+  assertNoRetiredScreenerModelKeys(raw, sourcePath, 'visionScreener', ['model']);
+  const knownKeys = ['enabled', 'timeoutMs', 'maxOutputTokens'];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `visionScreener has unsupported keys: ${unknownKeys.join(', ')}`);
@@ -968,7 +949,6 @@ function validateVisionScreener(
   }
   return {
     enabled: raw.enabled,
-    model: validateNonEmptyString(raw.model, sourcePath, 'visionScreener.model'),
     timeoutMs: validatePositiveInteger(raw.timeoutMs, sourcePath, 'visionScreener.timeoutMs'),
     maxOutputTokens: validatePositiveInteger(
       raw.maxOutputTokens,

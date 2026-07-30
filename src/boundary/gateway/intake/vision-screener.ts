@@ -72,6 +72,7 @@ export const VISION_FIELD_LATENCY_MS = 'vision_screener.latency_ms';
 export const VISION_FIELD_FLAGS = 'vision_screener.flags';
 export const VISION_FIELD_DESCRIPTION = 'vision_screener.description';
 export const VISION_FIELD_OCR_CHARS = 'vision_screener.ocr_chars';
+export const VISION_FIELD_NO_LEGIBLE_TEXT = 'vision_screener.no_legible_text';
 export const VISION_FIELD_ERROR = 'vision_screener.error';
 
 const MAX_OCR_CHARS = 16000;
@@ -164,6 +165,8 @@ export interface VisionIntakeImageInput {
 export interface VisionScreenerVerdict {
   /** Exact transcription of all text visible in the image ('' when none). */
   ocrText: string;
+  /** Explicit model attestation required when `ocrText` is empty. */
+  noLegibleText: boolean;
   /** Neutral own-words description of what the image depicts. */
   description: string;
   /** Flags from the closed VISION_SCREEN_FLAGS taxonomy (deduplicated). */
@@ -176,7 +179,7 @@ export interface VisionScreenerVerdict {
 
 export interface VisionScreenerDeps {
   backend: VisionScreenerBackend;
-  /** OpenRouter model slug (from intake-policy.json `visionScreener.model`). */
+  /** OpenRouter model slug resolved from the canonical vision purpose. */
   model: string;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
@@ -207,6 +210,8 @@ const VISION_CLASSIFIER_SYSTEM_PROMPT = [
   'with exactly these keys:',
   '  "ocrText": string — the exact transcription of all visible text,',
   '    preserving wording; an empty string when the image contains no text.',
+  '  "noLegibleText": boolean — true ONLY when the image contains no legible',
+  '    text and ocrText is empty; false when ocrText contains a transcription.',
   '  "description": string — one to three short sentences describing the',
   '    image contents. Under 400 characters.',
   '  "flags": an array (possibly empty) of strings drawn ONLY from this',
@@ -311,8 +316,26 @@ function parseVerdict(content: string, model: string, latencyMs: number): Vision
     throw new VisionScreenerSchemaError('vision screener response must be a JSON object');
   }
   const record = parsed as Record<string, unknown>;
+  const ocrText = validateOcrText(record.ocrText);
+  if (record.noLegibleText !== undefined && typeof record.noLegibleText !== 'boolean') {
+    throw new VisionScreenerSchemaError(
+      'vision screener response `noLegibleText` must be a boolean when present',
+    );
+  }
+  const noLegibleText = record.noLegibleText === true;
+  if (ocrText.trim().length === 0 && !noLegibleText) {
+    throw new VisionScreenerSchemaError(
+      'vision screener response with empty `ocrText` requires explicit `noLegibleText: true`',
+    );
+  }
+  if (ocrText.trim().length > 0 && noLegibleText) {
+    throw new VisionScreenerSchemaError(
+      'vision screener response cannot set `noLegibleText: true` when `ocrText` is non-empty',
+    );
+  }
   return {
-    ocrText: validateOcrText(record.ocrText),
+    ocrText,
+    noLegibleText,
     description: validateDescription(record.description),
     flags: validateFlags(record.flags),
     model,
@@ -410,6 +433,8 @@ export interface EvaluateVisionIntakeInput {
   /** Canonical contact id of the sender, when known (source lists, flywheel). */
   canonicalContactId?: string;
   policy: IntakePolicyConfig;
+  /** Model resolved at startup from the canonical vision purpose. */
+  model: string;
   /** The gateway's existing L1(+L1.5) screening service — the envelope owner. */
   screening: IntakeScreeningService;
   /** Null when no OpenRouter backend is resolvable (fail closed per mode). */
@@ -588,7 +613,7 @@ export async function evaluateVisionIntake(
   try {
     verdict = await screenImageWithVisionModel(input.image, {
       backend: input.backend,
-      model: policy.visionScreener.model,
+      model: input.model,
       timeoutMs: policy.visionScreener.timeoutMs,
       maxOutputTokens: policy.visionScreener.maxOutputTokens,
       ...(input.fetch ? { fetch: input.fetch } : {}),
@@ -619,6 +644,7 @@ export async function evaluateVisionIntake(
         [VISION_FIELD_FLAGS]: verdict.flags.join(',') || '(none)',
         [VISION_FIELD_DESCRIPTION]: verdict.description,
         [VISION_FIELD_OCR_CHARS]: String(verdict.ocrText.length),
+        [VISION_FIELD_NO_LEGIBLE_TEXT]: String(verdict.noLegibleText),
       },
     }],
     ...(input.atMs !== undefined ? { atMs: input.atMs } : {}),

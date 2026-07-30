@@ -182,9 +182,9 @@ describe('scheduled operator alerts', () => {
       companionName: 'PSFN',
     });
     const event = {
-      stage: 'escalation' as const,
-      sourceClass: 'web',
-      error: 'screening backend unavailable',
+      stage: 'l3' as const,
+      sourceClass: 'image_ocr',
+      error: 'L3 verdict failed schema validation',
       timestamp: 4,
     };
 
@@ -199,7 +199,7 @@ describe('scheduled operator alerts', () => {
         kind: 'system',
         provenance: 'system.operator_alert.repeated_screening_failure',
       },
-      message: expect.stringContaining('Observed runtime failures: 2'),
+      message: expect.stringMatching(/Stage: l3.*Observed runtime failures: 2/s),
     }));
   });
 });

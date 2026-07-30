@@ -120,6 +120,7 @@ async function screenAndEvaluate(originRef: string): Promise<{
     },
     priorScore: maxPriorScore(screened),
     config: policy,
+    model: 'test/background',
     backend: BACKEND,
     fetch: l2Counter.fetch,
   });
@@ -140,6 +141,7 @@ async function screenAndEvaluate(originRef: string): Promise<{
       }
       : {}),
     config: policy,
+    models: ['test/reasoning'],
     backend: BACKEND,
     fetch: l3Counter.fetch,
   });

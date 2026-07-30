@@ -56,6 +56,7 @@ import {
   type VisionIntakeImageInput,
   type VisionIntakeImageScreenResult,
 } from './vision-screener.js';
+import { resolveIntakeScreenerModels } from './screener-model-selection.js';
 
 const log = createComponentLogger('GatewayIntakeScreening');
 
@@ -135,6 +136,8 @@ export interface GatewayIntakeScreeningComposition {
 }
 
 export async function composeGatewayIntakeScreening(input: {
+  /** Hydrated canonical models/settings config used for purpose selection. */
+  config: SubstrateConfig;
   systemDataDir: string;
   /** Companion data root; hosts the durable quarantine store (htm9.11). */
   companionDataDir: string;
@@ -174,6 +177,10 @@ export async function composeGatewayIntakeScreening(input: {
       dispose: async () => {},
     };
   }
+  const screenerModels = resolveIntakeScreenerModels(input.config, {
+    l3DualModel: policy.l3Screener.dualModel,
+    visionEnabled: policy.visionScreener.enabled,
+  });
 
   // Held items land in companion-data/state/intake-quarantine.json; the
   // Garden approval queue reads the same file through its own instance.
@@ -272,10 +279,15 @@ export async function composeGatewayIntakeScreening(input: {
     );
     escalation = createGatewayIntakeEscalationPort({
       policy,
+      l2Model: screenerModels.l2,
+      l3Models: screenerModels.l3,
       backend,
       quarantine,
       cogSecEvents,
       ...(input.screenerFetch ? { fetch: input.screenerFetch } : {}),
+      ...(input.onFailClosedScreening
+        ? { onFailClosed: input.onFailClosedScreening }
+        : {}),
     });
   } else {
     const mandatoryTiers = [...new Set([
@@ -342,6 +354,7 @@ export async function composeGatewayIntakeScreening(input: {
               ? { canonicalContactId: request.canonicalContactId }
               : {}),
             policy,
+            model: screenerModels.vision!,
             screening,
             backend,
             quarantine,

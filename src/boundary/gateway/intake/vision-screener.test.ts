@@ -138,11 +138,15 @@ function makeVlmFetch(content: string, captured: CapturedRequest[] = []): Screen
 
 function verdictJson(input: {
   ocrText?: string;
+  noLegibleText?: boolean;
   description?: string;
   flags?: string[];
 }): string {
   return JSON.stringify({
     ocrText: input.ocrText ?? '',
+    ...(input.noLegibleText !== undefined
+      ? { noLegibleText: input.noLegibleText }
+      : {}),
     description: input.description ?? 'An image.',
     flags: input.flags ?? [],
   });
@@ -161,6 +165,7 @@ function makeEvaluateInput(
     origin: { ref: 'discord:chan-1:msg-1:attachment:0' },
     subject: { kind: 'attachment', index: 0 },
     policy,
+    model: 'google/gemini-2.5-flash-lite',
     screening: makeScreening(policy, quarantine),
     backend: BACKEND,
     ...(quarantine ? { quarantine } : {}),
@@ -232,6 +237,23 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         fetch: makeVlmFetch('sorry, I cannot help with that'),
       },
     )).rejects.toThrow(VisionScreenerSchemaError);
+  });
+
+  it('fails closed on empty OCR without an explicit no-legible-text sentinel', async () => {
+    await expect(screenImageWithVisionModel(
+      { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
+      {
+        backend: BACKEND,
+        model: 'test/vision-model',
+        timeoutMs: 5000,
+        maxOutputTokens: 1600,
+        fetch: makeVlmFetch(verdictJson({
+          ocrText: '',
+          description: 'A solid red square.',
+          flags: [],
+        })),
+      },
+    )).rejects.toThrow(/empty `ocrText`.*noLegibleText.*true/is);
   });
 
   it('rejects inline images without an image/* mime type and non-http(s) urls', async () => {
@@ -356,6 +378,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
       { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
       makeVlmFetch(verdictJson({
         ocrText: '',
+        noLegibleText: true,
         description: 'A solid red square with no text.',
         flags: [],
       })),
@@ -373,6 +396,21 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(quarantine.holds).toHaveLength(0);
     // Benign transcript does NOT clear the pixels: provenance stays hostile.
     expect(outcome.screening.envelope.sourceRiskTier).toBe('hostile');
+  });
+
+  it('cannot silently pass an empty-OCR verdict without the sentinel', async () => {
+    const outcome = await evaluateVisionIntake(makeEvaluateInput(
+      makePolicy('enforce'),
+      { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
+      makeVlmFetch(verdictJson({
+        ocrText: '',
+        description: 'A solid red square.',
+        flags: [],
+      })),
+    ));
+
+    expect(outcome.kind).toBe('failed_closed');
+    expect(toVisionIntakeImageScreenResult(outcome).flagged).toBe(true);
   });
 
   it('stays observe-only in shadow mode: flagged but never withheld, envelope + hold recorded', async () => {

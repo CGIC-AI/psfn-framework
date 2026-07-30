@@ -8,6 +8,8 @@ import { composeGatewayIntakeScreening } from './compose-screening.js';
 import type { InjectionClassifierBackend } from './injection-classifier.js';
 import { getRecentDiagnosticLogRecords } from '../../../shared/logger.js';
 import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
@@ -36,6 +38,7 @@ const tempDirs: string[] = [];
 function makeDataDirs(mode: 'shadow' | 'enforce', visionEnabled: boolean): {
   systemDataDir: string;
   companionDataDir: string;
+  config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-system-'));
@@ -53,6 +56,7 @@ function makeDataDirs(mode: 'shadow' | 'enforce', visionEnabled: boolean): {
   return {
     systemDataDir,
     companionDataDir,
+    config: loadSeedIntakeScreenerTestConfig(systemDataDir),
     // Vision composition tests must not implicitly load a developer's local
     // L1.5 model from the repository-default path.
     env: {
@@ -85,6 +89,25 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
       screenerBackend: null,
       injectionBackendFactory: fakeInjectionBackendFactory,
     })).rejects.toThrow(/no OpenRouter backend is resolvable/);
+  });
+
+  it('FAILS STARTUP when the selected vision model lacks explicit image capability', async () => {
+    const input = makeDataDirs('enforce', true);
+    const visionModel = input.config.modelRegistry?.models.find(model =>
+      model.purposes.some(purpose => purpose.purpose === 'vision'),
+    );
+    expect(visionModel).toBeDefined();
+    if (!visionModel) return;
+    visionModel.capabilities = {
+      ...visionModel.capabilities,
+      supportsVision: false,
+    };
+
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    })).rejects.toThrow(/vision.*supportsVision=true/is);
   });
 
   it('skips loudly (null screener) in shadow mode without a backend', async () => {

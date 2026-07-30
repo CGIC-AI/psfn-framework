@@ -313,7 +313,7 @@ export interface IntakeScreeningServiceOptions {
   now?: () => number;
   /** Structural alert telemetry; never carries screened content. */
   onFailClosed?: (event: {
-    stage: 'escalation' | 'quarantine_hold';
+    stage: 'escalation' | 'l3' | 'quarantine_hold';
     sourceClass: IntakeSourceClass;
     error: string;
     timestamp: number;

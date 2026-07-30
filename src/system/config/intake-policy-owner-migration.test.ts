@@ -38,6 +38,16 @@ describe('intake policy owner migration', () => {
     ) as Record<string, unknown>;
     const legacy = structuredClone(current);
     legacy.schemaVersion = 1;
+    Object.assign(legacy.l2Screener as Record<string, unknown>, {
+      model: 'legacy/l2',
+    });
+    Object.assign(legacy.l3Screener as Record<string, unknown>, {
+      model: 'legacy/l3',
+      secondaryModel: 'legacy/l3-secondary',
+    });
+    Object.assign(legacy.visionScreener as Record<string, unknown>, {
+      model: 'legacy/vision',
+    });
     const sinkGates = legacy.sinkGates as {
       sinks: Record<string, unknown>;
     };
@@ -57,6 +67,12 @@ describe('intake policy owner migration', () => {
       fromSchemaVersion: 1,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       addedPaths: ['sinkGates.sinks.skill_write'],
+      removedPaths: [
+        'l2Screener.model',
+        'l3Screener.model',
+        'l3Screener.secondaryModel',
+        'visionScreener.model',
+      ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
 
@@ -69,6 +85,7 @@ describe('intake policy owner migration', () => {
     const loaded = loadIntakePolicyConfig(dataDir);
     expect(loaded.schemaVersion).toBe(INTAKE_POLICY_SCHEMA_VERSION);
     expect(loaded.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
+    expect(loaded.l3Screener.dualModel).toBe(false);
     expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
       status: 'not_needed',
       fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
@@ -98,14 +115,67 @@ describe('intake policy owner migration', () => {
   });
 
   it('does not treat a v2 owner missing skill_write as migratable', () => {
-    const { dataDir, filePath, legacy } = makeOwner();
-    const invalidV2 = structuredClone(legacy);
-    invalidV2.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
+    const { dataDir, filePath } = makeOwner();
+    const invalidV2 = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const sinkGates = invalidV2.sinkGates as { sinks: Record<string, unknown> };
+    delete sinkGates.sinks.skill_write;
     writeFileSync(filePath, `${JSON.stringify(invalidV2, null, 2)}\n`);
 
     expect(() => migrateIntakePolicyOwner({ dataDir, apply: true }))
       .toThrow(/sinkGates\.sinks\.skill_write is required/);
     expect(() => loadIntakePolicyConfig(dataDir))
       .toThrow(/sinkGates\.sinks\.skill_write is required/);
+  });
+
+  it('dry-runs and atomically removes retired screener model keys from a v2 owner', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const current = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const withRetiredModels = structuredClone(current);
+    Object.assign(withRetiredModels.l2Screener as Record<string, unknown>, {
+      model: 'legacy/l2',
+    });
+    Object.assign(withRetiredModels.l3Screener as Record<string, unknown>, {
+      model: 'legacy/l3',
+      secondaryModel: 'legacy/l3-secondary',
+    });
+    Object.assign(withRetiredModels.visionScreener as Record<string, unknown>, {
+      model: 'legacy/vision',
+    });
+    writeFileSync(filePath, `${JSON.stringify(withRetiredModels, null, 2)}\n`);
+
+    expect(() => loadIntakePolicyConfig(dataDir))
+      .toThrow(/retired free-text model keys.*migrate:intake-policy-owner/is);
+    const before = readFileSync(filePath, 'utf8');
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      removedPaths: [
+        'l2Screener.model',
+        'l3Screener.model',
+        'l3Screener.secondaryModel',
+        'visionScreener.model',
+      ],
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      removedPaths: [
+        'l2Screener.model',
+        'l3Screener.model',
+        'l3Screener.secondaryModel',
+        'visionScreener.model',
+      ],
+    });
+    expect(loadIntakePolicyConfig(dataDir).visionScreener.enabled).toBe(true);
   });
 });

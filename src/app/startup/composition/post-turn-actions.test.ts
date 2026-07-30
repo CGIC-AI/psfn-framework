@@ -21,6 +21,7 @@ import {
   type DeferredCompanionOutreachAuthorizationEvidence,
   type DeferredCompanionOutreachAuthorizationRuntime,
 } from '../../../core/tools/notify-companion-handoff.js';
+import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
 
 const COMPANION_OUTREACH_PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const COMPANION_OUTREACH_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
@@ -660,6 +661,84 @@ describe('wirePostTurnActionRuntime', () => {
         ],
       });
       expect(phases).toContain('rescheduled');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('reschedules a preempted background continuation without consuming its attempt', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 1,
+        baseRetryDelayMs: 100,
+        maxRetryDelayMs: 100,
+      });
+      const handler = vi.fn()
+        .mockRejectedValueOnce(new ModelCallPreemptedError(
+          'registered_model::local_endpoint',
+          BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+          'post_turn_appraisal',
+        ))
+        .mockResolvedValueOnce(undefined);
+      runtime.registerHandler(POST_TURN_SUBAGENT_SPAWN_ACTION_KIND, handler, {
+        executionMode: 'background',
+      });
+
+      const phases: string[] = [];
+      eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+        phases.push(phase);
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeSubagentSpawnAction({
+            id: 'preempted-continuation',
+            dedupeKey: 'continuation:preempted',
+            maxRetries: 0,
+          }),
+        ],
+      });
+
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        scheduledCount: 1,
+        queued: [
+          expect.objectContaining({
+            actionId: 'preempted-continuation',
+            state: 'scheduled',
+            attempt: 0,
+            maxAttempts: 1,
+            nextRunAt: 1_700_000_000_100,
+          }),
+        ],
+      });
+      expect(phases).toContain('rescheduled');
+      expect(phases).not.toContain('failed');
+
+      nowSpy.mockReturnValue(1_700_000_000_100);
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(runtime.listQueued()).toHaveLength(0);
+      expect(phases).toContain('succeeded');
     } finally {
       nowSpy.mockRestore();
     }

@@ -1575,10 +1575,74 @@ describe('executePostTurnBackgroundWork', () => {
     }
   });
 
-  it('maps a preempted background model call to a foreground_active defer (mmo9.5.1)', async () => {
+  it('finds a model-call preemption in a wrapped error cause chain', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
     const recentEntries: SessionEntry[] = [
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: record.assistantMessage!.content,
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const preempted = new ModelCallPreemptedError(
+      'registered_model::local_endpoint',
+      'background_continuation',
+      'foreground_chat',
+    );
+    const maybeExtract = vi.fn(async () => {
+      throw new Error('Extraction orchestration failed', { cause: preempted });
+    });
+    const { dependencies } = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract,
+      tuning: {
+        ...TEST_POST_TURN_TUNING,
+        foregroundPreemptionDeferDelayMs: 2_345,
+      },
+    });
+
+    const error = await executePostTurnBackgroundWork(execution, dependencies)
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
+    expect(error).toMatchObject({
+      reasonCode: 'foreground_active',
+      delayMs: 2_345,
+    });
+  });
+
+  it('requeues and completes a real extraction after its model call is preempted', async () => {
+    const record = makeTurnRecord({
+      sessionId: 'logical-session-preempted-extraction',
+      channelId: 'discord:preempted-extraction',
+    });
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'I moved to Seattle for a new job and I feel relieved.',
+        authorName: 'Partner',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
       {
         id: 2,
         channelId: record.sessionId!,
@@ -1601,27 +1665,54 @@ describe('executePostTurnBackgroundWork', () => {
       'background_continuation',
       'foreground_chat',
     );
-    const maybeExtract = vi.fn(async () => { throw preempted; });
+    const complete = vi.fn()
+      .mockRejectedValueOnce(preempted)
+      .mockResolvedValueOnce({ content: '<response></response>' });
     const { dependencies } = makeDependencies({
       record,
       recentEntries,
-      maybeExtract,
       tuning: {
         ...TEST_POST_TURN_TUNING,
         foregroundPreemptionDeferDelayMs: 2_345,
       },
     });
+    const extractor = new RealMemoryExtractor(
+      { complete } as unknown as LLMProviderPort,
+      dependencies.sessionManager,
+      {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[2],
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as ConstructorParameters<typeof RealMemoryExtractor>[3],
+      {
+        emit: vi.fn().mockResolvedValue(undefined),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[4],
+      {
+        extractionInterval: 1,
+        minImportance: 0,
+        minConfidence: 0,
+        minNovelty: 0,
+        telemetryEnabled: true,
+      },
+    );
+    dependencies.getMemoryExtractor = () => extractor;
 
     const error = await executePostTurnBackgroundWork(execution, dependencies)
       .then(() => null)
       .catch((thrown: unknown) => thrown);
 
-    expect(maybeExtract).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
     if (!(error instanceof BackgroundWorkDeferredError)) {
       throw new Error('Expected foreground preemption to defer background work');
     }
     expect(error.reasonCode).toBe('foreground_active');
     expect(error.delayMs).toBe(2_345);
+
+    await expect(executePostTurnBackgroundWork(execution, dependencies)).resolves.toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });

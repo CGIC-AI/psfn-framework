@@ -91,6 +91,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/core/eval/observer-sidecar/persistence.tenant-schema.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11470,
+      "baselineSource": "measured",
+      "note": "Observer-sidecar fresh tenant-schema migration suite against the real containerized Postgres harness. Baseline 11.47s file wall (2 tests, local implementation run, 2026-07-30); 120000/11470 = 10.46x headroom for cold-start and shared-heavy-phase variance."
+    },
+    {
       "file": "src/faculties/introspection/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -211,13 +218,6 @@
     },
     {
       "file": "src/persistence/postgres/fleet-auth/schema.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": null,
-      "baselineSource": "inherited",
-      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
-    },
-    {
-      "file": "src/persistence/postgres/fleet-auth/trusted-host-provider-recovery-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
       "baselineSource": "inherited",

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStructuredToolErrorDetails,
   classifyToolError,
+  INTERNAL_TOOL_FAILURE_NOTICE,
+  internalToolFailureResult,
   sanitizeToolErrorDiagnostic,
   textResultFromError,
   textResultWithError,
@@ -95,6 +97,26 @@ describe('structured tool error results', () => {
       retryHint: 'try_alternative_input',
       retryable: false,
     });
+  });
+
+  it('shows allowlisted capacity, health, rate-limit, and capability blocks but withholds invariants', () => {
+    const visibleFailures = [
+      'Shard limit reached (3 concurrent). Wait for active shards to complete.',
+      'Shard routing denied: "research" is offline.',
+      'Shard routing denied: "research" is missing required capability tokens (web.read).',
+      'Shard launch denied: parent companion "artemis" does not grant shard.spawn',
+      'HTTP 429 rate limit reached; retry after 10 seconds',
+    ];
+
+    for (const message of visibleFailures) {
+      expect(internalToolFailureResult(new Error(message)).content[0]?.text).toContain(message);
+    }
+
+    const invariant = internalToolFailureResult(
+      new Error('SessionManager captured owner mismatch at /home/operator/private'),
+    );
+    expect(invariant.content[0]?.text).toBe(INTERNAL_TOOL_FAILURE_NOTICE);
+    expect(invariant.content[0]?.text).not.toContain('SessionManager');
   });
 
   it('marks free-text-derived error classes as inferred and structured ones as declared (bead sqsz)', () => {

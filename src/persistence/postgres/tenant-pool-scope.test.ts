@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const postgresMocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn((_databaseUrl: string, _options?: Record<string, unknown>) => ({}) as Pool),
+  runPostgresMigrations: vi.fn(async () => undefined),
   ensurePostgresSchemaWithAdvisoryLock: vi.fn(async () => undefined),
   ensurePostgresSchema: vi.fn(async () => undefined),
   queryOne: vi.fn(async () => undefined),
@@ -19,6 +20,7 @@ const postgresMocks = vi.hoisted(() => ({
 
 vi.mock('../postgres.js', () => ({
   createPostgresPool: postgresMocks.createPostgresPool,
+  runPostgresMigrations: postgresMocks.runPostgresMigrations,
   ensurePostgresSchemaWithAdvisoryLock: postgresMocks.ensurePostgresSchemaWithAdvisoryLock,
   ensurePostgresSchema: postgresMocks.ensurePostgresSchema,
   queryOne: postgresMocks.queryOne,

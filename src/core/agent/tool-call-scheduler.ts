@@ -538,7 +538,7 @@ async function executeSingleToolCall(
             retryHint: 'do_not_retry',
             companionMessage: TOOL_CANCELLED_NOTICE,
           })
-        : internalToolFailureResult();
+        : internalToolFailureResult(error);
       isError = true;
       outcome = 'execution_failure';
     }

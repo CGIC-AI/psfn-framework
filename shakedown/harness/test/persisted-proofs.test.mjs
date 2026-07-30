@@ -8,6 +8,7 @@ import {
   validateSituatedPresenceProof,
   validateSseTurnProof,
   validateTemporalProof,
+  validateWorldReadProof,
 } from '../lib/persisted-proofs.mjs';
 
 function turnRecord(overrides = {}) {
@@ -345,4 +346,21 @@ test('persisted proof validation runs independently of narration or action sensi
   });
   assert.equal(calls, 1);
   assert.deepEqual(failures, ['missing durable row']);
+});
+
+test('world-read persisted proof accepts argument-bearing live tool records', () => {
+  assert.deepEqual(validateWorldReadProof({
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', isError: false, arguments: { action: 'list' } },
+        { toolName: 'world', isError: false, arguments: { action: 'perceive' } },
+      ],
+    }),
+    sideChecks: {
+      world: {
+        telemetry: { status: 202, eventId: 'event-world-1' },
+        gardenAuditFound: true,
+      },
+    },
+  }), []);
 });

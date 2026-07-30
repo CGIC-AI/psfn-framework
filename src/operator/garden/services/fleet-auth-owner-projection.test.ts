@@ -114,6 +114,32 @@ describe('fleet-auth Garden owner projection', () => {
     }
   });
 
+  it('detects roster contact drift without exposing roster identities', () => {
+    const effective = makeConfig();
+    effective.accountRoster = [{
+      providerSubjectId: '123456789012345678',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      contactId: 'contact/operator',
+      role: 'owner',
+    }];
+    const onDisk = structuredClone(effective);
+    onDisk.accountRoster![0]!.contactId = 'contact/replacement';
+
+    const projection = buildEffectiveFleetAuthOwnerProjection({
+      effectiveVerifierConfig: verifier(effective),
+      loadOnDisk: () => onDisk,
+    });
+
+    expect(projection).toMatchObject({
+      status: 'restart_required',
+      restartRequired: true,
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain('123456789012345678');
+    expect(serialized).not.toContain('contact/operator');
+    expect(serialized).not.toContain('contact/replacement');
+  });
+
   it('fails closed without reflecting parser errors or owner contents', () => {
     const config = makeConfig();
     const reportUnavailable = vi.fn();

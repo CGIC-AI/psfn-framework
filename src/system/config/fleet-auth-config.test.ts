@@ -745,13 +745,18 @@ describe('fleet-auth account roster validation', () => {
     const parsed = validateFleetAuthConfig({
       ...config(),
       accountRoster: [
-        entry(),
+        entry({ contactId: 'contact/operator' }),
         entry({ providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' }),
       ],
       accountRosterSatisfiesStepUp: true,
     }, FLEET_AUTH_FILE_NAME);
     expect(parsed.accountRoster).toEqual([
-      { providerSubjectId: OWNER_SUBJECT, companionId: COMPANION_ID, role: 'owner' },
+      {
+        providerSubjectId: OWNER_SUBJECT,
+        companionId: COMPANION_ID,
+        contactId: 'contact/operator',
+        role: 'owner',
+      },
       { providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' },
     ]);
     expect(parsed.accountRosterSatisfiesStepUp).toBe(true);
@@ -785,6 +790,10 @@ describe('fleet-auth account roster validation', () => {
     ['numeric snowflake', { accountRoster: [entry({ providerSubjectId: 100000000000000001 })] }, /non-empty string/],
     ['uppercase companion uuid', { accountRoster: [entry({ companionId: 'ABCDEF00-0000-4000-8000-000000000000' })] }, /RFC-4122 UUID/],
     ['malformed companion id', { accountRoster: [entry({ companionId: 'companion-one' })] }, /RFC-4122 UUID/],
+    ['empty contact id', { accountRoster: [entry({ contactId: ' ' })] }, /contactId must be a non-empty string/],
+    ['non-string contact id', { accountRoster: [entry({ contactId: 7 })] }, /contactId must be a non-empty string/],
+    ['padded contact id', { accountRoster: [entry({ contactId: ' contact/operator ' })] }, /contactId must not have surrounding whitespace/],
+    ['oversized contact id', { accountRoster: [entry({ contactId: 'c'.repeat(257) })] }, /bounded contact identifier/],
     ['unknown role', { accountRoster: [entry({ role: 'root' })] }, /role must be one of/],
     ['non-string role', { accountRoster: [entry({ role: 1 })] }, /role must be one of/],
     ['duplicate subject+companion pair', { accountRoster: [entry(), entry({ role: 'member' })] }, /duplicate accountRoster entry/],

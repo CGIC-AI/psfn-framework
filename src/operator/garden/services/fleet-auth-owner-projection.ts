@@ -22,7 +22,7 @@ export function buildEffectiveFleetAuthOwnerProjection(options: {
       editableFields: [] as [],
       omittedCategories: [
         'credential references',
-        'provider identifiers and subjects',
+        'provider identifiers, subjects, and contact bindings',
         'private and public key material',
         'database roles and credentials',
         'private Discord guild/channel/role topology',

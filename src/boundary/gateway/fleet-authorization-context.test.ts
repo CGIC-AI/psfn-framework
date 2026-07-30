@@ -426,6 +426,54 @@ describe('admin-unconditional account roster authorization', () => {
     });
   });
 
+  it('uses the roster contact id when no principal binding exists', () => {
+    const decision = decideRoster(brokenGauntletSnapshot(), [{
+      ...ROSTER[0]!,
+      contactId: 'contact/operator',
+    }]);
+    expect(decision).toMatchObject({
+      decision: 'allow',
+      facts: {
+        contact: {
+          bindingId: `roster-binding-${COMPANION_ID}`,
+          contactId: 'contact/operator',
+        },
+      },
+    });
+  });
+
+  it.each([
+    [
+      'ambiguous active bindings',
+      [
+        snapshot().bindings[0]!,
+        {
+          ...snapshot().bindings[0]!,
+          bindingId: OTHER_BINDING_ID,
+          contactId: 'contact/other',
+        },
+      ],
+    ],
+    [
+      'a fenced active binding',
+      [{ ...snapshot().bindings[0]!, contactAuthorityFenced: true }],
+    ],
+    [
+      'a tombstoned active binding',
+      [{ ...snapshot().bindings[0]!, tombstoned: true }],
+    ],
+    [
+      'a non-active binding',
+      [{ ...snapshot().bindings[0]!, state: 'conflict' as const }],
+    ],
+  ])('does not replace %s with a roster contact fallback', (_label, bindings) => {
+    const decision = decideRoster(snapshot({ bindings }), [{
+      ...ROSTER[0]!,
+      contactId: 'contact/roster-fallback',
+    }]);
+    expect(decision.decision).toBe('deny');
+  });
+
   it('keeps every non-rostered decision identical to the roster-free evaluation', () => {
     const candidates: Array<FleetAuthorizationSnapshot> = [
       snapshot(),
@@ -533,10 +581,22 @@ describe('admin-unconditional account roster authorization', () => {
   });
 
   it('still allows the roster path when the intact gauntlet would also allow', () => {
-    const decision = decideRoster(snapshot(), ROSTER, 'memory.read.self');
+    const decision = decideRoster(snapshot(), [{
+      ...ROSTER[0]!,
+      contactId: 'contact/roster-fallback',
+    }], 'memory.read.self');
     expect(decision).toMatchObject({
       decision: 'allow',
-      facts: { operator: { role: 'owner' } },
+      facts: {
+        contact: {
+          bindingId: BINDING_ID,
+          contactId: 'contact/shared-id',
+          bindingVersion: 2,
+        },
+        operator: { role: 'owner' },
+      },
     });
+    expect(decision.decision === 'allow' ? decision.facts.contact.contactId : '')
+      .not.toMatch(/^roster-contact-/u);
   });
 });

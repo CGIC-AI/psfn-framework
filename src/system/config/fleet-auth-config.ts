@@ -66,6 +66,8 @@ export type FleetAuthRole = typeof FLEET_AUTH_ROLES[number];
 export interface FleetAuthAccountRosterEntry {
   providerSubjectId: string;
   companionId: string;
+  /** Canonical companion contact fallback when no binding record exists. */
+  contactId?: string;
   role: FleetAuthRole;
 }
 
@@ -606,10 +608,28 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
   return value.map((entry, index): FleetAuthAccountRosterEntry => {
     const field = `accountRoster[${index}]`;
     const record = requireRecord(entry, field);
-    requireExactKeys(record, ['providerSubjectId', 'companionId', 'role'], field);
+    assertNoUnknownKeys(
+      record,
+      ['providerSubjectId', 'companionId', 'contactId', 'role'],
+      field,
+      { errorPrefix: ERROR_PREFIX },
+    );
+    for (const required of ['providerSubjectId', 'companionId', 'role']) {
+      if (!Object.hasOwn(record, required)) fail(`${field}.${required} is required`);
+    }
     const providerSubjectId = parseSnowflake(record.providerSubjectId, `${field}.providerSubjectId`);
     const companionId = requireString(record.companionId, `${field}.companionId`);
     if (!isRfc4122Uuid(companionId)) fail(`${field}.companionId must be a lowercase RFC-4122 UUID`);
+    const rawContactId = record.contactId;
+    const contactId = rawContactId === undefined
+      ? undefined
+      : requireString(rawContactId, `${field}.contactId`);
+    if (contactId !== undefined && contactId !== rawContactId) {
+      fail(`${field}.contactId must not have surrounding whitespace`);
+    }
+    if (contactId !== undefined && contactId.length > 256) {
+      fail(`${field}.contactId must be a bounded contact identifier`);
+    }
     if (typeof record.role !== 'string' || !knownRoles.has(record.role)) {
       fail(`${field}.role must be one of ${FLEET_AUTH_ROLES.join(', ')}`);
     }
@@ -618,7 +638,12 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
       fail(`duplicate accountRoster entry for subject and companion at ${field}`);
     }
     seen.add(identity);
-    return { providerSubjectId, companionId, role: record.role as FleetAuthRole };
+    return {
+      providerSubjectId,
+      companionId,
+      ...(contactId ? { contactId } : {}),
+      role: record.role as FleetAuthRole,
+    };
   });
 }
 

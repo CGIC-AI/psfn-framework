@@ -387,6 +387,53 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres fleet authorization context snapshot', () => {
+  it('uses a real contact binding for a rostered pending principal', async () => {
+    const config = fleetConfig();
+    config.accountRoster = [{
+      providerSubjectId: SUBJECT_ID,
+      companionId: COMPANION_ID,
+      contactId: 'contact/configured-fallback',
+      role: 'owner',
+    }];
+    const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime({
+      config,
+    });
+    try {
+      await migration.query(`
+        UPDATE fleet_auth.human_principals
+        SET status = 'pending'
+        WHERE principal_id = $1
+      `, [principalId]);
+      await migration.query(`
+        UPDATE fleet_auth.provider_subjects
+        SET state = 'pending'
+        WHERE principal_id = $1
+      `, [principalId]);
+      await migration.query(`
+        DELETE FROM fleet_auth.principal_role_grants
+        WHERE principal_id = $1
+      `, [principalId]);
+
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).resolves.toMatchObject({
+        principalId,
+        contact: {
+          contactId: CONTACT_ID,
+          bindingVersion: 1,
+        },
+        operator: { role: 'owner' },
+      });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
   it('uses the exact provider subject recorded by the session when a principal has multiple live providers', async () => {
     const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime();
     try {

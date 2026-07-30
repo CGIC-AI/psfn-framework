@@ -13,7 +13,10 @@ import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
 } from '../fleet-auth/request-capability.js';
-import type { FleetAuthorizationContext } from './fleet-authorization-context.js';
+import {
+  FleetAuthorizationDeniedError,
+  type FleetAuthorizationContext,
+} from './fleet-authorization-context.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
 import {
@@ -55,6 +58,167 @@ describe('unified Fleet SSO origin provenance', () => {
       request({ host: 'attacker.example.test' }, true),
       { canonicalOrigin, trustProxy: false },
     )).toThrow(/provenance is invalid/u);
+  });
+
+  it('serves the login landing before an unauthenticated Companion UI request can reach upstream', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const broker = { resolveAuthorizationContext: vi.fn() };
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker,
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'companion-ui-auth-test',
+        kid: 'companion-ui-auth-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'companion-ui-auth-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'companion-ui-auth-test',
+          kid: 'companion-ui-auth-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2020-01-01T00:00:00.000Z',
+          notAfter: '2040-01-01T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: vi.fn() },
+      portalProjection: { resolve: vi.fn() },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      companionUi: {
+        companionId,
+        origin: new URL('http://127.0.0.1:3212'),
+      },
+    });
+    const incoming = Readable.from([]) as IncomingMessage;
+    incoming.method = 'GET';
+    incoming.url = '/companion-ui/chat?conversation=private';
+    incoming.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+    };
+    Object.defineProperty(incoming, 'socket', { value: {} });
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead,
+      end,
+    } as unknown as ServerResponse;
+
+    await router.handle(incoming, response);
+
+    expect(writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+      'Content-Type': 'text/html; charset=utf-8',
+    }));
+    expect(end).toHaveBeenCalledWith(expect.any(Buffer));
+    expect(broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a denied Companion UI session from an authorization outage', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const broker = {
+      resolveAuthorizationContext: vi.fn(async () => {
+        throw new FleetAuthorizationDeniedError('session_revoked');
+      }),
+    };
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker,
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'companion-ui-forged-cookie-test',
+        kid: 'companion-ui-forged-cookie-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'companion-ui-forged-cookie-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'companion-ui-forged-cookie-test',
+          kid: 'companion-ui-forged-cookie-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2020-01-01T00:00:00.000Z',
+          notAfter: '2040-01-01T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: vi.fn() },
+      portalProjection: { resolve: vi.fn() },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      companionUi: {
+        companionId,
+        origin: new URL('http://127.0.0.1:3212'),
+      },
+    });
+    const incoming = Readable.from([]) as IncomingMessage;
+    incoming.method = 'GET';
+    incoming.url = '/companion-ui/app.js';
+    incoming.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+      cookie: `__Host-psfn_session=${'f'.repeat(43)}`,
+    };
+    Object.defineProperty(incoming, 'socket', { value: {} });
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead,
+      end,
+    } as unknown as ServerResponse;
+
+    await router.handle(incoming, response);
+
+    expect(broker.resolveAuthorizationContext).toHaveBeenCalledWith(expect.objectContaining({
+      sessionToken: 'f'.repeat(43),
+      companionId,
+      action: 'companion.read',
+    }));
+    expect(writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+      'Content-Type': 'text/html; charset=utf-8',
+    }));
+    expect(end).toHaveBeenCalledWith(expect.any(Buffer));
+
+    broker.resolveAuthorizationContext.mockRejectedValueOnce(
+      new Error('fleet authorization database unavailable'),
+    );
+    const outageRequest = Readable.from([]) as IncomingMessage;
+    outageRequest.method = incoming.method;
+    outageRequest.url = incoming.url;
+    outageRequest.headers = incoming.headers;
+    Object.defineProperty(outageRequest, 'socket', { value: {} });
+    const outageWriteHead = vi.fn();
+    const outageEnd = vi.fn();
+    const outageResponse = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: outageWriteHead,
+      end: outageEnd,
+    } as unknown as ServerResponse;
+
+    await router.handle(outageRequest, outageResponse);
+
+    expect(outageWriteHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'Content-Type': 'application/json; charset=utf-8',
+    }));
+    expect(outageEnd).toHaveBeenCalledWith(
+      Buffer.from(JSON.stringify({ error: { type: 'fleet_sso_unavailable' } }), 'utf8'),
+    );
   });
 
   it('admits fleet Garden chat with one server-derived companion target', async () => {

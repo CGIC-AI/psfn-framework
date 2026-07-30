@@ -18,6 +18,7 @@ import {
 import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
 import { escalationScopeDigest } from '../../boundary/fleet-auth/escalation.js';
 import { parseGardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
+import { GARDEN_CLIENT_ROUTES } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import {
   FleetAuthorizationDeniedError,
@@ -38,6 +39,37 @@ const SESSION_A = 'a'.repeat(43);
 const SESSION_B = 'b'.repeat(43);
 const CANONICAL_ORIGIN = 'https://fleet.example.test';
 const NOW_SECONDS = 1_783_000_000;
+const OPERATOR_WALKTHROUGH_PRIMARY_APIS = new Map<string, readonly string[]>([
+  ['/', ['/api/admin/dashboard']],
+  ['/memory', ['/api/admin/memory']],
+  ['/sessions', ['/api/admin/sessions']],
+  [
+    '/episodic-memory',
+    [
+      '/api/admin/episodic-memory/episodes',
+      '/api/admin/episodic-memory/threads',
+    ],
+  ],
+  ['/contacts', ['/api/admin/contacts']],
+  [
+    '/cognitive-security/remediation',
+    [
+      '/api/admin/session-routes',
+      '/api/admin/session-routes/cogsec/events',
+    ],
+  ],
+  [
+    '/session-recovery',
+    [
+      '/api/admin/session-routes',
+      '/api/admin/session-routes/cogsec/events',
+    ],
+  ],
+  ['/prompts', ['/api/admin/prompts']],
+  ['/images', ['/api/admin/images/generated']],
+  ['/telemetry', ['/api/admin/audit/history']],
+  ['/fleet-costs', ['/api/admin/fleet-model-usage?range=custom&sinceMs=1&untilMs=1000&timezone=UTC&bucket=day']],
+]);
 const WORKLOAD_SOURCE = `
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -260,6 +292,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     const companionUiHits: IncomingHttpHeaders[] = [];
     const companionUi = createServer((request, response) => {
       companionUiHits.push({ ...request.headers });
+      if (request.url === '/companion-ui/redirect') {
+        response.writeHead(302, { Location: '/signed-in' });
+        response.end();
+        return;
+      }
       response.writeHead(200, { 'Content-Type': 'text/html' });
       response.end(`<main>companion-ui:${request.url}</main>`);
     });
@@ -319,12 +356,12 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         resolveAuthorizationContext: async (input: unknown) => {
           if (!isRecord(input) || typeof input.sessionToken !== 'string'
             || typeof input.companionId !== 'string' || typeof input.action !== 'string') {
-            throw new Error('denied');
+            throw new FleetAuthorizationDeniedError('malformed_request');
           }
           const expected = input.sessionToken === SESSION_A ? COMPANION_A
             : input.sessionToken === SESSION_B ? COMPANION_B : undefined;
           if (!expected || expected !== input.companionId || (revokedA && expected === COMPANION_A)) {
-            throw new Error('denied');
+            throw new FleetAuthorizationDeniedError('session_revoked');
           }
           return context(
             expected,
@@ -338,6 +375,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         consume: async input => ({ outcome: 'consumed', result: input.consumeResult }),
       },
       escalation: { consumeGrant },
+      accountRoster: [{
+        providerSubjectId: '12345678901234567',
+        companionId: COMPANION_A,
+        role: 'owner',
+      }],
       portalProjection: {
         resolve: async () => ({
           schemaVersion: 2,
@@ -376,6 +418,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     servers.push(edge);
     const edgePort = await listen(edge);
 
+    const unauthenticatedCompanionUi = await get(edgePort, '/companion-ui/app.js', '');
+    expect(unauthenticatedCompanionUi.status).toBe(200);
+    expect(unauthenticatedCompanionUi.body).toContain('Login with Discord');
+    expect(companionUiHits).toHaveLength(0);
+
     const resourcePath = '/api/admin/dashboard';
     const responseA = await get(
       edgePort,
@@ -394,6 +441,46 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(payloadA.forwarded.cookie).toBeUndefined();
     expect(payloadA.forwarded.authorization).toBeUndefined();
     expect(payloadA.forwarded.capability).toBeTypeOf('string');
+
+    for (const cataloguePath of GARDEN_CLIENT_ROUTES) {
+      const pagePath = cataloguePath.replace(':shardId', 'shard-test');
+      const primaryApiPaths = OPERATOR_WALKTHROUGH_PRIMARY_APIS.get(cataloguePath) ?? [];
+      const page = await get(
+        edgePort,
+        `/companions/${COMPANION_A}/garden${pagePath}`,
+        SESSION_A,
+      );
+      expect(page.status, pagePath).toBe(200);
+      const payload = JSON.parse(page.body);
+      expect(payload.path).toBe(pagePath);
+      const capabilityContext = parseGardenCapabilityContext(
+        String(payload.forwarded.context),
+        COMPANION_A,
+      );
+      const capability = verifier.verifyOperator({
+        token: String(payload.forwarded.capability),
+        target: compileGatewayGardenRequestTarget({
+          rawTarget: pagePath,
+          method: 'GET',
+          companionId: COMPANION_A,
+          body: Buffer.alloc(0),
+        }),
+        requestId: capabilityContext.requestId,
+        decisionId: capabilityContext.decisionId,
+        versions: capabilityContext.versions,
+        nowSeconds: NOW_SECONDS,
+      });
+      expect(capability.authContext.fleetAccessMode, pagePath).toBe('sole_admin');
+      for (const primaryApiPath of primaryApiPaths) {
+        const api = await get(
+          edgePort,
+          `/companions/${COMPANION_A}/garden${primaryApiPath}`,
+          SESSION_A,
+        );
+        expect(api.status, `${pagePath} -> ${primaryApiPath}`).toBe(200);
+        expect(JSON.parse(api.body).path).toBe(primaryApiPath);
+      }
+    }
 
     // The reveal surface carries no browser-authored envelope: the audited
     // escalation grant, bound to the exact compiled route, is what opens it.
@@ -440,7 +527,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       nowSeconds: NOW_SECONDS,
     });
     expect(revealedCapability.authContext.sessionAssurance).toBe('escalated');
-    expect(revealedCapability.authContext.fleetAccessMode).toBe('multi_admin');
+    expect(revealedCapability.authContext.fleetAccessMode).toBe('sole_admin');
 
     // An escalation surface without a grant fails closed and says why, and no
     // grant is silently consumed on the way.
@@ -593,21 +680,42 @@ describe('unified Fleet SSO two-companion process boundary', () => {
 
     const companionUiB = await get(edgePort, '/companion-ui/app.js', SESSION_B);
     expect(companionUiB.status).toBe(200);
-    expect(companionUiHits).toHaveLength(2);
-    expect(companionUiHits[1]!.cookie).toBeUndefined();
+    expect(companionUiB.body).toContain('Login with Discord');
+    expect(companionUiHits).toHaveLength(1);
 
-    const queryBearingShell = await get(edgePort, '/companion-ui/app.js?code=secret', SESSION_A);
-    expect(queryBearingShell.status).toBe(404);
+    const queryBearingShell = await get(edgePort, '/companion-ui/app.js?view=compact', SESSION_A);
+    expect(queryBearingShell.status).toBe(200);
+    expect(queryBearingShell.body).toBe(
+      '<main>companion-ui:/companion-ui/app.js?view=compact</main>',
+    );
     expect(companionUiHits).toHaveLength(2);
+
+    const companionUiRedirect = await get(edgePort, '/companion-ui/redirect', SESSION_A);
+    expect(companionUiRedirect.status).toBe(302);
+    expect(companionUiRedirect.headers.location).toBe('/companion-ui/signed-in');
+    expect(companionUiHits).toHaveLength(3);
 
     revokedA = true;
+    const revokedCompanionUi = await get(edgePort, '/companion-ui/app.js', SESSION_A);
+    expect(revokedCompanionUi.status).toBe(200);
+    expect(revokedCompanionUi.body).toContain('Login with Discord');
+    expect(companionUiHits).toHaveLength(3);
     const revoked = await get(
       edgePort,
       `/companions/${COMPANION_A}/garden${resourcePath}`,
       SESSION_A,
     );
     expect(revoked.status).toBe(404);
-    expect(await getHitCount(workloadA.port)).toEqual({ hits: 4, pid: workloadA.pid });
+    const sweptRequests = GARDEN_CLIENT_ROUTES.reduce(
+      (total, pagePath) => (
+        total + 1 + (OPERATOR_WALKTHROUGH_PRIMARY_APIS.get(pagePath)?.length ?? 0)
+      ),
+      0,
+    );
+    expect(await getHitCount(workloadA.port)).toEqual({
+      hits: 4 + sweptRequests,
+      pid: workloadA.pid,
+    });
   });
 
   it('certifies disjoint bounded projections, stateless links, and outages', async () => {

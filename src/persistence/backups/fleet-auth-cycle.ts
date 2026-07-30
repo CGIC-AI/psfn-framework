@@ -96,7 +96,7 @@ export interface RegisterScheduledFleetAuthBackupTaskOptions {
   scheduler: Scheduler;
   cycleOptions: FleetAuthConsistentBackupCycleOptions;
   config: BackupRuntimeConfig;
-  onBackupFailure?: (error: unknown) => void;
+  onBackupFailure?: (error: unknown) => Promise<void> | void;
   runCycle?: (
     options: FleetAuthConsistentBackupCycleOptions,
   ) => Promise<FleetAuthConsistentBackupCycleResult>;
@@ -140,6 +140,10 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
     if (resolve(coordinatorResult.manifestPath) !== resolve(expectedManifestPath)) {
       throw new Error('Fleet auth backup coordinator published its manifest outside the staged family');
     }
+    // This is the post-dump proof, independent of optional restore
+    // verification: every manifested artifact must exist, be a regular
+    // non-empty file, and still match the digest recorded by the coordinator.
+    verifyFleetAuthBackupManifest(expectedManifestPath);
 
     if (options.fleetBackupOptions.groupMode) {
       throw new Error(
@@ -184,10 +188,9 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
       }
     }
 
-    let manifestVerified = false;
+    const manifestVerified = true;
     let familyRestoreVerified = false;
     if (options.config.verifyRestore) {
-      verifyFleetAuthBackupManifest(expectedManifestPath);
       const scratchDatabaseUrl = options.fleetBackupOptions.postgres.restoreVerifyDatabaseUrl;
       if (!scratchDatabaseUrl
         || !options.restoreVerifySchemaOwnerDatabaseUrl
@@ -206,7 +209,6 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
         authorityFloors: options.authorityFloors,
         activationGeneration: options.authorityFloors.read().trustedHost.activationGeneration,
       });
-      manifestVerified = true;
       familyRestoreVerified = true;
     }
 
@@ -371,7 +373,7 @@ export function registerScheduledFleetAuthBackupTaskImplementation(
               }
               : {}),
           });
-          options.onBackupFailure?.(error);
+          await options.onBackupFailure?.(error);
           throw error;
         }
 

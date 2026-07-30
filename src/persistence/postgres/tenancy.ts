@@ -9,6 +9,7 @@ import {
   quotePostgresSchemaName,
   withPostgresClient,
 } from '../postgres.js';
+import { grantBackupReadAccessToTenantSchema } from './backup-schema-access.js';
 
 const TENANCY_LOCK_CLASS = 0x5053464e;
 const SHARD_SCHEMA_DIGEST_LENGTH = 40;
@@ -95,6 +96,8 @@ export function planPostgresTenantAccess(input: {
 
 export interface ProvisionPostgresTenantAccessOptions {
   plan: PostgresTenantAccessPlan;
+  /** Read-only role used by the fleet backup family. */
+  backupRole?: string;
   /** Refuse to adopt or repair any pre-existing role or schema. */
   requireAbsent?: boolean;
   /** Existing login role that may SET ROLE to the tenant role. */
@@ -291,6 +294,14 @@ export async function provisionPostgresTenantAccess(
         await client.query(`GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${shared} TO ${role}`);
         await client.query(`GRANT UPDATE ON ALL SEQUENCES IN SCHEMA ${shared} TO ${role}`);
       }
+    }
+
+    if (options.backupRole) {
+      await grantBackupReadAccessToTenantSchema(client, {
+        schema: plan.schema,
+        ownerRole: plan.role,
+        backupRole: options.backupRole,
+      });
     }
 
     if (runtimeLoginRole && runtimeLoginRole !== plan.role) {

@@ -87,6 +87,7 @@ function hashArtifact(path: string): Pick<FleetAuthBackupArtifact, 'sha256' | 's
 function writeFakeFamily(
   backupDir: string,
   tamperAfterManifest = false,
+  emptyCompanionDump = false,
 ): FleetAuthConsistentBackupResult {
   const files = [
     { kind: 'companion' as const, path: 'postgres/companion_one.dump', schema: 'companion_one' },
@@ -97,7 +98,11 @@ function writeFakeFamily(
   for (const file of files) {
     const absolutePath = join(backupDir, file.path);
     mkdirSync(dirname(absolutePath), { recursive: true });
-    writeFileSync(absolutePath, `${file.kind}-bytes\n`, 'utf8');
+    writeFileSync(
+      absolutePath,
+      emptyCompanionDump && file.kind === 'companion' ? '' : `${file.kind}-bytes\n`,
+      'utf8',
+    );
   }
   const artifacts: FleetAuthBackupArtifact[] = files.map(file => ({
     kind: file.kind,
@@ -360,6 +365,20 @@ describe('runFleetAuthConsistentBackupCycle', () => {
     expect(existsSync(join(backupRootDir, '20260715T150000000Z'))).toBe(false);
   });
 
+  it('rejects an empty dump even when restore verification is disabled', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: false });
+
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir, false, true),
+    ))).rejects.toThrow(/sizeBytes is invalid/);
+
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
+  });
+
   it('rejects a missing workspace member before publishing the encrypted family', async () => {
     const root = makeRoot();
     const backupRootDir = join(root, 'backups');
@@ -523,6 +542,38 @@ describe('registerScheduledFleetAuthBackupTask', () => {
       taskId: SCHEDULED_BACKUP_TASK_ID,
       message: 'consistent family failed',
     });
+  });
+
+  it('awaits operator-alert escalation before rethrowing a family-cycle failure', async () => {
+    const root = makeRoot();
+    const config = makeConfig(join(root, 'backups'));
+    const scheduler = new Scheduler(new EventBus());
+    const failure = new Error('consistent family failed');
+    let releaseAlert: (() => void) | undefined;
+    const onBackupFailure = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseAlert = resolve;
+      });
+    });
+    registerScheduledFleetAuthBackupTask({
+      scheduler,
+      cycleOptions: makeCycleOptions(root, config, async options => writeFakeFamily(options.backupDir)),
+      config,
+      onBackupFailure,
+      runCycle: async () => { throw failure; },
+    });
+
+    const handled = scheduledBackupHandler(scheduler)();
+    await vi.waitFor(() => expect(onBackupFailure).toHaveBeenCalledWith(failure));
+    let settled = false;
+    void handled.catch(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseAlert?.();
+    await expect(handled).rejects.toBe(failure);
   });
 });
 

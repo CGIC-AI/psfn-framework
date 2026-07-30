@@ -393,7 +393,7 @@ export interface RegisterScheduledFleetBackupTaskOptions {
   config: BackupRuntimeConfig;
   skipFirstRun?: boolean;
   /** Invoked when a fleet backup cycle fails (incl. partial failure). */
-  onBackupFailure?: (error: unknown) => void;
+  onBackupFailure?: (error: unknown) => Promise<void> | void;
   /** Test seam: override the fleet runner (defaults to the real cycle). */
   runFleetBackup?: (options: FleetBackupRunOptions) => Promise<FleetBackupRunResult>;
 }
@@ -441,7 +441,7 @@ export function registerScheduledFleetBackupTask(
             taskName: SCHEDULED_BACKUP_TASK_NAME,
             message: errorMessage,
           });
-          options.onBackupFailure?.(error);
+          await options.onBackupFailure?.(error);
           throw error;
         }
 

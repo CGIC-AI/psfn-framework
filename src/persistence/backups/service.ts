@@ -105,7 +105,7 @@ export interface RegisterScheduledBackupTaskOptions {
   config: BackupRuntimeConfig;
   skipFirstRun?: boolean;
   /** Invoked when a scheduled backup cycle fails, so the runtime can surface the failure. */
-  onBackupFailure?: (error: unknown) => void;
+  onBackupFailure?: (error: unknown) => Promise<void> | void;
 }
 
 function formatTimestamp(timestampMs: number): string {
@@ -630,7 +630,7 @@ export function registerScheduledBackupTask(
             taskName: SCHEDULED_BACKUP_TASK_NAME,
             message: errorMessage,
           });
-          options.onBackupFailure?.(error);
+          await options.onBackupFailure?.(error);
           throw error;
         }
 

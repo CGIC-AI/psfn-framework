@@ -77,10 +77,12 @@ import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-c
 import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
-import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
 import { prepareFleetSharedSchemaRuntime } from '../../persistence/backups/fleet-shared-schema-startup.js';
+import {
+  assertRestoreVerifyDatabasePreconditions,
+} from '../../persistence/backups/restore-verify-preconditions.js';
 import {
   DEFAULT_SHARED_WORLD_SCHEMA,
   registerScheduledFleetAuthBackupTask,
@@ -303,24 +305,6 @@ async function main(): Promise<void> {
     if (!fleetAuthSecrets || !companionDatabaseTopology || !sharedSchemaAccessContracts) {
       throw new Error('Fleet auth backup requires the complete multi-companion database topology');
     }
-    if (backupConfig.verifyRestore) {
-      const scratchMigrationUrl = deriveRestoreVerifyDatabaseUrl(
-        fleetAuthSecrets.database.migrationUrl,
-      );
-      if (!scratchMigrationUrl) {
-        throw new Error(
-          'Fleet auth verifyRestore requires a derivable migration URL for the dedicated scratch database',
-        );
-      }
-      // The scratch database itself remains an operator-provisioned recovery
-      // target. Gateway startup idempotently provisions only its fleet_auth
-      // schema with the migration authority; backup cycles still use only the
-      // dedicated backup/restore credential.
-      await migrateFleetAuthSchema({
-        databaseUrl: scratchMigrationUrl,
-        roles: config.fleetAuth.databaseRoles,
-      });
-    }
     const kubernetesHelm = resolveKubernetesHelmBackupConfig(env);
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
@@ -342,6 +326,41 @@ async function main(): Promise<void> {
       backupConfig,
       ...(kubernetesHelm ? { kubernetesHelm } : {}),
     });
+    if (backupConfig.verifyRestore) {
+      const scratchBackupUrl = cycleOptions.fleetBackupOptions.postgres.restoreVerifyDatabaseUrl;
+      const scratchMigrationUrl = cycleOptions.restoreVerifySchemaOwnerDatabaseUrl;
+      if (!scratchBackupUrl || !scratchMigrationUrl) {
+        throw new Error(
+          'Fleet auth verifyRestore requires complete derived scratch database credentials',
+        );
+      }
+      await assertRestoreVerifyDatabasePreconditions({
+        credentials: [
+          {
+            label: 'backup',
+            databaseUrl: scratchBackupUrl,
+            expectedRole: config.fleetAuth.databaseRoles.backupRestore,
+          },
+          {
+            label: 'fleet_auth migration',
+            databaseUrl: scratchMigrationUrl,
+            expectedRole: config.fleetAuth.databaseRoles.migration,
+          },
+          ...cycleOptions.schemas.map(contract => ({
+            label: `${contract.schema} schema owner`,
+            databaseUrl: cycleOptions.scratchSchemaOwnerDatabaseUrls[contract.schema]!,
+            expectedRole: contract.ownerRole,
+          })),
+        ],
+      });
+      // The scratch database remains operator-provisioned. Once its existence
+      // and CREATE/CONNECT grants are proved read-only above, startup
+      // idempotently provisions only its fleet_auth schema.
+      await migrateFleetAuthSchema({
+        databaseUrl: scratchMigrationUrl,
+        roles: config.fleetAuth.databaseRoles,
+      });
+    }
     fleetAuthBackupScheduler = new Scheduler(
       eventBus,
       {
@@ -354,8 +373,8 @@ async function main(): Promise<void> {
       scheduler: fleetAuthBackupScheduler,
       cycleOptions,
       config: backupConfig,
-      onBackupFailure: (error) => {
-        void eventBus.emit('backup.failed', {
+      onBackupFailure: async (error) => {
+        await eventBus.emit('backup.failed', {
           taskId: SCHEDULED_BACKUP_TASK_ID,
           taskName: SCHEDULED_BACKUP_TASK_NAME,
           error: error instanceof Error ? error.message : String(error),

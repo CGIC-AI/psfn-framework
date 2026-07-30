@@ -19,6 +19,10 @@ import {
   handleFleetModelUsageRoute,
   type FleetModelUsageRouteService,
 } from './routes/fleet-model-usage-routes.js';
+import {
+  observeGardenServiceDenial,
+  recordGardenDenial,
+} from './garden-denial-observability.js';
 
 const log = createComponentLogger('FleetGardenOperatorRouter');
 
@@ -71,6 +75,7 @@ export class FleetGardenOperatorRouter {
       sendText(input.res, admitted.status, admitted.message);
       return;
     }
+    observeGardenServiceDenial(input.res, log, admitted.context);
     if (admitted.kind === 'public'
       || !admitted.target.canonicalPath.startsWith('/api/admin/')) {
       input.dispatchLocal(admitted.target.canonicalRequestTarget);
@@ -146,13 +151,25 @@ export class FleetGardenOperatorRouter {
       headers: input.req.headers,
       body: Buffer.alloc(0),
     });
-    if (admitted.decision === 'deny'
-      || admitted.kind !== 'fleet_principal'
+    if (admitted.decision === 'deny') {
+      input.socket.write(`HTTP/1.1 ${admitted.status} Unauthorized\r\n\r\n`);
+      input.socket.destroy();
+      return;
+    }
+    if (admitted.kind !== 'fleet_principal'
       || !this.options.childAssertions
       || admitted.target.canonicalPath !== '/api/admin/events'
       || admitted.target.canonicalQuery) {
-      const status = admitted.decision === 'deny' ? admitted.status : 403;
-      input.socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+      recordGardenDenial(log, {
+        reasonCode: 'websocket_route_denied',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.kind === 'fleet_principal'
+          ? admitted.context.actor.principalId
+          : undefined,
+      });
+      input.socket.write('HTTP/1.1 403 Unauthorized\r\n\r\n');
       input.socket.destroy();
       return;
     }
@@ -168,8 +185,13 @@ export class FleetGardenOperatorRouter {
         admitted.target.canonicalRequestTarget,
       );
     } catch (error) {
-      log.warn('Fleet websocket child assertion exchange failed', {
-        error: toErrorMessage(error),
+      recordGardenDenial(log, {
+        reasonCode: 'child_assertion_denied',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.context.actor.principalId,
+        errorName: error instanceof Error ? error.name : typeof error,
       });
       input.socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       input.socket.destroy();

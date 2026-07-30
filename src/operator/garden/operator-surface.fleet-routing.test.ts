@@ -617,6 +617,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
     expect(status).toBe(503);
     expect(JSON.parse(body)).toMatchObject({
       status: 'degraded',
+      gardenDenialsLastHour: expect.any(Number),
       dependencies: { adminTransports: { status: 'unready' } },
     });
     expect(body).not.toContain(COMPANION_A);

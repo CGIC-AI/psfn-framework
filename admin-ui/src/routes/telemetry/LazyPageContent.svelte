@@ -9,6 +9,7 @@
   import {
     getEvents,
     getTelemetryCacheError,
+    getTelemetryConnectionError,
     hydrateTelemetryCache,
     isConnected,
     isPaused,
@@ -344,10 +345,9 @@
   }
 
   async function handleConnect() {
-    await hydrateCachedTelemetry();
-    if (getTelemetryCacheError()) return;
     connectTelemetry();
     connectedSince = Date.now();
+    await hydrateCachedTelemetry();
   }
 
   function handleDisconnect() {
@@ -501,6 +501,14 @@
       {:else}
         <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
         <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
+        {#if getTelemetryConnectionError()}
+          <span class="text-xs text-wilt-600" role="status">
+            {#if getTelemetryConnectionError()?.code !== null}
+              Code {getTelemetryConnectionError()?.code}:
+            {/if}
+            {getTelemetryConnectionError()?.reason}
+          </span>
+        {/if}
       {/if}
     </div>
   {/snippet}

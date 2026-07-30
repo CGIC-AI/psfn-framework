@@ -11,6 +11,7 @@
   import {
     connectGardenEventBus,
     disconnectGardenEventBus,
+    getGardenEventBusConnectionError,
     getGardenEvents,
     isGardenEventBusConnected,
     subscribeGardenEvents,
@@ -291,6 +292,15 @@
         {isGardenEventBusConnected() ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-wilt-200 bg-wilt-50 text-wilt-600'}">
         <span class="inline-block h-2.5 w-2.5 rounded-full {isGardenEventBusConnected() ? 'bg-moss-500' : 'bg-wilt-400'}"></span>
         {isGardenEventBusConnected() ? 'Live bus connected' : 'Live bus disconnected'}
+        {#if !isGardenEventBusConnected() && getGardenEventBusConnectionError()}
+          <span role="status">
+            —
+            {#if getGardenEventBusConnectionError()?.code !== null}
+              code {getGardenEventBusConnectionError()?.code}:
+            {/if}
+            {getGardenEventBusConnectionError()?.reason}
+          </span>
+        {/if}
       </span>
       <button
         type="button"

@@ -6,6 +6,10 @@ import type { TLSSocket } from 'node:tls';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  getGardenDenialsLastHour,
+  recordGardenDenial,
+} from './garden-denial-observability.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import {
   readBodyWithLimit,
@@ -215,6 +219,12 @@ export class GardenOperatorSurface implements Lifecycle {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (!this.authorizeFleetPeer(req)) {
+      if (this.routing.isFleetPrincipal()) {
+        recordGardenDenial(log, {
+          reasonCode: 'transport_peer_forbidden',
+          status: 403,
+        });
+      }
       sendText(res, 403, 'Forbidden');
       return;
     }
@@ -253,6 +263,12 @@ export class GardenOperatorSurface implements Lifecycle {
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.authorizeFleetPeer(req)) {
+      if (this.routing.isFleetPrincipal()) {
+        recordGardenDenial(log, {
+          reasonCode: 'transport_peer_forbidden',
+          status: 403,
+        });
+      }
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
@@ -512,6 +528,7 @@ export class GardenOperatorSurface implements Lifecycle {
       sendJson(res, readiness.status === 'ready' ? 200 : 503, {
         status: readiness.status === 'ready' ? 'ok' : 'degraded',
         uptime: process.uptime(),
+        gardenDenialsLastHour: getGardenDenialsLastHour(),
         // /health is always-public. Probe every registered target internally,
         // but never disclose fleet membership, endpoints, or raw failure
         // reasons through this response.
@@ -527,6 +544,7 @@ export class GardenOperatorSurface implements Lifecycle {
     const payload = {
       status: adminTransport.status === 'ok' ? 'ok' : 'degraded',
       uptime: process.uptime(),
+      gardenDenialsLastHour: getGardenDenialsLastHour(),
       dependencies: {
         adminTransport,
       },

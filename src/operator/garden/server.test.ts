@@ -26,6 +26,11 @@ import { createGatewayRequestCapabilitySigner } from '../../boundary/fleet-auth/
 import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
+import { clearGardenDenialsForTests } from './garden-denial-observability.js';
 
 const fleetVerifierKeyPair = generateKeyPairSync('ed25519');
 const fleetVerifierPublicKey = fleetVerifierKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -496,6 +501,86 @@ describe('AdminServer Garden routing', () => {
       }
     });
 
+    it('logs body-forbidden and subject-bound denials with safe structured context', async () => {
+      const fleetHarness = await createHarness({
+        host: '127.0.0.1',
+        fleetAuthEnabled: true,
+      });
+      try {
+        clearDiagnosticLogRingBufferForTests();
+        clearGardenDenialsForTests();
+        const forbiddenBody = '{}';
+        const bodyDenied = await request(
+          fleetHarness.port,
+          'GET',
+          '/api/admin/dashboard',
+          forbiddenBody,
+          { 'Content-Length': String(Buffer.byteLength(forbiddenBody)) },
+        );
+        expect(bodyDenied.status).toBe(400);
+        expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+          message: 'Fleet Garden request denied',
+          component: 'GardenAdmission',
+          context: expect.objectContaining({
+            reasonCode: 'request_body_forbidden',
+            routeId: 'GET /api/admin/dashboard',
+            action: 'garden.read',
+            principalId: 'unknown',
+            status: 400,
+          }),
+        }));
+
+        const target = compileGatewayGardenRequestTarget({
+          rawTarget: '/session-recovery',
+          method: 'GET',
+          companionId: FLEET_COMPANION_ID,
+          body: Buffer.alloc(0),
+        });
+        const requestId = randomUUID();
+        const decisionId = randomUUID();
+        const capability = createGatewayRequestCapabilitySigner({
+          issuer: 'psfn-fleet-auth',
+          kid: 'test-active',
+          privateKeyPem: fleetSignerPrivateKey,
+          ttlSeconds: 30,
+        }).signOperator({
+          target,
+          requestId,
+          decisionId,
+          authContext: FLEET_AUTH_CONTEXT,
+          versions: FLEET_AUTHORITY_VERSIONS,
+        });
+        const subjectDenied = await request(
+          fleetHarness.port,
+          'GET',
+          '/session-recovery',
+          undefined,
+          { ...buildGardenCapabilityHeaders({
+            token: capability,
+            context: { requestId, decisionId, versions: FLEET_AUTHORITY_VERSIONS },
+          }) },
+        );
+        expect(subjectDenied.status).toBe(403);
+        expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+          message: 'Fleet Garden request denied',
+          component: 'GardenAdminRoutes',
+          context: expect.objectContaining({
+            reasonCode: 'subject_bound_session_required',
+            routeId: 'GET /session-recovery',
+            action: 'recovery.begin',
+            principalId: 'principal-a',
+            status: 403,
+          }),
+        }));
+
+        const health = await request(fleetHarness.port, 'GET', '/health');
+        expect(health.status).toBe(200);
+        expect(JSON.parse(health.body)).toMatchObject({ gardenDenialsLastHour: 2 });
+      } finally {
+        await destroyHarness(fleetHarness);
+      }
+    });
+
     it('rejects insecure local mode on non-loopback hosts', async () => {
       await expect(
         createHarness({
@@ -860,7 +945,16 @@ describe('AdminServer Garden routing', () => {
       const unauthorizedStatus = await openWebSocketExpectStatus(harness.port, '/api/admin/events');
       expect(unauthorizedStatus).toBe(401);
 
-      const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
+      const loginBody = new URLSearchParams({ token }).toString();
+      const loginRes = await request(harness.port, 'POST', '/login', loginBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      const setCookie = loginRes.headers['set-cookie'];
+      const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+      const cookieHeader = cookie!.split(';')[0];
+      const ws = await openWebSocket(harness.port, '/api/admin/events', {
+        Cookie: cookieHeader,
+      });
       const messagePromise = new Promise<{ type: string }>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Timed out waiting for websocket telemetry')), 2000);
         ws.once('message', (raw: WebSocket.RawData) => {

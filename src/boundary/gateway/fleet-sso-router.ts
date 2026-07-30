@@ -11,6 +11,7 @@ import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
+import { WebSocketServer } from 'ws';
 import {
   compileGatewayGardenRequestTarget,
   GardenRequestTargetError,
@@ -220,6 +221,23 @@ function writeSocketError(socket: Duplex, status: 400 | 401 | 404 | 413 | 502 | 
           : status === 502 ? 'Bad Gateway'
             : 'Service Unavailable';
   socket.end(`HTTP/1.1 ${status} ${label}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+
+export function fleetGardenUpgradeClose(
+  status: 400 | 401 | 404 | 413 | 502 | 503,
+): { code: number; reason: string } {
+  switch (status) {
+    case 400:
+    case 413:
+      return { code: 4400, reason: 'Invalid Garden stream request' };
+    case 401:
+      return { code: 4401, reason: 'Garden stream authentication required' };
+    case 404:
+      return { code: 4404, reason: 'Garden stream unavailable' };
+    case 502:
+    case 503:
+      return { code: 4503, reason: 'Garden stream service unavailable' };
+  }
 }
 
 function hasAnyHeader(headers: IncomingHttpHeaders, names: readonly string[]): boolean {
@@ -446,6 +464,10 @@ export class GatewayFleetSsoRouter {
   private gardenChatHandler: FleetGardenChatHandler | null = null;
   private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
   private readonly testingHarnessDoor?: TestingHarnessGardenDoor;
+  private readonly rejectedUpgradeServer = new WebSocketServer({
+    noServer: true,
+    clientTracking: false,
+  });
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -644,10 +666,26 @@ export class GatewayFleetSsoRouter {
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     void this.proxyUpgrade(request, socket, head).catch((error) => {
-      if (!socket.destroyed) {
-        writeSocketError(socket, error instanceof FleetSsoRequestError ? error.status : 503);
+      if (socket.destroyed) return;
+      const status = error instanceof FleetSsoRequestError ? error.status : 503;
+      if (this.canSurfaceUpgradeRejection(request)) {
+        this.rejectedUpgradeServer.handleUpgrade(request, socket, head, (webSocket) => {
+          const close = fleetGardenUpgradeClose(status);
+          webSocket.close(close.code, close.reason);
+        });
+        return;
       }
+      writeSocketError(socket, status);
     });
+  }
+
+  private canSurfaceUpgradeRejection(request: IncomingMessage): boolean {
+    if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) return false;
+    try {
+      return parseGardenRoute(request.url ?? '')?.upstreamTarget === '/api/admin/events';
+    } catch {
+      return false;
+    }
   }
 
   private async serveCompanionUi(

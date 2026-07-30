@@ -18,6 +18,10 @@ import {
   type FleetPrincipalGardenAdmission,
   type GardenCapabilityContext,
 } from './garden-admission.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 
 const COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const REQUEST_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -362,5 +366,30 @@ describe('discriminated Garden admission', () => {
       });
       expect(result).toMatchObject({ decision: 'deny' });
     }
+  });
+
+  it('logs a body-forbidden denial with route, reason code, action, and safe principal fallback', async () => {
+    clearDiagnosticLogRingBufferForTests();
+
+    const result = await admitFleetGardenRequest({
+      admission: admission('operator'),
+      rawTarget: '/api/admin/dashboard',
+      method: 'GET',
+      headers: {},
+      body: Buffer.from('{}'),
+    });
+
+    expect(result).toMatchObject({ decision: 'deny', status: 400 });
+    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+      message: 'Fleet Garden request denied',
+      component: 'GardenAdmission',
+      context: expect.objectContaining({
+        reasonCode: 'request_body_forbidden',
+        routeId: 'GET /api/admin/dashboard',
+        action: 'garden.read',
+        principalId: 'unknown',
+        status: 400,
+      }),
+    }));
   });
 });

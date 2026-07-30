@@ -34,6 +34,7 @@ import type {
 } from '../../boundary/fleet-auth/request-capability.js';
 import type { CompiledGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   admitFleetGardenRequest,
   type FleetPrincipalGardenAdmission,
@@ -51,6 +52,9 @@ import {
   type FleetGardenTargetIdentity,
   type FleetGardenTargetReadiness,
 } from './fleet-garden-target-registry.js';
+import { recordGardenDenial } from './garden-denial-observability.js';
+
+const log = createComponentLogger('FleetGardenControlPlane');
 
 export interface FleetGardenControlPlaneOptions {
   /** Immutable routing identity for every reachable companion target. */
@@ -152,11 +156,22 @@ export class FleetGardenControlPlane {
     } catch (error) {
       if (error instanceof CompanionScopedGardenRouteError) {
         // Malformed and unknown selections are indistinguishable at this edge.
+        recordGardenDenial(log, {
+          reasonCode: 'route_not_declared',
+          status: 404,
+          errorName: error.name,
+        });
         return deny(404, 'Not found');
       }
       throw error;
     }
-    if (!route) return deny(404, 'Not found');
+    if (!route) {
+      recordGardenDenial(log, {
+        reasonCode: 'route_not_declared',
+        status: 404,
+      });
+      return deny(404, 'Not found');
+    }
 
     // Per-request frozen binding: the only companion this admission can ever
     // authorize is the one named by the canonical route.
@@ -183,6 +198,12 @@ export class FleetGardenControlPlane {
       // Only declared always-public routes are admissible without verified
       // authority, and they never resolve an agent target.
       if (admitted.target.authorization.publicAccess !== 'always') {
+        recordGardenDenial(log, {
+          reasonCode: 'capability_required',
+          status: 403,
+          routeId: admitted.target.resource.routeId,
+          action: admitted.target.action,
+        });
         return deny(403, 'Fleet Garden capability required');
       }
       return Object.freeze({
@@ -207,7 +228,15 @@ export class FleetGardenControlPlane {
         }),
         route.companionId,
       );
-    } catch {
+    } catch (error) {
+      recordGardenDenial(log, {
+        reasonCode: 'capability_invalid',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.verified.authContext.principalId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
       return deny(403, 'Invalid Fleet Garden capability');
     }
 
@@ -215,7 +244,15 @@ export class FleetGardenControlPlane {
     let upstream: FleetGardenTargetIdentity;
     try {
       upstream = this.registry.resolve(route.companionId);
-    } catch {
+    } catch (error) {
+      recordGardenDenial(log, {
+        reasonCode: 'fleet_target_not_found',
+        status: 404,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.verified.authContext.principalId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
       return deny(404, 'Not found');
     }
 

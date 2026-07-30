@@ -1,4 +1,7 @@
-import { ReconnectingWebSocket } from '$lib/api/websocket';
+import {
+  ReconnectingWebSocket,
+  type WsConnectionError,
+} from '$lib/api/websocket';
 import type { TelemetryEvent } from '$lib/types';
 import type { GardenEventEnvelope, GardenEventFilter } from './envelope';
 import {
@@ -12,7 +15,9 @@ import {
 import {
   getCompanionCacheScope,
   onCompanionScopeChange,
+  scopeGardenDataPath,
 } from '$lib/fleet/companion-scope';
+import { getToken } from '$lib/stores/auth.svelte';
 
 const MAX_GARDEN_EVENTS = MAX_CACHED_GARDEN_EVENTS;
 
@@ -26,6 +31,7 @@ interface GardenEventSubscription {
 
 let events = $state<GardenEventEnvelope[]>([]);
 let connected = $state(false);
+let connectionError = $state<WsConnectionError | null>(null);
 let paused = $state(false);
 let socket: ReconnectingWebSocket | null = null;
 const subscriptions = new Set<GardenEventSubscription>();
@@ -35,6 +41,8 @@ let telemetryCacheHydrated = false;
 let telemetryCacheHydration: Promise<void> | null = null;
 let telemetryCacheWrite: Promise<void> = Promise.resolve();
 let telemetryCacheError = $state<string | null>(null);
+let preparedAdminToken = '';
+let preparedAdminTokenUntil = 0;
 
 onCompanionScopeChange((previousCompanionId) => {
   disconnectGardenEventBus();
@@ -45,6 +53,9 @@ onCompanionScopeChange((previousCompanionId) => {
   telemetryCacheHydrated = false;
   telemetryCacheHydration = null;
   telemetryCacheError = null;
+  connectionError = null;
+  preparedAdminToken = '';
+  preparedAdminTokenUntil = 0;
   if (!previousCompanionId) return;
   const clearing = telemetryCacheWrite.then(() => telemetryCache.clearScope(previousCompanionId));
   telemetryCacheWrite = clearing
@@ -59,6 +70,27 @@ onCompanionScopeChange((previousCompanionId) => {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function prepareGardenWebSocketCredential(): Promise<void> {
+  const token = getToken();
+  if (!token) return;
+  const now = Date.now();
+  if (preparedAdminToken === token && preparedAdminTokenUntil > now) return;
+  const response = await fetch(scopeGardenDataPath('/login'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'text/html',
+    },
+    credentials: 'include',
+    body: new URLSearchParams({ token }).toString(),
+  });
+  if (!response.redirected) {
+    throw new Error('Unable to refresh the Garden WebSocket session credential');
+  }
+  preparedAdminToken = token;
+  preparedAdminTokenUntil = now + (60 * 60 * 1_000);
 }
 
 function persistGardenEvents(): void {
@@ -141,27 +173,40 @@ export function isGardenEventBusConnected(): boolean {
   return connected;
 }
 
+export function getGardenEventBusConnectionError(): WsConnectionError | null {
+  return connectionError;
+}
+
 export function isGardenEventBusPaused(): boolean {
   return paused;
 }
 
 export function connectGardenEventBus(): void {
   if (!socket) {
-    const nextSocket = new ReconnectingWebSocket('/api/admin/events');
+    const nextSocket = new ReconnectingWebSocket(
+      '/api/admin/events',
+      undefined,
+      prepareGardenWebSocketCredential,
+    );
     nextSocket.onMessage(handleSocketMessage);
     nextSocket.onConnectionChange((nextConnected) => {
       setGardenEventBusConnected(nextConnected);
+    });
+    nextSocket.onConnectionError((nextError) => {
+      connectionError = nextError;
     });
     socket = nextSocket;
   }
 
   socket.connect();
   setGardenEventBusConnected(socket.connected);
+  connectionError = socket.connectionError;
 }
 
 export function disconnectGardenEventBus(): void {
   if (!socket) {
     setGardenEventBusConnected(false);
+    connectionError = null;
     return;
   }
 
@@ -169,6 +214,7 @@ export function disconnectGardenEventBus(): void {
   socket = null;
   closingSocket.close();
   setGardenEventBusConnected(false);
+  connectionError = null;
 }
 
 export function clearGardenEventBus(): void {

@@ -160,9 +160,6 @@ BEGIN
   SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp()
   WHERE grant_id <> ALL(owner_grant_ids);
-  UPDATE fleet_auth.passkey_credentials
-  SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
   UPDATE fleet_auth.contact_authority_intents
   SET state = 'quarantined', restore_state = 'quarantined',
       updated_at = clock_timestamp();
@@ -188,8 +185,7 @@ BEGIN
       updated_at = clock_timestamp()
   WHERE grant_id = ANY(owner_grant_ids);
 
-  DELETE FROM fleet_auth.jit_authorization_grants;
-  DELETE FROM fleet_auth.step_up_challenges;
+  DELETE FROM fleet_auth.escalation_grants;
   DELETE FROM fleet_auth.oauth_transactions;
   DELETE FROM fleet_auth.browser_sessions;
   DELETE FROM fleet_auth.provider_token_custody;

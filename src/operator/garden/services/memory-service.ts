@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
@@ -58,10 +58,6 @@ import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/su
 import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/memory/writer.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
-import {
-  parseMemorySubjectJitRequest,
-  type MemorySubjectJitRequest,
-} from '../../../shared/contracts/memory-subject-jit.js';
 
 const log = createComponentLogger('AdminMemoryService');
 
@@ -182,6 +178,29 @@ function buildPrivacySummary(
   };
 }
 
+/**
+ * D1 subject-access projection for a signed fleet actor: owner/admin roles
+ * carry their deployment access mode (and per-request escalation) into the
+ * subject-authorized store; member/guest roles keep the narrow
+ * single-contact/self scope.
+ */
+function fleetSubjectAccessContext(context: FleetGardenRequestContext): {
+  viewerContactId: string;
+  adminAccessMode?: 'sole_admin' | 'multi_admin';
+  escalated?: boolean;
+} {
+  const adminClass = context.actor.role === 'owner' || context.actor.role === 'admin';
+  return {
+    viewerContactId: context.actor.contactId,
+    ...(adminClass
+      ? {
+          adminAccessMode: context.actor.accessMode,
+          ...(context.actor.sessionAssurance === 'escalated' ? { escalated: true } : {}),
+        }
+      : {}),
+  };
+}
+
 export class AdminMemoryDataService implements AdminMemoryService {
   private readonly bodyGate: AdminMemoryBodyGate;
 
@@ -229,7 +248,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       memoryStore: createSubjectAuthorizedMemoryStore(
         this.deps.fleetMemoryStore ?? this.deps.memoryStore,
         Object.freeze({
-          viewerContactId: context.actor.contactId,
+          ...fleetSubjectAccessContext(context),
           reportWithheldByAuthorization: context.actor.role === 'owner',
         }),
       ),
@@ -239,21 +258,23 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ...service,
       getBodyElevationStatus: () => ({ elevated: false, ttlMs: 0 }),
       elevateBodyAccess: () => {
-        throw new Error('Session-wide memory JIT is unavailable for fleet principals');
+        throw new Error(
+          'Session-wide elevation is unavailable for fleet principals; reveal each memory through an audited escalation',
+        );
       },
       dropBodyElevation: () => ({ elevated: false, ttlMs: 0 }),
       revealMemory: async () => {
-        throw new Error('Memory reveal requires an exact consumed subject JIT grant');
+        throw new Error('Memory reveal requires an audited escalation grant');
       },
     });
-    if (context.action !== 'memory.jit.self') return fleetSafeService;
+    if (context.action !== 'memory.reveal') return fleetSafeService;
     if (context.resource.routeId !== 'POST /api/admin/memory/:id/reveal'
       || context.subjectRelation !== 'self_or_co_subject') {
       return fleetSafeService;
     }
     return Object.freeze({
       ...fleetSafeService,
-      revealMemory: (id, jitRequest) => scoped.revealFleetMemory(context, id, jitRequest),
+      revealMemory: id => scoped.revealFleetMemory(context, id),
     });
   }
 
@@ -278,7 +299,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       getBodyElevationStatus: () => this.getBodyElevationStatus(sessionKey),
       elevateBodyAccess: () => this.elevateBodyAccess(sessionKey),
       dropBodyElevation: () => this.dropBodyElevation(sessionKey),
-      revealMemory: (id, jitRequest) => this.revealMemory(sessionKey, id, jitRequest),
+      revealMemory: id => this.revealMemory(sessionKey, id),
     };
   }
 
@@ -294,7 +315,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
       browserSessionId: context.actor.sessionRecordId,
       companionId: context.resource.companionId ?? '',
       viewerContactId: context.actor.contactId,
-      viewerRelation: 'self',
+      viewerRole: context.actor.role,
+      accessMode: context.actor.accessMode,
       authorityGeneration: context.versions.authorityGeneration,
       globalAuthEpoch: context.versions.globalAuthEpoch,
       sessionAuthnVersion: context.versions.sessionAuthnVersion,
@@ -303,10 +325,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
       grantVersion: context.versions.grantVersion,
       policyVersion: context.versions.policyVersion,
       ...(memoryId ? {
-        action: 'memory.jit.self' as const,
+        action: 'memory.reveal' as const,
         resourceMemoryId: memoryId,
-        assurance: context.actor.sessionAssurance === 'webauthn_uv'
-          ? 'webauthn_uv' as const
+        assurance: context.actor.sessionAssurance === 'escalated'
+          ? 'escalated' as const
           : undefined,
         requestExpiresAtSeconds: context.expiresAt,
       } : {}),
@@ -358,7 +380,9 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
     const map = new Map<string, { id: string; displayName: string }>();
-    if (this.requestContext?.kind === 'fleet_principal') {
+    if (this.requestContext?.kind === 'fleet_principal'
+      && this.requestContext.actor.role !== 'owner'
+      && this.requestContext.actor.role !== 'admin') {
       const contact = await contactStore.getById(this.requestContext.actor.contactId);
       if (contact) map.set(contact.id, { id: contact.id, displayName: contact.displayName });
       return map;
@@ -511,7 +535,6 @@ export class AdminMemoryDataService implements AdminMemoryService {
   async revealMemory(
     sessionKey: AdminMemorySessionKey,
     id: string,
-    _jitRequest?: MemorySubjectJitRequest,
   ): Promise<AdminMemoryDetailData | null> {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
@@ -539,27 +562,29 @@ export class AdminMemoryDataService implements AdminMemoryService {
   private async revealFleetMemory(
     context: FleetGardenRequestContext,
     id: string,
-    rawJitRequest: MemorySubjectJitRequest | undefined,
   ): Promise<AdminMemoryDetailData | null> {
     const signedMemoryId = typeof context.resource.pathParams.id === 'string'
       ? context.resource.pathParams.id.trim()
       : undefined;
     const normalizedId = id.trim();
-    if (!rawJitRequest || !normalizedId || signedMemoryId !== normalizedId
-      || context.actor.sessionAssurance !== 'webauthn_uv') {
-      throw new Error('Memory reveal requires exact user-verifying subject JIT authority');
+    if (!normalizedId || signedMemoryId !== normalizedId
+      || context.actor.sessionAssurance !== 'escalated') {
+      // The gateway mints `escalated` only after consuming an audited
+      // escalation grant scoped to exactly this reveal route and memory id.
+      throw new Error('Memory reveal requires an audited escalation grant');
     }
-    const jitRequest = parseMemorySubjectJitRequest(rawJitRequest);
     const classification = await this.deps.memoryStore.getMemorySubjectClassification(normalizedId);
     if (!classification) return null;
+    // Server-side exact binding to the CURRENT classification revision: the
+    // reveal cannot race a re-classification without failing closed.
     const exactStore = createSubjectAuthorizedMemoryStore(
       this.deps.fleetMemoryStore ?? this.deps.memoryStore,
       Object.freeze({
-        viewerContactId: context.actor.contactId,
+        ...fleetSubjectAccessContext(context),
         grantBindings: Object.freeze([{
           memoryId: normalizedId,
-          memoryRevision: jitRequest.memoryRevision,
-          classifierVersion: jitRequest.classifierVersion,
+          memoryRevision: classification.memoryRevision,
+          classifierVersion: classification.classifierVersion,
           evidenceDigest: classification.evidenceDigest,
         }]),
       }),
@@ -567,26 +592,24 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memory = await exactStore.getById(normalizedId);
     if (!memory) return null;
     const bodyContext = this.fleetBodyContext(context, normalizedId);
-    if (bodyContext.action !== 'memory.jit.self'
+    if (bodyContext.action !== 'memory.reveal'
       || bodyContext.resourceMemoryId === undefined
-      || bodyContext.assurance !== 'webauthn_uv'
+      || bodyContext.assurance !== 'escalated'
       || bodyContext.requestExpiresAtSeconds === undefined) {
       throw new Error('Memory reveal request authority is incomplete');
     }
-    const view = this.bodyGate.toFleetJitView(
+    const view = this.bodyGate.toFleetRevealView(
       bodyContext as FleetMemoryBodyAuthorizationContext,
-      jitRequest,
       memory,
       classification,
     );
     this.appendAudit(
       'memory_access',
       'allowed',
-      'Fleet principal exercised a subject-scoped memory reveal grant.',
+      'Fleet principal revealed a memory body through an audited escalation grant.',
       [
-        `purposeDigest=${createHash('sha256').update(jitRequest.purpose, 'utf8').digest('hex')}`,
-        `memoryRevision=${jitRequest.memoryRevision}`,
-        `classifierVersion=${jitRequest.classifierVersion}`,
+        `memoryRevision=${classification.memoryRevision}`,
+        `classifierVersion=${classification.classifierVersion}`,
       ],
     );
     const linkedContact = memory.contactId

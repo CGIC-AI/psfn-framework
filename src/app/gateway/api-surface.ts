@@ -69,12 +69,9 @@ import type {
 import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
-import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
-import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
-import type { TrustedHostAccountReapprovalService } from '../../boundary/fleet-auth/trusted-host-account-reapproval.js';
-import type { TrustedHostProviderRecoveryService } from '../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -133,12 +130,9 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
-  fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
-  fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
+  fleetAuthEscalation?: FleetEscalationCoordinator;
   fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
   fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
-  fleetAuthAccountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
-  fleetAuthProviderRecovery?: TrustedHostProviderRecoveryService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -433,12 +427,9 @@ export async function startOptionalGatewayApiServer(
     ? requireFleetSsoFleetManifest(options.config.companionFleet)
     : undefined;
   const principalAuthenticationWired = options.fleetAuthBroker !== undefined
-    && options.fleetAuthJitStepUp !== undefined
-    && options.fleetAuthPasskeyCeremonies !== undefined
+    && options.fleetAuthEscalation !== undefined
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
-    && options.fleetAuthAccountReapprovalCeremonies !== undefined
-    && options.fleetAuthProviderRecovery !== undefined
     && options.fleetAuthChildAssertions !== undefined
     && options.fleetAuthRequestCapabilities !== undefined
     && options.fleetAuthRequestCapabilityVerifier !== undefined
@@ -551,7 +542,10 @@ export async function startOptionalGatewayApiServer(
               },
             }
           : {}),
-        ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
+        ...(options.fleetAuthEscalation ? { escalation: options.fleetAuthEscalation } : {}),
+        ...(options.config.fleetAuth.accountRoster
+          ? { accountRoster: options.config.fleetAuth.accountRoster }
+          : {}),
         upstreams: resolveFleetSsoGardenUpstreams({
           fleet: fleetAuthFleet,
           ...(options.adminPort ? { fleetGardenPort: options.adminPort } : {}),
@@ -885,21 +879,12 @@ export async function startOptionalGatewayApiServer(
             broker: options.fleetAuthBroker,
             canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
             callbackPath: options.config.fleetAuth.callbackPath,
-            ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
-            ...(options.fleetAuthPasskeyCeremonies
-              ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
-              : {}),
+            ...(options.fleetAuthEscalation ? { escalation: options.fleetAuthEscalation } : {}),
             ...(options.fleetAuthTrustedHostRecovery
               ? { trustedHostRecovery: options.fleetAuthTrustedHostRecovery }
               : {}),
             ...(options.fleetAuthLifecycleCeremonies
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
-              : {}),
-            ...(options.fleetAuthAccountReapprovalCeremonies
-              ? { accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }
-              : {}),
-            ...(options.fleetAuthProviderRecovery
-              ? { providerRecovery: options.fleetAuthProviderRecovery }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {

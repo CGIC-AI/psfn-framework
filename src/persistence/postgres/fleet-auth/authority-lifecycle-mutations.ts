@@ -551,7 +551,6 @@ export async function prepareLifecycleMutation(
     case 'provider.add':
     case 'provider.relink':
     case 'provider.replace':
-    case 'provider.recover':
     case 'provider.unlink':
       return await prepareProviderLifecycleMutation(client, decision);
     case 'role.grant':

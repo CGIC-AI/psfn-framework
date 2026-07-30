@@ -139,8 +139,11 @@ export class TestingHarnessGardenDoor {
       correlationId: requestId,
     });
     const syntheticVersion = 1;
-    const sessionAssurance = target.authorization.requirements.assurance === 'webauthn_uv'
-      ? 'webauthn_uv' as const
+    // Synthetic shakedown door (sudo-harness pattern): escalated routes are
+    // exercised with a synthetic 'escalated' assurance; the audit row above is
+    // still recorded for every admitted request.
+    const sessionAssurance = target.authorization.requirements.assurance === 'escalated'
+      ? 'escalated' as const
       : 'oauth' as const;
     const facts: FleetAuthorizationFacts = {
       principalId: 'testing-harness',

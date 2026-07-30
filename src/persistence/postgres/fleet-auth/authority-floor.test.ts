@@ -14,7 +14,6 @@ import {
   FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME,
   FleetAuthAuthorityFloorStore,
 } from './authority-floor.js';
-import type { PasskeyAuthorityCandidate } from '../../../boundary/fleet-auth/passkey-authority.js';
 
 const PRINCIPAL_ID = '11111111-1111-4111-8111-111111111111';
 const COMPANION_ID = '22222222-2222-4222-8222-222222222222';
@@ -22,23 +21,6 @@ const DECISION_ID_A = '33333333-3333-4333-8333-333333333333';
 const DECISION_ID_B = '44444444-4444-4444-8444-444444444444';
 const CEREMONY_ID_A = '55555555-5555-4555-8555-555555555555';
 const CEREMONY_ID_B = '66666666-6666-4666-8666-666666666666';
-
-function passkey(
-  credentialIdHash: string,
-  publicKeyVerifier: string,
-): PasskeyAuthorityCandidate {
-  return {
-    credentialIdHash,
-    publicKeyVerifier,
-    rpId: 'fleet.example.test',
-    principalId: PRINCIPAL_ID,
-    expectedProvider: 'discord',
-    expectedProviderSubjectId: '123456789012345678',
-    signCount: 0,
-    backupEligible: false,
-    backupState: false,
-  };
-}
 
 describe('non-restored fleet auth authority floors', () => {
   const roots: string[] = [];
@@ -64,7 +46,6 @@ describe('non-restored fleet auth authority floors', () => {
       revocationCheckpoint: 0,
       tombstones: [],
     });
-    expect(initial.passkeys).toMatchObject({ generation: 0, credentials: [], tombstones: [] });
     expect(initial.trustedHost.lineageId).toMatch(/^[0-9a-f]{64}$/);
     expect(initial.trustedHost.provisioningSecret).toMatch(/^[0-9a-f]{64}$/);
     expect(initial.trustedHost.lineageId).not.toBe(initial.trustedHost.provisioningSecret);
@@ -249,161 +230,17 @@ describe('non-restored fleet auth authority floors', () => {
     })).toThrow(/cannot be synthesized from restored authority/i);
   });
 
-  it('keeps current replacement B authoritative while restored A remains denied', () => {
+  it('fails closed on every read once the floor file is unavailable', () => {
     const floor = store();
     floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-    const keyA = passkey('a'.repeat(64), 'verifier-a');
-    const keyB = passkey('b'.repeat(64), 'verifier-b');
-    floor.enrollPasskey(keyA, '2026-07-15T10:00:00.000Z');
-    expect(floor.verifyCurrentPasskey(keyA)).toMatchObject({ allowed: true, generation: 1 });
-
-    floor.replacePasskey({
-      priorCredentialIdHash: keyA.credentialIdHash,
-      replacement: keyB,
-      at: '2026-07-15T11:00:00.000Z',
-    });
-    expect(floor.verifyCurrentPasskey(keyA)).toEqual({ allowed: false, reason: 'not_current' });
-    expect(floor.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
-
-    const beforeRestore = floor.read().passkeys;
-    floor.prepareRestore({
-      activationGeneration: 2,
-      restoredTombstones: [],
-      at: '2026-07-15T12:00:00.000Z',
-    });
-    const afterRestore = floor.read().passkeys;
-    expect(afterRestore).toEqual(beforeRestore);
-    expect(floor.verifyCurrentPasskey(keyA)).toEqual({ allowed: false, reason: 'not_current' });
-    expect(floor.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
-  });
-
-  it('atomically fences an unavailable provider and rebinds its verified passkey', () => {
-    const floor = store();
-    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-    const current = passkey('9'.repeat(64), 'verifier-recovery');
-    floor.enrollPasskey(current, '2026-07-16T10:00:00.000Z');
-
-    const recovered = floor.recoverProviderAuthority({
-      principalId: PRINCIPAL_ID,
-      currentProviderSubjectId: current.expectedProviderSubjectId,
-      expectedNewProviderSubjectId: '223456789012345678',
-      credentialIdHash: current.credentialIdHash,
-      credentialGeneration: 1,
-      credentialFloorGeneration: 1,
-      expectedAuthorityGeneration: 1,
-      reasonDigest: '7'.repeat(64),
-      at: '2026-07-16T11:00:00.000Z',
-    });
-
-    expect(recovered.trustedHost).toMatchObject({
-      authorityGeneration: 2,
-      revocationCheckpoint: 1,
-    });
-    expect(floor.isAccountAuthorityTombstoned(
-      'provider_subject',
-      `discord:${current.expectedProviderSubjectId}`,
-    )).toBe(true);
-    expect(recovered.passkeys).toMatchObject({
-      generation: 2,
-      credentials: [expect.objectContaining({
-        credentialIdHash: current.credentialIdHash,
-        expectedProviderSubjectId: '223456789012345678',
-        generation: 2,
-        status: 'current',
-      })],
-    });
-    const beforeRestore = recovered.passkeys;
-    floor.prepareRestore({
-      activationGeneration: 2,
-      restoredTombstones: [],
-      at: '2026-07-16T12:00:00.000Z',
-    });
-    expect(floor.read().passkeys).toEqual(beforeRestore);
-    expect(() => floor.recoverProviderAuthority({
-      principalId: PRINCIPAL_ID,
-      currentProviderSubjectId: current.expectedProviderSubjectId,
-      expectedNewProviderSubjectId: '323456789012345678',
-      credentialIdHash: current.credentialIdHash,
-      credentialGeneration: 1,
-      credentialFloorGeneration: 1,
-      expectedAuthorityGeneration: 1,
-      reasonDigest: '8'.repeat(64),
-      at: '2026-07-16T13:00:00.000Z',
-    })).toThrow(/authority floor changed/i);
-  });
-
-  it('denies mismatched verifier/binding metadata and fails closed when the floor is unavailable', () => {
-    const floor = store();
-    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-    const current = passkey('c'.repeat(64), 'verifier-current');
-    floor.enrollPasskey(current, '2026-07-15T10:00:00.000Z');
-    expect(floor.verifyCurrentPasskey({ ...current, publicKeyVerifier: 'restored-verifier' }))
-      .toEqual({ allowed: false, reason: 'metadata_mismatch' });
-    expect(floor.verifyCurrentPasskey({ ...current, rpId: 'evil.example.test' }))
-      .toEqual({ allowed: false, reason: 'metadata_mismatch' });
+    expect(floor.exists()).toBe(true);
 
     unlinkSync(join(floor.root, FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME));
-    expect(() => floor.verifyCurrentPasskey(current)).toThrow(/authority floor.*unavailable/i);
-  });
-
-  it('over-fences the prior credential if replacement publication fails', () => {
-    const floor = store();
-    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-    const keyA = passkey('d'.repeat(64), 'verifier-a');
-    const keyB = passkey('e'.repeat(64), 'verifier-b');
-    floor.enrollPasskey(keyA, '2026-07-15T10:00:00.000Z');
-    expect(() => floor.replacePasskey({
-      priorCredentialIdHash: keyA.credentialIdHash,
-      replacement: keyB,
-      at: '2026-07-15T11:00:00.000Z',
-      faultInjection: () => {
-        throw new Error('simulated publication failure');
-      },
-    })).toThrow(/simulated publication failure/);
-    expect(floor.verifyCurrentPasskey(keyA)).toEqual({ allowed: false, reason: 'not_current' });
-    expect(floor.verifyCurrentPasskey(keyB)).toEqual({ allowed: false, reason: 'not_found' });
-  });
-
-  it('monotonically updates authenticator signals and tombstones revoked credentials', () => {
-    const floor = store();
-    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-    const key = {
-      ...passkey('f'.repeat(64), 'verifier-current'),
-      backupEligible: true,
-    };
-    floor.enrollPasskey(key, '2026-07-15T10:00:00.000Z');
-    const advanced = floor.updateCurrentPasskeySignals({
-      credentialIdHash: key.credentialIdHash,
-      expectedGeneration: 1,
-      signCount: 2,
-      backupEligible: true,
-      backupState: true,
-      at: '2026-07-15T10:30:00.000Z',
-    });
-    expect(advanced.passkeys.generation).toBe(2);
-    expect(floor.verifyCurrentPasskey({ ...key, signCount: 2, backupState: true }))
-      .toMatchObject({ allowed: true, generation: 2 });
-    expect(() => floor.updateCurrentPasskeySignals({
-      credentialIdHash: key.credentialIdHash,
-      expectedGeneration: 2,
-      signCount: 1,
-      backupEligible: true,
-      backupState: true,
-      at: '2026-07-15T10:45:00.000Z',
-    })).toThrow(/counter cannot move backward/);
-
-    const revoked = floor.revokePasskey({
-      credentialIdHash: key.credentialIdHash,
-      status: 'compromised',
-      at: '2026-07-15T11:00:00.000Z',
-    });
-    expect(revoked.passkeys.tombstones).toContainEqual(expect.objectContaining({
-      credentialIdHash: key.credentialIdHash,
-      status: 'compromised',
-      generation: 3,
-    }));
-    expect(floor.verifyCurrentPasskey({ ...key, signCount: 2, backupState: true }))
-      .toEqual({ allowed: false, reason: 'not_current' });
+    expect(floor.exists()).toBe(false);
+    expect(() => floor.read()).toThrow(/authority floor is unavailable/i);
+    expect(() => floor.readTrustedHost()).toThrow(/authority floor is unavailable/i);
+    expect(() => floor.isAccountAuthorityTombstoned('provider_subject', 'discord:123456789012345678'))
+      .toThrow(/authority floor is unavailable/i);
   });
 
   it('rejects malformed floor state instead of coercing it', () => {

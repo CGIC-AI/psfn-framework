@@ -93,6 +93,12 @@ export interface MemorySubjectQueryAuthorization {
   allowedViewerRelations: MemoryViewerRelation[];
   classifierVersion: number;
   grantBindings: MemorySubjectGrantBinding[];
+  /**
+   * D1 multi-admin carve-out: rows whose subject contacts exclude every viewer
+   * contact ("other"-relation rows) are hidden when the memory's sensitivity is
+   * intimate/confidential. An audited escalation clears this flag per request.
+   */
+  excludeHighSensitivityOtherRelation?: boolean;
 }
 
 const CLASSIFICATION_KEYS = [
@@ -117,6 +123,7 @@ const AUTHORIZATION_KEYS = [
   'allowedViewerRelations',
   'classifierVersion',
   'grantBindings',
+  'excludeHighSensitivityOtherRelation',
 ] as const;
 const GRANT_KEYS = ['memoryId', 'memoryRevision', 'classifierVersion', 'evidenceDigest'] as const;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -254,6 +261,10 @@ export function parseMemorySubjectQueryAuthorization(value: unknown): MemorySubj
   if (!Array.isArray(value.grantBindings) && value.grantBindings !== undefined) {
     throw new Error('Memory subject grantBindings must be an array');
   }
+  if (value.excludeHighSensitivityOtherRelation !== undefined
+    && typeof value.excludeHighSensitivityOtherRelation !== 'boolean') {
+    throw new Error('Memory subject excludeHighSensitivityOtherRelation must be a boolean');
+  }
   return {
     action: strictEnum(value.action, MEMORY_SUBJECT_ACCESS_ACTIONS, 'action'),
     viewerContactIds,
@@ -261,5 +272,8 @@ export function parseMemorySubjectQueryAuthorization(value: unknown): MemorySubj
     allowedViewerRelations,
     classifierVersion: positiveInteger(value.classifierVersion, 'classifierVersion'),
     grantBindings: (value.grantBindings ?? []).map(parseGrantBinding),
+    ...(value.excludeHighSensitivityOtherRelation === true
+      ? { excludeHighSensitivityOtherRelation: true }
+      : {}),
   };
 }

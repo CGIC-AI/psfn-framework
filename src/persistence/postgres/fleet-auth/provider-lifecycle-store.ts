@@ -145,15 +145,10 @@ export async function revokeProviderAuthority(
       WHERE principal_id = $1
     `, [current.principal_id, input.now]);
     await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
       SET revoked_at = COALESCE(revoked_at, $2)
       WHERE principal_id = $1
     `, [current.principal_id, input.now]);
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-      SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-      WHERE principal_id = $1
-    `, [current.principal_id]);
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
       SET revoked_at = COALESCE(revoked_at, $2)

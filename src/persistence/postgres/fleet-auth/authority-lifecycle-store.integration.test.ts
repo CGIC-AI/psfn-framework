@@ -398,149 +398,6 @@ async function seedOwnerAndTarget(pool: import('pg').Pool) {
 }
 
 describe('gateway fleet-auth authority lifecycle store', () => {
-  it('atomically consumes trusted-host provider recovery and fences replay/restored authority', async () => {
-    const context = await freshContext();
-    try {
-      const seeded = await seedOwnerAndTarget(context.pool);
-      const target = claim(seeded.targetId);
-      const credentialIdHash = '9'.repeat(64);
-      context.floors.enrollPasskey({
-        credentialIdHash,
-        publicKeyVerifier: 'AQID',
-        rpId: 'fleet.example.test',
-        principalId: seeded.targetId,
-        expectedProvider: 'discord',
-        expectedProviderSubjectId: '223456789012345678',
-        signCount: 1,
-        backupEligible: false,
-        backupState: false,
-      }, new Date().toISOString());
-      const oneTimeCredential = Buffer.alloc(32, 4).toString('base64url');
-      const webAuthnReceipt = Buffer.alloc(32, 5).toString('base64url');
-      const decision = {
-        ...baseDecision('provider.recover', target, target),
-        companionId: seeded.companionId,
-        unavailableProvider: {
-          provider: 'discord' as const,
-          subjectId: '223456789012345678',
-          authorityGeneration: 1,
-        },
-        newProvider: providerProof('423456789012345678'),
-        recovery: {
-          oneTimeCredential,
-          confirmation: 'provider.recover' as const,
-          webAuthnReceipt,
-          credentialIdHash,
-          credentialGeneration: 1,
-          credentialFloorGeneration: 1,
-        },
-      } satisfies VerifiedFleetAuthLifecycleDecision;
-      const exactScope = {
-        schemaVersion: 1,
-        action: 'provider.recover',
-        principalId: seeded.targetId,
-        currentProviderSubjectId: '223456789012345678',
-        currentProviderAuthorityGeneration: 1,
-        expectedNewProviderSubjectId: '423456789012345678',
-        authorityGeneration: 1,
-        globalAuthEpoch: 1,
-        reasonDigest: DIGEST,
-        principal: target,
-        credentialIdHash,
-        credentialFloorGeneration: 1,
-      };
-      await context.pool.query(`
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies (
-          ceremony_id, nonce_digest, kind, expected_provider,
-          expected_provider_subject_id, expected_companion_id, exact_scope,
-          status, global_auth_epoch, created_at, expires_at, protocol_version,
-          webauthn_challenge_digest, webauthn_challenge_ciphertext,
-          exact_origin, rp_id, credential_floor_generation,
-          prior_credential_id_hash, confirmed_at, recovery_receipt_digest,
-          recovery_credential_id_hash, recovery_credential_generation
-        ) VALUES (
-          $1, $2, 'provider_recovery', 'discord', $3, $4, $5::jsonb,
-          'pending', 1, $6, $7, 2, $8, $9,
-          'https://fleet.example.test', 'fleet.example.test', 1,
-          $10, $6, $11, $10, 1
-        )
-      `, [
-        decision.ceremonyId,
-        createHash('sha256').update(oneTimeCredential).digest('hex'),
-        decision.newProvider.subjectId,
-        seeded.companionId,
-        JSON.stringify(exactScope),
-        new Date(decision.decidedAt.getTime() - 5_000),
-        new Date(decision.decidedAt.getTime() + 300_000),
-        createHash('sha256').update('challenge').digest('hex'),
-        Buffer.from('ciphertext'),
-        credentialIdHash,
-        createHash('sha256').update(webAuthnReceipt).digest('hex'),
-      ]);
-      await seedDecisionProviderProofs(context.pool, decision);
-      const outcomes = await Promise.allSettled([
-        context.store.execute(decision),
-        context.store.execute(decision),
-      ]);
-      expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
-      expect(outcomes.filter(outcome => outcome.status === 'rejected')).toHaveLength(1);
-
-      const providers = await context.pool.query<{ subject_id: string; state: string }>(`
-        SELECT subject_id, state
-        FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
-        WHERE principal_id = $1 AND subject_id IN ($2, $3)
-        ORDER BY subject_id
-      `, [seeded.targetId, '223456789012345678', '423456789012345678']);
-      expect(providers.rows).toEqual([
-        { subject_id: '223456789012345678', state: 'revoked' },
-        { subject_id: '423456789012345678', state: 'active' },
-      ]);
-      expect(context.floors.isAccountAuthorityTombstoned(
-        'provider_subject',
-        'discord:223456789012345678',
-      )).toBe(true);
-      expect(context.floors.readPasskeys()).toMatchObject({
-        generation: 2,
-        credentials: [expect.objectContaining({
-          credentialIdHash,
-          expectedProviderSubjectId: '423456789012345678',
-          generation: 2,
-        })],
-      });
-      const durable = await context.pool.query<{
-        ceremony_status: string;
-        session_revoked: boolean;
-        decision_context: unknown;
-      }>(`
-        SELECT ceremony.status AS ceremony_status,
-               session.revoked_at IS NOT NULL AS session_revoked,
-               audit.decision_context
-        FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies AS ceremony
-        JOIN ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
-          ON session.record_id = $2
-        JOIN ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events AS audit
-          ON audit.decision_id = $3
-        WHERE ceremony.ceremony_id = $1
-      `, [decision.ceremonyId, decision.actorSession.sessionId, decision.decisionId]);
-      expect(durable.rows[0]).toMatchObject({ ceremony_status: 'consumed', session_revoked: true });
-      const auditJson = JSON.stringify(durable.rows[0]?.decision_context);
-      expect(auditJson).not.toContain(oneTimeCredential);
-      expect(auditJson).not.toContain(webAuthnReceipt);
-      expect(auditJson).not.toContain('223456789012345678');
-
-      const beforeRestore = context.floors.readPasskeys();
-      context.floors.prepareRestore({
-        activationGeneration: 2,
-        restoredTombstones: [],
-        at: new Date(decision.decidedAt.getTime() + 60_000).toISOString(),
-      });
-      expect(context.floors.readPasskeys()).toEqual(beforeRestore);
-    } finally {
-      await context.pool.end();
-      rmSync(context.floorRoot, { recursive: true, force: true });
-    }
-  }, TIMEOUT_MS);
-
   it('rejects stale authority after rollback and persists exactly one redacted denial audit', async () => {
     const context = await freshContext();
     try {
@@ -1703,7 +1560,7 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     }
   }, TIMEOUT_MS);
 
-  it('atomically fences sessions, JIT grants, challenges, custody, and Discord evidence', async () => {
+  it('atomically fences sessions, escalation grants, custody, and Discord evidence', async () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
@@ -1720,22 +1577,19 @@ describe('gateway fleet-auth authority lifecycle store', () => {
                 clock_timestamp() + interval '20 minutes')
       `, [sessionId, 'b'.repeat(64), 'c'.repeat(64), seeded.targetId]);
       await context.pool.query(`
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-          (challenge_id, principal_id, browser_session_id, challenge_digest,
-           kind, action, resource_digest, global_auth_epoch, expires_at)
-        VALUES ($1, $2, $3, $4, 'discord_possession', 'contact.unlink', $5, 1,
-                clock_timestamp() + interval '5 minutes')
-      `, [randomUUID(), seeded.targetId, sessionId, 'd'.repeat(64), 'e'.repeat(64)]);
-      await context.pool.query(`
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
-          (grant_id, principal_id, browser_session_id, companion_id, subject_scope,
-           action, resource_selector, purpose, assurance, memory_revision,
-           classifier_evidence_digest, authz_version, binding_version,
-           grant_version, policy_version, global_auth_epoch, expires_at)
-        VALUES ($1, $2, $3, $4, '{}', 'contact.unlink', '{}', 'test',
-                'discord_possession', 1, $5, 1, 1, 1, 1, 1,
-                clock_timestamp() + interval '5 minutes')
-      `, [randomUUID(), seeded.targetId, sessionId, seeded.companionId, 'f'.repeat(64)]);
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
+          (grant_id, principal_id, browser_session_id, companion_id, action,
+           route_id, scope_digest, reason_digest, assurance_requirement,
+           exact_origin, authz_version, binding_version, grant_version,
+           policy_version, global_auth_epoch, created_at, expires_at)
+        VALUES ($1, $2, $3, $4, 'memory.reveal',
+                'POST /api/admin/memory/:id/reveal', $5, $6, 'escalated',
+                'https://fleet.example.test', 1, 1, 1, 1, 1,
+                clock_timestamp(), clock_timestamp() + interval '5 minutes')
+      `, [
+        randomUUID(), seeded.targetId, sessionId, seeded.companionId,
+        'e'.repeat(64), 'f'.repeat(64),
+      ]);
       await context.pool.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
           (custody_id, principal_id, provider_subject_id, encrypted_token,
@@ -1759,18 +1613,15 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       await executeDecision(context, decision);
       const fenced = await context.pool.query<{
         session_revoked: boolean;
-        challenge_status: string;
-        jit_revoked: boolean;
+        escalation_revoked: boolean;
         custody_revoked: boolean;
         evidence_count: string;
       }>(`
         SELECT
           (SELECT revoked_at IS NOT NULL FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
            WHERE record_id = $1) AS session_revoked,
-          (SELECT status FROM ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-           WHERE browser_session_id = $1) AS challenge_status,
-          (SELECT revoked_at IS NOT NULL FROM ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
-           WHERE browser_session_id = $1) AS jit_revoked,
+          (SELECT revoked_at IS NOT NULL FROM ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
+           WHERE browser_session_id = $1) AS escalation_revoked,
           (SELECT revoked_at IS NOT NULL FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
            WHERE principal_id = $2) AS custody_revoked,
           (SELECT count(*)::text FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
@@ -1778,8 +1629,7 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       `, [sessionId, seeded.targetId]);
       expect(fenced.rows[0]).toEqual({
         session_revoked: true,
-        challenge_status: 'revoked',
-        jit_revoked: true,
+        escalation_revoked: true,
         custody_revoked: true,
         evidence_count: '0',
       });

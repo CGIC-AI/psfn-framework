@@ -1714,6 +1714,76 @@ ALTER TABLE hub_device_assertion_replays
 -- discontinuity for append-only deny records, not a uniqueness regression.
 `;
 
+const DISCORD_SSO_ONLY_AUTHORITY_SQL = `
+-- Operator ruling D2 (2026-07-30): the passkey/WebAuthn/JIT step-up stack is
+-- removed. Discord SSO is the only authentication authority, and escalation is
+-- an audited, single-use SSO grant bound to one exact Garden route resource.
+--
+-- Every remaining SECURITY DEFINER procedure that referenced these tables is
+-- re-applied with a cleaned body by applyFleetAuthReapprovalBoundary inside the
+-- same migration transaction (schema.ts), so no CREATE OR REPLACE is repeated
+-- here and a fresh database and a migrated database end with identical bodies.
+-- The restore_quarantine_activation_guard trigger on passkey_credentials is
+-- removed together with its table and is no longer authored by that DDL.
+--
+-- jit_authorization_grants.challenge_id references step_up_challenges, so the
+-- grants table is dropped first; plain drops suffice and CASCADE is not used.
+DROP TABLE IF EXISTS jit_authorization_grants;
+DROP TABLE IF EXISTS step_up_challenges;
+DROP TABLE IF EXISTS passkey_credentials;
+
+-- The 'webauthn_uv' session assurance level is renamed to 'escalated': the
+-- elevated level survives, its second-factor derivation does not. Any session
+-- that reached it through a passkey assertion is revoked before the rename, so
+-- no pre-ruling elevation is carried into the SSO-only doctrine.
+UPDATE browser_sessions
+SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+WHERE assurance = 'webauthn_uv';
+ALTER TABLE browser_sessions DROP CONSTRAINT browser_sessions_assurance_check;
+UPDATE browser_sessions SET assurance = 'escalated' WHERE assurance = 'webauthn_uv';
+ALTER TABLE browser_sessions
+  ADD CONSTRAINT browser_sessions_assurance_check
+  CHECK (assurance IN ('oauth', 'escalated', 'break_glass'));
+
+-- Single-use audited escalation grant. The grant authorizes one exact compiled
+-- Garden route resource for one companion under the issuing browser session,
+-- and is valid only while every authority counter it froze still matches.
+CREATE TABLE escalation_grants (
+  grant_id UUID PRIMARY KEY,
+  principal_id UUID NOT NULL REFERENCES human_principals(principal_id),
+  browser_session_id UUID NOT NULL REFERENCES browser_sessions(record_id),
+  companion_id UUID NOT NULL,
+  action TEXT NOT NULL CHECK (length(action) BETWEEN 1 AND 128),
+  route_id TEXT NOT NULL CHECK (length(route_id) BETWEEN 1 AND 512),
+  scope_digest TEXT NOT NULL CHECK (scope_digest ~ '^[0-9a-f]{64}$'),
+  reason_digest TEXT NOT NULL CHECK (reason_digest ~ '^[0-9a-f]{64}$'),
+  assurance_requirement TEXT NOT NULL
+    CHECK (assurance_requirement IN ('escalated', 'privacy_break_glass')),
+  exact_origin TEXT NOT NULL CHECK (exact_origin LIKE 'https://%'),
+  authz_version BIGINT NOT NULL CHECK (authz_version >= 1),
+  binding_version BIGINT NOT NULL CHECK (binding_version >= 1),
+  grant_version BIGINT NOT NULL CHECK (grant_version >= 1),
+  policy_version BIGINT NOT NULL CHECK (policy_version >= 1),
+  global_auth_epoch BIGINT NOT NULL CHECK (global_auth_epoch >= 1),
+  created_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  CHECK (expires_at > created_at)
+);
+
+CREATE INDEX escalation_grants_session_idx
+  ON escalation_grants (browser_session_id, created_at);
+
+-- Orphan-marked rather than silently retained: every trusted-host ceremony
+-- minter was deleted with the passkey/WebAuthn stack, so this table can no
+-- longer be written by production code, but three live SECURITY DEFINER
+-- procedures still declare %ROWTYPE against it and would fail to compile if it
+-- were dropped here.
+COMMENT ON TABLE trusted_host_ceremonies IS
+  'Orphaned by D2 (Discord-SSO-only, 2026-07-30): no production writer remains; retained because live SECURITY DEFINER procedures declare %ROWTYPE against it. Remove with those procedures.';
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1759,4 +1829,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     sql: ACCOUNT_REAPPROVAL_WEBAUTHN_SQL,
   },
   { version: 28, name: 'trusted_host_provider_recovery', sql: TRUSTED_HOST_PROVIDER_RECOVERY_SQL },
+  { version: 29, name: 'discord_sso_only_authority', sql: DISCORD_SSO_ONLY_AUTHORITY_SQL },
 ] as const;

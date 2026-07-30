@@ -32,6 +32,19 @@ export interface MemorySubjectAccessContext {
   includeCompanionPrivateRecallCandidates?: boolean;
   /** Owner-facing aggregate only; never widens row authorization. */
   reportWithheldByAuthorization?: boolean;
+  /**
+   * D1 admin projection (operator ruling 2026-07-30). Set only from a signed
+   * fleet actor context for owner/admin roles — never from request input:
+   * - `sole_admin`: every subject class and relation is visible; nothing about
+   *   the deployment's single operator is hidden from them.
+   * - `multi_admin`: every class/relation is visible EXCEPT intimate or
+   *   confidential rows derived from humans other than the viewer, which stay
+   *   hidden until an audited escalation sets `escalated`.
+   * Absent (or a non-admin role) keeps the narrow single-contact/self scope.
+   */
+  adminAccessMode?: 'sole_admin' | 'multi_admin';
+  /** True only when the gateway consumed an audited escalation grant for this request. */
+  escalated?: boolean;
 }
 
 const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization['action']>([
@@ -82,6 +95,24 @@ function authorization(
     && context.includeCompanionPrivateRecallCandidates
     && COMPANION_PRIVATE_RECALL_ACTIONS.has(action),
   );
+  const adminAccessMode = !companionInternal && context.viewerContactId?.trim()
+    ? context.adminAccessMode
+    : undefined;
+  if (adminAccessMode === 'sole_admin' || adminAccessMode === 'multi_admin') {
+    return {
+      action,
+      viewerContactIds,
+      allowedSubjectClasses: [
+        'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+      ],
+      allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+      classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
+      grantBindings: [...(context.grantBindings ?? [])],
+      ...(adminAccessMode === 'multi_admin' && context.escalated !== true
+        ? { excludeHighSensitivityOtherRelation: true }
+        : {}),
+    };
+  }
   return {
     action,
     viewerContactIds,

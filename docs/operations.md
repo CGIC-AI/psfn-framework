@@ -157,6 +157,20 @@ refuses startup. The separate
 `accountRosterSatisfiesStepUp: true` opt-in (default off, requires a non-empty
 roster) additionally lets a rostered owner satisfy `webauthn_uv`-class step-up
 for lifecycle ceremonies.
+"role": "owner" }]`). A Discord-authenticated session whose token-verified
+subject matches an entry is granted that entry's role for that companion
+directly from config — bypassing the first-owner ceremony, principal
+activation, and the nested authority version/generation gauntlet that can
+otherwise lock the operator out. The session itself must still be real,
+unexpired, and unrevoked, and subjects not in the roster keep the full
+gauntlet unchanged. A malformed roster entry, an unknown role, or a roster
+companion outside the companions registry refuses startup. The roster is also
+the deployment access-mode seam (operator ruling D1, 2026-07-30): exactly one
+rostered human for a companion selects sole-admin mode (nothing subject-gated
+for that admin); zero or two-plus selects multi-admin mode (everything visible
+except other-humans' sensitive memories, which open through an audited
+escalation grant — `POST /v1/fleet-auth/escalation/grant`, TTL
+`ttls.escalationGrantMs`).
 
 For every Garden request, the gateway resolves the live OPL1.5 session/contact/
 grant/policy context for the companion encoded in the path. Only then does it
@@ -825,7 +839,7 @@ The gateway consumes the bearer and never forwards it. It records a durable
 Fleet authorization event tagged with `provider: testing_harness`, then issues
 the same single-use, short-lived, companion-audience capability used by browser
 Fleet SSO. The synthetic session receives only the minimum route assurance
-(`oauth` or `webauthn_uv`) and can never receive break-glass assurance.
+(`oauth` or `escalated`) and can never receive break-glass assurance.
 
 Requests authenticated by that token resolve to the named API principal and
 always use the durable session key `api:testing-harness`. `X-Session-ID` is

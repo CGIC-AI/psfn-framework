@@ -742,12 +742,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   ): Promise<void> {
     if (sessionIds.length === 0) return;
     await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-      SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-      WHERE browser_session_id = ANY($1::uuid[])
-    `, [sessionIds]);
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
       SET revoked_at = COALESCE(revoked_at, $2)
       WHERE browser_session_id = ANY($1::uuid[])
     `, [sessionIds, now]);
@@ -789,12 +784,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
           WHERE record_id = ANY($1::uuid[])
         `, [recordIds, input.now]);
         await client.query(`
-          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-          SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-          WHERE browser_session_id = ANY($1::uuid[])
-        `, [recordIds]);
-        await client.query(`
-          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
           SET revoked_at = COALESCE(revoked_at, $2)
           WHERE browser_session_id = ANY($1::uuid[])
         `, [recordIds, input.now]);

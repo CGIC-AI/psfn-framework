@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createStaticCredentialVault } from '../../boundary/custody/credential-vault.js';
+import { resolveFleetAccessMode } from '../../boundary/fleet-auth/fleet-access-mode.js';
 import {
   FLEET_AUTH_ENV_VAR,
   FLEET_AUTH_FILE_NAME,
@@ -82,8 +83,7 @@ function validConfig(publicKeyPem: string, hubPublicKeyPem: string): FleetAuthCo
       sessionIdleMs: 1_800_000,
       sessionAbsoluteMs: 28_800_000,
       discordEvidenceMs: 300_000,
-      jitGrantMs: 300_000,
-      stepUpChallengeMs: 180_000,
+      escalationGrantMs: 900_000,
       internalAssertionMs: 30_000,
     },
     rolePolicy: {
@@ -331,6 +331,22 @@ describe('fleet-auth owner-file configuration', () => {
       ...config,
       ttls: { ...config.ttls, sessionIdleMs: config.ttls.sessionAbsoluteMs },
     }, 'fleet-auth.json')).toThrow(/sessionIdleMs must be less than sessionAbsoluteMs/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, escalationGrantMs: config.ttls.sessionIdleMs + 1_000 },
+    }, 'fleet-auth.json')).toThrow(/escalationGrantMs must not exceed sessionIdleMs/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, escalationGrantMs: 29_999 },
+    }, 'fleet-auth.json')).toThrow(/ttls\.escalationGrantMs/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, jitGrantMs: 300_000 },
+    }, 'fleet-auth.json')).toThrow(/unknown keys: jitGrantMs/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, stepUpChallengeMs: 180_000 },
+    }, 'fleet-auth.json')).toThrow(/unknown keys: stepUpChallengeMs/);
   });
 
   it('rejects invalid verifier rings, private signing keys in public config, and reused credentials', () => {
@@ -738,17 +754,15 @@ describe('fleet-auth account roster validation', () => {
   it('accepts an absent roster and leaves the parsed config without roster fields', () => {
     const parsed = validateFleetAuthConfig(config(), FLEET_AUTH_FILE_NAME);
     expect(parsed.accountRoster).toBeUndefined();
-    expect(parsed.accountRosterSatisfiesStepUp).toBeUndefined();
   });
 
-  it('accepts a valid roster with the explicit step-up opt-in and round-trips it', () => {
+  it('accepts a valid roster and round-trips it', () => {
     const parsed = validateFleetAuthConfig({
       ...config(),
       accountRoster: [
         entry({ contactId: 'contact/operator' }),
         entry({ providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' }),
       ],
-      accountRosterSatisfiesStepUp: true,
     }, FLEET_AUTH_FILE_NAME);
     expect(parsed.accountRoster).toEqual([
       {
@@ -759,7 +773,6 @@ describe('fleet-auth account roster validation', () => {
       },
       { providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' },
     ]);
-    expect(parsed.accountRosterSatisfiesStepUp).toBe(true);
     const reParsed = validateFleetAuthConfig(
       JSON.parse(JSON.stringify(parsed)),
       FLEET_AUTH_FILE_NAME,
@@ -797,21 +810,32 @@ describe('fleet-auth account roster validation', () => {
     ['unknown role', { accountRoster: [entry({ role: 'root' })] }, /role must be one of/],
     ['non-string role', { accountRoster: [entry({ role: 1 })] }, /role must be one of/],
     ['duplicate subject+companion pair', { accountRoster: [entry(), entry({ role: 'member' })] }, /duplicate accountRoster entry/],
-    ['step-up opt-in without roster', { accountRosterSatisfiesStepUp: true }, /requires a non-empty accountRoster/],
-    ['step-up opt-in with empty roster', { accountRoster: [], accountRosterSatisfiesStepUp: true }, /requires a non-empty accountRoster/],
-    ['non-boolean step-up opt-in', { accountRoster: [entry()], accountRosterSatisfiesStepUp: 'yes' }, /must be a boolean/],
+    ['a retired step-up opt-in without roster', { accountRosterSatisfiesStepUp: true }, /unknown keys: accountRosterSatisfiesStepUp/],
+    ['a retired step-up opt-in beside a roster', { accountRoster: [entry()], accountRosterSatisfiesStepUp: true }, /unknown keys: accountRosterSatisfiesStepUp/],
   ])('refuses startup on %s', (_label, overrides, expected) => {
     expect(() => validateFleetAuthConfig({ ...config(), ...overrides }, FLEET_AUTH_FILE_NAME))
       .toThrow(expected);
   });
 
-  it('accepts an explicit false opt-in and an empty roster without the opt-in', () => {
+  it('accepts an empty roster and resolves it to the fail-closed multi-admin access mode', () => {
     const parsed = validateFleetAuthConfig({
       ...config(),
       accountRoster: [],
-      accountRosterSatisfiesStepUp: false,
     }, FLEET_AUTH_FILE_NAME);
     expect(parsed.accountRoster).toEqual([]);
-    expect(parsed.accountRosterSatisfiesStepUp).toBe(false);
+    expect(resolveFleetAccessMode(parsed.accountRoster, COMPANION_ID)).toBe('multi_admin');
+  });
+
+  it('resolves sole-admin only when exactly one subject is rostered for the companion', () => {
+    const soleAdmin = validateFleetAuthConfig({
+      ...config(),
+      accountRoster: [entry(), entry({ companionId: OTHER_COMPANION_ID })],
+    }, FLEET_AUTH_FILE_NAME);
+    expect(resolveFleetAccessMode(soleAdmin.accountRoster, COMPANION_ID)).toBe('sole_admin');
+    const multiAdmin = validateFleetAuthConfig({
+      ...config(),
+      accountRoster: [entry(), entry({ providerSubjectId: OTHER_SUBJECT, role: 'admin' })],
+    }, FLEET_AUTH_FILE_NAME);
+    expect(resolveFleetAccessMode(multiAdmin.accountRoster, COMPANION_ID)).toBe('multi_admin');
   });
 });

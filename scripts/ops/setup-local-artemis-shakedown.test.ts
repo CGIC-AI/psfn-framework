@@ -101,7 +101,6 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
       companionId,
       role: 'owner',
     }]);
-    expect(fleetAuth.accountRosterSatisfiesStepUp).toBe(true);
     expect(fleetAuth.canonicalOrigin).toBe('https://psfn-gateway.local');
     expect(fleetAuth.hubDeviceAssertions.audience).toBe('https://psfn-gateway.local');
     expect(fleetAuth.verifierKeys[0].kid).not.toBe('replace-before-enable');
@@ -320,7 +319,7 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     const fleetAuthPath = join(preservedRoot, 'system-data/fleet-auth.json');
     const fleetAuth = readJson(fleetAuthPath);
     const retainedVerifierKey = fleetAuth.verifierKeys[0].publicKeyPem;
-    delete fleetAuth.accountRosterSatisfiesStepUp;
+    delete fleetAuth.accountRoster;
     writeFileSync(fleetAuthPath, `${JSON.stringify(fleetAuth, null, 2)}\n`);
 
     runScript([
@@ -340,7 +339,7 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     }));
     expect(readJson(schedulerPath).tickIntervalMs).toBe(120_000);
     expect(readJson(fleetAuthPath)).toEqual(expect.objectContaining({
-      accountRosterSatisfiesStepUp: true,
+      accountRoster: [{ providerSubjectId: ownerDiscordId, companionId, role: 'owner' }],
       verifierKeys: [expect.objectContaining({ publicKeyPem: retainedVerifierKey })],
     }));
     expect(verifyStartupOwnerFiles({

@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   FLEET_AUTH_BINDING_COMPLETE_PATH,
-  FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH,
   FLEET_AUTH_PROVIDER_COMPLETE_PATH,
   FLEET_AUTH_ROLE_COMPLETE_PATH,
   FleetAuthLifecycleCeremonyError,
@@ -13,7 +12,6 @@ import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
 
 const PATHS = new Set([
-  FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH,
   FLEET_AUTH_BINDING_COMPLETE_PATH,
   FLEET_AUTH_PROVIDER_COMPLETE_PATH,
   FLEET_AUTH_ROLE_COMPLETE_PATH,
@@ -40,7 +38,7 @@ function translate(error: unknown): never {
 
 export class FleetAuthLifecycleCeremonyHttpRoutes {
   constructor(private readonly ceremonies: Pick<GatewayFleetAuthLifecycleCeremonyService,
-    'startStrongAssurance' | 'complete'>) {}
+    'complete'>) {}
 
   matches(method: string | undefined, path: string): boolean {
     return method === 'POST' && PATHS.has(path);
@@ -58,18 +56,7 @@ export class FleetAuthLifecycleCeremonyHttpRoutes {
     if (!body.ok) return;
     try {
       if (!isRecord(body.value)) throw new Error('Lifecycle body must be an object');
-      if (input.path === FLEET_AUTH_LIFECYCLE_ASSURANCE_START_PATH) {
-        assertNoUnknownKeys(body.value, ['request'], 'lifecycleAssuranceStart');
-        const started = await this.ceremonies.startStrongAssurance({
-          token: input.token,
-          csrfToken: input.csrfToken,
-          requestOrigin: input.requestOrigin,
-          request: body.value.request,
-        });
-        sendJson(input.response, 200, started, { 'Cache-Control': 'no-store' });
-        return;
-      }
-      assertNoUnknownKeys(body.value, ['request', 'jitGrantId'], 'lifecycleComplete');
+      assertNoUnknownKeys(body.value, ['request'], 'lifecycleComplete');
       const request = parseFleetAuthLifecycleCeremonyRequest(body.value.request);
       const expectedPath = request.action === 'binding.activate'
         ? FLEET_AUTH_BINDING_COMPLETE_PATH
@@ -82,7 +69,6 @@ export class FleetAuthLifecycleCeremonyHttpRoutes {
       const completed = await this.ceremonies.complete({
         token: input.token,
         requestOrigin: input.requestOrigin,
-        jitGrantId: typeof body.value.jitGrantId === 'string' ? body.value.jitGrantId : '',
         request,
       });
       sendJson(input.response, 200, {

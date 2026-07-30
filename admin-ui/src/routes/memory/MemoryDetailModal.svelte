@@ -30,6 +30,9 @@
     scopeMutating: boolean;
     supersedeConfirmId: string | null;
     revealingId: string | null;
+    /** True when only per-memory audited escalation can reveal a body. */
+    escalationOnlyMode: boolean;
+    escalationReason: string;
     typeBadgeStyle: (type: string) => string;
     sensitivityBadgeStyle: (sensitivity: string) => string;
     isDurableMemoryView: (memory: AdminUiPurrMemory) => boolean;
@@ -46,6 +49,8 @@
     scopeLabel: (scope: ScopeLike) => string;
     onClose: () => void;
     onReveal: (id: string) => void | Promise<void>;
+    onEscalatedReveal: (id: string) => void | Promise<void>;
+    onEscalationReasonChange: (value: string) => void;
     onScopeRepair: (id: string) => void | Promise<void>;
     onScopeSave: (id: string) => void | Promise<void>;
     onSupersede: (id: string) => void | Promise<void>;
@@ -74,6 +79,8 @@
     scopeMutating,
     supersedeConfirmId,
     revealingId,
+    escalationOnlyMode,
+    escalationReason,
     typeBadgeStyle,
     sensitivityBadgeStyle,
     isDurableMemoryView,
@@ -90,6 +97,8 @@
     scopeLabel,
     onClose,
     onReveal,
+    onEscalatedReveal,
+    onEscalationReasonChange,
     onScopeRepair,
     onScopeSave,
     onSupersede,
@@ -186,14 +195,37 @@
             <p class="text-sm text-wilt-700">
               {detailModalData.memory.bodyRedaction?.revealHint ?? 'Reveal this memory or elevate memory body access to view (both are audit-logged).'}
             </p>
-            <button
-              onclick={() => { void onReveal(detailMemoryId); }}
-              disabled={revealingId === detailModalData.memory.id}
-              class="px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
-                     hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Reveal body (audited)'}
-            </button>
+            {#if escalationOnlyMode}
+              <label class="block text-xs uppercase tracking-[0.16em] text-wilt-700" for="memory-escalation-reason">
+                Reason (recorded in the audit trail)
+              </label>
+              <input
+                id="memory-escalation-reason"
+                type="text"
+                maxlength="512"
+                value={escalationReason}
+                oninput={(event) => onEscalationReasonChange((event.currentTarget as HTMLInputElement).value)}
+                placeholder="Why this memory body has to be read"
+                class="w-full px-3 py-2 rounded-lg border border-wilt-300 bg-bark-50 text-shadow-800 text-sm"
+              />
+              <button
+                onclick={() => { void onEscalatedReveal(detailMemoryId); }}
+                disabled={revealingId === detailModalData.memory.id || escalationReason.trim() === ''}
+                class="px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                       hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Escalate & reveal (audited)'}
+              </button>
+            {:else}
+              <button
+                onclick={() => { void onReveal(detailMemoryId); }}
+                disabled={revealingId === detailModalData.memory.id}
+                class="px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                       hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Reveal body (audited)'}
+              </button>
+            {/if}
           </div>
         {:else}
           <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>

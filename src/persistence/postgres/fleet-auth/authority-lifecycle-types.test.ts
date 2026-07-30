@@ -74,65 +74,17 @@ function providerReplace(): VerifiedFleetAuthLifecycleDecision {
   };
 }
 
-function providerRecovery(): Extract<
-  VerifiedFleetAuthLifecycleDecision,
-  { action: 'provider.recover' }
-> {
-  const target = principal();
-  const currentSubject = '123456789012345678';
-  return {
-    verification: 'gateway_verified',
-    action: 'provider.recover',
-    decisionId: randomUUID(),
-    ceremonyId: randomUUID(),
-    actor: target,
-    actorSession: {
-      sessionId: randomUUID(),
-      authnVersion: 1,
-      authzVersion: 1,
-      bindingVersion: 1,
-      grantVersion: 1,
-      policyVersion: 1,
-      globalAuthEpoch: 1,
-      provider: 'discord',
-      providerSubjectId: currentSubject,
-    },
-    target,
-    companionId: randomUUID(),
-    unavailableProvider: {
-      provider: 'discord',
-      subjectId: currentSubject,
-      authorityGeneration: 1,
-    },
-    newProvider: provider('223456789012345678'),
-    recovery: {
-      oneTimeCredential: 'A'.repeat(43),
-      confirmation: 'provider.recover',
-      webAuthnReceipt: 'B'.repeat(43),
-      credentialIdHash: 'c'.repeat(64),
-      credentialGeneration: 4,
-      credentialFloorGeneration: 4,
-    },
-    authorityGeneration: 1,
-    globalAuthEpoch: 1,
-    reasonDigest: DIGEST,
-    decidedAt: new Date('2026-07-16T12:00:00.000Z'),
-  };
-}
-
 describe('verified fleet-auth lifecycle decision contract', () => {
   it('accepts an exact current+new provider replacement proof', () => {
     expect(assertVerifiedFleetAuthLifecycleDecision(providerReplace()).action)
       .toBe('provider.replace');
   });
 
-  it('accepts only the distinct trusted-host recovery contract', () => {
-    expect(assertVerifiedFleetAuthLifecycleDecision(providerRecovery()).action)
-      .toBe('provider.recover');
+  it('rejects the retired provider-recovery action and an incomplete replacement proof', () => {
     expect(() => assertVerifiedFleetAuthLifecycleDecision({
-      ...providerRecovery(),
-      recovery: { ...providerRecovery().recovery, confirmation: 'yes' },
-    })).toThrow(/trusted-host evidence/i);
+      ...providerReplace(),
+      action: 'provider.recover',
+    })).toThrow(/action is unknown/u);
     expect(() => assertVerifiedFleetAuthLifecycleDecision({
       ...providerReplace(),
       currentProvider: undefined,

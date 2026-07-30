@@ -6,7 +6,7 @@ export interface FleetAuthSessionRow {
   provider: 'discord' | null;
   provider_subject_id: string | null;
   audience: string;
-  assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+  assurance: 'oauth' | 'escalated' | 'break_glass';
   session_authn_version: string;
   session_authz_version: string;
   binding_version: string;
@@ -33,14 +33,14 @@ export type PositiveIntegerScope =
   | 'authorization-context'
   | 'portal-authorization'
   | 'hub-device-attachment'
-  | 'jit-step-up'
+  | 'escalation-grant'
   | 'lifecycle-audit';
 
 const ERROR_PREFIX_BY_SCOPE: Record<PositiveIntegerScope, string> = {
   'authorization-context': 'Invalid fleet_auth authorization context',
   'portal-authorization': 'Invalid fleet portal authorization',
   'hub-device-attachment': 'Invalid hub device attachment',
-  'jit-step-up': 'Invalid fleet_auth',
+  'escalation-grant': 'Invalid fleet_auth',
   'lifecycle-audit': 'Invalid fleet_auth lifecycle audit',
 };
 

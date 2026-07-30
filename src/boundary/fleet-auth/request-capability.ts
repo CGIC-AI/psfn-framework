@@ -117,6 +117,7 @@ const AUTH_CONTEXT_KEYS = [
   'role',
   'session_record_id',
   'session_assurance',
+  'fleet_access_mode',
   'authorization_event_id',
   'resolved_at',
 ] as const;
@@ -131,6 +132,7 @@ const AUTH_CONTEXT_INPUT_KEYS = [
   'role',
   'sessionRecordId',
   'sessionAssurance',
+  'fleetAccessMode',
   'authorizationEventId',
   'resolvedAt',
 ] as const;
@@ -183,7 +185,9 @@ export interface RequestCapabilityAuthContext {
   readonly operatorGrantId: string;
   readonly role: 'owner' | 'admin' | 'member' | 'guest';
   readonly sessionRecordId: string;
-  readonly sessionAssurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+  readonly sessionAssurance: 'oauth' | 'escalated' | 'break_glass';
+  /** D1 deployment access mode resolved from the boot-frozen account roster. */
+  readonly fleetAccessMode: 'sole_admin' | 'multi_admin';
   readonly authorizationEventId: string;
   readonly resolvedAt: string;
   /** Gateway-authorized roster, present only on fleet model-usage reads. */
@@ -301,6 +305,7 @@ interface RequestCapabilityAuthClaims {
   role: RequestCapabilityAuthContext['role'];
   session_record_id: string;
   session_assurance: RequestCapabilityAuthContext['sessionAssurance'];
+  fleet_access_mode: RequestCapabilityAuthContext['fleetAccessMode'];
   authorization_event_id: string;
   resolved_at: string;
   fleet_companion_ids?: readonly string[];
@@ -508,6 +513,7 @@ function toAuthClaims(context: RequestCapabilityAuthContext): RequestCapabilityA
     role: context.role,
     session_record_id: context.sessionRecordId,
     session_assurance: context.sessionAssurance,
+    fleet_access_mode: context.fleetAccessMode,
     authorization_event_id: context.authorizationEventId,
     resolved_at: context.resolvedAt,
     ...(context.fleetCompanionIds
@@ -531,6 +537,7 @@ function fromAuthClaims(context: RequestCapabilityAuthClaims): RequestCapability
     role: context.role,
     sessionRecordId: context.session_record_id,
     sessionAssurance: context.session_assurance,
+    fleetAccessMode: context.fleet_access_mode,
     authorizationEventId: context.authorization_event_id,
     resolvedAt: context.resolved_at,
     ...(context.fleet_companion_ids
@@ -628,10 +635,15 @@ function assertAuthContext(value: unknown, target: CompiledGardenRequestTarget):
     reject('authContext.role is invalid');
   }
   requireStableId(context.sessionRecordId, 'authContext.sessionRecordId');
-  if (!['oauth', 'webauthn_uv', 'break_glass'].includes(
+  if (!['oauth', 'escalated', 'break_glass'].includes(
     requireString(context.sessionAssurance, 'authContext.sessionAssurance'),
   )) {
     reject('authContext.sessionAssurance is invalid');
+  }
+  if (!['sole_admin', 'multi_admin'].includes(
+    requireString(context.fleetAccessMode, 'authContext.fleetAccessMode'),
+  )) {
+    reject('authContext.fleetAccessMode is invalid');
   }
   requireStableId(context.authorizationEventId, 'authContext.authorizationEventId');
   if (!isCanonicalIsoTimestamp(requireString(context.resolvedAt, 'authContext.resolvedAt'))) {
@@ -1055,6 +1067,7 @@ function parseAuthContext(
   const provider = requireString(record.provider, 'claims.auth_context.provider');
   const role = requireString(record.role, 'claims.auth_context.role');
   const assurance = requireString(record.session_assurance, 'claims.auth_context.session_assurance');
+  const accessMode = requireString(record.fleet_access_mode, 'claims.auth_context.fleet_access_mode');
   const context: RequestCapabilityAuthClaims = {
     principal_id: requireStableId(record.principal_id, 'claims.auth_context.principal_id'),
     provider: provider === 'discord' || provider === 'testing_harness'
@@ -1081,9 +1094,12 @@ function parseAuthContext(
       record.session_record_id,
       'claims.auth_context.session_record_id',
     ),
-    session_assurance: ['oauth', 'webauthn_uv', 'break_glass'].includes(assurance)
+    session_assurance: ['oauth', 'escalated', 'break_glass'].includes(assurance)
       ? assurance as RequestCapabilityAuthContext['sessionAssurance']
       : reject('claims.auth_context.session_assurance is invalid'),
+    fleet_access_mode: ['sole_admin', 'multi_admin'].includes(accessMode)
+      ? accessMode as RequestCapabilityAuthContext['fleetAccessMode']
+      : reject('claims.auth_context.fleet_access_mode is invalid'),
     authorization_event_id: requireStableId(
       record.authorization_event_id,
       'claims.auth_context.authorization_event_id',

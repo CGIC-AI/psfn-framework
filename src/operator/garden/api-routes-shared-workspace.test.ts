@@ -184,7 +184,7 @@ function context(
     resource: Object.freeze({ scope: 'governed_shared_workspace' as const, area: 'shared_workspace' as const }),
     subjectRelation: 'current_companion' as const,
     requirements: Object.freeze({
-      assurance: strong ? 'webauthn_uv' as const : 'oauth' as const,
+      assurance: strong ? 'escalated' as const : 'oauth' as const,
       confirmation: strong ? 'explicit' as const : 'none' as const,
       approvals: Object.freeze(approvals),
     }),
@@ -200,7 +200,7 @@ function context(
     actor: Object.freeze({ kind: 'fleet_principal', principalId, provider: 'discord',
       providerSubjectId: '12345678901234567', contactId: 'contact-a', contactBindingId: 'binding-a',
       role: 'admin', operatorGrantId: 'grant-a', sessionRecordId: 'session-a',
-      sessionAssurance: strong ? 'webauthn_uv' : 'oauth' }),
+      sessionAssurance: strong ? 'escalated' : 'oauth', accessMode: 'multi_admin' }),
     action: 'shared_workspace.manage',
     resource: Object.freeze({ routeId, scope: 'governed_shared_workspace', area: 'shared_workspace',
       companionId: '11111111-1111-4111-8111-111111111111', pathParams: Object.freeze({}), query: Object.freeze({}) }),

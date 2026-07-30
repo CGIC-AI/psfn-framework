@@ -31,14 +31,14 @@ function authenticateRequest(
   const requirements = context.authorization.requirements;
   if (role === 'cogsec'
     && (!requirements.approvals.includes('cogsec')
-      || requirements.assurance !== 'webauthn_uv'
+      || requirements.assurance !== 'escalated'
       || requirements.confirmation !== 'explicit')) {
     throw new SharedWorkspaceAuthenticationError('CogSec workflow authorization is incomplete');
   }
   if (role === 'reviewer'
     && (!requirements.approvals.includes('cogsec')
       || !requirements.approvals.includes('independent_reviewer')
-      || requirements.assurance !== 'webauthn_uv'
+      || requirements.assurance !== 'escalated'
       || requirements.confirmation !== 'explicit')) {
     throw new SharedWorkspaceAuthenticationError('Independent review authorization is incomplete');
   }

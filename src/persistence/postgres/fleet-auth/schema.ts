@@ -110,7 +110,6 @@ export const FLEET_AUTH_DURABLE_TABLES = [
   'principal_contact_bindings',
   'principal_role_grants',
   'principal_merge_aliases',
-  'passkey_credentials',
   'authorization_audit_events',
   'contact_authority_intents',
   'contact_authority_resources',
@@ -124,8 +123,7 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'oauth_transactions',
   'provider_token_custody',
   'browser_sessions',
-  'step_up_challenges',
-  'jit_authorization_grants',
+  'escalation_grants',
   'trusted_host_ceremonies',
   'hub_device_assertion_replays',
   'request_capability_consumptions',
@@ -142,7 +140,6 @@ const FLEET_AUTH_MUTABLE_TABLES = [
   'provider_subjects',
   'principal_contact_bindings',
   'principal_role_grants',
-  'passkey_credentials',
   'contact_authority_intents',
   'hub_device_human_attachments',
   ...FLEET_AUTH_EPHEMERAL_TABLES,
@@ -723,7 +720,7 @@ export async function hasDurableFleetAuthAuthority(pool: Pool): Promise<boolean>
     SELECT (
       EXISTS (SELECT 1 FROM ${qualifiedTable('human_principals')} LIMIT 1)
       OR EXISTS (SELECT 1 FROM ${qualifiedTable('provider_subject_tombstones')} LIMIT 1)
-      OR EXISTS (SELECT 1 FROM ${qualifiedTable('passkey_credentials')} LIMIT 1)
+      OR EXISTS (SELECT 1 FROM ${qualifiedTable('principal_contact_bindings')} LIMIT 1)
       OR EXISTS (
         SELECT 1 FROM ${qualifiedTable('authority_state')}
         WHERE authority_lineage_id IS NOT NULL

@@ -76,7 +76,7 @@ export type PrivacyBreakGlassDisclosure =
   | { kind: 'journal'; journal: PrivacyBreakGlassJournalDisclosure };
 
 export interface PrivacyBreakGlassAuditEvidence {
-  assurance: 'webauthn_uv';
+  assurance: 'escalated';
   resourceKind: PrivacyBreakGlassResourceKind;
   resourceSelectorDigest: string;
   reasonCategory: PrivacyBreakGlassConfirmRequest['reasonCategory'];
@@ -362,7 +362,7 @@ export class AdminPrivacyBreakGlassService {
     pending: PendingPrivacyBreakGlassDecision,
   ): PrivacyBreakGlassAuditEvidence {
     return {
-      assurance: 'webauthn_uv',
+      assurance: 'escalated',
       resourceKind: pending.resourceKind,
       resourceSelectorDigest: privacyBreakGlassResourceSelectorDigest(
         pending.resourceKind,

@@ -13,6 +13,7 @@
     listManagedMemoryScopes,
     listMemories,
     revealMemory,
+    revealMemoryEscalated,
     searchMemories,
     unlinkMemories,
     updateMemoryScope,
@@ -89,6 +90,13 @@
   let elevation = $state<AdminMemoryElevationStatus | null>(null);
   let elevationMutating = $state(false);
   let revealingId = $state<string | null>(null);
+  let escalationReason = $state('');
+
+  // Cluster (fleet SSO) sign-in has no session-wide memory elevation, and the
+  // server says so by reporting a zero elevation TTL. Legacy operator sessions
+  // always report the real elevation window, so a zero TTL is the one signal
+  // that every body reveal must carry its own audited escalation grant.
+  let escalationOnlyMode = $derived(elevation !== null && elevation.ttlMs === 0);
 
   let selectedCount = $derived(selectedIds.length);
 
@@ -259,6 +267,7 @@
     supersedeConfirmId = null;
     scopeEditorRefLabel = '';
     scopeEditorTags = '';
+    escalationReason = '';
   }
 
   async function openDetailModal(id: string): Promise<void> {
@@ -717,6 +726,23 @@
     }
   }
 
+  // Cluster path: mint one single-use audited escalation grant for this exact
+  // reveal, spend it, and render the result like any other reveal.
+  async function handleEscalatedReveal(id: string): Promise<void> {
+    revealingId = id;
+    try {
+      detailModalData = await revealMemoryEscalated(id, escalationReason);
+      elevation = detailModalData.elevation ?? elevation;
+      syncScopeEditorFromDetail();
+      escalationReason = '';
+      flash(true, 'Memory body revealed under an audited escalation grant.');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to reveal memory body');
+    } finally {
+      revealingId = null;
+    }
+  }
+
   onMount(() => {
     loadMemories();
     loadManagedScopes();
@@ -763,6 +789,10 @@
         >
           End elevation
         </button>
+      {:else if escalationOnlyMode}
+        <span class="text-sm text-shadow-600">
+          Intimate and confidential memory bodies are redacted by default. Session-wide elevation is not available for cluster sign-in: reveal one memory at a time, each with a stated reason recorded in the audit trail.
+        </span>
       {:else}
         <span class="text-sm text-shadow-600">
           Intimate and confidential memory bodies are redacted by default. Metadata stays browsable; reveal per memory or elevate this session (both audited).
@@ -1351,6 +1381,8 @@
     {scopeMutating}
     {supersedeConfirmId}
     {revealingId}
+    {escalationOnlyMode}
+    {escalationReason}
     {typeBadgeStyle}
     {sensitivityBadgeStyle}
     {isDurableMemoryView}
@@ -1367,6 +1399,8 @@
     {scopeLabel}
     onClose={closeDetailModal}
     onReveal={handleReveal}
+    onEscalatedReveal={handleEscalatedReveal}
+    onEscalationReasonChange={(value) => { escalationReason = value; }}
     onScopeRepair={handleScopeRepair}
     onScopeSave={handleScopeSave}
     onSupersede={handleSupersede}

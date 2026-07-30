@@ -16,6 +16,7 @@ import {
   createRequestCapabilityVerifier,
 } from '../../boundary/fleet-auth/request-capability.js';
 import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import { escalationScopeDigest } from '../../boundary/fleet-auth/escalation.js';
 import { parseGardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import {
@@ -25,10 +26,6 @@ import {
 import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-portal-projection.js';
 import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
-import {
-  privacyBreakGlassPurpose,
-  privacyBreakGlassSubjectScopeDigest,
-} from '../../shared/contracts/privacy-break-glass.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { FleetAuthRole } from '../../system/config/fleet-auth-config.js';
 
@@ -292,12 +289,19 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }],
     });
     let revokedA = false;
-    const consumeGrant = vi.fn(async () => ({
+    const consumeGrant = vi.fn(async (input: {
+      target: { companionId: string; action: string; resource: { routeId: string } };
+    }) => ({
       grantId: '99999999-9999-4999-8999-999999999999',
       principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       browserSessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
-      assurance: 'webauthn_uv' as const,
-      credentialFloorGeneration: 2,
+      companionId: input.target.companionId,
+      action: input.target.action as never,
+      routeId: input.target.resource.routeId,
+      scopeDigest: escalationScopeDigest(input.target as never),
+      assuranceRequirement: input.target.action === 'privacy.break_glass'
+        ? 'privacy_break_glass' as const
+        : 'escalated' as const,
       expiresAt: new Date((NOW_SECONDS + 300) * 1_000),
     }));
     const router = new GatewayFleetSsoRouter({
@@ -333,7 +337,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       replay: {
         consume: async input => ({ outcome: 'consumed', result: input.consumeResult }),
       },
-      jitStepUp: { consumeGrant },
+      escalation: { consumeGrant },
       portalProjection: {
         resolve: async () => ({
           schemaVersion: 2,
@@ -391,31 +395,29 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(payloadA.forwarded.authorization).toBeUndefined();
     expect(payloadA.forwarded.capability).toBeTypeOf('string');
 
-    const revealBody = JSON.stringify({
-      subjectScopeDigest: 'a'.repeat(64),
-      purpose: 'Review my own memory',
-      memoryRevision: 3,
-      classifierVersion: 1,
-      classifierEvidenceDigest: 'b'.repeat(64),
-    });
+    // The reveal surface carries no browser-authored envelope: the audited
+    // escalation grant, bound to the exact compiled route, is what opens it.
+    const revealBody = '';
     const revealPath = '/api/admin/memory/memory-a/reveal';
     const reveal = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${revealPath}`,
       SESSION_A,
       revealBody,
-      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+      { 'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999' },
     );
     expect(reveal.status).toBe(200);
     expect(consumeGrant).toHaveBeenCalledWith(expect.objectContaining({
       grantId: '99999999-9999-4999-8999-999999999999',
       token: SESSION_A,
       requestOrigin: CANONICAL_ORIGIN,
-      binding: expect.objectContaining({
-        subjectScopeDigest: 'a'.repeat(64),
-        purpose: 'Review my own memory',
-        memoryRevision: 3,
-        classifierEvidenceDigest: 'b'.repeat(64),
+      target: expect.objectContaining({
+        companionId: COMPANION_A,
+        action: 'memory.reveal',
+        resource: expect.objectContaining({
+          routeId: 'POST /api/admin/memory/:id/reveal',
+          pathParams: { id: 'memory-a' },
+        }),
       }),
     }));
     const revealPayload = JSON.parse(reveal.body);
@@ -437,15 +439,21 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       versions: revealContext.versions,
       nowSeconds: NOW_SECONDS,
     });
-    expect(revealedCapability.authContext.sessionAssurance).toBe('webauthn_uv');
+    expect(revealedCapability.authContext.sessionAssurance).toBe('escalated');
+    expect(revealedCapability.authContext.fleetAccessMode).toBe('multi_admin');
 
+    // An escalation surface without a grant fails closed and says why, and no
+    // grant is silently consumed on the way.
     const missingGrant = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${revealPath}`,
       SESSION_A,
       revealBody,
     );
-    expect(missingGrant.status).toBe(404);
+    expect(missingGrant.status).toBe(403);
+    expect(JSON.parse(missingGrant.body)).toEqual({
+      error: { type: 'fleet_sso_request_denied' },
+    });
     expect(consumeGrant).toHaveBeenCalledTimes(1);
 
     const breakGlassRequest = {
@@ -455,36 +463,39 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     const breakGlassConfirmBody = JSON.stringify(breakGlassRequest);
     const breakGlassConfirmPath =
       '/api/admin/privacy-break-glass/memory/memory-private-b/confirm';
-    const ownerWithoutUv = await post(
+    const ownerWithoutGrant = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${breakGlassConfirmPath}`,
       SESSION_A,
       breakGlassConfirmBody,
     );
-    expect(ownerWithoutUv.status).toBe(404);
+    expect(ownerWithoutGrant.status).toBe(403);
+    expect(JSON.parse(ownerWithoutGrant.body)).toEqual({
+      error: { type: 'fleet_sso_request_denied' },
+    });
 
     const breakGlassConfirm = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${breakGlassConfirmPath}`,
       SESSION_A,
       breakGlassConfirmBody,
-      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+      { 'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999' },
     );
     expect(breakGlassConfirm.status).toBe(200);
     expect(consumeGrant).toHaveBeenLastCalledWith(expect.objectContaining({
       grantId: '99999999-9999-4999-8999-999999999999',
       token: SESSION_A,
       requestOrigin: CANONICAL_ORIGIN,
-      binding: expect.objectContaining({
-        subjectScopeDigest: privacyBreakGlassSubjectScopeDigest({
-          companionId: COMPANION_A,
-          action: 'privacy.break_glass',
+      target: expect.objectContaining({
+        companionId: COMPANION_A,
+        action: 'privacy.break_glass',
+        resource: expect.objectContaining({
           routeId: 'POST /api/admin/privacy-break-glass/memory/:id/confirm',
-          resourceKind: 'memory',
-          resourceId: 'memory-private-b',
+          pathParams: { id: 'memory-private-b' },
         }),
-        purpose: privacyBreakGlassPurpose(breakGlassRequest),
-        memoryRevision: 1,
+        authorization: expect.objectContaining({
+          requirements: expect.objectContaining({ assurance: 'privacy_break_glass' }),
+        }),
       }),
     }));
     const breakGlassConfirmPayload = JSON.parse(breakGlassConfirm.body);
@@ -514,14 +525,16 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       ...breakGlassRequest,
       confirmToken: 'f'.repeat(64),
     });
-    const jitOnDecision = await post(
+    // The decide route is not an escalation surface: presenting a grant there
+    // is rejected outright rather than quietly ignored.
+    const grantOnDecision = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${breakGlassDecidePath}`,
       SESSION_A,
       breakGlassDecideBody,
-      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+      { 'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999' },
     );
-    expect(jitOnDecision.status).toBe(404);
+    expect(grantOnDecision.status).toBe(404);
     const breakGlassDecision = await post(
       edgePort,
       `/companions/${COMPANION_A}/garden${breakGlassDecidePath}`,

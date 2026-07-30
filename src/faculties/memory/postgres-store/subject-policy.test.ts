@@ -34,7 +34,34 @@ describe('buildMemorySubjectAuthorizationPredicate', () => {
         classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
         evidenceDigest: 'd'.repeat(64),
       }]),
+      false,
     ]);
+  });
+
+  it('activates the D1 high-sensitivity other-relation carve-out only when requested', () => {
+    const predicate = buildMemorySubjectAuthorizationPredicate({
+      action: 'detail',
+      viewerContactIds: ['contact-a'],
+      allowedSubjectClasses: [
+        'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+      ],
+      allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+      classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
+      grantBindings: [],
+      excludeHighSensitivityOtherRelation: true,
+    }, { memoryAlias: 'memory' });
+    expect(predicate.sql).toContain("COALESCE(memory.sensitivity, 'personal') IN ('intimate', 'confidential')");
+    expect(predicate.values.at(-1)).toBe(true);
+
+    const withoutCarveOut = buildMemorySubjectAuthorizationPredicate({
+      action: 'detail',
+      viewerContactIds: ['contact-a'],
+      allowedSubjectClasses: ['single_contact'],
+      allowedViewerRelations: ['self'],
+      classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
+      grantBindings: [],
+    }, { memoryAlias: 'memory' });
+    expect(withoutCarveOut.values.at(-1)).toBe(false);
   });
 
   it('rejects malformed or version-mismatched policy instead of widening access', () => {

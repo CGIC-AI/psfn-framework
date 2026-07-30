@@ -27,20 +27,43 @@ describe('gateway fleet authorization context wiring', () => {
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(mainSource).toContain(
-      'fleetAuthAccountReapprovalCeremonies:\n            fleetAuthPersistence.accountReapprovalCeremonies,',
+      'fleetAuthEscalation: fleetAuthPersistence.escalation,',
     );
     expect(apiSurfaceSource).toContain(
-      '{ accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }',
+      '{ escalation: options.fleetAuthEscalation }',
     );
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
     expect(apiSurfaceSource).toContain('.verifyAndConsumeHubDeviceAssertion(assertion, expected)');
-    expect(mainSource).toContain(
-      'fleetAuthProviderRecovery: fleetAuthPersistence.providerRecovery,',
-    );
-    expect(apiSurfaceSource).toContain('providerRecovery: options.fleetAuthProviderRecovery');
     expect(apiSurfaceSource).toContain(
       'const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay',
     );
+    // The removed passkey/JIT ceremony surfaces must not creep back into the wiring.
+    for (const retired of [
+      'fleetAuthJitStepUp',
+      'fleetAuthPasskeyCeremonies',
+      'fleetAuthAccountReapprovalCeremonies',
+      'fleetAuthProviderRecovery',
+    ]) {
+      expect(mainSource).not.toContain(retired);
+      expect(apiSurfaceSource).not.toContain(retired);
+    }
+    // Every principal-composition conjunct stays required; dropping one must not
+    // silently downgrade the fail-closed startup guard.
+    for (const conjunct of [
+      'options.fleetAuthBroker !== undefined',
+      'options.fleetAuthEscalation !== undefined',
+      'options.fleetAuthTrustedHostRecovery !== undefined',
+      'options.fleetAuthLifecycleCeremonies !== undefined',
+      'options.fleetAuthChildAssertions !== undefined',
+      'options.fleetAuthRequestCapabilities !== undefined',
+      'options.fleetAuthRequestCapabilityVerifier !== undefined',
+      'options.fleetAuthRequestCapabilityReplay !== undefined',
+      'options.fleetPortalAuthorization !== undefined',
+      'options.primaryEmbodiments !== undefined',
+      'options.hubDeviceAssertionVerifier !== undefined',
+    ]) {
+      expect(apiSurfaceSource).toContain(conjunct);
+    }
   });
 
   it('constructs the private request-capability signer only inside gateway persistence', () => {

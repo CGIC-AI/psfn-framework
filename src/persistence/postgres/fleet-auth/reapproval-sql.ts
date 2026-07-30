@@ -16,7 +16,6 @@
 //      not move. Reactivation (restore_state -> 'live', lifecycle -> active) is
 //      permitted solely inside SECURITY DEFINER code owned by the fleet_auth
 //      schema owner (the migration role), i.e. reapprove_account_authority.
-//      Passkey projections can never be reactivated by any role.
 //
 //   2. reapprove_account_authority — a SECURITY DEFINER function owned by the
 //      migration role that runs the full account/binding/role reapproval
@@ -24,7 +23,7 @@
 //      binds lineage/generation/principal/provider/companion/contact/role,
 //      rechecks conflicts and tombstones under lock, activates the account,
 //      bumps versions and the auth epoch, revokes affected ephemeral authority,
-//      appends one immutable audit event, and never touches passkey authority.
+//      and appends one immutable audit event.
 //
 //   3. restore_quarantine_insert_guard / restore_quarantine_delete_guard —
 //      BEFORE INSERT and BEFORE DELETE triggers on principal_contact_bindings
@@ -83,7 +82,6 @@ BEGIN
     WHEN 'provider_subjects' THEN 'state'
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
-    WHEN 'passkey_credentials' THEN 'state'
     ELSE NULL
   END;
   IF v_lifecycle_column IS NULL THEN
@@ -91,17 +89,6 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
   v_new_lifecycle := v_new->>v_lifecycle_column;
-
-  -- Passkey projections are never reapprovable through any account path or any
-  -- role. They may only stay quarantined or be revoked.
-  IF TG_TABLE_NAME = 'passkey_credentials' THEN
-    IF (v_new->>'restore_state') IS DISTINCT FROM 'quarantined'
-       OR v_new_lifecycle NOT IN ('quarantined', 'revoked') THEN
-      RAISE EXCEPTION 'quarantined fleet_auth passkey projection cannot be reactivated'
-        USING ERRCODE = '42501';
-    END IF;
-    RETURN NEW;
-  END IF;
 
   SELECT owner_role.rolname INTO v_schema_owner
   FROM pg_namespace AS namespace
@@ -217,11 +204,6 @@ CREATE TRIGGER restore_quarantine_activation_guard
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON principal_role_grants;
 CREATE TRIGGER restore_quarantine_activation_guard
   BEFORE UPDATE ON principal_role_grants
-  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
-
-DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON passkey_credentials;
-CREATE TRIGGER restore_quarantine_activation_guard
-  BEFORE UPDATE ON passkey_credentials
   FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
 
 -- BEFORE INSERT guard: a non-owner role must not create a live/active authority
@@ -798,7 +780,7 @@ BEGIN
   WHERE grant_id = p_role_grant_id;
 
   -- Advance the ephemeral auth epoch and revoke affected ephemeral authority so
-  -- no pre-reapproval session/grant/challenge survives.
+  -- no pre-reapproval session or escalation grant survives.
   UPDATE fleet_auth.authority_state
   SET global_auth_epoch = v_new_epoch, updated_at = v_now
   WHERE singleton = TRUE;
@@ -807,13 +789,9 @@ BEGIN
   SET revoked_at = v_now
   WHERE principal_id = p_principal_id AND revoked_at IS NULL;
 
-  UPDATE fleet_auth.jit_authorization_grants
+  UPDATE fleet_auth.escalation_grants
   SET revoked_at = v_now
   WHERE principal_id = p_principal_id AND revoked_at IS NULL;
-
-  UPDATE fleet_auth.step_up_challenges
-  SET status = 'revoked'
-  WHERE principal_id = p_principal_id AND status = 'pending';
 
   -- Consume the ceremony exactly once.
   UPDATE fleet_auth.trusted_host_ceremonies

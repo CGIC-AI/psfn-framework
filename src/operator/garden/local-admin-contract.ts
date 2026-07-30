@@ -763,7 +763,7 @@ export function createInProcessGardenAdminContract(
           }
         },
       },
-      confirmTtlMs: Math.min(options.config.fleetAuth?.ttls.jitGrantMs ?? 120_000, 120_000),
+      confirmTtlMs: Math.min(options.config.fleetAuth?.ttls.escalationGrantMs ?? 120_000, 120_000),
     }),
     sessions: new AdminSessionDataService({
       sessionStore: options.sessionStore,

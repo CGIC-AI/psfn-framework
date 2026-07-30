@@ -204,7 +204,7 @@ describe('AdminPrivacyBreakGlassService', () => {
     if (!begun.ok) throw new Error('expected break-glass confirmation');
     expect(begun.confirmToken).toMatch(/^[0-9a-f]{64}$/u);
     expect(begun.audit).toMatchObject({
-      assurance: 'webauthn_uv',
+      assurance: 'escalated',
       resourceKind: 'memory',
       reasonCategory: REASON.reasonCategory,
       confirmationDecisionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -363,7 +363,7 @@ describe('AdminPrivacyBreakGlassService', () => {
     });
     expect(begun.ok).toBe(true);
     if (!begun.ok) throw new Error('expected journal confirmation');
-    expect(begun.audit).toMatchObject({ assurance: 'webauthn_uv', resourceKind: 'journal' });
+    expect(begun.audit).toMatchObject({ assurance: 'escalated', resourceKind: 'journal' });
     expect(listStream).toHaveBeenCalledWith('reflection-journal', 250);
 
     const decided = await service.decide({

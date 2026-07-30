@@ -31,7 +31,13 @@ export interface FleetGardenActorContext {
   readonly role: 'owner' | 'admin' | 'member' | 'guest';
   readonly operatorGrantId: string;
   readonly sessionRecordId: string;
-  readonly sessionAssurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+  readonly sessionAssurance: 'oauth' | 'escalated' | 'break_glass';
+  /**
+   * D1 deployment access mode (signed by the gateway from the boot-frozen
+   * account roster): `sole_admin` deployments have exactly one rostered human
+   * and are never subject-gated; `multi_admin` keeps the subject boundary.
+   */
+  readonly accessMode: 'sole_admin' | 'multi_admin';
 }
 
 export interface LegacyGardenActorContext {
@@ -124,6 +130,7 @@ export function createFleetGardenRequestContext(input: {
     operatorGrantId: verified.authContext.operatorGrantId,
     sessionRecordId: verified.authContext.sessionRecordId,
     sessionAssurance: verified.authContext.sessionAssurance,
+    accessMode: verified.authContext.fleetAccessMode,
   });
   return Object.freeze({
     kind: 'fleet_principal',
@@ -276,10 +283,27 @@ function isSubjectAuthorizedEpisodicRoute(context: GardenRequestContext): boolea
  * memory pass only through their subject-scoped projections (88u3); route
  * recovery, CogSec remediation, group memory, and shard review stay denied.
  */
+/**
+ * D1 helper: true when the signed fleet actor is the deployment's sole
+ * rostered admin (admin-class role + `sole_admin` access mode). Such an actor
+ * is never subject-partitioned from their own deployment's data.
+ */
+export function soleAdminFleetActor(
+  context: Pick<FleetGardenRequestContext, 'actor'>,
+): boolean {
+  return (context.actor.role === 'owner' || context.actor.role === 'admin')
+    && context.actor.accessMode === 'sole_admin';
+}
+
 export function gardenRequestServiceBoundaryDenial(
   context: GardenRequestContext,
 ): string | null {
   if (context.kind !== 'fleet_principal') return null;
+  // D1 sole-admin doctrine: with exactly one rostered human there is no other
+  // subject to protect — the SSO admin reaches every Garden service. The
+  // high-intimacy body escalation and the companion-privacy break-glass
+  // boundary are enforced downstream and are unaffected by this bypass.
+  if (soleAdminFleetActor(context)) return null;
   if (context.resource.area === 'sessions') {
     if (isSubjectBoundSessionRoute(context)) return null;
     return 'Fleet session access requires a subject-bound session projection';

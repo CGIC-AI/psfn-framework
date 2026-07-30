@@ -159,21 +159,6 @@ export interface VerifiedFirstOwnerAssurance {
   contactId: string;
 }
 
-/**
- * Implemented by the gateway-owned trusted-host/WebAuthn lane (opl1.10).
- * The broker never accepts caller booleans for UV or host confirmation; it
- * receives only the exact binding returned by this verifier.
- */
-export interface FirstOwnerAssurancePort {
-  verify(input: {
-    evidence: unknown;
-    expectedOrigin: string;
-  }): Promise<VerifiedFirstOwnerAssurance>;
-}
-
-export interface FirstOwnerContactAuthorityPort {
-  verify(input: VerifiedFirstOwnerAssurance): Promise<VerifiedDiscordContactAuthoritySnapshot>;
-}
 
 interface DiscordTokenResponse {
   accessToken: string;
@@ -192,8 +177,6 @@ export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOpti
   fetchImpl?: typeof fetch;
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
-  firstOwnerAssurance?: FirstOwnerAssurancePort;
-  firstOwnerContactAuthority?: FirstOwnerContactAuthorityPort;
   authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 }
 
@@ -248,8 +231,6 @@ export class GatewayFleetAuthBroker {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
-  private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
-  private readonly firstOwnerContactAuthority?: FirstOwnerContactAuthorityPort;
   private readonly discordEvidence: DiscordEvidenceBrokerBoundary;
   private readonly authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 
@@ -261,8 +242,6 @@ export class GatewayFleetAuthBroker {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
-    this.firstOwnerAssurance = options.firstOwnerAssurance;
-    this.firstOwnerContactAuthority = options.firstOwnerContactAuthority;
     this.authorizationContextResolver = options.authorizationContextResolver;
     this.discordEvidence = new DiscordEvidenceBrokerBoundary(options, this.fetchImpl, this.now);
   }
@@ -580,48 +559,6 @@ export class GatewayFleetAuthBroker {
       now: this.now(),
       reasonDigest: createHash('sha256').update(input.reason.trim()).digest('hex'),
     }));
-  }
-
-  async completeFirstOwnerBootstrap(input: {
-    token: string;
-    csrfToken: string;
-    requestOrigin: string;
-    assuranceEvidence: unknown;
-  }): Promise<FleetAuthSessionRecord> {
-    this.assertMutationOrigin(input.requestOrigin);
-    if (!this.firstOwnerAssurance || !this.firstOwnerContactAuthority) {
-      throw new FleetAuthBrokerError(
-        'strong_assurance_unavailable',
-        503,
-        'First-owner assurance is unavailable',
-      );
-    }
-    const verified = await this.firstOwnerAssurance.verify({
-      evidence: input.assuranceEvidence,
-      expectedOrigin: this.config.canonicalOrigin,
-    });
-    const contactAuthority = await this.firstOwnerContactAuthority.verify(verified);
-    if (contactAuthority.contactId !== verified.contactId
-      || contactAuthority.providerSubjectId !== verified.providerSubjectId) {
-      throw new FleetAuthBrokerError(
-        'first_owner_binding_mismatch',
-        403,
-        'First-owner contact authority does not match the trusted-host tuple',
-      );
-    }
-    return await this.discordEvidence.fenceFirstOwnerActivation(
-      await this.store.completeFirstOwnerBootstrap({
-        token: input.token,
-        csrfToken: input.csrfToken,
-        ...verified,
-        contactAuthority,
-        nextToken: opaqueToken(this.randomBytes),
-        nextCsrfToken: opaqueToken(this.randomBytes),
-        now: this.now(),
-        idleTtlMs: this.config.ttls.sessionIdleMs,
-        absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
-      }),
-    );
   }
 
   private assertMutationOrigin(requestOrigin: string): void {

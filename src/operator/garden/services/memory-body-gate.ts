@@ -3,12 +3,6 @@ import {
   MEMORY_SUBJECT_CLASSIFIER_VERSION,
   type MemorySubjectClassification,
 } from '../../../shared/contracts/memory-subject.js';
-import {
-  memorySubjectClassifierEvidenceDigest,
-  memorySubjectScopeDigest,
-  type MemorySubjectJitRequest,
-} from '../../../shared/contracts/memory-subject-jit.js';
-import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import { isHighIntimacySensitivityLevel } from '../../../system/trust/types.js';
 import type {
   AdminMemoryBodyRedaction,
@@ -64,10 +58,14 @@ export interface FleetMemoryBodyAuthorizationContext {
   browserSessionId: string;
   companionId: string;
   viewerContactId: string;
-  viewerRelation: 'self' | 'co_subject';
-  action: 'memory.jit.self';
+  /** Signed fleet role; owner/admin follow the D1 admin projection. */
+  viewerRole: 'owner' | 'admin' | 'member' | 'guest';
+  /** Signed D1 deployment access mode resolved from the account roster. */
+  accessMode: 'sole_admin' | 'multi_admin';
+  action: 'memory.reveal';
   resourceMemoryId: string;
-  assurance: 'webauthn_uv';
+  /** The gateway consumed an audited escalation grant for exactly this request. */
+  assurance: 'escalated';
   authorityGeneration: number;
   globalAuthEpoch: number;
   sessionAuthnVersion: number;
@@ -76,6 +74,10 @@ export interface FleetMemoryBodyAuthorizationContext {
   grantVersion: number;
   policyVersion: number;
   requestExpiresAtSeconds: number;
+}
+
+function isAdminClassRole(role: FleetMemoryBodyAuthorizationContext['viewerRole']): boolean {
+  return role === 'owner' || role === 'admin';
 }
 
 /**
@@ -165,9 +167,10 @@ export class AdminMemoryBodyGate {
 
   /**
    * Routine fleet view at every sensitivity. The SQL projection has already
-   * hidden non-subject rows before IDs and counts are constructed; this
+   * hidden unauthorized rows before IDs and counts are constructed; this
    * second check fails closed if the classification changed before response
-   * construction. Only high-intimacy rows receive a reveal binding.
+   * construction. High-intimacy bodies stay redacted until an audited
+   * escalation reveal — the single escalation point of the D1 doctrine.
    */
   toFleetAdminView(
     context: Omit<FleetMemoryBodyAuthorizationContext, 'action' | 'resourceMemoryId'
@@ -176,57 +179,33 @@ export class AdminMemoryBodyGate {
     classification: MemorySubjectClassification,
   ): AdminMemoryView {
     this.assertFleetProjection(context, memory, classification);
-    const subjectSafeMemory = this.subjectSafeMemory(memory, context.viewerContactId);
-    if (!isHighIntimacyMemory(subjectSafeMemory)) return subjectSafeMemory;
-    const redacted = this.toAdminView(null, subjectSafeMemory);
-    return {
-      ...redacted,
-      subjectJitBinding: {
-        subjectScopeDigest: memorySubjectScopeDigest({
-          companionId: context.companionId,
-          memoryId: memory.id,
-          viewerContactId: context.viewerContactId,
-          viewerRelation: context.viewerRelation,
-          classification,
-        }),
-        memoryRevision: classification.memoryRevision,
-        classifierVersion: classification.classifierVersion,
-        classifierEvidenceDigest: memorySubjectClassifierEvidenceDigest(classification),
-      },
-    };
+    const view = isAdminClassRole(context.viewerRole)
+      ? memory
+      : this.subjectSafeMemory(memory, context.viewerContactId);
+    if (!isHighIntimacyMemory(view)) return view;
+    return this.toAdminView(null, view);
   }
 
   /**
-   * Exercise one already-consumed gateway JIT grant. No reusable in-process
-   * fleet grant is minted: the signed request and SQL grant binding authorize
-   * exactly this response, while legacy feature-off reveal TTLs stay intact.
+   * Exercise one already-consumed gateway escalation grant (D2): the gateway
+   * verified session, grant scope (exact memory id), and TTL before minting
+   * the `escalated` assurance; the reveal is bound to that one resource. No
+   * reusable in-process fleet grant is minted.
    */
-  toFleetJitView(
+  toFleetRevealView(
     context: FleetMemoryBodyAuthorizationContext,
-    request: MemorySubjectJitRequest,
     memory: PurrMemory,
     classification: MemorySubjectClassification,
   ): AdminMemoryView {
     this.assertFleetProjection(context, memory, classification);
     if (context.resourceMemoryId !== memory.id
       || !Number.isSafeInteger(context.requestExpiresAtSeconds)
-      || this.now() >= context.requestExpiresAtSeconds * 1_000
-      || request.memoryRevision !== classification.memoryRevision
-      || request.classifierVersion !== classification.classifierVersion
-      || !timingSafeStringEqual(
-        request.classifierEvidenceDigest,
-        memorySubjectClassifierEvidenceDigest(classification),
-      )
-      || !timingSafeStringEqual(request.subjectScopeDigest, memorySubjectScopeDigest({
-        companionId: context.companionId,
-        memoryId: memory.id,
-        viewerContactId: context.viewerContactId,
-        viewerRelation: context.viewerRelation,
-        classification,
-      }))) {
-      throw new Error('Memory subject JIT grant does not match the current authorization projection');
+      || this.now() >= context.requestExpiresAtSeconds * 1_000) {
+      throw new Error('Memory reveal does not match its audited escalation grant');
     }
-    return this.subjectSafeMemory(memory, context.viewerContactId);
+    return isAdminClassRole(context.viewerRole)
+      ? memory
+      : this.subjectSafeMemory(memory, context.viewerContactId);
   }
 
   private subjectSafeMemory(memory: PurrMemory, viewerContactId: string): PurrMemory {
@@ -261,7 +240,7 @@ export class AdminMemoryBodyGate {
 
   private assertFleetProjection(
     context: Pick<FleetMemoryBodyAuthorizationContext,
-      'principalId' | 'browserSessionId' | 'companionId' | 'viewerContactId' | 'viewerRelation'
+      'principalId' | 'browserSessionId' | 'companionId' | 'viewerContactId' | 'viewerRole'
       | 'authorityGeneration' | 'globalAuthEpoch' | 'sessionAuthnVersion'
       | 'sessionAuthzVersion' | 'bindingVersion' | 'grantVersion' | 'policyVersion'>,
     memory: PurrMemory,
@@ -281,10 +260,16 @@ export class AdminMemoryBodyGate {
       || versions.some(version => !Number.isSafeInteger(version) || version < 1)
       || classification.memoryId !== memory.id
       || classification.status !== 'current'
-      || classification.classifierVersion !== MEMORY_SUBJECT_CLASSIFIER_VERSION
-      || classification.subjectClass !== 'single_contact'
-      || classification.subjectContactIds.length !== 1
-      || classification.subjectContactIds[0] !== context.viewerContactId) {
+      || classification.classifierVersion !== MEMORY_SUBJECT_CLASSIFIER_VERSION) {
+      throw new Error('Memory body access requires a current subject classification');
+    }
+    // Non-admin roles keep the pre-D1 narrow scope: exactly their own
+    // single-contact rows. Admin-class viewers follow the D1 projection the
+    // SQL predicate already applied for their access mode.
+    if (!isAdminClassRole(context.viewerRole)
+      && (classification.subjectClass !== 'single_contact'
+        || classification.subjectContactIds.length !== 1
+        || classification.subjectContactIds[0] !== context.viewerContactId)) {
       throw new Error('Memory body access requires a current proven single-contact subject');
     }
   }

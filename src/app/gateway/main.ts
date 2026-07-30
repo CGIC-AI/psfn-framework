@@ -758,13 +758,9 @@ async function main(): Promise<void> {
     ...(fleetAuthPersistence
       ? {
           fleetAuthBroker: fleetAuthPersistence.broker,
-          fleetAuthJitStepUp: fleetAuthPersistence.jitStepUp,
-          fleetAuthPasskeyCeremonies: fleetAuthPersistence.passkeyCeremonies,
+          fleetAuthEscalation: fleetAuthPersistence.escalation,
           fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
           ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
-          fleetAuthAccountReapprovalCeremonies:
-            fleetAuthPersistence.accountReapprovalCeremonies,
-          fleetAuthProviderRecovery: fleetAuthPersistence.providerRecovery,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

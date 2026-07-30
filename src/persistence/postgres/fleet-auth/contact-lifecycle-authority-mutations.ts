@@ -141,15 +141,10 @@ export async function applyContactLifecycleDestructiveFence(options: {
     WHERE principal_id = ANY($1::uuid[])
   `, [principalIds, now()]);
   await client.query(`
-    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants
     SET revoked_at = COALESCE(revoked_at, $2)
     WHERE principal_id = ANY($1::uuid[])
   `, [principalIds, now()]);
-  await client.query(`
-    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
-    SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-    WHERE principal_id = ANY($1::uuid[])
-  `, [principalIds]);
   await client.query(`
     UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
     SET revoked_at = COALESCE(revoked_at, $2)
@@ -171,7 +166,7 @@ export async function applyContactLifecycleDestructiveFence(options: {
         OR initiating_principal_id = ANY($1::uuid[]))
   `, [principalIds]);
   for (const table of [
-    'browser_sessions', 'jit_authorization_grants', 'step_up_challenges',
+    'browser_sessions', 'escalation_grants',
     'provider_token_custody', 'discord_evidence_snapshots',
     'discord_evidence_lifecycle_fences',
   ]) {

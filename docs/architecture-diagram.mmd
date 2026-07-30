@@ -17,7 +17,7 @@ flowchart TB
     POLICY["Gateway policy\nURL/SSRF/fs/shell/git/web/media,\nper-companion capability tiers"]
     CHANNELS["Channel adapters + backplane\nDiscord, Telegram, API, voice, companion-ui;\nsatellite/places registries, hub claims"]
     HOST_TOOLS["Privileged host tools\nfs, repo, shell, web, vault, beads, media"]
-    FLEET_AUTH["Fleet auth + portal\npasskeys, Ed25519 hop capabilities, replay guard,\nSSO router, portal projection, Companion UI WS broker"]
+    FLEET_AUTH["Fleet auth + portal\naudited escalation grants, Ed25519 hop capabilities, replay guard,\nSSO router, portal projection, Companion UI WS broker"]
     INTAKE_GW["Intake firewall screening\nL0 envelope, L1 scanners, L1.5 ONNX classifier,\nL2/L3 LLM screeners, L2.5 vision"]
   end
 
@@ -53,7 +53,7 @@ flowchart TB
   TELEGRAM --> CHANNELS
   API --> CHANNELS
   VOICE --> CHANNELS
-  COMPANION_UI -- "WS actions + approvals\npasskey / hop capabilities" --> FLEET_AUTH
+  COMPANION_UI -- "WS actions + approvals\nescalation / hop capabilities" --> FLEET_AUTH
   SAT_HUB <-- "satellite turns / presence in,\nevent-bus relay out" --> CHANNELS
   SAT_HUB -- "hub device assertions" --> FLEET_AUTH
   GARDEN_BROWSER --> GARDEN_HTTP

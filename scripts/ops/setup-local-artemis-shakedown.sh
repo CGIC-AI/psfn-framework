@@ -535,7 +535,6 @@ function generateFleetAuthOwner(owner) {
       companionId,
       role: 'owner',
     }],
-    accountRosterSatisfiesStepUp: true,
     verifierKeys: [{
       issuer: 'psfn-fleet-auth',
       kid: brokerKid,

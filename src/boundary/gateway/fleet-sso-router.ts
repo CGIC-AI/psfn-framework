@@ -26,6 +26,7 @@ import {
 } from '../fleet-auth/request-capability-transport.js';
 import type {
   GatewayRequestCapabilitySigner,
+  RequestCapabilityAuthContext,
   RequestCapabilityAuthorityVersions,
   RequestCapabilityVerifier,
   VerifiedRequestCapability,
@@ -36,17 +37,16 @@ import {
 } from './fleet-authorization-context.js';
 import type { GatewayFleetAuthBroker } from './fleet-auth-broker.js';
 import type {
-  FleetJitGrantBinding,
-  FleetJitRequestBinding,
-  FleetJitStepUpCoordinator,
-} from '../fleet-auth/jit-step-up.js';
-import { parseMemorySubjectJitRequest } from '../../shared/contracts/memory-subject-jit.js';
+  FleetEscalationCoordinator,
+  FleetEscalationGrantBinding,
+} from '../fleet-auth/escalation.js';
+import {
+  resolveFleetAccessMode,
+  type FleetAccessMode,
+} from '../fleet-auth/fleet-access-mode.js';
+import type { FleetAuthAccountRosterEntry } from '../../system/config/fleet-auth-config.js';
 import {
   isPrivacyBreakGlassConfirmRoute,
-  parsePrivacyBreakGlassConfirmRequest,
-  privacyBreakGlassPurpose,
-  privacyBreakGlassResourceKindForRoute,
-  privacyBreakGlassSubjectScopeDigest,
 } from '../../shared/contracts/privacy-break-glass.js';
 import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
@@ -96,7 +96,7 @@ const FLEET_LOGIN_PATH = '/fleet/login';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
-export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
+export const FLEET_ESCALATION_GRANT_HEADER = 'x-psfn-escalation-grant';
 const FORWARDED_HEADERS = Object.freeze([
   'forwarded',
   'x-forwarded-for',
@@ -155,7 +155,9 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
   readonly portalUi?: FleetGardenUiAssetsPort;
   readonly modelUsageProjection: FleetModelUsageProjectionPort;
-  readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
+  readonly escalation?: Pick<FleetEscalationCoordinator, 'consumeGrant'>;
+  /** Boot-frozen admin-unconditional roster; drives the D1 access-mode seam. */
+  readonly accountRoster?: readonly FleetAuthAccountRosterEntry[];
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
     readonly companionId: CompanionId;
@@ -185,7 +187,7 @@ interface ParsedGardenRoute {
 }
 
 class FleetSsoRequestError extends Error {
-  constructor(readonly status: 400 | 401 | 404 | 413 | 502 | 503, message: string) {
+  constructor(readonly status: 400 | 401 | 403 | 404 | 413 | 502 | 503, message: string) {
     super(message);
     this.name = 'FleetSsoRequestError';
   }
@@ -213,24 +215,26 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(body);
 }
 
-function writeSocketError(socket: Duplex, status: 400 | 401 | 404 | 413 | 502 | 503): void {
+function writeSocketError(socket: Duplex, status: 400 | 401 | 403 | 404 | 413 | 502 | 503): void {
   const label = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
-      : status === 404 ? 'Not Found'
-        : status === 413 ? 'Payload Too Large'
-          : status === 502 ? 'Bad Gateway'
-            : 'Service Unavailable';
+      : status === 403 ? 'Forbidden'
+        : status === 404 ? 'Not Found'
+          : status === 413 ? 'Payload Too Large'
+            : status === 502 ? 'Bad Gateway'
+              : 'Service Unavailable';
   socket.end(`HTTP/1.1 ${status} ${label}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 export function fleetGardenUpgradeClose(
-  status: 400 | 401 | 404 | 413 | 502 | 503,
+  status: 400 | 401 | 403 | 404 | 413 | 502 | 503,
 ): { code: number; reason: string } {
   switch (status) {
     case 400:
     case 413:
       return { code: 4400, reason: 'Invalid Garden stream request' };
     case 401:
+    case 403:
       return { code: 4401, reason: 'Garden stream authentication required' };
     case 404:
       return { code: 4404, reason: 'Garden stream unavailable' };
@@ -575,7 +579,16 @@ export class GatewayFleetSsoRouter {
           headers: request.headers,
           body,
         });
-        const issued = await this.issueCapability(authorization);
+        const issued = await this.issueCapability({
+          ...authorization,
+          authContext: Object.freeze({
+            ...authorization.authContext,
+            fleetAccessMode: resolveFleetAccessMode(
+              this.options.accountRoster,
+              route.companionId,
+            ),
+          }),
+        });
         await this.proxyHttp(request, response, upstream, route, body, issued);
         return;
       }
@@ -749,14 +762,13 @@ export class GatewayFleetSsoRouter {
       headers: targetHeaders,
       body: input.body,
     });
-    const rawJitGrantId = singleHeader(input.headers[FLEET_JIT_GRANT_HEADER]);
-    const isMemoryReveal = target.action === 'memory.jit.self'
-      && target.resource.routeId === 'POST /api/admin/memory/:id/reveal';
+    const rawEscalationGrantId = singleHeader(input.headers[FLEET_ESCALATION_GRANT_HEADER]);
     const isPrivacyConfirm = target.action === 'privacy.break_glass'
       && isPrivacyBreakGlassConfirmRoute(target.resource.routeId)
       && target.authorization.requirements.assurance === 'privacy_break_glass';
-    const isJitTarget = isMemoryReveal || isPrivacyConfirm;
-    if (!isJitTarget && rawJitGrantId !== undefined) {
+    const isEscalationTarget = target.authorization.requirements.assurance === 'escalated'
+      || isPrivacyConfirm;
+    if (!isEscalationTarget && rawEscalationGrantId !== undefined) {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
     const requestId = randomUUID();
@@ -775,62 +787,34 @@ export class GatewayFleetSsoRouter {
     }
     const decisionId = context.provenance.authorizationEventId;
     const versions = authorityVersions(context);
-    let consumedJit: FleetJitGrantBinding | undefined;
-    if (isJitTarget) {
-      if (!rawJitGrantId || !isRfc4122Uuid(rawJitGrantId) || !this.options.jitStepUp) {
-        throw new FleetSsoRequestError(404, 'Resource not found');
-      }
-      let binding: FleetJitRequestBinding;
-      try {
-        if (isMemoryReveal) {
-          const jitRequest = parseMemorySubjectJitRequest(JSON.parse(input.body.toString('utf8')));
-          binding = {
-            target,
-            subjectScopeDigest: jitRequest.subjectScopeDigest,
-            purpose: jitRequest.purpose,
-            memoryRevision: jitRequest.memoryRevision,
-            classifierEvidenceDigest: jitRequest.classifierEvidenceDigest,
-          };
-        } else {
-          const resourceKind = privacyBreakGlassResourceKindForRoute(target.resource.routeId);
-          const resourceId = target.resource.pathParams.id;
-          if (!resourceKind || !resourceId) throw new Error('Privacy resource is incomplete');
-          const request = parsePrivacyBreakGlassConfirmRequest(JSON.parse(input.body.toString('utf8')));
-          binding = {
-            target,
-            subjectScopeDigest: privacyBreakGlassSubjectScopeDigest({
-              companionId: target.companionId,
-              action: target.action,
-              routeId: target.resource.routeId,
-              resourceKind,
-              resourceId,
-            }),
-            purpose: privacyBreakGlassPurpose(request),
-            memoryRevision: 1,
-            classifierEvidenceDigest: target.resourceDigest,
-          };
-        }
-      } catch {
-        throw new FleetSsoRequestError(404, 'Resource not found');
+    let consumedEscalation: FleetEscalationGrantBinding | undefined;
+    if (isEscalationTarget) {
+      if (!rawEscalationGrantId || !isRfc4122Uuid(rawEscalationGrantId)
+        || !this.options.escalation) {
+        // Fail closed, and say why: the surface requires an audited grant.
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
       }
       try {
-        consumedJit = await this.options.jitStepUp.consumeGrant({
-          grantId: rawJitGrantId,
+        consumedEscalation = await this.options.escalation.consumeGrant({
+          grantId: rawEscalationGrantId,
           token: input.sessionToken,
           requestOrigin: this.options.canonicalOrigin,
-          binding,
+          target,
         });
       } catch {
-        throw new FleetSsoRequestError(404, 'Resource not found');
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
       }
-      if (!timingSafeStringEqual(consumedJit.principalId, context.principalId)
-        || !timingSafeStringEqual(consumedJit.browserSessionId, context.session.recordId)
-        || consumedJit.assurance !== 'webauthn_uv'
-        || consumedJit.expiresAt.getTime()
+      if (!timingSafeStringEqual(consumedEscalation.principalId, context.principalId)
+        || !timingSafeStringEqual(consumedEscalation.browserSessionId, context.session.recordId)
+        || consumedEscalation.expiresAt.getTime()
           <= (this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now())) {
-        throw new FleetSsoRequestError(404, 'Resource not found');
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
       }
     }
+    const fleetAccessMode: FleetAccessMode = resolveFleetAccessMode(
+      this.options.accountRoster,
+      input.route.companionId,
+    );
     const authContext = toRequestCapabilityAuthContext(context);
     const fleetCompanionIds = target.method === 'GET'
       && target.canonicalPath === '/api/admin/fleet-model-usage'
@@ -856,13 +840,15 @@ export class GatewayFleetSsoRouter {
       target,
       requestId,
       decisionId,
-      authContext: consumedJit
+      authContext: consumedEscalation
         ? Object.freeze({
           ...authContext,
-          sessionAssurance: isPrivacyConfirm ? 'break_glass' as const : 'webauthn_uv' as const,
+          fleetAccessMode,
+          sessionAssurance: isPrivacyConfirm ? 'break_glass' as const : 'escalated' as const,
         })
         : Object.freeze({
             ...authContext,
+            fleetAccessMode,
             ...(fleetCompanionIds && fleetModelUsageRequestTarget
               ? { fleetCompanionIds, fleetModelUsageRequestTarget }
               : {}),
@@ -876,7 +862,7 @@ export class GatewayFleetSsoRouter {
     target: CompiledGardenRequestTarget;
     requestId: string;
     decisionId: string;
-    authContext: ReturnType<typeof toRequestCapabilityAuthContext>;
+    authContext: RequestCapabilityAuthContext;
     versions: RequestCapabilityAuthorityVersions;
     context: FleetAuthorizationContext;
   }): Promise<{

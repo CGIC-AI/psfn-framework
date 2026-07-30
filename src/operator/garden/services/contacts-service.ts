@@ -35,7 +35,10 @@ import type {
   ContactUpdateResult,
 } from './types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
-import type { GardenRequestContext } from '../garden-request-context.js';
+import {
+  soleAdminFleetActor,
+  type GardenRequestContext,
+} from '../garden-request-context.js';
 import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
 
 function requestActor(context: GardenRequestContext | undefined): string {
@@ -48,7 +51,28 @@ function isOtherFleetContact(
   context: GardenRequestContext | undefined,
   contactId: string,
 ): boolean {
-  return context?.kind === 'fleet_principal' && context.actor.contactId !== contactId;
+  if (context?.kind !== 'fleet_principal') return false;
+  // D1 sole-admin doctrine: the deployment's single rostered admin owns the
+  // whole contact surface.
+  if (soleAdminFleetActor(context)) return false;
+  return context.actor.contactId !== contactId;
+}
+
+function fleetProfileAccessContext(context: GardenRequestContext & { kind: 'fleet_principal' }): {
+  viewerContactId: string;
+  adminAccessMode?: 'sole_admin' | 'multi_admin';
+  escalated?: boolean;
+} {
+  const adminClass = context.actor.role === 'owner' || context.actor.role === 'admin';
+  return {
+    viewerContactId: context.actor.contactId,
+    ...(adminClass
+      ? {
+          adminAccessMode: context.actor.accessMode,
+          ...(context.actor.sessionAssurance === 'escalated' ? { escalated: true } : {}),
+        }
+      : {}),
+  };
 }
 
 interface ChannelPrivacyUpdate {
@@ -157,7 +181,7 @@ export class AdminContactsDataService implements AdminContactsService {
     if (context?.kind !== 'fleet_principal') return this.deps.memoryStore;
     return createSubjectAuthorizedMemoryStore(
       this.deps.fleetMemoryStore ?? this.deps.memoryStore,
-      Object.freeze({ viewerContactId: context.actor.contactId }),
+      Object.freeze(fleetProfileAccessContext(context)),
     );
   }
 
@@ -356,6 +380,7 @@ export class AdminContactsDataService implements AdminContactsService {
     }
 
     const fleetContactId = context?.kind === 'fleet_principal'
+      && !soleAdminFleetActor(context)
       ? context.actor.contactId
       : null;
     const contacts = (await contactStore.listAll()).filter(contact => (

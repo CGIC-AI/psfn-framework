@@ -319,6 +319,74 @@ describe('subject-authorized memory store', () => {
     });
   });
 
+  it('D1 admin projection: sole_admin widens every class/relation with no sensitivity carve-out', async () => {
+    const queryAuthorizedMemorySubjects = vi.fn(async () => ({
+      memories: [memory('visible', 'anything')],
+      total: 1,
+    }));
+    const store = createSubjectAuthorizedMemoryStore({
+      queryAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort, {
+      viewerContactId: 'contact-self',
+      adminAccessMode: 'sole_admin',
+    });
+    await store.getById('visible');
+    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith({
+      authorization: {
+        action: 'detail',
+        viewerContactIds: ['contact-self'],
+        allowedSubjectClasses: [
+          'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+        ],
+        allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+        classifierVersion: 1,
+        grantBindings: [],
+      },
+      selector: { kind: 'detail', memoryId: 'visible' },
+    });
+  });
+
+  it('D1 admin projection: multi_admin keeps the high-sensitivity other-human carve-out until escalated', async () => {
+    const queryAuthorizedMemorySubjects = vi.fn(async () => ({ memories: [], total: 0 }));
+    const raw = { queryAuthorizedMemorySubjects } as unknown as MemoryStorePort;
+
+    await createSubjectAuthorizedMemoryStore(raw, {
+      viewerContactId: 'contact-self',
+      adminAccessMode: 'multi_admin',
+    }).getById('hidden');
+    expect(queryAuthorizedMemorySubjects).toHaveBeenLastCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({
+        allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
+        excludeHighSensitivityOtherRelation: true,
+      }),
+    }));
+
+    await createSubjectAuthorizedMemoryStore(raw, {
+      viewerContactId: 'contact-self',
+      adminAccessMode: 'multi_admin',
+      escalated: true,
+    }).getById('now-visible');
+    const lastAuthorization = queryAuthorizedMemorySubjects.mock.calls.at(-1)![0].authorization;
+    expect(lastAuthorization.excludeHighSensitivityOtherRelation).toBeUndefined();
+    expect(lastAuthorization.allowedViewerRelations).toEqual(['self', 'co_subject', 'other', 'none']);
+  });
+
+  it('D1 admin projection is inert for companion-internal contexts', async () => {
+    const queryAuthorizedMemorySubjects = vi.fn(async () => ({ memories: [], total: 0 }));
+    await createSubjectAuthorizedMemoryStore({
+      queryAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort, {
+      companionInternal: true,
+      adminAccessMode: 'sole_admin',
+    }).getById('internal');
+    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({
+        allowedSubjectClasses: ['companion_private'],
+        allowedViewerRelations: ['none'],
+      }),
+    }));
+  });
+
   it('filters every linked endpoint through the same subject SQL primitive in one batch', async () => {
     const visibleIds = new Set(['source', 'allowed']);
     const rawLinks = [

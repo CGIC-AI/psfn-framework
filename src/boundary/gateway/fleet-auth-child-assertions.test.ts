@@ -28,7 +28,8 @@ const versions: RequestCapabilityAuthorityVersions = Object.freeze({
 const authContext = Object.freeze({
   principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
   companionId, contactBindingId: 'binding-a', contactId: 'contact-a', operatorGrantId: 'grant-a',
-  role: 'admin' as const, sessionRecordId: 'session-a', sessionAssurance: 'webauthn_uv' as const,
+  role: 'admin' as const, sessionRecordId: 'session-a', sessionAssurance: 'escalated' as const,
+  fleetAccessMode: 'multi_admin' as const,
   authorizationEventId: 'event-a', resolvedAt: '2030-01-01T00:00:00.000Z',
 });
 const testingHarnessAuthContext = Object.freeze({
@@ -38,7 +39,8 @@ const testingHarnessAuthContext = Object.freeze({
   contactId: `testing-harness-contact-${companionId}`,
   operatorGrantId: 'testing-harness-admin', role: 'admin' as const,
   sessionRecordId: `testing-harness-session-${companionId}`,
-  sessionAssurance: 'webauthn_uv' as const,
+  sessionAssurance: 'escalated' as const,
+  fleetAccessMode: 'multi_admin' as const,
   authorizationEventId: 'event-harness', resolvedAt: '2030-01-01T00:00:00.000Z',
 });
 

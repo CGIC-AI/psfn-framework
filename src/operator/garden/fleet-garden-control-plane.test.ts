@@ -49,7 +49,8 @@ function authContext(companionId: CompanionId) {
     operatorGrantId: 'grant-a',
     role: 'admin' as const,
     sessionRecordId: 'session-a',
-    sessionAssurance: 'webauthn_uv' as const,
+    sessionAssurance: 'oauth' as const,
+    fleetAccessMode: 'multi_admin' as const,
     authorizationEventId: 'event-a',
     resolvedAt: '2030-01-01T00:00:00.000Z',
   });
@@ -188,7 +189,7 @@ describe('FleetGardenControlPlane', () => {
       context: {
         kind: 'fleet_principal',
         resource: { companionId: COMPANION_A },
-        actor: { sessionAssurance: 'webauthn_uv' },
+        actor: { sessionAssurance: 'oauth', accessMode: 'multi_admin' },
       },
       upstream: {
         companionId: COMPANION_A,

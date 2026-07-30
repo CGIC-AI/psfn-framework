@@ -123,9 +123,15 @@ async function testNormalExit() {
     // Per-tier result JSONs written and parseable.
     for (const tier of ['nursery', 'apprentice', 'autonomous']) {
       const p = join(matrixDir, `tool-conformance.${tier}.json`);
-      const ok = existsSync(p) && Array.isArray(JSON.parse(readFileSync(p, 'utf8')).results);
+      const payload = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
+      const ok = Array.isArray(payload?.results)
+        && payload?.capabilityTierChangeNotice?.matches === true;
       check(ok, `per-tier result JSON written for '${tier}'`);
     }
+    const sessionReads = stub.log.filter(
+      request => request.method === 'GET' && request.path.startsWith('/api/admin/sessions'),
+    );
+    check(sessionReads.length >= 6, 'verified companion-visible tier notices through session reads');
 
     // ok:false counting: one failure per tier, summarized correctly.
     const okFalseLines = (stderr.match(/ok:false=1/g) ?? []).length;

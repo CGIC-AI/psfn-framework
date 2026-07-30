@@ -56,6 +56,13 @@ export interface ResolvedShellExecution {
   deadlineBinaryPath: string;
   sandboxPath: string;
   childEnv: NodeJS.ProcessEnv;
+  /**
+   * Sandbox-absolute file paths masked with a read-only /dev/null bind
+   * (hrmrq.54): quarantined-artifact bytes the sandbox must be PHYSICALLY
+   * unable to read, regardless of how the command names them (cat, cp,
+   * pipes, globs — shapes no argv parser can enumerate).
+   */
+  shadowReadPaths?: string[];
   timeoutMs: number;
   maxOutputChars: number;
   maxProcesses: number;
@@ -344,6 +351,64 @@ function resolveRepositoryMount(
   return canonical;
 }
 
+function mapHostPathIntoSandbox(
+  hostPath: string,
+  workspacePath: string,
+  repositoryMountPath: string | undefined,
+): string | null {
+  const workspaceRelative = relative(workspacePath, hostPath);
+  if (
+    workspaceRelative.length > 0
+    && !workspaceRelative.startsWith('..')
+    && !isAbsolute(workspaceRelative)
+  ) {
+    return `/workspace/${workspaceRelative.replaceAll('\\', '/')}`;
+  }
+  if (repositoryMountPath) {
+    const repoRelative = relative(repositoryMountPath, hostPath);
+    if (
+      repoRelative.length > 0
+      && !repoRelative.startsWith('..')
+      && !isAbsolute(repoRelative)
+    ) {
+      return `${SANDBOX_REPOSITORY_MOUNT_TARGET}/${repoRelative.replaceAll('\\', '/')}`;
+    }
+  }
+  // Outside every sandbox mount: the file is not visible inside the sandbox
+  // at all, so there is nothing to mask.
+  return null;
+}
+
+/**
+ * Maps quarantined-artifact host paths (hrmrq.54) onto the sandbox paths that
+ * must be masked with a /dev/null bind. Both the registered form and its
+ * realpath are mapped, so a symlinked-prefix registration cannot leave the
+ * canonical file readable (or vice versa). Exported for direct unit coverage
+ * on hosts without the sandbox binary (resolveShellExecution requires bwrap).
+ */
+export function resolveShadowReadPaths(
+  artifactPaths: readonly string[] | undefined,
+  workspacePath: string,
+  repositoryMountPath: string | undefined,
+): string[] {
+  const shadowPaths = new Set<string>();
+  for (const raw of artifactPaths ?? []) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const resolved = resolve(normalize(raw.trim()));
+    const candidates = new Set<string>([resolved]);
+    try {
+      candidates.add(realpathSync(resolved));
+    } catch {
+      // Missing file: the resolve()-normalized form is the only mappable name.
+    }
+    for (const candidate of candidates) {
+      const mapped = mapHostPathIntoSandbox(candidate, workspacePath, repositoryMountPath);
+      if (mapped) shadowPaths.add(mapped);
+    }
+  }
+  return [...shadowPaths].sort();
+}
+
 function resolveRequiredRuntimeBinary(path: string, label: string): string {
   const canonical = resolveCanonicalExecutablePath(path);
   if (!canonical) {
@@ -405,6 +470,12 @@ export function resolveShellExecution(
   options: {
     workspacePath: string;
     policy: ShellExecPolicyConfig;
+    /**
+     * Host paths of quarantined-artifact files (hrmrq.54) the sandbox must
+     * not be able to read; mapped to /dev/null shadow binds when they fall
+     * inside a sandbox mount.
+     */
+    quarantinedArtifactPaths?: readonly string[];
   },
 ): ResolvedShellExecution {
   if (options.policy.enabled !== true) {
@@ -444,6 +515,11 @@ export function resolveShellExecution(
     childEnv.PSFN_REPO = SANDBOX_REPOSITORY_MOUNT_TARGET;
   }
   const limits = resolveLimits(params, options.policy);
+  const shadowReadPaths = resolveShadowReadPaths(
+    options.quarantinedArtifactPaths,
+    workspacePath,
+    repositoryMountPath,
+  );
 
   return {
     command,
@@ -451,6 +527,7 @@ export function resolveShellExecution(
     args,
     workspacePath,
     ...(repositoryMountPath ? { repositoryMountPath } : {}),
+    ...(shadowReadPaths.length > 0 ? { shadowReadPaths } : {}),
     cwd,
     sandboxCwd,
     sandboxBinaryPath: resolveRequiredRuntimeBinary(DEFAULT_SANDBOX_BINARY, 'sandbox'),

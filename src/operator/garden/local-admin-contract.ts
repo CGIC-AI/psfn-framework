@@ -557,6 +557,9 @@ export function createInProcessGardenAdminContract(
       list: () => getQuarantineStore().list(),
       getById: (id) => getQuarantineStore().getById(id),
       applyDecision: (input) => getQuarantineStore().applyDecision(input),
+      findByArtifactPath: (path) => getQuarantineStore().findByArtifactPath(path),
+      recordAccessAttempt: (input) => getQuarantineStore().recordAccessAttempt(input),
+      listActiveArtifactPaths: () => getQuarantineStore().listActiveArtifactPaths(),
     },
     settingsService,
     // Fresh store per decision: CogSecEventStore snapshots the file at

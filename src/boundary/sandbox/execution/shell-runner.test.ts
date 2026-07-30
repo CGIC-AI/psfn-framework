@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   executeShellCommandWithPolicy,
 } from './shell-runner.js';
+import { resolveShadowReadPaths } from './shell-execution-policy.js';
 
 /**
  * Read-only /proc scan for live processes whose command line contains the
@@ -233,6 +234,48 @@ describe('executeShellCommandWithPolicy', () => {
     },
   );
 
+  // hrmrq.54: quarantined-artifact bytes are physically masked in the sandbox.
+  describe('quarantined-artifact shadow paths (hrmrq.54)', () => {
+    it('maps workspace-resident artifact paths to sandbox shadow binds and skips paths outside every mount', () => {
+      const { workspace, outside } = workspaceFixture();
+      mkdirSync(join(workspace, 'files'));
+      const artifact = join(workspace, 'files', 'doc.md');
+      writeFileSync(artifact, 'MARKER-a6932606e2a7');
+      const outsideArtifact = join(outside, 'doc.md');
+      writeFileSync(outsideArtifact, 'MARKER-a6932606e2a7');
+
+      // The workspace artifact is masked at its sandbox path; the outside
+      // path is invisible in the sandbox (no mount), so nothing to mask.
+      expect(resolveShadowReadPaths([artifact, outsideArtifact], workspace, undefined))
+        .toEqual(['/workspace/files/doc.md']);
+    });
+
+    it('maps repository-mount artifact paths under /repo', () => {
+      const { workspace, outside } = workspaceFixture();
+      const repo = join(outside, 'repository');
+      mkdirSync(join(repo, 'docs'), { recursive: true });
+      const artifact = join(repo, 'docs', 'held.txt');
+      writeFileSync(artifact, 'MARKER-a6932606e2a7');
+
+      expect(resolveShadowReadPaths([artifact], workspace, repo))
+        .toEqual(['/repo/docs/held.txt']);
+    });
+
+    it('masks BOTH the symlinked registration form and its canonical realpath', () => {
+      const { workspace } = workspaceFixture();
+      mkdirSync(join(workspace, 'files'));
+      const artifact = join(workspace, 'files', 'doc.md');
+      writeFileSync(artifact, 'MARKER-a6932606e2a7');
+      symlinkSync(join(workspace, 'files'), join(workspace, 'files-link'));
+
+      expect(resolveShadowReadPaths([join(workspace, 'files-link', 'doc.md')], workspace, undefined))
+        .toEqual([
+          '/workspace/files-link/doc.md',
+          '/workspace/files/doc.md',
+        ]);
+    });
+  });
+
   it.runIf(!existsSync(sandboxBinaryPath))('fails closed when the namespace sandbox is unavailable', async () => {
     const { workspace } = workspaceFixture();
 
@@ -243,6 +286,34 @@ describe('executeShellCommandWithPolicy', () => {
   });
 
   describe.runIf(existsSync(sandboxBinaryPath))('with the OS namespace sandbox', () => {
+    it('physically masks a quarantined artifact: cat/cp/globs read empty, never the bytes (hrmrq.54)', async () => {
+      const { workspace } = workspaceFixture();
+      mkdirSync(join(workspace, 'files'));
+      const artifact = join(workspace, 'files', 'doc.md');
+      writeFileSync(artifact, 'MARKER-a6932606e2a7');
+
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            'cat files/doc.md; cp files/doc.md /tmp/copy 2>/dev/null && cat /tmp/copy; cat files/*.md',
+          ],
+          cwd: workspace,
+        },
+        {
+          workspacePath: workspace,
+          policy: enabledPolicy(workspace),
+          quarantinedArtifactPaths: [artifact],
+        },
+      );
+
+      expect(result.stdout).not.toContain('MARKER-a6932606e2a7');
+      expect(result.stderr).not.toContain('MARKER-a6932606e2a7');
+      // The real bytes are untouched on the host.
+      expect(readFileSync(artifact, 'utf8')).toBe('MARKER-a6932606e2a7');
+    });
+
     it('runs Bash in the Personal Workspace and persists its writes there', async () => {
       const { workspace } = workspaceFixture();
 

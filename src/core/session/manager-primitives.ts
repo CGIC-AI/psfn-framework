@@ -148,6 +148,20 @@ export interface SessionMessageRecordOptions {
    * `intakeScreening` metadata so sink gates can consult them downstream.
    */
   intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
+  /**
+   * hrmrq.54: tool-result screening already performed at the scheduler seam
+   * (tool-call-scheduler.ts). Recording reuses this outcome — same envelope
+   * snapshot, same marking plan — instead of re-running the side-effecting
+   * screenSync (which would double the quarantine hold). Only meaningful for
+   * `recordToolObservation`; the observation content is already the
+   * screening's effective text.
+   */
+  precomputedToolIntakeScreening?: {
+    mode: 'shadow' | 'enforce';
+    withheld: boolean;
+    snapshot: IntakeEnvelopeSnapshot;
+    markingPlan?: import('../cogsec/intake/marking.js').IntakeMarkingPlan;
+  };
 }
 
 export interface MirrorEntryMetadata {

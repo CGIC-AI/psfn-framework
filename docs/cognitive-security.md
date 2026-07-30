@@ -391,6 +391,15 @@ produce the same parsed text, envelope shape, and screening decision
 the separate voice path (`audio_transcript` at the gateway API surface and
 the Discord voice turn runtime), not through file-ingest.
 
+A screening-withheld document additionally discloses **no on-disk locator**
+(hrmrq.54): the ingest section renders as `[Attached file withheld: …]` with
+the intake-envelope quarantine reference instead of `Saved path:` /
+`Parsed text path:`, and the attachment's `localPath`/`parsedTextPath`
+metadata is stripped — a disclosed path is one `fs.read` away from the
+quarantined bytes. The saved document and its parsed sidecar paths are
+registered on the quarantine hold (`artifactPaths`) so the read gate below
+covers them.
+
 ## Sink Gates and the Lethal Trifecta
 
 `src/core/cogsec/intake/sink-gates.ts` is Layer 4 — the actual security
@@ -424,7 +433,12 @@ Structural rules (never configurable):
   denies the egress outright (seed: `untrusted`, `hostile`); `soft` allows
   it but flags the invocation for operator review (seed: `trusted`,
   `standard`) — never a silent pass. Egress-capable tools are identified by
-  capability token (`INTAKE_EGRESS_CAPABILITY_TOKENS`).
+  capability token (`INTAKE_EGRESS_CAPABILITY_TOKENS`). A `hard` deny blocks
+  **in both modes** (hrmrq.77): shadow mode is observe-only for everything
+  else, but in shadow the untrusted content was delivered — never withheld —
+  so the trifecta is fully armed exactly when observe-only would wave it
+  through; per-tier `hard` enforcement therefore overrides the global shadow
+  mode for this one class, and the audited reason records the override.
 
 Content reaching a gated sink **without** an envelope (legacy paths that
 predate stamping) resolves per the sink's explicit `unscreened` policy
@@ -435,8 +449,57 @@ and the enforce-mode wiring caveats are in
 below.
 
 Mode semantics mirror screening: `shadow` evaluates and audits every gate but
-always allows; `enforce` honors verdicts fail-closed; `off` constructs no
-gate at all.
+always allows — with the single hrmrq.77 exception above (a hard-enforcement
+trifecta deny blocks even in shadow); `enforce` honors verdicts fail-closed;
+`off` constructs no gate at all.
+
+### Tool-result screening and the quarantined-artifact read gate (hrmrq.54)
+
+Three seams close the S11 shakedown containment bypass, where quarantine held a
+document but its raw bytes were one `fs.read` of the disclosed path away:
+
+- **Scheduler seam** (`src/core/agent/tool-call-scheduler.ts`,
+  `toolResultScreener` wired in `src/core/agent/substrate-agent.ts`): every
+  executed tool result — including error text — is screened as
+  `sourceClass: 'tool_output'` **before** the result message enters the turn,
+  not only on the persistence copy. Enforce-mode quarantine substitutes the
+  fixed withheld notice (non-text blocks are dropped with it, fail closed),
+  sanitize substitutes the sanitized text, shadow observes. The outcome is
+  stashed on the result message and reused by session recording
+  (`precomputedToolIntakeScreening`), so one screen produces one envelope and
+  one hold. A screener failure fails the result closed.
+- **Filesystem seam** (`src/core/cogsec/intake/quarantined-artifact-guard.ts`,
+  consulted by `fs.read` and `fs.search` in
+  `src/boundary/gateway/methods/fs.ts`): quarantine holds register the held
+  item's on-disk artifact paths (`artifactPaths` on the store entry); a read
+  of a registered artifact whose envelope is not sink-consumable returns the
+  fixed withheld notice instead of content in enforce mode (search drops its
+  matches/previews), and **every** such attempt — enforce or shadow — is
+  recorded on the quarantine entry (`accessAttempts`, surfaced as
+  `contentAccessAttempts` in the Garden queue view), so a bypass attempt is
+  never invisible to the operator reviewing the case. Operator release
+  (`human_released*`) clears the gate; discard/expire keep blocking.
+  Registration realpaths existing files, so a symlinked-prefix hold cannot
+  miss canonical reads, and artifact paths thread through the L2/L3
+  escalation chain (`IntakeEscalationRequest.artifactPaths` →
+  `applyL3ScreeningOutcome`) so items flagged only by the heavy screeners
+  register their artifacts exactly like L1 quarantines. Terminal quarantine
+  entries whose registered artifacts still exist on disk are exempt from the
+  history-retention cap — pruning one would leave its bytes readable with no
+  gate and no audit.
+- **Shell seam** (`src/boundary/gateway/methods/shell.ts`,
+  `src/boundary/sandbox/execution/shell-execution-policy.ts` +
+  `bubblewrap-runner.ts`): the same bytes were reachable through the sandbox,
+  which bind-mounts the whole Personal Workspace. Two layers, both fail
+  closed: the `shell.exec` descriptor consults the guard for the resolved cwd
+  and every argv-derived path candidate (via `gateway:shell.exec`; a withheld
+  verdict returns the fixed notice as a failed exec, records the attempt, and
+  never launches the sandbox), and — enforce mode — every registered artifact
+  of a not-released entry is masked inside the sandbox with a read-only
+  `/dev/null` bind (`shadowReadPaths`), so `cat`/`cp`/pipes/globs and every
+  argv shape the descriptor cannot parse physically read empty. An
+  unenumerable deny set fails the exec instead of launching open; shadow mode
+  audits without withholding and mounts nothing.
 
 <!-- BEGIN qg13: per-sink unscreened posture (owned by qg13; keep self-contained) -->
 ### Per-sink `unscreened` posture (qg13)
@@ -581,7 +644,10 @@ Raw text is capped at 400 000 chars per entry; terminal discard/expire
 decisions scrub the raw text and safe representation, keeping the envelope
 journal and content hash for audit. Policy knobs: `quarantine.itemTtlHours`
 (seed 168) and `quarantine.maxHeldItems` (seed 500; oldest expire early past
-the cap).
+the cap). Entries also carry the held item's on-disk `artifactPaths`
+(registered at hold time; consulted by the quarantined-artifact read gate,
+hrmrq.54) and a bounded `accessAttempts` audit of reads attempted while the
+item was not released — shown in the queue view as `contentAccessAttempts`.
 
 The Garden **Cognitive Security → Approvals** page
 (`admin-ui/src/routes/cognitive-security/approvals/+page.svelte`) is the only

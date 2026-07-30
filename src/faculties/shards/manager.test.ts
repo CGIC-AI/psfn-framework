@@ -8,6 +8,7 @@ import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
+import { createShardAgentRuntime } from './agent-runtime.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import {
   getRunChargeSnapshot,
@@ -294,6 +295,44 @@ describe('ShardManager', () => {
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     resetRunChargeRollingWindowForTests();
+  });
+
+  // hrmrq.54: a shard's SessionManager must screen its tool results exactly
+  // like the parent's — both the scheduler-seam screener and the persistence
+  // seam key off sessionManager.intakeScreening.
+  it('createShardAgentRuntime assigns the parent intake screening onto the shard SessionManager (hrmrq.54)', () => {
+    const capabilityAccess = {
+      getTier: () => 'autonomous' as const,
+      getGrantedTokens: () => new Set(CAPABILITY_TIER_DEFAULTS.autonomous),
+      has: () => true,
+    };
+    const base = {
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      runtimeConfig: TEST_CONFIG,
+      systemPrompt: 'shard prompt',
+      capabilityAccess,
+      memoryProvider: null,
+      exposeMemory: false,
+      tools: [],
+    };
+    const screening = {
+      mode: 'enforce' as const,
+      screenSync: vi.fn(() => {
+        throw new Error('unused in this test');
+      }),
+    };
+
+    const { sessionManager } = createShardAgentRuntime({
+      ...base,
+      intakeScreening: screening,
+    });
+    expect(sessionManager.intakeScreening).toBe(screening);
+
+    // Absent ⇒ explicitly null (firewall off for this runtime), never undefined.
+    const { sessionManager: unscreened } = createShardAgentRuntime(base);
+    expect(unscreened.intakeScreening).toBeNull();
   });
 
   // Wiring proof (bead zet.7): operator-set shard concurrency/heartbeat

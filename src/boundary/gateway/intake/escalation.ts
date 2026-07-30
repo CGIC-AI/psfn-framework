@@ -171,6 +171,11 @@ export function createGatewayIntakeEscalationPort(
         : {}),
       ...(deps.actor ? { actor: deps.actor } : {}),
       ...(request.subject ? { subject: request.subject } : {}),
+      // hrmrq.54: register the item's on-disk artifacts on the L3 hold so the
+      // quarantined-artifact read gate covers L2/L3-only quarantines too.
+      ...(request.artifactPaths !== undefined && request.artifactPaths.length > 0
+        ? { artifactPaths: request.artifactPaths }
+        : {}),
       sourceRiskTier: request.sourceRiskTier,
       priorContribution: mergeContributions(request.priorContribution, l2Contribution),
       atMs: request.atMs,

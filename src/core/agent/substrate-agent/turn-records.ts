@@ -27,6 +27,7 @@ import {
   isToolCallOutcome,
 } from '../../../shared/contracts/tool-call-outcome.js';
 import { buildTurnRecordInternalStateSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
+import { getToolResultIntakeScreening } from '../tool-call-scheduler.js';
 
 export type TurnSessionWriteManager = Pick<
   SessionManager,
@@ -287,6 +288,11 @@ export function recordToolObservations(input: {
   for (const entry of input.turnMessages) {
     if (!isToolResultAgentMessage(entry)) continue;
     const outcome = resolveToolResultMessageOutcome(entry);
+    // hrmrq.54: a result screened at the scheduler seam carries its outcome
+    // (envelope snapshot + marking) on the message; recording reuses it so
+    // the SAME envelope lands in the session metadata without a second,
+    // side-effecting screen (and without doubling a quarantine hold).
+    const schedulerScreening = getToolResultIntakeScreening(entry);
     const result = input.sessionManager.recordToolObservation(
       input.turnSessionIdentity.logicalSessionId,
       {
@@ -307,6 +313,18 @@ export function recordToolObservations(input: {
         sourceMessageId: input.message.id,
         sourceChannelId: input.turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(input.message),
+        ...(schedulerScreening
+          ? {
+            precomputedToolIntakeScreening: {
+              mode: schedulerScreening.mode,
+              withheld: schedulerScreening.withheld,
+              snapshot: schedulerScreening.snapshot,
+              ...(schedulerScreening.markingPlan
+                ? { markingPlan: schedulerScreening.markingPlan }
+                : {}),
+            },
+          }
+          : {}),
       },
     );
     const toolName = entry.toolName.trim();

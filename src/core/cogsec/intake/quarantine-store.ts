@@ -19,9 +19,10 @@
 // discard/expire decisions scrub the raw text (and safe representation) from
 // the entry; the envelope journal and content hash remain for audit.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import {
+  isIntakeSinkConsumableState,
   transitionIntakeEnvelope,
   validateIntakeEnvelope,
   type IntakeEnvelope,
@@ -55,6 +56,20 @@ export interface IntakeQuarantineDecisionRecord {
   atMs: number;
 }
 
+/**
+ * One recorded attempt to read a quarantined item's on-disk artifact while
+ * the item was NOT operator-released (hrmrq.54). Surfaced in the Garden
+ * Cognitive Security queue so a containment bypass attempt is never invisible
+ * to the operator reviewing the case.
+ */
+export interface IntakeQuarantineAccessAttempt {
+  /** The artifact path whose read was attempted. */
+  path: string;
+  /** Auditable access seam, e.g. 'gateway:fs.read'. */
+  via: string;
+  atMs: number;
+}
+
 export interface IntakeQuarantineEntry {
   /** The envelope id (unique across writers). */
   id: string;
@@ -83,6 +98,14 @@ export interface IntakeQuarantineEntry {
   expiresAtMs: number;
   status: IntakeQuarantineEntryStatus;
   decision?: IntakeQuarantineDecisionRecord;
+  /**
+   * On-disk artifact paths carrying this item's raw content (a saved document
+   * and its parsed-text sidecar). Registered at hold time so read seams can
+   * refuse to serve a quarantined artifact's content (hrmrq.54).
+   */
+  artifactPaths?: string[];
+  /** Attempted artifact reads while the item was not released (bounded, newest last). */
+  accessAttempts?: IntakeQuarantineAccessAttempt[];
 }
 
 export interface IntakeQuarantineHoldInput {
@@ -94,6 +117,8 @@ export interface IntakeQuarantineHoldInput {
   canonicalContactId?: string;
   sourceChannelId?: string;
   cogSecCaseId?: string;
+  /** On-disk artifact paths carrying this item's raw content (hrmrq.54). */
+  artifactPaths?: readonly string[];
   atMs?: number;
 }
 
@@ -123,6 +148,34 @@ export interface IntakeQuarantineStore extends IntakeQuarantineHoldPort {
    * safe representation (fail closed).
    */
   applyDecision(input: IntakeQuarantineDecisionInput): IntakeQuarantineEntry;
+  /**
+   * The entry whose registered artifact paths contain `path` (normalized
+   * exact match), preferring held entries when several match (hrmrq.54).
+   */
+  findByArtifactPath(path: string): IntakeQuarantineEntry | undefined;
+  /**
+   * Records one attempted read of a quarantined item's artifact (bounded to
+   * the newest {@link INTAKE_QUARANTINE_MAX_ACCESS_ATTEMPTS}). Throws on
+   * unknown ids — an audit write must never silently miss.
+   */
+  recordAccessAttempt(input: IntakeQuarantineAccessAttemptInput): IntakeQuarantineEntry;
+  /**
+   * Every registered artifact path (normalized) belonging to an entry that is
+   * NOT in an operator-released sink-consumable state — the set a sandbox
+   * launch must physically deny (hrmrq.54). Throws on a broken store file:
+   * a caller that cannot enumerate the deny set must fail closed, not open.
+   */
+  listActiveArtifactPaths(): string[];
+}
+
+export interface IntakeQuarantineAccessAttemptInput {
+  /** The envelope/entry id whose artifact was requested. */
+  id: string;
+  /** The artifact path whose read was attempted. */
+  path: string;
+  /** Auditable access seam, e.g. 'gateway:fs.read'. */
+  via: string;
+  atMs?: number;
 }
 
 export interface IntakeQuarantineStoreOptions {
@@ -142,6 +195,15 @@ export interface IntakeQuarantineStoreOptions {
 /** Storage cap for held raw text; larger content is truncated with a flag. */
 export const INTAKE_QUARANTINE_MAX_RAW_CHARS = 400_000;
 
+/** Cap on registered artifact paths per entry (a document + its sidecars). */
+export const INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS = 16;
+
+/** Cap on recorded artifact access attempts per entry (newest kept). */
+export const INTAKE_QUARANTINE_MAX_ACCESS_ATTEMPTS = 50;
+
+const MAX_ARTIFACT_PATH_CHARS = 2_048;
+const MAX_ACCESS_ATTEMPT_VIA_CHARS = 256;
+
 /** Terminal entries retained for operator history beyond the held set. */
 const MAX_TERMINAL_ENTRIES = 200;
 
@@ -156,6 +218,55 @@ function invalidEntry(filePath: string, detail: string): Error {
   return new Error(`Invalid intake quarantine entry in ${filePath}: ${detail}`);
 }
 
+/**
+ * Canonical form for artifact-path registration and lookup: absolute,
+ * `path.resolve`-normalized. Lookup and registration MUST agree on this form
+ * or the read gate silently misses (hrmrq.54).
+ */
+export function normalizeQuarantineArtifactPath(path: string): string {
+  return resolve(path.trim());
+}
+
+/**
+ * Registration-time canonical form: resolve()-normalized AND realpathed when
+ * the file exists. Registration must store the CANONICAL path — a hold made
+ * through a symlinked prefix would otherwise register the symlink form, and
+ * a read of the real path would miss both the direct lookup and the guard's
+ * realpath fallback (which canonicalizes the READ path, not the stored one).
+ * A missing/unresolvable file keeps the resolve()-normalized form.
+ */
+function canonicalizeArtifactPathForRegistration(path: string): string {
+  const resolved = normalizeQuarantineArtifactPath(path);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function normalizeArtifactPathsForHold(paths: readonly string[]): string[] {
+  const normalized = new Set<string>();
+  for (const path of paths) {
+    if (typeof path !== 'string' || !path.trim()) {
+      throw new Error('Intake quarantine artifact paths must be non-empty strings');
+    }
+    const canonical = canonicalizeArtifactPathForRegistration(path);
+    if (canonical.length > MAX_ARTIFACT_PATH_CHARS) {
+      throw new Error(
+        `Intake quarantine artifact path exceeds ${String(MAX_ARTIFACT_PATH_CHARS)} chars`,
+      );
+    }
+    normalized.add(canonical);
+  }
+  if (normalized.size > INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS) {
+    throw new Error(
+      `Intake quarantine hold registered ${String(normalized.size)} artifact paths; `
+      + `max ${String(INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS)}`,
+    );
+  }
+  return [...normalized];
+}
+
 function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw invalidEntry(filePath, 'entry must be an object');
@@ -164,7 +275,7 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
   const knownKeys = [
     'id', 'envelope', 'mode', 'rawText', 'rawTextTruncated', 'safeRepresentationText',
     'canonicalContactId', 'sourceChannelId', 'cogSecCaseId', 'heldAtMs', 'expiresAtMs',
-    'status', 'decision',
+    'status', 'decision', 'artifactPaths', 'accessAttempts',
   ];
   const unknownKeys = Object.keys(entry).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -206,6 +317,40 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
     }
   } else if (envelope.state !== 'quarantined') {
     throw invalidEntry(filePath, `status 'held' requires envelope state 'quarantined', got '${envelope.state}'`);
+  }
+  if (entry.artifactPaths !== undefined) {
+    if (
+      !Array.isArray(entry.artifactPaths)
+      || entry.artifactPaths.some((path) => typeof path !== 'string' || !path.trim())
+    ) {
+      throw invalidEntry(filePath, 'artifactPaths must be an array of non-empty strings');
+    }
+    if (entry.artifactPaths.length > INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS) {
+      throw invalidEntry(
+        filePath,
+        `artifactPaths exceeds max ${String(INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS)}`,
+      );
+    }
+  }
+  if (entry.accessAttempts !== undefined) {
+    if (!Array.isArray(entry.accessAttempts)) {
+      throw invalidEntry(filePath, 'accessAttempts must be an array');
+    }
+    for (const attempt of entry.accessAttempts) {
+      if (typeof attempt !== 'object' || attempt === null || Array.isArray(attempt)) {
+        throw invalidEntry(filePath, 'accessAttempts entries must be objects');
+      }
+      const record = attempt as Record<string, unknown>;
+      if (typeof record.path !== 'string' || !record.path.trim()) {
+        throw invalidEntry(filePath, 'accessAttempts entries require a non-empty path');
+      }
+      if (typeof record.via !== 'string' || !record.via.trim()) {
+        throw invalidEntry(filePath, 'accessAttempts entries require a non-empty via');
+      }
+      if (typeof record.atMs !== 'number' || !Number.isFinite(record.atMs)) {
+        throw invalidEntry(filePath, 'accessAttempts entries require a finite atMs');
+      }
+    }
   }
   if (entry.decision !== undefined) {
     if (typeof entry.decision !== 'object' || entry.decision === null || Array.isArray(entry.decision)) {
@@ -307,7 +452,9 @@ export function createIntakeQuarantineStore(
   });
 
   /** Lazy TTL sweep; durably persists before publishing expiry notifications. */
-  const sweepExpired = (entries: Map<string, IntakeQuarantineEntry>, atMs: number): void => {
+  // Returns true when at least one entry expired (callers persist and may
+  // notify); fires the TTL-expiry alert hook per expired entry (hrmrq.71).
+  const sweepExpired = (entries: Map<string, IntakeQuarantineEntry>, atMs: number): boolean => {
     const expiredEvents: Array<Parameters<NonNullable<IntakeQuarantineStoreOptions['onExpired']>>[0]> = [];
     for (const [id, entry] of entries) {
       if (entry.status !== 'held' || entry.expiresAtMs > atMs) continue;
@@ -316,17 +463,35 @@ export function createIntakeQuarantineStore(
       entries.set(id, expired);
       expiredEvents.push({ entry: expired, expiredAtMs: atMs, reason });
     }
-    if (expiredEvents.length === 0) return;
+    if (expiredEvents.length === 0) return false;
     persist(entries);
     for (const event of expiredEvents) {
       options.onExpired?.(event);
     }
+    return true;
   };
 
-  /** Bound terminal-history growth; held entries are never pruned. */
+  /**
+   * True while the entry still gates on-disk bytes: it registered artifact
+   * paths, the operator has NOT released it into a sink-consumable state, and
+   * at least one artifact still exists. Such an entry anchors the
+   * quarantined-artifact read gate and its attempt audit (hrmrq.54): pruning
+   * it would turn every subsequent read of those bytes into an ungated,
+   * unaudited serve. It becomes prunable once the artifacts are gone or the
+   * operator released the item (released reads are cleared anyway).
+   */
+  const anchorsLiveArtifact = (entry: IntakeQuarantineEntry): boolean =>
+    !isIntakeSinkConsumableState(entry.envelope.state)
+    && (entry.artifactPaths ?? []).some((path) => existsSync(path));
+
+  /**
+   * Bound terminal-history growth; held entries are never pruned, and
+   * terminal entries whose registered artifacts still exist on disk are
+   * exempt from the cap (read-gate anchors, see anchorsLiveArtifact).
+   */
   const pruneTerminalHistory = (entries: Map<string, IntakeQuarantineEntry>): boolean => {
     const terminal = [...entries.values()]
-      .filter((entry) => entry.status !== 'held')
+      .filter((entry) => entry.status !== 'held' && !anchorsLiveArtifact(entry))
       .sort((left, right) => left.heldAtMs - right.heldAtMs);
     if (terminal.length <= MAX_TERMINAL_ENTRIES) return false;
     for (const entry of terminal.slice(0, terminal.length - MAX_TERMINAL_ENTRIES)) {
@@ -359,6 +524,9 @@ export function createIntakeQuarantineStore(
       }
 
       const truncated = input.rawText.length > INTAKE_QUARANTINE_MAX_RAW_CHARS;
+      const artifactPaths = input.artifactPaths !== undefined && input.artifactPaths.length > 0
+        ? normalizeArtifactPathsForHold(input.artifactPaths)
+        : undefined;
       const entry: IntakeQuarantineEntry = {
         id: input.envelope.id,
         envelope: input.envelope,
@@ -371,6 +539,7 @@ export function createIntakeQuarantineStore(
         ...(input.canonicalContactId !== undefined ? { canonicalContactId: input.canonicalContactId } : {}),
         ...(input.sourceChannelId !== undefined ? { sourceChannelId: input.sourceChannelId } : {}),
         ...(input.cogSecCaseId !== undefined ? { cogSecCaseId: input.cogSecCaseId } : {}),
+        ...(artifactPaths ? { artifactPaths } : {}),
         heldAtMs: atMs,
         expiresAtMs: atMs + ttlMs,
         status: 'held',
@@ -398,6 +567,71 @@ export function createIntakeQuarantineStore(
       const entries = load();
       sweepExpired(entries, atMs);
       return entries.get(id);
+    },
+
+    findByArtifactPath(path: string): IntakeQuarantineEntry | undefined {
+      const needle = normalizeQuarantineArtifactPath(path);
+      if (!needle) return undefined;
+      const atMs = now();
+      const entries = load();
+      if (sweepExpired(entries, atMs)) {
+        persist(entries);
+      }
+      let match: IntakeQuarantineEntry | undefined;
+      for (const entry of entries.values()) {
+        if (!entry.artifactPaths?.includes(needle)) continue;
+        // Prefer a held entry when several entries registered the same path
+        // (a released copy never masks a live hold — fail closed).
+        if (entry.status === 'held') return entry;
+        match ??= entry;
+      }
+      return match;
+    },
+
+    listActiveArtifactPaths(): string[] {
+      const atMs = now();
+      const entries = load();
+      if (sweepExpired(entries, atMs)) {
+        persist(entries);
+      }
+      const paths = new Set<string>();
+      for (const entry of entries.values()) {
+        if (!entry.artifactPaths?.length) continue;
+        // Operator-released items are cleared for reads; everything else
+        // (held, expired, discarded) stays in the physical deny set.
+        if (isIntakeSinkConsumableState(entry.envelope.state)) continue;
+        for (const path of entry.artifactPaths) paths.add(path);
+      }
+      return [...paths];
+    },
+
+    recordAccessAttempt(input: IntakeQuarantineAccessAttemptInput): IntakeQuarantineEntry {
+      const via = input.via.trim();
+      if (!via) {
+        throw new Error('Intake quarantine access attempt requires a non-empty via');
+      }
+      const path = input.path.trim();
+      if (!path) {
+        throw new Error('Intake quarantine access attempt requires a non-empty path');
+      }
+      const atMs = input.atMs ?? now();
+      const entries = load();
+      sweepExpired(entries, atMs);
+      const entry = entries.get(input.id);
+      if (!entry) {
+        throw new Error(`Intake quarantine entry not found: ${input.id}`);
+      }
+      const attempt: IntakeQuarantineAccessAttempt = {
+        path: path.slice(0, MAX_ARTIFACT_PATH_CHARS),
+        via: via.slice(0, MAX_ACCESS_ATTEMPT_VIA_CHARS),
+        atMs,
+      };
+      const attempts = [...(entry.accessAttempts ?? []), attempt]
+        .slice(-INTAKE_QUARANTINE_MAX_ACCESS_ATTEMPTS);
+      const updated: IntakeQuarantineEntry = { ...entry, accessAttempts: attempts };
+      entries.set(entry.id, updated);
+      persist(entries);
+      return updated;
     },
 
     applyDecision(input: IntakeQuarantineDecisionInput): IntakeQuarantineEntry {

@@ -171,6 +171,14 @@ export interface DocumentIngestResult {
   promptText: string;
   parsedTextPath: string;
   truncatedForPrompt: boolean;
+  /**
+   * Present when intake screening withheld this document's content
+   * (enforce-mode quarantine/block). The ingest message must not disclose any
+   * on-disk locator for a withheld document (hrmrq.54) — the rendered notice
+   * carries the envelope reference for the Garden Cognitive Security queue
+   * instead, and the attachment's localPath/parsedTextPath are stripped.
+   */
+  intakeWithheld?: { envelopeId: string };
 }
 
 export interface DocumentIngestFailure {
@@ -334,6 +342,11 @@ export async function screenDocumentIngestSummary(
   const screenedResults: DocumentIngestResult[] = [];
 
   for (const [index, result] of summary.results.entries()) {
+    // hrmrq.54: register the saved document and its parsed sidecar on the
+    // screening input so an enforce-mode quarantine hold records them — read
+    // seams then refuse to serve those paths and audit the attempt.
+    const artifactPaths = [result.attachment.localPath, result.parsedTextPath]
+      .filter((path): path is string => typeof path === 'string' && path.length > 0);
     const screened = await screening.screen(result.promptText, {
       sourceClass: 'document',
       origin: {
@@ -342,13 +355,28 @@ export async function screenDocumentIngestSummary(
       },
       scope: 'context',
       subject: { kind: 'attachment', index: context.attachmentIndexBase + index },
+      ...(artifactPaths.length > 0 ? { artifactPaths } : {}),
     });
     snapshots.push(screened.snapshot);
-    screenedResults.push(
-      screened.effectiveText === result.promptText
-        ? result
-        : { ...result, promptText: screened.effectiveText },
-    );
+    if (screened.withheld) {
+      // Quarantined: the prompt text becomes the fixed withheld notice AND
+      // every on-disk locator is stripped — a disclosed path is one fs.read
+      // away from the quarantined bytes (hrmrq.54).
+      const { localPath: _localPath, parsedTextPath: _parsedTextPath, ...attachmentSansPaths } =
+        result.attachment;
+      screenedResults.push({
+        ...result,
+        attachment: attachmentSansPaths,
+        promptText: screened.effectiveText,
+        intakeWithheld: { envelopeId: screened.envelope.id },
+      });
+    } else {
+      screenedResults.push(
+        screened.effectiveText === result.promptText
+          ? result
+          : { ...result, promptText: screened.effectiveText },
+      );
+    }
   }
 
   return {
@@ -666,11 +694,23 @@ export function appendDocumentIngestToContent(
   const base = content.trim() === '(empty message)' ? '' : content.trim();
   const sections: string[] = [];
   if (base) sections.push(base);
-  if (summary.results.length > 0) {
+  if (summary.results.some((result) => !result.intakeWithheld)) {
     sections.push(DOCUMENT_PROMPT_HEADER);
   }
 
   for (const result of summary.results) {
+    if (result.intakeWithheld) {
+      // hrmrq.54: a screening-withheld document never discloses its on-disk
+      // locators — the notice carries the envelope reference for the Garden
+      // Cognitive Security queue instead.
+      sections.push([
+        `[Attached file withheld: ${result.attachment.name}]`,
+        `Content type: ${result.attachment.contentType}`,
+        `Quarantine reference: intake-envelope:${result.intakeWithheld.envelopeId}`,
+        result.promptText,
+      ].join('\n'));
+      continue;
+    }
     sections.push([
       `[Attached file: ${result.attachment.name}]`,
       `Saved path: ${result.attachment.localPath ?? '(not saved)'}`,

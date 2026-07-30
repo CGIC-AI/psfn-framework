@@ -21,6 +21,12 @@ export interface CreateShardAgentRuntimeOptions {
   readonly memoryProvider: MemoryProvider | null;
   readonly exposeMemory: boolean;
   readonly tools: readonly AgentTool<any>[];
+  /**
+   * hrmrq.54: the parent's intake screening service. A shard's SessionManager
+   * must screen its tool results (scheduler seam + persistence seam) exactly
+   * like the parent's; absent ⇒ firewall off for this runtime.
+   */
+  readonly intakeScreening?: SessionManager['intakeScreening'];
 }
 
 export function createShardAgentRuntime(
@@ -31,6 +37,9 @@ export function createShardAgentRuntime(
     options.runtimeConfig,
     options.eventBus,
   );
+  // hrmrq.54: shard tool results screen like the parent's (the SubstrateAgent
+  // scheduler-seam screener reads this lazily; persistence keys off it too).
+  sessionManager.intakeScreening = options.intakeScreening ?? null;
   const agentLoop = new SubstrateAgent(
     options.eventBus,
     options.llmProvider,

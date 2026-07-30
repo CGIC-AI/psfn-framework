@@ -21,7 +21,13 @@
 //
 // MODE SEMANTICS (same split as screening.ts):
 // - 'shadow':  every gate is evaluated and AUDITED, but `allowed` is always
-//   true — observe-only rollout, zero behavior change.
+//   true — observe-only rollout, zero behavior change. ONE exception
+//   (psfn-framework-hrmrq.77): a HARD-enforcement lethal-trifecta deny blocks
+//   even in shadow mode. The trifecta's hard tier exists precisely for the
+//   most dangerous combination (untrusted content + private data + egress);
+//   letting the staged-rollout observe mode fail that class open contradicts
+//   the fail-closed doctrine, so per-tier enforcement 'hard' overrides the
+//   global shadow mode for egress-trifecta assessments only.
 // - 'enforce': `allowed` honors the verdict; deny paths are fail-closed with
 //   auditable reasons.
 // - 'off':     no gate is constructed (maybe-create returns null); callers
@@ -81,7 +87,11 @@ export interface IntakeEgressTrifectaAssessment {
   /** Strongest enforcement across the triggering envelopes' tiers; null when not triggered. */
   enforcement: IntakeTrifectaEnforcement | null;
   verdict: 'allow' | 'deny' | 'review';
-  /** Mode-aware: shadow always allows; enforce denies only on a hard verdict. */
+  /**
+   * Mode-aware, with one fail-closed exception: a hard-enforcement deny
+   * blocks in BOTH modes (hrmrq.77) — shadow mode never fails the lethal
+   * trifecta open. Soft verdicts allow (with review) in both modes.
+   */
   allowed: boolean;
   /** True on a soft verdict: egress proceeds but is flagged for operator review. */
   reviewRequired: boolean;
@@ -251,6 +261,12 @@ export function evaluateSinkAccess(
  * Enforcement strength is the strongest tier mapping across participating
  * envelopes: 'hard' denies, 'soft' allows with a review flag — never a
  * silent pass.
+ *
+ * A 'hard' deny blocks REGARDLESS of the global mode (hrmrq.77): shadow mode
+ * is observe-only for everything else, but the lethal-trifecta hard tier is
+ * the one class that must never fail open during staged rollout — in shadow
+ * mode the untrusted content was delivered (never withheld), so the trifecta
+ * is fully armed exactly when the observe-only mode would wave it through.
  */
 export function evaluateEgressTrifecta(
   policy: IntakePolicyConfig,
@@ -295,14 +311,19 @@ export function evaluateEgressTrifecta(
   }
 
   const verdict = enforcement === 'hard' ? 'deny' : 'review';
+  // Fail closed (hrmrq.77): a hard-enforcement deny blocks in BOTH modes.
+  // Shadow mode stays observe-only for every other gate, but the lethal
+  // trifecta's hard tier must never be waved through during staged rollout.
+  const shadowOverridden = mode === 'shadow' && verdict === 'deny';
   const reason = `lethal trifecta at ${input.egressDescription}: `
     + `${String(contentInPath.length)} enveloped item(s) (strongest tier '${strongestTier}') `
-    + `+ private data + egress; enforcement '${enforcement}' per trifecta.enforcementByTier`;
+    + `+ private data + egress; enforcement '${enforcement}' per trifecta.enforcementByTier`
+    + (shadowOverridden ? "; enforcement 'hard' overrides shadow mode (fail closed)" : '');
   return {
     triggered: true,
     enforcement,
     verdict,
-    allowed: mode === 'shadow' ? true : verdict !== 'deny',
+    allowed: verdict !== 'deny',
     reviewRequired: verdict === 'review',
     mode,
     reason,

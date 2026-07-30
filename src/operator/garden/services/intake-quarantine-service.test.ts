@@ -259,6 +259,26 @@ describe('admin intake quarantine service (htm9.11)', () => {
     expect(item.contentSha256).toBe('b'.repeat(64));
   });
 
+  // hrmrq.54: a containment-bypass attempt (reading the held item's on-disk
+  // artifact) must be visible to the operator reviewing the case.
+  it('surfaces recorded artifact access attempts on the queue item view (hrmrq.54)', () => {
+    const envelope = holdItem();
+    store.recordAccessAttempt({
+      id: envelope.id,
+      path: '/companion/files/doc.md.parsed.txt',
+      via: 'gateway:fs.read',
+      atMs: clock,
+    });
+    const { items } = service.listItems();
+    expect(items[0].contentAccessAttempts).toEqual([
+      {
+        path: '/companion/files/doc.md.parsed.txt',
+        via: 'gateway:fs.read',
+        at: new Date(clock).toISOString(),
+      },
+    ]);
+  });
+
   it('exposes raw text, extracted fields, and the transition journal in the detail view', () => {
     const envelope = holdItem();
     const detail = service.getItem(envelope.id);

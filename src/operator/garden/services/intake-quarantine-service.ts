@@ -98,6 +98,12 @@ export interface AdminIntakeQuarantineItemView {
   };
   /** What always-allow/always-deny would list; null when underivable. */
   flywheelTarget: AdminIntakeQuarantineFlywheelTarget | null;
+  /**
+   * Attempted reads of this item's on-disk artifacts while it was not
+   * released (hrmrq.54) — a containment-bypass attempt the operator must see
+   * while reviewing the case. Absent when no attempt was recorded.
+   */
+  contentAccessAttempts?: Array<{ path: string; via: string; at: string }>;
 }
 
 export interface AdminIntakeQuarantineItemDetail extends AdminIntakeQuarantineItemView {
@@ -311,6 +317,15 @@ function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQua
       }
       : {}),
     flywheelTarget: deriveFlywheelTarget(entry),
+    ...(entry.accessAttempts && entry.accessAttempts.length > 0
+      ? {
+        contentAccessAttempts: entry.accessAttempts.map((attempt) => ({
+          path: attempt.path,
+          via: attempt.via,
+          at: toIso(attempt.atMs),
+        })),
+      }
+      : {}),
   };
 }
 

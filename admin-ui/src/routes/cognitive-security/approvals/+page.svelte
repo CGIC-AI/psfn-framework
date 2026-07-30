@@ -343,6 +343,23 @@
                 <span class="ml-1 text-shadow-800">{statusLabel(item.operatorDecision.action)} by {item.operatorDecision.actor} at {formatTimestamp(item.operatorDecision.at)} -- {item.operatorDecision.reason}</span>
               </div>
             {/if}
+            {#if item.contentAccessAttempts && item.contentAccessAttempts.length > 0}
+              <!-- hrmrq.54: reads of the held item's on-disk artifact while it
+                   was not released -- a containment-bypass attempt the reviewer
+                   must see. -->
+              <div class="md:col-span-2 rounded border border-wilt-200 bg-wilt-50 px-3 py-2">
+                <span class="font-medium text-wilt-700">Content access attempted ({item.contentAccessAttempts.length}):</span>
+                <ul class="mt-1 space-y-0.5">
+                  {#each item.contentAccessAttempts as attempt (attempt.at + attempt.path)}
+                    <li class="text-xs text-shadow-800">
+                      <span class="font-mono">{attempt.via}</span>
+                      <span class="text-shadow-600">at {formatTimestamp(attempt.at)}:</span>
+                      <code class="font-mono break-all">{attempt.path}</code>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
           </div>
 
           {#if expandedId === item.id}

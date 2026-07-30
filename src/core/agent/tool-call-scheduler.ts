@@ -29,12 +29,58 @@ import {
 const TOOL_CANCELLED_NOTICE =
   '[System notice] This tool operation was cancelled before it completed. No internal diagnostic '
   + 'needs interpreting. You can tell your person the operation did not complete.';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeMarkingPlan } from '../cogsec/intake/marking.js';
+
+// ── Tool-result intake screening at the scheduler seam (hrmrq.54) ──
+//
+// The intake firewall used to screen tool output only on the PERSISTENCE
+// copy (session recording after the turn) — the scheduler handed the raw
+// result straight back into the model loop, so quarantined content one tool
+// call away (an fs.read of a withheld document, a shell cat, a workbench
+// dump) reached the companion's context unscreened. The screener runs here,
+// BEFORE the result message enters the turn: enforce-mode quarantine
+// replaces the content with the fixed withheld notice, sanitize substitutes
+// the sanitized text, shadow mode observes without altering anything. The
+// outcome is stashed on the result message so the persistence seam reuses
+// the SAME envelope instead of re-running a side-effecting screen.
+
+export interface ToolResultIntakeScreeningOutcome {
+  mode: 'shadow' | 'enforce';
+  withheld: boolean;
+  /** Original text on pass/shadow; sanitized text or the withheld notice in enforce mode. */
+  effectiveText: string;
+  snapshot: IntakeEnvelopeSnapshot;
+  markingPlan?: IntakeMarkingPlan;
+}
+
+export type ToolResultIntakeScreener = (input: {
+  toolName: string;
+  toolCallId: string;
+  text: string;
+}) => ToolResultIntakeScreeningOutcome | null;
+
+const TOOL_RESULT_INTAKE_SCREENING_KEY = 'psfnIntakeScreening';
+
+/** The screening outcome stashed on a tool-result message at the scheduler seam. */
+export function getToolResultIntakeScreening(
+  message: ToolResultMessage,
+): ToolResultIntakeScreeningOutcome | undefined {
+  const stashed = (message as unknown as Record<string, unknown>)[TOOL_RESULT_INTAKE_SCREENING_KEY];
+  return stashed === undefined ? undefined : stashed as ToolResultIntakeScreeningOutcome;
+}
 
 export interface ToolCallSchedulerOptions {
   maxParallelToolCalls: number;
   maxFailuresPerSignature?: number;
   guard?: ToolCallExecutionGuard;
   onTelemetry?: (eventName: string, payload: Record<string, unknown>) => void;
+  /**
+   * Intake screening for tool results at the scheduler seam (hrmrq.54).
+   * Absent ⇒ firewall off for this runtime. A screener failure fails the
+   * tool result closed: unscreened content never enters the turn.
+   */
+  toolResultScreener?: ToolResultIntakeScreener;
 }
 
 export interface ToolCallExecutionGuard {
@@ -483,6 +529,54 @@ async function executeSingleToolCall(
     throw new Error(`Tool call for ${toolCall.name} produced no result`);
   }
 
+  // hrmrq.54: screen the tool result BEFORE it enters the turn. Corrections
+  // are internally authored text and skip screening; every executed result
+  // (including error text, which can carry file content) is screened. A
+  // screener failure fails closed — unscreened content never reaches the
+  // model loop.
+  let intakeScreening: ToolResultIntakeScreeningOutcome | undefined;
+  if (options.toolResultScreener && !correction) {
+    const rawText = toolResultText(result);
+    if (rawText.trim().length > 0) {
+      try {
+        const screened = options.toolResultScreener({
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          text: rawText,
+        });
+        if (screened) {
+          intakeScreening = screened;
+          if (screened.mode === 'enforce' && screened.effectiveText !== rawText) {
+            options.onTelemetry?.('agent.tools.intake.screened', {
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              withheld: screened.withheld,
+              envelopeState: screened.snapshot.state,
+            });
+            result = replaceToolResultTextContent(result, screened.effectiveText, screened.withheld);
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        options.onTelemetry?.('agent.tools.intake.screen_failed', {
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          error: message,
+        });
+        result = {
+          content: [{
+            type: 'text',
+            text: `Internal tool status: the ${toolCall.name} result was withheld because intake screening failed (${message}). This is not a user-facing message.`,
+          }],
+          details: {},
+        };
+        isError = true;
+        outcome = 'execution_failure';
+        intakeScreening = undefined;
+      }
+    }
+  }
+
   if (cancelled) {
     options.onTelemetry?.('agent.tools.scheduler.cancelled', {
       toolName: toolCall.name,
@@ -527,10 +621,39 @@ async function executeSingleToolCall(
     isError,
     outcome,
     timestamp: Date.now(),
+    // Stash the screening outcome so the persistence seam (turn-records →
+    // session manager) reuses the SAME envelope instead of re-running a
+    // side-effecting screen (double quarantine hold).
+    ...(intakeScreening ? { [TOOL_RESULT_INTAKE_SCREENING_KEY]: intakeScreening } : {}),
   };
   context.stream.push({ type: 'message_start', message: toolResultMessage });
   context.stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;
+}
+
+/**
+ * Substitute the screening's effective text into a tool result. Withheld
+ * results are replaced WHOLE — non-text blocks rode in alongside quarantined
+ * content and are withheld with it (fail closed). Sanitized results keep
+ * their non-text blocks and carry one sanitized text block. `details` is
+ * internal plumbing (never rendered into model context) and is left intact.
+ */
+function replaceToolResultTextContent(
+  result: AgentToolResult<unknown>,
+  effectiveText: string,
+  withheld: boolean,
+): AgentToolResult<unknown> {
+  if (withheld) {
+    return { ...result, content: [{ type: 'text', text: effectiveText }] };
+  }
+  const blocks = Array.isArray(result.content) ? result.content : [];
+  const nonTextBlocks = blocks.filter(
+    (block) => (block as { type?: unknown }).type !== 'text',
+  );
+  return {
+    ...result,
+    content: [{ type: 'text', text: effectiveText }, ...nonTextBlocks],
+  };
 }
 
 function skipToolCall(

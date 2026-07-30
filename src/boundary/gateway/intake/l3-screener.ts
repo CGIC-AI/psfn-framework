@@ -765,6 +765,14 @@ export interface ApplyL3ScreeningOutcomeInput {
   quarantine?: IntakeQuarantineHoldPort;
   /** Canonical contact id of the sender, when known (people-list flywheel). */
   canonicalContactId?: string;
+  /**
+   * On-disk artifact paths carrying this item's raw content (hrmrq.54).
+   * Registered on the quarantine hold so the quarantined-artifact read gate
+   * can refuse to serve the bytes and audit the attempt; without them an
+   * L3-quarantined document's saved file and parsed-text sidecar stay
+   * readable with zero operator visibility.
+   */
+  artifactPaths?: readonly string[];
   /** Acting principal for envelope transitions. Default 'gateway:intake-l3'. */
   actor?: string;
   /** What the envelope covers on the carrying message. Default `{kind:'body'}`. */
@@ -979,6 +987,11 @@ export function applyL3ScreeningOutcome(
         : {}),
       ...(input.canonicalContactId !== undefined
         ? { canonicalContactId: input.canonicalContactId }
+        : {}),
+      // hrmrq.54: the artifact-aware hold — registering the paths here is
+      // what makes the read gate and its attempt audit apply to this item.
+      ...(input.artifactPaths !== undefined && input.artifactPaths.length > 0
+        ? { artifactPaths: input.artifactPaths }
         : {}),
       sourceChannelId: input.sourceChannelId,
       cogSecCaseId: event.caseId,

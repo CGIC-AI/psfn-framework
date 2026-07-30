@@ -23,6 +23,7 @@ import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import type { QuarantinedArtifactReadGuard } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
 import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js';
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
@@ -93,6 +94,13 @@ export interface GatewayMethodRuntime {
   visionIntake?: GatewayVisionIntakeScreener;
   /** Connection-scoped screened inline image bytes for the immediately-following turn. */
   inlineImageRetention?: GatewayInlineImageRetention;
+  /**
+   * Quarantined-artifact read guard (hrmrq.54): refuses to serve a
+   * quarantined item's on-disk artifact through fs read/search seams and
+   * records the attempted access for the operator. Absent when the intake
+   * firewall is off.
+   */
+  quarantinedArtifactGuard?: QuarantinedArtifactReadGuard;
   policyConfig: PolicyConfig;
   workspacePath: string;
   /** True when this connection is confined to one fleet Personal Workspace. */

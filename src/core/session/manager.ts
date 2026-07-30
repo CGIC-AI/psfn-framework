@@ -1117,25 +1117,40 @@ export class SessionManager implements SessionManagerTypeSurface {
     let metadataBase = envelopeMetadata;
     let intakeSnapshot: IntakeEnvelopeSnapshot | null = null;
     if (this.intakeScreening) {
-      const toolCallSuffix = observation.toolCallId?.trim() ? `:${observation.toolCallId.trim()}` : '';
-      const screened = this.intakeScreening.screenSync(observation.content, {
-        sourceClass: 'tool_output',
-        origin: {
-          ref: `tool:${observation.toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
-          detail: `channel:${resolvedChannelId}`.slice(0, 512),
-        },
-        scope: 'context',
-      });
-      observationForRecord = { ...observation, content: screened.effectiveText };
-      intakeSnapshot = screened.snapshot;
-      metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
-        mode: screened.mode,
-        withheld: screened.withheld,
-        envelopes: [screened.snapshot],
-        // htm9.13: the marking plan rides the metadata so prompt assembly can
-        // apply it at read time (enforce) or audit it (shadow).
-        ...(screened.markingPlan ? { marking: screened.markingPlan } : {}),
-      });
+      const precomputed = options.precomputedToolIntakeScreening;
+      if (precomputed) {
+        // hrmrq.54: the scheduler seam already screened this result (the
+        // observation content IS the effective text). Reuse its envelope and
+        // marking instead of re-running the side-effecting screenSync, which
+        // would journal a second envelope and double the quarantine hold.
+        intakeSnapshot = precomputed.snapshot;
+        metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
+          mode: precomputed.mode,
+          withheld: precomputed.withheld,
+          envelopes: [precomputed.snapshot],
+          ...(precomputed.markingPlan ? { marking: precomputed.markingPlan } : {}),
+        });
+      } else {
+        const toolCallSuffix = observation.toolCallId?.trim() ? `:${observation.toolCallId.trim()}` : '';
+        const screened = this.intakeScreening.screenSync(observation.content, {
+          sourceClass: 'tool_output',
+          origin: {
+            ref: `tool:${observation.toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
+            detail: `channel:${resolvedChannelId}`.slice(0, 512),
+          },
+          scope: 'context',
+        });
+        observationForRecord = { ...observation, content: screened.effectiveText };
+        intakeSnapshot = screened.snapshot;
+        metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
+          mode: screened.mode,
+          withheld: screened.withheld,
+          envelopes: [screened.snapshot],
+          // htm9.13: the marking plan rides the metadata so prompt assembly can
+          // apply it at read time (enforce) or audit it (shadow).
+          ...(screened.markingPlan ? { marking: screened.markingPlan } : {}),
+        });
+      }
     }
 
     const normalizedObservation = normalizeToolObservation(observationForRecord);

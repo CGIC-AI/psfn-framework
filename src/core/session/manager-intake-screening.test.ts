@@ -152,6 +152,49 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
     expect(screeningMetadata?.envelopes[0]?.state).toBe('quarantined');
   });
 
+  // hrmrq.54: results screened at the scheduler seam arrive with the outcome
+  // precomputed; recording must reuse that envelope, not re-screen (a second
+  // screen would journal a duplicate envelope and double a quarantine hold).
+  it('precomputed scheduler-seam screening is reused verbatim without re-screening', () => {
+    const mgr = new SessionManager(store, makeConfig(dir));
+    const screening = makeScreening('enforce');
+    mgr.intakeScreening = screening;
+
+    // The scheduler seam screened the raw output and substituted the notice.
+    const schedulerScreened = screening.screenSync(HOSTILE_TOOL_OUTPUT, {
+      sourceClass: 'tool_output',
+      origin: { ref: 'tool:fs:call-1', detail: 'seam:tool-scheduler' },
+      scope: 'context',
+    });
+    expect(schedulerScreened.withheld).toBe(true);
+
+    const { intakeSnapshot } = mgr.recordToolObservation('ch1', {
+      toolName: 'fs',
+      content: schedulerScreened.effectiveText,
+      toolCallId: 'call-1',
+    }, undefined, {
+      precomputedToolIntakeScreening: {
+        mode: schedulerScreened.mode,
+        withheld: schedulerScreened.withheld,
+        snapshot: schedulerScreened.snapshot,
+        ...(schedulerScreened.markingPlan
+          ? { markingPlan: schedulerScreened.markingPlan }
+          : {}),
+      },
+    });
+
+    // The SAME envelope (by id) rides the entry metadata and the returned
+    // snapshot — no second envelope was journaled.
+    expect(intakeSnapshot?.envelopeId).toBe(schedulerScreened.snapshot.envelopeId);
+    const entry = mgr.getRecentMessages('ch1', 10)[0]!;
+    expect(entry.content).toBe(renderIntakeWithheldContentPlaceholder());
+    const screeningMetadata = parseIntakeScreeningMetadata(entry.metadata);
+    expect(screeningMetadata?.withheld).toBe(true);
+    expect(screeningMetadata?.envelopes).toHaveLength(1);
+    expect(screeningMetadata?.envelopes[0]?.envelopeId)
+      .toBe(schedulerScreened.snapshot.envelopeId);
+  });
+
   it('no screening wired: recording behavior is byte-identical', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
 

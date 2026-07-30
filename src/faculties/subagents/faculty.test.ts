@@ -345,6 +345,40 @@ describe('SubagentFaculty', () => {
     ))).toBe(true);
   });
 
+  // hrmrq.54: subagent tool results screen like the parent's. The provider is
+  // resolved lazily at spawn time (composition assigns the parent
+  // SessionManager's screening service after construction) and its value is
+  // assigned onto the bounded worker's own SessionManager.
+  it('resolves the parent intake screening at spawn time (hrmrq.54)', async () => {
+    mockSubagentContent = 'done';
+    const screening = {
+      mode: 'enforce' as const,
+      screenSync: vi.fn(() => {
+        throw new Error('unused in this test');
+      }),
+    };
+    const intakeScreeningProvider = vi.fn(() => screening);
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      intakeScreeningProvider,
+    });
+
+    const result = await faculty.execute({
+      name: 'inspect',
+      task: 'inspect runtime state',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    expect(result.lifecycleState).toBe('completed');
+    expect(intakeScreeningProvider).toHaveBeenCalledTimes(1);
+  });
+
   it('reports terminal lifecycle delivery failure without falsifying a completed result', async () => {
     eventBus.guard('agent.completion_handoff', event => {
       if (event.handoff.status === 'completed') {

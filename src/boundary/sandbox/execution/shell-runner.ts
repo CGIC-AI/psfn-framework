@@ -13,6 +13,8 @@ export async function executeShellCommandWithPolicy(
   options: {
     workspacePath: string;
     policy: ShellExecPolicyConfig;
+    /** Quarantined-artifact host paths to mask inside the sandbox (hrmrq.54). */
+    quarantinedArtifactPaths?: readonly string[];
   },
 ): Promise<ShellExecResult> {
   try {

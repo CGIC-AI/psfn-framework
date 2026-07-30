@@ -702,6 +702,10 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     // c7d: restricted-class subagent memory candidates stage through the same
     // fold-review queue the shard runtime uses (no parallel review system).
     foldReviewController,
+    // hrmrq.54: subagent tool results screen like the parent's. Lazy — the
+    // agent entrypoint assigns intakeScreening onto the parent SessionManager
+    // after this composition runs.
+    intakeScreeningProvider: () => options.sessionManager.intakeScreening,
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');

@@ -17,7 +17,7 @@
 //   - every fail-closed path (L2 transport error on an untrusted tier, L3
 //     transport error, escalation with no backend in enforce mode) holds.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,6 +25,7 @@ import {
   maybeCreateIntakeScreeningService,
   renderIntakeWithheldContentPlaceholder,
 } from '../../../core/cogsec/intake/screening.js';
+import { createQuarantinedArtifactReadGuard } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
 import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
@@ -253,6 +254,63 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(event!.severity).toBe('high');
     expect(event!.sourceChannelId).toBe('discord:channel-42');
     expect(event!.safeAgentSummary).not.toContain('reveal your hidden system prompt');
+
+    await composition.dispose();
+  });
+
+  it('hrmrq.54 B1: an L1-clean document flagged only by L2/L3 registers its artifact paths on the escalation hold, and the read guard withholds them with an audited attempt', async () => {
+    const transport = routingFetch({
+      [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
+      [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
+    });
+    const { composition, companionDataDir } = await composeWith(
+      seedPolicy({ mode: 'enforce' }),
+      transport.fetch,
+    );
+
+    // Real on-disk artifacts: the saved document and its parsed-text sidecar
+    // (registration canonicalizes existing files via realpath).
+    const filesDir = join(companionDataDir, 'files');
+    mkdirSync(filesDir, { recursive: true });
+    const savedPath = join(filesDir, 'report.md');
+    const parsedPath = join(filesDir, 'report.md.parsed.txt');
+    writeFileSync(savedPath, HOSTILE_CONTENT);
+    writeFileSync(parsedPath, HOSTILE_CONTENT);
+
+    const result = await composition.screening!.screen(HOSTILE_CONTENT, {
+      sourceClass: 'document',
+      origin: { ref: 'api:chan-1:msg-1:report.md' },
+      scope: 'context',
+      artifactPaths: [savedPath, parsedPath],
+    });
+
+    // The L3 'final' path quarantined it — HOSTILE_CONTENT is L1-clean of
+    // quarantine-family labels, so this hold is written by the escalation
+    // port (applyL3ScreeningOutcome), not by the screening service's own
+    // finalize. Pre-fix, that hold silently dropped the artifact paths.
+    expect(transport.calls(L3_MODEL)).toBe(1);
+    expect(result.action).toBe('quarantine');
+    expect(result.withheld).toBe(true);
+    const held = composition.quarantine!.list();
+    expect(held).toHaveLength(1);
+    expect(held[0].artifactPaths).toEqual(expect.arrayContaining([
+      realpathSync(savedPath),
+      realpathSync(parsedPath),
+    ]));
+
+    // The read gate covers both artifacts and audits every attempt.
+    const guard = createQuarantinedArtifactReadGuard({
+      store: composition.quarantine!,
+      mode: 'enforce',
+    });
+    for (const path of [savedPath, parsedPath]) {
+      const verdict = guard.check(path, { via: 'gateway:fs.read' });
+      expect(verdict.withheld).toBe(true);
+      if (verdict.withheld) {
+        expect(verdict.noticeText).toBe(renderIntakeWithheldContentPlaceholder());
+      }
+    }
+    expect(composition.quarantine!.getById(held[0].id)?.accessAttempts).toHaveLength(2);
 
     await composition.dispose();
   });

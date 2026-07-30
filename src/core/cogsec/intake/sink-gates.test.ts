@@ -268,9 +268,80 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
       egressDescription: 'tool:notify',
     });
     expect(shadowAssessment.triggered).toBe(true);
-    // Shadow never blocks, but the verdict is audited.
+    // hrmrq.77: in shadow mode the quarantined content was DELIVERED (never
+    // withheld), so the trifecta is fully armed — a hard deny blocks even
+    // during the observe-only rollout.
     expect(shadowAssessment.verdict).toBe('deny');
-    expect(shadowAssessment.allowed).toBe(true);
+    expect(shadowAssessment.allowed).toBe(false);
+  });
+
+  // hrmrq.77 regression: live psfn-shard 2026-07-30 showed kind
+  // egress_trifecta, verdict deny, enforcement hard, mode shadow → allowed
+  // true. Per the fail-closed doctrine the hard tier overrides global shadow
+  // mode; the full shadow × enforcement matrix pins the ruling.
+  describe('shadow × enforcement matrix (hrmrq.77)', () => {
+    const hardEnvelope = () => makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' });
+    const softEnvelope = () => makeSnapshot({
+      state: 'released',
+      sourceClass: 'audio_transcript',
+      sourceRiskTier: 'standard',
+    });
+
+    const cases: Array<{
+      mode: 'shadow' | 'enforce';
+      enforcement: 'hard' | 'soft';
+      expected: { verdict: 'deny' | 'review'; allowed: boolean; reviewRequired: boolean };
+    }> = [
+      { mode: 'shadow', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
+      { mode: 'shadow', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
+      { mode: 'enforce', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
+      { mode: 'enforce', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
+    ];
+
+    for (const { mode, enforcement, expected } of cases) {
+      it(`mode=${mode} × enforcement=${enforcement} → verdict=${expected.verdict}, allowed=${String(expected.allowed)}`, () => {
+        const assessment = evaluateEgressTrifecta(makePolicy(mode), {
+          envelopes: [enforcement === 'hard' ? hardEnvelope() : softEnvelope()],
+          privateDataInPath: true,
+          egressDescription: 'tool:fs',
+        });
+        expect(assessment.triggered).toBe(true);
+        expect(assessment.enforcement).toBe(enforcement);
+        expect(assessment.verdict).toBe(expected.verdict);
+        expect(assessment.allowed).toBe(expected.allowed);
+        expect(assessment.reviewRequired).toBe(expected.reviewRequired);
+      });
+    }
+
+    it('a shadow-mode hard deny records the override in the auditable reason', () => {
+      const assessment = evaluateEgressTrifecta(makePolicy('shadow'), {
+        envelopes: [hardEnvelope()],
+        privateDataInPath: true,
+        egressDescription: 'tool:fs',
+      });
+      expect(assessment.reason).toContain("enforcement 'hard' overrides shadow mode");
+    });
+
+    it('an enforce-mode hard deny does not claim a shadow override', () => {
+      const assessment = evaluateEgressTrifecta(makePolicy('enforce'), {
+        envelopes: [hardEnvelope()],
+        privateDataInPath: true,
+        egressDescription: 'tool:fs',
+      });
+      expect(assessment.reason).not.toContain('overrides shadow mode');
+    });
+
+    it('untriggered assessments stay allowed in both modes', () => {
+      for (const mode of ['shadow', 'enforce'] as const) {
+        const assessment = evaluateEgressTrifecta(makePolicy(mode), {
+          envelopes: [hardEnvelope()],
+          privateDataInPath: false,
+          egressDescription: 'tool:fs',
+        });
+        expect(assessment.triggered).toBe(false);
+        expect(assessment.allowed).toBe(true);
+      }
+    });
   });
 });
 

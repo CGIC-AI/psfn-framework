@@ -125,6 +125,14 @@ export interface IntakeEscalationRequest {
    * fold the full layered history onto the ONE envelope it delivers.
    */
   priorContribution: IntakeEscalationContribution;
+  /**
+   * On-disk artifact paths carrying this item's raw content (hrmrq.54).
+   * MUST reach the quarantine hold on every escalation outcome that
+   * quarantines — including the L3 'final' path, whose hold the port itself
+   * writes via applyL3ScreeningOutcome — or the read gate never learns about
+   * the artifacts and fs/shell reads of the quarantined bytes go unaudited.
+   */
+  artifactPaths?: readonly string[];
   atMs: number;
 }
 
@@ -219,6 +227,13 @@ export interface IntakeScreeningInput {
    * rule); absent, the escalation port derives a source-class identifier.
    */
   sourceChannelId?: string;
+  /**
+   * On-disk artifact paths carrying this item's raw content (a saved
+   * document and its parsed-text sidecar). Registered on the quarantine hold
+   * so read seams can refuse to serve a quarantined artifact and record the
+   * attempt for the operator (hrmrq.54).
+   */
+  artifactPaths?: readonly string[];
   atMs?: number;
 }
 
@@ -592,6 +607,9 @@ export function createIntakeScreeningService(
           ...(input.canonicalContactId !== undefined
             ? { canonicalContactId: input.canonicalContactId }
             : {}),
+          ...(input.artifactPaths !== undefined && input.artifactPaths.length > 0
+            ? { artifactPaths: input.artifactPaths }
+            : {}),
           atMs,
         });
       } catch (error) {
@@ -727,6 +745,13 @@ export function createIntakeScreeningService(
           : {}),
         ...(input.sourceChannelId !== undefined
           ? { sourceChannelId: input.sourceChannelId }
+          : {}),
+        // hrmrq.54: the escalation port owns the quarantine hold on the L3
+        // 'final' path, so the artifact paths must travel with the request —
+        // omitting them here left L2/L3-only quarantines with unregistered,
+        // guard-invisible artifacts.
+        ...(input.artifactPaths !== undefined && input.artifactPaths.length > 0
+          ? { artifactPaths: input.artifactPaths }
           : {}),
         priorContribution: prior,
         atMs,

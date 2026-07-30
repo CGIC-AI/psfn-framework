@@ -62,6 +62,13 @@ export function buildBubblewrapArgs(request: ResolvedShellExecution): string[] {
   if (request.repositoryMountPath) {
     args.push('--ro-bind', request.repositoryMountPath, SANDBOX_REPOSITORY_MOUNT_TARGET);
   }
+  // hrmrq.54: mask quarantined-artifact files AFTER the workspace/repo binds
+  // so the /dev/null mount shadows the real bytes. This is the physical
+  // backstop for argv shapes the gateway descriptor cannot parse (cp, pipes,
+  // globs, here-docs): inside the sandbox the file exists but reads empty.
+  for (const shadowPath of request.shadowReadPaths ?? []) {
+    args.push('--ro-bind', '/dev/null', shadowPath);
+  }
   args.push(
     '--chdir', request.sandboxCwd,
     '--',

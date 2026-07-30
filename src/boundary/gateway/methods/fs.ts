@@ -250,6 +250,22 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
       assertPersonalWorkspacePath(resolved.path, runtime, 'returnNormalized');
+      // hrmrq.54: a quarantined item's on-disk artifact must never be served
+      // back into the turn while the item awaits operator review — the read
+      // returns the fixed quarantine notice and the attempt is recorded on
+      // the Garden queue entry.
+      const guardVerdict = runtime.quarantinedArtifactGuard?.check(resolved.path, {
+        via: 'gateway:fs.read',
+      });
+      if (guardVerdict?.withheld) {
+        return {
+          content: guardVerdict.noticeText,
+          offsetBytes: 0,
+          nextOffsetBytes: null,
+          eof: true,
+          truncated: false,
+        };
+      }
       const options = normalizeFilesystemReadOptions({
         ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
         ...(params.offsetBytes !== undefined ? { offsetBytes: params.offsetBytes } : {}),
@@ -311,7 +327,8 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.search',
     handler: async (params: FsSearchParams, runtime) => {
-      return await searchWorkspaceFiles(resolveReadRoot(runtime), {
+      const searchRoot = resolveReadRoot(runtime);
+      const result = await searchWorkspaceFiles(searchRoot, {
         query: params.query,
         ...(typeof params.glob === 'string' && !isBroadSearchGlob(params.glob)
           ? { glob: params.glob }
@@ -322,6 +339,26 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         ...(typeof params.maxBytesPerFile === 'number' ? { maxBytesPerFile: params.maxBytesPerFile } : {}),
         ...(typeof params.contextLines === 'number' ? { contextLines: params.contextLines } : {}),
       });
+      // hrmrq.54: search previews are a read seam too — a quarantined
+      // artifact's lines must not leak through match previews. One guard
+      // verdict per distinct matched file; withheld files drop out of the
+      // result and the attempt lands on the Garden queue entry.
+      const guard = runtime.quarantinedArtifactGuard;
+      if (!guard) return result;
+      const verdictByRelativePath = new Map<string, boolean>();
+      const isWithheld = (relativePath: string): boolean => {
+        const cached = verdictByRelativePath.get(relativePath);
+        if (cached !== undefined) return cached;
+        const absolutePath = resolveWorkspaceFsPathFromRoot(relativePath, searchRoot);
+        const withheld = guard.check(absolutePath, { via: 'gateway:fs.search' }).withheld;
+        verdictByRelativePath.set(relativePath, withheld);
+        return withheld;
+      };
+      return {
+        ...result,
+        matches: result.matches.filter((match) => !isWithheld(match.path)),
+        truncatedFiles: result.truncatedFiles.filter((path) => !isWithheld(path)),
+      };
     },
     summary: (p: FsSearchParams) => ({
       query: p.query,

@@ -195,6 +195,15 @@ export interface SubagentFacultyDeps {
    * composition supplies the same snapshot seam used for shard derivation.
    */
   snapshotParentCapabilityGrant?: () => CapabilityGrantSnapshot;
+  /**
+   * hrmrq.54: the parent's intake screening service, resolved lazily at spawn
+   * time (composition assigns it onto the parent SessionManager after
+   * construction). Without it a subagent's SessionManager screens NOTHING —
+   * its tool results enter the bounded worker's turn and session unscreened
+   * while the parent's identical tool output is gated. Absent ⇒ firewall off
+   * for this runtime (matches the parent's own null contract).
+   */
+  intakeScreeningProvider?: () => SessionManager['intakeScreening'];
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -553,6 +562,11 @@ export class SubagentFaculty implements SubagentControlPort {
         this.deps.config,
         this.deps.eventBus,
       );
+      // hrmrq.54: subagent tool results are screened exactly like the
+      // parent's — both the scheduler seam (SubstrateAgent's
+      // toolResultScreener reads sessionManager.intakeScreening lazily) and
+      // the persistence seam key off this assignment.
+      sessionManager.intakeScreening = this.deps.intakeScreeningProvider?.() ?? null;
       // mmo9.7.7: thread the request's typed work spec onto the bounded worker's
       // model calls through the mmo9.7.1 client seam (no new admission logic).
       const workSpecProvider = createSubagentWorkSpecProvider(

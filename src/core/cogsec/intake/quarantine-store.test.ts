@@ -1,6 +1,6 @@
 // htm9.11 — durable intake quarantine store tests.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -317,6 +317,163 @@ describe('intake quarantine store (htm9.11)', () => {
         .toThrow(/itemTtlHours/);
       expect(() => createIntakeQuarantineStore(filePath, { itemTtlHours: 1, maxHeldItems: 0 }))
         .toThrow(/maxHeldItems/);
+    });
+  });
+
+  // hrmrq.54: quarantined-artifact path registration and attempted-access audit.
+  describe('artifact paths and access attempts (hrmrq.54)', () => {
+    it('registers normalized artifact paths on hold and finds the entry by path', () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'held content',
+        artifactPaths: ['/data/files/doc.pdf', '/data/files/./doc.pdf.parsed.txt'],
+      });
+
+      const byOriginal = store.findByArtifactPath('/data/files/doc.pdf');
+      expect(byOriginal?.id).toBe(envelope.id);
+      expect(byOriginal?.artifactPaths).toEqual([
+        '/data/files/doc.pdf',
+        '/data/files/doc.pdf.parsed.txt',
+      ]);
+      // Lookup normalizes the same way registration does.
+      expect(store.findByArtifactPath('/data/files/../files/doc.pdf.parsed.txt')?.id)
+        .toBe(envelope.id);
+      expect(store.findByArtifactPath('/data/files/unrelated.txt')).toBeUndefined();
+    });
+
+    it('realpaths existing artifacts at registration so a symlinked-prefix hold cannot miss canonical reads', () => {
+      const realDir = join(dir, 'real');
+      mkdirSync(realDir, { recursive: true });
+      const canonicalArtifact = join(realpathSync(realDir), 'doc.md');
+      writeFileSync(canonicalArtifact, 'MARKER-content');
+      const linkDir = join(dir, 'link');
+      symlinkSync(realDir, linkDir);
+
+      const envelope = makeQuarantinedEnvelope();
+      // Registration arrives through the SYMLINKED prefix — pre-fix the store
+      // kept the symlink form, so a read of the canonical path missed both
+      // the direct lookup and the guard's realpath fallback (which
+      // canonicalizes the read path, never the stored one).
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'MARKER-content',
+        artifactPaths: [join(linkDir, 'doc.md')],
+      });
+
+      expect(store.getById(envelope.id)?.artifactPaths).toEqual([canonicalArtifact]);
+      expect(store.findByArtifactPath(canonicalArtifact)?.id).toBe(envelope.id);
+    });
+
+    it('never prunes a terminal entry whose registered artifact still exists (read-gate anchor), and prunes it once the artifact is gone', () => {
+      const artifact = join(dir, 'anchored.md');
+      writeFileSync(artifact, 'MARKER-content');
+      const canonicalArtifact = realpathSync(artifact);
+      const anchored = makeQuarantinedEnvelope();
+      store.hold({ envelope: anchored, mode: 'enforce', rawText: 'x', artifactPaths: [artifact] });
+      store.applyDecision({
+        id: anchored.id,
+        action: 'discard',
+        actor: 'operator:garden',
+        reason: 'hostile',
+      });
+
+      // Flood the terminal history far past the retention cap.
+      for (let index = 0; index < 201; index += 1) {
+        clock += 1;
+        const chaff = makeQuarantinedEnvelope({ atMs: clock });
+        store.hold({ envelope: chaff, mode: 'enforce', rawText: 'x', atMs: clock });
+        store.applyDecision({
+          id: chaff.id,
+          action: 'discard',
+          actor: 'operator:garden',
+          reason: 'chaff',
+          atMs: clock,
+        });
+      }
+
+      // The OLDEST terminal entry survives the cap because its artifact still
+      // exists: pruning it would leave the on-disk bytes readable with no
+      // gate and no audit (hrmrq.54).
+      expect(store.getById(anchored.id)).toBeDefined();
+      expect(store.findByArtifactPath(canonicalArtifact)?.id).toBe(anchored.id);
+
+      // Once the artifact itself is gone the exemption ends.
+      rmSync(artifact);
+      clock += 1;
+      const trigger = makeQuarantinedEnvelope({ atMs: clock });
+      store.hold({ envelope: trigger, mode: 'enforce', rawText: 'x', atMs: clock });
+      expect(store.getById(anchored.id)).toBeUndefined();
+    });
+
+    it('rejects empty and over-limit artifact path registrations (fail closed)', () => {
+      expect(() => store.hold({
+        envelope: makeQuarantinedEnvelope({ id: 'env-bad-path-01'.padEnd(26, '0') }),
+        mode: 'enforce',
+        rawText: 'x',
+        artifactPaths: ['   '],
+      })).toThrow(/non-empty strings/);
+      expect(() => store.hold({
+        envelope: makeQuarantinedEnvelope({ id: 'env-many-path-1'.padEnd(26, '0') }),
+        mode: 'enforce',
+        rawText: 'x',
+        artifactPaths: Array.from({ length: 17 }, (_, index) => `/data/files/f${String(index)}`),
+      })).toThrow(/artifact paths/);
+    });
+
+    it('records bounded access attempts on the entry and persists them', () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'held content',
+        artifactPaths: ['/data/files/doc.pdf'],
+      });
+
+      const updated = store.recordAccessAttempt({
+        id: envelope.id,
+        path: '/data/files/doc.pdf',
+        via: 'gateway:fs.read',
+      });
+      expect(updated.accessAttempts).toEqual([
+        { path: '/data/files/doc.pdf', via: 'gateway:fs.read', atMs: NOW },
+      ]);
+
+      // The write is durable across a fresh instance over the same file.
+      const reloaded = makeStore().getById(envelope.id);
+      expect(reloaded?.accessAttempts).toHaveLength(1);
+
+      for (let index = 0; index < 60; index += 1) {
+        store.recordAccessAttempt({
+          id: envelope.id,
+          path: '/data/files/doc.pdf',
+          via: `gateway:fs.read#${String(index)}`,
+        });
+      }
+      const bounded = store.getById(envelope.id);
+      expect(bounded?.accessAttempts).toHaveLength(50);
+      expect(bounded?.accessAttempts?.at(-1)?.via).toBe('gateway:fs.read#59');
+    });
+
+    it('throws on access attempts against unknown entries (audit must never silently miss)', () => {
+      expect(() => store.recordAccessAttempt({
+        id: 'missing-entry-id',
+        path: '/data/files/doc.pdf',
+        via: 'gateway:fs.read',
+      })).toThrow(/not found/);
+    });
+
+    it('fails closed on malformed persisted artifact metadata', () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({ envelope, mode: 'enforce', rawText: 'x', artifactPaths: ['/data/doc.pdf'] });
+      const raw = JSON.parse(readFileSync(filePath, 'utf8')) as {
+        entries: Array<Record<string, unknown>>;
+      };
+      raw.entries[0].accessAttempts = [{ path: '/p', via: '', atMs: NOW }];
+      writeFileSync(filePath, JSON.stringify(raw), 'utf8');
+      expect(() => store.list()).toThrow(/non-empty via/);
     });
   });
 });

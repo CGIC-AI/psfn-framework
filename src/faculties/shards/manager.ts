@@ -743,6 +743,9 @@ export class ShardManager implements ShardExecutionPort {
         memoryProvider: this.deps.memoryProvider,
         exposeMemory: !shardConfig.contextPack,
         tools: injectedTools,
+        // hrmrq.54: resolved at spawn time — composition assigns the parent
+        // SessionManager's screening service after construction.
+        intakeScreening: this.deps.sessionManager?.intakeScreening ?? null,
       });
       const chatChannelId = `${channelId}:human`;
       const chatTools = this.resolveInjectedTools(shardId, {
@@ -761,6 +764,8 @@ export class ShardManager implements ShardExecutionPort {
         memoryProvider: this.deps.memoryProvider,
         exposeMemory: !shardConfig.contextPack,
         tools: chatTools,
+        // hrmrq.54: the human-to-shard chat runtime screens tool results too.
+        intakeScreening: this.deps.sessionManager?.intakeScreening ?? null,
       });
       this.shardDirectory.register(shardId, {
         agentLoop: chatAgentLoop,

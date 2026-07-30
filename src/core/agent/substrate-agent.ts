@@ -703,6 +703,32 @@ export class SubstrateAgent {
     });
     installAgentToolSchedulerPatch(this.agent, {
       maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
+      // hrmrq.54: screen tool results at the scheduler seam, BEFORE they
+      // enter the turn — the persistence-time screen alone let quarantined
+      // content (e.g. an fs.read of a withheld document) reach the model
+      // loop unscreened. Resolved lazily: composition assigns
+      // sessionManager.intakeScreening after construction; a null service
+      // means the firewall is off for this runtime.
+      toolResultScreener: ({ toolName, toolCallId, text }) => {
+        const screening = this.sessionManager.intakeScreening;
+        if (!screening) return null;
+        const toolCallSuffix = toolCallId.trim() ? `:${toolCallId.trim()}` : '';
+        const screened = screening.screenSync(text, {
+          sourceClass: 'tool_output',
+          origin: {
+            ref: `tool:${toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
+            detail: 'seam:tool-scheduler',
+          },
+          scope: 'context',
+        });
+        return {
+          mode: screened.mode,
+          withheld: screened.withheld,
+          effectiveText: screened.effectiveText,
+          snapshot: screened.snapshot,
+          ...(screened.markingPlan ? { markingPlan: screened.markingPlan } : {}),
+        };
+      },
       onTelemetry: (eventName, payload) => {
         this.turnSupportRuntime.emitTelemetry(eventName, {
           ...this.turnSupportRuntime.withAdaptiveCorrelation(

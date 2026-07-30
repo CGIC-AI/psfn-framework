@@ -30,6 +30,24 @@ function request(): ResolvedShellExecution {
 }
 
 describe('buildBubblewrapArgs', () => {
+  it('masks quarantined artifacts with read-only /dev/null binds AFTER the workspace/repo binds (hrmrq.54)', () => {
+    const args = buildBubblewrapArgs({
+      ...request(),
+      repositoryMountPath: '/srv/psfn-repo',
+      shadowReadPaths: ['/workspace/files/doc.md', '/repo/docs/held.txt'],
+    });
+    const sequence = args.join('\0');
+
+    expect(sequence).toContain('--ro-bind\0/dev/null\0/workspace/files/doc.md');
+    expect(sequence).toContain('--ro-bind\0/dev/null\0/repo/docs/held.txt');
+    // Ordering is load-bearing: the /dev/null mount must layer OVER the
+    // workspace and repo binds, or the real bytes stay visible.
+    expect(sequence.indexOf('--bind\0/app/workspace\0/workspace'))
+      .toBeLessThan(sequence.indexOf('--ro-bind\0/dev/null\0/workspace/files/doc.md'));
+    expect(sequence.indexOf('--ro-bind\0/srv/psfn-repo\0/repo'))
+      .toBeLessThan(sequence.indexOf('--ro-bind\0/dev/null\0/repo/docs/held.txt'));
+  });
+
   it('builds a no-network namespace with only the Personal Workspace writable', () => {
     const args = buildBubblewrapArgs(request());
     const rendered = JSON.stringify(args);

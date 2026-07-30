@@ -195,6 +195,9 @@ export async function composeGatewayIntakeScreening(input: {
         list: () => durableQuarantine.list(),
         getById: (id) => durableQuarantine.getById(id),
         applyDecision: (decision) => durableQuarantine.applyDecision(decision),
+        findByArtifactPath: (path) => durableQuarantine.findByArtifactPath(path),
+        recordAccessAttempt: (attempt) => durableQuarantine.recordAccessAttempt(attempt),
+        listActiveArtifactPaths: () => durableQuarantine.listActiveArtifactPaths(),
       }
     : durableQuarantine;
 

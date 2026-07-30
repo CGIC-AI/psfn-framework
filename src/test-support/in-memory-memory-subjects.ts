@@ -310,7 +310,8 @@ export async function queryInMemoryAuthorizedAdmin(
   store: InMemorySubjectStoreBackend,
   input: MemorySubjectAdminQuery,
 ): Promise<MemorySubjectAdminResult> {
-  const authorized = (await store.getAllActiveMemories())
+  const allActive = await store.getAllActiveMemories();
+  const authorized = allActive
     .filter(memory => isAuthorized(memory, input.authorization))
     .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
   const { selector } = input;
@@ -342,12 +343,17 @@ export async function queryInMemoryAuthorizedAdmin(
       const options = selector.options ?? {};
       const all = authorized.filter(memory => !isInternalMemoryArtifact(memory));
       const filtered = subjectAdminFilter(all, options);
+      const allFiltered = subjectAdminFilter(
+        allActive.filter(memory => !isInternalMemoryArtifact(memory)),
+        options,
+      );
       const offset = Math.max(0, Math.floor(options.offset ?? 0));
       const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 50)));
       return {
         kind: 'memories',
         memories: filtered.slice(offset, offset + limit).map(memory => ({ ...memory, similarity: 1 })),
         total: filtered.length,
+        withheldBySubjectAuthorizationCount: allFiltered.length - filtered.length,
       };
     }
   }

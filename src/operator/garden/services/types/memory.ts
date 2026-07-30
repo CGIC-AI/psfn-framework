@@ -60,6 +60,8 @@ export interface AdminMemoryPrivacySummary {
 
 export interface AdminMemoryListData {
   memories: AdminMemoryView[];
+  /** Owner-only count; omitted for non-owner principals to avoid existence leakage. */
+  withheldBySubjectAuthorizationCount?: number;
   contactsById: Map<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
   pagination: {

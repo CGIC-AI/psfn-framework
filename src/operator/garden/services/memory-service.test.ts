@@ -83,6 +83,7 @@ describe('AdminMemoryDataService', () => {
     });
     expect(memoryStore.getAllActiveMemories).not.toHaveBeenCalled();
     expect(result.memories).toEqual([memory]);
+    expect(result.withheldBySubjectAuthorizationCount).toBe(0);
     expect(result.pagination).toMatchObject({
       limit: 10,
       offset: 5,

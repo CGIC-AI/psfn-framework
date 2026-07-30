@@ -28,7 +28,12 @@ function adminAggregateFromMemories(
     case 'stats':
       return { kind: 'stats', stats: { total: 0, byType: {}, avgSalience: 0 } };
     default:
-      return { kind: 'memories', memories: [...pageMemories], total: pageMemories.length };
+      return {
+        kind: 'memories',
+        memories: [...pageMemories],
+        total: pageMemories.length,
+        withheldBySubjectAuthorizationCount: 4,
+      };
   }
 }
 import { AdminMemoryDataService } from './services/memory-service.js';
@@ -180,6 +185,46 @@ describe('request-bound Garden principal isolation', () => {
       .toEqual(expect.arrayContaining([['contact-a'], ['contact-b']]));
     expect(Object.isFrozen(principalA)).toBe(true);
     expect(Object.isFrozen(principalA.actor)).toBe(true);
+  });
+
+  it('surfaces subject-authorization withholding only to the owner role', async () => {
+    const aggregateAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAdminQuery) => (
+      adminAggregateFromMemories(input, [{ ...memory('contact-a'), similarity: 1 }])
+    ));
+    const rawStore = {
+      aggregateAuthorizedMemorySubjects,
+      queryAuthorizedMemorySubjects: vi.fn(async () => ({
+        memories: [{ ...memory('contact-a'), similarity: 1 }],
+        total: 1,
+      })),
+      getMemorySubjectClassification: vi.fn(async () => ({
+        memoryId: 'memory-contact-a',
+        subjectClass: 'single_contact',
+        status: 'current',
+        classifierVersion: 1,
+        memoryRevision: 1,
+        evidenceDigest: 'a'.repeat(64),
+        evidence: ['explicit_subject_contact'],
+        subjectContactIds: ['contact-a'],
+        reasonClass: 'explicit_subject_contact',
+        classifiedAt: 1,
+        updatedAt: 1,
+      })),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({
+      memoryStore: rawStore,
+      fleetMemoryStore: rawStore,
+    });
+
+    const member = await service
+      .forRequest(context('principal-a', 'contact-a'))
+      .listMemories();
+    const owner = await service
+      .forRequest(context('principal-a', 'contact-a', { role: 'owner' }))
+      .listMemories();
+
+    expect(member.withheldBySubjectAuthorizationCount).toBeUndefined();
+    expect(owner.withheldBySubjectAuthorizationCount).toBe(4);
   });
 
   it('keeps strong JIT and non-subject relations fail closed', () => {

@@ -412,6 +412,12 @@ export function createInProcessGardenAdminContract(
     watermarkDefinitions: () => (
       buildEpisodicWatermarkLaneDefinitions(configStore.loadScheduler())
     ),
+    ...(options.memoryStore.getStartupMemorySubjectClassificationCoverage
+      ? {
+        startupMemorySubjectClassificationCoverage:
+          options.memoryStore.getStartupMemorySubjectClassificationCoverage(),
+      }
+      : {}),
   });
   const partnerAffectShadow = options.partnerAffectShadowStore
     ? new AdminPartnerAffectShadowDataService({

@@ -159,12 +159,75 @@ export function textResultWithError(
 
 export function internalToolFailureResult<
   T = StructuredToolErrorDetails,
->(): AgentToolResult<T> {
+>(error?: unknown): AgentToolResult<T> {
+  const operationalFailure = companionVisibleOperationalFailure(error);
+  if (operationalFailure) {
+    const details = buildStructuredToolErrorDetails(operationalFailure);
+    return {
+      content: [{ type: 'text', text: details.companionMessage }] satisfies TextContent[],
+      details,
+    } as AgentToolResult<T>;
+  }
   return textResultWithError(INTERNAL_TOOL_FAILURE_NOTICE, true, {
     errorClass: 'unavailable',
     retryHint: 'operator_escalation',
     companionMessage: INTERNAL_TOOL_FAILURE_NOTICE,
   }) as AgentToolResult<T>;
+}
+
+function companionVisibleOperationalFailure(
+  error: unknown,
+): ToolErrorMetadataInput | undefined {
+  if (error === undefined) return undefined;
+  const diagnostic = sanitizeToolErrorDiagnostic(error);
+  if (!diagnostic) return undefined;
+
+  const errorClass = classifyToolError(error);
+  if (errorClass === 'rate_limited') {
+    return {
+      cause: error,
+      rawDiagnostic: error,
+      errorClass,
+      retryHint: 'retry_after_delay',
+      companionMessage: diagnostic,
+    };
+  }
+
+  if (/^Shard limit reached\b/u.test(diagnostic)) {
+    return {
+      cause: error,
+      rawDiagnostic: error,
+      errorClass: 'unavailable',
+      retryHint: 'retry_after_delay',
+      companionMessage: diagnostic,
+    };
+  }
+
+  if (/^Shard routing denied:\s/u.test(diagnostic)) {
+    return {
+      cause: error,
+      rawDiagnostic: error,
+      errorClass: /missing required capability tokens/u.test(diagnostic)
+        ? 'policy_blocked'
+        : 'unavailable',
+      retryHint: /missing required capability tokens/u.test(diagnostic)
+        ? 'try_alternative_input'
+        : 'retry_after_delay',
+      companionMessage: diagnostic,
+    };
+  }
+
+  if (/^Shard launch denied:\s/u.test(diagnostic)) {
+    return {
+      cause: error,
+      rawDiagnostic: error,
+      errorClass: 'policy_blocked',
+      retryHint: 'try_alternative_input',
+      companionMessage: diagnostic,
+    };
+  }
+
+  return undefined;
 }
 
 export function textResultFromError(

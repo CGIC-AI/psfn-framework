@@ -8,6 +8,7 @@ import {
   POSTGRES_INTROSPECTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_MODEL_USAGE_MIGRATIONS,
+  POSTGRES_SHARED_ALL_MIGRATION_VERSIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
@@ -25,6 +26,23 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('keeps the combined shared-schema ledger unique and sequential across both chains', () => {
+    const registeredVersions = [
+      ...POSTGRES_SHARED_MIGRATIONS,
+      ...POSTGRES_SHARED_WIKI_MIGRATIONS,
+    ]
+      .flatMap(statement => {
+        const match = /INSERT INTO shared_schema_migrations[\s\S]*?VALUES \((\d+),/.exec(statement);
+        return match?.[1] === undefined ? [] : [Number(match[1])];
+      })
+      .sort((left, right) => left - right);
+
+    expect(registeredVersions).toEqual([...POSTGRES_SHARED_ALL_MIGRATION_VERSIONS]);
+    expect(registeredVersions).toEqual(
+      Array.from({ length: registeredVersions.length }, (_, index) => index + 1),
+    );
+  });
+
   it('retains social-desire settlement identities across desire deletion and recreation', () => {
     const sql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
 

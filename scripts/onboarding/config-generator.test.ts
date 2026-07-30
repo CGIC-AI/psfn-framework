@@ -78,7 +78,7 @@ describe('config generation passes the real settings-contract guard', () => {
     expect(() => stageAndValidate(plan)).not.toThrow();
   });
 
-  it('re-points both primary-bearing models at the chosen provider', () => {
+  it('re-points both selected models and assigns vision to the chosen primary', () => {
     const plan = makePlan({
       provider: {
         id: 'anthropic',
@@ -90,10 +90,20 @@ describe('config generation passes the real settings-contract guard', () => {
       },
       models: { primaryModelSlug: 'claude-x', extractionModelSlug: 'claude-y' },
     });
-    const registry = buildModelsRegistry(plan) as { models: Array<{ identity: { provider: string; model: string } }> };
+    const registry = buildModelsRegistry(plan) as {
+      models: Array<{
+        id: string;
+        identity: { provider: string; model: string };
+        purposes: Array<{ purpose: string; primary: boolean }>;
+      }>;
+    };
     expect(registry.models).toHaveLength(2);
     expect(registry.models.every((m) => m.identity.provider === 'anthropic')).toBe(true);
     expect(registry.models.map((m) => m.identity.model).sort()).toEqual(['claude-x', 'claude-y']);
+    expect(registry.models.find((m) => m.id === 'primary')?.purposes).toContainEqual({
+      purpose: 'vision',
+      primary: true,
+    });
   });
 
   it('providers.json stores an env ref, never the secret value', () => {

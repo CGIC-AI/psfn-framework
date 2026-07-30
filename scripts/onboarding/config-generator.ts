@@ -162,10 +162,11 @@ export function buildProvidersRegistry(plan: OnboardingPlan): unknown {
 }
 
 /**
- * Re-point the seed's two primary-bearing model entries (primary, extraction) at
- * the chosen provider and slugs. Keeping exactly those two entries preserves the
- * "exactly one primary per canonical purpose" invariant the model registry guard
- * enforces, and avoids leaving catalog entries that reference a provider id the
+ * Re-point the seed's two selected model entries (primary, extraction) at the
+ * chosen provider and slugs. The generated primary also owns vision: onboarding
+ * does not ask for a separate vision model, while the canonical registry guard
+ * requires exactly one primary for that purpose. Keeping exactly these two
+ * entries avoids leaving catalog entries that reference a provider id the
  * generated providers.json does not define.
  */
 export function buildModelsRegistry(plan: OnboardingPlan): unknown {
@@ -185,6 +186,14 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
       const identity = isRecord(entry.identity) ? entry.identity : {};
       return {
         ...entry,
+        ...(entry.id === 'primary' && Array.isArray(entry.purposes)
+          ? {
+              purposes: [
+                ...entry.purposes,
+                { purpose: 'vision', primary: true },
+              ],
+            }
+          : {}),
         identity: {
           ...identity,
           provider: providerId,

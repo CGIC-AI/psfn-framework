@@ -49,6 +49,11 @@ describe('companion Garden browser scope', () => {
       .toBe(`/companions/${COMPANION_A}/garden/api/admin/settings`);
     expect(scopeGardenDataPath('/health', pathname))
       .toBe(`/companions/${COMPANION_A}/garden/health`);
+    expect(scopeGardenDataPath('/api/admin/model-usage?timezone=America%2FNew_York', pathname))
+      .toBe(
+        `/companions/${COMPANION_A}/garden/api/admin/model-usage`
+          + '?timezone=America%2FNew_York',
+      );
     expect(companionGardenRoot(COMPANION_B))
       .toBe(`/companions/${COMPANION_B}/garden`);
     expect(getCompanionCacheScope(pathname)).toBe(COMPANION_A);
@@ -61,7 +66,6 @@ describe('companion Garden browser scope', () => {
       '/api//admin/model-usage',
       '/api/admin/../model-usage',
       '/api/admin/%2Fmodel-usage',
-      '/api/admin/model-usage?redirect=%2Fadmin',
       '/api/admin/model-usage#fragment',
       String.raw`/api\admin\model-usage`,
     ]) {

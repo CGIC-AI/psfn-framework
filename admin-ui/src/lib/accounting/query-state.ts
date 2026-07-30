@@ -247,7 +247,6 @@ export function buildChargeCostQuery(
   return {
     sinceMs: resolvedRange.sinceMs,
     untilMs: resolvedRange.untilMs,
-    ...(filters.companionId ? { companionId: filters.companionId } : {}),
     ...(filters.channelId ? { channelId: filters.channelId } : {}),
     ...(lane && CHARGE_LANES.has(lane)
       ? { lane: lane as ChargeCostReconciliationQuery['lane'] }
@@ -261,7 +260,6 @@ export function buildChargeCostQuery(
 }
 
 const CHARGE_COST_FILTERS = new Set<ModelUsageGroupDimension>([
-  'companionId',
   'channelId',
   'chargeLane',
   'chargeSurface',

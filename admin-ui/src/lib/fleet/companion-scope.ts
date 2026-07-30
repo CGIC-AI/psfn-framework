@@ -18,15 +18,15 @@ const scopeChangeListeners = new Set<CompanionScopeChangeListener>();
 let activeCompanionId: string | null | undefined;
 
 function requireRootAbsolutePath(path: string): void {
+  const question = path.indexOf('?');
+  const pathname = question < 0 ? path : path.slice(0, question);
   if (!path.startsWith('/')
     || path.startsWith('//')
     || path.includes('\\')
     || path.includes('#')
-    || /%2f|%5c/iu.test(path)) {
+    || /%2f|%5c/iu.test(pathname)) {
     throw new Error('Garden path must be one canonical root-absolute path');
   }
-  const question = path.indexOf('?');
-  const pathname = question < 0 ? path : path.slice(0, question);
   if (pathname.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(pathname)) {
     throw new Error('Garden path must be one canonical root-absolute path');
   }

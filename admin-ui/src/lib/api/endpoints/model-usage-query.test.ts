@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { serializeModelUsageQuery } from './model-usage-query';
 
 describe('serializeModelUsageQuery', () => {
-  it('canonicalizes every valid timezone entry without matching key suffixes', () => {
+  it('canonically percent-encodes every timezone entry', () => {
     const params = new URLSearchParams();
     params.append('sometimezone', 'America/New_York');
     params.append('timezone', 'America/New_York');
@@ -10,18 +10,18 @@ describe('serializeModelUsageQuery', () => {
 
     expect(serializeModelUsageQuery(params)).toBe(
       'sometimezone=America%2FNew_York'
-        + '&timezone=America/New_York'
-        + '&timezone=Europe/Paris',
+        + '&timezone=America%2FNew_York'
+        + '&timezone=Europe%2FParis',
     );
   });
 
-  it('keeps malformed timezone separators encoded', () => {
+  it('does not special-case malformed timezone names', () => {
     const params = new URLSearchParams();
     params.append('timezone', 'America/New_York');
     params.append('timezone', 'Not/A_Timezone');
 
     expect(serializeModelUsageQuery(params)).toBe(
-      'timezone=America/New_York&timezone=Not%2FA_Timezone',
+      'timezone=America%2FNew_York&timezone=Not%2FA_Timezone',
     );
   });
 });

@@ -5,6 +5,7 @@ import { buildChargeCostsPath } from './charge-costs';
 import { buildModelUsagePath, buildModelUsageExportPath } from './model-usage';
 import { buildFleetModelUsagePath } from './fleet-model-usage';
 import { scopeGardenDataPath } from '../../fleet/companion-scope';
+import { validateGardenRequestMetadata } from '../../../../../src/boundary/fleet-auth/request-capability-target.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 
@@ -34,7 +35,7 @@ describe('accounting endpoint paths', () => {
     const json = new URL(buildModelUsageExportPath('json', query), 'http://garden.local');
 
     expect(buildModelUsageExportPath('csv', query))
-      .toContain('timezone=America/New_York');
+      .toContain('timezone=America%2FNew_York');
     expect(csv.searchParams.get('model')).toBe('gpt-5');
     expect(csv.searchParams.get('status')).toBe('failure');
     expect(json.searchParams.get('model')).toBe('gpt-5');
@@ -43,7 +44,7 @@ describe('accounting endpoint paths', () => {
     expect(json.searchParams.get('format')).toBe('json');
   });
 
-  it('serializes the canonical charge-cost reconciliation scope', () => {
+  it('serializes charge-cost filters without browser-controlled companion authority', () => {
     const path = buildChargeCostsPath({
       sinceMs: 100,
       untilMs: 200,
@@ -58,7 +59,6 @@ describe('accounting endpoint paths', () => {
     expect(Object.fromEntries(url.searchParams)).toEqual({
       sinceMs: '100',
       untilMs: '200',
-      companionId: 'companion-a',
       lane: 'interactive',
       surface: 'externalModelConsult',
       runId: 'run-1',
@@ -72,19 +72,57 @@ describe('accounting endpoint paths', () => {
       timezone: 'America/New_York',
     }), pathname)).toBe(
       `/companions/${COMPANION_A}/garden/api/admin/model-usage`
-        + '?range=month&timezone=America/New_York',
+        + '?range=month&timezone=America%2FNew_York',
     );
     expect(scopeGardenDataPath(buildFleetModelUsagePath({
       range: 'month',
       timezone: 'America/New_York',
     }), pathname)).toBe(
       `/companions/${COMPANION_A}/garden/api/admin/fleet-model-usage`
-        + '?range=month&timezone=America/New_York',
+        + '?range=month&timezone=America%2FNew_York',
     );
     expect(scopeGardenDataPath(buildModelUsagePath({ timezone: 'UTC' }), pathname))
       .toBe(`/companions/${COMPANION_A}/garden/api/admin/model-usage?timezone=UTC`);
-    expect(() => scopeGardenDataPath(buildModelUsagePath({
+    expect(scopeGardenDataPath(buildModelUsagePath({
       timezone: 'Not/A_Timezone',
-    }), pathname)).toThrow(/one canonical root-absolute path/u);
+    }), pathname)).toBe(
+      `/companions/${COMPANION_A}/garden/api/admin/model-usage`
+        + '?timezone=Not%2FA_Timezone',
+    );
+  });
+
+  it('round-trips client timezone paths through the server capability validator', () => {
+    const query = {
+      range: 'month' as const,
+      timezone: 'America/New_York',
+      bucket: 'day' as const,
+    };
+
+    for (const [rawTarget, canonicalPath] of [
+      [buildModelUsagePath(query), '/api/admin/model-usage'],
+      [buildFleetModelUsagePath(query), '/api/admin/fleet-model-usage'],
+    ]) {
+      expect(validateGardenRequestMetadata({
+        rawTarget,
+        method: 'GET',
+      })).toMatchObject({
+        canonicalPath,
+        query: {
+          bucket: ['day'],
+          range: ['month'],
+          timezone: ['America/New_York'],
+        },
+      });
+    }
+  });
+
+  it('never serializes browser-controlled companion authority for model usage', () => {
+    expect(buildModelUsagePath({
+      range: 'month',
+      companionId: 'browser-selected-companion',
+    })).toBe('/api/admin/model-usage?range=month');
+    expect(buildModelUsageExportPath('json', {
+      companionId: 'browser-selected-companion',
+    })).toBe('/api/admin/model-usage/export?format=json');
   });
 });

@@ -85,7 +85,7 @@ describe('fleet costs helpers', () => {
       customSinceDate: '2026-07-01',
       customUntilDate: '2026-07-18',
     }, 'fleet')).toBe(
-      `/companions/${COMPANION_A}/garden/charge-budget?tab=token-usage&range=custom&timezone=America/New_York&bucket=day&since=2026-07-01&until=2026-07-18`,
+      `/companions/${COMPANION_A}/garden/charge-budget?tab=token-usage&range=custom&timezone=America%2FNew_York&bucket=day&since=2026-07-01&until=2026-07-18`,
     );
   });
 

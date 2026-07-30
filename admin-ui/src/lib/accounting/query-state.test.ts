@@ -6,6 +6,7 @@ import {
   buildChargeCostQuery,
   buildModelUsageQuery,
   createDefaultAccountingState,
+  unsupportedChargeCostFilters,
 } from './query-state';
 
 describe('accounting query state', () => {
@@ -107,12 +108,24 @@ describe('accounting query state', () => {
     expect(buildChargeCostQuery(state, { sinceMs: 10, untilMs: 20 })).toEqual({
       sinceMs: 10,
       untilMs: 20,
-      companionId: 'companion-a',
       channelId: 'discord:1',
       lane: 'interactive',
       surface: 'externalModelConsult',
       runId: 'run-1',
       rootRunId: 'root-1',
     });
+  });
+
+  it('treats companion filters as route authority, not charge-cost query fields', () => {
+    const state = {
+      ...createDefaultAccountingState('UTC', new Date('2026-07-14T12:00:00Z')),
+      filters: { companionId: 'browser-selected-companion' },
+    };
+
+    expect(buildChargeCostQuery(state, { sinceMs: 10, untilMs: 20 })).toEqual({
+      sinceMs: 10,
+      untilMs: 20,
+    });
+    expect(unsupportedChargeCostFilters(state)).toEqual(['companionId']);
   });
 });

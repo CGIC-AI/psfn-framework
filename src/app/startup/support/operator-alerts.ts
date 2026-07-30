@@ -30,13 +30,10 @@ export function createPromptGenerationFailureAlertHandler(
 
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
     if (!enabled) {
-      log.warn('Prompt generation failure alert skipped: ntfy is not configured', {
+      log.error(`Prompt generation failure operator alert recorded locally for ${event.process}: ntfy is not configured`, {
         companionName: resolvedCompanionName,
-        purpose: event.purpose,
-        attempts: event.attempts,
-        process: event.process,
-        service: event.service,
-        channelId: event.correlation?.channelId,
+        attempt: event.attempts,
+        reason: event.error.message,
       });
       return;
     }

@@ -30,6 +30,7 @@ import {
   ReflectionMetacognitionJournalStore,
   type ReflectionMutationSnapshot,
 } from '../../../persistence/journals/reflection-metacognition-journal.js';
+import { sanitizeDiagnosticText } from '../../../shared/diagnostics/redaction.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
@@ -273,7 +274,7 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
     lastRunAt: task.lastRunAt,
     lastFinishedAt: task.lastFinishedAt,
     lastOutcome: task.lastOutcome,
-    lastError: task.lastError,
+    lastError: task.lastError ? sanitizeDiagnosticText(task.lastError) : undefined,
     lastErrorAt: task.lastErrorAt,
     lastDeniedReason: task.lastDeniedReason,
   };

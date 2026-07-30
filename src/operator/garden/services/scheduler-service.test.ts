@@ -262,6 +262,25 @@ describe('AdminSchedulerService', () => {
     });
   });
 
+  it('redacts secrets from scheduler failures before exposing them to Garden', () => {
+    const { scheduler } = createSchedulerStub([
+      makeTask({
+        id: 'runtime-secret-failure',
+        name: 'Runtime Secret Failure',
+        lastOutcome: 'failed',
+        lastError: 'provider api_key=sk-secret-value failed',
+        lastErrorAt: 1_700_000_010_000,
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    expect(service.getFullData().tasks.find(task => task.id === 'runtime-secret-failure'))
+      .toMatchObject({
+        lastOutcome: 'failed',
+        lastError: 'provider api_key=[REDACTED_SECRET] failed',
+      });
+  });
+
   it('exposes the bundled task description, canonical cadence owner, and exact operation manifest', () => {
     const { scheduler } = createSchedulerStub([
       makeTask({

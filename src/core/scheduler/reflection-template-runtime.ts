@@ -103,6 +103,10 @@ import {
   emitReflectionNoveltyGateEvent,
   evaluateReflectionNoveltyGate,
 } from './reflection-template-runtime/reflection-novelty-gate.js';
+import {
+  isRecoverableEvidenceGroundingExhaustion,
+  REFLECTION_EVIDENCE_GROUNDING_DEGRADATION,
+} from './reflection-template-runtime/evidence-grounding-recovery.js';
 
 const log = createComponentLogger('ReflectionTemplates');
 
@@ -791,6 +795,7 @@ export function createReflectionTemplateRuntime(
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
     let reflectionProcessId: string | undefined;
+    let evidenceGroundingDegraded = false;
     const reflectionWorkerRouting = {
       ...(reflectionScopeHint
         ? { reflectionScope: reflectionScopeHint }
@@ -799,45 +804,61 @@ export function createReflectionTemplateRuntime(
     };
 
     if (shouldUseDeliberation(template)) {
-      const groundingResponse = await agentLoop.handleMessage({
-        id: `reflection-grounding-${template.id}-${Date.now()}`,
-        channelId: reflectionChannelId,
-        channelType: 'terminal',
-        authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
-        authorName: `${template.name} evidence grounding`,
-        content: joinReflectionPromptSections(
-          reflectionPrompt,
-          '[Read-only Tool Grounding Task]\n'
-            + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
-            + '- Use the core analysis_workbench only when deeper retrieval is useful.\n'
-            + '- Inside it, use only the read-only introspection helpers named in the policy above.\n'
-            + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
-            + '- Return a concise evidence note, not the final reflection.',
-        ),
-        timestamp: new Date(),
-        routing: {
-          ...reflectionWorkerRouting,
-          reflectionTurn: {
-            schemaVersion: 1,
-            stage: 'tool_grounding',
-            templateId: template.id,
-            mode: 'deliberation',
+      try {
+        const groundingResponse = await agentLoop.handleMessage({
+          id: `reflection-grounding-${template.id}-${Date.now()}`,
+          channelId: reflectionChannelId,
+          channelType: 'terminal',
+          authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
+          authorName: `${template.name} evidence grounding`,
+          content: joinReflectionPromptSections(
+            reflectionPrompt,
+            '[Read-only Tool Grounding Task]\n'
+              + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
+              + '- Use the core analysis_workbench only when deeper retrieval is useful.\n'
+              + '- Inside it, use only the read-only introspection helpers named in the policy above.\n'
+              + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
+              + '- Return a concise evidence note, not the final reflection.',
+          ),
+          timestamp: new Date(),
+          routing: {
+            ...reflectionWorkerRouting,
+            reflectionTurn: {
+              schemaVersion: 1,
+              stage: 'tool_grounding',
+              templateId: template.id,
+              mode: 'deliberation',
+            },
           },
-        },
-      });
-      const toolGrounding = groundingResponse.content.trim();
-      if (toolGrounding) {
+        });
+        const toolGrounding = groundingResponse.content.trim();
+        if (toolGrounding) {
+          reflectionPrompt = joinReflectionPromptSections(
+            reflectionPrompt,
+            `[Read-only Tool Grounding]\n${toolGrounding}`,
+          );
+        }
+        const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];
+        if (groundingProvenanceRefs.length > 0) {
+          reflectionGroundingProvenanceRefs = [...new Set([
+            ...reflectionGroundingProvenanceRefs,
+            ...groundingProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
+          ])];
+        }
+      } catch (error) {
+        if (!isRecoverableEvidenceGroundingExhaustion(error)) {
+          throw error;
+        }
+        evidenceGroundingDegraded = true;
         reflectionPrompt = joinReflectionPromptSections(
           reflectionPrompt,
-          `[Read-only Tool Grounding]\n${toolGrounding}`,
+          REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.promptSection,
         );
-      }
-      const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];
-      if (groundingProvenanceRefs.length > 0) {
-        reflectionGroundingProvenanceRefs = [...new Set([
-          ...reflectionGroundingProvenanceRefs,
-          ...groundingProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
-        ])];
+        log.error(`Reflection "${template.id}" evidence grounding degraded`, {
+          error: String(error),
+          templateId: template.id,
+          executionSource: source,
+        });
       }
 
       const processId = buildReflectionProcessId(`${template.id}-${source}`);
@@ -1016,6 +1037,9 @@ export function createReflectionTemplateRuntime(
     const persistedMetacognitiveFlags = mergeMetacognitiveFlags(
       persistenceContext?.metacognitiveFlags,
       supportGapFlags,
+      evidenceGroundingDegraded
+        ? [REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.metacognitiveFlag]
+        : [],
     );
     const persistenceContextForJournal = persistenceContext
       ? {
@@ -1116,7 +1140,14 @@ export function createReflectionTemplateRuntime(
         createdAt: reflectionCreatedAt,
         ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
         ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
-        tags: [template.id, 'reflection', reflectionMode],
+        tags: [
+          template.id,
+          'reflection',
+          reflectionMode,
+          ...(evidenceGroundingDegraded
+            ? REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.dailyJournalTags
+            : []),
+        ],
       });
       dailyJournalEntryId = dailyEntry.id;
     } catch (error) {
@@ -1297,6 +1328,7 @@ export function createReflectionTemplateRuntime(
               return;
             }
             log.error(`Deferred reflection "${template.id}" failed`, { error: String(error) });
+            throw error;
           } finally {
             pendingDeferredTemplates.delete(template.id);
           }
@@ -1405,13 +1437,7 @@ export function createReflectionTemplateRuntime(
           type: 'every',
           intervalMs: template.intervalMs,
           cadence: template.cadence,
-          handler: async () => {
-            try {
-              await executeScheduledTemplate(template);
-            } catch (err) {
-              log.error(`Reflection "${template.id}" error`, { error: String(err) });
-            }
-          },
+          handler: () => executeScheduledTemplate(template),
           state: 'idle',
         },
         { skipFirstRun: true },

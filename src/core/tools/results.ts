@@ -157,12 +157,14 @@ export function textResultWithError(
   };
 }
 
-export function internalToolFailureResult(): AgentToolResult<StructuredToolErrorDetails> {
+export function internalToolFailureResult<
+  T = StructuredToolErrorDetails,
+>(): AgentToolResult<T> {
   return textResultWithError(INTERNAL_TOOL_FAILURE_NOTICE, true, {
     errorClass: 'unavailable',
     retryHint: 'operator_escalation',
     companionMessage: INTERNAL_TOOL_FAILURE_NOTICE,
-  }) as AgentToolResult<StructuredToolErrorDetails>;
+  }) as AgentToolResult<T>;
 }
 
 export function textResultFromError(

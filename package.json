@@ -30,6 +30,7 @@
     "proxy:logs": "docker compose --env-file .env -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
     "test:ci-rules": "node --test scripts/ci/*.test.mjs",
+    "test:shakedown-harness": "vitest run --config shakedown/harness/vitest.config.mjs",
     "test:postgres:down": "node scripts/ci/stop-test-postgres.mjs",
     "test:garden:accounting": "vitest run --config vitest.garden-accounting.config.ts",
     "test:garden-ui": "npm --prefix admin-ui test",

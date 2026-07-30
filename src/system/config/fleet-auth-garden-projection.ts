@@ -25,6 +25,13 @@ interface FleetAuthGardenProjectionInput {
   rolePolicy: {
     disabledActionsByRole: Record<FleetAuthGardenRole, readonly string[]>;
   };
+  accountRoster?: ReadonlyArray<{
+    providerSubjectId: string;
+    companionId: string;
+    contactId?: string;
+    role: FleetAuthGardenRole;
+  }>;
+  accountRosterSatisfiesStepUp?: boolean;
   discordEvidenceMappings: ReadonlyArray<{
     companionId: string;
     channelId?: string;

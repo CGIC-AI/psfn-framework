@@ -493,17 +493,37 @@ export function evaluateAccountRosterAuthorization(input: {
     || input.disabledActionsByRole[entry.role].includes(request.action)) {
     return undefined;
   }
+  const companionBindings = snapshot.bindings.filter(binding => (
+    binding.companionId === request.companionId
+  ));
+  const activeBindings = companionBindings.filter(binding => (
+    binding.state === 'active'
+    && binding.restoreState === 'live'
+  ));
+  let contact: FleetAuthorizationFacts['contact'];
+  if (companionBindings.length === 0) {
+    contact = {
+      bindingId: `roster-binding-${entry.companionId}`,
+      contactId: entry.contactId ?? `roster-contact-${entry.providerSubjectId}`,
+      bindingVersion: session.bindingVersion,
+    };
+  } else {
+    if (activeBindings.length !== 1) return undefined;
+    const binding = activeBindings[0]!;
+    if (binding.tombstoned || binding.contactAuthorityFenced) return undefined;
+    contact = {
+      bindingId: binding.bindingId,
+      contactId: binding.contactId,
+      bindingVersion: binding.version,
+    };
+  }
   return {
     decision: 'allow',
     facts: {
       principalId: session.principalId,
       providerSubjectId: entry.providerSubjectId,
       companionId: entry.companionId,
-      contact: {
-        bindingId: `roster-binding-${entry.companionId}`,
-        contactId: `roster-contact-${entry.providerSubjectId}`,
-        bindingVersion: session.bindingVersion,
-      },
+      contact,
       operator: {
         grantId: `roster-grant-${entry.companionId}`,
         role: entry.role,

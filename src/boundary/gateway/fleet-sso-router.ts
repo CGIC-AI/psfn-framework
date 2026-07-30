@@ -32,6 +32,7 @@ import type {
   VerifiedRequestCapability,
 } from '../fleet-auth/request-capability.js';
 import {
+  FleetAuthorizationDeniedError,
   toRequestCapabilityAuthContext,
   type FleetAuthorizationContext,
 } from './fleet-authorization-context.js';
@@ -414,7 +415,11 @@ function copyResponseHeaders(
     if (name === 'location') {
       if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
         && !value.includes('\\') && !/[\u0000-\u001f\u007f]/u.test(value)) {
-        output[name] = `${publicPrefix}${value}`;
+        output[name] = value === publicPrefix
+          || value.startsWith(`${publicPrefix}/`)
+          || value.startsWith(`${publicPrefix}?`)
+          ? value
+          : `${publicPrefix}${value}`;
       }
     } else if (typeof value === 'string' || Array.isArray(value)) {
       output[name] = value;
@@ -562,10 +567,8 @@ export class GatewayFleetSsoRouter {
         this.loginLanding.send(response);
         return;
       }
-      if (rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)) {
-        await this.serveCompanionUi(request, response, rawPath, rawQuery);
-        return;
-      }
+      const companionUiRequest = rawPath === COMPANION_UI_PREFIX
+        || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
       if (this.testingHarnessDoor?.matchesBearer(request)) {
         const route = parseGardenRoute(request.url ?? '/');
         if (!route) throw new FleetSsoRequestError(404, 'Resource not found');
@@ -594,7 +597,11 @@ export class GatewayFleetSsoRouter {
       }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
-        if (request.method === 'GET' && (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`)) {
+        if (request.method === 'GET' && (
+          rawPath === FLEET_PATH
+          || rawPath === `${FLEET_PATH}/`
+          || companionUiRequest
+        )) {
           this.loginLanding.send(response);
           return;
         }
@@ -607,6 +614,28 @@ export class GatewayFleetSsoRouter {
           return;
         }
         throw new FleetSsoRequestError(401, 'Authentication required');
+      }
+      if (companionUiRequest) {
+        const companionUi = this.options.companionUi;
+        if (!companionUi) throw new FleetSsoRequestError(404, 'Resource not found');
+        try {
+          const context = await this.options.broker.resolveAuthorizationContext({
+            sessionToken,
+            audience: 'fleet',
+            companionId: companionUi.companionId,
+            action: 'companion.read',
+            correlationId: randomUUID(),
+          });
+          assertAllowedContext(context, companionUi.companionId, 'companion.read');
+        } catch (error) {
+          if (error instanceof FleetAuthorizationDeniedError) {
+            this.loginLanding.send(response);
+            return;
+          }
+          throw error;
+        }
+        await this.serveCompanionUi(request, response, rawPath, rawQuery);
+        return;
       }
       if (this.portalRoutes.matches(rawPath) || rawPath.startsWith(FLEET_PORTAL_API_PATH)) {
         await this.portalRoutes.handle({
@@ -709,12 +738,11 @@ export class GatewayFleetSsoRouter {
   ): Promise<void> {
     const companionUi = this.options.companionUi;
     if (!companionUi || (request.method !== 'GET' && request.method !== 'HEAD')
-      || rawQuery
       || request.headers['transfer-encoding'] !== undefined
       || (singleHeader(request.headers['content-length']) ?? '0') !== '0') {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
-    const upstreamTarget = rawPath;
+    const upstreamTarget = rawQuery ? `${rawPath}?${rawQuery}` : rawPath;
     await new Promise<void>((resolve, reject) => {
       const headers = buildFleetSsoProxyRequestHeaders(request.headers);
       const proxyRequest = httpRequest(
@@ -727,7 +755,7 @@ export class GatewayFleetSsoRouter {
         (proxyResponse) => {
           response.writeHead(
             proxyResponse.statusCode ?? 502,
-            copyResponseHeaders(proxyResponse.headers, ''),
+            copyResponseHeaders(proxyResponse.headers, COMPANION_UI_PREFIX),
           );
           proxyResponse.pipe(response);
           proxyResponse.on('end', resolve);

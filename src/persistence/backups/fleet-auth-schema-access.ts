@@ -10,6 +10,7 @@ import {
 } from '../postgres/fleet-auth/schema.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
+import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
 
 export interface FleetAuthSchemaAccessContract {
   kind: 'companion' | 'shared';
@@ -517,9 +518,11 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
       }
       await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${grantees}`);
       if (backupRole) {
-        await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-        await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-        await client.query(`GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+        await grantBackupReadAccessToTenantSchema(client, {
+          schema: contract.schema,
+          ownerRole: contract.ownerRole,
+          backupRole,
+        });
       }
       const allowedGrantees = [
         contract.ownerRole,

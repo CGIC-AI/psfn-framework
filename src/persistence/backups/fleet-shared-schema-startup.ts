@@ -230,8 +230,11 @@ export async function prepareFleetSharedSchemaRuntime(options: {
     protectedRoles,
   });
   await applyFleetAuthSchemaAccessContracts({
-    contracts: [contracts.find(contract => contract.kind === 'shared')!],
-    ownerDatabaseUrls: { [sharedSchema]: options.sharedMigrationDatabaseUrl },
+    contracts,
+    ownerDatabaseUrls: Object.fromEntries([
+      ...companionDatabases.map(entry => [entry.schema, entry.databaseUrl] as const),
+      [sharedSchema, options.sharedMigrationDatabaseUrl],
+    ]),
     ...(options.fleetAuth ? { backupRole: options.fleetAuth.roles.backupRestore } : {}),
   });
   await assertFleetAuthSchemaAccessIsolation({

@@ -202,6 +202,53 @@ describe('PostgreSQL flagship adoption boundary', () => {
 });
 
 describe('PostgreSQL least-privilege companion and shard roles', () => {
+  it('grants the backup role read access to present and future tenant objects', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
+    const backupRole = `${databaseName}_backup`.slice(0, 63);
+    const admin = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-tenant-backup-access',
+      max: 2,
+    });
+    const plan = planPostgresTenantAccess({ schema: 'backup_access_probe' });
+    try {
+      await admin.query(`CREATE ROLE "${backupRole}" NOLOGIN`);
+      await provisionPostgresTenantAccess(admin, {
+        plan,
+        runtimeLoginRole: 'postgres',
+      });
+      await admin.query(`SET ROLE "${plan.role}"`);
+      await admin.query(`CREATE TABLE "${plan.schema}".present_object (id INTEGER PRIMARY KEY)`);
+      await admin.query(`CREATE SEQUENCE "${plan.schema}".present_sequence`);
+      await admin.query('RESET ROLE');
+
+      await provisionPostgresTenantAccess(admin, {
+        plan,
+        runtimeLoginRole: 'postgres',
+        backupRole,
+      });
+      await admin.query(`SET ROLE "${plan.role}"`);
+      await admin.query(`CREATE TABLE "${plan.schema}".future_object (id INTEGER PRIMARY KEY)`);
+      await admin.query(`CREATE SEQUENCE "${plan.schema}".future_sequence`);
+      await admin.query('RESET ROLE');
+
+      await admin.query(`SET ROLE "${backupRole}"`);
+      await expect(admin.query(`SELECT * FROM "${plan.schema}".present_object`))
+        .resolves.toMatchObject({ rows: [] });
+      await expect(admin.query(`SELECT * FROM "${plan.schema}".future_object`))
+        .resolves.toMatchObject({ rows: [] });
+      await expect(admin.query(`SELECT last_value FROM "${plan.schema}".present_sequence`))
+        .resolves.toMatchObject({ rows: [{ last_value: '1' }] });
+      await expect(admin.query(`SELECT last_value FROM "${plan.schema}".future_sequence`))
+        .resolves.toMatchObject({ rows: [{ last_value: '1' }] });
+      await expect(admin.query(`SELECT nextval('"${plan.schema}".future_sequence')`))
+        .rejects.toThrow(/permission denied/u);
+      await admin.query('RESET ROLE');
+    } finally {
+      await admin.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('removes one explicitly planned disposable tenant without touching its peer', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const admin = createPostgresPool(databaseUrl, {

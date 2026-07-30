@@ -177,6 +177,17 @@ describe('runtime prompt layer schema', () => {
     expect(getRuntimePromptLayerDefinition('runtime.self')).toBeNull();
   });
 
+  it('states bounded image re-roll and filename delivery semantics', () => {
+    const tooling = getRuntimePromptLayerDefinition('runtime.tooling')?.content ?? '';
+
+    expect(tooling).toContain('Generate one image unless the user asks for alternatives.');
+    expect(tooling).toContain('one quality re-roll is reasonable');
+    expect(tooling).toContain('every generated fileName you mention in the final reply is delivered');
+    expect(tooling).toContain('unmentioned drafts remain in the gallery');
+    expect(tooling).toContain('Naming both the original and a re-roll sends both.');
+    expect(tooling).toContain('At most four generated images can be attached in one turn.');
+  });
+
   it('returns cloned schema metadata for callers', () => {
     const definitions = getRuntimePromptLayerDefinitions();
 

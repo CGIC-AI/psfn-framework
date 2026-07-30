@@ -8,7 +8,14 @@ import type {
 import {
   ImageService,
   type ImageProviderAttempt,
+  type ImageProviderAttemptStart,
 } from '../../../primitives/images/service.js';
+import {
+  estimateFalImageRequestCost,
+  type FalImageCostEstimate,
+} from '../../../primitives/images/fal-cost-estimate.js';
+import { resolveInlineOrEnvCredential } from '../../custody/credential-vault.js';
+import { roundModelUsageUsd } from '../../../shared/telemetry/model-usage-accounting.js';
 import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 
@@ -21,6 +28,7 @@ async function recordImageProviderAttempt(
   params: ImageUsageParams,
   logicalCallId: string,
   providerAttempt: ImageProviderAttempt,
+  falCostEstimate?: FalImageCostEstimate,
 ): Promise<void> {
   const recorder = runtime.modelUsageRecorder;
   if (!recorder) return;
@@ -33,17 +41,37 @@ async function recordImageProviderAttempt(
     ?? (params.model ? 'fal' : params.settingsDefaults?.provider)
     ?? 'auto';
   const requestedModel = params.model ?? params.settingsDefaults?.model ?? 'default';
+  const costEstimate = providerAttempt.status === 'success' && providerAttempt.provider === 'fal'
+    ? falCostEstimate
+    : undefined;
+  if (providerAttempt.status === 'success' && providerAttempt.provider === 'fal' && !costEstimate) {
+    throw new Error('Successful FAL image provider attempt is missing its preflight cost estimate');
+  }
+  const estimatedCostUsd = costEstimate
+    ? roundModelUsageUsd(
+        costEstimate.totalUsd * (imageCount / costEstimate.unitQuantity),
+      )
+    : undefined;
+  const localProviderCostUsd = providerAttempt.status === 'success'
+    && providerAttempt.provider === 'comfyui'
+    ? 0
+    : undefined;
   const metadata: Record<string, unknown> = {
     mode,
     promptChars: params.prompt.length,
     imageCount,
     inputImageCount,
     fallbackUsed: result?.fallbackUsed ?? false,
-    costAvailability: 'unknown_provider_not_exposed',
+    costAvailability: costEstimate?.source
+      ?? (localProviderCostUsd === 0 ? 'local_provider_zero_cost' : 'unknown_provider_not_exposed'),
   };
   if (result?.fallbackReason) metadata.fallbackReason = result.fallbackReason;
   if (result?.requestId) metadata.requestId = result.requestId;
   if (params.referenceImageIds?.length) metadata.referenceImageIds = params.referenceImageIds;
+  if (costEstimate) {
+    metadata.costEstimateEndpointId = costEstimate.endpointId;
+    metadata.costEstimateUnitQuantity = costEstimate.unitQuantity;
+  }
 
   await recorder.recordUsageEvent({
     logicalCallId,
@@ -53,7 +81,7 @@ async function recordImageProviderAttempt(
     completedAtMs: providerAttempt.completedAtMs,
     durationMs: Math.max(0, providerAttempt.completedAtMs - providerAttempt.startedAtMs),
     status: providerAttempt.status,
-    settlement: 'unknown',
+    settlement: providerAttempt.status === 'success' ? 'complete' : 'unknown',
     callKind,
     attribution: {
       ...(params.companionId ? { companionId: params.companionId } : {}),
@@ -96,7 +124,19 @@ async function recordImageProviderAttempt(
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     totalTokens: 0,
-    costSource: 'none',
+    ...(costEstimate && estimatedCostUsd !== undefined ? {
+      estimatedCostUsd,
+      effectiveCostUsd: estimatedCostUsd,
+      costSource: 'estimate' as const,
+      currency: costEstimate.currency,
+    } : localProviderCostUsd === 0 ? {
+      providerCostUsd: localProviderCostUsd,
+      effectiveCostUsd: localProviderCostUsd,
+      costSource: 'provider' as const,
+      currency: 'USD',
+    } : {
+      costSource: 'none' as const,
+    }),
     ...(providerAttempt.status === 'failure' ? {
       errorCode: error?.name ?? 'ImageError',
       errorMessage: error?.message ?? 'Image request failed',
@@ -115,8 +155,31 @@ async function runImageWithUsage(
     throw new Error('Image provider config is not wired on the gateway');
   }
   const logicalCallId = `image:${randomUUID()}`;
+  const falApiKey = resolveInlineOrEnvCredential(
+    runtime.imageConfig.falApiKey,
+    runtime.imageConfig.credentialVault,
+    'FAL_API_KEY',
+  ) ?? '';
+  const falCostEstimatesByAttempt = new Map<number, FalImageCostEstimate>();
+  const falCostEstimateRequests = new Map<string, Promise<FalImageCostEstimate>>();
+  const beforeProviderAttempt = async (providerAttempt: ImageProviderAttemptStart): Promise<void> => {
+    if (providerAttempt.provider !== 'fal') return;
+    const unitQuantity = params.numImages ?? 1;
+    const cacheKey = `${providerAttempt.model}:${String(unitQuantity)}`;
+    let request = falCostEstimateRequests.get(cacheKey);
+    if (!request) {
+      request = estimateFalImageRequestCost({
+        apiKey: falApiKey,
+        endpointId: providerAttempt.model,
+        unitQuantity,
+      });
+      falCostEstimateRequests.set(cacheKey, request);
+    }
+    falCostEstimatesByAttempt.set(providerAttempt.attempt, await request);
+  };
   const imageService = new ImageService(runtime.imageConfig, fetch, {
     personalFilesDir: runtime.workspacePath,
+    beforeProviderAttempt,
     onProviderAttempt: async providerAttempt => {
       await recordImageProviderAttempt(
         runtime,
@@ -125,6 +188,7 @@ async function runImageWithUsage(
         params as ImageCreateParams & GatewayCorrelationParams,
         logicalCallId,
         providerAttempt,
+        falCostEstimatesByAttempt.get(providerAttempt.attempt),
       );
     },
   });

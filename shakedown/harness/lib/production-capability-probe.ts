@@ -13,6 +13,11 @@ import {
 } from '../../../src/system/capabilities/gate.js';
 import { withCapabilityRequirement } from '../../../src/system/capabilities/requirements.js';
 import { resolveTierCapabilityTokens } from '../../../src/system/capabilities/tiers.js';
+import { createSelfStatusTool } from '../../../src/core/tools/self-status.js';
+import {
+  buildCapabilityTierChange,
+  formatCapabilityTierChangeNotice,
+} from '../../../src/system/capabilities/change-notice.js';
 import {
   CAPABILITY_MATRIX_PROBES,
   type CapabilityMatrixProbe,
@@ -156,6 +161,77 @@ async function probeShardBackend(
   }
 }
 
+async function probeCompanionCapabilitySelfInspection(
+  tier: Exclude<CapabilityTier, 'custom'>,
+): Promise<Record<string, unknown>> {
+  const grantedTokens = resolveTierCapabilityTokens(tier);
+  const tool = createSelfStatusTool({
+    config: {},
+    now: () => 1_700_000_000_000,
+    getCapabilityGrantSnapshot: () => ({
+      tier,
+      customTokens: [],
+      grantedTokens,
+    }),
+  });
+  const gated = gateToolWithCapabilities(tool, () => accessForTier(tier));
+  const result = await gated.execute(`self-inspection-${tier}`, { action: 'capabilities' });
+  const text = result.content
+    .filter((entry): entry is { type: 'text'; text: string } => entry.type === 'text')
+    .map(entry => entry.text)
+    .join('\n');
+  const payload = JSON.parse(text) as {
+    capability?: {
+      status?: string;
+      tier?: string;
+      grantedTokens?: unknown;
+    };
+  };
+  const observedTokens = Array.isArray(payload.capability?.grantedTokens)
+    ? payload.capability.grantedTokens
+    : [];
+  return {
+    matches: payload.capability?.status === 'available'
+      && payload.capability.tier === tier
+      && JSON.stringify(observedTokens) === JSON.stringify(grantedTokens),
+    tier: payload.capability?.tier ?? null,
+    grantedTokens: observedTokens,
+  };
+}
+
+function probeTierChangeNotice(
+  tier: Exclude<CapabilityTier, 'custom'>,
+): Record<string, unknown> {
+  const previousTier = tier === 'nursery' ? 'autonomous' : 'nursery';
+  const change = buildCapabilityTierChange(
+    {
+      tier: previousTier,
+      customTokens: [],
+      grantedTokens: resolveTierCapabilityTokens(previousTier),
+    },
+    {
+      tier,
+      customTokens: [],
+      grantedTokens: resolveTierCapabilityTokens(tier),
+    },
+  );
+  if (!change) throw new Error('Tier-change notice probe unexpectedly produced no change');
+  const notice = formatCapabilityTierChangeNotice(change);
+  return {
+    matches:
+      notice.includes(`[System notice: capability access changed]`)
+      && notice.includes(`from "${previousTier}" to "${tier}"`)
+      && notice.includes('Current granted capabilities:')
+      && notice.includes('Newly granted:')
+      && notice.includes('Withdrawn:')
+      && notice.includes('not a fault in you'),
+    previousTier,
+    currentTier: tier,
+    grantedTokens: change.granted,
+    withdrawnTokens: change.withdrawn,
+  };
+}
+
 async function main(): Promise<void> {
   const tier = parseTier(process.argv.slice(2));
   const gates = [];
@@ -163,7 +239,15 @@ async function main(): Promise<void> {
     gates.push(await probeCapabilityGate(probe, tier));
   }
   const shardBackend = await probeShardBackend(tier);
-  process.stdout.write(`${JSON.stringify({ tier, gates, shardBackend })}\n`);
+  const selfInspection = await probeCompanionCapabilitySelfInspection(tier);
+  const tierChangeNotice = probeTierChangeNotice(tier);
+  process.stdout.write(`${JSON.stringify({
+    tier,
+    gates,
+    shardBackend,
+    selfInspection,
+    tierChangeNotice,
+  })}\n`);
 }
 
 await main();

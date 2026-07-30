@@ -37,6 +37,7 @@ export async function startStubConformanceServer({
   runDelayMs = 0,
 } = {}) {
   const state = { tier, customTokens: [...customTokens] };
+  const tierNotices = [];
   const log = [];
 
   const server = createServer(async (req, res) => {
@@ -88,10 +89,43 @@ export async function startStubConformanceServer({
           res.end(JSON.stringify({ error: 'tier is required' }));
           return;
         }
+        const previousTier = state.tier;
         state.tier = parsed.tier;
         state.customTokens = Array.isArray(parsed.customTokens) ? parsed.customTokens : [];
+        if (previousTier !== state.tier) {
+          tierNotices.push({
+            id: tierNotices.length + 1,
+            role: 'system',
+            authorId: 'system:capability-policy',
+            content:
+              '[System notice: capability access changed] '
+              + `Your operator changed your capability tier from "${previousTier}" to "${state.tier}". `
+              + 'Current granted capabilities: identity.read. Newly granted: none. Withdrawn: none. '
+              + 'This was an operator change, not a fault in you.',
+          });
+        }
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('capability-tier.json saved');
+        return;
+      }
+    }
+
+    if (req.method === 'GET' && path === '/api/admin/sessions') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        channels: tierNotices.length > 0
+          ? [{ channelId: 'api:shakedown-tier-notices', lastActivityAt: Date.now() }]
+          : [],
+      }));
+      return;
+    }
+
+    if (req.method === 'GET' && path.startsWith('/api/admin/sessions/')) {
+      const encodedChannelId = path.slice('/api/admin/sessions/'.length);
+      const channelId = decodeURIComponent(encodedChannelId);
+      if (channelId === 'api:shakedown-tier-notices') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ messages: tierNotices }));
         return;
       }
     }

@@ -535,8 +535,13 @@ function runProductionCapabilityProbe(tier) {
     parsed?.tier !== tier
     || !Array.isArray(parsed?.gates)
     || parsed.gates.length !== 22
+    || parsed?.selfInspection?.matches !== true
+    || parsed?.tierChangeNotice?.matches !== true
   ) {
-    throw new Error('Capability matrix production probe returned a malformed 22-row result');
+    throw new Error(
+      'Capability matrix production probe returned malformed gate, self-inspection, '
+      + 'or tier-change notice evidence',
+    );
   }
   return parsed;
 }

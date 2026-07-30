@@ -118,6 +118,94 @@ async function fetchConformanceLatest({ adminBaseUrl, adminToken }, timeoutMs) {
   return parsed;
 }
 
+async function fetchAdminJson({ adminBaseUrl, adminToken }, path, timeoutMs) {
+  const url = `${adminBaseUrl}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: bearer(adminToken),
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new Error(`GET ${url} returned HTTP ${response.status}: ${rawText.slice(0, 400)}`);
+    }
+    return JSON.parse(rawText);
+  } catch (error) {
+    throw new Error(`GET ${url} failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForCompanionTierChangeNotice(
+  contract,
+  previousTier,
+  currentTier,
+  messageHighWaterByChannel,
+  timeoutMs,
+) {
+  const deadline = Date.now() + timeoutMs;
+  const expectedTransition = `from "${previousTier}" to "${currentTier}"`;
+  while (Date.now() <= deadline) {
+    const sessions = await fetchAdminJson(contract, '/api/admin/sessions', timeoutMs);
+    for (const channel of (Array.isArray(sessions?.channels) ? sessions.channels : []).slice(0, 10)) {
+      const channelId = typeof channel?.channelId === 'string' ? channel.channelId : '';
+      if (!channelId) continue;
+      const payload = await fetchAdminJson(
+        contract,
+        `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=50`,
+        timeoutMs,
+      );
+      const notice = (Array.isArray(payload?.messages) ? payload.messages : []).find(
+        entry => entry?.role === 'system'
+          && entry?.authorId === 'system:capability-policy'
+          && Number.isInteger(entry?.id)
+          && entry.id > (messageHighWaterByChannel[channelId] ?? 0)
+          && typeof entry?.content === 'string'
+          && entry.content.includes('[System notice: capability access changed]')
+          && entry.content.includes(expectedTransition),
+      );
+      if (notice) {
+        return {
+          matches: true,
+          channelId,
+          previousTier,
+          currentTier,
+          content: notice.content,
+        };
+      }
+    }
+    await sleep(250);
+  }
+  throw new Error(
+    `No companion-visible capability-tier notice found for ${expectedTransition} `
+    + `within ${timeoutMs}ms`,
+  );
+}
+
+async function captureSessionMessageHighWater(contract, timeoutMs) {
+  const sessions = await fetchAdminJson(contract, '/api/admin/sessions', timeoutMs);
+  const highWaterByChannel = {};
+  for (const channel of (Array.isArray(sessions?.channels) ? sessions.channels : []).slice(0, 10)) {
+    const channelId = typeof channel?.channelId === 'string' ? channel.channelId : '';
+    if (!channelId) continue;
+    const payload = await fetchAdminJson(
+      contract,
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=50`,
+      timeoutMs,
+    );
+    highWaterByChannel[channelId] = Math.max(
+      0,
+      ...(Array.isArray(payload?.messages) ? payload.messages : [])
+        .map(entry => entry?.id)
+        .filter(Number.isInteger),
+    );
+  }
+  return highWaterByChannel;
+}
+
 /**
  * Summarize a /latest payload. CORRECT parsing (the throwaway probe had a bug):
  * each entry is {toolName, probeKind, ok, durationMs}; classification/error are
@@ -246,6 +334,11 @@ async function main() {
   try {
     for (const tier of TIERS) {
       log(`\n=== FLIP -> ${tier} ===`);
+      const previousTier = await fetchCurrentTier(contract);
+      const messageHighWaterByChannel = await captureSessionMessageHighWater(
+        contract,
+        latestTimeoutMs,
+      );
       await setTierAndConfirm({
         adminBaseUrl: contract.adminBaseUrl,
         adminToken: contract.adminToken,
@@ -253,15 +346,32 @@ async function main() {
         confirmTimeoutMs: contract.tierFlipConfirmTimeoutMs,
         pollMs: contract.tierFlipPollMs,
       });
+      const tierChangeNotice = previousTier === tier
+        ? {
+            matches: true,
+            skipped: 'tier_unchanged',
+            previousTier,
+            currentTier: tier,
+          }
+        : await waitForCompanionTierChangeNotice(
+            contract,
+            previousTier,
+            tier,
+            messageHighWaterByChannel,
+            latestTimeoutMs,
+          );
       await triggerConformanceRun(contract, runTimeoutMs);
       if (settleMs > 0) await sleep(settleMs);
       const latest = await fetchConformanceLatest(contract, latestTimeoutMs);
 
       const outPath = join(outDir, `tool-conformance.${tier}.json`);
-      writeFileSync(outPath, JSON.stringify(latest, null, 2));
+      writeFileSync(outPath, JSON.stringify({
+        ...latest,
+        capabilityTierChangeNotice: tierChangeNotice,
+      }, null, 2));
 
       const summary = summarizeConformance(latest);
-      summaries.push({ tier, ...summary });
+      summaries.push({ tier, tierChangeNotice, ...summary });
       log(`[${tier}] total=${summary.total} ok:false=${summary.failed} -> ${outPath}`);
       for (const line of summary.lines) log(`   ${line}`);
     }

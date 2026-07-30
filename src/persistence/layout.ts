@@ -997,6 +997,10 @@ export function resolveLastActiveSessionPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'last_active_channel.json');
 }
 
+export function resolvePendingCapabilityNoticesPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'pending-capability-notices.jsonl');
+}
+
 export function resolveReadyNotificationMarkerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'ready_notification_marker.json');
 }

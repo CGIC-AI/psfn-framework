@@ -87,6 +87,49 @@ function makeConcurrencyMeta(
 }
 
 describe('tool-call-scheduler', () => {
+  it('withholds thrown internal diagnostics from the companion and emits full-detail telemetry', async () => {
+    const invariantMessage =
+      'SessionManager.resolveSessionChannelId cannot apply mutable active-context resolution '
+      + 'for "api:other-session" during an admitted turn owned by "api:captured-owner"';
+    const internalFailure = makeTool(
+      'session',
+      async () => {
+        throw new Error(invariantMessage);
+      },
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [internalFailure],
+      makeAssistantMessage(['session']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    const text = result.toolResults[0]?.content
+      .filter((entry): entry is { type: 'text'; text: string } => entry.type === 'text')
+      .map(entry => entry.text)
+      .join('\n') ?? '';
+    expect(text).toContain('[System notice]');
+    expect(text).toContain('failed safely');
+    expect(text).toContain('ask your operator');
+    expect(text).not.toContain('SessionManager');
+    expect(text).not.toContain('resolveSessionChannelId');
+    expect(text).not.toContain('api:other-session');
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.execution.failed',
+      expect.objectContaining({
+        toolName: 'session',
+        toolCallId: 'call-1',
+        errorName: 'Error',
+        errorMessage: invariantMessage,
+        errorStack: expect.stringContaining(invariantMessage),
+      }),
+    );
+  });
+
   it('promotes tool result details.isError to the top-level tool result error flag', async () => {
     const orient = makeTool(
       'orient',
@@ -1043,6 +1086,10 @@ describe('tool-call-scheduler', () => {
 
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(true);
     expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('execution_failure');
+    const companionText = (result.toolResults[0] as ToolResultMessage).content[0]?.text ?? '';
+    expect(companionText).toContain('was cancelled');
+    expect(companionText).not.toContain('internal runtime problem');
+    expect(companionText).not.toContain('aborted');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.scheduler.cancelled',
       expect.objectContaining({

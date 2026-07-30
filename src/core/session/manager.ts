@@ -119,6 +119,7 @@ import {
 import { BackgroundWorkHandoffRecovery } from './manager/background-work-handoff-recovery.js';
 import {
   assertNoCapturedSessionOwner,
+  CapturedSessionOwnerInvariantError,
   CapturedSessionReads,
   getCapturedSessionOwnerIdentity,
   type CapturedSessionOwnerIdentity,
@@ -449,7 +450,7 @@ export class SessionManager implements SessionManagerTypeSurface {
         return capturedOwner.logicalSessionId;
       }
       if (this.shouldOverrideSessionContext(channelId)) {
-        throw new Error(
+        throw new CapturedSessionOwnerInvariantError(
           'SessionManager.resolveSessionChannelId cannot apply mutable '
           + `active-context resolution for "${channelId}" during an admitted `
           + `turn owned by "${capturedOwner.logicalSessionId}"; resolve through `
@@ -1588,6 +1589,33 @@ export class SessionManager implements SessionManagerTypeSurface {
     const target = this.resolveSessionWriteTarget(channelId, sourceChannelId);
     const { resolvedChannelId, originChannelId } = target;
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
+    this.appendInternalSystemNote(resolvedChannelId, note, source, originChannelId);
+  }
+
+  /**
+   * Seed a newly generated explicit session without consulting mutable active
+   * context. This narrow creation primitive is safe inside a captured turn:
+   * the caller already owns the fresh opaque session ID, and the current
+   * admitted owner remains authoritative for every ordinary read/write.
+   */
+  initializeExplicitSession(sessionId: string, note: string): void {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId || !shouldPersistSessionChannel(normalizedSessionId)) {
+      throw new Error(`Cannot initialize non-persistable session "${sessionId}"`);
+    }
+    this.appendInternalSystemNote(
+      normalizedSessionId,
+      note,
+      'initializeExplicitSession',
+    );
+  }
+
+  private appendInternalSystemNote(
+    resolvedChannelId: string,
+    note: string,
+    source: string,
+    originChannelId?: string,
+  ): void {
     this.store.append({
       channelId: resolvedChannelId,
       role: 'system',

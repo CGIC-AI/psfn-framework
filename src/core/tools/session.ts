@@ -13,7 +13,11 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import { inferSessionChannelType } from '../session/session-id.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { textResult, textResultWithError } from './results.js';
+import {
+  internalToolFailureResult,
+  textResult,
+  textResultWithError,
+} from './results.js';
 import { executeCompleteFocusAction, executeStartFocusAction } from './focus.js';
 import {
   SESSION_CONTINUITY_FACETS,
@@ -27,10 +31,13 @@ import {
   type SessionGrepToolOptions,
 } from './session-search.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isCapturedSessionOwnerInvariantError } from '../session/manager/captured-session-owner.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 const DEFAULT_SESSION_PREFIX = 'api:session';
 const DEFAULT_SESSION_LIST_LIMIT = 20;
 const MAX_SESSION_LIST_LIMIT = 100;
+const log = createComponentLogger('SessionTool');
 const SESSION_TOOL_ACTION_NAMES = [
   'list',
   'new',
@@ -331,7 +338,9 @@ async function executeSessionNewAction(
       timestamp,
     });
   } catch (error) {
-    return textResultWithError(`session action="new" failed: ${toErrorMessage(error)}.`, true);
+    if (isCapturedSessionOwnerInvariantError(error)) throw error;
+    log.error('session action=new failed', { error: toErrorMessage(error) });
+    return internalToolFailureResult();
   }
 
   const details: SessionNewDetails = {
@@ -565,7 +574,9 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
             });
         }
       } catch (error) {
-        return textResultWithError(`session failed: ${toErrorMessage(error)}.`, true);
+        if (isCapturedSessionOwnerInvariantError(error)) throw error;
+        log.error('session tool action failed', { error: toErrorMessage(error) });
+        return internalToolFailureResult();
       }
     },
   };

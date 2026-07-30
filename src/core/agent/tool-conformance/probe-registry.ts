@@ -318,6 +318,7 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     complete_focus: SCHEMA_ASSERT,
   },
   self_status: {
+    capabilities: safeRead({ action: 'capabilities' }),
     snapshot: safeRead({ action: 'snapshot', recentChannelLimit: 1 }),
     diagnose: SCHEMA_ASSERT,
     logs: SCHEMA_ASSERT,

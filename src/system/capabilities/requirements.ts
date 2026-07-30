@@ -301,6 +301,7 @@ const SELF_STATUS_READ_ACTIONS = new Set([
 const SELF_STATUS_WRITE_ACTIONS = new Set(['availability_publish', 'availability_clear']);
 
 function resolveSelfStatusRequirement(action: string | null): CapabilityRequirement {
+  if (action === 'capabilities') return NO_CAPABILITY_REQUIREMENT;
   if (action === null || actionIn(action, SELF_STATUS_READ_ACTIONS)) return 'internal.read';
   if (actionIn(action, SELF_STATUS_WRITE_ACTIONS)) return 'external.companion';
   return ['internal.read', 'external.companion'];

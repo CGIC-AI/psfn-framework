@@ -7,7 +7,12 @@ import {
 } from '../../shared/telemetry/run-charge.js';
 import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type {
+  CapabilityTier,
+  SubstrateConfig,
+} from '../../system/config/runtime-config-contracts.js';
+import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
+import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { buildRuntimeToolCatalogEntry } from '../agent/tool-catalog.js';
 import {
   buildSelfStatusSnapshot,
@@ -93,6 +98,11 @@ function makeRuntime(overrides: Partial<SelfStatusToolRuntime> = {}): SelfStatus
     startedAtMs: 1_700_000_000_000,
     now: () => 1_700_000_120_000,
     getCapabilityTier: () => 'autonomous',
+    getCapabilityGrantSnapshot: () => ({
+      tier: 'autonomous',
+      customTokens: [],
+      grantedTokens: ['identity.read', 'memory.write', 'memory.delete'],
+    }),
     getAdaptiveToolRuntimeState: () => ({
       generatedAt: 1_700_000_100_000,
       coreTools: ['tool_search', 'toolset', 'self_status', 'system'],
@@ -190,6 +200,7 @@ describe('createSelfStatusTool', () => {
     expect(payload.capability).toEqual({
       status: 'available',
       tier: 'autonomous',
+      grantedTokens: ['identity.read', 'memory.write', 'memory.delete'],
       source: 'runtime',
     });
     expect(payload.tools.activeTools).toEqual([
@@ -248,6 +259,42 @@ describe('createSelfStatusTool', () => {
     expect(serialized).not.toContain('OPENROUTER_API_KEY');
     expect(serialized).not.toContain('/secret/');
   });
+
+  it.each([
+    { tier: 'nursery', customTokens: [] },
+    { tier: 'apprentice', customTokens: [] },
+    { tier: 'autonomous', customTokens: [] },
+    { tier: 'custom', customTokens: ['identity.read', 'memory.delete'] },
+  ] satisfies Array<{ tier: CapabilityTier; customTokens: CapabilityToken[] }>)(
+    'returns only the effective $tier tier grant for action=capabilities',
+    async ({ tier, customTokens }) => {
+      const grantedTokens = resolveTierCapabilityTokens(tier, customTokens);
+      const tool = createSelfStatusTool(makeRuntime({
+        getCapabilityGrantSnapshot: () => ({
+          tier,
+          customTokens,
+          grantedTokens,
+        }),
+      }));
+      const payload = parseResult(await tool.execute('self-capabilities-1', {
+        action: 'capabilities',
+      }));
+
+      expect(payload).toEqual({
+        schemaVersion: 1,
+        generatedAt: 1_700_000_120_000,
+        capability: {
+          status: 'available',
+          tier,
+          grantedTokens,
+          source: 'runtime',
+        },
+      });
+      expect(payload).not.toHaveProperty('tools');
+      expect(payload).not.toHaveProperty('memory');
+      expect(payload).not.toHaveProperty('substrate');
+    },
+  );
 
   it('reports unavailable and degraded subsystems explicitly rather than guessing', async () => {
     const payload = await buildSelfStatusSnapshot({
@@ -406,6 +453,10 @@ describe('createSelfStatusTool', () => {
     expect(JSON.stringify(tool.parameters)).toContain('Message content is never returned');
     expect(catalogEntry.schema).toMatchObject({
       actions: expect.arrayContaining([
+        {
+          name: 'capabilities',
+          requiredCapabilities: [],
+        },
         {
           name: 'snapshot',
           requiredCapabilities: ['internal.read'],

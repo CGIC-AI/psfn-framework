@@ -136,6 +136,10 @@ import { createAdminToolConformanceService } from './services/tool-conformance-s
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService, reloadOwnerModelsFromDisk } from './services/settings-service.js';
+import {
+  enqueuePendingCapabilityTierChangeNotice,
+  formatCapabilityTierChangeNotice,
+} from '../../system/capabilities/change-notice.js';
 import { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import { createAdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
@@ -421,6 +425,36 @@ export function createInProcessGardenAdminContract(
   const settingsService = new AdminSettingsDataService({
     config: options.config,
     configStore,
+    onCapabilityTierChanged: (change) => {
+      const targetSessionId = readLastActiveSession(companionDataDir)?.sessionId
+        ?? options.sessionManager.listRecentSessions(1).at(0)?.sessionId;
+      if (targetSessionId) {
+        const entryId = options.sessionManager.recordSystemMessage(
+          targetSessionId,
+          formatCapabilityTierChangeNotice(change),
+          'system:capability-policy',
+          'Capability policy',
+        );
+        if (entryId === null) {
+          throw new Error(
+            `session "${targetSessionId}" cannot persist the companion capability-tier notice`,
+          );
+        }
+      } else {
+        enqueuePendingCapabilityTierChangeNotice(companionDataDir, change);
+      }
+      void options.eventBus.emit('capability.tier.changed', {
+        companionId: options.config.companionId ?? 'single-companion',
+        previousTier: change.previous.tier,
+        currentTier: change.current.tier,
+        currentGrantedTokens: [...change.current.grantedTokens],
+        grantedTokens: [...change.granted],
+        withdrawnTokens: [...change.withdrawn],
+        ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+        delivery: targetSessionId ? 'immediate' : 'pending',
+        timestamp: Date.now(),
+      });
+    },
     ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
     ...(options.effectiveSchedulerConfig
       ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }

@@ -1312,4 +1312,38 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       content: [{ type: 'text', text: 'identity ok' }],
     });
   });
+
+  it('keeps capability self-inspection available during maintenance turns', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'capability grant ok' }],
+      details: {},
+    }));
+    const { facade, agent, correlation } = createFacade('reflection', []);
+    facade.registerTool(makeTool('self_status', execute), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-capability-self-inspection',
+      channelId: 'internal:reflection:test',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Runtime',
+      content: 'inspect current capability grant',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    }, 'reflection', 'background', correlation, { intent: 'reflection' });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as AgentTool<any>[];
+    const selfStatusTool = tools.find(tool => tool.name === 'self_status');
+    expect(selfStatusTool).toBeDefined();
+
+    const result = await selfStatusTool!.execute('call-capabilities', {
+      action: 'capabilities',
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      'call-capabilities',
+      { action: 'capabilities' },
+      undefined,
+    );
+    expect(result.content).toEqual([{ type: 'text', text: 'capability grant ok' }]);
+  });
 });

@@ -18,6 +18,36 @@ interface CapturedSessionOwnerContext extends CapturedSessionOwnerIdentity {
   manager: object;
 }
 
+export const CAPTURED_SESSION_OWNER_INVARIANT_CODE =
+  'SESSION_CAPTURED_OWNER_INVARIANT' as const;
+
+/**
+ * Fail-closed invariant raised when admitted turn work attempts mutable
+ * session resolution outside its captured owner. Tool handlers must propagate
+ * this error to the outer execution boundary: its forensic message belongs in
+ * telemetry, never in companion-visible tool content.
+ */
+export class CapturedSessionOwnerInvariantError extends Error {
+  readonly code = CAPTURED_SESSION_OWNER_INVARIANT_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'CapturedSessionOwnerInvariantError';
+  }
+}
+
+export function isCapturedSessionOwnerInvariantError(
+  error: unknown,
+): error is CapturedSessionOwnerInvariantError {
+  return error instanceof CapturedSessionOwnerInvariantError
+    || (
+      typeof error === 'object'
+      && error !== null
+      && 'code' in error
+      && error.code === CAPTURED_SESSION_OWNER_INVARIANT_CODE
+    );
+}
+
 type Tail<T extends readonly unknown[]> = T extends readonly [unknown, ...infer Rest]
   ? Rest
   : never;

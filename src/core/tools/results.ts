@@ -63,6 +63,12 @@ const GATEWAY_APPROVAL_DENIED = -32001;
 const GATEWAY_POLICY_DENIED = -32002;
 const GATEWAY_PROVIDER_ERROR = -32003;
 
+export const INTERNAL_TOOL_FAILURE_NOTICE =
+  '[System notice] This tool hit an internal runtime problem and failed safely. '
+  + 'The underlying diagnostic was withheld because it is meant for operators, not for you to interpret. '
+  + 'You can tell your person the operation did not complete and ask your operator to inspect runtime '
+  + 'diagnostics if it persists.';
+
 const SENSITIVE_QUERY_KEYS = new Set([
   'access_token',
   'api_key',
@@ -149,6 +155,14 @@ export function textResultWithError(
     content: [{ type: 'text', text }] satisfies TextContent[],
     details,
   };
+}
+
+export function internalToolFailureResult(): AgentToolResult<StructuredToolErrorDetails> {
+  return textResultWithError(INTERNAL_TOOL_FAILURE_NOTICE, true, {
+    errorClass: 'unavailable',
+    retryHint: 'operator_escalation',
+    companionMessage: INTERNAL_TOOL_FAILURE_NOTICE,
+  }) as AgentToolResult<StructuredToolErrorDetails>;
 }
 
 export function textResultFromError(

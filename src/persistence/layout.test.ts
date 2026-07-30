@@ -46,6 +46,7 @@ import {
   resolveInternalRoleEnvelopesDir,
   resolveLegacyValuesJournalPath,
   resolveLastActiveSessionPath,
+  resolvePendingCapabilityNoticesPath,
   resolveNotesDir,
   resolvePersistenceRoots,
   resolvePromptHistoryPath,
@@ -137,6 +138,9 @@ describe('persistence layout', () => {
     expect(resolveGeneratedImagesDir(dataDir)).toBe(join(dataDir, 'images'));
     expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
     expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'state', 'last_active_channel.json'));
+    expect(resolvePendingCapabilityNoticesPath(dataDir)).toBe(
+      join(dataDir, 'state', 'pending-capability-notices.jsonl'),
+    );
   });
 
   it('uses split continuous defaults when no explicit roots are configured', () => {

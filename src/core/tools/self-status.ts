@@ -3,6 +3,8 @@ import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descr
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
+import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { SessionActivitySummary } from '../../persistence/sessions/store.js';
 import type { MemoryStoreStats } from '../../faculties/memory/memory-store-port.js';
 import {
@@ -55,6 +57,7 @@ export interface SelfStatusToolRuntime {
   startedAtMs?: number;
   now?: () => number;
   getCapabilityTier?: () => CapabilityTier;
+  getCapabilityGrantSnapshot?: () => CapabilityGrantSnapshot;
   getAdaptiveToolRuntimeState?: () => AdaptiveToolRuntimeState;
   getToolCatalogSnapshot?: () => RuntimeToolCatalogSnapshot;
   getToolHealthStatusByName?: () => ReadonlyMap<string, RuntimeServiceHealthStatus>;
@@ -80,7 +83,7 @@ export interface SelfStatusToolRuntime {
 }
 
 interface SelfStatusParams {
-  action?: 'snapshot' | 'diagnose' | 'logs' | 'conformance' | SelfAvailabilityAction;
+  action?: 'capabilities' | 'snapshot' | 'diagnose' | 'logs' | 'conformance' | SelfAvailabilityAction;
   state?: Parameters<AgentFacingIcpAutonomyRuntime['publishOwnAvailability']>[0]['state'];
   expires_at_ms?: number;
   revision?: number;
@@ -116,13 +119,33 @@ type ToolCatalogSection = {
 
 function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
   tier: CapabilityTier;
+  grantedTokens: readonly string[];
   source: 'runtime' | 'config';
 }> {
-  if (runtime.getCapabilityTier) {
+  if (runtime.getCapabilityGrantSnapshot) {
     try {
+      const snapshot = runtime.getCapabilityGrantSnapshot();
       return {
         status: 'available',
-        tier: runtime.getCapabilityTier(),
+        tier: snapshot.tier,
+        grantedTokens: [...snapshot.grantedTokens],
+        source: 'runtime',
+      };
+    } catch {
+      return sectionError('capability_grant_provider_failed');
+    }
+  }
+
+  if (runtime.getCapabilityTier) {
+    try {
+      const tier = runtime.getCapabilityTier();
+      if (tier === 'custom') {
+        return sectionError('custom capability grant provider is not wired');
+      }
+      return {
+        status: 'available',
+        tier,
+        grantedTokens: resolveTierCapabilityTokens(tier),
         source: 'runtime',
       };
     } catch {
@@ -131,9 +154,13 @@ function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
   }
 
   if (runtime.config.capabilityTier) {
+    if (runtime.config.capabilityTier === 'custom') {
+      return sectionError('custom capability grant provider is not wired');
+    }
     return {
       status: 'available',
       tier: runtime.config.capabilityTier,
+      grantedTokens: resolveTierCapabilityTokens(runtime.config.capabilityTier),
       source: 'config',
     };
   }
@@ -502,6 +529,13 @@ export async function buildSelfStatusResult(
   runtime: SelfStatusToolRuntime,
   params: SelfStatusParams = {},
 ): Promise<Record<string, unknown>> {
+  if (params.action === 'capabilities') {
+    return {
+      schemaVersion: 1,
+      generatedAt: runtime.now?.() ?? Date.now(),
+      capability: resolveCapabilityTier(runtime),
+    };
+  }
   if (params.action === 'diagnose') {
     if (!runtime.diagnosis) {
       return {
@@ -527,6 +561,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         [
+          Type.Literal('capabilities'),
           Type.Literal('snapshot'),
           Type.Literal('diagnose'),
           Type.Literal('logs'),
@@ -534,7 +569,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
           ...SELF_AVAILABILITY_ACTIONS.map(action => Type.Literal(action)),
         ],
         {
-          description: 'snapshot (default) returns the runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics; conformance runs the tool-surface sweep.',
+          description: 'capabilities returns only the current tier and effective grant; snapshot (default) returns the broader runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics; conformance runs the tool-surface sweep.',
         },
       )),
       recentChannelLimit: Type.Optional(Type.Number({

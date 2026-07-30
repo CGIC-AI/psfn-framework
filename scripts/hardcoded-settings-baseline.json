@@ -384,6 +384,12 @@
       "value": "5"
     },
     {
+      "file": "src/boundary/gateway/methods/shell.ts",
+      "name": "MAX_GUARD_PATH_CANDIDATES",
+      "value": "128",
+      "note": "DoS guard on shell argv parsing for the quarantine read gate; not operator tuning."
+    },
+    {
       "file": "src/boundary/gateway/methods/web.ts",
       "name": "WEB_FETCH_BINARY_MAX_BYTES_DEFAULT",
       "value": "8 * 1024 * 1024"
@@ -1500,8 +1506,32 @@
     },
     {
       "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "INTAKE_QUARANTINE_MAX_ACCESS_ATTEMPTS",
+      "value": "50",
+      "note": "Bounded attempt-audit ring per entry; DoS guard, not operator tuning."
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "INTAKE_QUARANTINE_MAX_ARTIFACT_PATHS",
+      "value": "16",
+      "note": "Safety cap on per-entry artifact registration; not operator tuning."
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
       "name": "INTAKE_QUARANTINE_MAX_RAW_CHARS",
       "value": "400_000"
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "MAX_ACCESS_ATTEMPT_VIA_CHARS",
+      "value": "256",
+      "note": "Via-string length guard for attempt audit rows; not operator tuning."
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "MAX_ARTIFACT_PATH_CHARS",
+      "value": "2_048",
+      "note": "Path-length DoS guard for artifact registration; not operator tuning."
     },
     {
       "file": "src/core/cogsec/intake/quarantine-store.ts",
@@ -1834,6 +1864,12 @@
       "file": "src/core/eval/observer-sidecar/queue.ts",
       "name": "DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS",
       "value": "5_000"
+    },
+    {
+      "file": "src/core/icp/felt-impulse-initiation.ts",
+      "name": "FELT_IMPULSE_MIN_INTERVAL_MS",
+      "value": "15 * 60_000",
+      "note": "Local throttle atop the emo-sim lever sustain/cooldown; revisit as a setting if D4 tuning needs it."
     },
     {
       "file": "src/core/icp/initiation-candidate.ts",

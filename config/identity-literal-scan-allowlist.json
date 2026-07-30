@@ -728,7 +728,7 @@
     },
     {
       "path": "src/channels/backplane/places-mermaid.ts",
-      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
+      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
       "pattern": "identity-proper-name"
     },
@@ -2402,7 +2402,7 @@
     },
     {
       "path": "scripts/onboarding/flow.ts",
-      "contains": "PSFN onboarding — configure",
+      "contains": "PSFN onboarding \u2014 configure",
       "reason": "User-facing installer banner naming the product.",
       "pattern": "identity-proper-name"
     },
@@ -2422,6 +2422,42 @@
       "path": "scripts/onboarding/modes.ts",
       "contains": "deploy/helm/psfn",
       "reason": "Kubernetes-mode help text citing the repository chart path verbatim.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/lib/api/endpoints/memory.ts",
+      "contains": "X-PSFN-CSRF",
+      "reason": "Wire protocol header name for the fleet CSRF token; a protocol constant, not deployment identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/lib/api/endpoints/memory.ts",
+      "contains": "x-psfn-escalation-grant",
+      "reason": "Wire protocol header carrying the audited escalation grant; protocol constant.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/provision-postgres-tenancy.ts",
+      "contains": "psfn-fleet-contact-provision",
+      "reason": "Postgres applicationName for provisioning connections; operational tag, not identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/reattribute-memory-subjects.ts",
+      "contains": "psfn-memory-subject-reattribution",
+      "reason": "Postgres applicationName for the re-attribution maintenance connection; operational tag.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/fleet-sso-router.ts",
+      "contains": "x-psfn-escalation-grant",
+      "reason": "Wire protocol header carrying the audited escalation grant; protocol constant.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/api-routes-memory.ts",
+      "contains": "x-psfn-escalation-grant",
+      "reason": "Comment naming the escalation-grant protocol header; protocol constant.",
       "pattern": "identity-legacy-slug"
     }
   ]

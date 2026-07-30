@@ -275,7 +275,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
     expect(shadowAssessment.allowed).toBe(false);
   });
 
-  // hrmrq.77 regression: live psfn-shard 2026-07-30 showed kind
+  // hrmrq.77 regression: live deployment evidence 2026-07-30 showed kind
   // egress_trifecta, verdict deny, enforcement hard, mode shadow → allowed
   // true. Per the fail-closed doctrine the hard tier overrides global shadow
   // mode; the full shadow × enforcement matrix pins the ruling.

@@ -143,25 +143,8 @@ Discord-authenticated session whose token-verified subject matches an entry is
 granted that entry's role for that companion directly from config — bypassing
 the first-owner ceremony, principal activation, and the nested authority
 version/generation gauntlet that can otherwise lock the operator out. The
-authorization context uses the principal's single valid active live contact
-binding when one exists. Existing ambiguous, non-live, fenced, tombstoned, or
-non-active bindings deny authorization rather than falling through to another
-identity. Only when no binding row exists does it use the optional roster
-`contactId`, and only then the legacy synthetic roster identifier. Operators
-should set `contactId` whenever the database binding ceremony has not created a
-row so subject-scoped Garden projections resolve the operator's canonical
-contact. The session itself must still be real, unexpired, and unrevoked, and
-subjects not in the roster keep the full gauntlet unchanged. A malformed roster
-entry, an unknown role, or a roster companion outside the companions registry
-refuses startup. The separate
-`accountRosterSatisfiesStepUp: true` opt-in (default off, requires a non-empty
-roster) additionally lets a rostered owner satisfy `webauthn_uv`-class step-up
-for lifecycle ceremonies.
-"role": "owner" }]`). A Discord-authenticated session whose token-verified
-subject matches an entry is granted that entry's role for that companion
-directly from config — bypassing the first-owner ceremony, principal
-activation, and the nested authority version/generation gauntlet that can
-otherwise lock the operator out. The session itself must still be real,
+optional `contactId` binds the rostered admin to their canonical contact when
+no live principal contact binding exists (see the authority-model doc). The session itself must still be real,
 unexpired, and unrevoked, and subjects not in the roster keep the full
 gauntlet unchanged. A malformed roster entry, an unknown role, or a roster
 companion outside the companions registry refuses startup. The roster is also

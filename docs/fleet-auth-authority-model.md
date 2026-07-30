@@ -109,9 +109,8 @@ example:
 ```
 
 An exact roster match is configuration-owned administrator authority. It
-bypasses first-owner passkey ceremony, database principal activation, the
-nested child-authority generation/version chain, and step-up for the opted-in
-owner path. Non-roster subjects remain fail-closed. The roster must be validated
+bypasses database principal activation and the nested child-authority
+generation/version chain. Non-roster subjects remain fail-closed. The roster must be validated
 strictly and must never use display names or partial identifiers as fallback
 identity.
 
@@ -122,10 +121,6 @@ row exists, the optional roster `contactId` is the configuration-owned
 canonical fallback. The synthetic roster contact identifier remains only for
 older entries that provide neither source; it does not correspond to a stored
 contact and cannot project existing subject-owned data.
-bypasses database principal activation and the nested child-authority
-generation/version chain. Non-roster subjects remain fail-closed. The roster must be validated
-strictly and must never use display names, contacts, or partial identifiers as
-fallback identity.
 
 Because roster authorization bypasses the authority-generation staleness gate,
 its revocation trust anchor is the browser-session row itself

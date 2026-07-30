@@ -143,6 +143,7 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: {
       workspacePath: '/workspace',
     },
+    intakeScreeningMode: 'off',
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),

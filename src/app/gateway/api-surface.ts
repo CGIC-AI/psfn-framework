@@ -118,6 +118,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'getFleetConnectionSnapshot'
     | 'requestCompanionAgent'
   >;
+  /** Exact gateway topology posture after fleet/single configuration resolution. */
+  multiCompanion: boolean;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistryProvider: SatelliteRegistryProvider;
   /**
@@ -126,6 +128,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
    * real injection channel. Null when the firewall mode is 'off'.
    */
   intakeScreening?: IntakeScreeningService | null;
+  /** Explicit owner-file posture; required so omission cannot disable screening. */
+  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
   /** Fleet-only exact resolver for the companion owning an API/satellite ingress. */
   intakeScreeningForCompanion?: (
     companionId: string,
@@ -162,21 +166,78 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   };
 }
 
-function resolveMessageIntakeScreening(
+function resolveOwnedIntakeScreening(
   options: StartOptionalGatewayApiServerOptions,
-  message: SubstrateMessage,
+  companionId: string,
 ): IntakeScreeningService | null | undefined {
-  if (!options.intakeScreeningForCompanion) {
-    return options.intakeScreening;
+  if (options.multiCompanion) {
+    if (!options.intakeScreeningForCompanion) {
+      throw new Error('Fleet API intake screening has no companion-owned resolver');
+    }
+    return options.intakeScreeningForCompanion(companionId);
   }
-  const satellite = message.routing?.satellite;
-  const companionId = satellite?.addressedCompanionId
-    ?? satellite?.sharedDevice?.primaryCompanionId
-    ?? options.channelsConfig?.api.companionId;
-  if (!companionId) {
-    throw new Error('Fleet API intake screening cannot resolve an owning companionId');
+  return options.intakeScreening;
+}
+
+export function assertGatewayApiIntakeScreeningOwnership(
+  options: StartOptionalGatewayApiServerOptions,
+): void {
+  const configuredMode: unknown = options.intakeScreeningMode;
+  if (
+    configuredMode !== 'off'
+    && configuredMode !== 'shadow'
+    && configuredMode !== 'enforce'
+  ) {
+    throw new Error('Gateway API intake screening requires an explicit valid mode');
   }
-  return options.intakeScreeningForCompanion(companionId);
+  const mode = configuredMode;
+  if (options.multiCompanion) {
+    if (options.intakeScreening) {
+      throw new Error(
+        'Fleet gateway API intake screening must use a companion-owned resolver, not a singleton service',
+      );
+    }
+    if (!options.intakeScreeningForCompanion) {
+      throw new Error(
+        'Fleet gateway API intake screening requires a companion-owned resolver',
+      );
+    }
+    const fleet = options.config.companionFleet;
+    if (!fleet || fleet.companions.length === 0) {
+      throw new Error(
+        'Fleet gateway API intake screening requires the resolved companion manifest',
+      );
+    }
+    for (const companion of fleet.companions) {
+      const screening = options.intakeScreeningForCompanion(companion.companionId);
+      if (mode === 'off') {
+        if (screening !== null) {
+          throw new Error(
+            `Fleet gateway API intake screening mode=off resolved a service for ${companion.companionId}`,
+          );
+        }
+      } else if (!screening || screening.mode !== mode) {
+        throw new Error(
+          `Fleet gateway API intake screening mode=${mode} has no matching service for ${companion.companionId}`,
+        );
+      }
+    }
+    return;
+  }
+  if (options.intakeScreeningForCompanion) {
+    throw new Error(
+      'Single-companion gateway API intake screening must use its singleton service',
+    );
+  }
+  if (mode === 'off') {
+    if (options.intakeScreening) {
+      throw new Error('Single-companion gateway API intake screening mode=off resolved a service');
+    }
+  } else if (!options.intakeScreening || options.intakeScreening.mode !== mode) {
+    throw new Error(
+      `Single-companion gateway API intake screening mode=${mode} has no matching service`,
+    );
+  }
 }
 
 function resolveGatewayHubDeviceCompanionId(
@@ -470,6 +531,7 @@ export async function startOptionalGatewayApiServer(
     principalAuthenticationWired,
     fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
   });
+  assertGatewayApiIntakeScreeningOwnership(options);
   const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
     && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Fleet auth overrode any ALLOW_INSECURE_LOCAL_API=true above; warn loudly so
@@ -806,11 +868,22 @@ export async function startOptionalGatewayApiServer(
         satelliteRegistryProvider: options.satelliteRegistryProvider,
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
       });
-      const message = await screenVoiceTranscriptMessage(
-        inboundMessage,
-        resolveMessageIntakeScreening(options, inboundMessage),
-      );
-      const result = await options.gateway.requestAgentVoiceStream(message, { signal });
+      if (!options.multiCompanion) {
+        const message = await screenVoiceTranscriptMessage(
+          inboundMessage,
+          options.intakeScreening,
+        );
+        const result = await options.gateway.requestAgentVoiceStream(message, { signal });
+        return result.content;
+      }
+      const result = await options.gateway.requestAgentVoiceStream(inboundMessage, {
+        signal,
+        screenMessageForCompanion: (message, companionId) =>
+          screenVoiceTranscriptMessage(
+            message,
+            resolveOwnedIntakeScreening(options, companionId),
+          ),
+      });
       return result.content;
     },
   });
@@ -823,11 +896,22 @@ export async function startOptionalGatewayApiServer(
         stimuli: new CompanionStimulusIngress({
           cooldownMs: COMPANION_STIMULUS_COOLDOWN_MS,
           deliver: async (message) => {
-            const screened = await screenCompanionStimulusMessage(
-              message,
-              resolveMessageIntakeScreening(options, message),
-            );
-            const result = await options.gateway.requestAgentVoiceStream(screened);
+            if (!options.multiCompanion) {
+              const screened = await screenCompanionStimulusMessage(
+                message,
+                options.intakeScreening,
+              );
+              const result = await options.gateway.requestAgentVoiceStream(screened);
+              const response = result.content.trim();
+              return response ? { response } : {};
+            }
+            const result = await options.gateway.requestAgentVoiceStream(message, {
+              screenMessageForCompanion: (ownedMessage, companionId) =>
+                screenCompanionStimulusMessage(
+                  ownedMessage,
+                  resolveOwnedIntakeScreening(options, companionId),
+                ),
+            });
             const response = result.content.trim();
             return response ? { response } : {};
           },

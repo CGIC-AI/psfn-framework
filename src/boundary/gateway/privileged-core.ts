@@ -283,13 +283,13 @@ export async function buildGatewayPrivilegedCore(
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
+      intakeScreeningMode: intakeScreening.mode,
       ...(!input.bootstrap.server.multiCompanion.enabled
         && intakeScreening.screeningFor()
         ? { intakeScreening: intakeScreening.screeningFor()! }
         : {}),
       ...(input.bootstrap.server.multiCompanion.enabled
         ? {
-            intakeScreeningMode: intakeScreening.mode,
             intakeScreeningProvider: (companionId?: string) =>
               intakeScreening.screeningFor(companionId),
           }

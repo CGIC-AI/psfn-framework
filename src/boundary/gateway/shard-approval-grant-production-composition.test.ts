@@ -346,6 +346,7 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
           },
         },
       },
+      intakeScreeningMode: 'off',
       sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
       wyomingShardRouting: { enabled: false },
       eventBus,

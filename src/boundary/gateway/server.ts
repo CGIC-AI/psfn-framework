@@ -276,8 +276,11 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   intakeScreeningProvider?: (
     companionId?: string,
   ) => IntakeScreeningService | null;
-  /** Shared system-owned mode used by gateway-global egress guards in fleet mode. */
-  intakeScreeningMode?: 'off' | 'shadow' | 'enforce';
+  /**
+   * Explicit system-owned posture. Required even when off so omitting intake
+   * composition cannot silently disable gateway-global egress guards.
+   */
+  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
   /**
    * Quarantined-artifact access guard (hrmrq.54): blocks fs reads, searches,
    * writes, and edits of quarantined on-disk artifacts and records attempts.
@@ -513,6 +516,46 @@ export class GatewayServer {
         channelRouting: this.multiCompanion.channelRouting,
         discordAccounts: this.multiCompanion.discordAccounts,
       });
+      if (options.intakeScreening || options.visionIntake) {
+        throw new Error(
+          'Multi-companion gateway intake screening must use companion-owned providers, not singleton services',
+        );
+      }
+      if (!options.intakeScreeningProvider || !options.visionIntakeProvider) {
+        throw new Error(
+          'Multi-companion gateway requires companion-owned text and vision intake screening providers',
+        );
+      }
+      for (const companionId of this.multiCompanion.fleetCompanionIds) {
+        const screening = options.intakeScreeningProvider(companionId);
+        if (options.intakeScreeningMode === 'off') {
+          if (screening !== null) {
+            throw new Error(
+              `Fleet intake screening mode=off resolved a service for companion ${companionId}`,
+            );
+          }
+        } else if (!screening || screening.mode !== options.intakeScreeningMode) {
+          throw new Error(
+            `Fleet intake screening mode=${options.intakeScreeningMode} has no matching service for companion ${companionId}`,
+          );
+        }
+        // Resolve every vision owner at construction too. Null is an explicit,
+        // valid disabled posture; a missing/unknown owner must throw here.
+        options.visionIntakeProvider(companionId);
+      }
+    } else {
+      if (options.intakeScreeningMode === 'off') {
+        if (options.intakeScreening) {
+          throw new Error('Single-companion intake screening mode=off resolved a service');
+        }
+      } else if (
+        !options.intakeScreening
+        || options.intakeScreening.mode !== options.intakeScreeningMode
+      ) {
+        throw new Error(
+          `Single-companion intake screening mode=${options.intakeScreeningMode} has no matching service`,
+        );
+      }
     }
     if (this.discordAccountRoutingActive()) {
       const missingDocks = [...new Set(Object.values(this.multiCompanion.discordAccounts))]
@@ -537,7 +580,7 @@ export class GatewayServer {
     this.inboundChannelReplay = new GatewayInboundChannelReplay({
       onDrop: drop => this.alertInboundChannelDrop(drop),
     });
-    const cogSecMode = options.intakeScreeningMode ?? options.intakeScreening?.mode ?? 'off';
+    const cogSecMode = options.intakeScreeningMode;
     this.canaryEgressGuard = cogSecMode === 'off'
       ? null
       : createCanaryEgressGuard({
@@ -2862,9 +2905,12 @@ export class GatewayServer {
       );
     }
 
+    const screenedMessage = options.screenMessageForCompanion
+      ? await options.screenMessageForCompanion(message, companionId)
+      : message;
     const result = await requestAgentVoiceStream({
       client,
-      message,
+      message: screenedMessage,
       options,
       wyomingShardRouting: this.wyomingShardRouting,
       companionId,
@@ -2918,9 +2964,12 @@ export class GatewayServer {
           `satellite:${satellite.satelliteId}`,
           lease.companionId,
         );
+        const screenedMessage = options.screenMessageForCompanion
+          ? await options.screenMessageForCompanion(message, lease.companionId)
+          : message;
         const result = await requestAgentVoiceStream({
           client: route.client,
-          message,
+          message: screenedMessage,
           options: {
             ...options,
             timeoutMs: Math.min(

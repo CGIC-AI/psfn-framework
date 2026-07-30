@@ -652,6 +652,9 @@ describe('image tools', () => {
     expect(text).toContain('will NOT be delivered');
     expect(text).toContain('"generationId": "req-pending-1"');
     expect(text).toContain('"fileName": "pending.png"');
+    expect(text).toContain('Reference the exact fileName');
+    expect(text).toContain('At most 4 generated images');
+    expect(text).toContain('latest successful result from each image tool');
   });
 
   it('registers a pending paid deliverable for a charged selfie generation', async () => {

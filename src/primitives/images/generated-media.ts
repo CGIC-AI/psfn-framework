@@ -27,6 +27,7 @@ import {
   deriveImageFileStem,
   inferImageExtension,
 } from './file-naming.js';
+import { selectGeneratedImageAssetsForDelivery } from './delivery-selection.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 // Live tool names first; retired names ('media', 'image_create', 'image_edit')
@@ -89,6 +90,45 @@ function collectImageResultUnique(
   if (seen.has(key)) return;
   seen.add(key);
   entries.push(entry);
+}
+
+function mergeRecoveredImageResultsInGenerationOrder(
+  entries: CollectedImageGenerationResult[],
+  seen: Set<string>,
+  recoveredEntries: readonly CollectedImageGenerationResult[],
+): void {
+  const entryIndex = (key: string): number => (
+    entries.findIndex(entry => collectImageResultKey(entry) === key)
+  );
+  for (const [recoveredIndex, recovered] of recoveredEntries.entries()) {
+    const key = collectImageResultKey(recovered);
+    if (seen.has(key)) continue;
+
+    let insertionIndex = -1;
+    for (let next = recoveredIndex + 1; next < recoveredEntries.length; next += 1) {
+      const nextIndex = entryIndex(collectImageResultKey(recoveredEntries[next]!));
+      if (nextIndex >= 0) {
+        insertionIndex = nextIndex;
+        break;
+      }
+    }
+    if (insertionIndex < 0) {
+      for (let previous = recoveredIndex - 1; previous >= 0; previous -= 1) {
+        const previousIndex = entryIndex(collectImageResultKey(recoveredEntries[previous]!));
+        if (previousIndex >= 0) {
+          insertionIndex = previousIndex + 1;
+          break;
+        }
+      }
+    }
+
+    if (insertionIndex >= 0) {
+      entries.splice(insertionIndex, 0, recovered);
+    } else {
+      entries.push(recovered);
+    }
+    seen.add(key);
+  }
 }
 
 function imageResultFromPendingDeliverable(
@@ -524,18 +564,23 @@ export async function collectGeneratedImageAttachments(params: {
     );
   }
 
-  for (const deliverable of params.paidDeliverables ?? []) {
-    collectImageResultUnique(
-      imageResults,
-      seenImageResults,
-      imageResultFromPendingDeliverable(deliverable),
-    );
-  }
+  const recoveredImageResults = (params.paidDeliverables ?? [])
+    .map(imageResultFromPendingDeliverable)
+    .filter((entry): entry is CollectedImageGenerationResult => entry !== null);
+  mergeRecoveredImageResultsInGenerationOrder(
+    imageResults,
+    seenImageResults,
+    recoveredImageResults,
+  );
 
   if (imageResults.length === 0) {
     return [];
   }
 
+  const selectedAssets = selectGeneratedImageAssetsForDelivery({
+    imageResults,
+    turnMessages: params.turnMessages,
+  });
   const needsStorage = imageResults.some(result => (
     result.result.images.some(asset => !asset.localPath?.trim())
   ));
@@ -582,7 +627,9 @@ export async function collectGeneratedImageAttachments(params: {
         storageDir,
         fetchImpl,
       });
-      attachments.push(attachment);
+      if (selectedAssets.has(asset)) {
+        attachments.push(attachment);
+      }
       if (attachment.localPath?.trim()) {
         try {
           await writeGeneratedImageGalleryMetadata({

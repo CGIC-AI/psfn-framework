@@ -35,6 +35,7 @@ import {
   resolveImageToolProvider,
   resolveSelfieEditModelChain,
 } from './tool-routing.js';
+import { GENERATED_IMAGE_ATTACHMENT_LIMIT } from './delivery-selection.js';
 
 const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Optional preset aspect ratio.',
@@ -107,6 +108,26 @@ function resolveGenerationId(result: ImageGenerationResult): string | undefined 
   return fromFileName || undefined;
 }
 
+function formatDeliverySelectionContract(imageCount: number): string {
+  const singular = imageCount === 1;
+  return [
+    singular
+      ? 'This image is a pending chat attachment.'
+      : 'These images are pending chat attachments.',
+    singular
+      ? 'Send a reply (even one short line) this turn so a generated image reaches the user;'
+      : 'Send a reply (even one short line) this turn so generated images reach the user;',
+    singular
+      ? 'if you end the turn with no reply, this generated image will NOT be delivered.'
+      : 'if you end the turn with no reply, these generated images will NOT be delivered.',
+    singular
+      ? 'Reference the exact fileName below in your reply to select this image.'
+      : 'Reference the exact fileNames below in your reply to select images.',
+    'If your reply references no generated fileName, the latest successful result from each image tool is delivered.',
+    `At most ${GENERATED_IMAGE_ATTACHMENT_LIMIT} generated images are delivered per turn; additional selections remain in the gallery.`,
+  ].join(' ');
+}
+
 function formatResult(result: ImageGenerationResult): string {
   const imageCount = result.images.length;
   const generationId = resolveGenerationId(result);
@@ -120,13 +141,7 @@ function formatResult(result: ImageGenerationResult): string {
     ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
     ...(generationId ? { generationId } : {}),
     attachmentPending: true,
-    delivery: imageCount === 1
-      ? 'This image is a pending chat attachment. It will be delivered to the user ONLY when you send your next reply this turn. '
-        + 'Send a reply (even one short line) so it reaches them; if you end the turn with no reply, this paid image will NOT be delivered. '
-        + 'Reference it by its fileName below.'
-      : 'These images are pending chat attachments. They will be delivered to the user ONLY when you send your next reply this turn. '
-        + 'Send a reply (even one short line) so they reach them; if you end the turn with no reply, these paid images will NOT be delivered. '
-        + 'Reference them by the fileNames below.',
+    delivery: formatDeliverySelectionContract(imageCount),
     images: result.images.map((image, index) => ({
       index: index + 1,
       ...(image.contentType ? { contentType: image.contentType } : {}),

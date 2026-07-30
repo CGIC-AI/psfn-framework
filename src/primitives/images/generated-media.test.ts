@@ -480,6 +480,140 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('jpg-dedupe'));
   });
 
+  it('delivers only the image fileName referenced by the final reply after quality re-rolls', async () => {
+    const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
+    tempDirs.push(personalDir);
+    const imagesDir = resolvePersonalImagesDir(personalDir);
+    mkdirSync(imagesDir, { recursive: true });
+    const localPaths = Array.from({ length: 4 }, (_, index) => {
+      const localPath = join(imagesDir, `selfie-${index + 1}.png`);
+      writeFileSync(localPath, `selfie ${index + 1}`);
+      return localPath;
+    });
+
+    const turnMessages = localPaths.flatMap((localPath, index) => ([
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: `call-selfie-${index + 1}`,
+          name: 'selfie_create',
+          arguments: { prompt: `quality attempt ${index + 1}` },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolName: 'selfie_create',
+        toolCallId: `call-selfie-${index + 1}`,
+        content: [],
+        details: {
+          imageResult: {
+            provider: 'fal',
+            mode: 'edit',
+            requestId: `req-selfie-${index + 1}`,
+            fallbackUsed: false,
+            images: [{
+              url: `https://images.example.test/selfie-${index + 1}.png`,
+              contentType: 'image/png',
+              fileName: `selfie-${index + 1}.png`,
+              localPath,
+            }],
+          },
+        },
+      },
+    ] as any[]));
+    turnMessages.push({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'The fourth one finally feels right — selfie-4.png 💜' }],
+    } as any);
+
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir: personalDir,
+      turnMessages: turnMessages as any,
+      fetchImpl: async () => {
+        throw new Error('fetch should not be called for existing local image paths');
+      },
+    });
+
+    expect(attachments).toEqual([{
+      url: 'https://images.example.test/selfie-4.png',
+      contentType: 'image/png',
+      name: 'selfie-4.png',
+      localPath: localPaths[3],
+    }]);
+    expect(localPaths.every(existsSync)).toBe(true);
+  });
+
+  it('preserves paid-deliverable chronology when an older result is missing from the transcript', async () => {
+    const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
+    tempDirs.push(personalDir);
+
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir: personalDir,
+      turnMessages: [
+        {
+          role: 'toolResult',
+          toolName: 'selfie_create',
+          toolCallId: 'call-newer',
+          content: [],
+          details: {
+            imageResult: {
+              provider: 'fal',
+              mode: 'edit',
+              requestId: 'req-newer',
+              fallbackUsed: false,
+              images: [{
+                url: 'https://images.example.test/newer-final.png',
+                contentType: 'image/png',
+                fileName: 'newer-final.png',
+              }],
+            },
+          },
+        } as any,
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'This one feels right.' }],
+        } as any,
+      ],
+      paidDeliverables: [
+        {
+          surface: 'paidImageGeneration',
+          toolName: 'selfie_create',
+          toolCallId: 'call-older',
+          identifier: 'req-older',
+          artifactKind: 'image',
+          artifacts: [{
+            url: 'https://images.example.test/older-draft.png',
+            contentType: 'image/png',
+            fileName: 'older-draft.png',
+          }],
+        },
+        {
+          surface: 'paidImageGeneration',
+          toolName: 'selfie_create',
+          toolCallId: 'call-newer',
+          identifier: 'req-newer',
+          artifactKind: 'image',
+          artifacts: [{
+            url: 'https://images.example.test/newer-final.png',
+            contentType: 'image/png',
+            fileName: 'newer-final.png',
+          }],
+        },
+      ],
+      fetchImpl: async (url) => (
+        new Response(Buffer.from(String(url)), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+      ) as Response,
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.name).toBe('newer-final.png');
+    expect(attachments[0]?.url).toBe('https://images.example.test/newer-final.png');
+  });
+
   it('ignores non-image tool results and malformed payloads', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);

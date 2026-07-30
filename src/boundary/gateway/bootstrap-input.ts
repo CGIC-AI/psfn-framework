@@ -21,7 +21,7 @@ import {
   resolveBeadsToolsEnabled,
 } from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
-import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
+import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { createDefaultShellExecSettings } from '../../system/config/shell-exec-config.js';
 import {
   buildProviderCredentialEnv,
@@ -58,13 +58,17 @@ import {
 import { resolveGatewayCredentialPresence } from './credential-presence.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import {
+  ALL_VAULT_ACTIONS,
+  parseVaultActionsEnv,
+  resolveVaultToolsEnabled,
+} from '../integrations/vault/enablement.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
-const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
 
 export type GatewayRuntimeMode =
   | 'split'
@@ -120,11 +124,6 @@ interface GatewayBootstrapOptions {
   env: GatewayPolicyEnv & NodeJS.ProcessEnv;
   startupHydration: StartupConfigHydrationResult;
   satelliteRegistryConfig: SatelliteRegistryConfig;
-}
-
-function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
-  const parsed = parseBooleanEnv(value);
-  return parsed === undefined ? fallback : parsed;
 }
 
 function resolveGatewayRuntimeMode(raw: string | undefined): GatewayRuntimeMode {
@@ -219,23 +218,6 @@ function resolveDiscoveryLaneConfig(input: {
   };
 }
 
-function parseVaultActionsEnv(value: string | undefined): Array<(typeof ALL_VAULT_ACTIONS)[number]> | undefined {
-  const parsed = parseEnvList(value, { separators: [','] });
-  if (!parsed) {
-    return value === undefined ? undefined : [];
-  }
-
-  const valid = new Set(ALL_VAULT_ACTIONS);
-  const actions: Array<(typeof ALL_VAULT_ACTIONS)[number]> = [];
-  for (const entry of parsed) {
-    const normalized = entry.toLowerCase();
-    if (valid.has(normalized as (typeof ALL_VAULT_ACTIONS)[number])) {
-      actions.push(normalized as (typeof ALL_VAULT_ACTIONS)[number]);
-    }
-  }
-  return actions;
-}
-
 // Resolve the explicit web backend (bead htm9.10). When the
 // OpenRouter web tools are enabled in providers.json, the gateway resolves the
 // OpenRouter base URL + API key here (the gateway is the secret holder) and
@@ -316,10 +298,7 @@ function buildGatewayPolicyConfig(
   });
   const beadsAllowActions = parseBeadsActionsEnv(env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
-  const vaultToolsEnabled = parseBooleanEnvWithFallback(
-    env.VAULT_TOOLS_ENABLED,
-    false,
-  );
+  const vaultToolsEnabled = resolveVaultToolsEnabled(env.VAULT_TOOLS_ENABLED);
   const vaultAllowActions = parseVaultActionsEnv(env.VAULT_ALLOW_ACTIONS)
     ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);
 

@@ -12,6 +12,7 @@ import {
 } from '../../system/config/providers-config.js';
 import type { PolicyConfig } from './policy.js';
 import { consumeActiveGatewayCapturedProviderCostEvidence } from './llm-cost-capture.js';
+import { requireEnabledVaultName } from '../integrations/vault/enablement.js';
 
 export interface GatewayPrivilegedServiceRegistry extends ProviderRuntimeServices {
   modelDiscovery?: ModelDiscovery;
@@ -33,14 +34,10 @@ function createGatewayVaultOps(
     return undefined;
   }
 
-  if (!config.obsidianVaultName) {
-    throw new Error(
-      'VAULT_TOOLS_ENABLED is true but obsidianVaultName is not configured in settings.',
-    );
-  }
+  const vaultName = requireEnabledVaultName(config.obsidianVaultName);
 
   return new VaultOps({
-    vaultName: config.obsidianVaultName,
+    vaultName,
     ...(config.obsidianCliPath ? { cliPath: config.obsidianCliPath } : {}),
     ...(typeof config.obsidianTimeoutMs === 'number'
       ? { timeoutMs: config.obsidianTimeoutMs }

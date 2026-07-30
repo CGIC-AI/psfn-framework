@@ -196,6 +196,14 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('kill -KILL -- "-${pgid}"');
   });
 
+  it('hands the agent database credential through an inherited pipe, not a here-string file', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain(
+      'exec {postgres_database_url_fd}< <(printf \'%s\\n\' "${database_url}")',
+    );
+    expect(launcher).not.toContain('exec {postgres_database_url_fd}<<<');
+  });
+
   it('refuses duplicate launcher starts with a socket-scoped launcher lock', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('LAUNCHER_LOCK_DIR="${socket_dir}/launcher.lock"');
@@ -611,6 +619,7 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(agentAllowlist).toContain('SYSTEM_DATA_DIR');
     expect(agentAllowlist).toContain('COMPANION_DATA_DIR');
     expect(agentAllowlist).toContain('PSFN_FLEET_AUTH \\');
+    expect(agentAllowlist).toContain('VAULT_TOOLS_ENABLED \\');
     expect(agentAllowlist).not.toMatch(/\n\s*API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*ADMIN_TOKEN\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
@@ -675,6 +684,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '    ;;',
         '  src/app/agent/main.ts)',
         '    env | sort > agent.env',
+        '    if [ -p "/proc/self/fd/${POSTGRES_DATABASE_URL_FD:-999}" ]; then printf "pipe\\n" > agent.credential-kind; fi',
         '    cat "/proc/self/fd/${POSTGRES_DATABASE_URL_FD:-999}" > agent.database-url 2>/dev/null || true',
         `    ${JSON.stringify(process.execPath)} ${JSON.stringify(join(
           repoRoot,
@@ -749,6 +759,7 @@ describe('start-gateway-agent launcher supervision', () => {
       });
       expect(readFileSync(join(workDir, 'agent.database-url'), 'utf8').trim())
         .toBe('postgresql://psfn:split-secret@postgres/psfn');
+      expect(readFileSync(join(workDir, 'agent.credential-kind'), 'utf8').trim()).toBe('pipe');
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

@@ -115,6 +115,35 @@ describe('persistence cutover', () => {
     expect(result.manifestPath).toBeUndefined();
   });
 
+  it('treats a recreated empty legacy backups directory as converged without weakening real-data checks', () => {
+    const dirs = createRoots();
+    mkdirSync(join(dirs.legacySharedDataDir, 'backups'), { recursive: true });
+    mkdirSync(join(dirs.companionDataDir, 'backups'), { recursive: true });
+
+    const applied = executePersistenceCutover(dirs);
+    expect(applied.plan.entries.find(entry => entry.id === 'companion.backups')?.status)
+      .toBe('already_migrated');
+    expect(applied.plan.actionableCount).toBe(0);
+    expect(applied.plan.cleanupLegacyCount).toBe(0);
+
+    // Model a cutover cleanup followed by two successful boots recreating the
+    // same defensive empty shell. Preflight must remain converged each time.
+    rmSync(join(dirs.legacySharedDataDir, 'backups'), { recursive: true });
+    expect(() => assertPersistenceCutoverReady(dirs)).not.toThrow();
+    mkdirSync(join(dirs.legacySharedDataDir, 'backups'), { recursive: true });
+    expect(buildPersistenceCutoverPlan(dirs).actionableCount).toBe(0);
+    expect(() => assertPersistenceCutoverReady(dirs)).not.toThrow();
+    mkdirSync(join(dirs.legacySharedDataDir, 'backups'), { recursive: true });
+    expect(buildPersistenceCutoverPlan(dirs).actionableCount).toBe(0);
+    expect(() => assertPersistenceCutoverReady(dirs)).not.toThrow();
+
+    writeText(join(dirs.legacySharedDataDir, 'backups', 'real-backup.tar'), 'backup data');
+    const withData = buildPersistenceCutoverPlan(dirs);
+    expect(withData.entries.find(entry => entry.id === 'companion.backups')?.status)
+      .toBe('conflict');
+    expect(() => assertPersistenceCutoverReady(dirs)).toThrow(/legacy data still needs cutover/u);
+  });
+
   it('migrates legacy artifacts, writes a manifest, and becomes idempotent', () => {
     const dirs = createRoots();
     writeJson(join(dirs.legacySharedDataDir, 'settings.json'), { sessionMessageLimit: 55 });

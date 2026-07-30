@@ -250,6 +250,7 @@ build_agent_env() {
     TMPDIR \
     TZ \
     USER \
+    VAULT_TOOLS_ENABLED \
     WORKSPACE_PATH; do
     append_agent_env "${name}"
   done
@@ -489,7 +490,12 @@ spawn_agent_process() {
   fi
 
   local postgres_database_url_fd
-  exec {postgres_database_url_fd}<<<"${database_url}"
+  # Use an anonymous pipe rather than a bash here-string. Here-strings are
+  # seekable temporary files on stock Linux but can surface as an unreadable
+  # descriptor under WSL2 (read(2) => EINVAL). The credential remains absent
+  # from the child argv/environment; only the inherited descriptor number is
+  # exposed.
+  exec {postgres_database_url_fd}< <(printf '%s\n' "${database_url}")
   local POSTGRES_DATABASE_URL_FD="${postgres_database_url_fd}"
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then

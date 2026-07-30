@@ -387,6 +387,8 @@ runtime-owned records with distinct provenance and retention semantics.
 
 The legacy model-facing `vault` surface is an optional external Obsidian bridge for bounded source read/search/write compatibility. It is not the canonical durable companion note store.
 
+It is registered in the isolated agent only when `VAULT_TOOLS_ENABLED=true`; execution then crosses the gateway's policy-controlled `vault.*` RPC methods, and startup fails closed if the enabled bridge has no `obsidianVaultName` in `settings.json`. The live conformance sweep exercises a bounded no-match `search` through that gateway path; mutating actions remain schema-only.
+
 - Actions: `read`, `write`, `search`, `daily`
 - Retired aliases that must not be model-facing:
   `vault_read` -> `read`

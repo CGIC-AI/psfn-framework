@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadCharacterCard } from '../../src/core/identity/loader.js';
+import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
 import type { Prompter, PrompterChoiceOption } from './types.js';
 import { OnboardingCancelled, runOnboarding } from './flow.js';
 import { CompanionImportError } from './companion-import.js';
@@ -94,10 +95,31 @@ describe('runOnboarding — local dev happy path', () => {
     expect(existsSync(join(dataDir, 'providers.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'models.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'companions.json'))).toBe(true);
+    expect(existsSync(join(dataDir, 'companions', 'main', 'scheduler.json'))).toBe(true);
+    expect(existsSync(join(dataDir, 'companions', 'main', 'companion.json'))).toBe(true);
 
     const envText = readFileSync(envPath, 'utf-8');
     expect(envText).toContain('OPENROUTER_API_KEY=sk-or-flow-secret');
     expect(envText).toContain('DATA_DIR=');
+    expect(envText).toContain(`PSFN_RUNTIME_ROOT=${root}`);
+    expect(prompter.log.join('\n')).toContain('companion_main_runtime');
+    expect(prompter.log.join('\n')).toContain('shared_schema_migration');
+    expect(prompter.log.join('\n')).toContain('COMPANION_MAIN_DATABASE_URL');
+    expect(prompter.log.join('\n')).toContain('SHARED_SCHEMA_MIGRATION_DATABASE_URL');
+
+    const fleet = resolveConfiguredCompanionFleet({
+      PSFN_RUNTIME_ROOT: root,
+      DATA_DIR: dataDir,
+      CONFIG_DIR: SEED_DIR,
+    });
+    expect(fleet.companions).toEqual([
+      expect.objectContaining({
+        companionId: outcome.plan.companionId,
+        companionDataDir: join(dataDir, 'companions', 'main'),
+        characterCardPath: join(dataDir, 'companions', 'main', 'companion.json'),
+        displayName: 'Companion',
+      }),
+    ]);
 
     // The secret must never appear in any generated owner file.
     for (const file of readdirSync(dataDir).filter((f) => f.endsWith('.json'))) {
@@ -176,7 +198,7 @@ describe('runOnboarding — kubernetes mode', () => {
     expect(outcome.envWritten).toBe(false);
     expect(existsSync(envPath)).toBe(false);
     expect(existsSync(join(systemDataDir, 'providers.json'))).toBe(true);
-    expect(existsSync(join(companionDataDir, 'scheduler.json'))).toBe(true);
+    expect(existsSync(join(companionDataDir, 'main', 'scheduler.json'))).toBe(true);
   });
 });
 
@@ -225,9 +247,9 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
     },
   };
 
-  // The single-companion runtime reads the card at {companionDataDir}/companion.json.
+  // The fleet runtime reads the card from the generated companion subdirectory.
   function cardPath(dataDir: string): string {
-    return join(dataDir, 'companion.json');
+    return join(dataDir, 'companions', 'main', 'companion.json');
   }
 
   function runImport(input: {
@@ -264,6 +286,10 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
     expect(written.data.name).toBe('Nova');
     expect(written.data.personality).toContain('inquisitive');
     expect(outcome.writtenPaths).toContain(cardPath(dataDir));
+    const manifest = JSON.parse(readFileSync(join(dataDir, 'companions.json'), 'utf-8')) as {
+      companions: Array<{ displayName?: string }>;
+    };
+    expect(manifest.companions[0]?.displayName).toBe('Nova');
     // COMPANION_ID was written so the newcomer need not hand-copy it.
     expect(readFileSync(envPath, 'utf-8')).toContain('COMPANION_ID=');
   });

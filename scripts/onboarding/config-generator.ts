@@ -162,10 +162,10 @@ export function buildProvidersRegistry(plan: OnboardingPlan): unknown {
 }
 
 /**
- * Re-point the seed's two selected model entries (primary, extraction) at the
- * chosen provider and slugs. The generated primary also owns vision: onboarding
- * does not ask for a separate vision model, while the canonical registry guard
- * requires exactly one primary for that purpose. Keeping exactly these two
+ * Re-point the seed's selected primary, extraction, and vision entries at the
+ * chosen provider and operator-confirmed slugs. The dedicated vision entry
+ * preserves the seed's explicit `supportsVision` capability instead of
+ * pretending an arbitrary chat model can accept images. Keeping exactly these
  * entries avoids leaving catalog entries that reference a provider id the
  * generated providers.json does not define.
  */
@@ -176,24 +176,28 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
   }
   const providerId = plan.provider.id;
   const sourceType = plan.provider.type;
-  const models = seed.models
-    .filter((entry): entry is Record<string, unknown> => isRecord(entry)
-      && (entry.id === 'primary' || entry.id === 'extraction'))
-    .map((entry) => {
-      const slug = entry.id === 'primary'
-        ? plan.models.primaryModelSlug
-        : plan.models.extractionModelSlug;
+  const primary = seed.models.find(entry => isRecord(entry) && entry.id === 'primary');
+  const extraction = seed.models.find(entry => isRecord(entry) && entry.id === 'extraction');
+  const vision = seed.models.find(entry => isRecord(entry)
+    && Array.isArray(entry.purposes)
+    && entry.purposes.some(purpose => isRecord(purpose)
+      && purpose.purpose === 'vision'
+      && purpose.primary === true)
+    && isRecord(entry.capabilities)
+    && entry.capabilities.supportsVision === true);
+  if (!isRecord(primary) || !isRecord(extraction) || !isRecord(vision)) {
+    throw new Error(
+      'Invalid models seed: expected primary, extraction, and explicitly vision-capable entries',
+    );
+  }
+  const models = [
+    { entry: primary, slug: plan.models.primaryModelSlug },
+    { entry: extraction, slug: plan.models.extractionModelSlug },
+    { entry: vision, slug: plan.models.visionModelSlug },
+  ].map(({ entry, slug }) => {
       const identity = isRecord(entry.identity) ? entry.identity : {};
       return {
         ...entry,
-        ...(entry.id === 'primary' && Array.isArray(entry.purposes)
-          ? {
-              purposes: [
-                ...entry.purposes,
-                { purpose: 'vision', primary: true },
-              ],
-            }
-          : {}),
         identity: {
           ...identity,
           provider: providerId,
@@ -202,9 +206,6 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
         },
       };
     });
-  if (models.length !== 2) {
-    throw new Error('Invalid models seed: expected "primary" and "extraction" entries');
-  }
   return {
     schemaVersion: 1,
     promptCaching: isRecord(seed.promptCaching) ? seed.promptCaching : { enabled: true },

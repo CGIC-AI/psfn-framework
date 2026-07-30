@@ -6,6 +6,7 @@ import {
 } from '../../system/capabilities/shard-derivation.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { ShardCapabilityGrantEvidence } from './types.js';
+import { CompanionVisibleOperationalError } from '../../core/tools/results.js';
 
 /** One atomic authoritative capability-owner read for each shard launch. */
 export type ParentCapabilityGrantSnapshotProvider = () => CapabilityGrantSnapshot;
@@ -38,9 +39,13 @@ export function resolveShardLaunchCapabilityGrant(
     );
   }
   if (!capabilityGrant.parent.tokens.includes('shard.spawn')) {
-    throw new Error(
-      `Shard launch denied: parent companion "${parentCompanionId}" does not grant shard.spawn`,
-    );
+    throw new CompanionVisibleOperationalError({
+      companionMessage: 'Shard launch denied: the parent capability grant does not include shard.spawn.',
+      errorClass: 'policy_blocked',
+      retryHint: 'try_alternative_input',
+      operatorDiagnostic:
+        `Shard launch denied: parent companion "${parentCompanionId}" does not grant shard.spawn`,
+    });
   }
   return capabilityGrant;
 }

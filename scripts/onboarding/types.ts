@@ -46,10 +46,11 @@ export interface ProviderSelection {
   apiKeyValue: string;
 }
 
-/** Model slugs the operator confirmed for the two primary-bearing roles. */
+/** Model slugs the operator confirmed for the three generated runtime roles. */
 export interface ModelSelection {
   primaryModelSlug: string;
   extractionModelSlug: string;
+  visionModelSlug: string;
 }
 
 /** Optional voice selection. When disabled the runtime keeps stt/tts off. */

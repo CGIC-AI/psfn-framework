@@ -52,6 +52,25 @@ export interface ToolErrorMetadataInput {
   cause?: unknown;
 }
 
+export class CompanionVisibleOperationalError extends Error {
+  readonly companionMessage: string;
+  readonly errorClass: ToolErrorClass;
+  readonly retryHint: ToolRetryHint;
+
+  constructor(input: {
+    companionMessage: string;
+    errorClass: ToolErrorClass;
+    retryHint: ToolRetryHint;
+    operatorDiagnostic?: string;
+  }) {
+    super(input.operatorDiagnostic ?? input.companionMessage);
+    this.name = 'CompanionVisibleOperationalError';
+    this.companionMessage = input.companionMessage;
+    this.errorClass = input.errorClass;
+    this.retryHint = input.retryHint;
+  }
+}
+
 type TextResultErrorDetails = {
   isError?: boolean;
 } & Partial<Omit<StructuredToolErrorDetails, 'isError'>>;
@@ -178,55 +197,30 @@ export function internalToolFailureResult<
 function companionVisibleOperationalFailure(
   error: unknown,
 ): ToolErrorMetadataInput | undefined {
-  if (error === undefined) return undefined;
-  const diagnostic = sanitizeToolErrorDiagnostic(error);
-  if (!diagnostic) return undefined;
-
-  const errorClass = classifyToolError(error);
-  if (errorClass === 'rate_limited') {
+  if (error instanceof CompanionVisibleOperationalError) {
     return {
-      cause: error,
-      rawDiagnostic: error,
-      errorClass,
+      errorClass: error.errorClass,
+      retryHint: error.retryHint,
+      companionMessage: error.companionMessage,
+    };
+  }
+
+  if (readRateLimitStatus(error) === 429) {
+    return {
+      errorClass: 'rate_limited',
       retryHint: 'retry_after_delay',
-      companionMessage: diagnostic,
+      companionMessage: 'Provider rate limit reached. Try again after a delay.',
     };
   }
 
-  if (/^Shard limit reached\b/u.test(diagnostic)) {
-    return {
-      cause: error,
-      rawDiagnostic: error,
-      errorClass: 'unavailable',
-      retryHint: 'retry_after_delay',
-      companionMessage: diagnostic,
-    };
-  }
+  return undefined;
+}
 
-  if (/^Shard routing denied:\s/u.test(diagnostic)) {
-    return {
-      cause: error,
-      rawDiagnostic: error,
-      errorClass: /missing required capability tokens/u.test(diagnostic)
-        ? 'policy_blocked'
-        : 'unavailable',
-      retryHint: /missing required capability tokens/u.test(diagnostic)
-        ? 'try_alternative_input'
-        : 'retry_after_delay',
-      companionMessage: diagnostic,
-    };
+function readRateLimitStatus(error: unknown): number | undefined {
+  if (!isRecord(error)) return undefined;
+  for (const value of [error.status, error.statusCode, error.code]) {
+    if (value === 429 || value === '429') return 429;
   }
-
-  if (/^Shard launch denied:\s/u.test(diagnostic)) {
-    return {
-      cause: error,
-      rawDiagnostic: error,
-      errorClass: 'policy_blocked',
-      retryHint: 'try_alternative_input',
-      companionMessage: diagnostic,
-    };
-  }
-
   return undefined;
 }
 

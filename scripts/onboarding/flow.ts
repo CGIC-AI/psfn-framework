@@ -282,20 +282,30 @@ async function selectModels(
   prompter: Prompter,
   seedDir: string,
   providerType: string,
-): Promise<{ primaryModelSlug: string; extractionModelSlug: string }> {
+): Promise<{
+  primaryModelSlug: string;
+  extractionModelSlug: string;
+  visionModelSlug: string;
+}> {
   const defaults = defaultModelSlugs(seedDir);
   const primaryModelSlug = await prompter.text('Primary chat model slug', { default: defaults.primary });
   const extractionModelSlug = await prompter.text('Background/extraction model slug', { default: defaults.extraction });
+  const visionModelSlug = await prompter.text(
+    'Vision-capable model slug',
+    { default: defaults.vision, allowEmpty: false },
+  );
   // The seed defaults are OpenRouter-flavored (provider/model slugs). When a
   // different provider was chosen and a default was kept, flag it once.
-  const keptOpenRouterDefault = primaryModelSlug === defaults.primary || extractionModelSlug === defaults.extraction;
+  const keptOpenRouterDefault = primaryModelSlug === defaults.primary
+    || extractionModelSlug === defaults.extraction
+    || visionModelSlug === defaults.vision;
   if (providerType !== 'openrouter' && keptOpenRouterDefault) {
     prompter.info(
       '  Note: the default model slugs are OpenRouter-flavored (provider/model form). Confirm they '
       + 'match what your chosen provider serves, or re-run with provider-native slugs.',
     );
   }
-  return { primaryModelSlug, extractionModelSlug };
+  return { primaryModelSlug, extractionModelSlug, visionModelSlug };
 }
 
 async function selectVoice(prompter: Prompter, capturesHostSecret: boolean): Promise<VoiceSelection> {
@@ -390,7 +400,7 @@ function draftPlan(input: { mode: InstallMode; roots: PersistenceRootPlan; seedD
       apiKeyEnvName: 'PLACEHOLDER',
       apiKeyValue: '',
     },
-    models: { primaryModelSlug: 'x', extractionModelSlug: 'y' },
+    models: { primaryModelSlug: 'x', extractionModelSlug: 'y', visionModelSlug: 'z' },
     voice: { enabled: false, secrets: [] },
     companionId: '00000000-0000-4000-8000-000000000000',
     envEntries: [],

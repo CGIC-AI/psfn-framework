@@ -78,8 +78,8 @@ describe('runOnboarding — local dev happy path', () => {
     const dataDir = join(root, 'data');
     const prompter = new ScriptedPrompter({
       choices: ['local', 'openrouter', 'fresh'],
-      // id, apiBaseUrl, modelsApiUrl, apiKeyEnvName, primary slug, extraction slug
-      texts: ['', '', '', '', '', ''],
+      // id, apiBaseUrl, modelsApiUrl, apiKeyEnvName, primary, extraction, vision
+      texts: ['', '', '', '', '', '', ''],
       secrets: ['sk-or-flow-secret'],
       confirms: [false, false], // voice off, connectivity off
     });
@@ -138,7 +138,7 @@ describe('runOnboarding — idempotency and abort', () => {
     await runOnboarding({
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
-        texts: ['', '', '', '', '', ''],
+        texts: ['', '', '', '', '', '', ''],
         secrets: ['sk-first'],
         confirms: [false, false],
       }),
@@ -163,7 +163,7 @@ describe('runOnboarding — idempotency and abort', () => {
     await expect(runOnboarding({
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter'],
-        texts: ['', '', '', '', '', ''],
+        texts: ['', '', '', '', '', '', ''],
         secrets: ['sk-bad'],
         confirms: [false, true, false], // voice off, run check = true, proceed-anyway = false
       }),
@@ -187,7 +187,7 @@ describe('runOnboarding — kubernetes mode', () => {
     const outcome = await runOnboarding({
       prompter: new ScriptedPrompter({
         choices: ['kubernetes', 'openrouter', 'fresh'],
-        texts: ['', '', '', '', '', ''],
+        texts: ['', '', '', '', '', '', ''],
         confirms: [false], // voice off (no connectivity prompt in k8s mode)
       }),
       seedDir: SEED_DIR,
@@ -212,7 +212,7 @@ describe('runOnboarding — .env merge safety', () => {
     await runOnboarding({
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
-        texts: ['', '', '', '', '', ''],
+        texts: ['', '', '', '', '', '', ''],
         secrets: ['sk-merge'],
         confirms: [false, false],
       }),
@@ -259,7 +259,7 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
     sourcePath: string;
     lumpName?: string;
   }) {
-    const texts = ['', '', '', '', '', '', input.sourcePath];
+    const texts = ['', '', '', '', '', '', '', input.sourcePath];
     if (input.source === 'markdown') texts.push(input.lumpName ?? '');
     return runOnboarding({
       prompter: new ScriptedPrompter({
@@ -349,7 +349,7 @@ describe('runOnboarding — companion import (wckv.1.3)', () => {
     await runOnboarding({
       prompter: new ScriptedPrompter({
         choices: ['local', 'openrouter', 'fresh'],
-        texts: ['', '', '', '', '', '', 'Willow'],
+        texts: ['', '', '', '', '', '', '', 'Willow'],
         secrets: ['sk-fresh'],
         confirms: [false, false],
       }),

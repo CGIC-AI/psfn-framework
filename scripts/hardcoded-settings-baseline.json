@@ -4149,6 +4149,12 @@
       "value": "180_000"
     },
     {
+      "file": "src/primitives/images/delivery-selection.ts",
+      "name": "GENERATED_IMAGE_ATTACHMENT_LIMIT",
+      "value": "4",
+      "note": "Code-owned outbound artifact safety ceiling shared by the harvester and its model-visible selection contract; it bounds one turn independently of channel-specific send limits."
+    },
+    {
       "file": "src/primitives/images/fal.ts",
       "name": "DEFAULT_FAL_POLL_INTERVAL_MS",
       "value": "1_500"

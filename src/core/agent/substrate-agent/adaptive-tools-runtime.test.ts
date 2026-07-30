@@ -162,14 +162,14 @@ describe('createToolsetTool', () => {
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => [],
       setPromotedExtendedTools: next => [...next],
-      persistPromotedExtendedTools: () => null,
-      addPromotedExtendedTool: toolName => ({
+      persistPromotedExtendedTools: async () => null,
+      addPromotedExtendedTool: async toolName => ({
         ok: true,
         changed: true,
         promotedTools: [toolName],
         message: `Pinned ${toolName}.`,
       }),
-      removePromotedExtendedTool: () => ({
+      removePromotedExtendedTool: async () => ({
         ok: true,
         changed: true,
         promotedTools: [],
@@ -319,13 +319,13 @@ describe('createToolsetTool', () => {
   });
 
   it('pins and unpins presentation order without an availability result', async () => {
-    const addPromotedExtendedTool = vi.fn(toolName => ({
+    const addPromotedExtendedTool = vi.fn(async toolName => ({
       ok: true,
       changed: true,
       promotedTools: [toolName],
       message: 'Pinned.',
     }));
-    const removePromotedExtendedTool = vi.fn(() => ({
+    const removePromotedExtendedTool = vi.fn(async () => ({
       ok: true,
       changed: true,
       promotedTools: [],

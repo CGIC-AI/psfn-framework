@@ -98,28 +98,39 @@ export function buildAdminSettingsRoutes(options: {
             return;
           }
 
-          const result = saveSubConfigJson('models', configJson, context);
-          if (!result.ok) {
+          void saveSubConfigJson('models', configJson, context).then((result) => {
+            if (!result.ok) {
+              appendSettingsMutationAudit(
+                'denied',
+                'Operator models.json update failed.',
+                [`message=${toSanitizedMessage(result.message, 'models.json save failed')}`],
+                context,
+              );
+              sendJson(res, 400, {
+                error: result.message,
+                ...result,
+              });
+              return;
+            }
+
             appendSettingsMutationAudit(
-              'denied',
-              'Operator models.json update failed.',
-              [`message=${toSanitizedMessage(result.message, 'models.json save failed')}`],
+              'allowed',
+              'Operator updated models.json via /api/admin/settings/models.',
+              [],
               context,
             );
-            sendJson(res, 400, {
-              error: result.message,
-              ...result,
+            sendJson(res, 200, { ok: true, message: 'models.json saved' });
+          }).catch((error: unknown) => {
+            appendSettingsMutationAudit(
+              'denied',
+              'Operator models.json update failed with a server error.',
+              [`error=${toSanitizedMessage(error, 'server error')}`],
+              context,
+            );
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to update models.json'),
             });
-            return;
-          }
-
-          appendSettingsMutationAudit(
-            'allowed',
-            'Operator updated models.json via /api/admin/settings/models.',
-            [],
-            context,
-          );
-          sendJson(res, 200, { ok: true, message: 'models.json saved' });
+          });
         });
       },
     },
@@ -142,29 +153,43 @@ export function buildAdminSettingsRoutes(options: {
           const changedFields = parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value)
             ? Object.keys(parsed.value as Record<string, unknown>).sort()
             : [];
-          const result = updateSettings(JSON.stringify(parsed.value), context);
-          if (!result.ok) {
-            const safeMessage = toSanitizedMessage(result.message, 'Settings update failed');
+          void updateSettings(JSON.stringify(parsed.value), context).then((result) => {
+            if (!result.ok) {
+              const safeMessage = toSanitizedMessage(result.message, 'Settings update failed');
+              appendSettingsMutationAudit(
+                'denied',
+                `Operator settings update via /api/admin/settings failed: ${safeMessage}`,
+                [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+                context,
+              );
+              sendJson(res, 400, {
+                error: safeMessage,
+                ...result,
+                message: safeMessage,
+              });
+              return;
+            }
             appendSettingsMutationAudit(
-              'denied',
-              `Operator settings update via /api/admin/settings failed: ${safeMessage}`,
+              'allowed',
+              'Operator updated runtime settings via /api/admin/settings.',
               [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
               context,
             );
-            sendJson(res, 400, {
-              error: safeMessage,
-              ...result,
-              message: safeMessage,
+            sendJson(res, 200, result);
+          }).catch((error: unknown) => {
+            appendSettingsMutationAudit(
+              'denied',
+              'Operator settings update failed with a server error.',
+              [
+                changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null,
+                `error=${toSanitizedMessage(error, 'server error')}`,
+              ],
+              context,
+            );
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to update runtime settings'),
             });
-            return;
-          }
-          appendSettingsMutationAudit(
-            'allowed',
-            'Operator updated runtime settings via /api/admin/settings.',
-            [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
-            context,
-          );
-          sendJson(res, 200, result);
+          });
         });
       },
     },
@@ -193,25 +218,36 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          const result = saveSubConfigJson(params.key, configJson, context);
-          if (!result.ok) {
+          void saveSubConfigJson(params.key, configJson, context).then((result) => {
+            if (!result.ok) {
+              appendSettingsMutationAudit(
+                'denied',
+                `Operator ${params.key} owner-file update failed.`,
+                [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+                context,
+              );
+              sendJson(res, 400, { error: result.message });
+              return;
+            }
             appendSettingsMutationAudit(
-              'denied',
-              `Operator ${params.key} owner-file update failed.`,
-              [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+              'allowed',
+              `Operator updated ${params.key} owner file via /api/admin/settings/${params.key}.`,
+              [],
               context,
             );
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
-          appendSettingsMutationAudit(
-            'allowed',
-            `Operator updated ${params.key} owner file via /api/admin/settings/${params.key}.`,
-            [],
-            context,
-          );
-          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end(result.message);
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(result.message);
+          }).catch((error: unknown) => {
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator ${params.key} owner-file update failed with a server error.`,
+              [`error=${toSanitizedMessage(error, 'server error')}`],
+              context,
+            );
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, `Failed to update ${params.key} owner file`),
+            });
+          });
         });
       },
     },
@@ -240,25 +276,36 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          const result = saveSubConfigJson(params.key, configJson, context);
-          if (!result.ok) {
+          void saveSubConfigJson(params.key, configJson, context).then((result) => {
+            if (!result.ok) {
+              appendSettingsMutationAudit(
+                'denied',
+                `Operator ${params.key} owner-file update failed.`,
+                [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+                context,
+              );
+              sendJson(res, 400, { error: result.message });
+              return;
+            }
             appendSettingsMutationAudit(
-              'denied',
-              `Operator ${params.key} owner-file update failed.`,
-              [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+              'allowed',
+              `Operator updated ${params.key} owner file via /api/settings/${params.key}.`,
+              [],
               context,
             );
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
-          appendSettingsMutationAudit(
-            'allowed',
-            `Operator updated ${params.key} owner file via /api/settings/${params.key}.`,
-            [],
-            context,
-          );
-          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end(result.message);
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(result.message);
+          }).catch((error: unknown) => {
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator ${params.key} owner-file update failed with a server error.`,
+              [`error=${toSanitizedMessage(error, 'server error')}`],
+              context,
+            );
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, `Failed to update ${params.key} owner file`),
+            });
+          });
         });
       },
     },

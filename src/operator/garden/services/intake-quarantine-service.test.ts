@@ -126,7 +126,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     },
     settingsService: {
       getIntakeSourceLists: () => lists,
-      mutateIntakeSourceList: vi.fn((input) => {
+      mutateIntakeSourceList: vi.fn(async (input) => {
         mutations.push({ action: input.action, list: input.list, pattern: input.pattern });
         lists = {
           ...lists,
@@ -199,7 +199,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('signals queue consumers only after a decision is successfully applied', () => {
+  it('signals queue consumers only after a decision is successfully applied', async () => {
     const onQueueChanged = vi.fn();
     const signalingService = buildService({ onQueueChanged });
     const entry = holdItem();
@@ -207,12 +207,12 @@ describe('admin intake quarantine service (htm9.11)', () => {
     expect(begun.ok).toBe(true);
     if (!begun.ok) throw new Error('expected confirmation token');
 
-    expect(signalingService.resolveDecision({
+    expect((await signalingService.resolveDecision({
       id: entry.id,
       action: 'discard',
       confirmToken: begun.confirmToken,
       reason: 'hostile content',
-    }).ok).toBe(true);
+    })).ok).toBe(true);
     expect(onQueueChanged).toHaveBeenCalledTimes(1);
   });
 
@@ -290,9 +290,9 @@ describe('admin intake quarantine service (htm9.11)', () => {
   });
 
   describe('server-side double-confirm', () => {
-    it('release requires a confirm token from a prior beginDecision (two POSTs)', () => {
+    it('release requires a confirm token from a prior beginDecision (two POSTs)', async () => {
       const envelope = holdItem();
-      const denied = service.resolveDecision({
+      const denied = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         confirmToken: 'forged-token',
@@ -306,7 +306,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(begin.confirmToken).toMatch(/^[0-9a-f]{64}$/);
       expect(begin.summary).toContain('RAW');
 
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         confirmToken: begin.confirmToken,
@@ -317,13 +317,13 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(store.getById(envelope.id)?.envelope.state).toBe('human_released');
     });
 
-    it('tokens are single-use, even when resolution fails', () => {
+    it('tokens are single-use, even when resolution fails', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
       if (!begin.ok) throw new Error('begin failed');
 
       // Wrong action consumes the token...
-      const wrongAction = service.resolveDecision({
+      const wrongAction = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         confirmToken: begin.confirmToken,
@@ -332,7 +332,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(wrongAction).toMatchObject({ ok: false, status: 403 });
 
       // ...so the original decision no longer goes through either.
-      const replay = service.resolveDecision({
+      const replay = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         confirmToken: begin.confirmToken,
@@ -342,7 +342,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(store.getById(envelope.id)?.status).toBe('held');
     });
 
-    it('binds a token to the exact fleet principal and authority versions', () => {
+    it('binds a token to the exact fleet principal and authority versions', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision(
         { id: envelope.id, action: 'discard' },
@@ -350,7 +350,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       );
       if (!begin.ok) throw new Error('begin failed');
 
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         confirmToken: begin.confirmToken,
@@ -362,14 +362,14 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(store.getById(envelope.id)?.status).toBe('held');
     });
 
-    it('tokens expire after the short TTL', () => {
+    it('tokens expire after the short TTL', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
       if (!begin.ok) throw new Error('begin failed');
       expect(begin.expiresAtMs).toBe(NOW + 2 * 60_000);
 
       clock = NOW + 2 * 60_000 + 1;
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         confirmToken: begin.confirmToken,
@@ -379,7 +379,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect((resolved as { message: string }).message).toContain('expired');
     });
 
-    it('any source-list change between confirm and decide invalidates the token', () => {
+    it('any source-list change between confirm and decide invalidates the token', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
       if (!begin.ok) throw new Error('begin failed');
@@ -390,7 +390,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
         deniedSites: [{ pattern: 'unrelated.example', addedBy: 'operator', addedAt: clock }],
       };
 
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         confirmToken: begin.confirmToken,
@@ -401,11 +401,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(store.getById(envelope.id)?.status).toBe('held');
     });
 
-    it('token is bound to the flywheel option too', () => {
+    it('token is bound to the flywheel option too', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         sourceList: 'always_deny',
@@ -416,11 +416,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(mutations).toHaveLength(0);
     });
 
-    it('a decision on an already-decided item is refused at both steps', () => {
+    it('a decision on an already-decided item is refused at both steps', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
       if (!begin.ok) throw new Error('begin failed');
-      service.resolveDecision({
+      await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         confirmToken: begin.confirmToken,
@@ -440,11 +440,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect((begin as { message: string }).message).toContain('release-sanitized is unavailable');
     });
 
-    it('releases the safe representation when one exists', () => {
+    it('releases the safe representation when one exists', async () => {
       const envelope = holdItem({ safeRepresentationText: 'Summary: a neutral description.' });
       const begin = service.beginDecision({ id: envelope.id, action: 'release_sanitized' });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'release_sanitized',
         confirmToken: begin.confirmToken,
@@ -456,7 +456,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
   });
 
   describe('honest re-delivery of released content (jvbt)', () => {
-    const releaseRaw = (envelope: IntakeEnvelope) => {
+    const releaseRaw = async (envelope: IntakeEnvelope) => {
       const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
       if (!begin.ok) throw new Error('begin failed');
       return service.resolveDecision({
@@ -467,9 +467,9 @@ describe('admin intake quarantine service (htm9.11)', () => {
       });
     };
 
-    it('re-delivers the raw content with the surviving envelope provenance', () => {
+    it('re-delivers the raw content with the surviving envelope provenance', async () => {
       const envelope = holdItem();
-      const resolved = releaseRaw(envelope);
+      const resolved = await releaseRaw(envelope);
       expect(resolved.ok).toBe(true);
       expect(redeliveries).toHaveLength(1);
       const delivered = redeliveries[0];
@@ -486,11 +486,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
       }
     });
 
-    it('re-delivers the safe representation when that action is chosen', () => {
+    it('re-delivers the safe representation when that action is chosen', async () => {
       const envelope = holdItem({ safeRepresentationText: 'Summary: a neutral description.' });
       const begin = service.beginDecision({ id: envelope.id, action: 'release_sanitized' });
       if (!begin.ok) throw new Error('begin failed');
-      service.resolveDecision({
+      await service.resolveDecision({
         id: envelope.id,
         action: 'release_sanitized',
         confirmToken: begin.confirmToken,
@@ -502,11 +502,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(redeliveries[0].envelope.state).toBe('human_released_sanitized');
     });
 
-    it('never re-delivers a discarded item', () => {
+    it('never re-delivers a discarded item', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
       if (!begin.ok) throw new Error('begin failed');
-      service.resolveDecision({
+      await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         confirmToken: begin.confirmToken,
@@ -515,10 +515,10 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(redeliveries).toHaveLength(0);
     });
 
-    it('records an undeliverable release without reversing it or throwing', () => {
+    it('records an undeliverable release without reversing it or throwing', async () => {
       redeliverResult = () => ({ delivered: false, reason: 'no source channel was recorded' });
       const envelope = holdItem();
-      const resolved = releaseRaw(envelope);
+      const resolved = await releaseRaw(envelope);
       // The release still applied; only the delivery is reported as not landing.
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.status).toBe('released_raw');
@@ -527,12 +527,12 @@ describe('admin intake quarantine service (htm9.11)', () => {
       }
     });
 
-    it('does not let a throwing delivery port reverse the applied release', () => {
+    it('does not let a throwing delivery port reverse the applied release', async () => {
       redeliverResult = () => {
         throw new Error('session store unavailable');
       };
       const envelope = holdItem();
-      const resolved = releaseRaw(envelope);
+      const resolved = await releaseRaw(envelope);
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.envelope.state).toBe('human_released');
       if (resolved.ok) {
@@ -542,7 +542,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
   });
 
   describe('the flywheel (per-source policy updates)', () => {
-    it('always-deny on a site origin adds the host to deniedSites via the settings path', () => {
+    it('always-deny on a site origin adds the host to deniedSites via the settings path', async () => {
       const envelope = holdItem({ originRef: 'https://evil.example/post' });
       const begin = service.beginDecision({
         id: envelope.id,
@@ -552,7 +552,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       if (!begin.ok) throw new Error('begin failed');
       expect(begin.summary).toContain("always-deny site 'evil.example'");
 
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         sourceList: 'always_deny',
@@ -563,7 +563,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(mutations).toEqual([{ action: 'add', list: 'deniedSites', pattern: 'evil.example' }]);
     });
 
-    it('always-allow on a person origin adds the canonical contact id to trustedPeople', () => {
+    it('always-allow on a person origin adds the canonical contact id to trustedPeople', async () => {
       const envelope = holdItem({
         id: 'env-person-000001',
         originRef: 'discord:chan-1:msg-9',
@@ -575,7 +575,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
         sourceList: 'always_allow',
       });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         sourceList: 'always_allow',
@@ -586,7 +586,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(mutations).toEqual([{ action: 'add', list: 'trustedPeople', pattern: 'contact:alice' }]);
     });
 
-    it('is idempotent when the pattern is already listed', () => {
+    it('is idempotent when the pattern is already listed', async () => {
       lists = {
         ...lists,
         deniedSites: [{ pattern: 'evil.example', addedBy: 'operator', addedAt: NOW }],
@@ -598,7 +598,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
         sourceList: 'always_deny',
       });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         sourceList: 'always_deny',
@@ -621,12 +621,12 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect((begin as { message: string }).message).toContain('no listable source');
     });
 
-    it('aborts the decision (item stays held) when the source-list write fails', () => {
+    it('aborts the decision (item stays held) when the source-list write fails', async () => {
       service = createAdminIntakeQuarantineService({
         store,
         settingsService: {
           getIntakeSourceLists: () => lists,
-          mutateIntakeSourceList: () => ({ ok: false, message: 'contradiction with trustedSites' }),
+          mutateIntakeSourceList: async () => ({ ok: false, message: 'contradiction with trustedSites' }),
         },
         cogSecEvents: () => {
           throw new Error('must not reach the cogsec ledger');
@@ -640,7 +640,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
         sourceList: 'always_deny',
       });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'discard',
         sourceList: 'always_deny',
@@ -654,11 +654,11 @@ describe('admin intake quarantine service (htm9.11)', () => {
   });
 
   describe('cogsec ledger', () => {
-    it('writes an applying → applied intake_firewall event around every decision', () => {
+    it('writes an applying → applied intake_firewall event around every decision', async () => {
       const envelope = holdItem();
       const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
       if (!begin.ok) throw new Error('begin failed');
-      const resolved = service.resolveDecision({
+      const resolved = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',
         confirmToken: begin.confirmToken,

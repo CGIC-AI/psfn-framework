@@ -199,14 +199,14 @@ export function setPromotedExtendedToolNames(
   return normalized;
 }
 
-export function persistPromotedExtendedToolNames(
+export async function persistPromotedExtendedToolNames(
   config: Pick<SubstrateConfig, 'runtimeHooks'>,
   next: readonly string[],
-): string | null {
+): Promise<string | null> {
   const persist = config.runtimeHooks?.persistPromotedExtendedTools;
   if (!persist) return null;
   try {
-    persist([...next]);
+    await persist([...next]);
     return null;
   } catch (error) {
     return toErrorMessage(error);
@@ -506,16 +506,16 @@ export function getPromotedExtendedToolsLimit(): number {
 interface PromotedToolMutationRuntime {
   getPromotedExtendedToolNames: () => string[];
   setPromotedExtendedToolNames: (next: readonly string[]) => string[];
-  persistPromotedExtendedToolNames: (next: readonly string[]) => string | null;
+  persistPromotedExtendedToolNames: (next: readonly string[]) => Promise<string | null>;
   getExtendedToolByName: (toolName: string) => AgentTool<any> | null;
   resolveCapabilityAccess: () => CapabilityAccess;
   applyActiveToolsToAgent: () => void;
 }
 
-export function addPromotedExtendedTool(
+export async function addPromotedExtendedTool(
   toolName: string,
   runtime: PromotedToolMutationRuntime,
-): PromotedToolMutationResult {
+): Promise<PromotedToolMutationResult> {
   const normalizedName = toolName.trim();
   if (!normalizedName) {
     return {
@@ -573,7 +573,7 @@ export function addPromotedExtendedTool(
   }
 
   const next = [...current, normalizedName];
-  const persistError = runtime.persistPromotedExtendedToolNames(next);
+  const persistError = await runtime.persistPromotedExtendedToolNames(next);
   if (persistError) {
     return {
       ok: false,
@@ -594,10 +594,10 @@ export function addPromotedExtendedTool(
   };
 }
 
-export function removePromotedExtendedTool(
+export async function removePromotedExtendedTool(
   toolName: string,
   runtime: PromotedToolMutationRuntime,
-): PromotedToolMutationResult {
+): Promise<PromotedToolMutationResult> {
   const normalizedName = toolName.trim();
   if (!normalizedName) {
     return {
@@ -621,7 +621,7 @@ export function removePromotedExtendedTool(
   }
 
   const next = current.filter(name => name !== normalizedName);
-  const persistError = runtime.persistPromotedExtendedToolNames(next);
+  const persistError = await runtime.persistPromotedExtendedToolNames(next);
   if (persistError) {
     return {
       ok: false,
@@ -642,11 +642,11 @@ export function removePromotedExtendedTool(
   };
 }
 
-export function swapPromotedExtendedTools(
+export async function swapPromotedExtendedTools(
   fromSlot: number,
   toSlot: number,
   runtime: PromotedToolMutationRuntime,
-): PromotedToolMutationResult {
+): Promise<PromotedToolMutationResult> {
   const current = runtime.getPromotedExtendedToolNames();
   if (
     !Number.isInteger(fromSlot)
@@ -691,7 +691,7 @@ export function swapPromotedExtendedTools(
   next[fromIndex] = toTool;
   next[toIndex] = fromTool;
 
-  const persistError = runtime.persistPromotedExtendedToolNames(next);
+  const persistError = await runtime.persistPromotedExtendedToolNames(next);
   if (persistError) {
     return {
       ok: false,

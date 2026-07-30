@@ -639,11 +639,11 @@ function makeSettingsService(): AdminSettingsService {
   return {
     getSettingsData: async () => settingsData,
     getSettingsContractData: () => buildSettingsContractData(),
-    updateSettings: () => ({ ok: true, message: 'Settings updated' }),
+    updateSettings: async () => ({ ok: true, message: 'Settings updated' }),
     getSubConfigJson: key => (key === 'scheduler'
       ? JSON.stringify(settingsData.editors.scheduler, null, 2)
       : null),
-    saveSubConfigJson: () => ({ ok: true, message: 'config saved' }),
+    saveSubConfigJson: async () => ({ ok: true, message: 'config saved' }),
   };
 }
 

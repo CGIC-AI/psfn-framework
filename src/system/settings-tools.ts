@@ -42,9 +42,9 @@ function promotedMutationResponse(
 export interface PromotedExtendedToolsManager {
   getPromotedExtendedToolsLimit(): number;
   getPromotedExtendedTools(): readonly string[];
-  addPromotedExtendedTool(toolName: string): PromotedToolMutationResult;
-  removePromotedExtendedTool(toolName: string): PromotedToolMutationResult;
-  swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult;
+  addPromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult>;
+  removePromotedExtendedTool(toolName: string): Promise<PromotedToolMutationResult>;
+  swapPromotedExtendedTools(fromSlot: number, toSlot: number): Promise<PromotedToolMutationResult>;
 }
 
 export function executeSystemReadAction(
@@ -159,7 +159,7 @@ export function createPromotedToolsAddTool(
       return promotedMutationResponse(
         'add',
         manager,
-        manager.addPromotedExtendedTool(params.tool),
+        await manager.addPromotedExtendedTool(params.tool),
       );
     },
   };
@@ -182,7 +182,7 @@ export function createPromotedToolsRemoveTool(
       return promotedMutationResponse(
         'remove',
         manager,
-        manager.removePromotedExtendedTool(params.tool),
+        await manager.removePromotedExtendedTool(params.tool),
       );
     },
   };
@@ -206,7 +206,7 @@ export function createPromotedToolsSwapTool(
       return promotedMutationResponse(
         'swap',
         manager,
-        manager.swapPromotedExtendedTools(params.fromSlot, params.toSlot),
+        await manager.swapPromotedExtendedTools(params.fromSlot, params.toSlot),
       );
     },
   };

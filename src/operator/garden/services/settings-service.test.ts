@@ -20,6 +20,7 @@ import {
   type CapabilityTierChangeHandler,
 } from './settings-service.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
+import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 
 let tempDir: string | null = null;
 
@@ -99,6 +100,7 @@ function buildService(
   config: SubstrateConfig,
   getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>,
   onCapabilityTierChanged?: CapabilityTierChangeHandler,
+  systemDataWriter?: GatewaySystemDataWriterPort,
 ): AdminSettingsDataService {
   return new AdminSettingsDataService({
     config,
@@ -109,6 +111,7 @@ function buildService(
     effectiveSchedulerConfig: loadSchedulerConfig(config.dataDir),
     ...(getCredentialPresence ? { getCredentialPresence } : {}),
     ...(onCapabilityTierChanged ? { onCapabilityTierChanged } : {}),
+    ...(systemDataWriter ? { systemDataWriter } : {}),
   });
 }
 
@@ -121,7 +124,7 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
-  it('exposes skill_write through the typed and raw Garden intake-policy surfaces', () => {
+  it('exposes skill_write through the typed and raw Garden intake-policy surfaces', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));
 
@@ -143,7 +146,7 @@ describe('AdminSettingsDataService', () => {
       sinkGates: { sinks: Record<string, unknown> };
     };
     delete missingSkillWrite.sinkGates.sinks.skill_write;
-    expect(service.saveSubConfigJson(
+    expect(await service.saveSubConfigJson(
       'intake-policy',
       JSON.stringify(missingSkillWrite),
     )).toMatchObject({
@@ -185,7 +188,7 @@ describe('AdminSettingsDataService', () => {
       restartRequired: false,
     });
     expect(service.getSubConfigJson('fleet-auth')).toBeNull();
-    expect(service.saveSubConfigJson('fleet-auth', '{}')).toEqual({
+    expect(await service.saveSubConfigJson('fleet-auth', '{}')).toEqual({
       ok: false,
       message: 'fleet-auth.json is read-only in Garden; edit the canonical system owner file outside Garden',
     });
@@ -316,7 +319,7 @@ describe('AdminSettingsDataService', () => {
       },
     } satisfies Record<string, unknown>;
 
-    const result = service.updateSettings(JSON.stringify(payload));
+    const result = await service.updateSettings(JSON.stringify(payload));
 
     expect(result).toEqual({
       ok: true,
@@ -356,11 +359,11 @@ describe('AdminSettingsDataService', () => {
     }));
   });
 
-  it('rejects unsupported image provider and model settings without persisting them', () => {
+  it('rejects unsupported image provider and model settings without persisting them', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       imageProvider: 'unknown-provider',
       imageFalCreateModel: 'not-in-the-catalog',
       imageFalEditModel: 'also-not-in-the-catalog',
@@ -381,11 +384,11 @@ describe('AdminSettingsDataService', () => {
     expect(persisted.imageSelfieEditModel).toBeUndefined();
   });
 
-  it('persists model purpose selections that resolve against the live models.json registry (23pp)', () => {
+  it('persists model purpose selections that resolve against the live models.json registry (23pp)', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       modelPurposeSelection: { chat: 'extraction', vision: 'primary' },
     }));
 
@@ -398,11 +401,11 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('rejects model purpose selections referencing unknown registry slots without persisting them (23pp)', () => {
+  it('rejects model purpose selections referencing unknown registry slots without persisting them (23pp)', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       modelPurposeSelection: { chat: 'not-a-registry-slot' },
     }));
 
@@ -417,11 +420,11 @@ describe('AdminSettingsDataService', () => {
     expect(loadSettings(root).modelPurposeSelection).toBeUndefined();
   });
 
-  it('rejects model purpose selections with unknown purpose keys (23pp)', () => {
+  it('rejects model purpose selections with unknown purpose keys (23pp)', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       modelPurposeSelection: { bigBrain: 'primary' },
     }));
 
@@ -435,7 +438,7 @@ describe('AdminSettingsDataService', () => {
     ]));
   });
 
-  it('writes per-companion image selections to the selected overlay without mutating the fleet-global owner', () => {
+  it('writes per-companion image selections to the selected overlay without mutating the fleet-global owner', async () => {
     const root = makeTempDir();
     const companionA = join(root, 'companions', 'a');
     const companionB = join(root, 'companions', 'b');
@@ -455,12 +458,12 @@ describe('AdminSettingsDataService', () => {
     });
     const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
 
-    expect(service.updateSettings(JSON.stringify({
+    expect((await service.updateSettings(JSON.stringify({
       imageProvider: 'comfyui',
       imageFalCreateModel: 'xai/grok-imagine-image',
       imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
       imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
-    })).ok).toBe(true);
+    }))).ok).toBe(true);
 
     expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
     expect(loadSettings(root)).not.toEqual(expect.objectContaining({
@@ -484,7 +487,7 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('deep-merges and clears companion model selections without mutating siblings or global settings', () => {
+  it('deep-merges and clears companion model selections without mutating siblings or global settings', async () => {
     const root = makeTempDir();
     const companionA = join(root, 'companions', 'a');
     const companionB = join(root, 'companions', 'b');
@@ -516,11 +519,11 @@ describe('AdminSettingsDataService', () => {
     });
     const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
 
-    expect(service.updateSettings(JSON.stringify({
+    expect((await service.updateSettings(JSON.stringify({
       modelPurposeSelection: { chat: 'extraction' },
       moaReferenceModels: ['openrouter:new/reference'],
       moaAggregatorModel: 'openrouter:new/aggregator',
-    })).ok).toBe(true);
+    }))).ok).toBe(true);
 
     expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
     expect(loadCompanionSettingsOverlay(companionA)).toEqual({
@@ -533,11 +536,11 @@ describe('AdminSettingsDataService', () => {
     });
     expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
 
-    expect(service.updateSettings(JSON.stringify({
+    expect((await service.updateSettings(JSON.stringify({
       modelPurposeSelection: null,
       moaReferenceModels: [],
       moaAggregatorModel: null,
-    })).ok).toBe(true);
+    }))).ok).toBe(true);
 
     expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
     expect(loadCompanionSettingsOverlay(companionA)).toEqual({
@@ -613,7 +616,7 @@ describe('AdminSettingsDataService', () => {
       uiThemeId: 'generic-dark',
     };
 
-    const result = service.updateSettings(JSON.stringify(runtimeModelControls));
+    const result = await service.updateSettings(JSON.stringify(runtimeModelControls));
 
     expect(result).toEqual({
       ok: true,
@@ -638,14 +641,14 @@ describe('AdminSettingsDataService', () => {
     expect(persistedSettings).toEqual(expect.objectContaining(runtimeModelControls));
   });
 
-  it('returns field-level errors for malformed and out-of-range model-control payloads and fails closed', () => {
+  it('returns field-level errors for malformed and out-of-range model-control payloads and fails closed', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
 
     const modelsBefore = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     const settingsBefore = loadSettings(root);
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       analysisWorkbenchMaxTokens: 999,
       analysisWorkbenchMaxWallTimeMs: 1000,
       analysisWorkbenchMaxSubQueries: 0,
@@ -702,13 +705,13 @@ describe('AdminSettingsDataService', () => {
     expect(settingsAfter.analysisWorkbenchMaxSubQueries).toBe(settingsBefore.analysisWorkbenchMaxSubQueries);
   });
 
-  it('rejects a partial memory retrieval policy without persisting or applying it', () => {
+  it('rejects a partial memory retrieval policy without persisting or applying it', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
     const settingsBefore = loadSettings(root);
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       memoryRetrievalPolicy: {
         nonTemporalRecencyFloor: 0.4,
       },
@@ -725,12 +728,12 @@ describe('AdminSettingsDataService', () => {
     expect(config.memoryRetrievalPolicy).toBeUndefined();
   });
 
-  it('applies live context controls through the canonical admin settings mutation path', () => {
+  it('applies live context controls through the canonical admin settings mutation path', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       extractionThresholdPct: 34,
       compactionThresholdPct: 76,
     }));
@@ -752,13 +755,13 @@ describe('AdminSettingsDataService', () => {
     expect(persistedSettings.compactionThresholdPct).toBe(76);
   });
 
-  it('rejects removed runtime settings instead of silently persisting dead knobs', () => {
+  it('rejects removed runtime settings instead of silently persisting dead knobs', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
     const settingsBefore = loadSettings(root);
 
-    const result = service.updateSettings(JSON.stringify({
+    const result = await service.updateSettings(JSON.stringify({
       memoryBudgetPct: 24,
       defaultContextWindow: 196_000,
       sessionMessageLimit: 44,
@@ -828,8 +831,8 @@ describe('AdminSettingsDataService', () => {
       customTokens: ['identity.read', 'memory.write', 'git.read'],
     };
 
-    const schedulerResult = service.saveSubConfigJson('scheduler', JSON.stringify(schedulerPayload));
-    const capabilitiesResult = service.saveSubConfigJson('capabilities', JSON.stringify({
+    const schedulerResult = await service.saveSubConfigJson('scheduler', JSON.stringify(schedulerPayload));
+    const capabilitiesResult = await service.saveSubConfigJson('capabilities', JSON.stringify({
       tier: capabilitiesPayload.capabilityTier,
       customTokens: capabilitiesPayload.customTokens,
     }));
@@ -876,13 +879,13 @@ describe('AdminSettingsDataService', () => {
     }));
   });
 
-  it('reports the exact effective grant delta after a capability-tier mutation', () => {
+  it('reports the exact effective grant delta after a capability-tier mutation', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const onCapabilityTierChanged = vi.fn<CapabilityTierChangeHandler>();
     const service = buildService(config, undefined, onCapabilityTierChanged);
 
-    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+    const result = await service.saveSubConfigJson('capabilities', JSON.stringify({
       tier: 'custom',
       customTokens: ['identity.read', 'memory.delete'],
     }));
@@ -915,7 +918,7 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('retains both live-refresh and companion-notice divergence details', () => {
+  it('retains both live-refresh and companion-notice divergence details', async () => {
     const root = makeTempDir();
     const config = buildConfig(root, {
       refreshCapabilities: () => {
@@ -926,7 +929,7 @@ describe('AdminSettingsDataService', () => {
       throw new Error('companion notice failed');
     });
 
-    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+    const result = await service.saveSubConfigJson('capabilities', JSON.stringify({
       tier: 'apprentice',
       customTokens: [],
     }));
@@ -967,7 +970,7 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    expect(service.saveSubConfigJson('scheduler', JSON.stringify(edited))).toMatchObject({
+    expect(await service.saveSubConfigJson('scheduler', JSON.stringify(edited))).toMatchObject({
       ok: true,
     });
     expect(loadSchedulerConfig(root).backgroundWork).toEqual(edited.backgroundWork);
@@ -985,7 +988,7 @@ describe('AdminSettingsDataService', () => {
         },
       },
     };
-    expect(service.saveSubConfigJson('scheduler', JSON.stringify(malformed))).toEqual({
+    expect(await service.saveSubConfigJson('scheduler', JSON.stringify(malformed))).toEqual({
       ok: false,
       message:
         'Invalid scheduler config: backgroundWork.supervisor.retryMaxDelayMs '
@@ -1006,7 +1009,7 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
+    expect(await service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
       ok: true,
       message:
         'scheduler.json saved; restart required before scheduler changes take effect; '
@@ -1029,7 +1032,7 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('round-trips models through the raw editor path via the injected config store port', () => {
+  it('round-trips models through the raw editor path via the injected config store port', async () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();
     const config = buildConfig(root, {
@@ -1053,7 +1056,7 @@ describe('AdminSettingsDataService', () => {
       provider: 'openai',
     };
 
-    const result = service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
+    const result = await service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
 
     expect(result).toEqual({
       ok: true,
@@ -1097,7 +1100,7 @@ describe('AdminSettingsDataService', () => {
       provider: 'openai',
     };
 
-    const result = service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
+    const result = await service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
 
     expect(result.ok).toBe(true);
     expect(result.message).toContain('models.json saved with divergence');
@@ -1132,7 +1135,7 @@ describe('AdminSettingsDataService', () => {
     });
     const service = buildService(config);
 
-    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+    const result = await service.saveSubConfigJson('capabilities', JSON.stringify({
       tier: 'custom',
       customTokens: ['identity.read'],
     }));
@@ -1182,7 +1185,7 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    const result = service.saveSubConfigJson('backup', JSON.stringify(payload));
+    const result = await service.saveSubConfigJson('backup', JSON.stringify(payload));
 
     expect(result).toEqual({
       ok: true,
@@ -1193,6 +1196,86 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.backup).toEqual(payload);
+  });
+
+  it('proxies a backup owner write when the agent filesystem is read-only', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const writableStore = createOwnerFileConfigStore({
+      dataDir: root,
+      defaultContextWindow: config.defaultContextWindow,
+    });
+    const saveBackup = vi.fn(() => {
+      const error = new Error(
+        `EROFS: read-only file system, open '${join(root, 'backup.json.tmp')}'`,
+      ) as NodeJS.ErrnoException;
+      error.code = 'EROFS';
+      throw error;
+    });
+    const readOnlyStore = { ...writableStore, saveBackup };
+    const writeSystemData = vi.fn(async (request) => {
+      if (request.kind !== 'owner_file' || request.ownerFile !== 'backup') {
+        throw new Error('unexpected system-data write');
+      }
+      writableStore.saveBackup(request.payload);
+      return { ok: true as const };
+    });
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: readOnlyStore,
+      effectiveSchedulerConfig: loadSchedulerConfig(config.dataDir),
+      systemDataWriter: { writeSystemData },
+    });
+    const payload = {
+      ...loadBackupConfig(root),
+      maxRotatingBackups: 17,
+    };
+
+    await expect(service.saveSubConfigJson('backup', JSON.stringify(payload))).resolves.toEqual({
+      ok: true,
+      message: 'backup.json saved',
+    });
+    expect(writeSystemData).toHaveBeenCalledWith({
+      kind: 'owner_file',
+      ownerFile: 'backup',
+      payload,
+    });
+    expect(saveBackup).not.toHaveBeenCalled();
+    expect(loadBackupConfig(root).maxRotatingBackups).toBe(17);
+  });
+
+  it('replaces raw EROFS details with an actionable system-write error', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const configStore = createOwnerFileConfigStore({
+      dataDir: root,
+      defaultContextWindow: config.defaultContextWindow,
+    });
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: {
+        ...configStore,
+        saveBackup: () => {
+          const error = new Error('EROFS: read-only file system') as NodeJS.ErrnoException;
+          error.code = 'EROFS';
+          throw error;
+        },
+      },
+      effectiveSchedulerConfig: loadSchedulerConfig(config.dataDir),
+    });
+
+    const result = await service.saveSubConfigJson(
+      'backup',
+      JSON.stringify(loadBackupConfig(root)),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message:
+        'This deployment does not permit direct system-scope owner-file writes. '
+        + 'The authenticated gateway system-data writer is unavailable.',
+    });
+    expect(result.message).not.toContain('EROFS');
   });
 
   it('returns raw channels owner-file json with credential refs intact', () => {
@@ -1258,7 +1341,7 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    const result = service.saveSubConfigJson('channels', JSON.stringify(payload));
+    const result = await service.saveSubConfigJson('channels', JSON.stringify(payload));
 
     expect(result).toEqual({
       ok: true,
@@ -1327,7 +1410,7 @@ describe('AdminSettingsDataService', () => {
       fatigue: makeTestFatiguePolicyConfig(),
     };
 
-    const result = service.saveSubConfigJson('charge-policy', JSON.stringify(payload));
+    const result = await service.saveSubConfigJson('charge-policy', JSON.stringify(payload));
 
     expect(result).toEqual({
       ok: true,
@@ -1355,7 +1438,7 @@ describe('AdminSettingsDataService', () => {
       ...seed,
       runChargeQuotaByLane: { ...seed.runChargeQuotaByLane, interactive: 100 },
     };
-    const saveResult = service.saveSubConfigJson('charge-policy', JSON.stringify(editedOnDisk));
+    const saveResult = await service.saveSubConfigJson('charge-policy', JSON.stringify(editedOnDisk));
     expect(saveResult.ok).toBe(true);
 
     // The running process still carries the stale quota it loaded at startup.
@@ -1407,7 +1490,7 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
+    expect(await service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
       ok: true,
       message:
         'scheduler.json saved; restart required before scheduler changes take effect; '
@@ -1465,7 +1548,7 @@ describe('AdminSettingsDataService', () => {
       ],
     };
 
-    const result = service.saveSubConfigJson('providers', JSON.stringify(payload));
+    const result = await service.saveSubConfigJson('providers', JSON.stringify(payload));
 
     expect(result).toEqual({
       ok: true,

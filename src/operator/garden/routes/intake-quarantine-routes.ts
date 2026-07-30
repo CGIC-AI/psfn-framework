@@ -274,16 +274,15 @@ export function buildAdminIntakeQuarantineRoutes(options: {
             sendJson(res, 400, { error: input.error });
             return;
           }
-          try {
-            const result = quarantineService.resolveDecision({
-              id,
-              action: input.value.action,
-              ...(input.value.sourceList !== undefined
-                ? { sourceList: input.value.sourceList }
-                : {}),
-              confirmToken: input.value.confirmToken ?? '',
-              reason: input.value.reason ?? '',
-            }, context);
+          void quarantineService.resolveDecision({
+            id,
+            action: input.value.action,
+            ...(input.value.sourceList !== undefined
+              ? { sourceList: input.value.sourceList }
+              : {}),
+            confirmToken: input.value.confirmToken ?? '',
+            reason: input.value.reason ?? '',
+          }, context).then((result) => {
             if (!result.ok) {
               appendQuarantineAudit(
                 'denied',
@@ -310,7 +309,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
               ],
             );
             sendJson(res, 200, { ok: true, item: result.item, message: result.message });
-          } catch (error) {
+          }).catch((error: unknown) => {
             appendQuarantineAudit(
               'denied',
               'Operator quarantine decision failed with a server error.',
@@ -319,7 +318,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
             sendJson(res, 500, {
               error: toSanitizedMessage(error, 'Failed to apply quarantine decision'),
             });
-          }
+          });
         });
       },
     },

@@ -1682,7 +1682,7 @@ export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
   invalidatePromptPrefixCache?: (reason?: string) => void;
-  persistPromotedExtendedTools?: (toolNames: readonly string[]) => void;
+  persistPromotedExtendedTools?: (toolNames: readonly string[]) => void | Promise<void>;
 }
 
 export interface Lifecycle {

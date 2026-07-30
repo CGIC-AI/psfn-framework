@@ -19,6 +19,11 @@ import type {
   GatewayRpcEndpoint,
   GatewayRpcSerializedTransportStats,
 } from './transport.js';
+import type {
+  GatewaySystemDataWriterPort,
+  SystemDataWriteRequest,
+  SystemDataWriteResult,
+} from './system-data-writer.js';
 import {
   createSocketClient,
   createWebSocketRpcClient,
@@ -463,6 +468,7 @@ export class GatewayClient implements
   LLMProviderPort,
   EmbeddingProviderPort,
   GatewayModelDiscoveryTransport,
+  GatewaySystemDataWriterPort,
   ShardWorkloadLifecyclePort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
@@ -1624,6 +1630,16 @@ export class GatewayClient implements
 
   async runtimeHealth(): Promise<RuntimeHealthResult> {
     return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
+  }
+
+  async writeSystemData(request: SystemDataWriteRequest): Promise<SystemDataWriteResult> {
+    const result = await this.rpcInstance.request('system.data.write', request) as unknown;
+    if (!isRecord(result)
+      || Object.keys(result).length !== 1
+      || result.ok !== true) {
+      throw new Error('Gateway system-data writer returned an invalid response');
+    }
+    return { ok: true };
   }
 
   async kubeSelfManagement(

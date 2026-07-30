@@ -555,13 +555,13 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'candidate-captured-toolset-escape',
         { action: 'pin', tool: 'external_web' },
       )).resolves.toMatchObject({ details: { isError: true } });
-      expect(facade.addPromotedExtendedTool('email_send')).toMatchObject({
+      await expect(facade.addPromotedExtendedTool('email_send')).resolves.toMatchObject({
         ok: false,
         changed: false,
         errorCode: 'capability_denied',
       });
       expect(facade.setPromotedExtendedTools(['email_send'])).toEqual([]);
-      expect(facade.persistPromotedExtendedTools(['email_send']))
+      expect(await facade.persistPromotedExtendedTools(['email_send']))
         .toContain('cannot mutate or widen');
 
       for (const [name, params] of [

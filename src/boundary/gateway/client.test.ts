@@ -112,6 +112,47 @@ function getRpcResponse(sent: unknown[], id: number): any {
   return sent.find((msg: any) => msg.id === id && ('result' in msg || 'error' in msg));
 }
 
+describe('GatewayClient system-data writer', () => {
+  it('uses the single system.data.write RPC and validates the acknowledgement', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const writing = client.writeSystemData({
+      kind: 'owner_file',
+      ownerFile: 'backup',
+      payload: { intervalHours: 24 },
+    });
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'system.data.write',
+      params: {
+        kind: 'owner_file',
+        ownerFile: 'backup',
+        payload: { intervalHours: 24 },
+      },
+    });
+    expect(request.params).not.toHaveProperty('companionId');
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { ok: true } });
+    await expect(writing).resolves.toEqual({ ok: true });
+
+    const invalidWriting = client.writeSystemData({
+      kind: 'owner_file',
+      ownerFile: 'backup',
+      payload: { intervalHours: 48 },
+    });
+    const invalidRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: invalidRequest.id,
+      result: { ok: true, ignored: true },
+    });
+    await expect(invalidWriting).rejects.toThrow(/invalid response/);
+  });
+});
+
 describe('GatewayClient shard workload lifecycle', () => {
   it('registers and ends one opaque workload lease without sending parent authority', async () => {
     const conn = createMockConnection();

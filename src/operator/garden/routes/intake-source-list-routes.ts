@@ -115,34 +115,51 @@ export function buildAdminIntakeSourceListRoutes(options: {
             return;
           }
 
-          const result = settingsService.mutateIntakeSourceList(input.value);
-          if (!result.ok) {
-            appendSourceListMutationAudit(
-              'denied',
-              'Operator intake source-list mutation failed validation.',
-              [
-                `action=${input.value.action}`,
-                `list=${input.value.list}`,
-                `pattern=${input.value.pattern}`,
-                `message=${toSanitizedMessage(result.message, 'source-list mutation failed')}`,
-              ],
-            );
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
+          void settingsService.mutateIntakeSourceList(input.value)
+            .then((result) => {
+              if (!result.ok) {
+                appendSourceListMutationAudit(
+                  'denied',
+                  'Operator intake source-list mutation failed validation.',
+                  [
+                    `action=${input.value.action}`,
+                    `list=${input.value.list}`,
+                    `pattern=${input.value.pattern}`,
+                    `message=${toSanitizedMessage(result.message, 'source-list mutation failed')}`,
+                  ],
+                );
+                sendJson(res, 400, { error: result.message });
+                return;
+              }
 
-          appendSourceListMutationAudit(
-            'allowed',
-            input.value.action === 'add'
-              ? 'Operator added an intake source-list entry via /api/admin/intake/source-lists.'
-              : 'Operator removed an intake source-list entry via /api/admin/intake/source-lists.',
-            [`list=${input.value.list}`, `pattern=${input.value.pattern}`],
-          );
-          sendJson(res, 200, {
-            ok: true,
-            message: result.message,
-            lists: settingsService.getIntakeSourceLists(),
-          });
+              appendSourceListMutationAudit(
+                'allowed',
+                input.value.action === 'add'
+                  ? 'Operator added an intake source-list entry via /api/admin/intake/source-lists.'
+                  : 'Operator removed an intake source-list entry via /api/admin/intake/source-lists.',
+                [`list=${input.value.list}`, `pattern=${input.value.pattern}`],
+              );
+              sendJson(res, 200, {
+                ok: true,
+                message: result.message,
+                lists: settingsService.getIntakeSourceLists(),
+              });
+            })
+            .catch((error: unknown) => {
+              appendSourceListMutationAudit(
+                'denied',
+                'Operator intake source-list mutation failed with a server error.',
+                [
+                  `action=${input.value.action}`,
+                  `list=${input.value.list}`,
+                  `pattern=${input.value.pattern}`,
+                  `error=${toSanitizedMessage(error, 'server error')}`,
+                ],
+              );
+              sendJson(res, 500, {
+                error: toSanitizedMessage(error, 'Failed to mutate the intake source list'),
+              });
+            });
         });
       },
     },

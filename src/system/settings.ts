@@ -26,6 +26,7 @@ export {
   splitSettingsByDomain,
   toRuntimeOwnedSettings,
   normalizeEditableSettings,
+  parseRuntimeSettingsOwnerPayload,
 } from './settings/schema.js';
 
 export {

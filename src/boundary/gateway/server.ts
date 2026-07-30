@@ -139,6 +139,7 @@ import {
   inboundChannelMessageId,
   type InboundChannelReplayDrop,
 } from './inbound-channel-replay.js';
+import type { GatewaySystemDataWriterPort } from './system-data-writer.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -289,6 +290,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   kubeSelfManagement?: KubeSelfManagementController;
   /** Gateway-owned exact contact authority lifecycle service. */
   contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
+  /** Gateway-owned single writer for system owner files and system state. */
+  systemDataWriter?: GatewaySystemDataWriterPort;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   // an52.3: keyed on the authenticated companion so a fleet resolves each
@@ -742,6 +745,9 @@ export class GatewayServer {
         : {}),
       ...(this.options.contactLifecycleAuthority
         ? { contactLifecycleAuthority: this.options.contactLifecycleAuthority }
+        : {}),
+      ...(this.options.systemDataWriter
+        ? { systemDataWriter: this.options.systemDataWriter }
         : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       ...(this.options.welfareGrantVerifier

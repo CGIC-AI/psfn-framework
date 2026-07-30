@@ -949,7 +949,7 @@ describe('installPromotedToolsPersistenceHook', () => {
     }
   });
 
-  it('persists promoted tool names via runtimeHooks', () => {
+  it('persists promoted tool names via runtimeHooks', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-promoted-tools-'));
     tempDirs.push(dataDir);
     saveSettings(dataDir, {});
@@ -957,7 +957,7 @@ describe('installPromotedToolsPersistenceHook', () => {
     const config = { dataDir } as any;
     installPromotedToolsPersistenceHook(config);
 
-    config.runtimeHooks.persistPromotedExtendedTools(['repo_status', 'repo_diff']);
+    await config.runtimeHooks.persistPromotedExtendedTools(['repo_status', 'repo_diff']);
 
     const saved = loadSettings(dataDir);
     expect(saved.promotedExtendedTools).toEqual(['repo_status', 'repo_diff']);
@@ -981,7 +981,7 @@ describe('installPromotedToolsPersistenceHook', () => {
     expect(typeof config.runtimeHooks.persistPromotedExtendedTools).toBe('function');
   });
 
-  it('can persist promoted tool names through an injected config store port', () => {
+  it('can persist promoted tool names through an injected config store port', async () => {
     const savedSettings: Record<string, unknown> = {
       promotedExtendedTools: [],
     };
@@ -999,9 +999,57 @@ describe('installPromotedToolsPersistenceHook', () => {
       configStore,
     });
 
-    config.runtimeHooks.persistPromotedExtendedTools(['memory_recall', 'analysis_workbench']);
+    await config.runtimeHooks.persistPromotedExtendedTools(['memory_recall', 'analysis_workbench']);
 
     expect(savedSettings.promotedExtendedTools).toEqual(['memory_recall', 'analysis_workbench']);
+  });
+
+  it('routes tool-pin persistence through the gateway when system-data is read-only', async () => {
+    const saveRuntimeSettings = vi.fn(() => {
+      const error = new Error('EROFS: read-only file system') as NodeJS.ErrnoException;
+      error.code = 'EROFS';
+      throw error;
+    });
+    const configStore = {
+      loadRuntimeSettings: () => ({ promotedExtendedTools: [] }),
+      saveRuntimeSettings,
+    } as unknown as ConfigStorePort;
+    const writeSystemData = vi.fn(async () => ({ ok: true as const }));
+    const config = { dataDir: '/runtime/system-data' } as any;
+
+    installPromotedToolsPersistenceHook(config, {
+      configStore,
+      systemDataWriter: { writeSystemData },
+    });
+    await config.runtimeHooks.persistPromotedExtendedTools(['memory_recall']);
+
+    expect(saveRuntimeSettings).not.toHaveBeenCalled();
+    expect(writeSystemData).toHaveBeenCalledWith({
+      kind: 'owner_file',
+      ownerFile: 'settings',
+      payload: {
+        promotedExtendedTools: ['memory_recall'],
+      },
+    });
+  });
+
+  it('surfaces an actionable error when gateway tool-pin persistence is unavailable', async () => {
+    const configStore = {
+      loadRuntimeSettings: () => ({ promotedExtendedTools: [] }),
+      saveRuntimeSettings: vi.fn(),
+    } as unknown as ConfigStorePort;
+    const config = { dataDir: '/runtime/system-data' } as any;
+    installPromotedToolsPersistenceHook(config, {
+      configStore,
+      systemDataWriter: {
+        writeSystemData: vi.fn(async () => {
+          throw new Error('RPC connection closed');
+        }),
+      },
+    });
+
+    await expect(config.runtimeHooks.persistPromotedExtendedTools(['memory_recall']))
+      .rejects.toThrow(/authenticated gateway system-data writer.*RPC connection closed/);
   });
 });
 

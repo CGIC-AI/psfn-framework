@@ -24,6 +24,11 @@ interface DeploymentContainer {
     exec?: { command?: string[] };
     tcpSocket?: unknown;
   };
+  volumeMounts?: Array<{
+    mountPath?: string;
+    name?: string;
+    readOnly?: boolean;
+  }>;
 }
 
 interface DeploymentResource {
@@ -84,6 +89,22 @@ function agentContainer(): DeploymentContainer {
   return container;
 }
 
+function componentContainer(component: 'agent' | 'garden' | 'gateway'): DeploymentContainer {
+  const deploymentName = component === 'agent'
+    ? 'psfn-agent-11111111-1111-4111-8111-111111111111'
+    : `psfn-${component}`;
+  const deployment = renderedResources.find((resource): resource is DeploymentResource => (
+    isRecord(resource)
+    && resource.kind === 'Deployment'
+    && isRecord(resource.metadata)
+    && resource.metadata.name === deploymentName
+  ));
+  const container = deployment?.spec?.template?.spec?.containers
+    ?.find(candidate => candidate.name === component);
+  if (!container) throw new Error(`Missing rendered ${component} container`);
+  return container;
+}
+
 function envByName(component: 'agent' | 'garden' | 'gateway'): Map<string, SecretKeyRefEnv> {
   const entries = containerEnv(component);
   const result = new Map(entries.map(entry => [entry.name, entry]));
@@ -92,6 +113,55 @@ function envByName(component: 'agent' | 'garden' | 'gateway'): Map<string, Secre
 }
 
 describe('Helm runtime secret wiring', () => {
+  it('mounts system-data writable only in the gateway', () => {
+    const systemDataMount = (component: 'agent' | 'garden' | 'gateway') =>
+      componentContainer(component).volumeMounts
+        ?.find(mount => mount.name === 'system-data');
+
+    expect(systemDataMount('gateway')).toMatchObject({
+      mountPath: '/runtime/system-data',
+    });
+    expect(systemDataMount('gateway')?.readOnly).not.toBe(true);
+    expect(systemDataMount('agent')).toMatchObject({
+      mountPath: '/runtime/system-data',
+      readOnly: true,
+    });
+    expect(systemDataMount('garden')).toMatchObject({
+      mountPath: '/runtime/system-data',
+      readOnly: true,
+    });
+  });
+
+  it('keeps every templated agent and Garden system-data mount read-only', () => {
+    const mountReadOnlyFlags = (template: string): boolean[] => {
+      const lines = template.split('\n');
+      return lines.flatMap((line, index) => (
+        line.trim() === '- name: system-data'
+        && lines[index + 1]?.trim().startsWith('mountPath:')
+          ? [lines[index + 2]?.trim() === 'readOnly: true']
+          : []
+      ));
+    };
+    const workloadsTemplate = readFileSync(
+      join(process.cwd(), 'deploy', 'helm', 'psfn', 'templates', 'workloads.yaml'),
+      'utf8',
+    );
+    const fleetAgentsTemplate = readFileSync(
+      join(process.cwd(), 'deploy', 'helm', 'psfn', 'templates', 'fleet-agents.yaml'),
+      'utf8',
+    );
+
+    // workloads.yaml contains gateway, single-companion agent, and both Garden
+    // branches in that order. Only the gateway mount may remain writable.
+    expect(mountReadOnlyFlags(workloadsTemplate)).toEqual([
+      false,
+      true,
+      true,
+      true,
+    ]);
+    expect(mountReadOnlyFlags(fleetAgentsTemplate)).toEqual([true]);
+  });
+
   it('keeps the gateway root proof-signing key inside the gateway container', () => {
     expect(envByName('gateway').get('GATEWAY_SESSION_HMAC_KEY')).toEqual({
       name: 'GATEWAY_SESSION_HMAC_KEY',

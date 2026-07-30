@@ -451,6 +451,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const toolConformanceRunner = createToolConformanceRunner({
     getToolCatalog: () => agentLoop.getToolCatalog(),
     systemDataDir: pathSnapshot.systemDataDir,
+    systemDataWriter: gateway,
   });
   agentLoop.registerTool(createSelfStatusTool({
     config,

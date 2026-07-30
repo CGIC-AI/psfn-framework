@@ -143,7 +143,7 @@ export interface AdminIntakeQuarantineService {
   resolveDecision(
     request: AdminIntakeQuarantineDecisionRequest & { confirmToken: string; reason: string },
     context?: GardenRequestContext,
-  ): AdminIntakeQuarantineResolveResult;
+  ): Promise<AdminIntakeQuarantineResolveResult>;
 }
 
 /**
@@ -451,7 +451,7 @@ export function createAdminIntakeQuarantineService(
       };
     },
 
-    resolveDecision(request, context): AdminIntakeQuarantineResolveResult {
+    async resolveDecision(request, context): Promise<AdminIntakeQuarantineResolveResult> {
       const requestActor = context?.kind === 'fleet_principal'
         ? `fleet-principal:${context.actor.principalId}`
         : OPERATOR_ACTOR;
@@ -525,7 +525,7 @@ export function createAdminIntakeQuarantineService(
         if (existing) {
           flywheelMessage = `; sourceLists.${list} already contains '${validated.target.pattern}'`;
         } else {
-          const mutation = deps.settingsService.mutateIntakeSourceList({
+          const mutation = await deps.settingsService.mutateIntakeSourceList({
             action: 'add',
             list,
             pattern: validated.target.pattern,

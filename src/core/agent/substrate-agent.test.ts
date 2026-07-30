@@ -4381,7 +4381,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolNames.indexOf('extended_beta')).toBeLessThan(toolNames.indexOf('extended_alpha'));
   });
 
-  it('supports pin add/remove/swap mutations with bounds and persistence hooks', () => {
+  it('supports pin add/remove/swap mutations with bounds and persistence hooks', async () => {
     const persistPromotedExtendedTools = vi.fn();
     const config = makeConfig({
       runtimeHooks: {
@@ -4400,28 +4400,28 @@ describe('SubstrateAgent.handleMessage', () => {
       agent.registerTool(makeExtendedProbeTool(name), 'extended');
     }
 
-    expect(agent.addPromotedExtendedTool('tool_one').ok).toBe(true);
-    expect(agent.addPromotedExtendedTool('tool_one').changed).toBe(false);
-    expect(agent.addPromotedExtendedTool('tool_two').ok).toBe(true);
-    expect(agent.addPromotedExtendedTool('tool_three').ok).toBe(true);
-    expect(agent.addPromotedExtendedTool('tool_four').ok).toBe(true);
+    expect((await agent.addPromotedExtendedTool('tool_one')).ok).toBe(true);
+    expect((await agent.addPromotedExtendedTool('tool_one')).changed).toBe(false);
+    expect((await agent.addPromotedExtendedTool('tool_two')).ok).toBe(true);
+    expect((await agent.addPromotedExtendedTool('tool_three')).ok).toBe(true);
+    expect((await agent.addPromotedExtendedTool('tool_four')).ok).toBe(true);
 
-    const overLimit = agent.addPromotedExtendedTool('tool_five');
+    const overLimit = await agent.addPromotedExtendedTool('tool_five');
     expect(overLimit.ok).toBe(false);
     expect(overLimit.errorCode).toBe('max_slots');
     expect(agent.getPromotedExtendedTools()).toEqual(['tool_one', 'tool_two', 'tool_three', 'tool_four']);
 
-    const swapped = agent.swapPromotedExtendedTools(1, 2);
+    const swapped = await agent.swapPromotedExtendedTools(1, 2);
     expect(swapped.ok).toBe(true);
     expect(swapped.promotedTools).toEqual(['tool_two', 'tool_one', 'tool_three', 'tool_four']);
 
-    const removed = agent.removePromotedExtendedTool('tool_one');
+    const removed = await agent.removePromotedExtendedTool('tool_one');
     expect(removed.ok).toBe(true);
     expect(removed.promotedTools).toEqual(['tool_two', 'tool_three', 'tool_four']);
     expect(persistPromotedExtendedTools).toHaveBeenCalled();
   });
 
-  it('rejects invalid or capability-denied pins', () => {
+  it('rejects invalid or capability-denied pins', async () => {
     const config = makeConfig({ capabilityTier: 'custom' });
     const agent = new SubstrateAgent(
       new EventBus(),
@@ -4431,7 +4431,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    const invalidName = agent.addPromotedExtendedTool('not_registered');
+    const invalidName = await agent.addPromotedExtendedTool('not_registered');
     expect(invalidName.ok).toBe(false);
     expect(invalidName.errorCode).toBe('tool_not_extended');
 
@@ -4444,7 +4444,7 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(deniedTool, 'extended');
 
-    const denied = agent.addPromotedExtendedTool('repo_commit');
+    const denied = await agent.addPromotedExtendedTool('repo_commit');
     expect(denied.ok).toBe(false);
     expect(denied.errorCode).toBe('capability_denied');
     expect(denied.missingTokens).toContain('git.write');
@@ -4454,11 +4454,11 @@ describe('SubstrateAgent.handleMessage', () => {
 
     // Pins affect presentation only, so any capability-eligible extended tool
     // can be pinned without changing whether it is callable.
-    const scheduleTaskPromotion = agent.addPromotedExtendedTool('schedule_task');
+    const scheduleTaskPromotion = await agent.addPromotedExtendedTool('schedule_task');
     expect(scheduleTaskPromotion.ok).toBe(true);
   });
 
-  it('keeps runtime state unchanged when pin persistence fails', () => {
+  it('keeps runtime state unchanged when pin persistence fails', async () => {
     const config = makeConfig({
       runtimeHooks: {
         persistPromotedExtendedTools: vi.fn(() => {
@@ -4476,7 +4476,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     agent.registerTool(makeExtendedProbeTool('tool_one'), 'extended');
 
-    const result = agent.addPromotedExtendedTool('tool_one');
+    const result = await agent.addPromotedExtendedTool('tool_one');
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe('persist_failed');
     expect(agent.getPromotedExtendedTools()).toEqual([]);

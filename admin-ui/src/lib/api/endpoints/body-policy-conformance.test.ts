@@ -119,6 +119,14 @@ function staticString(
   pathBuilders: ReadonlyMap<string, string> = new Map(),
 ): string | null {
   if (ts.isStringLiteralLike(expression)) return expression.text;
+  // scopeGardenDataPath is a pure companion-scope prefixer; the catalogue
+  // route is the inner path it wraps, so resolve through it.
+  if (ts.isCallExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.expression.text === 'scopeGardenDataPath'
+    && expression.arguments.length >= 1) {
+    return staticString(expression.arguments[0]!, constants, pathBuilders);
+  }
   if (ts.isIdentifier(expression)) return constants.get(expression.text) ?? null;
   if (ts.isParenthesizedExpression(expression)
     || ts.isAsExpression(expression)

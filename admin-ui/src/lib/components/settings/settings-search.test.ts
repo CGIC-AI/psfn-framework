@@ -33,6 +33,9 @@ const FIELD_ENTRIES = buildSettingsSearchEntries().filter(
 // a conscious classification here rather than silently vanishing or misrouting.
 const EXPECTED_EXCLUDED_FIELD_KEYS = new Set([
   'modelCatalog',
+  // Edited through the scheduler raw editor; the Autonomy Control Plane page
+  // owns the effective-vs-on-disk view (authority.ts detail for this key).
+  'icpAutonomyEnabled',
   'episodicProcessingEnabled',
   'episodicProcessingRestWindowStartLocalTime',
   'episodicProcessingRestWindowEndLocalTime',

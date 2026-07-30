@@ -3,8 +3,8 @@
   "typescriptVersion": "5.9.3",
   "project": "tsconfig.json",
   "aggregation": "path-and-code-count",
-  "totalErrors": 239,
-  "filesWithErrors": 94,
+  "totalErrors": 238,
+  "filesWithErrors": 93,
   "errors": [
     {"path":"src/app/agent/companion-presence-wiring.ts","code":"TS2739","count":1},
     {"path":"src/app/agent/gateway-message-handlers.ts","code":"TS2345","count":2},
@@ -69,7 +69,6 @@
     {"path":"src/core/icp/initiation-source-runtime.ts","code":"TS18047","count":12},
     {"path":"src/core/icp/initiation-source-runtime.ts","code":"TS2345","count":3},
     {"path":"src/core/intention/concern-candidates.ts","code":"TS2322","count":2},
-    {"path":"src/core/scheduler/post-turn-runtime.ts","code":"TS2345","count":1},
     {"path":"src/core/scheduler/post-turn-runtime/scheduler-lanes.ts","code":"TS2345","count":1},
     {"path":"src/core/session/continuity-redaction.ts","code":"TS2345","count":1},
     {"path":"src/core/session/group-chat-harness/fixtures.ts","code":"TS2353","count":1},

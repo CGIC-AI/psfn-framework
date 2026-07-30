@@ -1076,6 +1076,12 @@ export interface EventMap {
   };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };
+  /**
+   * Follow-up activation-gate decision telemetry (blocked or activated). The
+   * detail bag is content-free gate evidence — channelId, pendingFollowUpId,
+   * reason, due/timing fields — never message text.
+   */
+  'intention.follow_up.activation_gate': { phase: 'blocked' | 'activated'; timestamp: number } & Record<string, unknown>;
   // Internal-state-driven outreach nudges (Charter 6.24, bead 1xb.2). The
   // deterministic gate decides whether the LLM nudge runs at all; the nudge
   // itself is the consent moment the companion accepts or declines.

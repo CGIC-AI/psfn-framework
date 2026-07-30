@@ -29,6 +29,11 @@ export const ICP_INITIATION_SOURCES = [
   'weighted_thought',
   'intention',
   'foreground',
+  // Affect-driven initiation (operator ruling D4, psfn-framework-hrmrq.34):
+  // the emo-sim proactivity sidecar's would_message lever firing — "she would
+  // send a proactive message now" — creates the candidate, replacing any
+  // wall-clock initiating impulse. Retry/TTL plumbing is unchanged.
+  'felt_impulse',
 ] as const;
 export type IcpInitiationSource = typeof ICP_INITIATION_SOURCES[number];
 

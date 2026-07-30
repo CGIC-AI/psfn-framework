@@ -22,6 +22,13 @@ export interface AdminIcpAutonomyServiceDependencies {
   runtimeEnablement: IcpAutonomyRuntimeEnablement;
   settingsService: AdminSettingsService;
   operatorLeaseTtlMs: number;
+  /**
+   * Probe for ICP-eligible sibling contacts (channel='companion' +
+   * machine-intelligence) in this companion's own contact store (hrmrq.34).
+   * Topology-independent, so the Garden can name the missing sibling seed
+   * explicitly instead of reporting an undifferentiated quiet lane.
+   */
+  countCompanionPeerContacts?: () => Promise<number>;
   now?: () => number;
 }
 
@@ -125,25 +132,51 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       + fatigue.reduce((sum, item) => sum + item.failedCount, 0)
       + costs.filter(cost => !cost.allowed).length;
     const runtimeEnabled = this.deps.runtimeEnablement.isEnabled();
+    const companionPeerContactCount = this.deps.countCompanionPeerContacts
+      ? await this.deps.countCompanionPeerContacts()
+      : null;
+    // Truthful per-gate attribution (hrmrq.34): 'disabled' distinguishes the
+    // scheduler.json owner flag from the in-process emergency fence;
+    // 'unavailable_topology' names the single-companion (or unprovisioned
+    // control-plane) case instead of misattributing it to the runtime flag;
+    // an empty candidate lane with zero sibling contacts names the missing
+    // seed:sibling-contacts maintenance step explicitly.
+    const onDiskEnabled = settings.scheduler.onDiskValue.enabled;
     const quietState = !runtimeEnabled
       ? 'disabled'
-      : failureCount > 0
-        ? 'failures_observed'
-        : candidates.length === 0
-          ? 'no_candidates'
-          : 'active';
+      : !available
+        ? 'unavailable_topology'
+        : failureCount > 0
+          ? 'failures_observed'
+          : candidates.length === 0
+            ? 'no_candidates'
+            : 'active';
     const quietExplanation = quietState === 'disabled'
-      ? 'Autonomous initiation is disabled in the running process.'
-      : quietState === 'failures_observed'
-        ? 'Recent bounded control-plane records include rejected, suppressed, failed, or denied activity.'
-        : quietState === 'no_candidates'
-          ? 'No local autonomous initiation candidates are recorded; quiet is not itself a failure.'
-          : 'Local candidate activity is recorded; inspect machine-readable reasons and lifecycle state.';
+      ? (onDiskEnabled
+        ? 'Autonomous initiation was emergency-disabled in this running process (one-way runtime fence). '
+          + 'scheduler.json still has icpAutonomy.enabled = true; restart the agent to restore autonomy.'
+        : 'Autonomous initiation is disabled by scheduler.json (icpAutonomy.enabled = false). '
+          + 'The capability tier may still grant it; enable the flag in Settings under the scheduler '
+          + 'owner file and restart the agent.')
+      : quietState === 'unavailable_topology'
+        ? 'The runtime flag is enabled, but this deployment is not a multi-companion topology '
+          + '(no shared ICP control plane is provisioned), so there is no companion peer to initiate toward. '
+          + 'The control plane is wired but empty; multi-companion mode with at least one sibling companion is required.'
+        : quietState === 'failures_observed'
+          ? 'Recent bounded control-plane records include rejected, suppressed, failed, or denied activity.'
+          : quietState === 'no_candidates'
+            ? (companionPeerContactCount === 0
+              ? 'No local autonomous initiation candidates are recorded — and no ICP-eligible sibling contact '
+                + "exists (no contact carries a channel='companion' identity), so peer selection can never succeed. "
+                + 'Run `npm run seed:sibling-contacts -- --apply` to seed mutual sibling contacts (bead x5t4).'
+              : 'No local autonomous initiation candidates are recorded; quiet is not itself a failure.')
+            : 'Local candidate activity is recorded; inspect machine-readable reasons and lifecycle state.';
 
     return {
       available,
       localCompanionId: this.deps.localCompanionId ?? null,
       runtimeEnabled,
+      companionPeerContactCount,
       settings,
       availability: availability.map(lease => ({
         ...lease,

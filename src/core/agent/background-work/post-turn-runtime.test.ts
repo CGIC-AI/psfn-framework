@@ -1146,6 +1146,58 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
+  it('records the social-desire felt signal before the appraisal call (psfn-framework-hrmrq.85)', async () => {
+    const selfSnapshotRef = 'internal-state-v1:felt-signal';
+    const record = makeTurnRecord({
+      internalStateSnapshotRef: [
+        'trust:regular',
+        'contact:contact-1',
+        'prompt:prompt-v1',
+        'memory:memory-v1',
+        'session:session-v1',
+        `self:${selfSnapshotRef}`,
+      ].join('|'),
+    });
+    const execution = makeEmotionExecution(record, selfSnapshotRef);
+    const appraisalEntry: SessionEntry = {
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: record.turnId,
+        requestId: record.requestId,
+        role: 'assistant',
+        actorKind: 'machine_intelligence',
+      }),
+    };
+    const fixture = makeDependencies({ record, recentEntries: [appraisalEntry] });
+    const callOrder: string[] = [];
+    fixture.triggerEmotionAppraisal.mockImplementation(async () => {
+      callOrder.push('appraisal');
+    });
+    const feltSignalRecord = vi.fn(async () => {
+      callOrder.push('felt-signal');
+      return null;
+    });
+
+    await executePostTurnBackgroundWork(execution, {
+      ...fixture.dependencies,
+      socialDesireFeltSignals: { record: feltSignalRecord },
+    });
+
+    // The deterministic accumulation write runs FIRST, with the exact per-turn
+    // appraisal state and the turn's completion instant, so an appraisal gate
+    // close or model-call preemption can never starve social-desire pressure.
+    expect(feltSignalRecord).toHaveBeenCalledTimes(1);
+    expect(feltSignalRecord).toHaveBeenCalledWith(execution.payload.appraisalState, {
+      sourceRef: `emotion_appraisal:${execution.payload.source.channelId}:${execution.payload.source.turnId}`,
+      nowMs: execution.payload.source.createdAtMs,
+    });
+    expect(callOrder).toEqual(['felt-signal', 'appraisal']);
+  });
+
   it('runs auto-compaction from the exact bounded source-turn snapshot', async () => {
     const record = makeTurnRecord();
     const execution = makeAutoCompactionExecution(record);

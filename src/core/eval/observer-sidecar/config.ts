@@ -95,6 +95,12 @@ function createObserverEvalSidecarPort(
     ...(eventBus
       ? { emitContextCoherence: event => eventBus.emit('context.coherence.detected', event) }
       : {}),
+    // hrmrq.34 (D4): forward would_message lever fires to the affect-driven
+    // ICP initiation seam. The subscriber lives in app wiring (felt-impulse
+    // adapter); with no subscriber the emit is inert telemetry.
+    ...(eventBus
+      ? { emitFeltImpulse: event => eventBus.emit('icp.felt_impulse.lever', event) }
+      : {}),
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
     runner: createEmoSimServerRunner({
@@ -158,6 +164,15 @@ interface EmoSimObserverEvalSidecarOptions {
   persistence: ObserverEvalSidecarPersistencePort | null;
   runner: EmoSimRunner;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
+  /**
+   * Affect-driven ICP initiation hand-off (hrmrq.34, operator ruling D4): a
+   * fired would_message lever — "she would send a proactive message now" — is
+   * forwarded so the app-side felt-impulse adapter can create an ICP
+   * initiation candidate. This is the ONE ratified authoritative consumer of
+   * lever output; everything else about the lever store stays eval-owned
+   * telemetry.
+   */
+  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
 }
 
 class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
@@ -181,6 +196,9 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       retentionDays: options.config.persistence?.retentionDays ?? 14,
       ...(options.emitContextCoherence
         ? { emitContextCoherence: options.emitContextCoherence }
+        : {}),
+      ...(options.emitFeltImpulse
+        ? { emitFeltImpulse: options.emitFeltImpulse }
         : {}),
     });
   }
@@ -381,6 +399,8 @@ interface ObserverEvalLeverStageOptions {
   sidecarId: string;
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
+  /** hrmrq.34 (D4): forward fired would_message levers to the ICP felt-impulse seam. */
+  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
 }
 
 interface ObserverEvalCoherenceContext {
@@ -396,6 +416,7 @@ function createObserverEvalLeverStage(input: {
   sidecarId: string;
   retentionDays: number;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
+  emitFeltImpulse?: (event: { lever: 'would_message'; firedAtMs: number; timestamp: number }) => Promise<void>;
 }): ObserverEvalLeverStage | null {
   if (input.settings?.enabled !== true) {
     return null;
@@ -412,6 +433,9 @@ function createObserverEvalLeverStage(input: {
     retentionDays: input.retentionDays,
     ...(input.emitContextCoherence
       ? { emitContextCoherence: input.emitContextCoherence }
+      : {}),
+    ...(input.emitFeltImpulse
+      ? { emitFeltImpulse: input.emitFeltImpulse }
       : {}),
   });
 }
@@ -466,6 +490,18 @@ export class ObserverEvalLeverStage {
           cooldown: event.cooldown,
           retention: this.makeLeverRetention(event.firedAtMs),
         });
+        // hrmrq.34 (operator ruling D4): a fired would_message lever IS the
+        // affect-driven initiating impulse for ICP. Forward it to the
+        // felt-impulse seam; the app-side adapter owns peer selection,
+        // authorization, and candidate creation. Content-free by construction
+        // (lever name + timestamps only).
+        if (event.lever === 'would_message' && this.options.emitFeltImpulse) {
+          await this.options.emitFeltImpulse({
+            lever: 'would_message',
+            firedAtMs: event.firedAtMs,
+            timestamp: input.observedAtMs,
+          });
+        }
         if (
           event.lever === 'rumination_watch'
           && input.coherenceContext

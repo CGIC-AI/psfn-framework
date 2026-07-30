@@ -240,6 +240,13 @@ export interface ReflectionRuntimeOptions {
   socialDesireOutbound?: SocialDesireOutboundRuntime | null;
   /** Live human-contact trust/channel/local-time revalidation on every attempt. */
   socialDesireHumanDeliveryPolicy?: SocialDesireHumanDeliveryPolicy | null;
+  /**
+   * Live personal-project provenance verifier (hrmrq.85). Returns true only
+   * when the project exists and is still resumable (active/paused). Unwired
+   * while a payload carries personalProjectId → the outbound gate fails
+   * closed ('personal_project_runtime_unavailable').
+   */
+  verifyPersonalProjectLive?: ((projectId: string) => Promise<boolean>) | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
     'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'

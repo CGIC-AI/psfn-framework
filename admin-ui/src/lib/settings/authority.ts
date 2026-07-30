@@ -122,6 +122,22 @@ export function resolveSettingAuthority(
     };
   }
 
+  if (key === 'icpAutonomyEnabled') {
+    const scheduler = (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
+    const onDisk = asRecord(asRecord(scheduler)?.icpAutonomy)?.enabled;
+    return {
+      sourceLabel: fallback.sourceLabel,
+      ...(typeof onDisk === 'boolean'
+        ? { effectiveValue: `On disk: ${onDisk ? 'enabled' : 'disabled'}` }
+        : {}),
+      detail:
+        'Authoritative source: scheduler.json > icpAutonomy.enabled (default ON per operator ruling D4). '
+        + 'Edit through the scheduler raw editor; the Autonomy Control Plane page shows effective vs on-disk state. '
+        + 'The in-process emergency disable is one-way — restart restores the owner-file value.',
+      precedence: 'Restart required after saving so autonomous initiation picks up the owner-file flag.',
+    };
+  }
+
   if (key === 'capabilityTier') {
     const capabilities = (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
     const effectiveTier = asString(capabilities.tier) ?? asString(asRecord(data?.config)?.capabilityTier);

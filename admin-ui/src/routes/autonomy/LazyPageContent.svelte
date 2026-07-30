@@ -164,8 +164,25 @@
   {:else if data}
     {#if !data.available}
       <div class="card-garden border-l-4 border-l-gold-400 p-5">
-        <p class="font-medium text-shadow-900">Autonomy backend unavailable</p>
-        <p class="mt-1 text-sm text-shadow-600">The local companion identity, candidate store, or shared Postgres control plane is not wired. No status is fabricated and controls remain disabled.</p>
+        <p class="font-medium text-shadow-900">Control plane wired but empty</p>
+        <p class="mt-1 text-sm text-shadow-600">
+          This deployment has no multi-companion ICP control plane (single-companion topology, or the
+          shared Postgres control plane is not provisioned). The page stays wired and truthful: the
+          runtime flag state above is real, the tables below are genuinely empty, and mutation
+          controls remain disabled. Autonomous initiation additionally requires seeded sibling
+          contacts — see <code>npm run seed:sibling-contacts</code>.
+        </p>
+      </div>
+    {/if}
+    {#if data.companionPeerContactCount === 0}
+      <div class="card-garden border-l-4 border-l-wilt-400 p-5">
+        <p class="font-medium text-shadow-900">No ICP-eligible sibling contacts</p>
+        <p class="mt-1 text-sm text-shadow-600">
+          No contact carries a <code>channel='companion'</code> identity, so peer selection can never
+          succeed even with autonomy enabled. Run
+          <code>npm run seed:sibling-contacts -- --apply</code> on the fleet to seed mutual sibling
+          contacts (idempotent; dry-run without <code>--apply</code>).
+        </p>
       </div>
     {/if}
 

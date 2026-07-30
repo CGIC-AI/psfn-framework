@@ -98,6 +98,15 @@ async function safeEmit(
   void eventBus;
 }
 
+/**
+ * Throttle for the info-level lane-tick line (hrmrq.85): a live-but-quiet lane
+ * must be distinguishable from a dead lane in ordinary logs without logging
+ * every 30-minute tick. One info line per window; every tick still logs debug
+ * and emits the intention.nudge.gate event.
+ */
+const LANE_TICK_INFO_THROTTLE_MS = 6 * 60 * 60_000;
+let lastWeightedThoughtTickInfoAtMs = 0;
+
 export async function runWeightedThoughtOutreachTick(
   options: WeightedThoughtOutreachTaskOptions,
   nowMs: number,
@@ -119,14 +128,25 @@ export async function runWeightedThoughtOutreachTick(
     nowMs,
   );
 
-  await safeEmit(eventBus, () => eventBus.emit('intention.nudge.gate', {
+  const gateTelemetry = {
     open: result.gate.open,
     reason: result.gate.reason,
     maxWeight: typeof result.gate.inputs.maxWeight === 'number' ? result.gate.inputs.maxWeight : 0,
     threshold: config.nudgeThreshold,
     thoughtCount: typeof result.gate.inputs.thoughtCount === 'number' ? result.gate.inputs.thoughtCount : 0,
+  };
+  await safeEmit(eventBus, () => eventBus.emit('intention.nudge.gate', {
+    ...gateTelemetry,
     timestamp: nowMs,
   }));
+  // Throttled liveness line (hrmrq.85): proves the lane ticks even when the
+  // gate stays closed for days; a truly dead lane goes silent here too.
+  if (nowMs - lastWeightedThoughtTickInfoAtMs >= LANE_TICK_INFO_THROTTLE_MS) {
+    lastWeightedThoughtTickInfoAtMs = nowMs;
+    log.info('Weighted-thought outreach lane tick', gateTelemetry);
+  } else {
+    log.debug('Weighted-thought outreach lane tick', gateTelemetry);
+  }
 
   if (!result.evaluated) {
     return;

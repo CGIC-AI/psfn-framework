@@ -70,6 +70,10 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
   observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
   backgroundMaintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
+  // hrmrq.34: icpAutonomy.enabled is scheduler.json-owned and edited through
+  // the Garden scheduler raw editor (restart applies it; the autonomy page
+  // shows effective vs on-disk with a restart pill).
+  icpAutonomyEnabled: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingEnabled: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowStartLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowEndLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },

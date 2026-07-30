@@ -411,3 +411,61 @@ describe('provenance-driven group-continuation channel resolution', () => {
     expect((candidate.payload as Record<string, unknown>).reason).toBe('weighted_thought:standard');
   });
 });
+
+describe('personal-project provenance routing (psfn-framework-hrmrq.85)', () => {
+  // The exact shape main.ts records for personal-project activity: an internal
+  // workspace sourceChannelId plus the live personalProjectId, no concern and
+  // no pending follow-up.
+  const projectThought = createThoughtWeight(
+    {
+      id: 'personal-project:proj-1',
+      content: 'Return to Moth story: draft the third scene',
+      source: 'personal_project',
+      thoughtClass: 'standard',
+      emotionalIntensity: 1,
+      provenance: {
+        sourceChannelId: 'internal:free-time:project',
+        personalProjectId: 'proj-1',
+      },
+    },
+    LIFECYCLE,
+    T0,
+  );
+
+  it('resolves deliberately to the primary private channel, never group continuation', async () => {
+    // Pre-hrmrq.85 this dead-ended internal_only:missing_live_provenance on
+    // every run. The internal workspace channel must also never be treated as
+    // a group-continuation candidate.
+    const approveGroupContinuation = vi.fn(async () => true);
+    const resolution = await resolveOutreachChannel(projectThought, {
+      ...PRIMARY_POLICY,
+      approveGroupContinuation,
+    });
+    expect(resolution).toEqual({
+      outcome: 'deliver',
+      channelId: 'dm-primary',
+      channelType: 'discord',
+      target: 'primary',
+    });
+    expect(approveGroupContinuation).not.toHaveBeenCalled();
+  });
+
+  it('rejects (fail closed) when no primary channel is configured', async () => {
+    const resolution = await resolveOutreachChannel(projectThought, {
+      primaryChannelType: 'discord',
+    });
+    expect(resolution).toEqual({ outcome: 'reject', reason: 'no_primary_channel' });
+  });
+
+  it('an accepted project nudge carries personalProjectId for live gate re-verification', async () => {
+    const store = makeStore(projectThought);
+    const evaluator = acceptEvaluator('I want to get back to my Moth story');
+    const result = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator), T0);
+
+    expect(result.produced).toHaveLength(1);
+    const payload = result.produced[0]!.candidate.payload as Record<string, unknown>;
+    expect(payload.personalProjectId).toBe('proj-1');
+    expect(payload.concernIds).toBeUndefined();
+    expect(payload.pendingFollowUpId).toBeUndefined();
+  });
+});

@@ -207,7 +207,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
         ? {
           withheldBySubjectAuthorizationCount: candidates.length - episodes.length,
         }
-        : context === undefined || context.kind === 'legacy_operator'
+        : context === undefined || context.kind === 'legacy_token'
           ? { withheldBySubjectAuthorizationCount: 0 }
           : {}),
       pagination: {

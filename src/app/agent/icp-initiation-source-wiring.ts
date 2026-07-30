@@ -1,4 +1,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { createIcpFeltImpulseInitiationAdapter } from '../../core/icp/felt-impulse-initiation.js';
+import type { KnownCompanionPeerAvailability } from '../../core/icp/agent-facing-autonomy.js';
 import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiation-consent-evaluator.js';
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
@@ -32,6 +35,15 @@ export interface IcpInitiationSourceWiringInput {
   contactStore: CoLocationAdapterOptions['contactStore'];
   weightedThoughtStore: CoLocationAdapterOptions['thoughtStore'] | undefined;
   lifecycleConfig: CoLocationAdapterOptions['lifecycleConfig'];
+  /**
+   * Peer directory for the affect-driven felt-impulse source (hrmrq.34, D4):
+   * the agent-facing autonomy runtime's canonical-peer listing. Absent in
+   * single-companion topologies — the felt-impulse subscription is then not
+   * wired, and the omission is logged explicitly.
+   */
+  peerDirectory?: {
+    listKnownPeerAvailability(): Promise<KnownCompanionPeerAvailability[]>;
+  };
 }
 
 export interface IcpInitiationSourceWiring {
@@ -42,7 +54,11 @@ export interface IcpInitiationSourceWiring {
     | undefined;
   intentionCandidateAdapter: ReturnType<typeof createIcpIntentionCandidateAdapter> | undefined;
   unregisterCoLocationThoughtAdapter: () => void;
+  /** Unsubscribe the felt-impulse lever listener (no-op when not wired). */
+  unregisterFeltImpulseAdapter: () => void;
 }
+
+const log = createComponentLogger('IcpInitiationSourceWiring');
 
 /** Keep ICP source composition out of the already-large agent entrypoint. */
 export function wireIcpInitiationSources(
@@ -95,11 +111,40 @@ export function wireIcpInitiationSources(
       })
     : () => undefined;
 
+  // ── Affect-driven felt-impulse source (hrmrq.34, operator ruling D4) ──
+  // The emo-sim proactivity sidecar's would_message lever is the initiating
+  // impulse: the observer-sidecar lever stage publishes
+  // 'icp.felt_impulse.lever' on the bus, and this subscription turns it into
+  // an ICP initiation candidate through the same source runtime every other
+  // source uses (consent, preflight, permits, retry/TTL unchanged).
+  let unregisterFeltImpulseAdapter: () => void = () => undefined;
+  if (sourceRuntime && input.peerDirectory) {
+    const feltImpulseAdapter = createIcpFeltImpulseInitiationAdapter({
+      sourceRuntime,
+      peers: input.peerDirectory,
+      isAuthorized,
+      eventBus: input.eventBus,
+    });
+    unregisterFeltImpulseAdapter = input.eventBus.on('icp.felt_impulse.lever', async (signal) => {
+      await feltImpulseAdapter.onLeverSignal(signal);
+    });
+    log.info('ICP felt-impulse initiation source wired to the emo-sim would_message lever');
+  } else if (input.config.enabled) {
+    // Explicit, not silent: autonomy is on but the affect-driven impulse has
+    // no path (no source runtime or no peer directory in this topology).
+    log.warn('ICP felt-impulse initiation source NOT wired', {
+      hasSourceRuntime: Boolean(sourceRuntime),
+      hasPeerDirectory: Boolean(input.peerDirectory),
+      hint: 'requires multi-companion topology (candidate store + peers) and the observer-sidecar levers enabled',
+    });
+  }
+
   return {
     runtimeEnablement,
     sourceRuntime,
     weightedThoughtCandidateAdapter,
     intentionCandidateAdapter,
     unregisterCoLocationThoughtAdapter,
+    unregisterFeltImpulseAdapter,
   };
 }

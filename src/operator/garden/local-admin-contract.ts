@@ -484,6 +484,7 @@ export function createInProcessGardenAdminContract(
     }],
   });
   ownerFileReloadWatcher.start();
+  const icpContactStore = options.contactStore;
   const icpAutonomy = options.icpRuntimeEnablement && options.effectiveSchedulerConfig
     ? new AdminIcpAutonomyDataService({
       localCompanionId: options.config.companionId,
@@ -493,6 +494,20 @@ export function createInProcessGardenAdminContract(
       settingsService,
       operatorLeaseTtlMs:
         options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+      // hrmrq.34: sibling-seed visibility — count ICP-eligible companion
+      // contacts so the quiet explanation can name a missing seed explicitly.
+      ...(icpContactStore
+        ? {
+          countCompanionPeerContacts: async () => {
+            const contacts = await icpContactStore.listAll();
+            return contacts.filter(contact => contact.isMachineIntelligence === true
+              && [
+                ...(contact.channelIdentities ?? []),
+                ...(contact.channels ?? []),
+              ].some(identity => identity.channel.trim().toLowerCase() === 'companion')).length;
+          },
+        }
+        : {}),
     })
     : null;
   const roomArbiter = new AdminRoomArbiterDataService({

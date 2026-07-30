@@ -62,7 +62,7 @@ import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
-import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
+import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
 import type { FreeTimeReturnPolicy, FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
@@ -315,6 +315,14 @@ export interface FreeTimeBlockResult {
   /** True when at least one turn produced real content (not a stop signal). */
   activity: boolean;
   endReason: FreeTimeBlockEndReason;
+  /**
+   * Why a `rested` block rested: `companion_rested` is a genuine choice; every
+   * other {@link FreeTimeRestReason} is the chooser failing closed. Present
+   * exactly when endReason === 'rested' so telemetry, the Garden, and the
+   * companion-facing note can tell rest-by-choice from rest-by-failure
+   * (psfn-framework-hrmrq.69).
+   */
+  restReason?: FreeTimeRestReason;
   spentChargeUnits: number;
   startedAtMs: number;
   endedAtMs: number;
@@ -381,12 +389,25 @@ export async function runFreeTimeBlock(input: FreeTimeBlockRunInput): Promise<Fr
 }
 
 export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
+  // A `rested` outcome is only a choice when the chooser actually produced one.
+  // Every other rest reason is the chooser failing closed (disabled, timeout,
+  // error, unparseable output, invalid option, resolve failure) — telling the
+  // companion that was "a valid way to spend the time" would misrepresent her
+  // own agency back to her (psfn-framework-hrmrq.69). Fail closed: an
+  // unattributed rest is NOT affirmed as a choice.
+  const failedRest = result.endReason === 'rested' && result.restReason !== 'companion_rested';
+  const outcomeLine = failedRest
+    ? `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: rested (${result.restReason ?? 'reason unrecorded'} — not a choice).`
+    : `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: ${result.endReason}.`;
+  const activityLine = result.activity
+    ? 'Something was made or explored this block.'
+    : failedRest
+      ? 'The free-time chooser did not run to completion, so no choice was made this block — this was a system failure, not you choosing to rest.'
+      : 'Nothing was made this block — resting is a valid way to spend the time.';
   return [
     '[Free-time block]',
-    `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: ${result.endReason}.`,
-    result.activity
-      ? 'Something was made or explored this block.'
-      : 'Nothing was made this block — resting is a valid way to spend the time.',
+    outcomeLine,
+    activityLine,
     `Charge spent (background lane): ${result.spentChargeUnits} unit(s).`,
     'No outbound message was sent; any artifacts went to durable stores through normal tools.',
   ].join('\n');
@@ -920,13 +941,16 @@ function makeLaneHandler(
       // Rest is a first-class outcome (bible §6.7/§10.2): the block ends here
       // with NO free-time turn. The chooser's single call is the only spend;
       // there is no second model call.
-      log.debug('Free-time block ended at chooser (rest)', { lane, reason: chosen.reason });
+      // Info, not debug: rest-by-failure (chooser_error/timeout/…) must be
+      // visible in ordinary logs, not only under debug (psfn-framework-hrmrq.69).
+      log.info('Free-time block ended at chooser (rest)', { lane, restReason: chosen.reason });
       result = {
         lane,
         channelId,
         turnsUsed: 0,
         activity: false,
         endReason: 'rested',
+        restReason: chosen.reason,
         spentChargeUnits: 0,
         startedAtMs: nowMs,
         endedAtMs: nowMs,
@@ -1006,6 +1030,7 @@ function makeLaneHandler(
       turnsUsed: result.turnsUsed,
       activity: result.activity,
       endReason: result.endReason,
+      ...(result.restReason !== undefined ? { restReason: result.restReason } : {}),
       spentChargeUnits: result.spentChargeUnits,
       returnSurfaced,
     });
@@ -1026,6 +1051,7 @@ function makeLaneHandler(
         turnsUsed: result.turnsUsed,
         activity: result.activity,
         endReason: result.endReason,
+        ...(result.restReason !== undefined ? { restReason: result.restReason } : {}),
         spentChargeUnits: result.spentChargeUnits,
         maxChargeUnits: options.config.budget.maxChargeUnits,
         maxTurns: options.config.budget.maxTurns,

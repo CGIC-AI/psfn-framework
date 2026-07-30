@@ -141,6 +141,7 @@ interface WireOptions {
   store?: SocialDesireStorePort;
   intentionAppraisalEnabled?: boolean;
   getActiveConcerns?: ReturnType<typeof vi.fn>;
+  verifyPersonalProjectLive?: (projectId: string) => Promise<boolean>;
 }
 
 function wire(options: WireOptions = {}) {
@@ -267,6 +268,9 @@ function wire(options: WireOptions = {}) {
       },
       intentionAppraisalEnabled: options.intentionAppraisalEnabled ?? true,
       ...(options.getActiveConcerns ? { getActiveConcerns: options.getActiveConcerns } : {}),
+      ...(options.verifyPersonalProjectLive
+        ? { verifyPersonalProjectLive: options.verifyPersonalProjectLive }
+        : {}),
       ...(options.icp
         ? {
             icpIntentionCandidateAdapter: {
@@ -359,6 +363,50 @@ describe('social-desire provenance at the outbound gate', () => {
 
     await expect(handler(action)).resolves.toEqual({ detail: 'sent' });
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('personal-project provenance fails closed when no verifier is wired (hrmrq.85)', async () => {
+    const { handler } = wire();
+    await expect(handler({
+      ...desireAction('unused-pp-unwired'),
+      payload: {
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        content: 'I want to get back to my story',
+        personalProjectId: 'proj-1',
+      },
+    })).resolves.toEqual({ detail: 'blocked:personal_project_runtime_unavailable' });
+  });
+
+  it('personal-project provenance delivers when the project is verified live (hrmrq.85)', async () => {
+    const verifyPersonalProjectLive = vi.fn(async (projectId: string) => projectId === 'proj-1');
+    const { handler, dispatch } = wire({ verifyPersonalProjectLive });
+    await expect(handler({
+      ...desireAction('unused-pp-live'),
+      payload: {
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        content: 'I want to get back to my story',
+        reason: 'weighted_thought:standard',
+        personalProjectId: 'proj-1',
+      },
+    })).resolves.toEqual({ detail: 'sent' });
+    expect(verifyPersonalProjectLive).toHaveBeenCalledWith('proj-1');
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('personal-project provenance blocks a vanished or non-resumable project (hrmrq.85)', async () => {
+    const { handler, dispatch } = wire({ verifyPersonalProjectLive: async () => false });
+    await expect(handler({
+      ...desireAction('unused-pp-stale'),
+      payload: {
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        content: 'I want to get back to my story',
+        personalProjectId: 'proj-gone',
+      },
+    })).resolves.toEqual({ detail: 'blocked:stale_personal_project' });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('still blocks a payload without any live provenance (missing_live_provenance)', async () => {

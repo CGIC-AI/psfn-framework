@@ -92,6 +92,7 @@ import { createTurnId } from '../turns/id.js';
 import { EmotionState, type VADVector } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal } from '../emotion/appraisal.js';
+import type { SocialDesireFeltSignalWriter } from '../intention/social-desire-felt-signal.js';
 import type { ActiveConcernContextProvider } from '../intention/concern-store-port.js';
 import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
@@ -391,6 +392,13 @@ export class SubstrateAgent {
   wikiRetrieval: WikiRetrievalPort | null = null;
   scratchpadProvider: ScratchpadProvider | null = null;
   /**
+   * Social-desire felt-signal writer (psfn-framework-hrmrq.85), assigned by
+   * composition when the social-desire lane is enabled. The post-turn
+   * emotion_appraisal background job records each turn's deterministic felt
+   * social signal through it; null keeps accumulation inert (lane disabled).
+   */
+  socialDesireFeltSignals: SocialDesireFeltSignalWriter | null = null;
+  /**
    * Intake sink gate (htm9.3), assigned by composition alongside the session
    * manager's. Drives the tool-egress sink: per-invocation lethal-trifecta
    * checks over the current turn's intake envelopes. Null = firewall off.
@@ -623,6 +631,11 @@ export class SubstrateAgent {
           emotionRuntime: this.emotionSelfModelRuntime,
           getEmotionTemplateVariables: () => this.resolveCharacterPromptVariables(),
           tuning: backgroundWorkTuning.postTurn,
+          // Read at execution time (not construction) because composition
+          // assigns the writer after the agent is built (hrmrq.85).
+          ...(this.socialDesireFeltSignals
+            ? { socialDesireFeltSignals: this.socialDesireFeltSignals }
+            : {}),
         }),
       });
     } else {

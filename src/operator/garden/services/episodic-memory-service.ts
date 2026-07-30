@@ -10,6 +10,7 @@ import type {
 import {
   createSubjectAuthorizedEpisodicStore,
   isEpisodeVisibleToSubject,
+  type EpisodicSubjectAccessContext,
 } from '../../../faculties/memory/episodic/subject-authorized-store.js';
 import type {
   FleetGardenRequestContext,
@@ -135,6 +136,27 @@ function averageSalience(episodes: readonly Episode[]): number {
   return Number((total / episodes.length).toFixed(3));
 }
 
+function episodicSubjectAccessContext(
+  context: FleetGardenRequestContext,
+): EpisodicSubjectAccessContext {
+  const adminClass = context.actor.role === 'owner' || context.actor.role === 'admin';
+  return {
+    viewerContactId: context.actor.contactId,
+    ...(adminClass
+      ? {
+          adminAccessMode: context.actor.accessMode,
+          ...(context.actor.sessionAssurance === 'escalated' ? { escalated: true } : {}),
+        }
+      : {}),
+  };
+}
+
+function reportsWithheldEpisodes(context: FleetGardenRequestContext): boolean {
+  return context.actor.role === 'owner'
+    && context.actor.accessMode === 'multi_admin'
+    && context.actor.sessionAssurance !== 'escalated';
+}
+
 export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryService {
   constructor(private readonly store: AdminEpisodicStore) {}
 
@@ -152,25 +174,22 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
   /**
    * Subject-authorized episodic projection (88u3). For a fleet principal,
    * every returned row is filtered by the subject-authorized episodic
-   * predicate, which admits only episodes whose explicitly attributed
-   * participants include the request's authenticated contact binding (and
-   * arcs whose endpoints are both visible). The list path retains only the
-   * raw candidate count long enough to report an owner-only withheld count;
-   * foreign episode rows never enter the response. Mirrors the
-   * memory service's request-local subject scoping: the subject comes from
-   * the signed capability's contact binding, never request parameters, and
-   * role never widens visibility. Legacy/public contexts keep the
-   * unpartitioned single-companion behavior unchanged. Fails closed for any
-   * fleet context without an exact request-local subject relation.
+   * predicate. Member/guest roles stay bound to their authenticated contact;
+   * owner/admin roles carry the same signed D1 access mode and audited
+   * escalation seam as AdminMemoryDataService. Arcs require both endpoints to
+   * be visible. Legacy/public contexts keep the unpartitioned
+   * single-companion behavior unchanged. Fails closed for any fleet context
+   * without an exact request-local subject relation.
    */
   private subjectProjection(
     context: GardenRequestContext | undefined,
   ): AdminEpisodicMemoryDataService | null {
     const fleetContext = this.subjectContext(context);
     if (!fleetContext) return null;
-    return new AdminEpisodicMemoryDataService(createSubjectAuthorizedEpisodicStore(this.store, {
-      viewerContactId: fleetContext.actor.contactId,
-    }));
+    return new AdminEpisodicMemoryDataService(createSubjectAuthorizedEpisodicStore(
+      this.store,
+      episodicSubjectAccessContext(fleetContext),
+    ));
   }
 
   async listEpisodes(
@@ -193,9 +212,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     }
 
     const candidates = await this.loadEpisodeCandidates({ threadId, from, to });
-    const episodes = (fleetContext
+    const accessContext = fleetContext
+      ? episodicSubjectAccessContext(fleetContext)
+      : undefined;
+    const episodes = (accessContext
       ? candidates.filter(episode => (
-        isEpisodeVisibleToSubject(episode, fleetContext.actor.contactId)
+        isEpisodeVisibleToSubject(episode, accessContext)
       ))
       : candidates)
       .sort(compareEpisodeRecency);
@@ -203,7 +225,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
 
     return {
       episodes: page,
-      ...(fleetContext?.actor.role === 'owner'
+      ...(fleetContext && reportsWithheldEpisodes(fleetContext)
         ? {
           withheldBySubjectAuthorizationCount: candidates.length - episodes.length,
         }

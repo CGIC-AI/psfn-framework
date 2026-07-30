@@ -33,6 +33,74 @@ describe('Fleet Garden WebSocket rejection close contract', () => {
   ] as const)('maps HTTP %s to close code %s with a browser-visible reason', (status, code, reason) => {
     expect(fleetGardenUpgradeClose(status)).toEqual({ code, reason });
   });
+
+  it('rejects a revoked session during the HTTP upgrade instead of opening then closing', async () => {
+    const canonicalOrigin = 'https://fleet.example.test';
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const broker = {
+      resolveAuthorizationContext: vi.fn(async () => {
+        throw new FleetAuthorizationDeniedError('session_revoked');
+      }),
+    };
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker,
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'fleet-upgrade-revocation-test',
+        kid: 'fleet-upgrade-revocation-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'fleet-upgrade-revocation-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'fleet-upgrade-revocation-test',
+          kid: 'fleet-upgrade-revocation-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2020-01-01T00:00:00.000Z',
+          notAfter: '2040-01-01T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: vi.fn() },
+      portalProjection: { resolve: vi.fn() },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+    });
+    const rejectedUpgradeServer = (
+      router as unknown as {
+        rejectedUpgradeServer: { handleUpgrade: (...args: unknown[]) => void };
+      }
+    ).rejectedUpgradeServer;
+    const openedThenClosed = vi
+      .spyOn(rejectedUpgradeServer, 'handleUpgrade')
+      .mockImplementation(() => undefined);
+    const socket = {
+      destroyed: false,
+      end: vi.fn(),
+    };
+    const incoming = {
+      url: `/companions/${companionId}/garden/api/admin/events`,
+      headers: {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_session=${'r'.repeat(43)}`,
+        origin: canonicalOrigin,
+        'x-forwarded-host': 'fleet.example.test',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-port': '443',
+        'x-forwarded-for': '198.51.100.9',
+      },
+      socket: {},
+    } as IncomingMessage;
+
+    router.handleUpgrade(incoming, socket as never, Buffer.alloc(0));
+
+    await vi.waitFor(() => expect(socket.end).toHaveBeenCalledOnce());
+    expect(socket.end).toHaveBeenCalledWith(expect.stringMatching(/^HTTP\/1\.1 404 /u));
+    expect(openedThenClosed).not.toHaveBeenCalled();
+  });
 });
 
 function request(headers: IncomingMessage['headers'], encrypted = false): Pick<IncomingMessage, 'headers' | 'socket'> {

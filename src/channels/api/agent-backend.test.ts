@@ -9,6 +9,7 @@ import { compileCompanionUiAction } from '../../boundary/fleet-auth/companion-ui
 import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
+  type RequestCapabilityAuthContext,
 } from '../../boundary/fleet-auth/request-capability.js';
 
 function createSessionManagerStub() {
@@ -260,9 +261,10 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       role: 'owner' as const,
       sessionRecordId: '66666666-6666-4666-8666-666666666666',
       sessionAssurance: 'oauth' as const,
+      fleetAccessMode: 'multi_admin' as const,
       authorizationEventId: '77777777-7777-4777-8777-777777777777',
       resolvedAt: new Date().toISOString(),
-    };
+    } satisfies RequestCapabilityAuthContext;
     const parentInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions };
     const parentToken = assertionSigner.signOperator({ ...parentInput, authContext });
     const verifiedParent = assertionVerifier.verifyOperator({ token: parentToken, ...parentInput });

@@ -194,6 +194,13 @@ class FleetSsoRequestError extends Error {
   }
 }
 
+class FleetSsoUpstreamUpgradeError extends FleetSsoRequestError {
+  constructor(status: 502 | 503, message: string) {
+    super(status, message);
+    this.name = 'FleetSsoUpstreamUpgradeError';
+  }
+}
+
 function singleHeader(value: string | string[] | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
@@ -710,7 +717,8 @@ export class GatewayFleetSsoRouter {
     void this.proxyUpgrade(request, socket, head).catch((error) => {
       if (socket.destroyed) return;
       const status = error instanceof FleetSsoRequestError ? error.status : 503;
-      if (this.canSurfaceUpgradeRejection(request)) {
+      if (error instanceof FleetSsoUpstreamUpgradeError
+        && this.canSurfaceUpstreamUpgradeFailure(request)) {
         this.rejectedUpgradeServer.handleUpgrade(request, socket, head, (webSocket) => {
           const close = fleetGardenUpgradeClose(status);
           webSocket.close(close.code, close.reason);
@@ -721,7 +729,7 @@ export class GatewayFleetSsoRouter {
     });
   }
 
-  private canSurfaceUpgradeRejection(request: IncomingMessage): boolean {
+  private canSurfaceUpstreamUpgradeFailure(request: IncomingMessage): boolean {
     if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) return false;
     try {
       return parseGardenRoute(request.url ?? '')?.upstreamTarget === '/api/admin/events';
@@ -1063,9 +1071,11 @@ export class GatewayFleetSsoRouter {
       });
       proxyRequest.once('response', (proxyResponse) => {
         proxyResponse.resume();
-        reject(new FleetSsoRequestError(502, 'Garden upstream refused the upgrade'));
+        reject(new FleetSsoUpstreamUpgradeError(502, 'Garden upstream refused the upgrade'));
       });
-      proxyRequest.once('error', reject);
+      proxyRequest.once('error', () => {
+        reject(new FleetSsoUpstreamUpgradeError(503, 'Garden upstream is unavailable'));
+      });
       proxyRequest.end();
     });
   }

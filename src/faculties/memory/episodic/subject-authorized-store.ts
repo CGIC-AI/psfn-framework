@@ -23,23 +23,43 @@ export interface EpisodicSubjectAccessContext {
    * capability's contact binding), never from tool or request parameters.
    */
   viewerContactId: string;
+  /**
+   * D1 admin projection, supplied only for owner/admin actors:
+   * - sole_admin sees every episode;
+   * - multi_admin sees self/co-subject and unattributed episodes, while
+   *   episodes attributed only to other humans remain withheld.
+   */
+  adminAccessMode?: 'sole_admin' | 'multi_admin';
+  /** True only after the gateway consumed an audited escalation grant. */
+  escalated?: boolean;
 }
 
 export function isEpisodeVisibleToSubject(
   episode: Episode,
-  viewerContactId: string,
+  context: EpisodicSubjectAccessContext,
 ): boolean {
-  const normalized = viewerContactId.trim();
-  return normalized.length > 0 && episode.participantContactIds.includes(normalized);
+  const viewerContactId = context.viewerContactId.trim();
+  if (!viewerContactId) return false;
+  if (context.adminAccessMode === 'sole_admin'
+    || (context.adminAccessMode === 'multi_admin' && context.escalated === true)) {
+    return true;
+  }
+  if (context.adminAccessMode === 'multi_admin'
+    && episode.participantContactIds.length === 0) {
+    return true;
+  }
+  return episode.participantContactIds.includes(viewerContactId);
 }
 
 /**
- * Project the broad episodic store into a subject-scoped read store (88u3):
- * an episode is visible only when the viewer contact is one of its explicitly
- * attributed participants (`participantContactIds`; room participation alone
- * never populates that field). Fail closed: episodes with no participant
- * attribution are invisible, and an arc is visible only when BOTH of its
- * endpoint episodes are visible. Named reads never fall back to the raw
+ * Project the broad episodic store into a subject-scoped read store
+ * (88u3 + D1). Member/guest access requires the viewer contact to be an
+ * explicitly attributed participant (`participantContactIds`; room
+ * participation alone never populates that field). Admin access follows the
+ * signed D1 mode above. L0.1 episodes carry no per-row sensitivity classifier,
+ * so multi-admin mode fails closed by treating episodes attributed only to
+ * other humans as sensitive until escalation. An arc is visible only when
+ * BOTH endpoints are visible, and named reads never fall back to the raw
  * store.
  */
 export function createSubjectAuthorizedEpisodicStore(
@@ -52,7 +72,10 @@ export function createSubjectAuthorizedEpisodicStore(
   }
 
   const isVisible = (episode: Episode): boolean => (
-    isEpisodeVisibleToSubject(episode, viewerContactId)
+    isEpisodeVisibleToSubject(episode, {
+      ...context,
+      viewerContactId,
+    })
   );
   const filterEpisodes = (episodes: readonly Episode[]): Episode[] => episodes.filter(isVisible);
   const filterArcsToVisibleEndpoints = async (

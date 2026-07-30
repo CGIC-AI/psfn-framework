@@ -105,7 +105,10 @@ function makeStore(episodes: readonly Episode[], arcs: readonly EpisodeArc[]) {
         left.startedAt.localeCompare(right.startedAt)
         || left.id.localeCompare(right.id)
       ))),
-    searchByTime: vi.fn(() => [...episodes]),
+    searchByTime: vi.fn((options: { from?: string; to?: string } = {}) => episodes.filter(episode => (
+      (options.from === undefined || episode.endedAt >= options.from)
+      && (options.to === undefined || episode.startedAt <= options.to)
+    ))),
   } satisfies AdminEpisodicStore;
   return store;
 }
@@ -249,6 +252,8 @@ describe('subject-authorized episodic projection (88u3)', () => {
     subjectRelation?: FleetGardenRequestContext['subjectRelation'];
     routeId?: string;
     role?: FleetGardenRequestContext['actor']['role'];
+    accessMode?: FleetGardenRequestContext['actor']['accessMode'];
+    assurance?: FleetGardenRequestContext['actor']['sessionAssurance'];
   }): FleetGardenRequestContext {
     const subjectRelation = overrides.subjectRelation ?? 'self_or_co_subject';
     const authorization = Object.freeze({
@@ -257,7 +262,7 @@ describe('subject-authorized episodic projection (88u3)', () => {
       resource: Object.freeze({ scope: 'personal_workspace' as const, area: 'memory' as const }),
       subjectRelation,
       requirements: Object.freeze({
-        assurance: 'oauth' as const,
+        assurance: overrides.assurance === 'escalated' ? 'escalated' as const : 'oauth' as const,
         confirmation: 'none' as const,
         approvals: Object.freeze([]),
       }),
@@ -291,7 +296,8 @@ describe('subject-authorized episodic projection (88u3)', () => {
         role: overrides.role ?? 'member',
         operatorGrantId: 'grant-principal-a',
         sessionRecordId: 'session-principal-a',
-        sessionAssurance: 'oauth' as const,
+        sessionAssurance: overrides.assurance ?? 'oauth',
+        accessMode: overrides.accessMode ?? 'multi_admin',
       }),
       action: 'memory.read.self' as const,
       resource: Object.freeze({
@@ -401,18 +407,113 @@ describe('subject-authorized episodic projection (88u3)', () => {
     }))).rejects.toThrow(/exact request-local subject relation/u);
   });
 
-  it('does not let an owner role widen episodic visibility beyond the subject', async () => {
+  it.each(['owner', 'admin'] as const)(
+    'D1 sole_admin %s sees every episode and receives no phantom withheld count',
+    async (role) => {
+      const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+      const service = new AdminEpisodicMemoryDataService(
+        makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+      );
+      const context = fleetMemoryContext({
+        contactId: 'contact-a',
+        role,
+        accessMode: 'sole_admin',
+      });
+
+      const listed = await service.listEpisodes(undefined, context);
+      expect(listed.episodes.map(episode => episode.id).sort()).toEqual([
+        'episode-foreign-1',
+        'episode-own-1',
+        'episode-shared-1',
+        'episode-unattributed-1',
+      ]);
+      expect(listed.withheldBySubjectAuthorizationCount).toBeUndefined();
+      await expect(service.getEpisodeDetail(foreign.id, context))
+        .resolves.toMatchObject({ episode: { id: foreign.id } });
+      await expect(service.getEpisodeDetail(unattributed.id, context))
+        .resolves.toMatchObject({ episode: { id: unattributed.id } });
+      expect((await service.listEpisodeArcs(own.id, undefined, context))
+        ?.relatedArcs.map(view => view.arc.id).sort()).toEqual(['arc-cross', 'arc-own']);
+    },
+  );
+
+  it.each(['owner', 'admin'] as const)(
+    'D1 multi_admin %s sees unassigned episodes but withholds other-human episodes until escalation',
+    async (role) => {
+      const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+      const service = new AdminEpisodicMemoryDataService(
+        makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+      );
+      const baseContext = {
+        contactId: 'contact-a',
+        role,
+        accessMode: 'multi_admin' as const,
+      };
+
+      const listed = await service.listEpisodes(undefined, fleetMemoryContext(baseContext));
+      expect(listed.episodes.map(episode => episode.id).sort()).toEqual([
+        'episode-own-1',
+        'episode-shared-1',
+        'episode-unattributed-1',
+      ]);
+      expect(listed.withheldBySubjectAuthorizationCount)
+        .toBe(role === 'owner' ? 1 : undefined);
+
+      const escalatedContext = fleetMemoryContext({
+        ...baseContext,
+        assurance: 'escalated',
+      });
+      const escalated = await service.listEpisodes(undefined, escalatedContext);
+      expect(escalated.episodes).toHaveLength(4);
+      expect(escalated.withheldBySubjectAuthorizationCount).toBeUndefined();
+      await expect(service.getEpisodeDetail(foreign.id, escalatedContext))
+        .resolves.toMatchObject({ episode: { id: foreign.id } });
+    },
+  );
+
+  it('reports only the episodes the same filtered multi_admin request would reveal after escalation', async () => {
     const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
     const service = new AdminEpisodicMemoryDataService(
       makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
     );
+    const params = new URLSearchParams({
+      threadId: 'thread-foreign',
+      from: '2026-04-02T00:00:00.000Z',
+      to: '2026-04-02T23:59:59.999Z',
+    });
+    const baseContext = {
+      contactId: 'contact-a',
+      role: 'owner' as const,
+      accessMode: 'multi_admin' as const,
+    };
 
-    const listed = await service.listEpisodes(
-      undefined,
-      fleetMemoryContext({ contactId: 'contact-a', role: 'owner' }),
+    const listed = await service.listEpisodes(params, fleetMemoryContext(baseContext));
+    const escalated = await service.listEpisodes(
+      params,
+      fleetMemoryContext({ ...baseContext, assurance: 'escalated' }),
     );
-    expect(listed.episodes.map(episode => episode.id).sort())
-      .toEqual(['episode-own-1', 'episode-shared-1']);
-    expect(listed.withheldBySubjectAuthorizationCount).toBe(2);
+    expect(listed.episodes).toHaveLength(0);
+    expect(listed.withheldBySubjectAuthorizationCount)
+      .toBe(escalated.pagination.total - listed.pagination.total);
+    expect(escalated.episodes.map(episode => episode.id)).toEqual([foreign.id]);
   });
+
+  it.each(['member', 'guest'] as const)(
+    'keeps %s visibility subject-scoped even in a sole_admin deployment topology',
+    async (role) => {
+      const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+      const service = new AdminEpisodicMemoryDataService(
+        makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+      );
+      const listed = await service.listEpisodes(undefined, fleetMemoryContext({
+        contactId: 'contact-a',
+        role,
+        accessMode: 'sole_admin',
+      }));
+
+      expect(listed.episodes.map(episode => episode.id).sort())
+        .toEqual(['episode-own-1', 'episode-shared-1']);
+      expect(listed.withheldBySubjectAuthorizationCount).toBeUndefined();
+    },
+  );
 });

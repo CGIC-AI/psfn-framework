@@ -9,7 +9,10 @@ import type { GardenRequestContext } from '../../garden-request-context.js';
 
 export interface AdminEpisodicEpisodeListData {
   episodes: Episode[];
-  /** Owner-only count; omitted for non-owner principals to avoid existence leakage. */
+  /**
+   * Present only for non-escalated multi-admin owner requests, where it reports
+   * the rows the same filtered request would reveal after escalation.
+   */
   withheldBySubjectAuthorizationCount?: number;
   pagination: {
     limit: number;

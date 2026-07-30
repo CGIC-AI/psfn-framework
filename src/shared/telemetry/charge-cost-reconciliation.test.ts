@@ -161,7 +161,7 @@ describe('reconcileChargeCosts', () => {
     const data = reconcileChargeCosts({
       tenantCompanionId: 'companion-a',
       chargeEntries: [
-        chargeEntry({ eventId: 'non-model', surface: 'localFilesystem', amount: 2 }),
+        chargeEntry({ eventId: 'non-model', surface: 'subagentLaunch', amount: 2 }),
         chargeEntry({ eventId: 'charged-only', amount: 3 }),
         chargeEntry({ eventId: 'ambiguous-a', amount: 4, lineage: { runId: 'run-many', rootRunId: 'root-many' } }),
         chargeEntry({ eventId: 'ambiguous-b', amount: 6, lineage: { runId: 'run-many', rootRunId: 'root-many' } }),

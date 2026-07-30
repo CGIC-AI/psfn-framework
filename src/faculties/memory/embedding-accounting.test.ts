@@ -44,6 +44,12 @@ describe('withEmbeddingUsageAccounting', () => {
       originType: 'chat',
       conversationId: 'conversation-1',
       rootInitiationId: 'root-1',
+      chargeLane: 'interactive',
+      chargeSurface: 'externalModelConsult',
+      chargeEventId: 'charge-event-1',
+      chargeRunId: 'charge-run-1',
+      chargeRootRunId: 'charge-root-1',
+      chargeParentRunId: 'charge-parent-1',
     }, async () => await accounted.embedBatch(['hello']))).resolves.toEqual([
       new Float32Array([1, 2]),
     ]);
@@ -71,6 +77,16 @@ describe('withEmbeddingUsageAccounting', () => {
       providerCost: { total: 0.001, currency: 'USD' },
       metadata: expect.objectContaining({ rawUsage: { prompt_tokens: 10 } }),
     }]);
+    for (const field of [
+      'chargeLane',
+      'chargeSurface',
+      'chargeEventId',
+      'chargeRunId',
+      'chargeRootRunId',
+      'chargeParentRunId',
+    ]) {
+      expect(events[0]?.attribution).not.toHaveProperty(field);
+    }
     expect(provider.embedBatchWithUsage).toHaveBeenCalledTimes(1);
     expect(provider.embedBatch).not.toHaveBeenCalled();
   });

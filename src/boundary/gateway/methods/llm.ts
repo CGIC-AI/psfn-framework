@@ -43,6 +43,7 @@ import {
 } from '../../../primitives/llm/work-spec-wire.js';
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
+import { stripChargeAttribution } from '../../../shared/telemetry/model-usage-attribution.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
 import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import {
@@ -428,12 +429,13 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
       const startedAtMs = Date.now();
       const logicalCallId = `embedding:${randomUUID()}`;
       const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
+      const nativeParams = stripChargeAttribution(params);
       const correlation = buildCorrelation({
-        ...params,
-        callType: params.callType ?? 'memory',
-        purpose: params.purpose ?? 'embedding',
-        originType: params.originType ?? 'memory',
-        originStage: params.originStage ?? 'embedding',
+        ...nativeParams,
+        callType: nativeParams.callType ?? 'memory',
+        purpose: nativeParams.purpose ?? 'embedding',
+        originType: nativeParams.originType ?? 'memory',
+        originStage: nativeParams.originStage ?? 'embedding',
       });
       let result: EmbeddingBatchProviderUsageResult;
       try {
@@ -445,7 +447,7 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         if (!recordsUsageInternally) {
           await recordEmbeddingUsage(
             runtime,
-            params,
+            nativeParams,
             logicalCallId,
             startedAtMs,
             'failure',
@@ -463,7 +465,7 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
       if (!recordsUsageInternally) {
         await recordEmbeddingUsage(
           runtime,
-          params,
+          nativeParams,
           logicalCallId,
           startedAtMs,
           'success',
@@ -687,12 +689,6 @@ async function recordEmbeddingUsage(
       ...(params.requestId ? { requestId: params.requestId } : {}),
       ...(params.toolName ? { toolName: params.toolName } : {}),
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-      ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
-      ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
-      ...(params.chargeEventId ? { chargeEventId: params.chargeEventId } : {}),
-      ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
-      ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
-      ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),
       ...(params.shardId ? { shardId: params.shardId } : {}),
       ...(params.subagentId ? { subagentId: params.subagentId } : {}),
       ...(params.conversationId ? { conversationId: params.conversationId } : {}),

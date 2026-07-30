@@ -367,10 +367,6 @@ describe('startup owner-file loaders', () => {
         shard: 10,
       },
       surfaceCosts: {
-        ownerFileInspection: 0,
-        localFilesystem: 0,
-        localEmbedding: 0,
-        externalEmbedding: 0,
         localImageGeneration: 0,
         paidImageGeneration: 5,
         analysisWorkbenchExtensionBand: 4,
@@ -669,7 +665,10 @@ describe('startup owner-file loaders', () => {
     expect(result.ok).toBe(false);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('charge-policy.json');
-    expect(result.errors[0]).toContain('surfaceCosts.localFilesystem must be a finite number >= 0');
+    expect(result.errors[0]).toContain(
+      'ownerFileInspection are retired charge surfaces',
+    );
+    expect(result.errors[0]).toContain('delete these keys from the owner file');
   });
 
   it('rejects the tracked fleet-auth seed before enabled startup', () => {

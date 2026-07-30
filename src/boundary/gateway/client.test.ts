@@ -1553,7 +1553,7 @@ describe('GatewayClient streaming', () => {
       callType: 'memory',
       purpose: 'embedding',
       chargeLane: 'shard',
-      chargeSurface: 'externalEmbedding',
+      chargeSurface: 'externalModelConsult',
       chargeEventId: 'charge-event-1',
       chargeRunId: 'run-1',
       chargeRootRunId: 'root-run-1',
@@ -1574,17 +1574,22 @@ describe('GatewayClient streaming', () => {
         requestId: 'request-1',
         channelId: 'shard:shard-1',
         channelType: 'api',
-        chargeLane: 'shard',
-        chargeSurface: 'externalEmbedding',
-        chargeEventId: 'charge-event-1',
-        chargeRunId: 'run-1',
-        chargeRootRunId: 'root-run-1',
         shardId: 'shard-1',
         workloadType: 'shard',
         workloadId: 'shard-1',
         texts: ['alpha'],
       },
     });
+    for (const field of [
+      'chargeLane',
+      'chargeSurface',
+      'chargeEventId',
+      'chargeRunId',
+      'chargeRootRunId',
+      'chargeParentRunId',
+    ]) {
+      expect(request.params).not.toHaveProperty(field);
+    }
     conn._emit({
       id: request.id,
       jsonrpc: '2.0',

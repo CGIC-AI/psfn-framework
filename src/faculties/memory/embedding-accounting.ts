@@ -12,7 +12,7 @@ import type {
 import { extractProviderAttemptUsageDetails } from '../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../shared/telemetry/provider-cost-evidence.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
+import { stripChargeAttribution } from '../../shared/telemetry/model-usage-attribution.js';
 
 /** zn2iy: optional per-call cancellation, forwarded to the wrapped provider. */
 interface EmbeddingUsageCancellation {
@@ -53,8 +53,7 @@ export function withEmbeddingUsageAccounting(
     error?: unknown,
   ): Promise<void> => {
     const completedAtMs = Date.now();
-    const correlation = getRequestContext();
-    const chargeSnapshot = getRunChargeSnapshot();
+    const correlation = stripChargeAttribution(getRequestContext() ?? {});
     const accounting = usageDetails
       ? reconcileModelUsageAccounting({
           usage: {
@@ -81,46 +80,28 @@ export function withEmbeddingUsageAccounting(
         : 'unknown',
       callKind: 'embedding',
       attribution: {
-        ...(correlation?.companionId
+        ...(correlation.companionId
           ? { companionId: correlation.companionId }
           : (options.companionId ? { companionId: options.companionId } : {})),
-        ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
-        ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
-        ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
+        ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
+        ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+        ...(correlation.channelType ? { channelType: correlation.channelType } : {}),
         callType: 'memory',
         purpose: 'embedding',
-        originType: correlation?.originType ?? correlation?.callType ?? 'memory',
-        originStage: correlation?.originStage ?? 'embedding',
+        originType: correlation.originType ?? correlation.callType ?? 'memory',
+        originStage: correlation.originStage ?? 'embedding',
         service: 'memory',
         process: 'embedding',
-        ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-        ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-        ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-        ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
-        ...(chargeSnapshot?.lane
-          ? { chargeLane: chargeSnapshot.lane }
-          : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
-        ...(chargeSnapshot?.surface
-          ? { chargeSurface: chargeSnapshot.surface }
-          : { chargeSurface: provider.kind === 'api' ? 'externalEmbedding' : 'localEmbedding' }),
-        ...(chargeSnapshot?.chargeEventId
-          ? { chargeEventId: chargeSnapshot.chargeEventId }
-          : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
-        ...(chargeSnapshot?.lineage.runId
-          ? { chargeRunId: chargeSnapshot.lineage.runId }
-          : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
-        ...(chargeSnapshot?.lineage.rootRunId
-          ? { chargeRootRunId: chargeSnapshot.lineage.rootRunId }
-          : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
-        ...(chargeSnapshot?.lineage.parentRunId
-          ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId }
-          : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
-        ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
-        ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
-        ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
-        ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
-        ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
-        ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
+        ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(correlation.shardId ? { shardId: correlation.shardId } : {}),
+        ...(correlation.subagentId ? { subagentId: correlation.subagentId } : {}),
+        ...(correlation.conversationId ? { conversationId: correlation.conversationId } : {}),
+        ...(correlation.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
+        ...(correlation.workloadType ? { workloadType: correlation.workloadType } : {}),
+        ...(correlation.workloadId ? { workloadId: correlation.workloadId } : {}),
       },
       provider: provider.kind,
       model: provider.model,

@@ -19,7 +19,7 @@
 // must exist as channel='companion', is_machine_intelligence contacts in this
 // companion's own schema. When NO eligible peer exists the failure is
 // EXPLICIT (warn log + outcome event naming the seed:sibling-contacts
-// maintenance entrypoint) — never a silent no-op (carlini evidence 2026-07-30).
+// maintenance entrypoint) — never a silent no-op (live fleet evidence 2026-07-30).
 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -105,7 +105,7 @@ export function createIcpFeltImpulseInitiationAdapter(
 
       const peers = await deps.peers.listKnownPeerAvailability();
       if (peers.length === 0) {
-        // EXPLICIT peer-eligibility failure (hrmrq.34 / carlini evidence):
+        // EXPLICIT peer-eligibility failure (hrmrq.34 / live fleet evidence):
         // the felt impulse fired but there is no ICP-canonical sibling
         // contact to reach. Name the fix, do not degrade silently.
         log.warn(

@@ -91,12 +91,8 @@ export function getBearerApiCompanionPin(): Promise<BearerApiCompanionPinData> {
   return apiGet<BearerApiCompanionPinData>('/api/admin/channels/bearer-companion');
 }
 
-export function setBearerApiCompanionPin(
-  companionId: string,
-): Promise<BearerApiCompanionPinSaveResponse> {
-  return apiPost<BearerApiCompanionPinSaveResponse>('/api/admin/channels/bearer-companion', {
-    companionId,
-  });
+export function setBearerApiCompanionPin(): Promise<BearerApiCompanionPinSaveResponse> {
+  return apiPost<BearerApiCompanionPinSaveResponse>('/api/admin/channels/bearer-companion');
 }
 
 export function getChannelEnvelopeData(): Promise<ChannelEnvelopeData> {

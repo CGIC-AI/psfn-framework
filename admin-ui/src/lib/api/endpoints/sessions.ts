@@ -228,7 +228,13 @@ export function listSessionRoutes(): Promise<AdminSessionRouteListData> {
 export function resetSourceChannelSession(
   input: AdminSessionRouteResetInput,
 ): Promise<AdminSessionRouteResetData> {
-  return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', input);
+  // The server derives the audit actor from the authenticated request context.
+  // Never forward the legacy browser field across the fleet capability boundary.
+  return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', {
+    sourceChannelId: input.sourceChannelId,
+    reason: input.reason,
+    ...(input.mode ? { mode: input.mode } : {}),
+  });
 }
 
 export function listCogSecEvents(): Promise<AdminCogSecEventListData> {
@@ -238,11 +244,19 @@ export function listCogSecEvents(): Promise<AdminCogSecEventListData> {
 export function previewCogSecRemediation(
   input: AdminCogSecRemediationInput,
 ): Promise<AdminCogSecRemediationPreviewData> {
-  return apiPost<AdminCogSecRemediationPreviewData>('/api/admin/session-routes/cogsec/preview', input);
+  const { actor: _serverOwnedActor, ...body } = input;
+  return apiPost<AdminCogSecRemediationPreviewData>(
+    '/api/admin/session-routes/cogsec/preview',
+    body,
+  );
 }
 
 export function applyCogSecRemediation(
   input: AdminCogSecRemediationInput,
 ): Promise<AdminCogSecRemediationApplyData> {
-  return apiPost<AdminCogSecRemediationApplyData>('/api/admin/session-routes/cogsec/apply', input);
+  const { actor: _serverOwnedActor, ...body } = input;
+  return apiPost<AdminCogSecRemediationApplyData>(
+    '/api/admin/session-routes/cogsec/apply',
+    body,
+  );
 }

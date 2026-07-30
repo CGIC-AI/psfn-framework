@@ -25,7 +25,6 @@ export function listWishes(): Promise<WishlistListResponse> {
 export function acknowledgeWish(id: string): Promise<WishlistMutationResponse> {
   return apiPost<WishlistMutationResponse>(
     `/api/admin/wishlist/${encodeURIComponent(id)}/acknowledge`,
-    {},
   );
 }
 
@@ -50,6 +49,5 @@ export function convertWishToBead(
 export function completeWish(id: string): Promise<WishlistMutationResponse> {
   return apiPost<WishlistMutationResponse>(
     `/api/admin/wishlist/${encodeURIComponent(id)}/done`,
-    {},
   );
 }

@@ -18,7 +18,7 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 // result and whole-gate attestation is invalidated and forced to rerun. It is
 // embedded in every stage record and in the final attestation; a mismatch is a
 // hard reuse invalidation.
-export const GATE_VERSION = 3;
+export const GATE_VERSION = 4;
 
 // Schema version for a single per-stage record on disk. Independent of the
 // whole-gate attestation schema so the two can evolve separately.
@@ -348,6 +348,19 @@ export function buildGatePlan({
   }
   if (matches(/^admin-ui\//)) {
     plan.push(command('garden-ui', 'npm', ['run', 'verify:garden-ui']));
+  }
+  if (
+    matches(
+      /^(?:src\/boundary\/fleet-auth\/garden-route-capabilities\.ts|admin-ui\/src\/lib\/api\/)/,
+    )
+  ) {
+    plan.push(
+      command(
+        'garden-route-body-policy',
+        'npm',
+        ['run', 'test:garden:route-body-policy'],
+      ),
+    );
   }
   if (matches(/^companion-ui\//)) {
     plan.push(command('companion-ui', 'npm', ['run', 'verify:companion-ui']));

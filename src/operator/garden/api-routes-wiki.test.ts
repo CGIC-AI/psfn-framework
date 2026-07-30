@@ -1,5 +1,15 @@
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { GatewaySystemDataWriter } from '../../boundary/gateway/system-data-writer.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { AdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
@@ -18,6 +28,7 @@ import type {
   SharedWorldWikiProposal,
   SharedWorldWikiProposalApplyResult,
 } from './services/types.js';
+import { AdminWikiDataService } from './services/wiki-service.js';
 
 class CapturingResponse {
   status = 0;
@@ -424,6 +435,74 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
       rejected: [expect.objectContaining({ file: 'partner.md' })],
       projection: expect.objectContaining({ status: 'skipped', reason: 'dry_run' }),
     });
+  });
+
+  it('publishes through the gateway when the agent system-data root is read-only', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-workspace-'));
+    const agentSystemDataDir = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-agent-'));
+    const gatewaySystemDataDir = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-gateway-'));
+    const places = {
+      schemaVersion: 1,
+      sites: [{ siteId: 'home', displayName: 'Home', kind: 'physical' }],
+      places: [],
+    };
+    writeFileSync(join(agentSystemDataDir, 'places.json'), JSON.stringify(places), 'utf8');
+    writeFileSync(join(gatewaySystemDataDir, 'places.json'), JSON.stringify(places), 'utf8');
+    chmodSync(agentSystemDataDir, 0o555);
+    const systemDataWriter = new GatewaySystemDataWriter({
+      configStore: {
+        saveRuntimeSettings: vi.fn(),
+        saveModels: vi.fn(),
+        saveProviders: vi.fn(),
+        saveChannelsOwnerFile: vi.fn(),
+        saveTrustPolicy: vi.fn(),
+        saveIntakePolicy: vi.fn(),
+        savePartnerAffectShadow: vi.fn(),
+        saveBackup: vi.fn(),
+      },
+      systemDataDir: gatewaySystemDataDir,
+    });
+    const service = new AdminWikiDataService({
+      workspacePath,
+      systemDataDir: agentSystemDataDir,
+      systemDataWriter,
+    });
+
+    try {
+      const response = await invokePost(
+        makeRoutes(service),
+        '/api/admin/wiki/shared-world/home/publish',
+        {},
+      );
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({
+        siteId: 'home',
+        created: ['site-overview'],
+        projection: { status: 'skipped', reason: 'postgres_not_configured' },
+      });
+      expect(existsSync(join(
+        gatewaySystemDataDir,
+        'shared-world',
+        'wiki',
+        'sites',
+        'home',
+        'documents',
+        'site-overview.md',
+      ))).toBe(true);
+      expect(existsSync(join(
+        agentSystemDataDir,
+        'shared-world',
+        'wiki',
+        'sites',
+        'home',
+      ))).toBe(false);
+    } finally {
+      chmodSync(agentSystemDataDir, 0o755);
+      rmSync(workspacePath, { recursive: true, force: true });
+      rmSync(agentSystemDataDir, { recursive: true, force: true });
+      rmSync(gatewaySystemDataDir, { recursive: true, force: true });
+    }
   });
 
   it('rejects an import with no directory', async () => {

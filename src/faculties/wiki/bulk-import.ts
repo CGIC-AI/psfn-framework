@@ -108,20 +108,24 @@ export interface WikiImportOptions {
   updatedBy?: string;
   /** When true, run the guard + resolve ids but do NOT write (preview). */
   dryRun?: boolean;
+  /** Gateway execution fails the whole RPC if an accepted file cannot be written. */
+  failOnWriteError?: boolean;
+}
+
+export interface WikiImportFilesOptions extends WikiImportOptions {
+  files: readonly MarkdownImportFile[];
 }
 
 /**
- * Import a directory of Markdown files into a wiki store. Personal-fact-guarded
- * per-file for shared-world targets; every rejection is reported, never dropped
- * silently. Idempotent per file: the document id is derived from the filename,
- * so re-importing updates in place.
+ * Import already-read Markdown files. This is the shared deterministic core for
+ * local imports and gateway-routed imports: the agent may read an operator
+ * selected directory, while only the gateway writes the shared-world tree.
  */
-export function importMarkdownDirectory(options: WikiImportOptions): WikiImportReport {
-  const { directory, store, scope, personalFactGuard } = options;
+export function importMarkdownFiles(options: WikiImportFilesOptions): WikiImportReport {
+  const { directory, files, store, scope, personalFactGuard } = options;
   const sourceClass: WikiSourceClass = options.sourceClass ?? 'operator_authored_note';
   const updatedBy = options.updatedBy ?? 'wiki-bulk-import';
 
-  const files = readMarkdownDirectory(directory);
   const report: WikiImportReport = {
     directory,
     scope,
@@ -154,6 +158,7 @@ export function importMarkdownDirectory(options: WikiImportOptions): WikiImportR
       });
       report.imported.push({ file: entry.file, id: written.id, title: written.title });
     } catch (error) {
+      if (options.failOnWriteError) throw error;
       report.rejected.push({
         file: entry.file,
         reason: error instanceof Error ? error.message : String(error),
@@ -162,4 +167,17 @@ export function importMarkdownDirectory(options: WikiImportOptions): WikiImportR
   }
 
   return report;
+}
+
+/**
+ * Import a directory of Markdown files into a wiki store. Personal-fact-guarded
+ * per-file for shared-world targets; every rejection is reported, never dropped
+ * silently. Idempotent per file: the document id is derived from the filename,
+ * so re-importing updates in place.
+ */
+export function importMarkdownDirectory(options: WikiImportOptions): WikiImportReport {
+  return importMarkdownFiles({
+    ...options,
+    files: readMarkdownDirectory(options.directory),
+  });
 }

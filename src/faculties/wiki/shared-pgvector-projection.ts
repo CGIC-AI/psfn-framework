@@ -441,7 +441,7 @@ export function resolveSharedWikiProjectionDecision(context: {
 export async function runSharedWorldWikiWrite<TReport>(options: {
   context: SharedWikiProjectionContext;
   store: SharedWorldWikiStore;
-  write: () => TReport;
+  write: () => TReport | Promise<TReport>;
 }): Promise<{ report: TReport; projection: SharedWikiProjectionOutcome }> {
   const { context, store } = options;
   const siteId = store.siteId;
@@ -457,7 +457,7 @@ export async function runSharedWorldWikiWrite<TReport>(options: {
     multiCompanion: context.multiCompanion,
   });
   if (decision.action === 'skip') {
-    const report = options.write();
+    const report = await options.write();
     log.warn('Shared-world wiki write completed WITHOUT projection (flag-off, honest skip)', {
       siteId,
       reason: decision.reason,
@@ -480,7 +480,7 @@ export async function runSharedWorldWikiWrite<TReport>(options: {
   } catch (error) {
     if (context.multiCompanion) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    const report = options.write();
+    const report = await options.write();
     log.warn('Shared-world wiki projection unavailable; write completed, projection reported failed', {
       siteId,
       error: message,
@@ -492,7 +492,7 @@ export async function runSharedWorldWikiWrite<TReport>(options: {
   }
 
   try {
-    const report = options.write();
+    const report = await options.write();
     let rebuild: WikiProjectionRebuildResult;
     try {
       const documents = store

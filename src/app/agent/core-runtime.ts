@@ -532,6 +532,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getIntakeSinkGate: () => intakeSinkGate,
     ...(config.companionId ? { companionId: config.companionId } : {}),
     systemDataDir: pathSnapshot.systemDataDir,
+    systemDataWriter: gateway,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.

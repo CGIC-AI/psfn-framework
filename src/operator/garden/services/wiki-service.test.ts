@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SharedWorldWikiStore } from '../../../faculties/wiki/store.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import { GatewaySystemDataWriter } from '../../../boundary/gateway/system-data-writer.js';
 import { AdminWikiDataService } from './wiki-service.js';
 
 const tempDirs: string[] = [];
@@ -25,6 +26,22 @@ function writePlacesRegistry(systemDataDir: string): void {
     places: [],
   };
   writeFileSync(join(systemDataDir, 'places.json'), JSON.stringify(registry), 'utf8');
+}
+
+function createSystemDataWriter(systemDataDir: string): GatewaySystemDataWriter {
+  return new GatewaySystemDataWriter({
+    configStore: {
+      saveRuntimeSettings: vi.fn(),
+      saveModels: vi.fn(),
+      saveProviders: vi.fn(),
+      saveChannelsOwnerFile: vi.fn(),
+      saveTrustPolicy: vi.fn(),
+      saveIntakePolicy: vi.fn(),
+      savePartnerAffectShadow: vi.fn(),
+      saveBackup: vi.fn(),
+    },
+    systemDataDir,
+  });
 }
 
 function sharedDocumentCount(
@@ -52,7 +69,11 @@ describe('AdminWikiDataService scope memo', () => {
       body: 'The first shared reference.',
       sourceClass: 'system_seed',
     });
-    const service = new AdminWikiDataService({ workspacePath, systemDataDir });
+    const service = new AdminWikiDataService({
+      workspacePath,
+      systemDataDir,
+      systemDataWriter: createSystemDataWriter(systemDataDir),
+    });
 
     const initial = await service.listWikiScopes();
     expect(sharedDocumentCount(initial)).toBe(1);
@@ -73,5 +94,15 @@ describe('AdminWikiDataService scope memo', () => {
     });
     const refreshed = await service.listWikiScopes();
     expect(sharedDocumentCount(refreshed)).toBe(3);
+  });
+
+  it('fails closed with a gateway remedy when a shared-world writer is unavailable', async () => {
+    const workspacePath = makeTempDir('psfn-wiki-service-workspace-');
+    const systemDataDir = makeTempDir('psfn-wiki-service-system-');
+    writePlacesRegistry(systemDataDir);
+    const service = new AdminWikiDataService({ workspacePath, systemDataDir });
+
+    await expect(service.publishSharedWorldSite('home'))
+      .rejects.toThrow(/gateway system-data writer.*system\.data\.write/iu);
   });
 });

@@ -10,13 +10,17 @@ function summarizeSystemDataWrite(
     return {
       companionId: authenticatedCompanionId ?? '(unidentified)',
       kind: request.kind,
-      ...(request.kind === 'owner_file'
-        ? { ownerFile: request.ownerFile }
-        : {
+      ...(request.kind === 'owner_file' ? { ownerFile: request.ownerFile } : {}),
+      ...(request.kind === 'tool_conformance'
+        ? {
             ranAt: request.payload.ranAt,
             trigger: request.payload.trigger,
             resultCount: request.payload.results.length,
-          }),
+          }
+        : {}),
+      ...(request.kind === 'shared_world_wiki'
+        ? { operation: request.operation, siteId: request.siteId }
+        : {}),
     };
   } catch {
     // Audit summaries execute before the audited handler. They must never

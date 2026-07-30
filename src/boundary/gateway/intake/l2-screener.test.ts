@@ -67,7 +67,6 @@ function testPolicy(): IntakePolicyConfig {
         },
       },
       l2Screener: {
-        model: 'google/gemini-2.5-flash-lite',
         escalationThresholdsByTier: {
           trusted: 0.95, standard: 0.85, untrusted: 0.6, hostile: 0.5,
         },
@@ -82,9 +81,7 @@ function testPolicy(): IntakePolicyConfig {
         maxContentChars: 24000,
       },
       l3Screener: {
-        model: 'z-ai/glm-4.5-air',
         dualModel: false,
-        secondaryModel: null,
         escalationConfidenceThresholdsByTier: {
           trusted: 0.9, standard: 0.8, untrusted: 0.7, hostile: 0.6,
         },
@@ -328,6 +325,7 @@ describe('evaluateL2 routing', () => {
       context: baseContext(),
       priorScore: 0,
       config: testPolicy(),
+      model: 'google/gemini-2.5-flash-lite',
       backend: BACKEND,
       ...overrides,
     };
@@ -379,6 +377,7 @@ describe('evaluateL2 L3 escalation', () => {
       context: baseContext(),
       priorScore: 1,
       config: testPolicy(),
+      model: 'google/gemini-2.5-flash-lite',
       backend: BACKEND,
       ...overrides,
     };
@@ -424,6 +423,7 @@ describe('evaluateL2 fail-closed per tier', () => {
       context: baseContext(),
       priorScore: 1,
       config: testPolicy(),
+      model: 'google/gemini-2.5-flash-lite',
       backend: BACKEND,
       fetch: fetchHttpError(503, 'Service Unavailable'),
       ...overrides,

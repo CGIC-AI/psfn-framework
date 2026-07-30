@@ -303,10 +303,11 @@ invariant owned by the shared transport
 (`src/boundary/gateway/intake/screener-transport.ts`) and pinned by tests.
 The transport also neutralizes delimiter collisions
 (`neutralizeUntrustedDelimiters`) so screened content cannot forge the
-screener prompt's own framing. Model choice is config
-(`l2Screener.model`, seed `google/gemini-2.5-flash-lite`) — a fast, cheap
-model; speed is the gating criterion. Cost per call: one small
-chat-completion (seed caps: 8 s timeout, 24 000 input chars).
+screener prompt's own framing. The model is resolved at gateway startup
+through the canonical `background` purpose in `models.json`, using the same
+single- versus multi-companion selection semantics as ordinary model calls.
+There is no screener-specific model selector in `intake-policy.json`. Cost per
+call: one small chat-completion (seed caps: 8 s timeout, 24 000 input chars).
 
 `screenL2` returns a schema-validated classification (closed-taxonomy intent
 labels, injection confidence in [0,1], a safe one-line summary) and throws on
@@ -322,12 +323,13 @@ tier in `l3Screener.mandatoryTiers` — returns an `escalate_l3` outcome.
 > mandatory tier, via the same `IntakeEscalationPort` as L2.
 
 The deep second/third pass for items L2 flags, or for tiers mandating deep
-screening. Same tool-less transport; model is a larger open model
-(`l3Screener.model`, seed `z-ai/glm-4.5-air`; seed caps: 30 s timeout,
-48 000 input chars, 1 200 output tokens). Optional dual-verdict mode
-(`dualModel`, default off) runs two **different** models; the aggregate flags
-if either flags (fail-closed aggregation) and both verdicts land on the
-envelope.
+screening. Same tool-less transport; its primary model is resolved through
+the canonical `reasoning` purpose (seed caps: 30 s timeout, 48 000 input
+chars, 1 200 output tokens). Optional dual-verdict mode (`dualModel`, default
+off) adds the canonical `background` purpose as a second independent verdict.
+Startup rejects dual mode when both purposes resolve to the same model. The
+aggregate flags if either flags (fail-closed aggregation), and both verdicts
+land on the envelope.
 
 Hard rule (operator-locked): anything that reaches L3 generates a CogSec
 event **and** a quarantine entry. `applyL3ScreeningOutcome` folds every
@@ -339,7 +341,10 @@ flagged) stored in `envelope.extractedFields`; a verbatim-quote guard rejects
 any screener output that echoes a run of ≥24 chars of the screened content —
 summary-instead-of-quote is enforced structurally, not by prompt politeness.
 There is no per-tier fail-closed action for L3: an L3 failure always holds
-the item in quarantine in enforce mode.
+the item in quarantine in enforce mode. Each L3 failed-closed result also
+emits structural `intake.screening.fail_closed` telemetry with stage `l3` and
+the source class. The standard operator-alert handler raises a priority-5
+alert on the second runtime failure for the same stage/source-class pair.
 
 ### Vision screening (L2.5/L3, wired — htm9.8)
 
@@ -349,12 +354,13 @@ called from the agent's vision-attachment phase
 (`src/core/agent/substrate-agent/vision-attachments.ts`) for **every inbound
 image** before it can become model input.
 
-One small multimodal call (config `visionScreener.model`, seed
-`google/gemini-2.5-flash-lite`) OCRs **and** describes the image —
-deliberately not a heavy OCR pipeline (no Tesseract, no CLIP+OCR at L1). One
-call costs a fraction of a cent (seed caps: 20 s timeout, 1 600 output
-tokens). This closes the typographic-injection gap: rendered instruction
-text, including near-white-on-white that a machine reads and a human cannot.
+One small multimodal call, resolved through the canonical `vision` purpose,
+OCRs **and** describes the image — deliberately not a heavy OCR pipeline (no
+Tesseract, no CLIP+OCR at L1). Startup requires the selected catalog entry to
+declare `supportsVision: true`. One call costs a fraction of a cent (seed
+caps: 20 s timeout, 1 600 output tokens). This closes the
+typographic-injection gap: rendered instruction text, including
+near-white-on-white that a machine reads and a human cannot.
 
 Taint rules, both verified in code:
 
@@ -367,6 +373,11 @@ Taint rules, both verified in code:
   regardless of how benign the transcript looks, because pixel-perturbation
   and steganographic attacks against the downstream vision model have no
   deployable detector (see Known Gaps).
+- **Empty OCR is explicit, never inferred.** A verdict with empty `ocrText`
+  is schema-valid only when the model also returns
+  `noLegibleText: true`. Empty OCR without that sentinel fails closed, so a
+  text-only or image-ignoring model cannot silently classify every image as
+  benign.
 
 Fail closed: vision model unreachable/timeout/unparseable in enforce mode
 means the image is **withheld** (fixed soft-notice template) — never
@@ -928,11 +939,22 @@ per-sink record must be fully mapped (no implicit defaults), and
 contradictory source lists (same pattern trusted and denied) refuse to load.
 Defaults below are the seed values.
 
+Screener model identity is deliberately absent from this owner file. L2 uses
+the standard `background` purpose, L3 uses `reasoning` (plus `background` in
+dual mode), and vision uses `vision`. Existing owners carrying the retired
+`l2Screener.model`, `l3Screener.model`,
+`l3Screener.secondaryModel`, or `visionScreener.model` keys fail startup with
+an actionable remedy. Dry-run and apply the atomic cleanup with
+`npm run migrate:intake-policy-owner -- --data-dir <system-data-dir>` and
+the same command plus `--apply`, or delete the keys manually; configure the
+normal `models.json`/`modelPurposeSelection` lanes instead. Runtime never
+silently ignores or aliases the retired keys.
+
 ### Top level
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `schemaVersion` | `1` | Must be 1. |
+| `schemaVersion` | `2` | Must be 2. Schema 1 requires the explicit `migrate:intake-policy-owner` command. |
 | `mode` | `"shadow"` | `off`: no screening service or sink gate constructed, no envelopes exist. `shadow`: envelopes created, screened, journaled, and audited, but delivered content never changes and gates never block. `enforce`: `effectiveText` honors decisions (sanitize substitutes sanitized text; quarantine/block substitute the withheld notice) and sink-gate denials are real. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
@@ -947,7 +969,7 @@ Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `itemTtlHours` | `168` | Hours before a held item auto-transitions to `expired`. |
+| `itemTtlHours` | `168` | Hours before a held item auto-transitions to `expired`. Expired rows remain visible in the Garden queue's bounded terminal history, and each durable TTL transition emits an operator alert event. |
 | `maxHeldItems` | `500` | Queue cap; oldest items expire early past it. |
 
 ### `injectionClassifier` (L1.5)
@@ -961,7 +983,6 @@ Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `model` | `"google/gemini-2.5-flash-lite"` | OpenRouter slug for the tool-less L2 call. Config, never hardcoded. |
 | `escalationThresholdsByTier` | trusted `0.95`, standard `0.85`, untrusted `0.6`, hostile `0.5` | Prior (max L1/L1.5) score at/above which an item escalates to L2. |
 | `mandatoryTiers` | `["hostile"]` | Tiers that always escalate to L2 regardless of prior score. |
 | `failClosedActionByTier` | trusted/standard `l1_labels_only`, untrusted/hostile `quarantine` | Action when the L2 call errors/times out. No silent-pass option exists. |
@@ -972,9 +993,7 @@ Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `model` | `"z-ai/glm-4.5-air"` | Primary heavy-verdict model. |
-| `dualModel` | `false` | When true, two different models each produce a verdict; the aggregate flags if either flags. |
-| `secondaryModel` | `null` | Required (and distinct from `model`) when `dualModel` is true; must be `null` otherwise. |
+| `dualModel` | `false` | When true, the standard `reasoning` and `background` purpose models each produce a verdict; startup requires them to resolve to different models, and the aggregate flags if either flags. |
 | `escalationConfidenceThresholdsByTier` | trusted `0.9`, standard `0.8`, untrusted `0.7`, hostile `0.6` | L2 injection confidence at/above which an item escalates to L3 even without a flagged label. |
 | `mandatoryTiers` | `["hostile"]` | Tiers that always escalate to L3 regardless of the L2 verdict. |
 | `timeoutMs` | `30000` | Per-model-call timeout. |
@@ -989,7 +1008,6 @@ already suspect, so an L3 failure always holds the item (enforce mode).
 | Knob | Seed default | What it does |
 | --- | --- | --- |
 | `enabled` | `true` | `false` restores pre-htm9.8 behavior (images bypass VLM screening). When true, enforce mode fails closed: unreachable vision model means the image is withheld. |
-| `model` | `"google/gemini-2.5-flash-lite"` | Multimodal OpenRouter slug for the one OCR+description call. |
 | `timeoutMs` | `20000` | Per-call timeout. |
 | `maxOutputTokens` | `1600` | Output cap for the OCR+description verdict. |
 
@@ -1133,11 +1151,6 @@ highest-friction action; when a safe representation exists, prefer it.
 
 Documented deliberately; do not let the layer diagram imply otherwise.
 
-- **L2/L3 escalation is not wired yet.** `evaluateL2`/`evaluateL3` have no
-  runtime call sites (verified 2026-07-09); the wiring is landing
-  separately. Until then, live decisions come from L1 + L1.5 + the vision
-  screener, and the `l2Screener`/`l3Screener` policy sections configure
-  code that is not yet reachable.
 - **Pixel-perturbation and steganographic image attacks have no deployable
   detector** — nothing in the field ships one. The mitigation is
   containment, not detection: `image_ocr` provenance stays hostile-tier

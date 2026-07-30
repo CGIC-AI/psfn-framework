@@ -9,11 +9,10 @@
 // anything unparseable), and its raw output is NEVER echoed verbatim into
 // anything companion-visible.
 //
-// Model choice is CONFIG (`l3Screener.model`): a larger open model — GLM,
-// Kimi, MiniMax, heavy Gemma, or GPT-mini class. Optional dual-verdict mode
-// (`l3Screener.dualModel`, default single) runs TWO different models for
-// independent perspectives; the aggregate flags if EITHER flags (fail-closed
-// aggregation) and both verdicts are recorded on the envelope.
+// Model choice follows the canonical reasoning purpose. Optional dual-verdict
+// mode (`l3Screener.dualModel`, default single) adds the canonical background
+// purpose for an independent second perspective; startup requires the two
+// purposes to resolve to different models.
 //
 // HARD RULE (operator-locked): anything that reaches L3 generates a CogSec
 // event AND a quarantine entry. `applyL3ScreeningOutcome` is that guarantee:
@@ -181,7 +180,7 @@ export interface L3AggregateVerdict {
 
 export interface L3ScreenerDeps {
   backend: L3ScreenerBackend;
-  /** OpenRouter model slug (from intake-policy.json `l3Screener`). */
+  /** OpenRouter model slug resolved from a canonical model purpose. */
   model: string;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
@@ -534,6 +533,11 @@ export interface EvaluateL3Input {
    */
   l2?: { labels: readonly IntakeRiskLabel[]; injectionConfidence: number };
   config: IntakePolicyConfig;
+  /**
+   * Startup-resolved canonical purpose models: reasoning first and, in dual
+   * mode, background second.
+   */
+  models: readonly string[];
   backend: L3ScreenerBackend;
   /** Test seam; production uses the global fetch. */
   fetch?: L3ScreenerFetch;
@@ -590,16 +594,15 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
   }
 
   const l3 = config.l3Screener;
-  const models = [l3.model];
-  if (l3.dualModel) {
-    if (!l3.secondaryModel) {
-      // Owner-file validation guarantees this; guard against hand-built configs.
-      throw new L3ScreenerError(
-        'L3 dual-model mode requires l3Screener.secondaryModel',
-      );
-    }
-    models.push(l3.secondaryModel);
+  const expectedModels = l3.dualModel ? 2 : 1;
+  if (input.models.length !== expectedModels) {
+    throw new L3ScreenerError(
+      `L3 ${l3.dualModel ? 'dual' : 'single'}-model mode requires `
+      + `${String(expectedModels)} startup-resolved purpose model(s), got `
+      + String(input.models.length),
+    );
   }
+  const models = [...input.models];
 
   const settled = await Promise.allSettled(models.map((model) => screenL3(
     input.text,

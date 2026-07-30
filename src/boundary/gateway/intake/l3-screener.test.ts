@@ -47,7 +47,10 @@ import {
 import { renderIntakeWithheldContentPlaceholder } from '../../../core/cogsec/intake/screening.js';
 import { isIntakeFirewallNoticeText } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
-import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
+import {
+  createIntakeQuarantineStore,
+  type IntakeQuarantineHoldPort,
+} from '../../../core/cogsec/intake/quarantine-store.js';
 import { formatToolObservationForContext } from '../../../core/session/tool-observation.js';
 import {
   createPromptPlanBlock,
@@ -90,7 +93,7 @@ function testPolicy(overrides: PolicyOverrides = {}): IntakePolicyConfig {
 function dualPolicy(overrides: PolicyOverrides = {}): IntakePolicyConfig {
   return testPolicy({
     ...overrides,
-    l3: { dualModel: true, secondaryModel: SECONDARY_MODEL, ...(overrides.l3 ?? {}) },
+    l3: { dualModel: true, ...(overrides.l3 ?? {}) },
   });
 }
 
@@ -400,11 +403,15 @@ describe('shouldEscalateToL3', () => {
 
 describe('evaluateL3', () => {
   function evalInput(overrides: Partial<EvaluateL3Input> = {}): EvaluateL3Input {
+    const config = overrides.config ?? testPolicy();
     return {
       text: HOSTILE_CONTENT,
       context: baseContext(),
       l2: L2_FLAGGED,
-      config: testPolicy(),
+      config,
+      models: config.l3Screener.dualModel
+        ? [PRIMARY_MODEL, SECONDARY_MODEL]
+        : [PRIMARY_MODEL],
       backend: BACKEND,
       ...overrides,
     };
@@ -508,6 +515,7 @@ describe('l3ScreeningContribution', () => {
       context: baseContext(),
       l2: L2_FLAGGED,
       config: dualPolicy(),
+      models: [PRIMARY_MODEL, SECONDARY_MODEL],
       backend: BACKEND,
       fetch: fetchByModel({
         [PRIMARY_MODEL]: CLEAR_RESPONSE,
@@ -535,6 +543,7 @@ describe('l3ScreeningContribution', () => {
       context: baseContext(),
       l2: L2_FLAGGED,
       config: testPolicy(),
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchHttpError(500, 'Internal Server Error'),
     });
@@ -603,6 +612,7 @@ describe('applyL3ScreeningOutcome', () => {
       context,
       l2: L2_FLAGGED,
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchReturning(response),
     });
@@ -691,6 +701,7 @@ describe('applyL3ScreeningOutcome', () => {
       context: baseContext(),
       l2: L2_FLAGGED,
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchHttpError(503, 'Service Unavailable'),
     });
@@ -706,6 +717,58 @@ describe('applyL3ScreeningOutcome', () => {
     const event = events.getEvent(result.cogSecCaseId);
     expect(event?.severity).toBe('high');
     expect(event?.failureDetails).toContain('fail-closed');
+  });
+
+  it('fires the TTL-expiry alert hook for an L3 failed-closed hold', async () => {
+    const config = testPolicy({ mode: 'enforce' });
+    const events = makeEventStore();
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-l3-expiry-'));
+    tempDirs.push(dir);
+    let clock = 1_750_000_000_000;
+    const onExpired = vi.fn();
+    const quarantine = createIntakeQuarantineStore(
+      join(dir, 'intake-quarantine.json'),
+      {
+        itemTtlHours: 1,
+        maxHeldItems: 10,
+        now: () => clock,
+        onExpired,
+      },
+    );
+    const outcome = await evaluateL3({
+      text: HOSTILE_CONTENT,
+      context: baseContext(),
+      l2: L2_FLAGGED,
+      config,
+      models: [PRIMARY_MODEL],
+      backend: BACKEND,
+      fetch: fetchHttpError(503, 'Service Unavailable'),
+    });
+    applyL3ScreeningOutcome({
+      ...applyInput(
+        outcome as Exclude<L3ScreeningOutcome, { kind: 'skipped' }>,
+        config,
+        events,
+      ),
+      quarantine,
+      atMs: clock,
+    });
+
+    clock += 3_600_001;
+    expect(quarantine.list()[0]?.status).toBe('expired');
+    expect(onExpired).toHaveBeenCalledWith({
+      entry: expect.objectContaining({
+        status: 'expired',
+        rawText: '',
+        envelope: expect.objectContaining({
+          extractedFields: expect.objectContaining({
+            [L3_FIELD_ERROR]: expect.stringContaining('503'),
+          }),
+        }),
+      }),
+      expiredAtMs: clock,
+      reason: 'quarantine TTL elapsed',
+    });
   });
 
   it('shadow mode: observe-only text passthrough, but envelope + CogSecEvent are still written', async () => {
@@ -729,6 +792,7 @@ describe('applyL3ScreeningOutcome', () => {
       context: baseContext(),
       l2: L2_FLAGGED,
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchHttpError(500, 'Internal Server Error'),
     });
@@ -805,6 +869,7 @@ describe('applyL3ScreeningOutcome', () => {
       context: baseContext(),
       l2: L2_FLAGGED,
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchHttpError(503, 'Service Unavailable'),
     });
@@ -898,6 +963,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
       context: baseContext(),
       priorScore: 1,
       config,
+      model: 'google/gemini-2.5-flash-lite',
       backend: BACKEND,
       fetch: fetchReturning(JSON.stringify({
         labels: ['injection/override_attempt'],
@@ -917,6 +983,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
         injectionConfidence: l2Outcome.classification.injectionConfidence,
       },
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchReturning(FLAGGED_RESPONSE),
     });
@@ -956,6 +1023,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
       text: CANARY,
       context: baseContext({ sourceClass: 'image_ocr', sourceRiskTier: 'hostile' }),
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchReturning(CLEAR_RESPONSE),
     });
@@ -998,6 +1066,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
       context: baseContext(),
       l2: L2_FLAGGED,
       config,
+      models: [PRIMARY_MODEL],
       backend: BACKEND,
       fetch: fetchReturning(echoing),
     });

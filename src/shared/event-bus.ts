@@ -1055,7 +1055,7 @@ export interface EventMap {
     reason: string;
   };
   'intake.screening.fail_closed': {
-    stage: 'escalation' | 'quarantine_hold';
+    stage: 'escalation' | 'l3' | 'quarantine_hold';
     sourceClass: string;
     error: string;
     timestamp: number;

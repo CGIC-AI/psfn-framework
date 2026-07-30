@@ -35,6 +35,8 @@ import type { ScreenerFetch } from './screener-transport.js';
 import { L2_SCREENER_SCANNER_ID, L2_SCREENER_SUMMARY_FIELD } from './l2-screener.js';
 import { L3_FIELD_ERROR, L3_SCREENER_SCANNER_ID } from './l3-screener.js';
 import { L2_SCREENER_ERROR_FIELD } from './escalation.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
@@ -55,9 +57,9 @@ function fakeInjectionBackendFactory(): Promise<InjectionClassifierBackend> {
   });
 }
 
-// Seed model slugs (the mock transport routes on the request body's model).
-const L2_MODEL = 'google/gemini-2.5-flash-lite';
-const L3_MODEL = 'z-ai/glm-4.5-air';
+// Canonical purpose models from config/models.seed.json.
+const L2_MODEL = 'deepseek/deepseek-v3.2';
+const L3_MODEL = 'z-ai/glm-5';
 
 const BACKEND = { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test-never-logged' };
 
@@ -121,6 +123,7 @@ function seedPolicy(overrides: Record<string, unknown>): Record<string, unknown>
 function makeDataDirs(policy: Record<string, unknown>): {
   systemDataDir: string;
   companionDataDir: string;
+  config: SubstrateConfig;
   env: NodeJS.ProcessEnv;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-system-'));
@@ -130,6 +133,7 @@ function makeDataDirs(policy: Record<string, unknown>): {
   return {
     systemDataDir,
     companionDataDir,
+    config: loadSeedIntakeScreenerTestConfig(systemDataDir),
     // This suite exercises L2/L3 wiring, not the optional L1.5 model. Keep
     // it deterministic even when a developer has provisioned the real model
     // at the repository-default path.
@@ -183,6 +187,7 @@ function routingFetch(behaviors: Partial<Record<string, ModelBehavior>>): {
 async function composeWith(
   policy: Record<string, unknown>,
   fetch: ScreenerFetch,
+  onFailClosedScreening?: Parameters<typeof composeGatewayIntakeScreening>[0]['onFailClosedScreening'],
 ): Promise<{
   composition: Awaited<ReturnType<typeof composeGatewayIntakeScreening>>;
   companionDataDir: string;
@@ -193,6 +198,7 @@ async function composeWith(
     screenerBackend: BACKEND,
     screenerFetch: fetch,
     injectionBackendFactory: fakeInjectionBackendFactory,
+    ...(onFailClosedScreening ? { onFailClosedScreening } : {}),
   });
   return { composition, companionDataDir: dirs.companionDataDir };
 }
@@ -434,9 +440,15 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
       [L3_MODEL]: { rejectWith: 'upstream 502' },
     });
+    const failClosedEvents: Array<{
+      stage: string;
+      sourceClass: string;
+      error: string;
+    }> = [];
     const { composition, companionDataDir } = await composeWith(
       seedPolicy({ mode: 'enforce' }),
       transport.fetch,
+      event => failClosedEvents.push(event),
     );
 
     const result = await composition.screening!.screen(HOSTILE_CONTENT, {
@@ -456,6 +468,11 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(event!.severity).toBe('high');
     expect(event!.failureDetails).toContain('fail-closed');
     expect(composition.quarantine!.list()).toHaveLength(1);
+    expect(failClosedEvents).toEqual([expect.objectContaining({
+      stage: 'l3',
+      sourceClass: 'web_fetch',
+      error: expect.stringContaining('upstream 502'),
+    })]);
 
     await composition.dispose();
   });

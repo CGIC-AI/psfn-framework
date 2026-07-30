@@ -32,6 +32,7 @@ import type {
   IntakeEscalationDecision,
   IntakeEscalationPort,
   IntakeEscalationRequest,
+  IntakeScreeningServiceOptions,
 } from '../../../core/cogsec/intake/screening.js';
 import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
 import type { IntakeRiskLabel } from '../../../shared/contracts/intake-envelope.js';
@@ -46,6 +47,10 @@ export const L2_SCREENER_ERROR_FIELD = 'l2_error';
 
 export interface GatewayIntakeEscalationDeps {
   policy: IntakePolicyConfig;
+  /** Startup-resolved canonical background-purpose model for L2. */
+  l2Model: string;
+  /** Startup-resolved reasoning (+ optional background) purpose models for L3. */
+  l3Models: readonly string[];
   /** Gateway-resolved OpenRouter connection (secret-bearing, never logged). */
   backend: ScreenerBackend;
   /** Durable quarantine store (htm9.11) for the L3 hard-rule hold. */
@@ -56,6 +61,8 @@ export interface GatewayIntakeEscalationDeps {
   actor?: string;
   /** Test seam; production uses the global fetch. */
   fetch?: ScreenerFetch;
+  /** Structural operator-alert telemetry; never carries screened content. */
+  onFailClosed?: IntakeScreeningServiceOptions['onFailClosed'];
 }
 
 function mergeContributions(
@@ -92,6 +99,7 @@ export function createGatewayIntakeEscalationPort(
       context,
       priorScore: request.priorScore,
       config: deps.policy,
+      model: deps.l2Model,
       backend: deps.backend,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
     });
@@ -139,6 +147,7 @@ export function createGatewayIntakeEscalationPort(
       context,
       ...(l2ForL3 ? { l2: l2ForL3 } : {}),
       config: deps.policy,
+      models: deps.l3Models,
       backend: deps.backend,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
     });
@@ -180,6 +189,14 @@ export function createGatewayIntakeEscalationPort(
       priorContribution: mergeContributions(request.priorContribution, l2Contribution),
       atMs: request.atMs,
     });
+    if (l3Outcome.kind === 'failed_closed') {
+      deps.onFailClosed?.({
+        stage: 'l3',
+        sourceClass: request.sourceClass,
+        error: l3Outcome.error,
+        timestamp: request.atMs,
+      });
+    }
     return {
       kind: 'final',
       result: {

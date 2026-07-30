@@ -37,7 +37,6 @@
     }
   },
   "l2Screener": {
-    "model": "google/gemini-2.5-flash-lite",
     "escalationThresholdsByTier": {
       "trusted": 0.95,
       "standard": 0.85,
@@ -55,9 +54,7 @@
     "maxContentChars": 24000
   },
   "l3Screener": {
-    "model": "z-ai/glm-4.5-air",
     "dualModel": false,
-    "secondaryModel": null,
     "escalationConfidenceThresholdsByTier": {
       "trusted": 0.9,
       "standard": 0.8,
@@ -71,7 +68,6 @@
   },
   "visionScreener": {
     "enabled": true,
-    "model": "google/gemini-2.5-flash-lite",
     "timeoutMs": 20000,
     "maxOutputTokens": 1600
   },

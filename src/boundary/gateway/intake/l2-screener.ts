@@ -10,9 +10,8 @@
 //
 // Placement: gateway process. The gateway is the secret holder, so it resolves
 // the OpenRouter base URL + API key (never logged) and passes them in as the
-// backend. Model choice is CONFIG (l2Screener.model), never hardcoded — a fast,
-// cheap model (Gemini Flash-Lite / Gemma / Qwen ~27B class); speed is the gating
-// criterion.
+// backend. Model choice follows the canonical background purpose, resolved at
+// gateway startup from models.json + modelPurposeSelection.
 //
 // Contract with the rest of the firewall:
 // - `screenL2(text, context, deps)` returns a schema-validated classification:
@@ -107,7 +106,7 @@ export type L2ScreenerFetch = ScreenerFetch;
 
 export interface L2ScreenerDeps {
   backend: L2ScreenerBackend;
-  /** OpenRouter model slug (from intake-policy.json `l2Screener.model`). */
+  /** OpenRouter model slug resolved from the canonical background purpose. */
   model: string;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
@@ -298,6 +297,8 @@ export interface EvaluateL2Input {
   /** Max of the prior L1/L1.5 scores that gate escalation. */
   priorScore: number;
   config: IntakePolicyConfig;
+  /** Model resolved at startup from the canonical background purpose. */
+  model: string;
   backend: L2ScreenerBackend;
   /** Test seam; production uses the global fetch. */
   fetch?: L2ScreenerFetch;
@@ -340,7 +341,7 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
   try {
     const classification = await screenL2(input.text, context, {
       backend: input.backend,
-      model: config.l2Screener.model,
+      model: input.model,
       timeoutMs: config.l2Screener.timeoutMs,
       maxContentChars: config.l2Screener.maxContentChars,
       ...(input.fetch ? { fetch: input.fetch } : {}),

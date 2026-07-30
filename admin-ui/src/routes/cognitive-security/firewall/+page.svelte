@@ -202,8 +202,8 @@
       <h2 class="font-serif text-lg text-shadow-900 mb-1">Escalation thresholds by tier</h2>
       <p class="text-sm text-shadow-600 mb-3">
         L1.5 classifier: <span class="font-mono text-xs">label threshold {policy.injectionClassifier.labelThreshold}</span> ·
-        L2 model: <span class="font-mono text-xs">{policy.l2Screener.model}</span> ·
-        L3 model: <span class="font-mono text-xs">{policy.l3Screener.model}{policy.l3Screener.dualModel && policy.l3Screener.secondaryModel ? ` + ${policy.l3Screener.secondaryModel}` : ''}</span>
+        L2 lane: <span class="font-mono text-xs">background purpose</span> ·
+        L3 lane: <span class="font-mono text-xs">reasoning purpose{policy.l3Screener.dualModel ? ' + background purpose' : ''}</span>
       </p>
       <div class="overflow-x-auto">
         <table class="w-full text-left text-sm min-w-[640px]">

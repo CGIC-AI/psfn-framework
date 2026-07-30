@@ -300,7 +300,7 @@ describe('intake policy owner file', () => {
 
   it('validates the L2 screener seed and covers every tier', () => {
     const policy = seedPolicy();
-    expect(policy.l2Screener.model.length).toBeGreaterThan(0);
+    expect(policy.l2Screener).not.toHaveProperty('model');
     expect(Object.keys(policy.l2Screener.escalationThresholdsByTier).sort())
       .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
     expect(Object.keys(policy.l2Screener.failClosedActionByTier).sort())
@@ -339,11 +339,6 @@ describe('intake policy owner file', () => {
     )).toThrow(/l2Screener has unsupported keys: retries/);
 
     expect(() => validateIntakePolicy(
-      { ...policy, l2Screener: { ...policy.l2Screener, model: '' } },
-      INTAKE_POLICY_FILE_NAME,
-    )).toThrow(/l2Screener\.model must be a non-empty string/);
-
-    expect(() => validateIntakePolicy(
       {
         ...policy,
         l2Screener: {
@@ -365,7 +360,7 @@ describe('intake policy owner file', () => {
   it('validates the vision screener seed: enabled, multimodal model, call knobs', () => {
     const policy = seedPolicy();
     expect(policy.visionScreener.enabled).toBe(true);
-    expect(policy.visionScreener.model.length).toBeGreaterThan(0);
+    expect(policy.visionScreener).not.toHaveProperty('model');
     expect(policy.visionScreener.timeoutMs).toBeGreaterThanOrEqual(1);
     expect(policy.visionScreener.maxOutputTokens).toBeGreaterThanOrEqual(1);
   });
@@ -391,11 +386,6 @@ describe('intake policy owner file', () => {
     )).toThrow(/visionScreener\.enabled must be a boolean/);
 
     expect(() => validateIntakePolicy(
-      { ...policy, visionScreener: { ...policy.visionScreener, model: '  ' } },
-      INTAKE_POLICY_FILE_NAME,
-    )).toThrow(/visionScreener\.model must be a non-empty string/);
-
-    expect(() => validateIntakePolicy(
       { ...policy, visionScreener: { ...policy.visionScreener, timeoutMs: 0 } },
       INTAKE_POLICY_FILE_NAME,
     )).toThrow(/visionScreener\.timeoutMs must be an integer >= 1/);
@@ -412,10 +402,10 @@ describe('intake policy owner file', () => {
 
   it('validates the L3 screener seed: single-verdict default, every tier covered, hostile mandatory', () => {
     const policy = seedPolicy();
-    expect(policy.l3Screener.model.length).toBeGreaterThan(0);
+    expect(policy.l3Screener).not.toHaveProperty('model');
+    expect(policy.l3Screener).not.toHaveProperty('secondaryModel');
     // Dual-vs-single knob defaults to single; measure before enabling dual.
     expect(policy.l3Screener.dualModel).toBe(false);
-    expect(policy.l3Screener.secondaryModel).toBeNull();
     expect(Object.keys(policy.l3Screener.escalationConfidenceThresholdsByTier).sort())
       .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
     // Riskier tiers must not escalate LESS eagerly than safer tiers.
@@ -440,45 +430,45 @@ describe('intake policy owner file', () => {
         l3Screener: {
           ...policy.l3Screener,
           dualModel: true,
-          secondaryModel: 'moonshotai/kimi-k2',
         },
       },
       INTAKE_POLICY_FILE_NAME,
     );
     expect(dual.l3Screener.dualModel).toBe(true);
-    expect(dual.l3Screener.secondaryModel).toBe('moonshotai/kimi-k2');
   });
 
-  it('fails closed on incoherent dual-model L3 configurations', () => {
+  it('requires the dual-model L3 knob to be explicit', () => {
     const policy = seedPolicy();
-    // dualModel without a second model.
-    expect(() => validateIntakePolicy(
-      { ...policy, l3Screener: { ...policy.l3Screener, dualModel: true } },
-      INTAKE_POLICY_FILE_NAME,
-    )).toThrow(/dualModel=true requires a non-null l3Screener\.secondaryModel/);
-    // Two "independent" verdicts from the same model are not independent.
-    expect(() => validateIntakePolicy(
-      {
-        ...policy,
-        l3Screener: {
-          ...policy.l3Screener,
-          dualModel: true,
-          secondaryModel: policy.l3Screener.model,
-        },
-      },
-      INTAKE_POLICY_FILE_NAME,
-    )).toThrow(/must be a DIFFERENT model/);
-    // The knob itself must be explicit.
     const { dualModel: _dropped, ...withoutKnob } = policy.l3Screener;
     expect(() => validateIntakePolicy(
       { ...policy, l3Screener: withoutKnob },
       INTAKE_POLICY_FILE_NAME,
     )).toThrow(/dualModel must be a boolean/);
-    const { secondaryModel: _dropped2, ...withoutSecondary } = policy.l3Screener;
-    expect(() => validateIntakePolicy(
-      { ...policy, l3Screener: withoutSecondary },
-      INTAKE_POLICY_FILE_NAME,
-    )).toThrow(/secondaryModel is required/);
+  });
+
+  it('fails closed with a migration remedy for retired free-text screener model keys', () => {
+    const policy = seedPolicy();
+    for (const [section, retired] of [
+      ['l2Screener', { model: 'legacy/l2' }],
+      ['l3Screener', { model: 'legacy/l3', secondaryModel: 'legacy/l3b' }],
+      ['visionScreener', { model: 'legacy/vision' }],
+    ] as const) {
+      expect(() => validateIntakePolicy(
+        {
+          ...policy,
+          [section]: {
+            ...(policy[section] as unknown as Record<string, unknown>),
+            ...retired,
+          },
+        },
+        INTAKE_POLICY_FILE_NAME,
+      )).toThrow(
+        new RegExp(
+          `${section}.*retired.*delete.*standard purpose-based model selection`,
+          'is',
+        ),
+      );
+    }
   });
 
   it('fails closed on unmapped L3 tiers, unknown keys, and a missing L3 block', () => {

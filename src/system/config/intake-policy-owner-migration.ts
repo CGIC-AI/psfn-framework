@@ -33,13 +33,36 @@ export interface IntakePolicyOwnerMigrationResult {
   fromSchemaVersion: number;
   toSchemaVersion: typeof INTAKE_POLICY_SCHEMA_VERSION;
   addedPaths?: string[];
+  removedPaths?: string[];
+}
+
+const RETIRED_SCREENER_MODEL_PATHS = [
+  ['l2Screener', 'model'],
+  ['l3Screener', 'model'],
+  ['l3Screener', 'secondaryModel'],
+  ['visionScreener', 'model'],
+] as const;
+
+function removeRetiredScreenerModelKeys(
+  raw: Record<string, unknown>,
+): { candidate: Record<string, unknown>; removedPaths: string[] } {
+  const candidate = structuredClone(raw);
+  const removedPaths: string[] = [];
+  for (const [section, key] of RETIRED_SCREENER_MODEL_PATHS) {
+    const value = candidate[section];
+    if (!isRecord(value) || !Object.hasOwn(value, key)) continue;
+    delete value[key];
+    removedPaths.push(`${section}.${key}`);
+  }
+  return { candidate, removedPaths };
 }
 
 /**
  * Explicitly upgrades intake-policy schema v1 owners to v2 by adding the
- * canonical skill_write sink rule. Runtime loading never calls this function:
- * an operator must dry-run and apply it against the exact system owner root
- * before startup will accept the new schema.
+ * canonical skill_write sink rule, and removes retired screener model
+ * selectors from current-schema owners. Runtime loading never calls this
+ * function: an operator must dry-run and apply it against the exact system
+ * owner root before startup will accept the migrated owner.
  */
 export function migrateIntakePolicyOwner(
   options: IntakePolicyOwnerMigrationOptions,
@@ -77,7 +100,45 @@ export function migrateIntakePolicyOwner(
       throw new Error(`Invalid intake policy at ${filePath}: expected object`);
     }
 
+    const finishCandidate = (
+      candidate: Record<string, unknown>,
+      result: IntakePolicyOwnerMigrationResult,
+    ): IntakePolicyOwnerMigrationResult => {
+      if (options.apply) {
+        writeFileDurableAtomicSync(
+          pinnedLeafPath(dataDirectory, INTAKE_POLICY_FILE_NAME),
+          `${JSON.stringify(candidate, null, 2)}\n`,
+          {
+            faultInjection: (stage) => {
+              options.faultInjection?.(stage, filePath);
+              if (stage !== 'after_file_sync') return;
+              assertSourceStillCurrent();
+            },
+          },
+        );
+        assertPinnedDirectoryAtLogicalPath(
+          dataDirectory,
+          'Intake policy owner data directory',
+        );
+      } else {
+        assertSourceStillCurrent();
+      }
+      return result;
+    };
+
     if (raw.schemaVersion === INTAKE_POLICY_SCHEMA_VERSION) {
+      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(raw);
+      if (removedPaths.length > 0) {
+        validateIntakePolicy(candidate, filePath);
+        return finishCandidate(candidate, {
+          mode,
+          status: options.apply ? 'applied' : 'planned',
+          filePath,
+          fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+          toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+          removedPaths,
+        });
+      }
       validateIntakePolicy(raw, filePath);
       assertSourceStillCurrent();
       return {
@@ -106,15 +167,16 @@ export function migrateIntakePolicyOwner(
       );
     }
 
-    const candidate: Record<string, unknown> = structuredClone(raw);
-    candidate.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
-    candidate.sinkGates = {
+    const upgraded: Record<string, unknown> = structuredClone(raw);
+    upgraded.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
+    upgraded.sinkGates = {
       ...raw.sinkGates,
       sinks: {
         ...raw.sinkGates.sinks,
         skill_write: createSkillWriteSinkRule(),
       },
     };
+    const { candidate, removedPaths } = removeRetiredScreenerModelKeys(upgraded);
     validateIntakePolicy(candidate, filePath);
 
     const result: IntakePolicyOwnerMigrationResult = {
@@ -124,27 +186,9 @@ export function migrateIntakePolicyOwner(
       fromSchemaVersion: 1,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       addedPaths: ['sinkGates.sinks.skill_write'],
+      ...(removedPaths.length > 0 ? { removedPaths } : {}),
     };
-    if (options.apply) {
-      writeFileDurableAtomicSync(
-        pinnedLeafPath(dataDirectory, INTAKE_POLICY_FILE_NAME),
-        `${JSON.stringify(candidate, null, 2)}\n`,
-        {
-          faultInjection: (stage) => {
-            options.faultInjection?.(stage, filePath);
-            if (stage !== 'after_file_sync') return;
-            assertSourceStillCurrent();
-          },
-        },
-      );
-      assertPinnedDirectoryAtLogicalPath(
-        dataDirectory,
-        'Intake policy owner data directory',
-      );
-    } else {
-      assertSourceStillCurrent();
-    }
-    return result;
+    return finishCandidate(candidate, result);
   } finally {
     closePinnedDirectory(dataDirectory);
   }

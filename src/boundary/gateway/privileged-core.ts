@@ -177,6 +177,7 @@ export async function buildGatewayPrivilegedCore(
   // and threaded into the RPC runtime and channel surfaces. Mode 'off' yields
   // a null service; a provisioned-but-broken L1.5 model fails startup.
   const intakeScreening = await composeGatewayIntakeScreening({
+    config: input.config,
     systemDataDir: input.startupHydration.systemDataDir,
     companionDataDir: input.startupHydration.companionDataDir,
     // htm9.8: the vision intake screener shares the gateway's OpenRouter

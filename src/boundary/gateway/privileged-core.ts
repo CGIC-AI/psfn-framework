@@ -15,14 +15,15 @@ import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
-  composeGatewayIntakeScreening,
   resolveIntakeScreenerBackend,
-  type GatewayIntakeScreeningComposition,
 } from './intake/compose-screening.js';
+import {
+  composeGatewayIntakeScreeningRuntime,
+  type GatewayIntakeScreeningRuntime,
+} from './intake/fleet-screening.js';
 import { GatewayServer } from './server.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
-import { createQuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -57,12 +58,11 @@ export interface GatewayPrivilegedCore {
   eligibilityGate: EligibilityGate;
   privilegedServices: ReturnType<typeof createGatewayPrivilegedServiceRegistry>;
   /**
-   * Cognition intake firewall (htm9.2): the gateway-wide screening service
-   * (null when intake-policy mode is 'off') plus its disposer. Shared by the
-   * RPC method runtime (web.fetch/web.search) and the Discord channel surface
-   * (parsed document ingest).
+   * Cognition intake firewall (htm9.2): one historical composition in
+   * single-companion mode, or an exact per-companion resolver plus fleet-wide
+   * artifact guard in fleet mode.
    */
-  intakeScreening: GatewayIntakeScreeningComposition;
+  intakeScreening: GatewayIntakeScreeningRuntime;
   auditDb: null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
@@ -175,23 +175,34 @@ export async function buildGatewayPrivilegedCore(
     audit: entry => auditStore.recordSummary(entry),
   });
 
-  // Cognition intake firewall (htm9.2): composed once for the gateway process
-  // and threaded into the RPC runtime and channel surfaces. Mode 'off' yields
-  // a null service; a provisioned-but-broken L1.5 model fails startup.
-  const intakeScreening = await composeGatewayIntakeScreening({
+  // Cognition intake firewall (htm9.2): single-companion mode preserves the
+  // historical one-service composition. Fleet mode composes one service and
+  // durable quarantine store per companion, then routes every ingress by its
+  // authenticated/routed owner. Mode 'off' yields null services; a
+  // provisioned-but-broken L1.5 model fails startup.
+  const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
     systemDataDir: input.startupHydration.systemDataDir,
     companionDataDir: input.startupHydration.companionDataDir,
+    multiCompanion: input.bootstrap.server.multiCompanion.enabled,
+    ...(input.config.companionFleet
+      ? {
+          companions: input.config.companionFleet.companions.map(companion => ({
+            companionId: companion.companionId,
+            companionDataDir: companion.companionDataDir,
+          })),
+        }
+      : {}),
     // htm9.8: the vision intake screener shares the gateway's OpenRouter
     // credentials (providers.json openrouter apiBaseUrl + apiKeyRef, key
     // resolved through the credential vault with process-env fallback).
     screenerBackend: resolveIntakeScreenerBackend(input.config),
-    onQuarantineHeld: () => emitGardenQueueChanged(
+    onQuarantineHeld: companionId => emitGardenQueueChanged(
       eventBus,
       'intake-quarantine',
-      input.config.companionId,
+      companionId ?? input.config.companionId,
     ),
-    onQuarantineExpired: ({ entry, expiredAtMs, reason }) => {
+    onQuarantineExpired: (_companionId, { entry, expiredAtMs, reason }) => {
       void eventBus.emit('intake.quarantine.expired', {
         envelopeId: entry.id,
         ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
@@ -205,7 +216,7 @@ export async function buildGatewayPrivilegedCore(
         });
       });
     },
-    onFailClosedScreening: (event) => {
+    onFailClosedScreening: (_companionId, event) => {
       void eventBus.emit('intake.screening.fail_closed', event).catch((error: unknown) => {
         input.logger.error('Failed to emit fail-closed intake screening alert event', {
           stage: event.stage,
@@ -272,19 +283,33 @@ export async function buildGatewayPrivilegedCore(
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
-      ...(intakeScreening.screening ? { intakeScreening: intakeScreening.screening } : {}),
-      // hrmrq.54: fs read/search seams refuse to serve a quarantined item's
-      // on-disk artifacts and record the attempted access on the queue entry.
-      ...(intakeScreening.screening && intakeScreening.quarantine
+      ...(!input.bootstrap.server.multiCompanion.enabled
+        && intakeScreening.screeningFor()
+        ? { intakeScreening: intakeScreening.screeningFor()! }
+        : {}),
+      ...(input.bootstrap.server.multiCompanion.enabled
         ? {
-            quarantinedArtifactGuard: createQuarantinedArtifactAccessGuard({
-              store: intakeScreening.quarantine,
-              mode: intakeScreening.screening.mode,
-            }),
+            intakeScreeningMode: intakeScreening.mode,
+            intakeScreeningProvider: (companionId?: string) =>
+              intakeScreening.screeningFor(companionId),
           }
         : {}),
+      // hrmrq.54: fs read/search seams refuse to serve a quarantined item's
+      // on-disk artifacts and record the attempted access on the queue entry.
+      ...(intakeScreening.quarantinedArtifactGuard
+        ? { quarantinedArtifactGuard: intakeScreening.quarantinedArtifactGuard }
+        : {}),
       cogSecEvents,
-      ...(intakeScreening.visionIntake ? { visionIntake: intakeScreening.visionIntake } : {}),
+      ...(!input.bootstrap.server.multiCompanion.enabled
+        && intakeScreening.resolve().visionIntake
+        ? { visionIntake: intakeScreening.resolve().visionIntake! }
+        : {}),
+      ...(input.bootstrap.server.multiCompanion.enabled
+        ? {
+            visionIntakeProvider: (companionId?: string) =>
+              intakeScreening.resolve(companionId).visionIntake,
+          }
+        : {}),
       policyConfig: {
         ...input.bootstrap.policyConfig,
         ...(privilegedServices.vaultOps

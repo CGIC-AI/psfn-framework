@@ -18,7 +18,10 @@ import {
   createIntakeQuarantineStore,
   type IntakeQuarantineStore,
 } from './quarantine-store.js';
-import { createQuarantinedArtifactAccessGuard } from './quarantined-artifact-guard.js';
+import {
+  createQuarantinedArtifactAccessGuard,
+  createUnionQuarantinedArtifactAccessGuard,
+} from './quarantined-artifact-guard.js';
 
 const NOW = 1_750_000_000_000;
 
@@ -195,6 +198,29 @@ describe('quarantined-artifact access guard (hrmrq.54)', () => {
     });
     const verdict = guard.check('/companion/files/audit-broken.md', { via: 'gateway:fs.read' });
     expect(verdict.withheld).toBe(true);
+  });
+
+  it('fails the fleet union closed when any companion store is unreadable', () => {
+    const brokenStore = {
+      findByArtifactPath: () => {
+        throw new Error('companion B quarantine is corrupt');
+      },
+      recordAccessAttempt: () => {
+        throw new Error('unreachable');
+      },
+      listActiveArtifactPaths: () => {
+        throw new Error('companion B quarantine is corrupt');
+      },
+    };
+    const guard = createUnionQuarantinedArtifactAccessGuard({
+      stores: [store, brokenStore],
+      mode: 'enforce',
+    });
+
+    expect(guard.check('/companion-b/files/unknown.md', { via: 'gateway:fs.read' }))
+      .toMatchObject({ withheld: true, envelopeId: 'unknown' });
+    expect(() => guard.listEnforcedArtifactPaths())
+      .toThrow('companion B quarantine is corrupt');
   });
 
   describe('listEnforcedArtifactPaths (shell physical deny set)', () => {

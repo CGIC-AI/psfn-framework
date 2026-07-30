@@ -67,7 +67,10 @@ import { logLegacyWorkspaceMigrationResult } from './legacy-workspace-migration-
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
-import { createCompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createCompanionId,
+  type CompanionId,
+} from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
 import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
@@ -449,7 +452,15 @@ async function main(): Promise<void> {
     bootstrap,
     eventBus,
     eligibilityGate,
-    intakeScreening: privilegedCore.intakeScreening.screening,
+    intakeScreening: bootstrap.server.multiCompanion.enabled
+      ? null
+      : privilegedCore.intakeScreening.screeningFor(),
+    ...(bootstrap.server.multiCompanion.enabled
+      ? {
+          intakeScreeningForCompanion: (companionId: CompanionId) =>
+            privilegedCore.intakeScreening.screeningFor(companionId),
+        }
+      : {}),
     log,
     enableDiscordEvidenceLifecycle: fleetAuthPersistence?.discordEvidenceLifecycle !== undefined,
   });
@@ -761,7 +772,15 @@ async function main(): Promise<void> {
       startupHydration.pathSnapshot.systemDataDir,
     ),
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
-    intakeScreening: privilegedCore.intakeScreening.screening,
+    intakeScreening: bootstrap.server.multiCompanion.enabled
+      ? null
+      : privilegedCore.intakeScreening.screeningFor(),
+    ...(bootstrap.server.multiCompanion.enabled
+      ? {
+          intakeScreeningForCompanion: (companionId: string) =>
+            privilegedCore.intakeScreening.screeningFor(companionId),
+        }
+      : {}),
     companionRelay: {
       relay: companionRelay,
       approvals: {

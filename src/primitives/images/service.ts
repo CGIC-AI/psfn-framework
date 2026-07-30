@@ -46,6 +46,26 @@ export interface ImageProviderAttempt {
   error?: Error;
 }
 
+export interface ImageProviderAttemptStart {
+  attempt: number;
+  provider: 'fal' | 'comfyui';
+  model: string;
+  startedAtMs: number;
+}
+
+export class ImageProviderAttemptPreflightError extends Error {
+  constructor(
+    readonly attempt: ImageProviderAttemptStart,
+    cause: unknown,
+  ) {
+    super(
+      `Failed to preflight ${attempt.provider} image provider attempt ${attempt.attempt}`,
+      { cause },
+    );
+    this.name = 'ImageProviderAttemptPreflightError';
+  }
+}
+
 export class ImageProviderAttemptSettlementError extends Error {
   constructor(
     readonly attempt: ImageProviderAttempt,
@@ -60,7 +80,8 @@ export class ImageProviderAttemptSettlementError extends Error {
 }
 
 function isRetryableFalProviderError(error: unknown): boolean {
-  return !(error instanceof ImageProviderAttemptSettlementError)
+  return !(error instanceof ImageProviderAttemptPreflightError)
+    && !(error instanceof ImageProviderAttemptSettlementError)
     && isTransientFalError(error);
 }
 
@@ -68,6 +89,7 @@ interface ImageServiceOptions {
   companionDataDir?: string;
   generatedImagesDir?: string;
   personalFilesDir?: string;
+  beforeProviderAttempt?: (attempt: ImageProviderAttemptStart) => Promise<void> | void;
   onProviderAttempt?: (attempt: ImageProviderAttempt) => Promise<void> | void;
 }
 
@@ -472,6 +494,17 @@ export class ImageService implements ImageOperations {
     context.providerAttempt += 1;
     const attempt = context.providerAttempt;
     const startedAtMs = Date.now();
+    const attemptStart: ImageProviderAttemptStart = {
+      attempt,
+      provider,
+      model,
+      startedAtMs,
+    };
+    try {
+      await this.options.beforeProviderAttempt?.(attemptStart);
+    } catch (error) {
+      throw new ImageProviderAttemptPreflightError(attemptStart, error);
+    }
     let result: ImageGenerationResult;
     try {
       result = await operation();

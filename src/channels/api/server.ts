@@ -743,6 +743,7 @@ export class ApiServer implements ChannelAdapterPort {
     stripClientCertHeaders(req.headers);
 
     const testingHarnessPrincipal = this.resolveTestingHarnessPrincipal(req);
+    const companionRoute = matchCompanionRelayRoute(req.method, path);
     // This credential names one room. Remove caller-selected affinity before
     // either the direct or gateway/agent backend reads the request headers.
     if (testingHarnessPrincipal) {
@@ -763,12 +764,17 @@ export class ApiServer implements ChannelAdapterPort {
 
     // The testing-harness bearer deliberately remains available in fleet-auth
     // mode so sanctioned external probes can reach the one persistent test
-    // room without acquiring a partner or device identity.
-    if (this.fleetAuthBootstrapOnly && !testingHarnessPrincipal) {
+    // room without acquiring a partner or device identity. Companion relay
+    // routes remain satellite-only and must resolve through API_SATELLITE_KEYS.
+    if (this.fleetAuthBootstrapOnly && !testingHarnessPrincipal && !companionRoute) {
       if (req.method === 'POST' && path === '/v1/chat/completions') {
         void this.handleFleetHubDeviceChat(req, res, clientCert);
         return;
       }
+      log.warn('API request rejected: fleet_auth_principal_resolver_unavailable', {
+        method: req.method ?? 'UNKNOWN',
+        path,
+      });
       sendApiError(
         res,
         503,
@@ -779,7 +785,6 @@ export class ApiServer implements ChannelAdapterPort {
     }
 
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
-    const companionRoute = matchCompanionRelayRoute(req.method, path);
     const icpOperatorCancelMatch = req.method === 'POST'
       ? ICP_OPERATOR_CANCEL_PATH.exec(path)
       : null;
@@ -791,13 +796,16 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleConfirmationOperatorResolve(req, res);
       return;
     }
-    const principal = testingHarnessPrincipal ?? resolveApiServerRequestPrincipal(req, res, {
-      apiKey: this.apiKey,
-      adminToken: this.adminToken,
-      ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
-      allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
-      isTelemetryIngest,
-    });
+    const requiresSatellitePrincipal = this.fleetAuthBootstrapOnly && companionRoute !== null;
+    const principal = !requiresSatellitePrincipal && testingHarnessPrincipal
+      ? testingHarnessPrincipal
+      : resolveApiServerRequestPrincipal(req, res, {
+        ...(!requiresSatellitePrincipal && this.apiKey ? { apiKey: this.apiKey } : {}),
+        ...(!requiresSatellitePrincipal && this.adminToken ? { adminToken: this.adminToken } : {}),
+        ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
+        allowInsecureWithoutAuth: !requiresSatellitePrincipal && this.allowInsecureWithoutAuth,
+        isTelemetryIngest,
+      });
     if (!principal) return;
 
     // Satellite-scoped credentials are only valid on satellite surfaces

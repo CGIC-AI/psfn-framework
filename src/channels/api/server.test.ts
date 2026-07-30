@@ -25,6 +25,10 @@ import { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 
 // ── Helpers ──
 
@@ -2376,6 +2380,11 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
       eventBus,
       sessionManager: createMockSessionManager(),
       apiKey: 'legacy-api-key',
+      testingHarnessPrincipal: {
+        principalId: 'testing-harness',
+        apiKey: 'dedicated-testing-harness-key',
+      },
+      satelliteApiKeys: ['dedicated-satellite-key'],
       allowInsecureWithoutAuth: true,
       fleetAuthBootstrapOnly: true,
       fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
@@ -2389,6 +2398,7 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
 
   afterEach(async () => {
     await stopServer(server);
+    clearDiagnosticLogRingBufferForTests();
   });
 
   it('exposes login bootstrap but rejects ordinary HTTP through API-key and insecure-local paths', async () => {
@@ -2405,6 +2415,58 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
     const insecureAttempt = await request(port, 'GET', '/v1/models');
     expect(insecureAttempt.status).toBe(503);
     expect(JSON.parse(insecureAttempt.body).error.type).toBe('fleet_auth_principal_resolver_unavailable');
+  });
+
+  it('routes matched companion relay requests through the satellite principal resolver', async () => {
+    const relayAttempt = await request(
+      port,
+      'GET',
+      '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
+    );
+
+    expect(relayAttempt.status).toBe(401);
+    expect(JSON.parse(relayAttempt.body).error.type).toBe('invalid_api_key');
+
+    for (const bearer of ['dedicated-testing-harness-key', 'legacy-api-key']) {
+      const nonSatelliteAttempt = await request(
+        port,
+        'GET',
+        '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
+        undefined,
+        { Authorization: `Bearer ${bearer}` },
+      );
+      expect(nonSatelliteAttempt.status).toBe(401);
+      expect(JSON.parse(nonSatelliteAttempt.body).error.type).toBe('invalid_api_key');
+    }
+
+    const satelliteAttempt = await request(
+      port,
+      'GET',
+      '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
+      undefined,
+      { Authorization: 'Bearer dedicated-satellite-key' },
+    );
+    expect(satelliteAttempt.status).toBe(503);
+    expect(JSON.parse(satelliteAttempt.body).error.type).toBe('companion_relay_not_configured');
+
+    const ordinaryAttempt = await request(port, 'GET', '/v1/models');
+    expect(ordinaryAttempt.status).toBe(503);
+    expect(JSON.parse(ordinaryAttempt.body).error.type).toBe(
+      'fleet_auth_principal_resolver_unavailable',
+    );
+  });
+
+  it('logs bootstrap-only principal resolver rejections', async () => {
+    clearDiagnosticLogRingBufferForTests();
+
+    const response = await request(port, 'GET', '/v1/models');
+
+    expect(response.status).toBe(503);
+    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      component: 'ApiServer',
+      message: expect.stringContaining('fleet_auth_principal_resolver_unavailable'),
+    }));
   });
 
   it('rejects all voice WebSocket upgrades even when a legacy API key is presented', async () => {

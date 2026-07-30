@@ -713,6 +713,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   options.agentLoop.registerTool(createAnalysisWorkbenchTool({
     llmProvider: options.llmProvider,
     fileRead: options.fileRead,
+    ...(options.config.fsReadMaxBytes !== undefined
+      ? { fsReadMaxBytes: options.config.fsReadMaxBytes }
+      : {}),
     embeddingService: options.embeddingService,
     memoryStore: options.memoryStore,
     sessionManager: options.sessionManager,

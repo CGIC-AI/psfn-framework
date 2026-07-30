@@ -1,4 +1,4 @@
-// ── Cognition Intake Firewall: quarantined-artifact read guard (hrmrq.54) ──
+// ── Cognition Intake Firewall: quarantined-artifact access guard (hrmrq.54) ──
 //
 // Closes the containment bypass where a quarantined document's raw bytes were
 // one fs.read away: the intake screening withholds the content from the
@@ -6,8 +6,8 @@
 // read seam that serves those paths hands the quarantined content straight
 // back into the turn.
 //
-// The guard is the ONE decision point read seams consult before serving file
-// content. It resolves the requested path against the quarantine store's
+// The guard is the ONE decision point filesystem seams consult before serving
+// or mutating file content. It resolves the requested path against the quarantine store's
 // registered artifact paths (quarantine-store.ts, registered at hold time):
 //
 // - Released/discard-resolved-and-consumable entries do not block: once a
@@ -54,11 +54,11 @@ export type QuarantinedArtifactCheckResult =
     noticeText: string;
   };
 
-export interface QuarantinedArtifactReadGuard {
+export interface QuarantinedArtifactAccessGuard {
   /**
-   * Check one read of `path`. `via` is the auditable access seam
-   * (e.g. 'gateway:fs.read'). Never throws: audit failures are logged and the
-   * verdict still fails closed.
+   * Check one access to `path`. `via` is the auditable access seam
+   * (e.g. 'gateway:fs.read' or 'gateway:fs.write'). Never throws: audit
+   * failures are logged and the verdict still fails closed.
    */
   check(path: string, context: { via: string }): QuarantinedArtifactCheckResult;
   /**
@@ -71,7 +71,7 @@ export interface QuarantinedArtifactReadGuard {
   listEnforcedArtifactPaths(): string[];
 }
 
-export interface QuarantinedArtifactReadGuardOptions {
+export interface QuarantinedArtifactAccessGuardOptions {
   store: QuarantinedArtifactPathPort;
   /** Current firewall mode; 'shadow' observes and records but never withholds. */
   mode: 'shadow' | 'enforce';
@@ -98,9 +98,9 @@ function lookupEntry(
   return undefined;
 }
 
-export function createQuarantinedArtifactReadGuard(
-  options: QuarantinedArtifactReadGuardOptions,
-): QuarantinedArtifactReadGuard {
+export function createQuarantinedArtifactAccessGuard(
+  options: QuarantinedArtifactAccessGuardOptions,
+): QuarantinedArtifactAccessGuard {
   const { store, mode } = options;
   const now = options.now ?? Date.now;
 
@@ -158,7 +158,7 @@ export function createQuarantinedArtifactReadGuard(
       }
 
       if (mode !== 'enforce') {
-        log.warn('Shadow mode: quarantined-artifact read observed (not withheld)', {
+        log.warn('Shadow mode: quarantined-artifact access observed (not withheld)', {
           entryId: entry.id,
           envelopeState: entry.envelope.state,
           path,
@@ -167,7 +167,7 @@ export function createQuarantinedArtifactReadGuard(
         return { withheld: false };
       }
 
-      log.warn('Quarantined-artifact read withheld', {
+      log.warn('Quarantined-artifact access withheld', {
         entryId: entry.id,
         envelopeState: entry.envelope.state,
         path,

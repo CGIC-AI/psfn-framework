@@ -32,6 +32,7 @@ describe('createToolchainCapabilities read_file', () => {
     const { read_file } = createToolchainCapabilities({
       gatewayCaps: {},
       fileRead,
+      fsReadMaxBytes: 123_456,
     });
 
     const first = await read_file('large.md');
@@ -60,7 +61,7 @@ describe('createToolchainCapabilities read_file', () => {
 
     expect(pages.length).toBeGreaterThanOrEqual(3);
     expect(pages.map(page => page.content).join('')).toBe(expected);
-    expect(pages.every(page => Buffer.byteLength(page.content, 'utf8') <= 200_000)).toBe(true);
+    expect(pages.every(page => Buffer.byteLength(page.content, 'utf8') <= 123_456)).toBe(true);
     expect(
       pages
         .filter(page => !page.eof)
@@ -72,12 +73,29 @@ describe('createToolchainCapabilities read_file', () => {
       nextOffsetBytes: null,
     });
     expect(fileRead.mock.calls.map(([, options]) => options)).toEqual([
-      { maxBytes: 200_000, offsetBytes: 0 },
-      { maxBytes: 200_000, offsetBytes: 0 },
+      { maxBytes: 123_456, offsetBytes: 0 },
+      { maxBytes: 123_456, offsetBytes: 0 },
       ...pages.slice(1).map(page => ({
-        maxBytes: 200_000,
+        maxBytes: 123_456,
         offsetBytes: page.offsetBytes,
       })),
     ]);
   });
+
+  it.each([undefined, 0, 200_001, 1.5])(
+    'fails closed without a valid configured read cap (%s)',
+    async (fsReadMaxBytes) => {
+      const fileRead = vi.fn<SandboxFileRead>();
+      const { read_file } = createToolchainCapabilities({
+        gatewayCaps: {},
+        fileRead,
+        ...(fsReadMaxBytes !== undefined ? { fsReadMaxBytes } : {}),
+      });
+
+      await expect(read_file('held.txt')).resolves.toEqual({
+        error: expect.stringContaining('fsReadMaxBytes must be a configured safe integer'),
+      });
+      expect(fileRead).not.toHaveBeenCalled();
+    },
+  );
 });

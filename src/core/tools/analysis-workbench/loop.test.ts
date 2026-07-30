@@ -65,6 +65,7 @@ function sequentialLLM(responses: string[]): LLMProviderPort {
 function makeDeps(llm: LLMProviderPort, overrides?: Partial<REPLDeps>): REPLDeps {
   return {
     llmProvider: llm,
+    fsReadMaxBytes: 20_000,
     embeddingService: null,
     memoryStore: null,
     sessionManager: null,

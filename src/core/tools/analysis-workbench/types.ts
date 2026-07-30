@@ -151,6 +151,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
 export interface REPLDeps {
   llmProvider: LLMProviderPort;
   fileRead?: SandboxFileRead;
+  fsReadMaxBytes?: number;
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

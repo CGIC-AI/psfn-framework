@@ -109,6 +109,9 @@ export class REPLSandbox {
     const toolchain = createToolchainCapabilities({
       gatewayCaps,
       fileRead: this.deps.fileRead,
+      ...(this.deps.fsReadMaxBytes !== undefined
+        ? { fsReadMaxBytes: this.deps.fsReadMaxBytes }
+        : {}),
       budgetRef: this.budgetRef,
     });
 

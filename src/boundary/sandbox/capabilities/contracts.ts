@@ -96,6 +96,7 @@ export interface ScheduleMutationResult {
 export interface SandboxDeps {
   llmProvider: LLMProviderPort;
   fileRead?: SandboxFileRead;
+  fsReadMaxBytes?: number;
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

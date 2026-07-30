@@ -205,6 +205,7 @@ function wireSplitThinkTool(options: {
   llmProvider: LLMProviderPort;
   eventBus: EventBus;
   fileRead?: SandboxFileRead;
+  fsReadMaxBytes?: number;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
@@ -219,7 +220,10 @@ function wireSplitThinkTool(options: {
     embeddingService: null,
     memoryStore: EMPTY_MEMORY_STORE as any,
     sessionManager: {} as any,
-    config: { capabilityTier: options.tier } as any,
+    config: {
+      capabilityTier: options.tier,
+      fsReadMaxBytes: options.fsReadMaxBytes ?? 20_000,
+    } as any,
     parentSystemPrompt: 'test',
     shardParentIcpDelivery: null,
     scheduler: null,
@@ -432,16 +436,17 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
   });
 
   it('preserves governed paged reads after production LLM provider narrowing', async () => {
+    const configuredReadMaxBytes = 12_345;
     const fsReadDetailed = vi.fn(async (
       _path: string,
       options?: { maxBytes?: number; offsetBytes?: number },
     ) => {
       const offsetBytes = options?.offsetBytes ?? 0;
       return offsetBytes === 0
-        ? {
+          ? {
             content: 'page-zero🙂',
             offsetBytes,
-            nextOffsetBytes: 20_000,
+            nextOffsetBytes: configuredReadMaxBytes,
             eof: false,
             truncated: true,
           }
@@ -465,6 +470,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       llmProvider,
       eventBus: new EventBus(),
       fileRead: gatewayOps.filesystem.read,
+      fsReadMaxBytes: configuredReadMaxBytes,
     });
 
     const analysisWorkbench = findAnalysisWorkbenchTool(target);
@@ -477,12 +483,12 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     expect(text).toContain('"second":"page-one終"');
     expect(text).toContain('"eof":true');
     expect(fsReadDetailed).toHaveBeenNthCalledWith(1, 'large.md', {
-      maxBytes: 20_000,
+      maxBytes: configuredReadMaxBytes,
       offsetBytes: 0,
     });
     expect(fsReadDetailed).toHaveBeenNthCalledWith(2, 'large.md', {
-      maxBytes: 20_000,
-      offsetBytes: 20_000,
+      maxBytes: configuredReadMaxBytes,
+      offsetBytes: configuredReadMaxBytes,
     });
   });
 

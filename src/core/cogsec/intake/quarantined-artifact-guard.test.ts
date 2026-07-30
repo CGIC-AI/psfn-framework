@@ -1,4 +1,4 @@
-// hrmrq.54 — quarantined-artifact read guard tests.
+// hrmrq.54 — quarantined-artifact access guard tests.
 //
 // Regression for the S11 shakedown containment bypass: quarantine held the
 // document, but fs.read of the saved/parsed paths served the raw content into
@@ -18,7 +18,7 @@ import {
   createIntakeQuarantineStore,
   type IntakeQuarantineStore,
 } from './quarantine-store.js';
-import { createQuarantinedArtifactReadGuard } from './quarantined-artifact-guard.js';
+import { createQuarantinedArtifactAccessGuard } from './quarantined-artifact-guard.js';
 
 const NOW = 1_750_000_000_000;
 
@@ -55,7 +55,7 @@ function makeQuarantinedEnvelope(id?: string): IntakeEnvelope {
   });
 }
 
-describe('quarantined-artifact read guard (hrmrq.54)', () => {
+describe('quarantined-artifact access guard (hrmrq.54)', () => {
   let dir: string;
   let store: IntakeQuarantineStore;
 
@@ -80,7 +80,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
       rawText: 'MARKER-a6932606e2a7',
       artifactPaths: ['/companion/files/doc.md', '/companion/files/doc.md.parsed.txt'],
     });
-    const guard = createQuarantinedArtifactReadGuard({ store, mode: 'enforce', now: () => NOW });
+    const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'enforce', now: () => NOW });
 
     const verdict = guard.check('/companion/files/doc.md.parsed.txt', { via: 'gateway:fs.read' });
     expect(verdict.withheld).toBe(true);
@@ -97,7 +97,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
   });
 
   it('does not withhold unregistered paths', () => {
-    const guard = createQuarantinedArtifactReadGuard({ store, mode: 'enforce' });
+    const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'enforce' });
     expect(guard.check('/companion/files/innocent.txt', { via: 'gateway:fs.read' }))
       .toEqual({ withheld: false });
   });
@@ -117,7 +117,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
       reason: 'reviewed, safe',
       atMs: NOW,
     });
-    const guard = createQuarantinedArtifactReadGuard({ store, mode: 'enforce' });
+    const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'enforce' });
     expect(guard.check('/companion/files/released.md', { via: 'gateway:fs.read' }))
       .toEqual({ withheld: false });
   });
@@ -137,7 +137,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
       reason: 'hostile',
       atMs: NOW,
     });
-    const guard = createQuarantinedArtifactReadGuard({ store, mode: 'enforce' });
+    const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'enforce' });
     const verdict = guard.check('/companion/files/discarded.md', { via: 'gateway:fs.read' });
     expect(verdict.withheld).toBe(true);
   });
@@ -150,14 +150,14 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
       rawText: 'held',
       artifactPaths: ['/companion/files/shadow.md'],
     });
-    const guard = createQuarantinedArtifactReadGuard({ store, mode: 'shadow', now: () => NOW });
+    const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'shadow', now: () => NOW });
     expect(guard.check('/companion/files/shadow.md', { via: 'gateway:fs.read' }))
       .toEqual({ withheld: false });
     expect(store.getById(envelope.id)?.accessAttempts).toHaveLength(1);
   });
 
   it('fails closed in enforce mode when the store lookup throws', () => {
-    const guard = createQuarantinedArtifactReadGuard({
+    const guard = createQuarantinedArtifactAccessGuard({
       store: {
         findByArtifactPath: () => {
           throw new Error('corrupt quarantine file');
@@ -183,7 +183,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
       rawText: 'held',
       artifactPaths: ['/companion/files/audit-broken.md'],
     });
-    const guard = createQuarantinedArtifactReadGuard({
+    const guard = createQuarantinedArtifactAccessGuard({
       store: {
         findByArtifactPath: (path) => store.findByArtifactPath(path),
         recordAccessAttempt: () => {
@@ -221,7 +221,7 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
         atMs: NOW,
       });
 
-      const guard = createQuarantinedArtifactReadGuard({ store, mode: 'enforce', now: () => NOW });
+      const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'enforce', now: () => NOW });
       const paths = guard.listEnforcedArtifactPaths();
       expect(paths).toContain('/companion/files/doc.md');
       expect(paths).toContain('/companion/files/doc.md.parsed.txt');
@@ -235,12 +235,12 @@ describe('quarantined-artifact read guard (hrmrq.54)', () => {
         rawText: 'held',
         artifactPaths: ['/companion/files/shadow.md'],
       });
-      const guard = createQuarantinedArtifactReadGuard({ store, mode: 'shadow', now: () => NOW });
+      const guard = createQuarantinedArtifactAccessGuard({ store, mode: 'shadow', now: () => NOW });
       expect(guard.listEnforcedArtifactPaths()).toEqual([]);
     });
 
     it('enforce mode propagates store failures (an unenumerable deny set fails the launch)', () => {
-      const guard = createQuarantinedArtifactReadGuard({
+      const guard = createQuarantinedArtifactAccessGuard({
         store: {
           findByArtifactPath: () => undefined,
           recordAccessAttempt: () => {

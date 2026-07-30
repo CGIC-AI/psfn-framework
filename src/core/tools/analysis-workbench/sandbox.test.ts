@@ -86,6 +86,7 @@ function nullDeps(
 ) {
   return {
     llmProvider: llm ?? mockLLM(),
+    fsReadMaxBytes: 20_000,
     executionPort: executionPort ?? null,
     embeddingService: null,
     memoryStore: null,
@@ -485,6 +486,7 @@ describe('REPLSandbox', () => {
         allowWorkspaceWrite: true,
       }),
       fileRead,
+      fsReadMaxBytes: 12_345,
     });
 
     const result = await sandbox.execute(
@@ -504,7 +506,7 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('true 2 false');
     expect(result.output).toContain('fetched:https://example.com');
     expect(fileRead).toHaveBeenCalledWith('/app/workspace/a.txt', {
-      maxBytes: 20_000,
+      maxBytes: 12_345,
       offsetBytes: 0,
     });
     expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');

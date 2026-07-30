@@ -237,6 +237,33 @@ async function buildWriteFailureMessage(
   return guidance.join(' ');
 }
 
+function assertQuarantinedArtifactMutationAllowed(
+  resolvedPath: string,
+  runtime: GatewayMethodRuntime,
+  via: 'gateway:fs.write' | 'gateway:fs.edit',
+): void {
+  const verdict = runtime.quarantinedArtifactGuard?.check(resolvedPath, { via });
+  if (!verdict?.withheld) return;
+  throw new JSONRPCErrorException(
+    verdict.noticeText,
+    GatewayErrors.POLICY_DENIED,
+  );
+}
+
+function resolveGuardedMutationPath(
+  requestedPath: string,
+  runtime: GatewayMethodRuntime,
+  missingPathBehavior: 'returnNormalized' | 'resolveParent',
+  via: 'gateway:fs.write' | 'gateway:fs.edit',
+): { workspaceRoot: string; normalizedPath: string; resolvedPath: string } {
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const normalizedPath = normalizeRequestedWorkspacePath(requestedPath, workspaceRoot);
+  const resolvedPath = resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot);
+  assertPersonalWorkspacePath(resolvedPath, runtime, missingPathBehavior);
+  assertQuarantinedArtifactMutationAllowed(resolvedPath, runtime, via);
+  return { workspaceRoot, normalizedPath, resolvedPath };
+}
+
 const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.read',
@@ -283,10 +310,12 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.write',
     handler: async (params: FsWriteParams, runtime) => {
-      const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
-      const normalizedPath = normalizeRequestedWorkspacePath(params.path, workspaceRoot);
-      const resolvedPath = resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot);
-      assertPersonalWorkspacePath(resolvedPath, runtime, 'resolveParent');
+      const { workspaceRoot, resolvedPath } = resolveGuardedMutationPath(
+        params.path,
+        runtime,
+        'resolveParent',
+        'gateway:fs.write',
+      );
       try {
         await writeFile(resolvedPath, params.content, 'utf-8');
       } catch (error) {
@@ -372,9 +401,14 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.edit',
     handler: async (params: FsEditParams, runtime) => {
-      const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+      const { workspaceRoot, normalizedPath } = resolveGuardedMutationPath(
+        params.path,
+        runtime,
+        'returnNormalized',
+        'gateway:fs.edit',
+      );
       const result = await editWorkspaceFile(workspaceRoot, {
-        path: normalizeRequestedWorkspacePath(params.path, workspaceRoot),
+        path: normalizedPath,
         oldText: params.oldText,
         newText: params.newText,
         replaceAll: params.replaceAll,

@@ -1,5 +1,8 @@
 import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
+import {
+  FILESYSTEM_READ_PAGE_CONTRACT,
+  validateFilesystemReadMaxBytes,
+} from '../../../shared/contracts/filesystem.js';
 import type {
   SandboxFileRead,
   SandboxFileReadPage,
@@ -31,6 +34,7 @@ export interface ToolchainCapabilities {
 interface CreateToolchainCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
   fileRead?: SandboxFileRead;
+  fsReadMaxBytes?: number;
   budgetRef?: SandboxBudgetRef;
 }
 
@@ -86,9 +90,19 @@ function normalizeReadOffset(value: unknown): { offsetBytes: number } | { error:
   return { offsetBytes };
 }
 
+function normalizeConfiguredReadMaxBytes(value: unknown): number | null {
+  if (typeof value !== 'number') return null;
+  try {
+    return validateFilesystemReadMaxBytes(value);
+  } catch {
+    return null;
+  }
+}
+
 export function createToolchainCapabilities(
   options: CreateToolchainCapabilitiesOptions,
 ): ToolchainCapabilities {
+  const configuredReadMaxBytes = normalizeConfiguredReadMaxBytes(options.fsReadMaxBytes);
   const read_file = async (
     path: string,
     readOptions?: ReadFileOptions,
@@ -98,6 +112,14 @@ export function createToolchainCapabilities(
     }
     if (typeof options.fileRead !== 'function') {
       return { error: 'read_file unavailable: requires governed gateway fs.read paging and audit path' };
+    }
+    if (configuredReadMaxBytes === null) {
+      return {
+        error:
+          'read_file unavailable: fsReadMaxBytes must be a configured safe integer between '
+          + `${String(FILESYSTEM_READ_PAGE_CONTRACT.minBytes)} and `
+          + `${String(FILESYSTEM_READ_PAGE_CONTRACT.maxBytes)}`,
+      };
     }
 
     const normalizedPath = normalizePath(path);
@@ -111,7 +133,7 @@ export function createToolchainCapabilities(
 
     try {
       return await options.fileRead(normalizedPath, {
-        maxBytes: FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
+        maxBytes: configuredReadMaxBytes,
         offsetBytes: normalizedOffset.offsetBytes,
       });
     } catch (err) {

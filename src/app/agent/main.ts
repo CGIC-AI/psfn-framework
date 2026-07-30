@@ -152,6 +152,7 @@ import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
+import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -179,6 +180,19 @@ async function main(): Promise<void> {
     env: process.env,
     log,
   });
+  const operatorAlerting = resolveOperatorAlertSinkConfiguration({
+    ntfyConfigured: Boolean(
+      process.env.NTFY_BASE_URL?.trim() && process.env.NTFY_TOPIC?.trim(),
+    ),
+    telegramEnabled: channelsConfig.telegram.enabled,
+    telegramChatId: channelsConfig.telegram.operatorChatId,
+  });
+  if (operatorAlerting.status === 'unconfigured') {
+    log.error('OPERATOR ALERTING IS UNCONFIGURED', {
+      warning: operatorAlerting.warning,
+      configuredSinks: operatorAlerting.configuredSinks,
+    });
+  }
 
   log.info('Initializing...');
   log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
@@ -333,7 +347,7 @@ async function main(): Promise<void> {
     channelLabels: channelsConfig.contextEnvelope.channels,
     pendingApprovals: pendingContactApprovals,
     notifyOperatorPendingContact: async (entry) => {
-      await gateway.notifyNtfy({
+      await gateway.notifyOperator({
         sender: { kind: 'system', provenance: 'system.contacts.pending_approval' },
         title: 'PSFN contact approval required',
         priority: 4,
@@ -463,12 +477,34 @@ async function main(): Promise<void> {
       {
         itemTtlHours: intakePolicy.quarantine.itemTtlHours,
         maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+        onExpired: ({ entry, expiredAtMs, reason }) => {
+          void eventBus.emit('intake.quarantine.expired', {
+            envelopeId: entry.id,
+            ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
+            heldAtMs: entry.heldAtMs,
+            expiredAtMs,
+            reason,
+          }).catch((error: unknown) => {
+            log.error('Failed to emit intake quarantine expiry alert event', {
+              envelopeId: entry.id,
+              error: String(error),
+            });
+          });
+        },
       },
     )
     : null;
   const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',
+    onFailClosed: (event) => {
+      void eventBus.emit('intake.screening.fail_closed', event).catch((error: unknown) => {
+        log.error('Failed to emit fail-closed intake screening alert event', {
+          stage: event.stage,
+          error: String(error),
+        });
+      });
+    },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
     ...(intakeQuarantineWriter
@@ -1097,6 +1133,7 @@ async function main(): Promise<void> {
     outreachOutbox,
     episodicStore,
     subsystemOutputRefStore: backgroundWorkStore,
+    operatorAlerting,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
     hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,

@@ -26,11 +26,13 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import {
   createIntakeScreeningService,
   type IntakeEscalationPort,
+  type IntakeScreeningServiceOptions,
   type IntakeScreeningService,
 } from '../../../core/cogsec/intake/screening.js';
 import { createIntakeL1Scanner } from '../../../core/cogsec/intake/scanners/index.js';
 import {
   createIntakeQuarantineStore,
+  type IntakeQuarantineStoreOptions,
   type IntakeQuarantineStore,
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
@@ -147,6 +149,10 @@ export async function composeGatewayIntakeScreening(input: {
   screenerFetch?: ScreenerFetch;
   /** Called after a quarantine hold has been atomically persisted. */
   onQuarantineHeld?: () => void;
+  /** Called for lazy held-item TTL expiry; content is never included. */
+  onQuarantineExpired?: IntakeQuarantineStoreOptions['onExpired'];
+  /** Called for structural fail-closed screening telemetry. */
+  onFailClosedScreening?: IntakeScreeningServiceOptions['onFailClosed'];
   env?: NodeJS.ProcessEnv;
   /**
    * Test seam for the L1.5 injection classifier backend. When provided the
@@ -176,6 +182,7 @@ export async function composeGatewayIntakeScreening(input: {
     {
       itemTtlHours: policy.quarantine.itemTtlHours,
       maxHeldItems: policy.quarantine.maxHeldItems,
+      ...(input.onQuarantineExpired ? { onExpired: input.onQuarantineExpired } : {}),
     },
   );
   const quarantine: IntakeQuarantineStore = input.onQuarantineHeld
@@ -302,6 +309,7 @@ export async function composeGatewayIntakeScreening(input: {
     ...(escalation ? { escalation } : {}),
     quarantine,
     actor: 'gateway:intake-screening',
+    ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
   });
   // ── Vision intake screener (htm9.8) ──
   // enabled + backend        → wired.

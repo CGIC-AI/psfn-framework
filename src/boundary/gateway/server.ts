@@ -29,6 +29,8 @@ import {
   type GatewayCredentialPresenceResult,
   type PolicyDecision,
   type RuntimeHealthResult,
+  type OperatorAlertResult,
+  type NotifyNtfyParams,
   type VoiceHandleMessageResult,
 } from './protocol.js';
 import {
@@ -58,6 +60,7 @@ import {
   type VoiceStreamRequestOptions,
 } from './voice-stream-request.js';
 import { GatewayNtfyNotifier, type GatewayNtfyConfig } from './ntfy-notifier.js';
+import { GatewayOperatorAlertDispatcher } from './operator-alert-dispatcher.js';
 import {
   createGatewayApprovalBoundaryService,
   type ApprovalBoundaryService,
@@ -250,6 +253,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * closed on the telegram channel without it.
    */
   telegramDock?: ChannelOutboundDock;
+  /** Numeric Telegram destination for secondary system/operator alerts. */
+  operatorTelegramChatId?: string;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
@@ -374,6 +379,7 @@ export class GatewayServer {
   private readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
+  private readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
   private readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
   private readonly shardWorkloadRegistrar: GatewayShardWorkloadRegistrar | undefined;
   private readonly approvalBoundary: ApprovalBoundaryService;
@@ -491,6 +497,13 @@ export class GatewayServer {
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
+    this.operatorAlertDispatcher = new GatewayOperatorAlertDispatcher({
+      ntfy: this.ntfyNotifier,
+      ...(options.telegramDock ? { telegramDock: options.telegramDock } : {}),
+      ...(options.operatorTelegramChatId
+        ? { telegramChatId: options.operatorTelegramChatId }
+        : {}),
+    });
     const cogSecMode = options.intakeScreening?.mode ?? 'off';
     this.canaryEgressGuard = cogSecMode === 'off'
       ? null
@@ -557,6 +570,10 @@ export class GatewayServer {
       activeVersion: this.sessionHmacKeyring.activeVersion,
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
     });
+  }
+
+  async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
+    return await this.operatorAlertDispatcher.dispatch(params);
   }
 
   // Wrap a handler with audit timing — logs call, records duration/error on completion
@@ -721,6 +738,7 @@ export class GatewayServer {
         id: this.authenticatedCompanionId(conn) ?? 'unidentified-agent-rpc',
       }),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
+      sendOperatorAlert: (params) => this.operatorAlertDispatcher.dispatch(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,

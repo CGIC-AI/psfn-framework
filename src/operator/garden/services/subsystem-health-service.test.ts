@@ -14,6 +14,24 @@ function laneById(lanes: SubsystemLaneHealth[], id: string): SubsystemLaneHealth
 }
 
 describe('AdminSubsystemHealthDataService', () => {
+  it('surfaces zero configured operator-alert sinks as a degraded Garden banner', () => {
+    const bus = new EventBus();
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: bus,
+      operatorAlerting: {
+        configuredSinks: [],
+        status: 'unconfigured',
+        warning: 'Operator alerting has zero configured sinks; alerts cannot leave the runtime.',
+      },
+    });
+
+    expect(service.getSnapshot().operatorAlerting).toEqual({
+      configuredSinks: [],
+      status: 'unconfigured',
+      warning: 'Operator alerting has zero configured sinks; alerts cannot leave the runtime.',
+    });
+  });
+
   it('reports never-fired event lanes as "never" with no fabricated data', () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({

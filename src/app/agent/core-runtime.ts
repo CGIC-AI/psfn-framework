@@ -76,8 +76,12 @@ import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
   createActiveMemoryRefreshFailureAlertHandler,
+  createBackupFailureAlertHandler,
   createPromptGenerationFailureAlertHandler,
-  isPromptGenerationFailureAlertConfigured,
+  createQuarantineExpiryAlertHandler,
+  createRepeatedScreeningFailureAlertHandler,
+  createScheduledTaskFailureAlertHandler,
+  createSleepConsolidationFailureAlertHandler,
 } from '../startup/support/operator-alerts.js';
 import { createAppCacheFromEnv } from '../../shared/cache/runtime.js';
 import type { AppCache } from '../../shared/cache/types.js';
@@ -337,9 +341,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       stream: gateway.stream.bind(gateway),
     },
     streamRuntimeOptions: {
-      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name, {
-        enabled: isPromptGenerationFailureAlertConfigured(process.env),
-      }),
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
     },
     fatigueBudget: fatigueRuntime.fatigueBudget,
     humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
@@ -398,7 +400,29 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       notifier: operatorNotifier,
       companionName: card.data.name,
       failureThreshold: config.memoryRefreshFailureAlertThreshold,
-      enabled: isPromptGenerationFailureAlertConfigured(process.env),
+    }),
+  );
+  eventBus.on(
+    'backup.failed',
+    createBackupFailureAlertHandler(operatorNotifier, card.data.name),
+  );
+  eventBus.on(
+    'schedule.task.failed',
+    createScheduledTaskFailureAlertHandler(operatorNotifier, card.data.name),
+  );
+  eventBus.on(
+    'memory.sleep_consolidation.failure',
+    createSleepConsolidationFailureAlertHandler(operatorNotifier, card.data.name),
+  );
+  eventBus.on(
+    'intake.quarantine.expired',
+    createQuarantineExpiryAlertHandler(operatorNotifier, card.data.name),
+  );
+  eventBus.on(
+    'intake.screening.fail_closed',
+    createRepeatedScreeningFailureAlertHandler({
+      notifier: operatorNotifier,
+      companionName: card.data.name,
     }),
   );
   // Lazily construct a read-only model-usage query port on first `diagnose`

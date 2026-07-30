@@ -310,12 +310,17 @@ describe('source-risk-scaled scrutiny via source lists (htm9.13)', () => {
 // ── htm9.11: durable quarantine hold on screening quarantine decisions ──
 
 describe('quarantine hold on screening decisions (htm9.11)', () => {
-  function makeHoldingService(mode: 'shadow' | 'enforce', hold: IntakeQuarantineHoldPort['hold']) {
+  function makeHoldingService(
+    mode: 'shadow' | 'enforce',
+    hold: IntakeQuarantineHoldPort['hold'],
+    onFailClosed?: NonNullable<Parameters<typeof createIntakeScreeningService>[0]['onFailClosed']>,
+  ) {
     return createIntakeScreeningService({
       policy: makePolicy(mode),
       l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
       quarantine: { hold },
       actor: 'test:intake-screening',
+      ...(onFailClosed ? { onFailClosed } : {}),
     });
   }
 
@@ -352,13 +357,54 @@ describe('quarantine hold on screening decisions (htm9.11)', () => {
   });
 
   it('records a hold failure visibly and keeps the content withheld (fail closed)', async () => {
+    const failures: Array<{ stage: string; error: string }> = [];
     const service = makeHoldingService('enforce', () => {
       throw new Error('quarantine disk full');
+    }, event => {
+      failures.push(event);
     });
     const result = await service.screen(HOSTILE_TEXT, screenInput);
     expect(result.quarantineHoldError).toContain('quarantine disk full');
     expect(result.withheld).toBe(true);
     expect(result.effectiveText).toBe(renderIntakeWithheldContentPlaceholder());
+    expect(failures).toEqual([
+      expect.objectContaining({
+        stage: 'quarantine_hold',
+        error: 'quarantine disk full',
+      }),
+    ]);
+  });
+});
+
+describe('fail-closed screening alert telemetry', () => {
+  it('reports an escalation runtime failure without including screened content', async () => {
+    const failures: unknown[] = [];
+    const service = createIntakeScreeningService({
+      policy: makePolicy('enforce'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      escalation: {
+        escalate: async () => {
+          throw new Error('screening audit unavailable');
+        },
+      },
+      actor: 'test:intake-screening',
+      now: () => 123,
+      onFailClosed: event => failures.push(event),
+    });
+
+    const result = await service.screen(CLEAN_TEXT, {
+      ...screenInput,
+      sourceClass: 'image_ocr',
+    });
+
+    expect(result.action).toBe('quarantine');
+    expect(failures).toEqual([{
+      stage: 'escalation',
+      sourceClass: 'image_ocr',
+      error: 'screening audit unavailable',
+      timestamp: 123,
+    }]);
+    expect(JSON.stringify(failures)).not.toContain(CLEAN_TEXT);
   });
 });
 

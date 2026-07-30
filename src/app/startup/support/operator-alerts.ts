@@ -14,29 +14,34 @@ const ACTIVE_MEMORY_REFRESH_FAILURE_SENDER: NotificationSenderMetadata = Object.
   kind: 'system',
   provenance: 'system.operator_alert.active_memory_refresh_failure',
 });
-
-export interface PromptGenerationFailureAlertEnv extends NodeJS.ProcessEnv {
-  NTFY_BASE_URL?: string;
-  NTFY_TOPIC?: string;
-}
+const BACKUP_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.backup_failure',
+});
+const SCHEDULED_TASK_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.scheduled_task_failure',
+});
+const SLEEP_CONSOLIDATION_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.sleep_consolidation_failure',
+});
+const QUARANTINE_EXPIRY_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.quarantine_expiry',
+});
+const REPEATED_SCREENING_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.repeated_screening_failure',
+});
 
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
   companionName: string,
-  options: { enabled?: boolean } = {},
 ): (event: StreamTerminalFailureEvent) => Promise<void> {
   const resolvedCompanionName = requireOperatorAlertCompanionName(companionName);
-  const enabled = options.enabled !== false;
 
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
-    if (!enabled) {
-      log.error(`Prompt generation failure operator alert recorded locally for ${event.process}: ntfy is not configured`, {
-        companionName: resolvedCompanionName,
-        attempt: event.attempts,
-        reason: event.error.message,
-      });
-      return;
-    }
     try {
       await notifier.notify({
         sender: PROMPT_GENERATION_FAILURE_SENDER,
@@ -45,7 +50,7 @@ export function createPromptGenerationFailureAlertHandler(
         message: formatPromptGenerationFailureAlert(event, resolvedCompanionName),
       });
     } catch (error) {
-      log.warn('Failed to send ntfy alert for prompt generation failure', {
+      log.error('Failed to deliver operator alert for prompt generation failure', {
         companionName: resolvedCompanionName,
         purpose: event.purpose,
         attempts: event.attempts,
@@ -94,7 +99,6 @@ export interface ActiveMemoryRefreshFailureAlertOptions {
    * a missing or invalid value fails closed at composition.
    */
   failureThreshold: number | undefined;
-  enabled?: boolean;
 }
 
 /**
@@ -102,7 +106,7 @@ export interface ActiveMemoryRefreshFailureAlertOptions {
  * silent degradation. Subscribed to `memory.active_context.refresh` on the
  * event bus: `degraded` phases increment a per-key consecutive-failure count,
  * `ready` phases reset it. Crossing the config-owned threshold raises one
- * alert through the system-derived gateway notification path (ntfy); the
+ * alert through the system-derived multi-sink gateway notification path; the
  * alert re-arms only after a successful refresh for that key.
  */
 export function createActiveMemoryRefreshFailureAlertHandler(
@@ -116,7 +120,6 @@ export function createActiveMemoryRefreshFailureAlertHandler(
       `Invalid memoryRefreshFailureAlertThreshold: expected a positive integer, got ${String(failureThreshold)}`,
     );
   }
-  const enabled = options.enabled !== false;
   const consecutiveFailuresByKey = new Map<string, number>();
   const alertedKeys = new Set<string>();
 
@@ -133,18 +136,6 @@ export function createActiveMemoryRefreshFailureAlertHandler(
       return;
     }
 
-    if (!enabled) {
-      log.warn('Active memory refresh failure alert skipped: ntfy is not configured', {
-        companionName,
-        key: event.key,
-        channelId: event.channelId,
-        consecutiveFailures: failureCount,
-        failureThreshold,
-      });
-      alertedKeys.add(event.key);
-      return;
-    }
-
     try {
       await notifier.notify({
         sender: ACTIVE_MEMORY_REFRESH_FAILURE_SENDER,
@@ -156,7 +147,7 @@ export function createActiveMemoryRefreshFailureAlertHandler(
     } catch (error) {
       // Delivery failure must not fake an alerted state: the next degraded
       // refresh for this key retries the notification.
-      log.warn('Failed to send ntfy alert for persistent active memory refresh failure', {
+      log.error('Failed to deliver operator alert for persistent active memory refresh failure', {
         companionName,
         key: event.key,
         channelId: event.channelId,
@@ -166,6 +157,142 @@ export function createActiveMemoryRefreshFailureAlertHandler(
       });
     }
   };
+}
+
+type BackupFailureEvent = EventMap['backup.failed'];
+type ScheduledTaskFailureEvent = EventMap['schedule.task.failed'];
+type SleepConsolidationFailureEvent = EventMap['memory.sleep_consolidation.failure'];
+type QuarantineExpiryEvent = EventMap['intake.quarantine.expired'];
+type FailClosedScreeningEvent = EventMap['intake.screening.fail_closed'];
+
+export function createBackupFailureAlertHandler(
+  notifier: NotificationPort,
+  companionName: string,
+): (event: BackupFailureEvent) => Promise<void> {
+  const name = requireOperatorAlertCompanionName(companionName);
+  return async (event) => {
+    await deliverOperatorAlert(notifier, {
+      sender: BACKUP_FAILURE_SENDER,
+      title: `${name} backup failure`,
+      priority: 5,
+      message: [
+        `${name} scheduled backup failed.`,
+        `Task: ${event.taskName} (${event.taskId})`,
+        `Error: ${event.error}`,
+      ].join('\n'),
+    }, { alertKind: 'backup_failure', taskId: event.taskId });
+  };
+}
+
+export function createScheduledTaskFailureAlertHandler(
+  notifier: NotificationPort,
+  companionName: string,
+): (event: ScheduledTaskFailureEvent) => Promise<void> {
+  const name = requireOperatorAlertCompanionName(companionName);
+  return async (event) => {
+    if (event.taskId === 'scheduled-backup') return;
+    await deliverOperatorAlert(notifier, {
+      sender: SCHEDULED_TASK_FAILURE_SENDER,
+      title: `${name} scheduled job failure`,
+      priority: 5,
+      message: [
+        `${name} scheduled job failed.`,
+        `Task: ${event.taskName} (${event.taskId})`,
+        `Type: ${event.type}`,
+        `Error: ${event.error}`,
+      ].join('\n'),
+    }, { alertKind: 'scheduled_task_failure', taskId: event.taskId });
+  };
+}
+
+export function createSleepConsolidationFailureAlertHandler(
+  notifier: NotificationPort,
+  companionName: string,
+): (event: SleepConsolidationFailureEvent) => Promise<void> {
+  const name = requireOperatorAlertCompanionName(companionName);
+  return async (event) => {
+    await deliverOperatorAlert(notifier, {
+      sender: SLEEP_CONSOLIDATION_FAILURE_SENDER,
+      title: `${name} sleeptime failure`,
+      priority: 5,
+      message: [
+        `${name} sleeptime consolidation failed closed.`,
+        `Session: ${event.sessionId}`,
+        `Scope: ${event.scopeKey}`,
+        `Stage: ${event.stage}`,
+        `Candidate episodes: ${event.candidateEpisodeIds.length}`,
+        `Error: ${event.error}`,
+      ].join('\n'),
+    }, { alertKind: 'sleep_consolidation_failure', sessionId: event.sessionId });
+  };
+}
+
+export function createQuarantineExpiryAlertHandler(
+  notifier: NotificationPort,
+  companionName: string,
+): (event: QuarantineExpiryEvent) => Promise<void> {
+  const name = requireOperatorAlertCompanionName(companionName);
+  return async (event) => {
+    await deliverOperatorAlert(notifier, {
+      sender: QUARANTINE_EXPIRY_SENDER,
+      title: `${name} quarantine item expired`,
+      priority: 5,
+      message: [
+        `${name} held CogSec intake expired before operator review.`,
+        `Envelope: ${event.envelopeId}`,
+        `Source channel: ${event.sourceChannelId ?? 'unknown'}`,
+        `Held at: ${new Date(event.heldAtMs).toISOString()}`,
+        `Expired at: ${new Date(event.expiredAtMs).toISOString()}`,
+        `Reason: ${event.reason}`,
+      ].join('\n'),
+    }, { alertKind: 'quarantine_expiry', envelopeId: event.envelopeId });
+  };
+}
+
+export function createRepeatedScreeningFailureAlertHandler(options: {
+  notifier: NotificationPort;
+  companionName: string;
+}): (event: FailClosedScreeningEvent) => Promise<void> {
+  const name = requireOperatorAlertCompanionName(options.companionName);
+  const counts = new Map<string, number>();
+  const alerted = new Set<string>();
+  return async (event) => {
+    const key = `${event.stage}:${event.sourceClass}`;
+    const count = (counts.get(key) ?? 0) + 1;
+    counts.set(key, count);
+    if (count === 1 || alerted.has(key)) return;
+
+    const delivered = await deliverOperatorAlert(options.notifier, {
+      sender: REPEATED_SCREENING_FAILURE_SENDER,
+      title: `${name} repeated intake screening failures`,
+      priority: 5,
+      message: [
+        `${name} intake screening has failed closed repeatedly.`,
+        `Stage: ${event.stage}`,
+        `Source class: ${event.sourceClass}`,
+        `Observed runtime failures: ${count}`,
+        `Last error: ${event.error}`,
+      ].join('\n'),
+    }, { alertKind: 'repeated_screening_failure', stage: event.stage });
+    if (delivered) alerted.add(key);
+  };
+}
+
+async function deliverOperatorAlert(
+  notifier: NotificationPort,
+  params: Parameters<NotificationPort['notify']>[0],
+  context: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    await notifier.notify(params);
+    return true;
+  } catch (error) {
+    log.error('Failed to deliver operator alert', {
+      ...context,
+      error: toErrorMessage(error),
+    });
+    return false;
+  }
 }
 
 export function formatActiveMemoryRefreshFailureAlert(
@@ -187,10 +314,4 @@ function requireOperatorAlertCompanionName(companionName: string): string {
   const resolved = companionName.trim();
   if (resolved) return resolved;
   throw new Error('Missing companion name for operator alert: explicit identity is required');
-}
-
-export function isPromptGenerationFailureAlertConfigured(
-  env: PromptGenerationFailureAlertEnv = process.env,
-): boolean {
-  return Boolean(env.NTFY_BASE_URL?.trim() && env.NTFY_TOPIC?.trim());
 }

@@ -63,6 +63,8 @@ export interface GatewayPrivilegedCore {
   auditDb: null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
+    telegramDock?: ChannelOutboundDock;
+    operatorTelegramChatId?: string;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
     /** Inter-companion channel lane (W6); multi-companion only. */
@@ -185,6 +187,28 @@ export async function buildGatewayPrivilegedCore(
       'intake-quarantine',
       input.config.companionId,
     ),
+    onQuarantineExpired: ({ entry, expiredAtMs, reason }) => {
+      void eventBus.emit('intake.quarantine.expired', {
+        envelopeId: entry.id,
+        ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
+        heldAtMs: entry.heldAtMs,
+        expiredAtMs,
+        reason,
+      }).catch((error: unknown) => {
+        input.logger.error('Failed to emit intake quarantine expiry alert event', {
+          envelopeId: entry.id,
+          error: String(error),
+        });
+      });
+    },
+    onFailClosedScreening: (event) => {
+      void eventBus.emit('intake.screening.fail_closed', event).catch((error: unknown) => {
+        input.logger.error('Failed to emit fail-closed intake screening alert event', {
+          stage: event.stage,
+          error: String(error),
+        });
+      });
+    },
   });
 
   // htm9.18: durable CogSec event store for the canary egress tripwire. Shares
@@ -203,6 +227,8 @@ export async function buildGatewayPrivilegedCore(
     auditDb: null,
     createGatewayServer: ({
       discordAdapter,
+      telegramDock,
+      operatorTelegramChatId,
       discordAccountDocks,
       companionChannels,
       icpAutonomyStore,
@@ -227,6 +253,8 @@ export async function buildGatewayPrivilegedCore(
       embeddingService: privilegedServices.embeddingProvider,
       modelDiscovery: privilegedServices.modelDiscovery,
       discordAdapter,
+      ...(telegramDock ? { telegramDock } : {}),
+      ...(operatorTelegramChatId ? { operatorTelegramChatId } : {}),
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),

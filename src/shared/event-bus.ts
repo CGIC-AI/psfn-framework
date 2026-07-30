@@ -1009,6 +1009,13 @@ export interface EventMap {
   };
   'schedule.tick': { timestamp: number };
   'schedule.task.run': { taskId: string; taskName: string; type: string } & EventCorrelationFields;
+  'schedule.task.failed': {
+    taskId: string;
+    taskName: string;
+    type: string;
+    error: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'schedule.task.denied': {
     taskId: string;
     taskName: string;
@@ -1021,6 +1028,19 @@ export interface EventMap {
   } & EventCorrelationFields;
   'schedule.healthcheck': { timestamp: number; taskCount: number };
   'backup.failed': { taskId: string; taskName: string; error: string; timestamp: number };
+  'intake.quarantine.expired': {
+    envelopeId: string;
+    sourceChannelId?: string;
+    heldAtMs: number;
+    expiredAtMs: number;
+    reason: string;
+  };
+  'intake.screening.fail_closed': {
+    stage: 'escalation' | 'quarantine_hold';
+    sourceClass: string;
+    error: string;
+    timestamp: number;
+  };
   'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };
   // Cross-companion co-location (sprint 10, W5a): the observing agent's
   // presence refresh found a companion at its own place that was not there on

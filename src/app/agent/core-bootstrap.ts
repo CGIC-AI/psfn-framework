@@ -11,7 +11,10 @@ import {
   createRuntimeSafeguardSurfaces,
   type RuntimeSafeguardSurfaces,
 } from '../startup/support/safeguard-surfaces.js';
-import { createGatewayNotificationPort, type NotificationPort } from '../../core/tools/ntfy.js';
+import {
+  createGatewayOperatorNotificationPort,
+  type NotificationPort,
+} from '../../core/tools/ntfy.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
@@ -132,7 +135,7 @@ export async function bootstrapAgentCoreRuntime(
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();
-  const operatorNotifier = createGatewayNotificationPort(gateway);
+  const operatorNotifier = createGatewayOperatorNotificationPort(gateway);
   const {
     safeguardAuditTrail,
     identityCoolingOff,

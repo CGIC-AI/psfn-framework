@@ -287,6 +287,7 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'discord.sendMedia':
     case 'discord.typing':
     case 'notify.ntfy':
+    case 'notify.operator':
     case 'clarify.deliver':
       return 'ALLOW';
 

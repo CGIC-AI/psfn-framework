@@ -607,6 +607,13 @@ export class Scheduler {
         entry.lastErrorAt = entry.lastFinishedAt;
         delete entry.lastDeniedReason;
         log.error(`Task "${entry.name}" error`, { error: errorText });
+        await this.eventBus.emit('schedule.task.failed', {
+          taskId: id,
+          taskName: entry.name,
+          type: entry.type,
+          error: errorText,
+          timestamp: entry.lastFinishedAt,
+        });
       }
 
       if (entry.type === 'one-shot') {

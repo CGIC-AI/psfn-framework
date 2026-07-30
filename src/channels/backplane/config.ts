@@ -72,6 +72,8 @@ export interface TelegramChannelConfig {
   enabled: boolean;
   token: string;
   allowedUsers: string[];
+  /** System-owned destination for secondary operator alerts. */
+  operatorChatId?: string;
   mode: TelegramMode;
   pollIntervalMs: number;
   webhook: TelegramWebhookConfig;
@@ -211,6 +213,7 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
   enabled: false,
   token: '',
   allowedUsers: [],
+  operatorChatId: '',
   mode: 'polling',
   pollIntervalMs: DEFAULT_TELEGRAM_POLL_INTERVAL_MS,
   webhook: {
@@ -986,6 +989,15 @@ export function loadRuntimeChannelsConfig(
   const allowedUsers = allowedUsersOverride
     ?? parseConfiguredStringArray(telegramConfig.allowedUsers, 'channels.json.telegram.allowedUsers')
     ?? [];
+  const operatorChatId = parseConfiguredString(
+    telegramConfig.operatorChatId,
+    'channels.json.telegram.operatorChatId',
+  ) ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.operatorChatId;
+  if (operatorChatId && !/^-?\d+$/.test(operatorChatId)) {
+    throw new Error(
+      'channels.json.telegram.operatorChatId must be a numeric Telegram chat id',
+    );
+  }
 
   const mode = parseConfiguredTelegramMode(
     telegramConfig.mode,
@@ -1095,6 +1107,7 @@ export function loadRuntimeChannelsConfig(
       enabled,
       token,
       allowedUsers,
+      operatorChatId,
       mode,
       pollIntervalMs,
       ...(telegramCompanionId ? { companionId: telegramCompanionId } : {}),

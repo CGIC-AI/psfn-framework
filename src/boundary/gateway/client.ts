@@ -138,6 +138,7 @@ import type {
   VoiceHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
+  OperatorAlertResult,
   ClarifyDeliverParams,
   ClarifyDeliverResult,
   ConfirmationListResult,
@@ -1597,6 +1598,10 @@ export class GatewayClient implements
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
+  }
+
+  async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
+    return await this.rpcInstance.request('notify.operator', params) as OperatorAlertResult;
   }
 
   async clarifyDeliver(params: ClarifyDeliverParams): Promise<ClarifyDeliverResult> {

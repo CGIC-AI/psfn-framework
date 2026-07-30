@@ -46,6 +46,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'notify.ntfy', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
+  it('allows the system-only multi-sink operator notification route', () => {
+    expect(evaluatePolicy({ method: 'notify.operator', params: {} }, policyConfig)).toBe('ALLOW');
+  });
+
   it('allows web.fetch with valid HTTPS URL when urlPolicy is configured', () => {
     const configWithUrlPolicy: PolicyConfig = {
       ...policyConfig,

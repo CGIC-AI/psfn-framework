@@ -14,6 +14,7 @@
 //     `stale`. Unknown stays unknown.
 
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
+import type { OperatorAlertSinkConfiguration } from '../../../shared/contracts/operator-alerting.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
@@ -74,6 +75,7 @@ export interface SubsystemHealthSnapshot {
   /** When this process (and therefore the event ring buffers) started. */
   processStartedAt: number;
   generatedAt: number;
+  operatorAlerting?: OperatorAlertSinkConfiguration;
   lanes: SubsystemLaneHealth[];
 }
 
@@ -242,6 +244,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
   private readonly now: () => number;
   private readonly processStartedAt: number;
   private readonly scheduler: SubsystemSchedulerStateProvider | null;
+  private readonly operatorAlerting: SubsystemHealthSnapshot['operatorAlerting'];
   private readonly lanes = new Map<string, LaneAccumulator>();
   private readonly backgroundWorkHealth = new BackgroundWorkHealthAccumulator();
   private readonly unsubscribers: Array<() => void> = [];
@@ -253,6 +256,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     staleIntervalFactor?: number;
     now?: () => number;
     processStartedAt?: number;
+    operatorAlerting?: SubsystemHealthSnapshot['operatorAlerting'];
   }) {
     this.ringLimit = Number.isFinite(deps.ringLimit)
       ? Math.max(1, Math.floor(deps.ringLimit as number))
@@ -263,6 +267,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     this.now = deps.now ?? (() => Date.now());
     this.processStartedAt = deps.processStartedAt ?? this.now();
     this.scheduler = deps.scheduler ?? null;
+    this.operatorAlerting = deps.operatorAlerting;
 
     for (const def of EVENT_LANE_DEFINITIONS) {
       this.lanes.set(def.id, { lastEvent: null, observedEventCount: 0, recent: [] });
@@ -293,6 +298,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     return {
       processStartedAt: this.processStartedAt,
       generatedAt,
+      ...(this.operatorAlerting ? { operatorAlerting: this.operatorAlerting } : {}),
       lanes,
     };
   }

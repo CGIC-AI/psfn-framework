@@ -37,6 +37,7 @@ import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-
 import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
+import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -84,6 +85,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'toolConformanceRunner'
     | 'humanAttentionLedger'
   >;
+  operatorAlerting: OperatorAlertSinkConfiguration;
 }
 
 export async function startOptionalAdminTransportServer(
@@ -175,6 +177,7 @@ export async function startOptionalAdminTransportServer(
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
+    operatorAlerting: options.operatorAlerting,
     getCredentialPresence: () => options.gateway.getCredentialPresence(),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
     toolConformanceRunner: options.coreRuntime.toolConformanceRunner,

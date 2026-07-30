@@ -158,9 +158,12 @@ Use this order for every multi-PR implementation wave, including a two-PR wave:
    base change, rebase rather than merge, then rerun the gate; an attestation
    minted for the old base cannot be reused.
 6. Publish each ready PR with `npm run pr:publish` (for a new PR, pass its title
-   and body file after `--`). The publisher makes an existing draft ready before
-   pushing, creates a new PR as non-draft, pushes only the attested head, and
-   waits for CI and Greptile on that exact SHA.
+   and body file after `--`; repeat `--label <name>` for each required label).
+   The publisher makes an existing draft ready before pushing. It creates an
+   unlabeled new PR as non-draft; for a labeled new PR, it creates a momentary
+   draft with the labels and immediately marks it ready so the first
+   CI-triggering event includes them. It pushes only the attested head and waits
+   for CI and Greptile on that exact SHA.
 
 ## Standard Bead Loop
 
@@ -329,6 +332,14 @@ operation must supply the explicit inputs documented in the header of
 `scripts/ci/check-change-budget.mjs`; missing evidence fails closed, and the
 budget is never silently skipped.
 
+For an authorized exception, include the required rationale in the body file
+and apply the label through the publisher:
+
+```bash
+npm run pr:publish -- --title "<title>" --body-file <path> \
+  --label change-budget:exception
+```
+
 The calculation measures the PR-owned delta. Commits that only merge the current
 base into a branch do not count toward its files, lines, or commit budget, so
 normal base integration needs no misleading exception prose. Novel conflict
@@ -343,11 +354,18 @@ Publish only with the tracked wrapper. For a new PR:
 npm run pr:publish -- --title "<title>" --body-file <path>
 ```
 
+Repeat `--label <name>` to apply one or more labels. The wrapper validates every
+requested label before it pushes or publishes the remote attestation. A labeled
+new PR is created as a momentary draft with all labels attached, then immediately
+marked ready; this suppresses CI for the unlabeled `opened` payload and makes the
+labeled `ready_for_review` payload the first CI-triggering event. Without
+`--label`, new-PR creation remains directly non-draft.
+
 For an already-open PR whose title and body do not need changes, run
 `npm run pr:publish`. The wrapper marks an existing draft ready **before** it
-pushes the attested head; it creates a new PR as non-draft. Never push while the
-PR is draft, because draft synchronizations receive no CI and Greptile skips
-them.
+pushes the attested head; it applies any requested labels before that push.
+Never push an existing PR while it is draft, because draft synchronizations
+receive no CI and Greptile skips them.
 
 The wrapper pushes only the attested head, publishes its authenticated
 exact-base status, and verifies that both CI and Greptile target exactly that

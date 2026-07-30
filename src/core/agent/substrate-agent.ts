@@ -24,10 +24,6 @@ import type { AppCache } from '../../shared/cache/types.js';
 import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
-import {
-  INTENTION_FOLLOW_UP_AUTHOR_ID,
-  INTENTION_FOLLOW_UP_AUTHOR_NAME,
-} from '../intention/appraisal.js';
 import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -67,8 +63,7 @@ import {
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingress.js';
-import { convertToLlm, type InternalWhisperMessage } from './messages.js';
-import { MESSAGE_CLASSES } from './message-classes.js';
+import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
@@ -146,13 +141,13 @@ import { SessionPresenceOverrideState } from './session-presence-override.js';
 import {
   resolveContinuitySubjectKey,
   type CompanionSubstrateHealthContext,
-  type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { installContextCoherenceMonitor } from './context-coherence-monitor.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import { PromptContextBuilder } from './substrate-agent/prompt-context-builder.js';
+import { FollowUpIngressRouter } from './substrate-agent/follow-up-ingress.js';
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
@@ -163,7 +158,6 @@ import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execut
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
 import {
   CompletionNoticeBuffer,
-  renderCompletionNoticeLines,
   type CompletionNoticeDeliveryDisposition,
   type CompletionNoticeDeliveryInput,
 } from './completion-notices.js';
@@ -349,6 +343,7 @@ export class SubstrateAgent {
   private readonly humanAttentionPressure: HumanAttentionPressurePort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
   private readonly promptContextBuilder: PromptContextBuilder;
+  private readonly followUpIngress: FollowUpIngressRouter;
   private durableChargeRecorder: DurableRunChargeRecorder | null = null;
   private durableChargeProbe: DurableRunChargeProbe | null = null;
   private currentInternalState: InternalState | null = null;
@@ -777,6 +772,16 @@ export class SubstrateAgent {
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       log,
     });
+    // Queued follow-up ingress + completion-notice routing (emh3p.2).
+    this.followUpIngress = new FollowUpIngressRouter({
+      agent: this.agent,
+      turnRunReservation: this.turnRunReservation,
+      turnQueueIngress: this.turnQueueIngress,
+      turnSupportRuntime: this.turnSupportRuntime,
+      completionNotices: this.completionNotices,
+      requireActiveTurnSessionIdentity: () => this.requireActiveTurnSessionIdentity(),
+      resolveAuthorContext: (message) => this.promptContextBuilder.resolveAuthorContext(message),
+    });
   }
 
   /** Ensure the model is resolved before calling agent.prompt() */
@@ -1195,25 +1200,7 @@ export class SubstrateAgent {
    * ordinary turn rather than entering the candidate follow-up queue.
    */
   async followUp(message: SubstrateMessage): Promise<void> {
-    return this.turnRunReservation.runIngress({
-      kind: 'queued-ingress',
-      sourceId: message.id,
-      ingress: 'follow-up',
-    }, async ({ deferredFromExclusive }) => {
-      // Claim the fresh-ordinary FIFO slot synchronously, before author
-      // resolution, so concurrent idle inputs cannot invert arrival order.
-      const slot = this.turnQueueIngress.reserveFreshOrdinarySlot();
-      try {
-        if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
-        if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-          this.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
-          return;
-        }
-        await slot.run(message);
-      } finally {
-        slot.dispose();
-      }
-    });
+    return this.followUpIngress.followUp(message);
   }
 
   /**
@@ -1225,108 +1212,7 @@ export class SubstrateAgent {
   async deliverCompletionNotice(
     input: CompletionNoticeDeliveryInput,
   ): Promise<CompletionNoticeDeliveryDisposition> {
-    const sourceChannelId = input.sourceChannelId.trim();
-    const logicalSessionId = input.logicalSessionId.trim();
-    if (!sourceChannelId || !logicalSessionId) {
-      throw new Error('Completion notice delivery requires source and logical session ids');
-    }
-    return this.turnRunReservation.runIngress({
-      kind: 'queued-ingress',
-      sourceId: input.notice.handoffId,
-      ingress: 'completion',
-    }, async ({ deferredFromExclusive }) => {
-      const activeIdentity = this.turnSupportRuntime.getActiveTurnSessionIdentity();
-      if (!deferredFromExclusive
-        && this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()
-        && activeIdentity?.logicalSessionId === logicalSessionId) {
-        this.agent.followUp({
-          role: 'custom',
-          type: 'internalWhisper',
-          messageClass: MESSAGE_CLASSES.internalWhisper,
-          content: renderCompletionNoticeLines(input.notice),
-          speakerName: 'Task report',
-          timestamp: Date.now(),
-        } satisfies InternalWhisperMessage);
-        return 'active_nudge';
-      }
-      this.completionNotices.register(logicalSessionId, input.notice);
-      return 'buffered';
-    });
-  }
-
-  private createInternalWhisperMessage(message: SubstrateMessage): InternalWhisperMessage {
-    return {
-      role: 'custom',
-      type: 'internalWhisper',
-      messageClass: MESSAGE_CLASSES.internalWhisper,
-      content: message.content,
-      speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
-      timestamp: Date.now(),
-    };
-  }
-
-  private async tryQueueFollowUpOnActiveOrdinaryRun(
-    message: SubstrateMessage,
-  ): Promise<boolean> {
-    if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-      if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
-      this.agent.followUp(this.createInternalWhisperMessage(message));
-      log.debug('Queued follow-up', {
-        channelId: message.channelId,
-        internalKind: 'whisper',
-      });
-      return true;
-    }
-
-    const isSystemOriginated = message.authorId.startsWith('system:');
-    const turnId = createTurnId();
-    const systemContent = isSystemOriginated
-      ? formatAttributedSystemContent(message.content, message.authorName)
-      : message.content;
-    const authorContext: ResolvedAuthorContext | null = isSystemOriginated
-      ? null
-      : await this.promptContextBuilder.resolveAuthorContext(message);
-    if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
-    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
-    if (isSystemOriginated) {
-      this.turnSupportRuntime.recordSystemMessage(
-        message,
-        turnSessionIdentity,
-        turnId,
-        message.id,
-        systemContent,
-      );
-    } else {
-      if (!authorContext) {
-        throw new Error('External follow-up requires resolved ordinary author context');
-      }
-      this.turnSupportRuntime.recordUserMessage(
-        message,
-        turnSessionIdentity,
-        turnId,
-        message.id,
-        authorContext.trustLevel,
-        authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
-      );
-    }
-    this.agent.followUp(isSystemOriginated
-      ? {
-        role: 'custom',
-        type: 'systemNote',
-        messageClass: MESSAGE_CLASSES.systemNote,
-        content: systemContent,
-        timestamp: Date.now(),
-      }
-      : {
-        role: 'user',
-        content: systemContent,
-        timestamp: Date.now(),
-      } satisfies UserMessage);
-    log.debug('Queued follow-up', {
-      channelId: message.channelId,
-      systemOriginated: isSystemOriginated,
-    });
-    return true;
+    return this.followUpIngress.deliverCompletionNotice(input);
   }
 
   private requireActiveTurnSessionIdentity(): TurnSessionIdentity {

@@ -154,6 +154,7 @@ import { AdminRoomArbiterDataService } from './services/room-arbiter-service.js'
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('GardenAdminContract');
 
@@ -223,6 +224,8 @@ export interface InProcessGardenAdminContractOptions {
   speakingArbiterAdminStore?: SpeakingArbiterAdminStore | null;
   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
+  /** Redacted startup snapshot used for the zero-sink health banner. */
+  operatorAlerting?: OperatorAlertSinkConfiguration;
 }
 
 export interface FleetGardenDirectDatabaseServices {
@@ -356,6 +359,7 @@ export function createInProcessGardenAdminContract(
   const subsystemHealth = new AdminSubsystemHealthDataService({
     eventBus: options.eventBus,
     scheduler: schedulerService,
+    ...(options.operatorAlerting ? { operatorAlerting: options.operatorAlerting } : {}),
   });
   const partnerAffectShadow = options.partnerAffectShadowStore
     ? new AdminPartnerAffectShadowDataService({
@@ -425,6 +429,20 @@ export function createInProcessGardenAdminContract(
         {
           itemTtlHours: intakePolicy.quarantine.itemTtlHours,
           maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+          onExpired: ({ entry, expiredAtMs, reason }) => {
+            void options.eventBus.emit('intake.quarantine.expired', {
+              envelopeId: entry.id,
+              ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
+              heldAtMs: entry.heldAtMs,
+              expiredAtMs,
+              reason,
+            }).catch((error: unknown) => {
+              log.error('Failed to emit intake quarantine expiry alert event', {
+                envelopeId: entry.id,
+                error: toErrorMessage(error),
+              });
+            });
+          },
         },
       );
     }

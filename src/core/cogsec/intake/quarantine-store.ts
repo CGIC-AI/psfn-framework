@@ -131,6 +131,12 @@ export interface IntakeQuarantineStoreOptions {
   /** Held-item capacity (intake-policy quarantine.maxHeldItems); oldest expire early. */
   maxHeldItems: number;
   now?: () => number;
+  /** Called for each lazy TTL expiry after the transition is durably persisted. */
+  onExpired?: (event: {
+    entry: IntakeQuarantineEntry;
+    expiredAtMs: number;
+    reason: string;
+  }) => void;
 }
 
 /** Storage cap for held raw text; larger content is truncated with a flag. */
@@ -300,15 +306,21 @@ export function createIntakeQuarantineStore(
     ...(entry.safeRepresentationText !== undefined ? { safeRepresentationText: '' } : {}),
   });
 
-  /** Lazy TTL sweep; returns true when any entry changed (caller persists). */
-  const sweepExpired = (entries: Map<string, IntakeQuarantineEntry>, atMs: number): boolean => {
-    let changed = false;
+  /** Lazy TTL sweep; durably persists before publishing expiry notifications. */
+  const sweepExpired = (entries: Map<string, IntakeQuarantineEntry>, atMs: number): void => {
+    const expiredEvents: Array<Parameters<NonNullable<IntakeQuarantineStoreOptions['onExpired']>>[0]> = [];
     for (const [id, entry] of entries) {
       if (entry.status !== 'held' || entry.expiresAtMs > atMs) continue;
-      entries.set(id, expireEntry(entry, atMs, 'quarantine TTL elapsed'));
-      changed = true;
+      const reason = 'quarantine TTL elapsed';
+      const expired = expireEntry(entry, atMs, reason);
+      entries.set(id, expired);
+      expiredEvents.push({ entry: expired, expiredAtMs: atMs, reason });
     }
-    return changed;
+    if (expiredEvents.length === 0) return;
+    persist(entries);
+    for (const event of expiredEvents) {
+      options.onExpired?.(event);
+    }
   };
 
   /** Bound terminal-history growth; held entries are never pruned. */
@@ -372,9 +384,7 @@ export function createIntakeQuarantineStore(
     list(): IntakeQuarantineEntry[] {
       const atMs = now();
       const entries = load();
-      if (sweepExpired(entries, atMs)) {
-        persist(entries);
-      }
+      sweepExpired(entries, atMs);
       return [...entries.values()].sort((left, right) => {
         if ((left.status === 'held') !== (right.status === 'held')) {
           return left.status === 'held' ? -1 : 1;
@@ -386,9 +396,7 @@ export function createIntakeQuarantineStore(
     getById(id: string): IntakeQuarantineEntry | undefined {
       const atMs = now();
       const entries = load();
-      if (sweepExpired(entries, atMs)) {
-        persist(entries);
-      }
+      sweepExpired(entries, atMs);
       return entries.get(id);
     },
 

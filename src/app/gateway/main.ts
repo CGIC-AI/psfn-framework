@@ -95,6 +95,15 @@ import {
   loadTestingHarnessGardenAdminConfig,
   resolveTestingHarnessGardenVerifierConfig,
 } from '../../channels/backplane/config.js';
+import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
+import {
+  createBackupFailureAlertHandler,
+  createQuarantineExpiryAlertHandler,
+  createRepeatedScreeningFailureAlertHandler,
+  createScheduledTaskFailureAlertHandler,
+} from '../startup/support/operator-alerts.js';
+import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
+import type { NotificationPort } from '../../core/tools/ntfy.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -354,7 +363,6 @@ async function main(): Promise<void> {
         });
       },
     });
-    fleetAuthBackupScheduler.start();
     log.info('Gateway-owned fleet auth consistent backups enabled', {
       companionCount: config.companionFleet.companions.length,
       mode: 'consistent-family',
@@ -431,6 +439,17 @@ async function main(): Promise<void> {
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
+  const operatorAlerting = resolveOperatorAlertSinkConfiguration({
+    ntfyConfigured: bootstrap.server.ntfy !== undefined,
+    telegramEnabled: telegram !== undefined,
+    telegramChatId: bootstrap.channelsConfig.telegram.operatorChatId,
+  });
+  if (operatorAlerting.status === 'unconfigured') {
+    log.error('OPERATOR ALERTING IS UNCONFIGURED', {
+      warning: operatorAlerting.warning,
+      configuredSinks: operatorAlerting.configuredSinks,
+    });
+  }
   const primaryDiscordCompanionId = bootstrap.channelsConfig.discord.companionId
     ?? (config.companionFleet?.companions.length === 1
       ? config.companionFleet.companions[0]?.companionId
@@ -587,6 +606,9 @@ async function main(): Promise<void> {
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(telegram ? { telegramDock: telegram } : {}),
+    ...(bootstrap.channelsConfig.telegram.operatorChatId
+      ? { operatorTelegramChatId: bootstrap.channelsConfig.telegram.operatorChatId }
+      : {}),
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
@@ -601,6 +623,32 @@ async function main(): Promise<void> {
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),
   });
+  const gatewayOperatorNotifier: NotificationPort = {
+    notify: async (params) => {
+      await gateway.notifyOperator(params);
+      return { status: 'sent', topic: 'operator-alert-sinks' };
+    },
+  };
+  const operatorAlertCompanionName = resolveCompanionNameFromConfig(config);
+  eventBus.on(
+    'backup.failed',
+    createBackupFailureAlertHandler(gatewayOperatorNotifier, operatorAlertCompanionName),
+  );
+  eventBus.on(
+    'schedule.task.failed',
+    createScheduledTaskFailureAlertHandler(gatewayOperatorNotifier, operatorAlertCompanionName),
+  );
+  eventBus.on(
+    'intake.quarantine.expired',
+    createQuarantineExpiryAlertHandler(gatewayOperatorNotifier, operatorAlertCompanionName),
+  );
+  eventBus.on(
+    'intake.screening.fail_closed',
+    createRepeatedScreeningFailureAlertHandler({
+      notifier: gatewayOperatorNotifier,
+      companionName: operatorAlertCompanionName,
+    }),
+  );
   const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({
     read: async ({ companionId, contactId, providerSubjectId }) => {
       const result = await gateway.requestCompanionAgent<unknown>(
@@ -660,6 +708,7 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
+  fleetAuthBackupScheduler?.start();
   // Companion event relay (w9hj.1): fan-out hub for redacted operational
   // events. Approval events arrive on the gateway bus from the confirmation
   // queue; tool/artifact events arrive from the agent over

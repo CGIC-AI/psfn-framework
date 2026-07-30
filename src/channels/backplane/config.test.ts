@@ -24,6 +24,7 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('');
       expect(config.telegram.allowedUsers).toEqual([]);
+      expect(config.telegram.operatorChatId).toBe('');
       expect(config.telegram.mode).toBe('polling');
       expect(config.telegram.pollIntervalMs).toBe(1000);
       expect(config.telegram.webhook).toEqual({
@@ -84,6 +85,7 @@ describe('loadRuntimeChannelsConfig', () => {
             envName: 'TELEGRAM_BOT_TOKEN',
           },
           allowedUsers: ['42', '@trusted_friend'],
+          operatorChatId: '-100123',
           mode: 'polling',
           pollIntervalMs: 2500,
           webhook: {
@@ -107,6 +109,7 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.telegram.enabled).toBe(true);
       expect(config.telegram.token).toBe('token-from-env');
       expect(config.telegram.allowedUsers).toEqual(['42', '@trusted_friend']);
+      expect(config.telegram.operatorChatId).toBe('-100123');
       expect(config.telegram.mode).toBe('polling');
       expect(config.telegram.pollIntervalMs).toBe(2500);
       expect(config.telegram.webhook).toEqual({
@@ -173,6 +176,24 @@ describe('loadRuntimeChannelsConfig', () => {
 
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
         'channels.json.telegram.tokenRef must be configured when telegram is enabled',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed Telegram operator chat id', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: false,
+          operatorChatId: '@operator',
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.telegram.operatorChatId must be a numeric Telegram chat id',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });

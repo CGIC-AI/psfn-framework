@@ -1,18 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createActiveMemoryRefreshFailureAlertHandler,
+  createBackupFailureAlertHandler,
   createPromptGenerationFailureAlertHandler,
+  createRepeatedScreeningFailureAlertHandler,
+  createScheduledTaskFailureAlertHandler,
+  createSleepConsolidationFailureAlertHandler,
   formatActiveMemoryRefreshFailureAlert,
   formatPromptGenerationFailureAlert,
-  isPromptGenerationFailureAlertConfigured,
   type ActiveMemoryRefreshEvent,
 } from './operator-alerts.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
 import type { NotificationPort } from '../../../core/tools/ntfy.js';
-import {
-  clearDiagnosticLogRingBufferForTests,
-  getRecentDiagnosticLogRecords,
-} from '../../../shared/logger.js';
 
 function makeEvent(): StreamTerminalFailureEvent {
   return {
@@ -47,7 +46,7 @@ function makeEvent(): StreamTerminalFailureEvent {
 }
 
 describe('operator alerts', () => {
-  it('formats stable prompt-generation failure alerts for ntfy delivery', () => {
+  it('formats stable prompt-generation failure alerts for operator delivery', () => {
     const text = formatPromptGenerationFailureAlert(makeEvent(), 'PSFN');
 
     expect(text).toContain('PSFN prompt generation failed after exhausting configured fallback.');
@@ -58,7 +57,7 @@ describe('operator alerts', () => {
     expect(text).toContain('Error: 403 Key limit exceeded (total limit)');
   });
 
-  it('sends a priority-5 ntfy alert for terminal prompt-generation failures', async () => {
+  it('sends a priority-5 operator alert for terminal prompt-generation failures', async () => {
     const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({
         status: 'sent',
@@ -80,27 +79,15 @@ describe('operator alerts', () => {
     }));
   });
 
-  it('records a local operator alert when ntfy is not configured', async () => {
-    clearDiagnosticLogRingBufferForTests();
+  it('attempts prompt-generation alerts even when delivery is unconfigured', async () => {
     const notifier: NotificationPort = {
-      notify: vi.fn().mockRejectedValue(new Error('ntfy is not configured')),
+      notify: vi.fn().mockRejectedValue(new Error('Operator alerting has zero configured sinks')),
     };
-    const handler = createPromptGenerationFailureAlertHandler(notifier, 'PSFN', {
-      enabled: false,
-    });
+    const handler = createPromptGenerationFailureAlertHandler(notifier, 'PSFN');
 
     await handler(makeEvent());
 
-    expect(notifier.notify).not.toHaveBeenCalled();
-    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
-      level: 'error',
-      component: 'OperatorAlerts',
-      message: expect.stringContaining('Prompt generation failure operator alert recorded locally for agent.turn.prompt'),
-      context: expect.objectContaining({
-        attempt: 2,
-        reason: '403 Key limit exceeded (total limit)',
-      }),
-    }));
+    expect(notifier.notify).toHaveBeenCalledOnce();
   });
 
   it('fails closed instead of inventing an operator alert identity', () => {
@@ -111,18 +98,109 @@ describe('operator alerts', () => {
       notify: vi.fn(),
     }, '')).toThrow('Missing companion name for operator alert: explicit identity is required');
   });
+});
 
-  it('requires both ntfy base URL and topic for prompt-generation alerts', () => {
-    expect(isPromptGenerationFailureAlertConfigured({
-      NTFY_BASE_URL: 'https://ntfy.local',
-      NTFY_TOPIC: 'ops',
-    })).toBe(true);
-    expect(isPromptGenerationFailureAlertConfigured({
-      NTFY_BASE_URL: 'https://ntfy.local',
-    })).toBe(false);
-    expect(isPromptGenerationFailureAlertConfigured({
-      NTFY_TOPIC: 'ops',
-    })).toBe(false);
+describe('scheduled operator alerts', () => {
+  it('delivers an induced backup failure through the operator notification port', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createBackupFailureAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      taskId: 'scheduled-backup',
+      taskName: 'Scheduled backup',
+      error: 'pg_dump exited 1',
+      timestamp: 1,
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: {
+        kind: 'system',
+        provenance: 'system.operator_alert.backup_failure',
+      },
+      title: 'PSFN backup failure',
+      priority: 5,
+      message: expect.stringContaining('pg_dump exited 1'),
+    }));
+  });
+
+  it('alerts on non-backup scheduled task failures', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createScheduledTaskFailureAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      taskId: 'reflection:nightly',
+      taskName: 'Nightly reflection',
+      type: 'every',
+      error: 'reflection provider unavailable',
+      timestamp: 2,
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'PSFN scheduled job failure',
+      message: expect.stringContaining('Nightly reflection'),
+    }));
+  });
+
+  it('does not duplicate the dedicated backup failure alert', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createScheduledTaskFailureAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      taskId: 'scheduled-backup',
+      taskName: 'Scheduled backup',
+      type: 'every',
+      error: 'failed',
+      timestamp: 2,
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('alerts on fail-closed sleeptime consolidation failures', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createSleepConsolidationFailureAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      sessionId: 'session-1',
+      scopeKey: 'direct:user-1',
+      candidateEpisodeIds: ['episode-1'],
+      stage: 'thematic_grouping',
+      error: 'malformed model response',
+      timestamp: 3,
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'PSFN sleeptime failure',
+      message: expect.stringContaining('malformed model response'),
+    }));
+  });
+
+  it('alerts once when fail-closed screening reaches the configured repetition threshold', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createRepeatedScreeningFailureAlertHandler({
+      notifier,
+      companionName: 'PSFN',
+    });
+    const event = {
+      stage: 'escalation' as const,
+      sourceClass: 'web',
+      error: 'screening backend unavailable',
+      timestamp: 4,
+    };
+
+    await handler(event);
+    expect(notify).not.toHaveBeenCalled();
+    await handler(event);
+    await handler(event);
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: {
+        kind: 'system',
+        provenance: 'system.operator_alert.repeated_screening_failure',
+      },
+      message: expect.stringContaining('Observed runtime failures: 2'),
+    }));
   });
 });
 
@@ -241,17 +319,17 @@ describe('createActiveMemoryRefreshFailureAlertHandler', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
-  it('skips delivery but does not throw when ntfy is not configured', async () => {
+  it('attempts delivery but does not throw when every operator sink is unavailable', async () => {
     const { notifier, notify } = makeFakeNotifier();
+    notify.mockRejectedValueOnce(new Error('Operator alerting has zero configured sinks'));
     const handler = createActiveMemoryRefreshFailureAlertHandler({
       notifier,
       companionName: 'PSFN',
       failureThreshold: 1,
-      enabled: false,
     });
 
     await handler(makeRefreshEvent());
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledOnce();
   });
 
   it('formats the alert with key, channel, failure count, and last error', () => {

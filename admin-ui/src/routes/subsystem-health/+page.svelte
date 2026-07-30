@@ -138,6 +138,20 @@
       </p>
     </div>
   {:else if snapshot}
+    {#if snapshot.operatorAlerting?.status === 'unconfigured'}
+      <div
+        class="card-garden p-5 border-l-4 border-l-wilt-400 bg-wilt-50"
+        role="alert"
+        aria-live="assertive"
+      >
+        <p class="text-sm font-semibold text-wilt-700">Operator alerting is unconfigured</p>
+        <p class="text-sm text-shadow-700 mt-1">
+          {snapshot.operatorAlerting.warning}
+          Configure ntfy and/or the Telegram operator chat destination in channels.json.
+        </p>
+      </div>
+    {/if}
+
     <!-- Process-start context -->
     <div class="card-garden p-4 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
       <span class="text-shadow-600">

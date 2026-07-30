@@ -2049,6 +2049,49 @@ describe('GatewayServer', () => {
       );
     });
 
+    it('fans a backup alert through Telegram when ntfy is unavailable', async () => {
+      fetchMock.mockRejectedValue(new Error('ntfy offline'));
+      const telegramSend = vi.fn(async () => undefined);
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'default-topic',
+          timeoutMs: 1_000,
+          debounceWindowMs: 0,
+        },
+        telegramDock: {
+          id: 'telegram',
+          outbound: {
+            textChunkLimit: 4_096,
+            sendText: telegramSend,
+          },
+        },
+        operatorTelegramChatId: '-100123',
+      });
+
+      const response = await invokeRpc(conn, 2, 'notify.operator', {
+        message: 'pg_dump exited 1',
+        title: 'Backup failed',
+        priority: 5,
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.backup_failure',
+        },
+      });
+
+      expect(response.result).toEqual({
+        deliveries: [
+          { sink: 'ntfy', status: 'failed', error: 'ntfy offline' },
+          { sink: 'telegram', status: 'sent', target: 'telegram:-100123' },
+        ],
+      });
+      expect(telegramSend).toHaveBeenCalledWith(
+        { channelId: 'telegram:-100123' },
+        'Backup failed\n\npg\\_dump exited 1',
+      );
+    });
+
     it('debounces duplicate alerts', async () => {
       fetchMock.mockResolvedValue(new Response('', { status: 200 }));
       const { conn } = await setupServerConnection({

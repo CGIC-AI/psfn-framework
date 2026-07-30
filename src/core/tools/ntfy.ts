@@ -9,6 +9,7 @@ import type {
   ClarifyDeliverResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
+  OperatorAlertResult,
   PendingClarification,
 } from '../../boundary/gateway/protocol.js';
 import type { WirableTool } from '../agent/tool-wiring-validator.js';
@@ -850,6 +851,21 @@ export function createGatewayNotificationPort(
       ...params,
       sender: normalizeNotificationSenderMetadata(params.sender),
     }),
+  };
+}
+
+/** System-only operator alerts fan out through every configured gateway sink. */
+export function createGatewayOperatorNotificationPort(
+  gateway: { notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> },
+): NotificationPort {
+  return {
+    notify: async (params) => {
+      await gateway.notifyOperator({
+        ...params,
+        sender: normalizeNotificationSenderMetadata(params.sender),
+      });
+      return { status: 'sent', topic: 'operator-alert-sinks' };
+    },
   };
 }
 

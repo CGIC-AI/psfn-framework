@@ -878,6 +878,18 @@ export interface NotifyNtfyResult {
   messageId?: string;
 }
 
+export interface OperatorAlertDelivery {
+  sink: 'ntfy' | 'telegram';
+  status: 'sent' | 'debounced' | 'failed';
+  target?: string;
+  messageId?: string;
+  error?: string;
+}
+
+export interface OperatorAlertResult {
+  deliveries: OperatorAlertDelivery[];
+}
+
 // ── Notification types (gateway → agent, no response) ──
 
 export interface LLMChunkNotification {
@@ -1096,6 +1108,7 @@ export interface GatewayMethods {
   'image.edit': [ImageEditRpcParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
+  'notify.operator': [NotifyNtfyParams, OperatorAlertResult];
   'clarify.deliver': [ClarifyDeliverParams, ClarifyDeliverResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
   'shard.workload.register': [ShardWorkloadRegisterParams, ShardWorkloadRegisterResult];

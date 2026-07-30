@@ -296,6 +296,13 @@ export interface IntakeScreeningServiceOptions {
   /** Acting principal for envelope transitions, e.g. 'gateway:intake-screening'. */
   actor: string;
   now?: () => number;
+  /** Structural alert telemetry; never carries screened content. */
+  onFailClosed?: (event: {
+    stage: 'escalation' | 'quarantine_hold';
+    sourceClass: IntakeSourceClass;
+    error: string;
+    timestamp: number;
+  }) => void;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -406,6 +413,8 @@ interface EscalationExtras {
   contribution?: IntakeEscalationContribution;
   /** Fail-closed override of the L1/L1.5 decision (L2 per-tier quarantine). */
   forced?: { action: Extract<IntakeDecisionAction, 'quarantine'>; reason: string };
+  /** Present only when the override was caused by a screening runtime failure. */
+  failure?: { stage: 'escalation'; error: string };
 }
 
 export function createIntakeScreeningService(
@@ -635,6 +644,22 @@ export function createIntakeScreeningService(
         error: scorerOutcome.error,
       });
     }
+    if (escalationExtras?.failure) {
+      options.onFailClosed?.({
+        stage: escalationExtras.failure.stage,
+        sourceClass: input.sourceClass,
+        error: escalationExtras.failure.error,
+        timestamp: atMs,
+      });
+    }
+    if (quarantineHoldError) {
+      options.onFailClosed?.({
+        stage: 'quarantine_hold',
+        sourceClass: input.sourceClass,
+        error: quarantineHoldError,
+        timestamp: atMs,
+      });
+    }
 
     return {
       envelope,
@@ -722,6 +747,10 @@ export function createIntakeScreeningService(
         forced: {
           action: 'quarantine',
           reason: `escalation-fail-closed:${message}`.slice(0, 1024),
+        },
+        failure: {
+          stage: 'escalation',
+          error: message,
         },
         contribution: {
           riskLabels: [],
@@ -825,6 +854,7 @@ export interface MaybeCreateIntakeScreeningOptions {
   /** Durable quarantine store (htm9.11) for held-item review in Garden. */
   quarantine?: IntakeQuarantineHoldPort;
   now?: () => number;
+  onFailClosed?: IntakeScreeningServiceOptions['onFailClosed'];
 }
 
 /**
@@ -846,5 +876,6 @@ export function maybeCreateIntakeScreeningService(
     ...(options.quarantine ? { quarantine: options.quarantine } : {}),
     actor: options.actor,
     ...(options.now ? { now: options.now } : {}),
+    ...(options.onFailClosed ? { onFailClosed: options.onFailClosed } : {}),
   });
 }

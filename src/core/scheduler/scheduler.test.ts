@@ -474,6 +474,16 @@ describe('Scheduler', () => {
 
     it('exposes runtime outcome metadata for failed task runs', async () => {
       const nowSpy = vi.spyOn(Date, 'now');
+      const failures: Array<{
+        taskId: string;
+        taskName: string;
+        type: string;
+        error: string;
+        timestamp: number;
+      }> = [];
+      eventBus.on('schedule.task.failed', (event) => {
+        failures.push(event);
+      });
       try {
         nowSpy.mockReturnValue(1_700_000_010_000);
         scheduler.register({
@@ -498,6 +508,13 @@ describe('Scheduler', () => {
           lastErrorAt: 1_700_000_010_000,
         });
         expect(scheduler.getTask('metadata-failure')?.lastDeniedReason).toBeUndefined();
+        expect(failures).toEqual([{
+          taskId: 'metadata-failure',
+          taskName: 'Metadata Failure',
+          type: 'every',
+          error: 'Error: scheduler test failure',
+          timestamp: 1_700_000_010_000,
+        }]);
       } finally {
         nowSpy.mockRestore();
       }

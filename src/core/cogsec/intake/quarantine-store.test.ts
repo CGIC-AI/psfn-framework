@@ -3,7 +3,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createIntakeEnvelope,
   transitionIntakeEnvelope,
@@ -59,10 +59,14 @@ describe('intake quarantine store (htm9.11)', () => {
   let clock: number;
   let store: IntakeQuarantineStore;
 
-  const makeStore = (overrides: { maxHeldItems?: number } = {}) => createIntakeQuarantineStore(filePath, {
+  const makeStore = (overrides: {
+    maxHeldItems?: number;
+    onExpired?: Parameters<typeof createIntakeQuarantineStore>[1]['onExpired'];
+  } = {}) => createIntakeQuarantineStore(filePath, {
     itemTtlHours: TTL_HOURS,
     maxHeldItems: overrides.maxHeldItems ?? 500,
     now: () => clock,
+    ...(overrides.onExpired ? { onExpired: overrides.onExpired } : {}),
   });
 
   beforeEach(() => {
@@ -242,14 +246,23 @@ describe('intake quarantine store (htm9.11)', () => {
   describe('TTL and capacity', () => {
     it('expires held entries past their TTL on read, scrubbing content', () => {
       const envelope = makeQuarantinedEnvelope();
+      const onExpired = vi.fn();
+      store = makeStore({ onExpired });
       store.hold({ envelope, mode: 'enforce', rawText: 'raw' });
       clock = NOW + TTL_MS + 1;
       const listed = store.list();
       expect(listed[0].status).toBe('expired');
       expect(listed[0].envelope.state).toBe('expired');
       expect(listed[0].rawText).toBe('');
+      expect(onExpired).toHaveBeenCalledWith({
+        entry: expect.objectContaining({ id: envelope.id, status: 'expired', rawText: '' }),
+        expiredAtMs: clock,
+        reason: 'quarantine TTL elapsed',
+      });
       // The sweep persisted: a fresh instance sees the expiry.
       expect(makeStore().getById(envelope.id)?.status).toBe('expired');
+      store.list();
+      expect(onExpired).toHaveBeenCalledOnce();
     });
 
     it('expires the oldest held entries early when the capacity cap is reached', () => {

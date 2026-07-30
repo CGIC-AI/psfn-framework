@@ -15,6 +15,7 @@ import type {
   GatewayCredentialPresenceResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
+  OperatorAlertResult,
   PolicyDecision,
   RuntimeHealthResult,
 } from '../protocol.js';
@@ -153,6 +154,7 @@ export interface GatewayMethodRuntime {
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
   sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
+  sendOperatorAlert(params: NotifyNtfyParams): Promise<OperatorAlertResult>;
   getRuntimeHealth(): RuntimeHealthResult;
   getCredentialPresence?(): GatewayCredentialPresenceResult;
   nextStreamRequestId(): string;

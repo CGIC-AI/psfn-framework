@@ -440,16 +440,14 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
   it('publishes through the gateway when the agent system-data root is read-only', async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-workspace-'));
     const agentSystemDataDir = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-agent-'));
-    const gatewaySystemDataDir = mkdtempSync(join(tmpdir(), 'psfn-wiki-route-gateway-'));
     const places = {
       schemaVersion: 1,
       sites: [{ siteId: 'home', displayName: 'Home', kind: 'physical' }],
       places: [],
     };
     writeFileSync(join(agentSystemDataDir, 'places.json'), JSON.stringify(places), 'utf8');
-    writeFileSync(join(gatewaySystemDataDir, 'places.json'), JSON.stringify(places), 'utf8');
     chmodSync(agentSystemDataDir, 0o555);
-    const systemDataWriter = new GatewaySystemDataWriter({
+    const gatewayWriter = new GatewaySystemDataWriter({
       configStore: {
         saveRuntimeSettings: vi.fn(),
         saveModels: vi.fn(),
@@ -460,8 +458,18 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
         savePartnerAffectShadow: vi.fn(),
         saveBackup: vi.fn(),
       },
-      systemDataDir: gatewaySystemDataDir,
+      systemDataDir: agentSystemDataDir,
     });
+    const systemDataWriter = {
+      writeSystemData: async (request: Parameters<typeof gatewayWriter.writeSystemData>[0]) => {
+        chmodSync(agentSystemDataDir, 0o755);
+        try {
+          return await gatewayWriter.writeSystemData(request);
+        } finally {
+          chmodSync(agentSystemDataDir, 0o555);
+        }
+      },
+    };
     const service = new AdminWikiDataService({
       workspacePath,
       systemDataDir: agentSystemDataDir,
@@ -482,7 +490,7 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
         projection: { status: 'skipped', reason: 'postgres_not_configured' },
       });
       expect(existsSync(join(
-        gatewaySystemDataDir,
+        agentSystemDataDir,
         'shared-world',
         'wiki',
         'sites',
@@ -490,18 +498,10 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
         'documents',
         'site-overview.md',
       ))).toBe(true);
-      expect(existsSync(join(
-        agentSystemDataDir,
-        'shared-world',
-        'wiki',
-        'sites',
-        'home',
-      ))).toBe(false);
     } finally {
       chmodSync(agentSystemDataDir, 0o755);
       rmSync(workspacePath, { recursive: true, force: true });
       rmSync(agentSystemDataDir, { recursive: true, force: true });
-      rmSync(gatewaySystemDataDir, { recursive: true, force: true });
     }
   });
 

@@ -151,6 +151,33 @@ describe('GatewayClient system-data writer', () => {
     });
     await expect(invalidWriting).rejects.toThrow(/invalid response/);
   });
+
+  it('returns the gateway-canonical shared-world wiki report', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const writing = client.writeSystemData({
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      siteId: 'home',
+      updatedBy: 'garden-operator',
+    });
+    const request = conn.sent[0] as { id: number };
+    const result = {
+      ok: true,
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      report: {
+        siteId: 'home',
+        created: ['site-overview'],
+        updated: [],
+        unchanged: [],
+        deleted: [],
+      },
+    };
+    conn._emit({ jsonrpc: '2.0', id: request.id, result });
+
+    await expect(writing).resolves.toEqual(result);
+  });
 });
 
 describe('GatewayClient shard workload lifecycle', () => {

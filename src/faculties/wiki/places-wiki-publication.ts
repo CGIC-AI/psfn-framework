@@ -24,7 +24,6 @@ import type {
   PlacesRegistryConfig,
 } from '../../shared/contracts/places-registry.js';
 import { normalizeWikiDocumentId, type SharedWorldWikiStore } from './store.js';
-import type { WikiDocumentUpsertInput } from './types.js';
 
 /** Marker tag on every generated page; the prune step only ever deletes these. */
 export const PLACES_PUBLICATION_TAG = 'generated:places';
@@ -44,12 +43,6 @@ export interface PlacesWikiPublicationReport {
   updated: string[];
   unchanged: string[];
   deleted: string[];
-}
-
-export interface PlacesWikiPublicationPlan {
-  report: PlacesWikiPublicationReport;
-  upserts: WikiDocumentUpsertInput[];
-  deletes: string[];
 }
 
 function placePageId(placeId: string): string {
@@ -155,12 +148,12 @@ export function buildSiteWikiPages(registry: PlacesRegistryConfig, siteId: strin
  * into an operator-owned SharedWorldWikiStore. Writes only changed/new pages and
  * prunes generated pages whose place was removed from the registry.
  */
-export function planSiteWikiPublication(
+export function publishSiteWiki(
   store: SharedWorldWikiStore,
   registry: PlacesRegistryConfig,
   siteId: string,
   options: { updatedBy?: string } = {},
-): PlacesWikiPublicationPlan {
+): PlacesWikiPublicationReport {
   if (store.siteId !== siteId) {
     throw new Error(
       `places→wiki publication: store site "${store.siteId}" does not match requested site "${siteId}"`,
@@ -177,9 +170,6 @@ export function planSiteWikiPublication(
     unchanged: [],
     deleted: [],
   };
-  const upserts: WikiDocumentUpsertInput[] = [];
-  const deletes: string[] = [];
-
   for (const draft of drafts) {
     const existing = store.get(draft.id);
     const bodyNormalized = draft.body.endsWith('\n') ? draft.body : `${draft.body}\n`;
@@ -192,7 +182,7 @@ export function planSiteWikiPublication(
       report.unchanged.push(draft.id);
       continue;
     }
-    upserts.push({
+    store.upsert({
       id: draft.id,
       title: draft.title,
       body: draft.body,
@@ -211,26 +201,8 @@ export function planSiteWikiPublication(
   for (const entry of store.list()) {
     if (desiredIds.has(entry.id)) continue;
     if (!entry.tags.includes(PLACES_PUBLICATION_TAG)) continue;
-    deletes.push(entry.id);
-    report.deleted.push(entry.id);
+    if (store.delete(entry.id)) report.deleted.push(entry.id);
   }
 
-  return { report, upserts, deletes };
-}
-
-/**
- * Apply the deterministic publication plan locally. Host-side maintenance uses
- * this path; agent-side Garden sends the equivalent domain operation to the
- * gateway so the system-data mount can remain read-only.
- */
-export function publishSiteWiki(
-  store: SharedWorldWikiStore,
-  registry: PlacesRegistryConfig,
-  siteId: string,
-  options: { updatedBy?: string } = {},
-): PlacesWikiPublicationReport {
-  const plan = planSiteWikiPublication(store, registry, siteId, options);
-  for (const input of plan.upserts) store.upsert(input);
-  for (const id of plan.deletes) store.delete(id);
-  return plan.report;
+  return report;
 }

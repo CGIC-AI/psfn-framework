@@ -33,6 +33,7 @@ import {
 import { PersonalProjectLibrary } from './personal-projects.js';
 import { PersonalWishlist } from './personal-wishlist.js';
 import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
+import { createGatewaySharedWorldWikiDocumentWriter } from './gateway-shared-world-writer.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -151,6 +152,7 @@ export async function wireWikiRuntime(
   deps: WikiRuntimeDeps = {},
 ): Promise<WikiRuntimeWiring> {
   const multiCompanion = deps.getMultiCompanion?.() === true;
+  const systemDataWriter = deps.systemDataWriter;
   const postgresRole = multiCompanion && deps.postgresSchema?.trim()
     ? deps.postgresRole?.trim() || (() => {
         throw new Error('Multi-companion wiki runtime requires a topology-owned PostgreSQL role');
@@ -167,11 +169,6 @@ export async function wireWikiRuntime(
     if (!deps.companionId?.trim()) {
       throw new Error('Multi-companion shared-world wiki caretaker requires a companion identity');
     }
-    if (!deps.systemDataWriter) {
-      throw new Error(
-        'Multi-companion shared-world wiki caretaker requires the gateway system-data writer',
-      );
-    }
     const systemDataDir = deps.systemDataDir?.trim();
     if (!systemDataDir) {
       throw new Error('Multi-companion shared-world wiki caretaker requires the system data root');
@@ -185,6 +182,11 @@ export async function wireWikiRuntime(
       throw new Error(
         'Multi-companion shared-world wiki caretaker requires a valid places registry',
         { cause: error },
+      );
+    }
+    if (!systemDataWriter) {
+      throw new Error(
+        'Multi-companion shared-world wiki caretaker requires the gateway system-data writer',
       );
     }
   }
@@ -299,13 +301,11 @@ export async function wireWikiRuntime(
       );
     }
     const systemDataDir = deps.systemDataDir;
-    const systemDataWriter = deps.systemDataWriter;
-    if (!systemDataWriter) {
-      throw new Error(
-        'Multi-companion shared-world wiki caretaker requires the gateway system-data writer',
-      );
-    }
     const activeKnownSiteIds = knownSiteIds;
+    const writeSharedDocument = createGatewaySharedWorldWikiDocumentWriter({
+      systemDataDir,
+      systemDataWriter,
+    });
     sharedWorldProposal = {
       actorId: deps.companionId.trim(),
       submitter: new SharedWorldWikiProposalService({
@@ -317,25 +317,7 @@ export async function wireWikiRuntime(
       proposalStore,
       isKnownSite: siteId => activeKnownSiteIds.has(siteId),
       openSharedStore: siteId => new SharedWorldWikiStore(systemDataDir, siteId),
-      writeSharedDocument: async (siteId, documentInput) => {
-        await systemDataWriter.writeSystemData({
-          kind: 'shared_world_wiki',
-          operation: 'upsert_document',
-          siteId,
-          document: documentInput,
-        });
-        const documentId = documentInput.id;
-        const written = documentId
-          ? new SharedWorldWikiStore(systemDataDir, siteId).get(documentId)
-          : null;
-        if (!written) {
-          throw new Error(
-            'Gateway wrote the shared-world wiki document, but the agent cannot read it. '
-            + 'Verify the gateway and agent share the same system-data volume.',
-          );
-        }
-        return written;
-      },
+      writeSharedDocument,
       projection: sharedProjection,
     });
   }

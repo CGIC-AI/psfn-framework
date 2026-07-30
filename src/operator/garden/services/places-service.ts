@@ -20,8 +20,8 @@ import {
 import { renderPlacesMermaid } from '../../../channels/backplane/places-mermaid.js';
 import {
   loadSatelliteRegistryConfig,
-  saveSatelliteRegistryConfig,
 } from '../../../channels/backplane/satellite-registry.js';
+import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 import type {
   AffordanceBackend,
   AffordanceKind,
@@ -128,9 +128,12 @@ function toBoundSatelliteView(satellite: {
   };
 }
 
-function buildPlacesData(dataDir: string): AdminPlacesData {
+function buildPlacesData(
+  dataDir: string,
+  satellitesOverride?: SatelliteRegistryConfig,
+): AdminPlacesData {
   const places = loadPlacesRegistryConfig(dataDir);
-  const satellites = loadSatelliteRegistryConfig(dataDir);
+  const satellites = satellitesOverride ?? loadSatelliteRegistryConfig(dataDir);
 
   const placeIds = new Set(places.places.map((place) => place.placeId));
   const twinPlaceIdByPlaceId = new Map<string, string>();
@@ -192,6 +195,7 @@ function buildPlacesData(dataDir: string): AdminPlacesData {
 export function createAdminPlacesService(options: {
   dataDir: string;
   fleetCompanionIds: readonly CompanionId[];
+  systemDataWriter?: GatewaySystemDataWriterPort;
 }): AdminPlacesService {
   const { dataDir } = options;
   void options.fleetCompanionIds;
@@ -254,13 +258,22 @@ export function createAdminPlacesService(options: {
         }),
       };
 
-      saveSatelliteRegistryConfig(dataDir, nextRegistry);
+      if (!options.systemDataWriter) {
+        throw new Error(
+          'Satellite re-bind requires the gateway system-data writer. '
+          + 'Verify the agent is connected to a gateway with system.data.write configured.',
+        );
+      }
+      await options.systemDataWriter.writeSystemData({
+        kind: 'satellites',
+        payload: nextRegistry,
+      });
 
       return {
         ok: true,
         satelliteId,
         placeId: targetPlaceId,
-        places: buildPlacesData(dataDir),
+        places: buildPlacesData(dataDir, nextRegistry),
       };
     },
   };

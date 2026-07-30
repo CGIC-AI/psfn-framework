@@ -10,13 +10,15 @@ import {
 } from '../../../faculties/wiki/scope.js';
 import type { WikiDocumentListEntry } from '../../../faculties/wiki/types.js';
 import {
-  publishSiteWiki,
+  planSiteWikiPublication,
   type PlacesWikiPublicationReport,
 } from '../../../faculties/wiki/places-wiki-publication.js';
 import {
-  importMarkdownDirectory,
+  importMarkdownFiles,
+  readMarkdownDirectory,
   type WikiImportReport,
 } from '../../../faculties/wiki/bulk-import.js';
+import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 import {
   createSharedWikiPgvectorProjectionStore,
   runSharedWorldWikiWrite,
@@ -56,6 +58,8 @@ export interface AdminWikiDataServiceOptions {
   workspacePath: string;
   /** System-data dir owning shared-world wiki subtrees and places.json. */
   systemDataDir: string;
+  /** Gateway-owned single writer for system-data mutations. */
+  systemDataWriter?: GatewaySystemDataWriterPort;
   /**
    * s10f9: dependencies for the shared-schema pgvector projection that follows
    * every shared-world write (publish/import). When absent the service still
@@ -88,6 +92,7 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
 export class AdminWikiDataService implements AdminWikiService {
   private readonly personalStore: WikiStore;
   private readonly systemDataDir: string;
+  private readonly systemDataWriter?: GatewaySystemDataWriterPort;
   private readonly sharedProjectionContext: SharedWikiProjectionContext;
   private readonly proposalStore: SharedWorldWikiProposalStore | null;
   private sharedWikiScopeMemo: SharedWikiScopeMemo | null = null;
@@ -95,6 +100,7 @@ export class AdminWikiDataService implements AdminWikiService {
   constructor(options: AdminWikiDataServiceOptions) {
     this.personalStore = new WikiStore(options.workspacePath);
     this.systemDataDir = options.systemDataDir;
+    this.systemDataWriter = options.systemDataWriter;
     // Without injected deps the runner degrades honestly flag-off; note it can
     // never fail closed here because multiCompanion is only knowable from the
     // injected context — compositions running multi-companion MUST inject it.
@@ -110,6 +116,16 @@ export class AdminWikiDataService implements AdminWikiService {
       throw new Error('shared-world wiki caretaker is unavailable');
     }
     return this.proposalStore;
+  }
+
+  private requireSystemDataWriter(): GatewaySystemDataWriterPort {
+    if (!this.systemDataWriter) {
+      throw new Error(
+        'Shared-world wiki writes require the gateway system-data writer. '
+        + 'Verify the agent is connected to a gateway with system.data.write configured.',
+      );
+    }
+    return this.systemDataWriter;
   }
 
   private isKnownSite(siteId: string): boolean {
@@ -218,6 +234,12 @@ export class AdminWikiDataService implements AdminWikiService {
       throw new Error(`unknown siteId "${siteId}" — not present in places.json sites (fail closed)`);
     }
     const store = new SharedWorldWikiStore(this.systemDataDir, siteId);
+    const plan = planSiteWikiPublication(
+      store,
+      registry,
+      siteId,
+      { updatedBy: 'garden-operator' },
+    );
     // s10f9: write + shared-schema projection run together so filesystem and
     // shared.shared_wiki_chunks cannot drift silently. Multi-companion fails
     // closed BEFORE the write when the projection is unavailable.
@@ -225,8 +247,15 @@ export class AdminWikiDataService implements AdminWikiService {
       const { report, projection } = await runSharedWorldWikiWrite({
         context: this.sharedProjectionContext,
         store,
-        write: (): PlacesWikiPublicationReport =>
-          publishSiteWiki(store, registry, siteId, { updatedBy: 'garden-operator' }),
+        write: async (): Promise<PlacesWikiPublicationReport> => {
+          await this.requireSystemDataWriter().writeSystemData({
+            kind: 'shared_world_wiki',
+            operation: 'publish_site',
+            siteId,
+            updatedBy: 'garden-operator',
+          });
+          return plan.report;
+        },
       });
       return { ...report, projection };
     } finally {
@@ -247,18 +276,20 @@ export class AdminWikiDataService implements AdminWikiService {
     // Touch the resolver so a malformed siteId fails closed before any FS read.
     resolveSharedWorldWikiSiteDir(this.systemDataDir, siteId);
     const store = new SharedWorldWikiStore(this.systemDataDir, siteId);
-    const runImport = (dryRun: boolean): WikiImportReport => importMarkdownDirectory({
+    const files = readMarkdownDirectory(directory);
+    const plannedReport = importMarkdownFiles({
       directory,
+      files,
       store,
       scope: store.scope,
       personalFactGuard: true,
       updatedBy: 'garden-operator',
-      dryRun,
+      dryRun: true,
     });
     if (request.dryRun === true) {
       // Nothing written → nothing to project; the outcome says so explicitly.
       return {
-        ...runImport(true),
+        ...plannedReport,
         projection: {
           siteId,
           status: 'skipped',
@@ -273,7 +304,17 @@ export class AdminWikiDataService implements AdminWikiService {
       const { report, projection } = await runSharedWorldWikiWrite({
         context: this.sharedProjectionContext,
         store,
-        write: (): WikiImportReport => runImport(false),
+        write: async (): Promise<WikiImportReport> => {
+          await this.requireSystemDataWriter().writeSystemData({
+            kind: 'shared_world_wiki',
+            operation: 'import_files',
+            siteId,
+            directory,
+            files,
+            updatedBy: 'garden-operator',
+          });
+          return plannedReport;
+        },
       });
       return { ...report, projection };
     } finally {
@@ -308,6 +349,24 @@ export class AdminWikiDataService implements AdminWikiService {
         proposalStore: this.requireProposalStore(),
         isKnownSite: siteId => this.isKnownSite(siteId),
         openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        writeSharedDocument: async (siteId, documentInput) => {
+          const store = new SharedWorldWikiStore(this.systemDataDir, siteId);
+          await this.requireSystemDataWriter().writeSystemData({
+            kind: 'shared_world_wiki',
+            operation: 'upsert_document',
+            siteId,
+            document: documentInput,
+          });
+          const documentId = documentInput.id;
+          const written = documentId ? store.get(documentId) : null;
+          if (!written) {
+            throw new Error(
+              'Gateway wrote the shared-world wiki document, but the agent cannot read it. '
+              + 'Verify the gateway and agent share the same system-data volume.',
+            );
+          }
+          return written;
+        },
         projection,
       });
       return await caretaker.approve(proposalId, operatorActorId);

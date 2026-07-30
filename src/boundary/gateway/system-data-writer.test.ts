@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,22 @@ import { GatewaySystemDataWriter, parseSystemDataWriteRequest } from './system-d
 
 describe('GatewaySystemDataWriter', () => {
   const tempDirs: string[] = [];
+
+  function makeWriter(systemDataDir: string): GatewaySystemDataWriter {
+    return new GatewaySystemDataWriter({
+      configStore: {
+        saveRuntimeSettings: vi.fn(),
+        saveModels: vi.fn(),
+        saveProviders: vi.fn(),
+        saveChannelsOwnerFile: vi.fn(),
+        saveTrustPolicy: vi.fn(),
+        saveIntakePolicy: vi.fn(),
+        savePartnerAffectShadow: vi.fn(),
+        saveBackup: vi.fn(),
+      },
+      systemDataDir,
+    });
+  }
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -93,6 +109,64 @@ describe('GatewaySystemDataWriter', () => {
     await writer.writeSystemData({ kind: 'tool_conformance', payload });
 
     expect(readToolConformanceLatest(systemDataDir)).toEqual(payload);
+  });
+
+  it('persists the validated satellite registry beneath the gateway writable root', async () => {
+    const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-gateway-satellites-write-'));
+    tempDirs.push(systemDataDir);
+    const writer = makeWriter(systemDataDir);
+    const payload = {
+      schemaVersion: 1 as const,
+      enabled: false,
+      satellites: [],
+    };
+
+    await expect(writer.writeSystemData({
+      kind: 'satellites',
+      payload,
+    })).resolves.toEqual({ ok: true });
+
+    expect(JSON.parse(readFileSync(join(systemDataDir, 'satellites.json'), 'utf8')))
+      .toEqual(payload);
+  });
+
+  it('contains shared-world wiki writes to the gateway-owned site tree', async () => {
+    const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-gateway-wiki-write-'));
+    tempDirs.push(systemDataDir);
+    writeFileSync(join(systemDataDir, 'places.json'), JSON.stringify({
+      schemaVersion: 1,
+      sites: [{ siteId: 'home', displayName: 'Home', kind: 'physical' }],
+      places: [],
+    }), 'utf8');
+    const writer = makeWriter(systemDataDir);
+
+    await expect(writer.writeSystemData({
+      kind: 'shared_world_wiki',
+      operation: 'publish_site',
+      siteId: 'home',
+      updatedBy: 'garden-operator',
+    })).resolves.toEqual({ ok: true });
+    expect(existsSync(join(
+      systemDataDir,
+      'shared-world',
+      'wiki',
+      'sites',
+      'home',
+      'documents',
+      'site-overview.md',
+    ))).toBe(true);
+
+    await expect(writer.writeSystemData({
+      kind: 'shared_world_wiki',
+      operation: 'upsert_document',
+      siteId: '../escape',
+      document: {
+        id: 'escaped',
+        title: 'Escaped',
+        body: 'This must not be written.',
+      },
+    })).rejects.toThrow(/siteId|outside|scope/u);
+    expect(existsSync(join(systemDataDir, 'escape'))).toBe(false);
   });
 
   it('rejects unknown owner names and caller-supplied identity fields', () => {

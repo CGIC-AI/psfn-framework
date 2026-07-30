@@ -1,12 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildAdminPlacesRoutes } from '../api-routes-places.js';
 import { checkAdminRequestAuth } from '../server-auth.js';
 import { createAdminPlacesService } from './places-service.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import { GatewaySystemDataWriter } from '../../../boundary/gateway/system-data-writer.js';
 
 const ENDPOINT = {
   endpointId: 'ep-1',
@@ -83,10 +84,19 @@ const PLACES = {
 };
 
 let dataDir: string;
+let gatewayDataDir: string;
+
+function seedRoot(
+  root: string,
+  satellites: unknown = SATELLITES,
+  places: unknown = PLACES,
+): void {
+  writeFileSync(join(root, 'satellites.json'), JSON.stringify(satellites), 'utf8');
+  writeFileSync(join(root, 'places.json'), JSON.stringify(places), 'utf8');
+}
 
 function seed(satellites: unknown = SATELLITES, places: unknown = PLACES): void {
-  writeFileSync(join(dataDir, 'satellites.json'), JSON.stringify(satellites), 'utf8');
-  writeFileSync(join(dataDir, 'places.json'), JSON.stringify(places), 'utf8');
+  seedRoot(dataDir, satellites, places);
 }
 
 function readSatellites(): {
@@ -99,12 +109,41 @@ function readSatellites(): {
   return JSON.parse(readFileSync(join(dataDir, 'satellites.json'), 'utf8'));
 }
 
+function createSystemDataWriter(systemDataDir: string): GatewaySystemDataWriter {
+  return new GatewaySystemDataWriter({
+    configStore: {
+      saveRuntimeSettings: vi.fn(),
+      saveModels: vi.fn(),
+      saveProviders: vi.fn(),
+      saveChannelsOwnerFile: vi.fn(),
+      saveTrustPolicy: vi.fn(),
+      saveIntakePolicy: vi.fn(),
+      savePartnerAffectShadow: vi.fn(),
+      saveBackup: vi.fn(),
+    },
+    systemDataDir,
+  });
+}
+
+function createPlacesService(
+  fleetCompanionIds: readonly typeof COMPANION_A[] = NO_COMPANIONS,
+) {
+  return createAdminPlacesService({
+    dataDir,
+    fleetCompanionIds,
+    systemDataWriter: createSystemDataWriter(dataDir),
+  });
+}
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'psfn-places-'));
+  gatewayDataDir = mkdtempSync(join(tmpdir(), 'psfn-places-gateway-'));
 });
 
 afterEach(() => {
+  chmodSync(dataDir, 0o755);
   rmSync(dataDir, { recursive: true, force: true });
+  rmSync(gatewayDataDir, { recursive: true, force: true });
 });
 
 class CapturingResponse {
@@ -149,7 +188,7 @@ async function invokeRoute(
 describe('AdminPlacesService', () => {
   it('joins places, affordances, and bound satellites', async () => {
     seed();
-    const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
+    const data = await createPlacesService().listPlaces();
     expect(data.places.map(p => p.placeId)).toEqual([
       'place-kitchen',
       'place-living',
@@ -167,7 +206,7 @@ describe('AdminPlacesService', () => {
   });
 
   it('degrades to an empty registry when the owner files are absent', async () => {
-    const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
+    const data = await createPlacesService().listPlaces();
     expect(data.sites).toEqual([]);
     expect(data.places).toEqual([]);
     expect(data.unboundSatellites).toEqual([]);
@@ -175,7 +214,7 @@ describe('AdminPlacesService', () => {
 
   it('re-binds a satellite to a known place and persists it', async () => {
     seed();
-    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
+    const service = createPlacesService();
     const result = await service.rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-living' });
     expect(result.placeId).toBe('place-living');
     expect(readSatellites().satellites.find(s => s.satelliteId === 'sat-roamer')?.placeId).toBe('place-living');
@@ -186,7 +225,7 @@ describe('AdminPlacesService', () => {
 
   it('unbinds a satellite when placeId is null', async () => {
     seed();
-    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
+    const service = createPlacesService();
     const result = await service.rebindSatellite({ satelliteId: 'sat-kitchen', placeId: null });
     expect(result.placeId).toBeNull();
     expect(readSatellites().satellites.find(s => s.satelliteId === 'sat-kitchen')?.placeId).toBeUndefined();
@@ -196,7 +235,7 @@ describe('AdminPlacesService', () => {
   it('fails closed on an unknown placeId and leaves the owner file untouched', async () => {
     seed();
     const before = readFileSync(join(dataDir, 'satellites.json'), 'utf8');
-    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
+    const service = createPlacesService();
     await expect(service.rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-ghost' }))
       .rejects.toThrow(/does not exist in places.json/);
     expect(readFileSync(join(dataDir, 'satellites.json'), 'utf8')).toBe(before);
@@ -204,24 +243,37 @@ describe('AdminPlacesService', () => {
 
   it('fails closed on an unknown satellite', async () => {
     seed();
-    await expect(createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS })
+    await expect(createPlacesService()
       .rebindSatellite({ satelliteId: 'sat-nope', placeId: 'place-living' }))
       .rejects.toThrow(/unknown satellite/);
   });
 
   it('fails closed when re-binding a satellite to a virtual place', async () => {
     seed();
-    await expect(createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS })
+    await expect(createPlacesService()
       .rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-kitchen-overlay' }))
       .rejects.toThrow(/must be physical/u);
   });
 
-  it('preserves the governed shared-device policy while changing only placeId', async () => {
+  it('fails closed with a gateway remedy when the system-data writer is unavailable', async () => {
     seed();
     const service = createAdminPlacesService({
       dataDir,
-      fleetCompanionIds: [COMPANION_A],
+      fleetCompanionIds: NO_COMPANIONS,
     });
+
+    await expect(service.rebindSatellite({
+      satelliteId: 'sat-roamer',
+      placeId: 'place-living',
+    })).rejects.toThrow(/gateway system-data writer.*system\.data\.write/iu);
+    expect(readSatellites().satellites.find(
+      satellite => satellite.satelliteId === 'sat-roamer',
+    )?.placeId).toBeUndefined();
+  });
+
+  it('preserves the governed shared-device policy while changing only placeId', async () => {
+    seed();
+    const service = createPlacesService([COMPANION_A]);
 
     await service.rebindSatellite({
       satelliteId: 'sat-kitchen',
@@ -237,7 +289,7 @@ describe('buildAdminPlacesRoutes', () => {
   it('serves GET /api/admin/places', async () => {
     seed();
     const routes = buildAdminPlacesRoutes({
-      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      placesService: createPlacesService(),
       withBody,
     });
     const res = await invokeRoute(routes, 'GET', '/api/admin/places');
@@ -249,7 +301,7 @@ describe('buildAdminPlacesRoutes', () => {
   it('re-binds via PATCH /api/admin/places/satellites/:satelliteId/binding', async () => {
     seed();
     const routes = buildAdminPlacesRoutes({
-      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      placesService: createPlacesService(),
       withBody,
     });
     const res = await invokeRoute(
@@ -262,13 +314,44 @@ describe('buildAdminPlacesRoutes', () => {
     expect(JSON.parse(res.body).placeId).toBe('place-living');
   });
 
-  it('rejects the retired companionId binding field via PATCH', async () => {
+  it('re-binds through the gateway when the agent system-data root is read-only', async () => {
     seed();
+    seedRoot(gatewayDataDir);
+    chmodSync(dataDir, 0o555);
+    const systemDataWriter = createSystemDataWriter(gatewayDataDir);
     const routes = buildAdminPlacesRoutes({
       placesService: createAdminPlacesService({
         dataDir,
-        fleetCompanionIds: [COMPANION_A],
+        fleetCompanionIds: NO_COMPANIONS,
+        systemDataWriter,
       }),
+      withBody,
+    });
+
+    const res = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/places/satellites/sat-roamer/binding',
+      JSON.stringify({ placeId: 'place-living' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      satelliteId: 'sat-roamer',
+      placeId: 'place-living',
+    });
+    expect(JSON.parse(readFileSync(join(gatewayDataDir, 'satellites.json'), 'utf8'))
+      .satellites.find((satellite: { satelliteId: string }) => satellite.satelliteId === 'sat-roamer'))
+      .toMatchObject({ placeId: 'place-living' });
+    expect(readSatellites().satellites.find(
+      satellite => satellite.satelliteId === 'sat-roamer',
+    )?.placeId).toBeUndefined();
+  });
+
+  it('rejects the retired companionId binding field via PATCH', async () => {
+    seed();
+    const routes = buildAdminPlacesRoutes({
+      placesService: createPlacesService([COMPANION_A]),
       withBody,
     });
     const res = await invokeRoute(
@@ -285,7 +368,7 @@ describe('buildAdminPlacesRoutes', () => {
   it('rejects a PATCH re-bind to an unknown place with 400', async () => {
     seed();
     const routes = buildAdminPlacesRoutes({
-      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      placesService: createPlacesService(),
       withBody,
     });
     const res = await invokeRoute(

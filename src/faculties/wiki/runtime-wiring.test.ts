@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,8 +56,31 @@ describe('multi-companion wiki runtime prerequisites', () => {
         embedding,
         companionId: 'companion-a',
         systemDataDir,
+        systemDataWriter: { writeSystemData: vi.fn(async () => ({ ok: true })) },
         getMultiCompanion: () => true,
       })).rejects.toThrow('requires a valid places registry');
+      expect(registerTool).not.toHaveBeenCalled();
+    } finally {
+      rmSync(systemDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed before database access when the gateway writer is missing', async () => {
+    const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-caretaker-writer-'));
+    const registerTool = vi.fn();
+    writeFileSync(join(systemDataDir, 'places.json'), JSON.stringify({
+      schemaVersion: 1,
+      sites: [{ siteId: 'home', displayName: 'Home', kind: 'physical' }],
+      places: [],
+    }), 'utf8');
+    try {
+      await expect(wireWikiRuntime({ registerTool }, '/unused', {
+        databaseUrl: 'postgresql://unused/unused',
+        embedding,
+        companionId: 'companion-a',
+        systemDataDir,
+        getMultiCompanion: () => true,
+      })).rejects.toThrow('requires the gateway system-data writer');
       expect(registerTool).not.toHaveBeenCalled();
     } finally {
       rmSync(systemDataDir, { recursive: true, force: true });

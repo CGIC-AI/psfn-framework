@@ -95,6 +95,14 @@ export class SharedWorldWikiProposalService implements SharedWorldWikiProposalSu
 
 export interface SharedWorldWikiCaretakerOptions extends SharedWorldWikiProposalServiceOptions {
   openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
+  /**
+   * Optional remote canonical writer. Agent runtimes supply the gateway-backed
+   * implementation; host-side maintenance and focused store tests may omit it.
+   */
+  writeSharedDocument?: (
+    siteId: string,
+    input: WikiDocumentUpsertInput,
+  ) => Promise<WikiDocument>;
   projection: SharedWorldWikiProjectionPort;
 }
 
@@ -102,6 +110,7 @@ export class SharedWorldWikiCaretakerService {
   private readonly proposalStore: SharedWorldWikiProposalStorePort;
   private readonly isKnownSite: (siteId: string) => boolean;
   private readonly openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
+  private readonly writeSharedDocument?: SharedWorldWikiCaretakerOptions['writeSharedDocument'];
   private readonly projection: SharedWorldWikiProjectionPort;
   private readonly now: () => number;
 
@@ -109,6 +118,7 @@ export class SharedWorldWikiCaretakerService {
     this.proposalStore = options.proposalStore;
     this.isKnownSite = options.isKnownSite;
     this.openSharedStore = options.openSharedStore;
+    this.writeSharedDocument = options.writeSharedDocument;
     this.projection = options.projection;
     this.now = options.now ?? Date.now;
   }
@@ -210,7 +220,7 @@ export class SharedWorldWikiCaretakerService {
         // so retrying must not increment the document version.
         document = existing;
       } else {
-        document = store.upsert({
+        const input: WikiDocumentUpsertInput = {
           id: guarded.proposal.documentId,
           title: guarded.proposal.title,
           body: guarded.proposal.body,
@@ -226,7 +236,10 @@ export class SharedWorldWikiCaretakerService {
           sensitivity: 'public',
           summary: undefined,
           updatedBy: `wiki-caretaker:${claim.reviewedBy ?? 'operator'}`,
-        });
+        };
+        document = this.writeSharedDocument
+          ? await this.writeSharedDocument(claim.siteId, input)
+          : store.upsert(input);
       }
 
       failurePhase = 'projection';

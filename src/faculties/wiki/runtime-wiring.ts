@@ -32,6 +32,7 @@ import {
 } from './shared-world-caretaker.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
 import { PersonalWishlist } from './personal-wishlist.js';
+import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -79,6 +80,8 @@ export interface WikiRuntimeDeps {
   companionId?: string;
   /** System owner root containing places.json; used only to validate proposal site ids. */
   systemDataDir?: string;
+  /** Gateway-owned single writer for shared-world wiki canonical mutations. */
+  systemDataWriter?: GatewaySystemDataWriterPort;
 }
 
 export interface WikiRuntimeWiring {
@@ -163,6 +166,11 @@ export async function wireWikiRuntime(
     }
     if (!deps.companionId?.trim()) {
       throw new Error('Multi-companion shared-world wiki caretaker requires a companion identity');
+    }
+    if (!deps.systemDataWriter) {
+      throw new Error(
+        'Multi-companion shared-world wiki caretaker requires the gateway system-data writer',
+      );
     }
     const systemDataDir = deps.systemDataDir?.trim();
     if (!systemDataDir) {
@@ -291,6 +299,12 @@ export async function wireWikiRuntime(
       );
     }
     const systemDataDir = deps.systemDataDir;
+    const systemDataWriter = deps.systemDataWriter;
+    if (!systemDataWriter) {
+      throw new Error(
+        'Multi-companion shared-world wiki caretaker requires the gateway system-data writer',
+      );
+    }
     const activeKnownSiteIds = knownSiteIds;
     sharedWorldProposal = {
       actorId: deps.companionId.trim(),
@@ -303,6 +317,25 @@ export async function wireWikiRuntime(
       proposalStore,
       isKnownSite: siteId => activeKnownSiteIds.has(siteId),
       openSharedStore: siteId => new SharedWorldWikiStore(systemDataDir, siteId),
+      writeSharedDocument: async (siteId, documentInput) => {
+        await systemDataWriter.writeSystemData({
+          kind: 'shared_world_wiki',
+          operation: 'upsert_document',
+          siteId,
+          document: documentInput,
+        });
+        const documentId = documentInput.id;
+        const written = documentId
+          ? new SharedWorldWikiStore(systemDataDir, siteId).get(documentId)
+          : null;
+        if (!written) {
+          throw new Error(
+            'Gateway wrote the shared-world wiki document, but the agent cannot read it. '
+            + 'Verify the gateway and agent share the same system-data volume.',
+          );
+        }
+        return written;
+      },
       projection: sharedProjection,
     });
   }

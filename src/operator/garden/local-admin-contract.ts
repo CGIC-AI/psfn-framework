@@ -692,6 +692,7 @@ export function createInProcessGardenAdminContract(
       ? new AdminWikiDataService({
         workspacePath: options.config.workspacePath,
         systemDataDir: resolveConfiguredSystemDataDir(options.config),
+        ...(options.systemDataWriter ? { systemDataWriter: options.systemDataWriter } : {}),
         // s10f9: shared-world writes project into shared.shared_wiki_chunks via
         // the SAME embedding port the runtime composed (gateway-backed in the
         // agent process). Multi-companion + missing Postgres fails the write
@@ -802,6 +803,7 @@ export function createInProcessGardenAdminContract(
       fleetCompanionIds: options.config.companionFleet?.companions.map(
         companion => companion.companionId,
       ) ?? [],
+      ...(options.systemDataWriter ? { systemDataWriter: options.systemDataWriter } : {}),
     }),
     enrollment: options.hubIdentityEnrollmentStore && options.contactStore
       ? createAdminEnrollmentService({

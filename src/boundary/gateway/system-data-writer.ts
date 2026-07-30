@@ -9,6 +9,16 @@ import {
   TOOL_CONFORMANCE_SCHEMA_VERSION,
 } from '../../core/agent/tool-conformance/types.js';
 import { writeToolConformanceResult } from '../../core/agent/tool-conformance/store.js';
+import {
+  parseSatelliteRegistryConfig,
+  saveSatelliteRegistryConfig,
+} from '../../channels/backplane/satellite-registry.js';
+import {
+  executeSharedWorldWikiWrite,
+  parseSharedWorldWikiWriteRequest,
+  type SharedWorldWikiWriteRequest,
+} from './system-data-writer-wiki.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ConfigStorePort } from '../../system/config/config-store.js';
 import { parseRuntimeSettingsOwnerPayload } from '../../system/settings/schema.js';
 import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
@@ -35,7 +45,12 @@ export type SystemDataWriteRequest =
   | {
       kind: 'tool_conformance';
       payload: ToolConformanceRunResult;
-    };
+    }
+  | {
+      kind: 'satellites';
+      payload: SatelliteRegistryConfig;
+    }
+  | SharedWorldWikiWriteRequest;
 
 export interface SystemDataWriteResult {
   ok: true;
@@ -211,6 +226,23 @@ export function parseSystemDataWriteRequest(value: unknown): SystemDataWriteRequ
       payload: parseToolConformanceResult(value.payload),
     };
   }
+  if (value.kind === 'satellites') {
+    assertNoUnknownKeys(
+      value,
+      ['kind', 'payload'],
+      'system.data.write satellites params',
+    );
+    return {
+      kind: 'satellites',
+      payload: parseSatelliteRegistryConfig(
+        value.payload,
+        'system.data.write satellites payload',
+      ),
+    };
+  }
+  if (value.kind === 'shared_world_wiki') {
+    return parseSharedWorldWikiWriteRequest(value);
+  }
   throw new Error('system.data.write kind is unsupported');
 }
 
@@ -234,6 +266,14 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
     const request = parseSystemDataWriteRequest(input);
     if (request.kind === 'tool_conformance') {
       writeToolConformanceResult(this.deps.systemDataDir, request.payload);
+      return { ok: true };
+    }
+    if (request.kind === 'satellites') {
+      saveSatelliteRegistryConfig(this.deps.systemDataDir, request.payload);
+      return { ok: true };
+    }
+    if (request.kind === 'shared_world_wiki') {
+      executeSharedWorldWikiWrite(request, this.deps.systemDataDir);
       return { ok: true };
     }
 

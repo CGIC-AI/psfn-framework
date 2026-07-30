@@ -10,7 +10,7 @@ export type AdminChargeCostQuery = ChargeCostReconciliationQuery;
 const QUERY_FIELDS = [
   'sinceMs',
   'untilMs',
-  'companionId',
+  // Companion authority comes from the authenticated Garden route, never a browser query.
   'channelId',
   'lane',
   'surface',

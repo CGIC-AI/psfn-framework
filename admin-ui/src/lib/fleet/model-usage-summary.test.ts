@@ -72,14 +72,14 @@ describe('fleet model-usage summary client', () => {
     })).toThrow(/invalid bounded projection/u);
   });
 
-  it('preserves IANA timezone separators in the fleet-principal query path', () => {
+  it('canonically percent-encodes IANA timezone separators in the fleet-principal query path', () => {
     expect(buildFleetModelUsageSummaryPath({
       range: 'custom',
       timezone: 'America/New_York',
       sinceMs: 10,
       untilMs: 20,
     })).toBe(
-      '/v1/fleet/model-usage?range=custom&timezone=America/New_York&sinceMs=10&untilMs=20',
+      '/v1/fleet/model-usage?range=custom&timezone=America%2FNew_York&sinceMs=10&untilMs=20',
     );
   });
 
@@ -94,7 +94,7 @@ describe('fleet model-usage summary client', () => {
       timezone: 'America/New_York',
     })).resolves.toMatchObject({ combined: { totalTokens: 330 } });
     expect(fetch).toHaveBeenCalledWith(
-      '/v1/fleet/model-usage?range=week&timezone=America/New_York',
+      '/v1/fleet/model-usage?range=week&timezone=America%2FNew_York',
       expect.objectContaining({
         cache: 'no-store',
         credentials: 'include',

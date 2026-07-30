@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('$lib/api/client', () => ({ apiGet: vi.fn() }));
 import {
   buildFleetModelUsagePath,
   getAuthorizedFleetModelUsage,
@@ -113,13 +115,13 @@ describe('fleet model-usage endpoint', () => {
     );
   });
 
-  it('preserves valid IANA timezone slashes for the strict scoped-path guard', () => {
+  it('canonically percent-encodes valid IANA timezone slashes', () => {
     expect(buildFleetModelUsagePath({
       range: 'month',
       timezone: 'America/New_York',
       bucket: 'day',
     })).toBe(
-      '/api/admin/fleet-model-usage?range=month&timezone=America/New_York&bucket=day',
+      '/api/admin/fleet-model-usage?range=month&timezone=America%2FNew_York&bucket=day',
     );
   });
 

@@ -21,7 +21,8 @@ export type {
 const MODEL_USAGE_QUERY_FIELDS = [
   'range', 'timezone', 'sinceMs', 'untilMs', 'bucket', 'limit', 'cursor', 'eventOrder',
   'topN', 'sortBy', 'sortDirection', 'provider', 'model', 'toolName', 'callKind', 'callType',
-  'purpose', 'originType', 'originStage', 'service', 'process', 'companionId', 'sessionId',
+  // Companion authority comes from the authenticated Garden route, never a browser query.
+  'purpose', 'originType', 'originStage', 'service', 'process', 'sessionId',
   'channelId', 'channelType', 'turnId', 'requestId', 'toolCallId', 'chargeLane', 'chargeSurface',
   'chargeEventId',
   'chargeRunId', 'chargeRootRunId', 'chargeParentRunId', 'shardId', 'subagentId', 'conversationId',

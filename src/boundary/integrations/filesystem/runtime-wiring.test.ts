@@ -52,7 +52,7 @@ describe('filesystem runtime wiring', () => {
     expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'core')).toBe(true);
   });
 
-  it('attaches gateway wiring metadata and enforces the direct-read cap in gateway mode', async () => {
+  it('attaches gateway wiring metadata and enforces the shared direct-read cap in gateway mode', async () => {
     const target = createMockTarget();
     const gatewayOps = {
       filesystem: {
@@ -96,18 +96,18 @@ describe('filesystem runtime wiring', () => {
       'fs.write',
       'fs.edit',
     ]);
-    await expect(ops.read('notes.txt', { maxBytes: 20_001 })).rejects.toThrow('max_bytes');
+    await expect(ops.read('notes.txt', { maxBytes: 200_001 })).rejects.toThrow('max_bytes');
     expect(gatewayOps.filesystem.read).not.toHaveBeenCalled();
     await expect(ops.read('notes.txt')).resolves.toMatchObject({ content: 'content' });
     expect(gatewayOps.filesystem.read).toHaveBeenCalledWith('notes.txt', {
-      maxBytes: 20_000,
+      maxBytes: 100_000,
       offsetBytes: 0,
     });
   });
 
   it('wires local workspace filesystem ops with unified read/list/search/write/edit behavior', async () => {
     const root = mkdtempSync(join(tmpdir(), 'filesystem-runtime-'));
-    const workspace = join(root, 'workspace');
+    const workspace = join(root, 'workspaces', 'personal', 'companion-a');
     mkdirSync(join(workspace, 'memories'), { recursive: true });
     writeFileSync(join(workspace, 'memories', 'memorybook.txt'), 'remember this\n', 'utf-8');
 
@@ -142,9 +142,15 @@ describe('filesystem runtime wiring', () => {
       const largePath = join(workspace, 'memories', 'large.txt');
       const largeContent = `${`${'x'.repeat(100)}\n`.repeat(200)}needle`;
       writeFileSync(largePath, largeContent, 'utf-8');
-      await expect(ops.read('memories/large.txt', { maxBytes: 20_001 }))
+      await expect(ops.read('memories/large.txt', { maxBytes: 200_000 }))
+        .resolves.toMatchObject({
+          content: largeContent,
+          eof: true,
+          truncated: false,
+        });
+      await expect(ops.read('memories/large.txt', { maxBytes: 200_001 }))
         .rejects.toThrow('max_bytes');
-      await expect(ops.read('memories/large.txt')).resolves.toMatchObject({
+      await expect(ops.read('memories/large.txt', { maxBytes: 20_000 })).resolves.toMatchObject({
         content: largeContent.slice(0, 20_000),
         offsetBytes: 0,
         nextOffsetBytes: 20_000,
@@ -171,6 +177,11 @@ describe('filesystem runtime wiring', () => {
         status: 'created',
         bytesWritten: 6,
       });
+      const prefixedPath = 'workspaces/personal/companion-a/memories/prefixed.txt';
+      await expect(ops.write({ path: prefixedPath, content: 'prefixed\n' }))
+        .resolves.toMatchObject({ path: 'memories/prefixed.txt', status: 'created' });
+      await expect(ops.read(prefixedPath))
+        .resolves.toMatchObject({ content: 'prefixed\n', eof: true });
 
       const edited = await ops.edit({
         path: 'memories/new.txt',
@@ -178,8 +189,25 @@ describe('filesystem runtime wiring', () => {
         newText: 'restored',
       });
       expect(edited).toEqual({ path: 'memories/new.txt', replacements: 1 });
+      const editedPrefixed = await ops.edit({
+        path: prefixedPath,
+        oldText: 'prefixed',
+        newText: 'normalized',
+      });
+      expect(editedPrefixed).toEqual({
+        path: 'memories/prefixed.txt',
+        replacements: 1,
+      });
+      await expect(ops.read('memories/prefixed.txt'))
+        .resolves.toMatchObject({ content: 'normalized\n', eof: true });
 
       await expect(ops.read(resolve(root, 'outside.txt'))).rejects.toThrow('workspace root');
+      await expect(ops.write({ path: '../escape.txt', content: 'nope' }))
+        .rejects.toThrow('without traversal segments');
+
+      mkdirSync(join(workspace, 'workspaces', 'personal', 'companion-a'), { recursive: true });
+      await expect(ops.write({ path: prefixedPath, content: 'ambiguous\n' }))
+        .rejects.toThrow('ambiguous');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

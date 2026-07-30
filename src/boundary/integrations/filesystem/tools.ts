@@ -5,12 +5,12 @@ import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { FilesystemOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
 
 const DEFAULT_LIST_MAX_ENTRIES = 200;
 const MAX_LIST_MAX_ENTRIES = 500;
 const DEFAULT_LIST_MAX_SCANNED_ENTRIES = 5_000;
 const MAX_LIST_MAX_SCANNED_ENTRIES = 20_000;
-const MAX_READ_CHARS = 20_000;
 const DEFAULT_SEARCH_MAX_MATCHES = 50;
 const MAX_SEARCH_MAX_MATCHES = 200;
 const DEFAULT_SEARCH_MAX_FILES = 200;
@@ -100,7 +100,31 @@ function normalizeListGlobParam(value: unknown): string | undefined {
   return value;
 }
 
-export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
+export interface CreateFsToolOptions {
+  defaultMaxBytes?: number;
+}
+
+function resolveDefaultReadMaxBytes(value: number | undefined): number {
+  const configured = value ?? FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes;
+  if (
+    !Number.isSafeInteger(configured)
+    || configured < FILESYSTEM_READ_PAGE_CONTRACT.minBytes
+    || configured > FILESYSTEM_READ_PAGE_CONTRACT.maxBytes
+  ) {
+    throw new Error(
+      `fsReadMaxBytes must be a safe integer between `
+      + `${String(FILESYSTEM_READ_PAGE_CONTRACT.minBytes)} and `
+      + `${String(FILESYSTEM_READ_PAGE_CONTRACT.maxBytes)}`,
+    );
+  }
+  return configured;
+}
+
+export function createFsTool(
+  ops: FilesystemOperations,
+  options: CreateFsToolOptions = {},
+): SubstrateAgentTool {
+  const defaultReadMaxBytes = resolveDefaultReadMaxBytes(options.defaultMaxBytes);
   return {
     name: 'fs',
     label: 'fs',
@@ -138,10 +162,12 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
           + `(default ${String(DEFAULT_LIST_MAX_SCANNED_ENTRIES)}).`,
       })),
       max_bytes: Type.Optional(Type.Integer({
-        minimum: 1,
-        maximum: MAX_READ_CHARS,
+        minimum: FILESYSTEM_READ_PAGE_CONTRACT.minBytes,
+        maximum: FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
         description:
-          `Used with action=read. Read at most this many bytes; ${String(MAX_READ_CHARS)} is a hard cap. `
+          `Used with action=read. Read at most this many bytes; `
+          + `${String(FILESYSTEM_READ_PAGE_CONTRACT.maxBytes)} is a hard cap `
+          + `(default ${String(defaultReadMaxBytes)}). `
           + 'Use analysis_workbench or a bounded automaton for larger documents.',
       })),
       offset_bytes: Type.Optional(Type.Integer({
@@ -236,9 +262,9 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
             const maxBytes = optionalSafeIntegerInRange(
               params.max_bytes,
               'max_bytes',
-              MAX_READ_CHARS,
-              1,
-              MAX_READ_CHARS,
+              defaultReadMaxBytes,
+              FILESYSTEM_READ_PAGE_CONTRACT.minBytes,
+              FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
             );
             const offsetBytes = optionalSafeIntegerInRange(
               params.offset_bytes,

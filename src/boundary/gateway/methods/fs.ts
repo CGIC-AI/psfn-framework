@@ -11,11 +11,13 @@ import type {
 import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths } from '../policy.js';
 import {
+  normalizeWorkspacePathInput,
   normalizeWorkspaceRelativeGlob,
   resolveCanonicalPath,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from '../filesystem-paths.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import {
@@ -29,6 +31,8 @@ import {
 } from '../../integrations/filesystem/workspace-ops.js';
 import { normalizeFilesystemReadOptions } from '../../integrations/filesystem/ops.js';
 
+const log = createComponentLogger('GatewayFilesystem');
+
 function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
   const fullCodebaseReadRoot = runtime.policyConfig.fullCodebaseReadRoot;
@@ -38,15 +42,55 @@ function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   return resolveWorkspaceRoot(fullCodebaseReadRoot);
 }
 
-async function resolveReadPath(path: string, runtime: GatewayMethodRuntime): Promise<string> {
-  if (isAbsolute(path)) {
-    return resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
+interface ResolvedReadPath {
+  path: string;
+  scope: 'personal-workspace' | 'explicit-absolute' | 'codebase-fallback';
+}
+
+function normalizeRequestedWorkspacePath(path: string, workspaceRoot: string): string {
+  try {
+    const normalized = normalizeWorkspacePathInput(path, workspaceRoot);
+    if (normalized.ambiguity) {
+      throw new Error(normalized.ambiguity);
+    }
+    if (normalized.strippedPrefix) {
+      log.warn('Stripped duplicated Personal Workspace prefix from filesystem path', {
+        requestedPath: path,
+        strippedPrefix: normalized.strippedPrefix,
+        normalizedPath: normalized.path,
+      });
+    }
+    return normalized.path;
+  } catch (error) {
+    throw new JSONRPCErrorException(
+      `${error instanceof Error ? error.message : String(error)}; `
+      + 'expected a Personal Workspace-relative path such as "notes/example.txt"',
+      GatewayErrors.POLICY_DENIED,
+    );
   }
-  const workspaceCandidate = resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
+}
+
+async function resolveReadPath(path: string, runtime: GatewayMethodRuntime): Promise<ResolvedReadPath> {
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const normalizedPath = normalizeRequestedWorkspacePath(path, workspaceRoot);
+  if (isAbsolute(normalizedPath)) {
+    return {
+      path: resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot),
+      scope: 'explicit-absolute',
+    };
+  }
+  const workspaceCandidate = resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot);
   if (await pathExists(workspaceCandidate)) {
-    return workspaceCandidate;
+    return { path: workspaceCandidate, scope: 'personal-workspace' };
   }
-  return resolveWorkspaceFsPathFromRoot(path, resolveReadRoot(runtime));
+  const readRoot = resolveReadRoot(runtime);
+  if (readRoot === workspaceRoot) {
+    return { path: workspaceCandidate, scope: 'personal-workspace' };
+  }
+  return {
+    path: resolveWorkspaceFsPathFromRoot(normalizedPath, readRoot),
+    scope: 'codebase-fallback',
+  };
 }
 
 function relativePathForDisplay(path: string, root: string): string {
@@ -136,7 +180,8 @@ async function resolveListBase(
     return { cwd: readRoot, displayRoot: readRoot, glob: normalizedGlob };
   }
 
-  const cwd = await resolveReadPath(requestedPath, runtime);
+  const resolvedReadPath = await resolveReadPath(requestedPath, runtime);
+  const cwd = resolvedReadPath.path;
   const cwdStat = await stat(cwd);
   if (!cwdStat.isDirectory()) {
     throw new JSONRPCErrorException(
@@ -196,13 +241,20 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.read',
     handler: async (params: FsReadParams, runtime) => {
-      const resolvedPath = await resolveReadPath(params.path, runtime);
-      assertPersonalWorkspacePath(resolvedPath, runtime, 'returnNormalized');
+      const resolved = await resolveReadPath(params.path, runtime);
+      if (runtime.personalWorkspaceIsolation && resolved.scope === 'codebase-fallback') {
+        throw new JSONRPCErrorException(
+          'fs.read codebase fallback is unavailable under Personal Workspace isolation; '
+          + 'request a path inside the authenticated companion Personal Workspace',
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
+      assertPersonalWorkspacePath(resolved.path, runtime, 'returnNormalized');
       const options = normalizeFilesystemReadOptions({
         ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
         ...(params.offsetBytes !== undefined ? { offsetBytes: params.offsetBytes } : {}),
       });
-      return await readTextFile(resolvedPath, options.maxBytes, options.offsetBytes);
+      return await readTextFile(resolved.path, options.maxBytes, options.offsetBytes);
     },
     summary: (p: FsReadParams) => ({
       path: p.path,
@@ -216,7 +268,8 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'fs.write',
     handler: async (params: FsWriteParams, runtime) => {
       const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
-      const resolvedPath = resolveWorkspaceFsPathFromRoot(params.path, workspaceRoot);
+      const normalizedPath = normalizeRequestedWorkspacePath(params.path, workspaceRoot);
+      const resolvedPath = resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot);
       assertPersonalWorkspacePath(resolvedPath, runtime, 'resolveParent');
       try {
         await writeFile(resolvedPath, params.content, 'utf-8');
@@ -284,7 +337,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: FsEditParams, runtime) => {
       const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
       const result = await editWorkspaceFile(workspaceRoot, {
-        path: params.path,
+        path: normalizeRequestedWorkspacePath(params.path, workspaceRoot),
         oldText: params.oldText,
         newText: params.newText,
         replaceAll: params.replaceAll,

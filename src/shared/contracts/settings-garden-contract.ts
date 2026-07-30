@@ -127,6 +127,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   analysisWorkbenchMaxSubQueries: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchExecutionTimeoutMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchOutputTruncation: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  fsReadMaxBytes: { sectionId: 'analysis-workbench', surface: 'advanced' },
   observerEvalSidecar: { sectionId: 'analysis-workbench', surface: 'advanced' },
   capabilityTier: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   customTokens: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },

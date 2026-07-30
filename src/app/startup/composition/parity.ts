@@ -214,8 +214,13 @@ export function wireSessionToolsRuntime(
 export function wireFilesystemToolsRuntime(
   target: FilesystemToolRuntimeTarget,
   workspacePath: string,
+  config: Pick<SubstrateConfig, 'fsReadMaxBytes'> = {},
 ): void {
-  wireFilesystemRuntime(target, workspacePath);
+  wireFilesystemRuntime(target, workspacePath, {
+    ...(config.fsReadMaxBytes !== undefined
+      ? { defaultReadMaxBytes: config.fsReadMaxBytes }
+      : {}),
+  });
 }
 
 /**

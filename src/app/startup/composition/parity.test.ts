@@ -203,16 +203,24 @@ describe('wireFilesystemToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers fs as a core tool', () => {
+  it('registers fs as a core tool with the settings-owned read default', () => {
     const target = {
       registerTool: vi.fn(),
     };
 
-    wireFilesystemToolsRuntime(target as any, tempDir);
+    wireFilesystemToolsRuntime(target as any, tempDir, { fsReadMaxBytes: 125_000 });
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);
     expect(calls.every(([, category]) => category === 'core')).toBe(true);
+    expect(calls[0]?.[0].parameters).toMatchObject({
+      properties: {
+        max_bytes: {
+          maximum: 200_000,
+          description: expect.stringContaining('default 125000'),
+        },
+      },
+    });
   });
 });
 

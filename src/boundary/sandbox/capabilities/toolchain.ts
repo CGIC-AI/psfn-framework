@@ -1,5 +1,5 @@
 import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
-import { FILESYSTEM_DIRECT_READ_CONTRACT } from '../../integrations/filesystem/ops.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
 import type {
   SandboxFileRead,
   SandboxFileReadPage,
@@ -75,12 +75,12 @@ function normalizeReadOffset(value: unknown): { offsetBytes: number } | { error:
     typeof offsetBytes !== 'number'
     || !Number.isSafeInteger(offsetBytes)
     || offsetBytes < 0
-    || offsetBytes > FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes
+    || offsetBytes > FILESYSTEM_READ_PAGE_CONTRACT.maxOffsetBytes
   ) {
     return {
       error:
         `offsetBytes must be a safe integer between 0 and `
-        + `${String(FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes)}`,
+        + `${String(FILESYSTEM_READ_PAGE_CONTRACT.maxOffsetBytes)}`,
     };
   }
   return { offsetBytes };
@@ -111,7 +111,7 @@ export function createToolchainCapabilities(
 
     try {
       return await options.fileRead(normalizedPath, {
-        maxBytes: FILESYSTEM_DIRECT_READ_CONTRACT.maxBytes,
+        maxBytes: FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
         offsetBytes: normalizedOffset.offsetBytes,
       });
     } catch (err) {

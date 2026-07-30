@@ -182,10 +182,13 @@ The surface stays intentionally narrow while still supporting ordinary CLI work:
   (allowlist, cwd bounds, limits, confirmation, audit) governs it identically to the direct `shell` tool — there is no
   second, agent-local execution path, and `shell_exec` stays a REPL-only helper rather than a tool-catalog entry
 
-`fs action="read"` remains intentionally capped at 20,000 bytes. For larger documents, use `analysis_workbench` so the
-raw material stays in temporary context, or use a bounded `subagent` instructed to return provenance-bearing excerpts
-with source paths and line or byte ranges. Bring those excerpts or a durable artifact back before discarding the worker;
-a summary by itself is not a provenance-preserving handoff.
+`fs action="read"` is paged. Its default page size is the settings-owned `fsReadMaxBytes` (100,000 bytes by default),
+and callers may request a different `max_bytes` up to the 200,000-byte hard cap. The agent reads
+`fsReadMaxBytes` once at boot, so changing it requires an agent restart. For larger documents, follow
+`next_offset_bytes` across pages or use `analysis_workbench` so the raw material stays in temporary context. A bounded
+`subagent` may instead return provenance-bearing excerpts with source paths and line or byte ranges; bring those
+excerpts or a durable artifact back before discarding the worker, because a summary by itself is not a
+provenance-preserving handoff.
 
 ## Canonical Session Surface
 

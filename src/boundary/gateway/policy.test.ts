@@ -443,7 +443,7 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       {
         method: 'fs.read',
-        params: { path: '/app/companion/modules/test.ts', maxBytes: 20_000, offsetBytes: 40_000 },
+        params: { path: '/app/companion/modules/test.ts', maxBytes: 200_000, offsetBytes: 40_000 },
       },
       policyConfig,
     )).toBe('ALLOW');
@@ -451,7 +451,6 @@ describe('evaluatePolicy', () => {
     for (const params of [
       { path: '/app/companion/modules/test.ts', maxBytes: 0 },
       { path: '/app/companion/modules/test.ts', maxBytes: 1.5 },
-      { path: '/app/companion/modules/test.ts', maxBytes: 20_001 },
       { path: '/app/companion/modules/test.ts', maxBytes: 200_001 },
       { path: '/app/companion/modules/test.ts', offsetBytes: -1 },
       { path: '/app/companion/modules/test.ts', offsetBytes: 1.5 },
@@ -481,6 +480,19 @@ describe('evaluatePolicy', () => {
       { method: 'fs.write', params: { path: 'notes.txt' } },
       policyConfig,
     )).toBe('ALLOW');
+  });
+
+  it('denies a different companion Personal Workspace prefix', () => {
+    const companionPolicyConfig: PolicyConfig = {
+      workspacePath: '/app/workspaces/personal/companion-a',
+    };
+    expect(evaluatePolicy(
+      {
+        method: 'fs.write',
+        params: { path: 'workspaces/personal/companion-b/secret.md' },
+      },
+      companionPolicyConfig,
+    )).toBe('DENY');
   });
 
   it('allows fs.list with workspace-relative glob', () => {
@@ -589,12 +601,12 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/workspace/../../../etc/passwd' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('DENY');
 
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '../escape.txt' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('DENY');
   });
 
   it('denies fs.list traversal and absolute glob patterns', () => {

@@ -8,11 +8,13 @@ import type { PlacesRegistryConfig } from '../../shared/contracts/places-registr
 const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
 import {
+  normalizeWorkspacePathInput,
   normalizeWorkspaceRelativeGlob,
   resolveCanonicalPath,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from './filesystem-paths.js';
+import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
 
 export interface BeadsPolicyConfig {
   enabled?: boolean;
@@ -425,7 +427,11 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         const offsetBytes = filesystemParams.offsetBytes;
         if (
           (maxBytes !== undefined
-            && !isPositiveIntegerInRange(maxBytes, 1, 20_000))
+            && !isPositiveIntegerInRange(
+              maxBytes,
+              FILESYSTEM_READ_PAGE_CONTRACT.minBytes,
+              FILESYSTEM_READ_PAGE_CONTRACT.maxBytes,
+            ))
           || (offsetBytes !== undefined
             && !isPositiveIntegerInRange(offsetBytes, 0, Number.MAX_SAFE_INTEGER))
         ) {
@@ -434,7 +440,17 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       }
 
       const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
-      const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
+      let normalizedInputPath: string;
+      try {
+        const normalizedInput = normalizeWorkspacePathInput(path, workspaceRoot);
+        if (normalizedInput.ambiguity) {
+          return 'DENY';
+        }
+        normalizedInputPath = normalizedInput.path;
+      } catch {
+        return 'DENY';
+      }
+      const normalizedPath = resolveWorkspaceFsPathFromRoot(normalizedInputPath, workspaceRoot);
 
       // Build list of all allowed prefixes for this operation
       const allowedPrefixes = [workspaceRoot];

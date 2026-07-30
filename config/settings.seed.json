@@ -284,6 +284,7 @@
   "analysisWorkbenchMaxSubQueries": 24,
   "analysisWorkbenchExecutionTimeoutMs": 5000,
   "analysisWorkbenchOutputTruncation": 8192,
+  "fsReadMaxBytes": 100000,
   "shellExec": {
     "enabled": false,
     "allowlist": [],

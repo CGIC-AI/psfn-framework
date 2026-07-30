@@ -182,12 +182,30 @@ describe('Garden route capability catalogue', () => {
     expect(resolveGardenRouteCapability('POST', '/api/admin/channels/bearer-companion')?.capability)
       .toMatchObject({
         id: 'POST /api/admin/channels/bearer-companion',
+        body: { mode: 'forbidden' },
         authorization: {
           action: 'channels.manage',
           baseRole: 'admin',
           requirements: { assurance: 'webauthn_uv', confirmation: 'explicit' },
         },
       });
+  });
+
+  it('matches mutation body policies to the Garden handlers that consume request bodies', () => {
+    const bodyMode = (method: 'POST', path: string) =>
+      resolveGardenRouteCapability(method, path)?.capability.body.mode;
+
+    expect(bodyMode('POST', '/api/admin/graph-proposals/proposal-a/approve')).toBe('optional');
+    expect(bodyMode('POST', '/api/admin/graph-proposals/proposal-a/reject')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/approve')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/deny')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/contact-approvals/contact-a/reset')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/acknowledge')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/wishlist/wish-a/done')).toBe('forbidden');
+    expect(bodyMode('POST', '/api/admin/prompts/layer-a/rollback')).toBe('optional');
+    expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/acknowledge')).toBe('optional');
+    expect(bodyMode('POST', '/api/admin/action-pipe/actions/action-a/cancel')).toBe('optional');
+    expect(bodyMode('POST', '/api/admin/session-routes/reset')).toBe('optional');
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

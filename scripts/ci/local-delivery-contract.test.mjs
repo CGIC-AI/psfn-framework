@@ -194,6 +194,16 @@ test('delivery-only gate stays fast while product changes retain full validation
     assert.ok(names.includes('startup-owner-files'), `${path} must run startup-owner-files`);
   }
 
+  const catalogueOnlyNames = buildGatePlan({
+    paths: ['src/boundary/fleet-auth/garden-route-capabilities.ts'],
+  })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  assert.ok(
+    catalogueOnlyNames.includes('garden-route-body-policy'),
+    'a catalogue-only change must run the Garden route body-policy conformance suite',
+  );
+
   const lockfileNames = buildGatePlan({ paths: ['package-lock.json'] })
     .filter(({ skip }) => !skip)
     .map(({ name }) => name);

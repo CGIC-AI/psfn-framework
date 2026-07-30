@@ -33,6 +33,7 @@
     "test:shakedown-harness": "vitest run --config shakedown/harness/vitest.config.mjs",
     "test:postgres:down": "node scripts/ci/stop-test-postgres.mjs",
     "test:garden:accounting": "vitest run --config vitest.garden-accounting.config.ts",
+    "test:garden:route-body-policy": "vitest run --config vitest.garden-route-body-policy.config.ts",
     "test:garden-ui": "npm --prefix admin-ui test",
     "test:ops:kube-port-forward": "node --test scripts/ops/keep-kube-port-forward.test.mjs",
     "prewarm": "node scripts/prewarm-worktree.mjs",

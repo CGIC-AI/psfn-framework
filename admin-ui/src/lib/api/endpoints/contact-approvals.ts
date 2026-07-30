@@ -60,7 +60,9 @@ export function loadContactApprovalsLocalFirst(
  * Endpoint: POST /api/admin/contact-approvals/:id/approve
  */
 export function approveContactApproval(id: string): Promise<ContactApprovalMutationResult> {
-  return apiPost<ContactApprovalMutationResult>(`/api/admin/contact-approvals/${encodeURIComponent(id)}/approve`, {});
+  return apiPost<ContactApprovalMutationResult>(
+    `/api/admin/contact-approvals/${encodeURIComponent(id)}/approve`,
+  );
 }
 
 /**
@@ -69,7 +71,9 @@ export function approveContactApproval(id: string): Promise<ContactApprovalMutat
  * Endpoint: POST /api/admin/contact-approvals/:id/deny
  */
 export function denyContactApproval(id: string): Promise<ContactApprovalMutationResult> {
-  return apiPost<ContactApprovalMutationResult>(`/api/admin/contact-approvals/${encodeURIComponent(id)}/deny`, {});
+  return apiPost<ContactApprovalMutationResult>(
+    `/api/admin/contact-approvals/${encodeURIComponent(id)}/deny`,
+  );
 }
 
 /**
@@ -78,5 +82,7 @@ export function denyContactApproval(id: string): Promise<ContactApprovalMutation
  * Endpoint: POST /api/admin/contact-approvals/:id/reset
  */
 export function resetContactApproval(id: string): Promise<ContactApprovalMutationResult> {
-  return apiPost<ContactApprovalMutationResult>(`/api/admin/contact-approvals/${encodeURIComponent(id)}/reset`, {});
+  return apiPost<ContactApprovalMutationResult>(
+    `/api/admin/contact-approvals/${encodeURIComponent(id)}/reset`,
+  );
 }

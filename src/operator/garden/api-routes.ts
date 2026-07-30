@@ -971,7 +971,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminChannelEnvelopeRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
-    ...buildAdminBearerCompanionRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
+    ...buildAdminBearerCompanionRoutes({ settingsService, appendAuditTimelineEntry }),
     ...buildAdminIntakeSourceListRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...(intakeQuarantineService
       ? buildAdminIntakeQuarantineRoutes({

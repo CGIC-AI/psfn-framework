@@ -15,6 +15,7 @@
     type ChannelPrivacy,
     type ContactTrackingMode,
   } from '$lib/api/endpoints/channels';
+  import { currentCompanionGardenScope } from '$lib/fleet/companion-scope';
 
   // ── State ──
   let data = $state<ChannelEnvelopeData | null>(null);
@@ -41,7 +42,6 @@
 
   // Companion Cluster: Bearer API pinned-companion control (vknn)
   let bearerPin = $state<BearerApiCompanionPinData | null>(null);
-  let bearerPinSelection = $state('');
   let bearerPinSaving = $state(false);
   let bearerPinError = $state('');
   let bearerPinMessage = $state('');
@@ -205,25 +205,31 @@
     bearerPinError = '';
     try {
       bearerPin = await getBearerApiCompanionPin();
-      bearerPinSelection = bearerPin.pinnedCompanionId ?? '';
     } catch (e) {
       bearerPinError = e instanceof Error ? e.message : 'Failed to load Bearer API pin';
     }
   }
 
+  function requestBoundCompanionId(): string | null {
+    const scopedCompanionId = currentCompanionGardenScope()?.companionId;
+    if (scopedCompanionId) return scopedCompanionId;
+    return bearerPin?.companions.length === 1
+      ? (bearerPin.companions[0]?.companionId ?? null)
+      : null;
+  }
+
   async function submitBearerPin(): Promise<void> {
-    const companionId = bearerPinSelection.trim();
+    const companionId = requestBoundCompanionId();
     if (!companionId) {
-      bearerPinError = 'Select a companion to pin the Bearer API to';
+      bearerPinError = 'Open a companion Garden before changing the Bearer API pin';
       return;
     }
     bearerPinSaving = true;
     bearerPinError = '';
     bearerPinMessage = '';
     try {
-      const result = await setBearerApiCompanionPin(companionId);
+      const result = await setBearerApiCompanionPin();
       bearerPin = result.data;
-      bearerPinSelection = result.data.pinnedCompanionId ?? '';
       bearerPinMessage = result.message;
     } catch (e) {
       bearerPinError = e instanceof Error ? e.message : 'Failed to pin the Bearer API companion';
@@ -297,28 +303,17 @@
         <p class="text-sm text-shadow-600">No registered companions are available to pin.</p>
       {:else}
         <div class="flex flex-wrap items-end gap-3">
-          <label class="block">
-            <span class="text-xs font-medium text-shadow-600 uppercase tracking-wide">Pinned companion</span>
-            <select
-              bind:value={bearerPinSelection}
-              disabled={bearerPinSaving}
-              class="mt-1 w-72 max-w-full text-sm rounded-lg border border-bark-300 px-3 py-2"
-            >
-              <option value="" disabled>Select a companion</option>
-              {#each bearerPin.companions as companion (companion.companionId)}
-                <option value={companion.companionId}>
-                  {companion.displayName}{companion.displayName === companion.companionId ? '' : ` (${companion.companionId})`}
-                </option>
-              {/each}
-            </select>
-          </label>
+          <p class="text-sm text-shadow-700">
+            This Garden:
+            <code class="font-mono">{requestBoundCompanionId() ?? 'companion scope unavailable'}</code>
+          </p>
           <button
             onclick={submitBearerPin}
-            disabled={bearerPinSaving || !bearerPinSelection || bearerPinSelection === bearerPin.pinnedCompanionId}
+            disabled={bearerPinSaving || !requestBoundCompanionId() || requestBoundCompanionId() === bearerPin.pinnedCompanionId}
             class="text-sm px-4 py-2 rounded-lg bg-gold-200 text-shadow-900 hover:bg-gold-300
                    transition-colors disabled:opacity-50 font-medium"
           >
-            {bearerPinSaving ? 'Pinning...' : 'Pin companion'}
+            {bearerPinSaving ? 'Pinning...' : 'Pin this companion'}
           </button>
         </div>
         <p class="text-xs text-shadow-500">

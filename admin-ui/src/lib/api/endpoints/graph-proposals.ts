@@ -86,7 +86,6 @@ export function approveGraphProposal(
 export function rejectGraphProposal(id: string): Promise<GraphProposalMutationResult> {
   return apiPost<GraphProposalMutationResult>(
     `/api/admin/graph-proposals/${encodeURIComponent(id)}/reject`,
-    {},
   );
 }
 

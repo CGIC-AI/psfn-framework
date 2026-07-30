@@ -204,11 +204,14 @@ export async function apiDownload(path: string): Promise<ApiDownload> {
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const serializedBody = body !== undefined ? JSON.stringify(body) : undefined;
   const res = await apiFetch(path, {
     method: 'POST',
-    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    headers: serializedBody === undefined
+      ? authHeaders()
+      : { ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: serializedBody,
   });
   await throwIfNotOk(res);
   return res.json();

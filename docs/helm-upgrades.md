@@ -1130,8 +1130,11 @@ below_):
 - Test cluster Garden: `https://<test-garden-origin>` (a tailnet origin served
   with `tailscale serve`).
 - Live fleet Garden: `https://<live-fleet-garden-origin>`.
-- The satellite hub stays on its own `https://<satellite-hub-origin>`. It is a
-  separate surface and is not part of Fleet SSO.
+- The satellite hub stays on its own `https://<satellite-hub-origin>`. Its
+  browser surface does not participate in Discord Fleet SSO. Its server-to-server
+  `/v1/companion/*` bridge still reaches the gateway API when Fleet auth is
+  enabled and authenticates with its configured satellite-scoped API key; those
+  relay routes are not browser SSO routes.
 
 Discord application (one per deployment; a single app with both redirects works,
 but separate apps are preferred to keep the blast radius small):

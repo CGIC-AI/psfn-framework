@@ -798,7 +798,7 @@ export async function startOptionalGatewayApiServer(
   const voiceWebSocketPath = voiceWebSocketRuntime
     ? undefined
     : DISABLED_VOICE_WEBSOCKET_PATH;
-  const companionRelay: CompanionRelayHttpDeps | undefined = !fleetAuthBootstrapOnly && options.companionRelay
+  const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay
     ? {
         ...options.companionRelay,
         stimuli: new CompanionStimulusIngress({

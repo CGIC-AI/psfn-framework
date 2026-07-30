@@ -38,6 +38,9 @@ describe('gateway fleet authorization context wiring', () => {
       'fleetAuthProviderRecovery: fleetAuthPersistence.providerRecovery,',
     );
     expect(apiSurfaceSource).toContain('providerRecovery: options.fleetAuthProviderRecovery');
+    expect(apiSurfaceSource).toContain(
+      'const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay',
+    );
   });
 
   it('constructs the private request-capability signer only inside gateway persistence', () => {

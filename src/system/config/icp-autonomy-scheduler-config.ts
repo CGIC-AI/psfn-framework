@@ -22,7 +22,11 @@ export interface IcpAutonomySchedulerConfig {
 }
 
 export const DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG: IcpAutonomySchedulerConfig = {
-  enabled: false,
+  // Operator ruling D4 (2026-07-30, psfn-framework-hrmrq.34): autonomous
+  // initiation is DEFAULT-ON. The one-way runtime fence
+  // (createIcpAutonomyRuntimeEnablement) remains only as the live-process
+  // emergency disable; scheduler.json can still set enabled:false explicitly.
+  enabled: true,
   candidate: {
     defaultTtlMs: 24 * 60 * 60_000,
     retryCadenceMs: 5 * 60_000,

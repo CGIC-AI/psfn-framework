@@ -77,6 +77,13 @@ export interface AdminIcpAutonomyData {
   available: boolean;
   localCompanionId: string | null;
   runtimeEnabled: boolean;
+  /**
+   * Count of ICP-eligible sibling contacts (channel='companion' identity +
+   * machine-intelligence) in this companion's own contact store, or null when
+   * no probe is wired. 0 means peer selection can never succeed until
+   * `npm run seed:sibling-contacts -- --apply` runs (hrmrq.34).
+   */
+  companionPeerContactCount: number | null;
   settings: EffectiveIcpAutonomySettingsState;
   availability: AdminIcpAvailabilityView[];
   candidates: AdminIcpCandidateView[];
@@ -86,7 +93,7 @@ export interface AdminIcpAutonomyData {
   costs: AdminIcpCostView[];
   reasonCounts: AdminIcpReasonCount[];
   failureCount: number;
-  quietState: 'disabled' | 'no_candidates' | 'active' | 'failures_observed';
+  quietState: 'disabled' | 'unavailable_topology' | 'no_candidates' | 'active' | 'failures_observed';
   quietExplanation: string;
   redaction: {
     privateMotivation: 'withheld';

@@ -92,6 +92,28 @@ export async function resolveOutreachChannel(
   policy: OutreachChannelPolicy,
 ): Promise<OutreachChannelResolution> {
   const { provenance } = thought;
+
+  // Personal-project thoughts (0ggv.3, hrmrq.85): unfinished project work is a
+  // live companion-owned artifact, and its nudge is a share about HER OWN work,
+  // not a continuation of any partner conversation. It deliberately routes to
+  // the primary private channel only — its internal sourceChannelId
+  // ('internal:free-time:project') is workspace provenance, never a
+  // group-continuation candidate, so it must not fall through to the
+  // group-continuation branch below. The outbound gate re-verifies the project
+  // is still resumable at dispatch (fail closed), mirroring concern liveness.
+  if (provenance.personalProjectId) {
+    const projectPrimaryChannelId = policy.primaryChannelId?.trim() || undefined;
+    if (!projectPrimaryChannelId) {
+      return { outcome: 'reject', reason: 'no_primary_channel' };
+    }
+    return {
+      outcome: 'deliver',
+      channelId: projectPrimaryChannelId,
+      channelType: policy.primaryChannelType,
+      target: 'primary',
+    };
+  }
+
   const hasLiveProvenance = Boolean(provenance.concernId ?? provenance.pendingFollowUpId);
   if (!hasLiveProvenance) {
     // The delivery handler fail-closes on outbound without live provenance;
@@ -153,6 +175,9 @@ export function buildOutboundActionCandidate(input: {
         ? { pendingFollowUpId: thought.provenance.pendingFollowUpId }
         : {}),
       ...(thought.provenance.concernId ? { concernIds: [thought.provenance.concernId] } : {}),
+      ...(thought.provenance.personalProjectId
+        ? { personalProjectId: thought.provenance.personalProjectId }
+        : {}),
     } satisfies IntentionOutboundMessageActionPayload,
     maxRetries: 1,
   };

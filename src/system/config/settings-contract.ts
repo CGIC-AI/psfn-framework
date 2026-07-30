@@ -203,6 +203,7 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['modelRoleAssignments', MODELS_FILE_NAME],
   ['modelRoster', MODELS_FILE_NAME],
   ['backgroundMaintenanceIntervalMs', SCHEDULER_FILE_NAME],
+  ['icpAutonomyEnabled', SCHEDULER_FILE_NAME],
   ['episodicProcessingEnabled', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowStartLocalTime', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
@@ -223,6 +224,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['modelRoleAssignments', 'models'],
   ['modelRoster', 'models'],
   ['backgroundMaintenanceIntervalMs', 'scheduler'],
+  ['icpAutonomyEnabled', 'scheduler'],
   ['episodicProcessingEnabled', 'scheduler'],
   ['episodicProcessingRestWindowStartLocalTime', 'scheduler'],
   ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
@@ -248,6 +250,7 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'profileSynthesisEnabled',
+  'icpAutonomyEnabled',
   'episodicProcessingEnabled',
   'voiceEnabled',
 ]);

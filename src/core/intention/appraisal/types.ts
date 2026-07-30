@@ -220,6 +220,12 @@ export interface IntentionOutboundMessageActionPayload {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+  /**
+   * Live personal-project provenance (hrmrq.85): the outbound gate re-verifies
+   * the project against the personal-project library at dispatch and fails
+   * closed when it is missing, unwired, or no longer resumable.
+   */
+  personalProjectId?: string;
   /** Marks direct external output drafted by the background appraisal model. */
   appraisalFollowUp?: IntentionOutboundAppraisalFollowUpProvenance;
   /** Consented social-desire provenance (verified live at the outbound gate). */

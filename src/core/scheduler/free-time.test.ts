@@ -37,8 +37,10 @@ import {
   FREE_TIME_QUIET_HOURS_TASK_ID,
   FREE_TIME_RETURN_NOTE_SOURCE,
   freeTimeWorkspaceChannelId,
+  buildFreeTimeBlockNote,
   registerFreeTimeTasks,
   runFreeTimeBlock,
+  type FreeTimeBlockRecord,
   type FreeTimeRuntimeOptions,
 } from './free-time.js';
 
@@ -1305,6 +1307,94 @@ describe('workspace-resolved return-note routing', () => {
     // Every free-time turn ran on the INTERNAL channel only — no partner-channel dispatch.
     for (const call of invokeTurn.mock.calls) {
       expect(isInternalSessionId(call[0].channelId)).toBe(true);
+    }
+  });
+});
+
+describe('rest-by-choice vs rest-by-failure visibility (psfn-framework-hrmrq.69)', () => {
+  const baseResult = {
+    lane: 'quiet_hours' as const,
+    channelId: 'internal:free-time:main',
+    turnsUsed: 0,
+    activity: false,
+    endReason: 'rested' as const,
+    spentChargeUnits: 0,
+    startedAtMs: 1,
+    endedAtMs: 2,
+  };
+
+  it('a genuine companion_rested note still reads as a choice', () => {
+    const note = buildFreeTimeBlockNote({ ...baseResult, restReason: 'companion_rested' });
+    expect(note).toContain('resting is a valid way to spend the time');
+    expect(note).not.toContain('system failure');
+  });
+
+  it('a fail-closed chooser rest names the failure and is not affirmed as a choice', () => {
+    for (const restReason of [
+      'chooser_disabled',
+      'chooser_timeout',
+      'chooser_error',
+      'chooser_unparseable',
+      'chooser_invalid_option',
+      'resolve_failed',
+    ] as const) {
+      const note = buildFreeTimeBlockNote({ ...baseResult, restReason });
+      expect(note).not.toContain('valid way to spend the time');
+      expect(note).toContain(restReason);
+      expect(note).toContain('not a choice');
+    }
+  });
+
+  it('a rested result with no recorded reason fails closed to the honest framing', () => {
+    const note = buildFreeTimeBlockNote({ ...baseResult });
+    expect(note).not.toContain('valid way to spend the time');
+    expect(note).toContain('reason unrecorded');
+  });
+
+  it('a non-rest loaf keeps the existing affirming framing', () => {
+    const note = buildFreeTimeBlockNote({ ...baseResult, endReason: 'loafed' });
+    expect(note).toContain('resting is a valid way to spend the time');
+  });
+
+  it.each([
+    ['companion_rested', true],
+    ['chooser_error', false],
+  ] as const)('runtime carries restReason=%s through note, event, and block record', async (restReason, affirmed) => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const records: FreeTimeBlockRecord[] = [];
+      const events: Array<{ endReason: string; restReason?: string }> = [];
+      const { scheduler, sessionManager, runtime, eventBus } = buildRuntime({
+        turnScript: ['should never run'],
+        now: () => nowMs,
+      });
+      runtime.chooseWorkspace = async () => ({ kind: 'rest', reason: restReason });
+      runtime.recordBlock = (record) => records.push(record);
+      eventBus.on('scheduler.free_time.block', (payload) => events.push({
+        endReason: payload.endReason,
+        ...(payload.restReason !== undefined ? { restReason: payload.restReason } : {}),
+      }));
+      registerFreeTimeTasks(runtime);
+
+      nowMs += 2_000; // let the poll interval elapse so the task is due
+      await scheduler.tick();
+
+      expect(events).toEqual([{ endReason: 'rested', restReason }]);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ endReason: 'rested', restReason });
+
+      const appendSystemNote = sessionManager.appendSystemNote as ReturnType<typeof vi.fn>;
+      expect(appendSystemNote).toHaveBeenCalledTimes(1);
+      const [, note] = appendSystemNote.mock.calls[0];
+      if (affirmed) {
+        expect(note).toContain('resting is a valid way to spend the time');
+      } else {
+        expect(note).not.toContain('valid way to spend the time');
+        expect(note).toContain('chooser_error');
+      }
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 });

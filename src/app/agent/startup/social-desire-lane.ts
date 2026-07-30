@@ -13,6 +13,10 @@ import { CanonicalCompanionPeerValidationError, type AgentFacingIcpAutonomyRunti
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { createLlmSocialDesireConsentEvaluator } from '../../../core/intention/social-desire-consent-evaluator.js';
+import {
+  createSocialDesireFeltSignalWriter,
+  type SocialDesireFeltSignalWriter,
+} from '../../../core/intention/social-desire-felt-signal.js';
 import { createContactSocialDesireTierSource } from '../../../core/intention/social-desire-store-port.js';
 import {
   createSocialDesireConsentLedger,
@@ -35,24 +39,36 @@ import type { AgentSchedulerRuntime } from '../scheduler-runtime.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 
 export interface SocialDesireLaneDeps {
-  schedulerConfig: SchedulerConfig;
+  /** Narrowed to the fields the lane consumes (testable without a full config). */
+  schedulerConfig: Pick<SchedulerConfig, 'socialDesire' | 'episodicProcessing'>;
   scheduler: AgentSchedulerRuntime['scheduler'];
-  postTurnActions: AgentSchedulerRuntime['postTurnActions'];
+  postTurnActions: Pick<AgentSchedulerRuntime['postTurnActions'], 'enqueue'>;
   eventBus: EventBus;
   log: Logger;
   socialDesireStore: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>['socialDesireStore'];
-  outreachOutbox: OutreachOutboxStore;
+  /** Narrowed to the desire-budget read the lane performs. */
+  outreachOutbox: Pick<OutreachOutboxStore, 'countSentSince'>;
   heartbeatChannel: { channelId: string; channelType: ChannelType } | undefined;
-  contactStore: ContactStorePort;
+  /** Narrowed to the single read the lane performs (testable without a full port). */
+  contactStore: Pick<ContactStorePort, 'getById'>;
   icpPeers: AgentFacingIcpAutonomyRuntime | undefined;
   localCompanionId: string | undefined;
   llmProvider: LLMProviderPort;
   companionName: string;
+  /**
+   * Composes the accumulation writer into the emotion/appraisal felt-signal
+   * path (psfn-framework-hrmrq.85). REQUIRED: an enabled social-desire lane
+   * without a felt-signal producer is a consent-moment scheduler over a store
+   * nothing can write — registration throws rather than boot that lie.
+   */
+  attachFeltSignalWriter: (writer: SocialDesireFeltSignalWriter) => void;
 }
 
 export interface SocialDesireLaneResult {
   socialDesireOutbound: SocialDesireOutboundRuntime | undefined;
   socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
+  /** The composed accumulation writer; undefined only when the lane is disabled. */
+  socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
 }
 
 export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesireLaneResult {
@@ -74,10 +90,28 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
 
   let socialDesireOutbound: SocialDesireOutboundRuntime | undefined;
   let socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
+  let socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
   if (schedulerConfig.socialDesire.enabled) {
     if (!socialDesireStore) {
-      log.warn('socialDesire enabled but no social-desire store is available; lane not registered');
+      // Fail closed (psfn-framework-hrmrq.85): an enabled lane without its
+      // durable store would silently register nothing and report itself
+      // healthy. Boot must refuse the contradiction instead.
+      throw new Error(
+        'scheduler.json socialDesire.enabled is true but no social-desire store is composed; '
+        + 'refusing to boot a consent-moment lane whose pressure can never accumulate',
+      );
     } else {
+      // Accumulation writer (hrmrq.85): the ONLY production producer for the
+      // social-desire store, threaded into the post-turn emotion-appraisal
+      // path by the composition callback. The required callback makes
+      // "enabled lane with no writer composed" unrepresentable at boot.
+      socialDesireFeltSignals = createSocialDesireFeltSignalWriter({
+        store: socialDesireStore,
+        tierSource: createContactSocialDesireTierSource(contactStore),
+        lifecycle: schedulerConfig.socialDesire.lifecycle,
+      });
+      deps.attachFeltSignalWriter(socialDesireFeltSignals);
+      log.info('Social-desire felt-signal writer composed into the emotion/appraisal path');
       const socialDesireConsents = createSocialDesireConsentLedger({
         ttlMs: schedulerConfig.socialDesire.outreach.consentTtlMs,
       });
@@ -160,5 +194,5 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
       });
     }
   }
-  return { socialDesireOutbound, socialDesireHumanDeliveryPolicy };
+  return { socialDesireOutbound, socialDesireHumanDeliveryPolicy, socialDesireFeltSignals };
 }

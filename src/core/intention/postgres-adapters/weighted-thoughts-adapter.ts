@@ -79,6 +79,9 @@ function parseProvenance(value: unknown): ThoughtProvenance {
   if (typeof raw.pendingFollowUpId === 'string' && raw.pendingFollowUpId.trim()) {
     provenance.pendingFollowUpId = raw.pendingFollowUpId.trim();
   }
+  if (typeof raw.personalProjectId === 'string' && raw.personalProjectId.trim()) {
+    provenance.personalProjectId = raw.personalProjectId.trim();
+  }
   if (typeof raw.sourceChannelId === 'string' && raw.sourceChannelId.trim()) {
     provenance.sourceChannelId = raw.sourceChannelId.trim();
   }

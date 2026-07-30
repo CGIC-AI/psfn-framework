@@ -255,7 +255,7 @@
     }
   },
   "icpAutonomy": {
-    "enabled": false,
+    "enabled": true,
     "candidate": {
       "defaultTtlMs": 86400000,
       "retryCadenceMs": 300000,

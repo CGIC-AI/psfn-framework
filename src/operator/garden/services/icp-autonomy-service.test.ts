@@ -46,7 +46,7 @@ function candidate(status: IcpInitiationCandidate['status'] = 'pending'): IcpIni
   };
 }
 
-function settings(): AdminSettingsService {
+function settings(onDiskEnabled = true): AdminSettingsService {
   return {
     getSettingsData: vi.fn(async () => ({
       effectiveIcpAutonomy: {
@@ -59,7 +59,7 @@ function settings(): AdminSettingsService {
             availability: { operatorLeaseTtlMs: 1_000 },
           },
           onDiskValue: {
-            enabled: true,
+            enabled: onDiskEnabled,
             candidate: { defaultTtlMs: 1, retryCadenceMs: 1, maxRetryAttempts: 1 },
             permit: { ttlMs: 1 },
             availability: { operatorLeaseTtlMs: 1_000 },
@@ -152,6 +152,98 @@ function projectionStore(
     close: vi.fn(),
   };
 }
+
+describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
+  it('attributes a disabled runtime to scheduler.json when the owner flag is off', async () => {
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(candidate()),
+      projectionStore: projectionStore(sharedStore()),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(false),
+      settingsService: settings(false),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+    const data = await service.getData();
+    expect(data.quietState).toBe('disabled');
+    expect(data.quietExplanation).toContain('scheduler.json (icpAutonomy.enabled = false)');
+    expect(data.quietExplanation).not.toContain('emergency-disabled');
+  });
+
+  it('attributes a disabled runtime to the emergency fence when scheduler.json is still enabled', async () => {
+    const enablement = createIcpAutonomyRuntimeEnablement(true);
+    enablement.disable();
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(candidate()),
+      projectionStore: projectionStore(sharedStore()),
+      runtimeEnablement: enablement,
+      settingsService: settings(true),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+    const data = await service.getData();
+    expect(data.quietState).toBe('disabled');
+    expect(data.quietExplanation).toContain('emergency-disabled');
+    expect(data.quietExplanation).toContain('restart');
+  });
+
+  it('names the single-companion topology instead of claiming the process is disabled', async () => {
+    const service = new AdminIcpAutonomyDataService({
+      candidateStore: null,
+      projectionStore: null,
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(true),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+    const data = await service.getData();
+    expect(data.available).toBe(false);
+    expect(data.runtimeEnabled).toBe(true);
+    expect(data.quietState).toBe('unavailable_topology');
+    expect(data.quietExplanation).toContain('multi-companion');
+    expect(data.quietExplanation).toContain('wired but empty');
+  });
+
+  it('names the missing sibling-contact seed when the candidate lane is empty with zero companion contacts', async () => {
+    const candidates = candidateStore(candidate());
+    vi.mocked(candidates.listCandidates).mockResolvedValue([]);
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(sharedStore(), { permits: [] }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(true),
+      operatorLeaseTtlMs: 1_000,
+      countCompanionPeerContacts: async () => 0,
+      now: () => 2_000,
+    });
+    const data = await service.getData();
+    expect(data.quietState).toBe('no_candidates');
+    expect(data.companionPeerContactCount).toBe(0);
+    expect(data.quietExplanation).toContain('seed:sibling-contacts');
+    expect(data.quietExplanation).toContain("channel='companion'");
+  });
+
+  it('keeps the neutral no-candidates framing when sibling contacts exist', async () => {
+    const candidates = candidateStore(candidate());
+    vi.mocked(candidates.listCandidates).mockResolvedValue([]);
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(sharedStore(), { permits: [] }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(true),
+      operatorLeaseTtlMs: 1_000,
+      countCompanionPeerContacts: async () => 2,
+      now: () => 2_000,
+    });
+    const data = await service.getData();
+    expect(data.quietState).toBe('no_candidates');
+    expect(data.companionPeerContactCount).toBe(2);
+    expect(data.quietExplanation).toContain('quiet is not itself a failure');
+  });
+});
 
 describe('AdminIcpAutonomyDataService', () => {
   it('returns bounded control-plane state without private motivation, contacts, or bearer permits', async () => {

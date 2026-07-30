@@ -28,6 +28,14 @@ export interface ThoughtProvenance {
   concernId?: string;
   /** Live pending-follow-up id, when the thought tracks a scheduled follow-up. */
   pendingFollowUpId?: string;
+  /**
+   * Live personal-project id, when the thought simmers unfinished project work
+   * (0ggv.3 / psfn-framework-hrmrq.85). Like concernId/pendingFollowUpId this
+   * is LIVE provenance: the outbound gate re-verifies the project against the
+   * personal-project library at dispatch time and fails closed when the
+   * project is gone or no longer resumable.
+   */
+  personalProjectId?: string;
   /** Channel where the concern/thought was originally raised (provenance). */
   sourceChannelId?: string;
   /** Channel type of the source channel. */

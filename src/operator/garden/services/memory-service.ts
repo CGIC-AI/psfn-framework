@@ -446,7 +446,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return {
       memories: await Promise.all(memories.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       ...((this.requestContext === undefined
-        || this.requestContext.kind === 'legacy_operator'
+        || this.requestContext.kind === 'legacy_token'
         || (this.requestContext.kind === 'fleet_principal'
           && this.requestContext.actor.role === 'owner'))
         ? {

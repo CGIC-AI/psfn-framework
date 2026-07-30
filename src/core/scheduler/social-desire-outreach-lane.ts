@@ -90,12 +90,35 @@ async function safeEmit(emit: () => Promise<void>): Promise<void> {
   }
 }
 
+/** Throttle for the info-level lane-tick liveness line (hrmrq.85). */
+const LANE_TICK_INFO_THROTTLE_MS = 6 * 60 * 60_000;
+let lastSocialDesireTickInfoAtMs = 0;
+
 export async function runSocialDesireOutreachTick(
   options: SocialDesireOutreachTaskOptions,
   nowMs: number,
 ): Promise<void> {
   const { eventBus } = options;
   const result = await runSocialDesireOutreachOnce(options.deps, nowMs);
+
+  // Per-tick gate/liveness telemetry (hrmrq.85): a real subscriber (Garden
+  // subsystem health) consumes this, so a quiet lane (zero desires) is
+  // distinguishable from one that never ticks.
+  const gateTelemetry = {
+    desireCount: options.deps.store.snapshotDesires().length,
+    desiresEvaluated: result.desiresEvaluated,
+    consentMomentsEvaluated: result.consentMomentsEvaluated,
+  };
+  await safeEmit(() => eventBus.emit('social_desire.outreach.gate', {
+    ...gateTelemetry,
+    timestamp: nowMs,
+  }));
+  if (nowMs - lastSocialDesireTickInfoAtMs >= LANE_TICK_INFO_THROTTLE_MS) {
+    lastSocialDesireTickInfoAtMs = nowMs;
+    log.info('Social-desire outreach lane tick', gateTelemetry);
+  } else {
+    log.debug('Social-desire outreach lane tick', gateTelemetry);
+  }
 
   for (const produced of result.produced) {
     const syntheticMessage = {

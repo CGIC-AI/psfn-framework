@@ -354,6 +354,11 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ? normalizeConcernIds(payload.concernIds.filter((id): id is string => typeof id === 'string'))
     : [];
   const requiresActiveConcern = payload.requiresActiveConcern === true;
+  // Live personal-project provenance (hrmrq.85); the outbound gate re-verifies
+  // the project against the personal-project library at dispatch.
+  const personalProjectId = typeof payload.personalProjectId === 'string'
+    ? payload.personalProjectId.trim()
+    : '';
   const originIcpRootInitiationId = payload.originIcpRootInitiationId;
   const channelType = payload.channelType;
   if (!channelId || !content) return null;
@@ -387,6 +392,7 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
     ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
+    ...(personalProjectId ? { personalProjectId } : {}),
     ...(appraisalFollowUp ? { appraisalFollowUp } : {}),
     ...(socialDesire ? { socialDesire } : {}),
     ...(typeof originIcpRootInitiationId === 'string'

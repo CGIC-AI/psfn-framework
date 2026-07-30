@@ -206,6 +206,20 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
       + 'block runs carry turns + background-lane charge spend. Charter 8.8/8.9.',
   },
   ...BACKGROUND_WORK_HEALTH_LANES,
+  {
+    id: 'weighted_thought_outreach',
+    label: 'Weighted-thought outreach',
+    description: 'Internal-state-driven outreach lane (charter 6.24); every tick reports the '
+      + 'nudge gate with thought count and max weight, so a closed gate is distinguishable '
+      + 'from a dead lane (hrmrq.85).',
+  },
+  {
+    id: 'social_desire_outreach',
+    label: 'Social-desire consent lane',
+    description: 'Per-contact durable desire consent moments (oth4); every tick reports the '
+      + 'desire snapshot size and evaluation counts, so an empty store is distinguishable '
+      + 'from a dead lane (hrmrq.85).',
+  },
 ];
 
 /**
@@ -525,6 +539,41 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       );
     }
 
+    // Outreach lane liveness (hrmrq.85): real subscribers for the per-tick
+    // gate telemetry both autonomy lanes emit, so the Garden shows every tick
+    // — a closed gate records 'skipped' with its reason; silence means the
+    // lane is genuinely not ticking.
+    this.unsubscribers.push(
+      eventBus.on('intention.nudge.gate', (payload) => {
+        this.record('weighted_thought_outreach', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: payload.open ? 'ran' : 'skipped',
+          reason: payload.reason,
+          counts: collectCounts([
+            ['thoughtCount', trimNumber(payload.thoughtCount)],
+            ['maxWeight', trimNumber(payload.maxWeight)],
+            ['threshold', trimNumber(payload.threshold)],
+          ]),
+        });
+      }),
+    );
+    this.unsubscribers.push(
+      eventBus.on('social_desire.outreach.gate', (payload) => {
+        this.record('social_desire_outreach', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: payload.desiresEvaluated > 0 ? 'ran' : 'skipped',
+          reason: payload.desiresEvaluated > 0
+            ? 'desires_evaluated'
+            : payload.desireCount === 0 ? 'no_desires_accumulated' : 'no_desire_eligible',
+          counts: collectCounts([
+            ['desireCount', trimNumber(payload.desireCount)],
+            ['desiresEvaluated', trimNumber(payload.desiresEvaluated)],
+            ['consentMomentsEvaluated', trimNumber(payload.consentMomentsEvaluated)],
+          ]),
+        });
+      }),
+    );
+
     // Free-time block runs (E8.1): each completed block feeds the same
     // 'free_time' lane with turns + background-lane charge spend, so recent
     // blocks and their cost are visible alongside the gate skips (charter 8.9).
@@ -533,7 +582,12 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         this.record('free_time', {
           at: trimNumber(payload.timestamp) ?? this.now(),
           outcome: 'ran',
-          reason: `${payload.lane}:${payload.endReason}`,
+          // restReason distinguishes rest-by-choice (companion_rested) from a
+          // fail-closed chooser (chooser_error/timeout/…) in the Garden lane
+          // (psfn-framework-hrmrq.69).
+          reason: typeof payload.restReason === 'string'
+            ? `${payload.lane}:${payload.endReason}:${payload.restReason}`
+            : `${payload.lane}:${payload.endReason}`,
           counts: collectCounts([
             ['turnsUsed', trimNumber(payload.turnsUsed)],
             ['spentChargeUnits', trimNumber(payload.spentChargeUnits)],

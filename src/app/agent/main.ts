@@ -448,7 +448,13 @@ async function main(): Promise<void> {
           content: `Return to ${project.title}: ${project.nextStep}`,
           source: 'personal_project',
           thoughtClass: 'standard',
-          provenance: { sourceChannelId: 'internal:free-time:project' },
+          // hrmrq.85: personalProjectId is LIVE provenance — the outreach
+          // resolver routes it to the primary channel and the outbound gate
+          // re-verifies the project is still resumable at dispatch time.
+          provenance: {
+            sourceChannelId: 'internal:free-time:project',
+            personalProjectId: project.id,
+          },
         },
         Date.now(),
       );
@@ -613,6 +619,7 @@ async function main(): Promise<void> {
     weightedThoughtCandidateAdapter: icpWeightedThoughtCandidateAdapter,
     intentionCandidateAdapter: icpIntentionCandidateAdapter,
     unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
+    unregisterFeltImpulseAdapter: unregisterIcpFeltImpulseAdapter,
   } = wireIcpInitiationSources({
     config: schedulerConfig.icpAutonomy,
     localCompanionId: config.companionId,
@@ -628,6 +635,11 @@ async function main(): Promise<void> {
     contactStore,
     weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
     socialDesireStore: persistenceRuntime.socialDesireStore,
+    // hrmrq.34 (D4): affect-driven felt-impulse initiation targets canonical
+    // sibling peers via the agent-facing autonomy runtime's directory.
+    ...(coreRuntime.icpAutonomyRuntime
+      ? { peerDirectory: coreRuntime.icpAutonomyRuntime }
+      : {}),
     lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
   });
 
@@ -1221,6 +1233,7 @@ async function main(): Promise<void> {
   stopFn = async () => {
     detachCompanionEventForwarder();
     unregisterIcpCoLocationThoughtAdapter();
+    unregisterIcpFeltImpulseAdapter();
     detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
@@ -1322,6 +1335,11 @@ async function main(): Promise<void> {
     localCompanionId: config.companionId,
     llmProvider,
     companionName: card.data.name,
+    // hrmrq.85: compose the accumulation writer into the post-turn
+    // emotion-appraisal path — the lane's single production producer.
+    attachFeltSignalWriter: (writer) => {
+      agentLoop.socialDesireFeltSignals = writer;
+    },
   });
 
   // Journal auto-publisher (for reflections -> markdown journal).
@@ -1422,6 +1440,23 @@ async function main(): Promise<void> {
       outreachOutbox,
       ...(socialDesireOutbound ? { socialDesireOutbound } : {}),
       ...(socialDesireHumanDeliveryPolicy ? { socialDesireHumanDeliveryPolicy } : {}),
+      // hrmrq.85: live personal-project provenance verification for
+      // weighted-thought outreach — the project must still exist and be
+      // resumable (active/paused) at dispatch time.
+      verifyPersonalProjectLive: async (projectId: string) => {
+        try {
+          const project = personalProjects.getProject(projectId);
+          return project.status === 'active' || project.status === 'paused';
+        } catch (error) {
+          // A vanished project is stale provenance, not a runtime fault; any
+          // other failure (corrupt manifest, store error) propagates so the
+          // gate's caller records a real failure instead of a silent block.
+          if (error instanceof Error && error.message.includes('personal project not found')) {
+            return false;
+          }
+          throw error;
+        }
+      },
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

@@ -432,7 +432,7 @@ export interface EventMap {
     channelId: string;
     trigger: 'timer' | 'turn_threshold';
     outcome: 'processed' | 'skipped';
-    reason?: 'no_new_messages' | 'below_relevance_minimum' | 'session_retired';
+    reason?: 'no_new_messages' | 'below_relevance_minimum' | 'session_retired' | 'testing_session';
     newEntryCount: number;
     relevantTurnCount: number;
     minRelevantTurns: number;
@@ -1132,8 +1132,20 @@ export interface EventMap {
   // Social-desire consent moments (epic oth4, bead oth4.2). Deterministic
   // eligibility + budget gates decide whether the LLM consent moment runs at
   // all; the moment itself is her choice of message / defer / decline.
+  // Per-tick liveness/gate telemetry for the social-desire consent lane
+  // (hrmrq.85): distinguishes a quiet lane (no eligible desires) from a dead
+  // one. desireCount is the durable snapshot size; evaluated counts desires
+  // that passed the deterministic pre-checks this tick.
+  'social_desire.outreach.gate': { desireCount: number; desiresEvaluated: number; consentMomentsEvaluated: number; timestamp: number };
   'social_desire.consent.accepted': { contactId: string; orientation: string; pressure: number; channelId: string; channelType: string; companionTarget: boolean; timestamp: number };
   'social_desire.consent.deferred': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
+  // Affect-driven ICP initiation impulse (hrmrq.34, operator ruling D4): the
+  // emo-sim proactivity sidecar's would_message lever fired. The felt-impulse
+  // adapter (app wiring) is the ratified authoritative consumer; content-free.
+  'icp.felt_impulse.lever': { lever: 'would_message'; firedAtMs: number; timestamp: number };
+  // Outcome telemetry from the felt-impulse adapter, incl. the EXPLICIT
+  // no-eligible-peer surface (missing channel='companion' sibling seed).
+  'icp.felt_impulse.outcome': { outcome: string; peerContactId?: string; candidateId?: string; reason?: string; timestamp: number };
   'social_desire.consent.declined': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
   'social_desire.consent.blocked': { contactId: string; reason: string; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
@@ -1457,6 +1469,12 @@ export interface EventMap {
     turnsUsed: number;
     activity: boolean;
     endReason: string;
+    /**
+     * Present when endReason === 'rested': `companion_rested` is a genuine
+     * choice, anything else is the chooser failing closed
+     * (psfn-framework-hrmrq.69).
+     */
+    restReason?: string;
     spentChargeUnits: number;
     maxChargeUnits: number;
     maxTurns: number;

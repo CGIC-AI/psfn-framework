@@ -24,6 +24,7 @@ import {
 import type { BackgroundWorkPostTurnTuning } from './config.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
+import type { SocialDesireFeltSignalWriter } from '../../intention/social-desire-felt-signal.js';
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
 
@@ -51,6 +52,14 @@ export interface PostTurnBackgroundRuntimeDependencies {
   emotionRuntime: Pick<EmotionSelfModelRuntime, 'triggerEmotionAppraisal'>;
   getEmotionTemplateVariables: () => Record<string, string>;
   tuning: BackgroundWorkPostTurnTuning;
+  /**
+   * Social-desire accumulation writer (psfn-framework-hrmrq.85). When composed,
+   * every emotion_appraisal job records the turn's deterministic felt social
+   * signal BEFORE the LLM appraisal call, so accumulation survives appraisal
+   * gate closes and model-call preemption. Absent only when the social-desire
+   * lane is disabled (lane registration fails closed on the mismatch).
+   */
+  socialDesireFeltSignals?: SocialDesireFeltSignalWriter;
   now?: () => number;
 }
 
@@ -349,6 +358,22 @@ async function runPostTurnBackgroundWork(
           !== payload.internalStateSnapshotRef
         ) {
           throw new BackgroundWorkPermanentError('source_mismatch');
+        }
+        // Social-desire accumulation (psfn-framework-hrmrq.85): the payload's
+        // appraisal state IS the turn's felt state, so record the deterministic
+        // felt signal first — the LLM appraisal below may gate closed or be
+        // preempted, and neither may starve relational pressure. nowMs is the
+        // turn's completion instant, so a job retry replays the same
+        // accumulation decision (the tier tick-gap absorbs the duplicate).
+        if (dependencies.socialDesireFeltSignals) {
+          const feltSignalWriter = dependencies.socialDesireFeltSignals;
+          await input.effects.run('social-desire-felt-signal', async (assertOwned) => {
+            await assertOwned();
+            await feltSignalWriter.record(payload.appraisalState, {
+              sourceRef: `emotion_appraisal:${payload.source.channelId}:${payload.source.turnId}`,
+              nowMs: payload.source.createdAtMs,
+            });
+          });
         }
         await input.effects.run('emotion-appraisal', async (assertOwned) => {
           const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();

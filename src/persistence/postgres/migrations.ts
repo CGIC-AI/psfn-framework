@@ -1169,6 +1169,13 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_initiation_candidates_pending_follow_up
     ON icp_initiation_candidates (pending_follow_up_id)
     WHERE pending_follow_up_id IS NOT NULL;`,
+  // hrmrq.34 (operator ruling D4): affect-driven initiation source
+  // 'felt_impulse' — the emo-sim would_message lever creating the candidate.
+  `ALTER TABLE icp_initiation_candidates
+    DROP CONSTRAINT IF EXISTS icp_initiation_candidates_source_check;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD CONSTRAINT icp_initiation_candidates_source_check
+    CHECK (source IN ('free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'));`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [
@@ -2505,15 +2512,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  10 — speaking arbiter: reservations, egress leases, per-channel room episodes
 //       (jp36.5.1.1 gateway speaking arbiter, two-phase reservation/egress lease)
 //  11 — speaking arbiter charge association
+//  12 — icp felt_impulse initiation source (hrmrq.34, operator ruling D4)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -2952,6 +2960,21 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (11, 'speaking-arbiter-charge-association')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 12 (hrmrq.34, operator ruling D4): affect-driven ICP initiation.
+  // The emo-sim would_message lever is a first-class initiation source, so the
+  // shared conversation-episode ledger must accept 'felt_impulse'.
+  `ALTER TABLE icp_conversation_episodes
+    DROP CONSTRAINT IF EXISTS icp_conversation_episodes_initiation_source_check;`,
+  `ALTER TABLE icp_conversation_episodes
+    ADD CONSTRAINT icp_conversation_episodes_initiation_source_check
+    CHECK (initiation_source IN (
+      'free_time', 'weighted_thought', 'intention', 'foreground', 'felt_impulse'
+    ));`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (12, 'icp-felt-impulse-initiation-source')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

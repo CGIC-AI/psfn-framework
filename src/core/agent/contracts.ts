@@ -205,6 +205,10 @@ export interface MemoryExtractor {
     assertEffectAllowed?: () => Promise<void>,
     /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
     recoveredEntries?: readonly SessionEntry[],
+    /** NON-crossing durable fence for the pre-write phase; write sites use assertEffectAllowed. */
+    assertPreWriteFence?: () => Promise<void>,
+    /** mmo9.7.4/fxt1: welfare-escalated claims protect their model call from gate preemption. */
+    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string },
   ): Promise<MemoryExtractionOutputs | void>;
   /**
    * How many most-recent bounded session entries a durable post-turn handler

@@ -61,13 +61,30 @@ export function createPostTurnOutboundGates(deps: PostTurnOutboundGatesDeps) {
       return appraisalProvenance.blockReason;
     }
 
+    const personalProjectId = payload.personalProjectId?.trim() || undefined;
+
     if (
       !hasPendingFollowUpLink
       && linkedConcernIds.length === 0
       && !requiresActiveConcern
       && !socialDesire
+      && !personalProjectId
     ) {
       return 'missing_live_provenance';
+    }
+
+    if (personalProjectId) {
+      // Live personal-project provenance (0ggv.3 / hrmrq.85): a weighted
+      // thought about her own unfinished work. Verified against the
+      // personal-project library at dispatch, exactly as concern/follow-up
+      // provenance is re-verified live. Fail closed on an unwired verifier —
+      // a payload merely claiming project provenance can never pass.
+      if (!runtimeOptions.verifyPersonalProjectLive) {
+        return 'personal_project_runtime_unavailable';
+      }
+      if (!(await runtimeOptions.verifyPersonalProjectLive(personalProjectId))) {
+        return 'stale_personal_project';
+      }
     }
 
     if (socialDesire) {

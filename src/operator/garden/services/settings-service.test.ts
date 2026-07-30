@@ -1397,11 +1397,13 @@ describe('AdminSettingsDataService', () => {
       }),
       effectiveSchedulerConfig,
     });
+    // The seed default is enabled:true (operator ruling D4, hrmrq.34), so the
+    // divergence under test is an operator turning the owner flag OFF.
     const editedScheduler = {
       ...effectiveSchedulerConfig,
       icpAutonomy: {
         ...effectiveSchedulerConfig.icpAutonomy,
-        enabled: true,
+        enabled: false,
       },
     };
 
@@ -1415,8 +1417,8 @@ describe('AdminSettingsDataService', () => {
 
     expect(data.effectiveIcpAutonomy.scheduler).toMatchObject({
       ownerFile: 'scheduler.json',
-      effectiveValue: { enabled: false },
-      onDiskValue: { enabled: true },
+      effectiveValue: { enabled: true },
+      onDiskValue: { enabled: false },
       restartRequired: true,
     });
     expect(data.effectiveIcpAutonomy.chargePolicy).toMatchObject({

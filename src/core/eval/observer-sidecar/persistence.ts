@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import {
   createPostgresPool,
-  ensurePostgresSchema,
+  runPostgresMigrations,
   executeQuery,
   queryRows,
   queryOne,
@@ -249,6 +249,13 @@ export interface ObserverEvalSidecarPersistencePort {
 
 interface StoreOptions {
   nowMs?: () => number;
+  /**
+   * Tenant schema to create before running migrations. Required whenever the
+   * pool is tenant-scoped (multi-companion follower): plain DDL replay cannot
+   * create the schema the pinned search_path points at, so omitting this on a
+   * tenant pool crashes the sidecar at first query (psfn-framework-hrmrq.86).
+   */
+  schema?: string;
 }
 
 interface ObserverEvalRunRow {
@@ -360,7 +367,11 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   private readonly nowMs: () => number;
 
   constructor(private readonly pool: Pool, options: StoreOptions = {}) {
-    this.ready = ensurePostgresSchema(pool, POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS);
+    this.ready = runPostgresMigrations(
+      pool,
+      POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS,
+      options.schema !== undefined ? { schema: options.schema } : {},
+    );
     this.nowMs = options.nowMs ?? Date.now;
   }
 
@@ -374,7 +385,10 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
       allowExitOnIdle: true,
       ...(tenant ? { schema: tenant.schema, role: tenant.role } : {}),
     });
-    return new PostgresObserverEvalSidecarStore(pool, options);
+    return new PostgresObserverEvalSidecarStore(pool, {
+      ...options,
+      ...(tenant ? { schema: tenant.schema } : {}),
+    });
   }
 
   async upsertRun(input: ObserverEvalSidecarRunInput): Promise<ObserverEvalSidecarRunRecord> {

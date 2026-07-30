@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Runs the shakedown harness regression tests. These are dependency-light Node
-# scripts (no test framework) that stub the Garden settings API / tier CLI so no
-# live cluster is touched. Each exits non-zero on failure.
+# Runs the shakedown harness regression tests. The dependency-light Node scripts
+# stub the Garden settings API / tier CLI so no live cluster is touched. The
+# Vitest verdict suite exercises production harness scoring. Each command exits
+# non-zero on failure.
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$TEST_DIR/../../.." && pwd)"
 
 tests=(
   "bootstrap-config.test.mjs"  # bootstrap rejects unsafe roots before any write
@@ -33,5 +35,7 @@ for t in "${tests[@]}"; do
   node "$TEST_DIR/$t"
   echo
 done
+
+npm --prefix "$REPO_ROOT" run test:shakedown-harness
 
 echo "All harness regression tests passed."

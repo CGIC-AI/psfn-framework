@@ -37,6 +37,14 @@ import {
 } from './lib/capability-matrix.mjs';
 import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 import { validatePersistedProof } from './lib/persisted-proofs.mjs';
+import {
+  ACTION_BLOCKER_PATTERN,
+  assistantClaimsActionFailure,
+  assistantClaimsActionSuccess,
+  collectSideEffectSemanticFailures,
+  evaluateSideEffectVerdict,
+  evaluateToolNameVerdict,
+} from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
 
@@ -125,31 +133,6 @@ const DEFAULT_CASE_DELAY_MS = optionalIntEnv('PSFN_CASE_DELAY_MS', 1500);
 const DEFAULT_AFTER_TIMEOUT_MS = optionalIntEnv('PSFN_AFTER_TIMEOUT_MS', 240000);
 const DEFAULT_CASE_OVERHEAD_TIMEOUT_MS = optionalIntEnv('PSFN_CASE_OVERHEAD_TIMEOUT_MS', 30000);
 const MATRIX_ABORT_STATUSES = new Set(['harness_error', 'agent_busy', 'runtime_stale']);
-const ACTION_BLOCKER_PATTERN = /\b(blocked|denied|unavailable|not available|disabled|not permitted|permission|forbidden|unauthorized|cannot|can't|failed|error|requires confirmation|pending confirmation|queued for confirmation|confirmation id|not active|not exposed|unknown action)\b/i;
-const ACTION_SUCCESS_PATTERN = /\b(success|succeeded|successfully|done|completed|created|updated|deleted|restored|stored|wrote|written|sent|notified|spawned|executed|imported|redacted|appended|activated)\b/i;
-const ACTION_SUCCESS_KEYS = new Set([
-  'worked',
-  'executed',
-  'wrote',
-  'readBack',
-  'noted',
-  'linked',
-  'disabledThenRestored',
-  'created',
-  'updated',
-  'deleted',
-  'redacted',
-  'imported',
-  'appended',
-  'started',
-  'completed',
-  'toggledTwice',
-  'readyWorked',
-  'showWorked',
-  'rolledBack',
-  'viewed',
-  'listed',
-]);
 
 // --- shared probe primitives bound to this run's turn-records directory ---
 const sleep = probe.sleep;
@@ -272,6 +255,7 @@ function buildHarnessErrorResult(testCase, errorMessage) {
     parsedAssistant: null,
     semanticFailureMatches: [],
     toolValidationErrors: [],
+    sideEffectVerdict: null,
     restartCheckFailed: false,
     staleTurnRecord: false,
     turnRecordMatchesRequest: null,
@@ -318,6 +302,7 @@ function buildMatrixAbortedResult(testCase, blocker) {
     parsedAssistant: null,
     semanticFailureMatches: [],
     toolValidationErrors: [],
+    sideEffectVerdict: null,
     narrationWithoutExecutionFailures: [],
     restartCheckFailed: false,
     caseStatus: 'matrix_aborted',
@@ -1664,12 +1649,8 @@ function collectSemanticValidationFailures(testCase, parsedAssistant, turnSummar
     .map((entry) => semanticFailure(entry.trim()));
 }
 
-function collectForbiddenToolFailures(testCase, seenToolNames) {
-  if (!Array.isArray(testCase.forbiddenTools) || testCase.forbiddenTools.length === 0) {
-    return [];
-  }
-  return testCase.forbiddenTools
-    .filter((name) => typeof name === 'string' && seenToolNames.includes(name))
+function collectForbiddenToolFailures(seenForbiddenToolNames) {
+  return seenForbiddenToolNames
     .map((name) => semanticFailure(`forbidden tool was used: ${name}`, 'forbidden_tool'));
 }
 
@@ -1679,67 +1660,14 @@ function sideChecksContainText(sideChecks, expectedText) {
     && JSON.stringify(sideChecks ?? {}).includes(expectedText);
 }
 
-function parsedAssistantClaimsActionSuccess(parsedAssistant) {
-  if (!parsedAssistant || typeof parsedAssistant !== 'object') {
-    return false;
-  }
-  const stack = [parsedAssistant];
-  while (stack.length > 0) {
-    const value = stack.pop();
-    if (!value || typeof value !== 'object') continue;
-    if (Array.isArray(value)) {
-      stack.push(...value);
-      continue;
-    }
-    for (const [key, entry] of Object.entries(value)) {
-      if (ACTION_SUCCESS_KEYS.has(key) && entry === true) {
-        return true;
-      }
-      if (
-        ACTION_SUCCESS_KEYS.has(key)
-        && typeof entry === 'string'
-        && entry.trim().length > 0
-        && !ACTION_BLOCKER_PATTERN.test(entry)
-      ) {
-        return true;
-      }
-      if (entry && typeof entry === 'object') {
-        stack.push(entry);
-      }
-    }
-  }
-  return false;
-}
-
-function assistantClaimsActionSuccess(parsedAssistant, assistantText) {
-  if (parsedAssistantClaimsActionSuccess(parsedAssistant)) {
-    return true;
-  }
-  if (typeof assistantText !== 'string' || assistantText.trim().length === 0) {
-    return false;
-  }
-  return ACTION_SUCCESS_PATTERN.test(assistantText) && !ACTION_BLOCKER_PATTERN.test(assistantText);
-}
-
-function collectSideEffectProofFailures(testCase, sideChecks, parsedAssistant) {
-  if (typeof testCase.validateSideEffects !== 'function') {
-    return [];
-  }
-  const failures = testCase.validateSideEffects({ sideChecks, parsedAssistant });
-  if (!Array.isArray(failures)) {
-    return [];
-  }
-  return failures.filter((failure) => typeof failure === 'string' && failure.trim().length > 0);
-}
-
 function collectNarrationWithoutExecutionFailures({
   testCase,
   parsedAssistant,
   assistantText,
   seenToolNames,
-  sideChecks,
+  sideEffectVerdict,
 }) {
-  if (testCase.actionSensitive !== true) {
+  if (testCase.actionSensitive !== true && sideEffectVerdict === null) {
     return [];
   }
   if (!assistantClaimsActionSuccess(parsedAssistant, assistantText)) {
@@ -1748,7 +1676,7 @@ function collectNarrationWithoutExecutionFailures({
   const expectedActionTools = (Array.isArray(testCase.expectedTools) ? testCase.expectedTools : [])
     .filter((name) => name !== 'toolset');
   const missingActionTools = expectedActionTools.filter((name) => !seenToolNames.includes(name));
-  const sideEffectFailures = collectSideEffectProofFailures(testCase, sideChecks, parsedAssistant);
+  const sideEffectFailures = sideEffectVerdict?.proofFailures ?? [];
   if (missingActionTools.length === 0 && sideEffectFailures.length === 0) {
     return [];
   }
@@ -3460,15 +3388,15 @@ async function runCase(testCase, ctx) {
   }
   const parsedAssistant = parseAssistantJson(extractAssistantText(turnSummary, outcome.response));
   const expectedToolNames = Array.isArray(testCase.expectedTools) ? testCase.expectedTools : [];
-  const seenToolNames = [...new Set([
-    ...(Array.isArray(toolAudit.toolNames) ? toolAudit.toolNames : []),
-    ...archiveToolMessages
-      .map((entry) => entry?.toolName)
-      .filter((name) => typeof name === 'string' && name.length > 0),
-  ])]
-    .filter((name) => typeof name === 'string' && name.length > 0);
-  const missingExpectedTools = expectedToolNames.filter((name) => !seenToolNames.includes(name));
-  const forbiddenToolFailures = collectForbiddenToolFailures(testCase, seenToolNames);
+  const toolNameVerdict = evaluateToolNameVerdict({
+    expectedToolNames,
+    forbiddenToolNames: testCase.forbiddenTools,
+    toolAuditNames: toolAudit.toolNames,
+    archiveToolMessages,
+    turnIds: stepOutcomes.map((step) => step?.turnRecord?.turnId),
+  });
+  const { seenToolNames, missingExpectedTools } = toolNameVerdict;
+  const forbiddenToolFailures = collectForbiddenToolFailures(toolNameVerdict.seenForbiddenToolNames);
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
   const semanticValidationFailures = collectSemanticValidationFailures(
     testCase,
@@ -3479,13 +3407,21 @@ async function runCase(testCase, ctx) {
     ctx,
   );
   const assistantText = extractAssistantText(turnSummary, outcome.response);
+  const sideEffectVerdict = evaluateSideEffectVerdict({
+    validateSideEffects: testCase.validateSideEffects,
+    sideChecks,
+    parsedAssistant,
+    claimedActionSuccess: assistantClaimsActionSuccess(parsedAssistant, assistantText),
+    claimedActionFailure: assistantClaimsActionFailure(parsedAssistant, assistantText),
+  });
   const narrationWithoutExecutionFailures = collectNarrationWithoutExecutionFailures({
     testCase,
     parsedAssistant,
     assistantText,
     seenToolNames,
-    sideChecks,
+    sideEffectVerdict,
   });
+  const sideEffectSemanticFailures = collectSideEffectSemanticFailures(sideEffectVerdict);
   const persistedProofFailures = (await validatePersistedProof(testCase, {
     ctx,
     turnRecord: outcome.turnRecord,
@@ -3501,6 +3437,7 @@ async function runCase(testCase, ctx) {
     ...semanticFailureMatches,
     ...semanticValidationFailures,
     ...forbiddenToolFailures,
+    ...sideEffectSemanticFailures,
     ...persistedProofFailures,
   ];
   return {
@@ -3536,6 +3473,7 @@ async function runCase(testCase, ctx) {
     parsedAssistant,
     semanticFailureMatches: allSemanticFailures,
     toolValidationErrors,
+    sideEffectVerdict,
     narrationWithoutExecutionFailures,
     restartCheckFailed,
     caseStatus: classifyCaseStatus({

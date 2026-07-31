@@ -293,7 +293,7 @@ describe('unified Fleet SSO origin provenance', () => {
     );
   });
 
-  it('admits fleet Garden chat with one server-derived companion target', async () => {
+  it('admits fleet Garden chat and reports a missing handler as service availability', async () => {
     const companionId = '11111111-1111-4111-8111-111111111111';
     const nowSeconds = 1_783_000_000;
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -396,6 +396,37 @@ describe('unified Fleet SSO origin provenance', () => {
 
     expect(response.writeHead).not.toHaveBeenCalled();
     expect(handler).toHaveBeenCalledOnce();
+
+    const unavailableRouter = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker: { resolveAuthorizationContext: vi.fn(async () => authorization) },
+      signer,
+      verifier,
+      replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
+      portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      nowSeconds: () => nowSeconds,
+    });
+    const unavailableRequest = Readable.from([body]) as IncomingMessage;
+    unavailableRequest.method = incoming.method;
+    unavailableRequest.url = incoming.url;
+    unavailableRequest.headers = incoming.headers;
+    Object.defineProperty(unavailableRequest, 'socket', { value: {} });
+    const unavailableEnd = vi.fn();
+    const unavailableResponse = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: unavailableEnd,
+    } as unknown as ServerResponse;
+
+    await unavailableRouter.handle(unavailableRequest, unavailableResponse);
+
+    expect(unavailableResponse.writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(unavailableEnd).toHaveBeenCalledWith(
+      Buffer.from(JSON.stringify({ error: { type: 'fleet_sso_unavailable' } }), 'utf8'),
+    );
   });
 
   it('records a browser-principal escalation denial at the unified-origin door', async () => {

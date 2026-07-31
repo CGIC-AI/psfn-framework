@@ -42,6 +42,7 @@ import {
   classifyCaseFailure,
   isMatrixAbortStatus,
   resolveCaseTimeoutMs,
+  resolveCaseCoverageHoleReason,
   runCaseWithTimeout,
   runCaseSetup,
   throwIfAborted,
@@ -52,6 +53,7 @@ import {
   assistantClaimsActionFailure,
   assistantClaimsActionSuccess,
   classifyCaseStatus,
+  collectNarrationWithoutExecutionFailures,
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
@@ -61,6 +63,7 @@ import {
 } from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
+import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 
 const CONFIG = (() => {
   try {
@@ -274,6 +277,10 @@ function buildHarnessErrorResult(
   return {
     id: testCase.id,
     caseId: testCase.id,
+    tier: testCase.tier ?? null,
+    variants: Array.isArray(testCase.variants) ? testCase.variants : [],
+    feature: testCase.feature ?? null,
+    proof: testCase.proof ?? null,
     sessionId: testCase.sessionId,
     busyRetries: 0,
     submitAttempts: 0,
@@ -1680,38 +1687,6 @@ function sideChecksContainText(sideChecks, expectedText) {
     && JSON.stringify(sideChecks ?? {}).includes(expectedText);
 }
 
-function collectNarrationWithoutExecutionFailures({
-  testCase,
-  parsedAssistant,
-  assistantText,
-  seenToolNames,
-  sideEffectVerdict,
-}) {
-  if (testCase.actionSensitive !== true && sideEffectVerdict === null) {
-    return [];
-  }
-  if (!assistantClaimsActionSuccess(parsedAssistant, assistantText)) {
-    return [];
-  }
-  const expectedActionTools = (Array.isArray(testCase.expectedTools) ? testCase.expectedTools : [])
-    .filter((name) => name !== 'toolset');
-  const missingActionTools = expectedActionTools.filter((name) => !seenToolNames.includes(name));
-  const sideEffectFailures = sideEffectVerdict?.proofFailures ?? [];
-  if (missingActionTools.length === 0 && sideEffectFailures.length === 0) {
-    return [];
-  }
-  return [
-    semanticFailure(
-      [
-        'assistant claimed action success without execution proof',
-        missingActionTools.length > 0 ? `missing action tools: ${missingActionTools.join(',')}` : null,
-        sideEffectFailures.length > 0 ? `side-effect proof failed: ${sideEffectFailures.join('; ')}` : null,
-      ].filter(Boolean).join(' | '),
-      'narration_without_execution',
-    ),
-  ];
-}
-
 async function chatCase(input) {
   throwIfAborted(input.signal);
   const headers = probe.buildChatHeaders({
@@ -1849,7 +1824,7 @@ async function chatCase(input) {
   };
 }
 
-async function activateToolsTurn(
+async function suggestToolsTurn(
   sessionId,
   toolNames,
   apiUserId,
@@ -1857,18 +1832,19 @@ async function activateToolsTurn(
   signal,
 ) {
   const requestedTools = toolNames
-    .map((toolName) => `"${String(toolName).replace(/"/g, '\\"')}"`)
+    .map((toolName) => String(toolName))
     .join(', ');
-  const activationMessage =
-    `Use toolset with action "activate" and tools [${requestedTools}]. `
+  const suggestionIntent = `Call these canonical tools directly: ${requestedTools}`;
+  const suggestionMessage =
+    `Use toolset with action "suggest" and intent ${JSON.stringify(suggestionIntent)}. `
     + 'Do not call any other tool. '
-    + 'Return only a JSON object with keys activatedTools and alreadyActiveTools.';
+    + 'Return only a JSON object with keys recommendations and nextStep.';
   return chatCase({
     sessionId,
     apiUserId,
     privacy: 'private',
     timeoutMs,
-    message: activationMessage,
+    message: suggestionMessage,
     signal,
   });
 }
@@ -1963,9 +1939,9 @@ function buildBaselineCases(ctx) {
     {
       id: 'prompt_stack',
       sessionId: `system-prompt-${ctx.runToken}`,
-      expectedTools: ['toolset', 'identity', 'north_star', 'system'],
+      expectedTools: ['identity', 'north_star', 'system'],
       forbiddenTools: ['analysis_workbench', 'scratchpad'],
-      activateTools: ['north_star'],
+      suggestTools: ['north_star'],
       message:
         'Use identity with action "list_layers". '
         + 'Then use north_star with action "list". '
@@ -2028,6 +2004,7 @@ function buildBaselineCases(ctx) {
       expectedTools: ['orient'],
       forbiddenTools: ['analysis_workbench'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         'Use orient with action "create_concern" to create a concern with the exact text "matrix concern". '
         + 'Then use orient with action "list_concerns", orient with action "resolve_concern", and orient with action "list_concerns" again. '
@@ -2150,6 +2127,7 @@ function buildBaselineCases(ctx) {
       expectedTools: ['scratchpad'],
       forbiddenTools: ['analysis_workbench'],
       actionSensitive: true,
+      actionSuccessKeys: ['wrote'],
       message:
         `Use scratchpad with action "add" and content "${scratchpadToken}". `
         + 'Then use scratchpad with action "list". '
@@ -2175,6 +2153,7 @@ function buildBaselineCases(ctx) {
       expectedTools: ['memory'],
       forbiddenTools: ['analysis_workbench'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         `Use memory with action "write" to store this exact secret as personal private context: "${privateSecret}". `
         + 'Call memory with text set to the exact secret, type "semantic", and sensitivity "personal". '
@@ -2245,8 +2224,6 @@ function buildApprenticeCases(ctx) {
   const linkedIdentity = `identity-${ctx.runToken}`;
   const valueInitial = `matrix-value-${ctx.runToken}`;
   const valueUpdated = `matrix-value-updated-${ctx.runToken}`;
-  const memoryInitial = `matrix-memory-${ctx.runToken}`;
-  const memoryPatched = `matrix-memory-patched-${ctx.runToken}`;
   const issueTitle = `Shakedown follow-up ${ctx.runToken}`;
   const editSourceUrl = 'https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg';
   const falEditSourceUrls = [
@@ -2259,6 +2236,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-contact-${ctx.runToken}`,
       expectedTools: ['contact'],
       actionSensitive: true,
+      actionSuccessKeys: ['noted', 'linked'],
       message:
         `Use contact with action "note", contactId "${ctx.primaryContactId}", and notes "${contactNote}". `
         + `Then call contact with action "link_identity", contactId "${ctx.primaryContactId}", channel "matrix", channelUserId "${linkedIdentity}", and privacyLevel "private". `
@@ -2292,6 +2270,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-values-${ctx.runToken}`,
       expectedTools: ['orient'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         `Call orient with action "values_add", value "${valueInitial}", and context "live shakedown". `
         + 'Read the returned entry.version from the direct tool result JSON. '
@@ -2318,62 +2297,17 @@ function buildApprenticeCases(ctx) {
       ),
     },
     {
-      id: 'memory_patch_delete_restore',
-      sessionId: `apprentice-memory-${ctx.runToken}`,
-      expectedTools: ['memory'],
-      actionSensitive: true,
-      message:
-        `First call memory with action "write", text "${memoryInitial}", type "semantic", sensitivity "personal". `
-        + 'Use the returned memory id. '
-        + `Then call memory with action "patch", memory_id set to that id, text "${memoryPatched}", and reason "shakedown patch". `
-        + 'Then call memory with action "delete" on that same id with reason "shakedown delete". '
-        + 'Then call memory with action "restore" using the returned delete_id. '
-        + 'Do not substitute any other tool. If a direct tool call fails, report the exact tool error. '
-        + 'Return only a JSON object with keys memoryId and deleteId.',
-      validateParsedAssistant: ({ parsedAssistant }) => {
-        const failures = [];
-        if (typeof parsedAssistant?.memoryId !== 'string' || parsedAssistant.memoryId.trim().length === 0) {
-          failures.push('memory_patch_delete_restore memoryId must be a non-empty string');
-        }
-        if (typeof parsedAssistant?.deleteId !== 'string' || parsedAssistant.deleteId.trim().length === 0) {
-          failures.push('memory_patch_delete_restore deleteId must be a non-empty string');
-        }
-        return failures;
-      },
-      timeoutMs: 180000,
-      after: async () => ({
-        memoryRows: await pgAll(
-          `select id, text, deleted_at, source_ref from l2_memories where text like '%${memoryInitial}%' or text like '%${memoryPatched}%';`,
-        ),
-        patchRows: await pgAll(
-          "select memory_id, reason, source_ref, created_at from l2_memory_patch_events where source_ref like '%tool:memory|action:patch%' order by created_at desc limit 5;",
-        ),
-        deleteRows: await pgAll(
-          'select delete_id, memory_id, delete_reason, restored_at, restored_by from l2_memory_delete_versions order by deleted_at desc limit 5;',
-        ),
-      }),
-      validateSideEffects: ({ sideChecks }) => {
-        const failures = [];
-        if (!sideChecksContainText(sideChecks?.memoryRows, memoryPatched)) {
-          failures.push('memory_patch_delete_restore must persist the patched memory text');
-        }
-        if (!Array.isArray(sideChecks?.deleteRows) || sideChecks.deleteRows.length === 0) {
-          failures.push('memory_patch_delete_restore must persist a delete/restore journal row');
-        }
-        return failures;
-      },
-    },
-    {
       id: 'issue_create_update',
       sessionId: `apprentice-issue-${ctx.runToken}`,
-      expectedTools: ['toolset', 'beads'],
-      activateTools: ['beads'],
+      expectedTools: ['beads'],
+      suggestTools: ['beads'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         `Then call beads with action "create", title "${issueTitle}", issue_type "bug", priority 2. `
         + 'Read the created issue id from the returned JSON payload. '
         + 'Then call beads with the preferred action "update" on that id and status "in_progress"; do not use legacy issue_* aliases unless the model has already selected one. '
-        + 'Do not call any non-beads tool after activation unless a direct tool call fails. '
+        + 'Do not call any non-beads tool during this turn unless a direct tool call fails. '
         + 'Return only a JSON object with keys issueId and status.',
       validateParsedAssistant: ({ parsedAssistant }) => {
         const failures = [];
@@ -2400,17 +2334,26 @@ function buildApprenticeCases(ctx) {
         };
       },
       timeoutMs: 180000,
-      validateSideEffects: ({ sideChecks }) => (
-        rowsOf(sideChecks?.issues).length > 0
+      validateSideEffects: ({ sideChecks, parsedAssistant }) => {
+        const issueId = typeof parsedAssistant?.issueId === 'string'
+          ? parsedAssistant.issueId.trim()
+          : '';
+        const matchingIssue = rowsOf(sideChecks?.issues).find((row) => (
+          row?.id === issueId
+          && row?.title === issueTitle
+          && row?.status === 'in_progress'
+        ));
+        return matchingIssue
           ? []
-          : ['issue_create_update must create an issue row before cleanup']
-      ),
+          : ['issue_create_update must persist its returned issue id at in_progress before cleanup'];
+      },
     },
     {
       id: 'image_analyze',
       sessionId: `apprentice-image-analyze-${ctx.runToken}`,
       expectedTools: ['generate_image'],
       actionSensitive: true,
+      actionSuccessKeys: ['worked'],
       message:
         `Then call generate_image with action "analyze", input_urls=["${editSourceUrl}"], and question="What is in this image?". `
         + 'Return only a JSON object with keys summary and worked.',
@@ -2436,6 +2379,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-image-create-${ctx.runToken}`,
       expectedTools: ['generate_image'],
       actionSensitive: true,
+      actionSuccessKeys: ['worked'],
       message:
         'Then call generate_image with action "generate", provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
         + 'Return only a JSON object with keys worked and note.',
@@ -2451,6 +2395,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-image-edit-${ctx.runToken}`,
       expectedTools: ['generate_image'],
       actionSensitive: true,
+      actionSuccessKeys: ['worked'],
       message:
         `Then call generate_image with action "edit", provider "auto", input_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
         + 'Return only a JSON object with keys worked and note.',
@@ -2464,9 +2409,10 @@ function buildApprenticeCases(ctx) {
     {
       id: 'selfie_create',
       sessionId: `apprentice-selfie-${ctx.runToken}`,
-      expectedTools: ['toolset', 'selfie_create'],
-      activateTools: ['selfie_create'],
+      expectedTools: ['selfie_create'],
+      suggestTools: ['selfie_create'],
       actionSensitive: true,
+      actionSuccessKeys: ['worked'],
       message:
         'selfie_create is a core tool that is already active — call it directly and do not wait for or depend on a toolset activation handshake. '
         + 'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
@@ -2483,6 +2429,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-subagent-${ctx.runToken}`,
       expectedTools: ['subagent'],
       actionSensitive: true,
+      actionSuccessKeys: ['executed'],
       message:
         'Use subagent exactly once with action "spawn", name "matrix-worker", task "Compute 2+2 and answer with one sentence.", and max_turns 1. '
         + 'Do not use analysis_workbench or any other worker tool instead. If subagent fails, quote the exact tool error. '
@@ -2494,6 +2441,7 @@ function buildApprenticeCases(ctx) {
       sessionId: `apprentice-notify-${ctx.runToken}`,
       expectedTools: ['notify'],
       actionSensitive: true,
+      actionSuccessKeys: ['executed'],
       message:
         'Attempt notify exactly once with action "brief" and message "matrix operator ping". '
         + 'Return only a JSON object with keys executed and note.',
@@ -2554,6 +2502,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-heartbeat-${ctx.runToken}`,
       expectedTools: ['schedule'],
       actionSensitive: true,
+      actionSuccessKeys: ['disabledThenRestored'],
       message:
         'Use schedule with action "list_templates" first. '
         + 'Then use schedule with action "update_template", template_id "daily-review", enabled false, and reason "matrix disable". '
@@ -2566,9 +2515,10 @@ function buildCoverageCases(ctx) {
     {
       id: 'north_star_cycle',
       sessionId: `coverage-north-star-${ctx.runToken}`,
-      expectedTools: ['toolset', 'north_star'],
-      activateTools: ['north_star'],
+      expectedTools: ['north_star'],
+      suggestTools: ['north_star'],
       actionSensitive: true,
+      actionSuccessKeys: ['created', 'updated', 'deleted'],
       message:
         `Then use north_star with action "create", title "${northStarTitle}", content "${northStarContent}", scope "shared", and enabled true. `
         + 'Read the returned item.id and set created to that non-empty id string. '
@@ -2609,6 +2559,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-prompt-mutate-${ctx.runToken}`,
       expectedTools: ['identity'],
       actionSensitive: true,
+      actionSuccessKeys: ['updated', 'rolledBack'],
       message:
         'Use identity with action "list_layers" first and choose one runtime layer, not a base or operator layer. '
         + 'Then use identity with action "get_layer" on that layer. '
@@ -2624,6 +2575,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-prompt-toggle-${ctx.runToken}`,
       expectedTools: ['identity'],
       actionSensitive: true,
+      actionSuccessKeys: ['toggledTwice'],
       message: promptToggleLayer
         ? (
           `Use identity with action "list_layers" first and confirm the runtime layer with identifier "${promptToggleLayer.identifier}" exists. `
@@ -2704,6 +2656,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-session-switch-${ctx.runToken}`,
       expectedTools: ['session'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         `Use session with action "new" and metadata {"previousSessionId":"coverage-session-switch-${ctx.runToken}"}. `
         + `Then use session with action "resume" and sessionId "coverage-session-switch-${ctx.runToken}". `
@@ -2715,6 +2668,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-focus-${ctx.runToken}`,
       expectedTools: ['session'],
       actionSensitive: true,
+      actionSuccessKeys: ['started', 'completed'],
       message:
         `Use session with action "start_focus" and scope "matrix focus ${ctx.runToken}". `
         + 'Then use session with action "search" and query "matrix", and session with action "grep" and pattern "matrix" and limit 2. '
@@ -2726,6 +2680,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-skill-${ctx.runToken}`,
       expectedTools: ['skill'],
       actionSensitive: true,
+      actionSuccessKeys: ['created', 'updated'],
       message:
         `Use skill with action "create", name "${skillName}", category "ops", content "${skillContent}", and description "matrix shakedown skill". `
         + `Then use skill with action "view" and name "${skillName}". `
@@ -2735,11 +2690,16 @@ function buildCoverageCases(ctx) {
       after: async () => ({
         skillPath: `${MANAGED_SKILLS_ROOT}/ops/${skillName}/SKILL.md`,
         skillExists: existsSync(`${MANAGED_SKILLS_ROOT}/ops/${skillName}/SKILL.md`),
+        skillContent: existsSync(`${MANAGED_SKILLS_ROOT}/ops/${skillName}/SKILL.md`)
+          ? readFileSync(`${MANAGED_SKILLS_ROOT}/ops/${skillName}/SKILL.md`, 'utf8')
+          : null,
       }),
       validateSideEffects: ({ sideChecks }) => (
         sideChecks?.skillExists === true
+        && typeof sideChecks?.skillContent === 'string'
+        && sideChecks.skillContent.includes(skillContentUpdated)
           ? []
-          : ['skill_manage must persist the managed skill file']
+          : ['skill_manage must persist the updated managed skill content']
       ),
     },
     {
@@ -2747,6 +2707,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-orient-${ctx.runToken}`,
       expectedTools: ['orient'],
       actionSensitive: true,
+      actionSuccessKeys: ['appended'],
       message:
         `Use orient with action "append", block "goals", text "${orientMarker}", and separator "\\n". `
         + 'Return only a JSON object with keys appended and note.',
@@ -2764,6 +2725,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-memory-import-${ctx.runToken}`,
       expectedTools: ['memory'],
       actionSensitive: true,
+      actionSuccessKeys: ['imported'],
       message:
         `Use memory with action "import" and records [{\"text\":\"${importAlpha}\",\"type\":\"semantic\",\"sensitivity\":\"personal\"},{\"text\":\"${importBeta}\",\"type\":\"episodic\",\"sensitivity\":\"personal\"}] `
         + 'and source "matrix-shakedown". Return only a JSON object with keys imported and note.',
@@ -2784,6 +2746,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-memory-redact-${ctx.runToken}`,
       expectedTools: ['memory'],
       actionSensitive: true,
+      actionSuccessKeys: ['redacted'],
       message:
         `Use memory with action "write", text "${redactSecret}", type "semantic", sensitivity "personal". `
         + 'Read the returned memory id. '
@@ -2795,7 +2758,7 @@ function buildCoverageCases(ctx) {
           `select id, text, deleted_at, source_ref from l2_memories where text like '%${redactSecret}%';`,
         ),
         deleteRows: await pgAll(
-          'select delete_id, memory_id, delete_reason, restored_at from l2_memory_delete_versions order by deleted_at desc limit 5;',
+          `select d.delete_id, d.memory_id, d.delete_reason, d.restored_at from l2_memory_delete_versions d join l2_memories m on m.id = d.memory_id where m.text like '%${redactSecret}%' order by d.deleted_at desc limit 5;`,
         ),
       }),
       validateSideEffects: ({ sideChecks }) => (
@@ -2818,6 +2781,7 @@ function buildCoverageCases(ctx) {
       sessionId: `coverage-persona-${ctx.runToken}`,
       expectedTools: ['identity'],
       actionSensitive: true,
+      actionSuccessKeys: ['executed'],
       message:
         `Attempt identity exactly once with action "update_persona", creator_notes "matrix persona ${ctx.runToken}", and reason "matrix persona probe". `
         + 'If it is unavailable, blocked, denied, or returns an error, set executed=false and copy the exact blocker/error in note. '
@@ -2841,8 +2805,8 @@ function buildCoverageCases(ctx) {
     {
       id: 'issue_read_sync',
       sessionId: `coverage-issue-read-${ctx.runToken}`,
-      expectedTools: ['toolset', 'beads'],
-      activateTools: ['beads'],
+      expectedTools: ['beads'],
+      suggestTools: ['beads'],
       message:
         'Then use beads with action "ready". '
         + 'Select an existing issue id from that result. If ready returns no issues, use beads with action "list" and select an existing issue id from that result. '
@@ -2875,9 +2839,10 @@ function buildAutonomousCases(ctx) {
     {
       id: 'issue_close_cycle',
       sessionId: `autonomous-issue-close-${ctx.runToken}`,
-      expectedTools: ['toolset', 'beads'],
-      activateTools: ['beads'],
+      expectedTools: ['beads'],
+      suggestTools: ['beads'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         `Then call beads with action "create", title "${issueTitle}", issue_type "task", priority 2. `
         + 'Read the created issue id from the returned JSON payload. '
@@ -2904,12 +2869,27 @@ function buildAutonomousCases(ctx) {
           `select id, title, status, closed_at from issues where title = "${issueTitle.replace(/"/g, '\\"')}" order by created_at desc limit 3;`,
         ),
       }),
+      validateSideEffects: ({ sideChecks, parsedAssistant }) => {
+        const issueId = typeof parsedAssistant?.issueId === 'string'
+          ? parsedAssistant.issueId.trim()
+          : '';
+        const matchingIssue = rowsOf(sideChecks?.issues).find((row) => (
+          row?.id === issueId
+          && row?.title === issueTitle
+          && row?.status === 'closed'
+          && Boolean(row?.closed_at ?? row?.closedAt)
+        ));
+        return matchingIssue
+          ? []
+          : ['issue_close_cycle must persist its returned issue id as closed with closed_at'];
+      },
     },
     {
       id: 'lifecycle_restart',
       sessionId: `autonomous-restart-${ctx.runToken}`,
       expectedTools: ['system'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         'Call system exactly once with action "restart" and reason "autonomous shakedown restart". '
         + 'Return only the direct tool result text.',
@@ -2940,6 +2920,7 @@ function buildAutonomousCases(ctx) {
       sessionId: `autonomous-rebuild-${ctx.runToken}`,
       expectedTools: ['system'],
       actionSensitive: true,
+      actionSuccessKeys: [],
       message:
         'Call system exactly once with action "rebuild" and reason "autonomous shakedown rebuild". '
         + 'Return only the direct tool result text.',
@@ -2984,7 +2965,7 @@ function buildCapabilityMatrixCase(ctx) {
     baseLayerId: ctx.promptBaseLayer?.id,
     operatorLayerId: ctx.promptOperatorLayer?.id,
   });
-  const activationTools = [...new Set(
+  const suggestedTools = [...new Set(
     executionPlan.executions
       .map((execution) => execution.toolName)
       .filter((toolName) => ['repo', 'world', 'beads', 'notify'].includes(toolName)),
@@ -3044,8 +3025,9 @@ function buildCapabilityMatrixCase(ctx) {
   return {
     id: 'capability_refusal_matrix',
     sessionId: `capability-matrix-${EXPECTED_CAPABILITY_TIER}-${ctx.runToken}`,
-    activateTools: activationTools,
+    suggestTools: suggestedTools,
     actionSensitive: true,
+    actionSuccessKeys: [],
     messages: [
       ...executionPlan.executions.map((execution) => ({
         message: execution.message,
@@ -3072,11 +3054,11 @@ function buildCapabilityMatrixCase(ctx) {
       };
     },
     after: async ({ outcomes, beforeChecks }) => {
-      const activationOffset = activationTools.length > 0 ? 1 : 0;
+      const suggestionOffset = suggestedTools.length > 0 ? 1 : 0;
       const outcomesByExecutionId = Object.fromEntries(
         executionPlan.executions.map((execution, index) => [
           execution.executionId,
-          outcomes[activationOffset + index]?.turnRecord ?? null,
+          outcomes[suggestionOffset + index]?.turnRecord ?? null,
         ]),
       );
       const observedTier = await fetchCurrentTierWithRetry({
@@ -3099,7 +3081,7 @@ function buildCapabilityMatrixCase(ctx) {
       let approvalRouting = null;
       if (approvalMessage) {
         const approvalTurn = outcomes[
-          activationOffset + executionPlan.executions.length
+          suggestionOffset + executionPlan.executions.length
         ]?.turnRecord ?? null;
         const confirmationsResponse = await fetchJson(`${ADMIN_BASE}/api/admin/confirmations`);
         approvalRouting = evaluateApprovalRoutingProbe({
@@ -3189,7 +3171,8 @@ function buildCapabilityMatrixCase(ctx) {
 
 function buildCases(ctx) {
   const baseline = buildBaselineCases(ctx);
-  const apprentice = buildApprenticeCases(ctx);
+  const memoryTierCases = buildMemoryTierCases(ctx, { pgAll });
+  const apprentice = [...buildApprenticeCases(ctx), ...memoryTierCases.apprentice];
   const coverage = [
     ...buildCoverageCases(ctx),
     ...buildSprint10Cases(ctx, {
@@ -3221,7 +3204,7 @@ function buildCases(ctx) {
       waitForTurnRecord: waitForCaseTurnRecord,
     }),
   ];
-  const autonomous = buildAutonomousCases(ctx);
+  const autonomous = [...buildAutonomousCases(ctx), ...memoryTierCases.autonomous];
   const capabilityMatrix = (CASE_IDS.size === 0 || CASE_IDS.has('capability_refusal_matrix'))
     ? buildCapabilityMatrixCase(ctx)
     : null;
@@ -3313,13 +3296,13 @@ async function runCase(testCase, ctx, signal) {
   throwIfAborted(signal);
   const beforeChecks = await runCaseSetup(testCase, { ctx, signal });
   throwIfAborted(signal);
-  const activationMessages = Array.isArray(testCase.activateTools) && testCase.activateTools.length > 0
-    ? [{ activateTools: testCase.activateTools, timeoutMs: testCase.activationTimeoutMs ?? 60_000 }]
+  const suggestionMessages = Array.isArray(testCase.suggestTools) && testCase.suggestTools.length > 0
+    ? [{ suggestTools: testCase.suggestTools, timeoutMs: testCase.suggestionTimeoutMs ?? 60_000 }]
     : [];
   const baseMessages = Array.isArray(testCase.messages) && testCase.messages.length > 0
     ? testCase.messages
     : [{ message: testCase.message }];
-  const caseMessages = [...activationMessages, ...baseMessages];
+  const caseMessages = [...suggestionMessages, ...baseMessages];
   const stepOutcomes = [];
   let outcome = null;
   if (typeof testCase.execute === 'function') {
@@ -3351,17 +3334,17 @@ async function runCase(testCase, ctx, signal) {
     for (let index = 0; index < caseMessages.length; index += 1) {
       const step = caseMessages[index];
       recordCaseDiagnostic(testCase.id, {
-        event: Array.isArray(step.activateTools) && step.activateTools.length > 0
-          ? 'activation_dispatch_start'
+        event: Array.isArray(step.suggestTools) && step.suggestTools.length > 0
+          ? 'suggestion_dispatch_start'
           : 'chat_dispatch_start',
         stepIndex: index,
         sessionId: step.sessionId ?? testCase.sessionId,
         timeoutMs: step.timeoutMs ?? testCase.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
       });
-      if (Array.isArray(step.activateTools) && step.activateTools.length > 0) {
-        outcome = await activateToolsTurn(
+      if (Array.isArray(step.suggestTools) && step.suggestTools.length > 0) {
+        outcome = await suggestToolsTurn(
           step.sessionId ?? testCase.sessionId,
-          step.activateTools,
+          step.suggestTools,
           ctx.primaryApiUserId,
           step.timeoutMs ?? 60_000,
           signal,
@@ -3488,16 +3471,9 @@ async function runCase(testCase, ctx, signal) {
     turnIds: stepOutcomes.map((step) => step?.turnRecord?.turnId),
   });
   const { seenToolNames, missingExpectedTools } = toolNameVerdict;
-  const dispatchTurnToolNames = evaluateToolNameVerdict({
-    expectedToolNames: [],
-    forbiddenToolNames: [],
-    toolAuditNames: toolAudit.toolNames,
-    archiveToolMessages,
-    turnIds: [outcome.turnRecord?.turnId],
-  }).seenToolNames;
   const dispatchAborted = isDispatchAbortedTurn({
     turnSummary,
-    seenToolNames: dispatchTurnToolNames,
+    response: outcome.response,
   });
   const forbiddenToolFailures = collectForbiddenToolFailures(toolNameVerdict.seenForbiddenToolNames);
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
@@ -3510,22 +3486,30 @@ async function runCase(testCase, ctx, signal) {
     ctx,
   );
   const assistantText = extractAssistantText(turnSummary, outcome.response);
-  const sideEffectVerdict = dispatchAborted
-    ? null
-    : evaluateSideEffectVerdict({
-        validateSideEffects: testCase.validateSideEffects,
-        sideChecks,
-        parsedAssistant,
-        claimedActionSuccess: assistantClaimsActionSuccess(parsedAssistant, assistantText),
-        claimedActionFailure: assistantClaimsActionFailure(parsedAssistant, assistantText),
-      });
-  const narrationWithoutExecutionFailures = collectNarrationWithoutExecutionFailures({
-    testCase,
+  const claimedActionSuccess = assistantClaimsActionSuccess(
     parsedAssistant,
     assistantText,
+    Array.isArray(testCase.actionSuccessKeys) ? testCase.actionSuccessKeys : [],
+  );
+  const claimedActionFailure = assistantClaimsActionFailure(
+    parsedAssistant,
+    assistantText,
+    Array.isArray(testCase.actionSuccessKeys) ? testCase.actionSuccessKeys : [],
+  );
+  const sideEffectVerdict = evaluateSideEffectVerdict({
+    validateSideEffects: testCase.validateSideEffects,
+    sideChecks,
+    parsedAssistant,
+    claimedActionSuccess,
+    claimedActionFailure,
+    turnSummary,
+  });
+  const narrationWithoutExecutionFailures = collectNarrationWithoutExecutionFailures({
+    actionSensitive: testCase.actionSensitive,
+    expectedToolNames,
     seenToolNames,
-    dispatchTurnToolNames,
     sideEffectVerdict,
+    claimedActionSuccess,
   });
   const sideEffectSemanticFailures = collectSideEffectSemanticFailures(sideEffectVerdict);
   const persistedProofFailures = (await validatePersistedProof(testCase, {
@@ -3660,6 +3644,13 @@ async function main() {
   const cases = buildCases(ctx);
   const selectedCases = selectRequestedCasesOrThrow(cases, outputBase);
   const selectedCaseIds = selectedCases.map((testCase) => testCase.id);
+  const catalogToolNames = Array.isArray(adaptiveTools.body?.catalog?.tools)
+    ? [...new Set(
+      adaptiveTools.body.catalog.tools
+        .map((tool) => tool?.name)
+        .filter((name) => typeof name === 'string' && name.length > 0),
+    )].sort()
+    : [];
 
   const results = [];
   let matrixAborted = false;
@@ -3676,42 +3667,56 @@ async function main() {
   writePartialProgress('running');
   for (let caseIndex = 0; caseIndex < selectedCases.length; caseIndex += 1) {
     const testCase = selectedCases[caseIndex];
+    const coverageHoleReason = resolveCaseCoverageHoleReason(testCase, {
+      target: TARGET,
+      catalogToolNames,
+    });
     console.error(JSON.stringify({
-      event: 'case_start',
+      event: coverageHoleReason ? 'case_skip' : 'case_start',
       phase: PHASE,
       caseId: testCase.id,
       sessionId: testCase.sessionId,
+      ...(coverageHoleReason ? { reason: coverageHoleReason } : {}),
       at: new Date().toISOString(),
     }));
-    const caseTimeoutMs = resolveCaseTimeoutMs(testCase, {
-      fetchTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
-      busyRetryWindowMs: DEFAULT_BUSY_RETRY_WINDOW_MS,
-      turnMatchWaitMs: DEFAULT_TURN_MATCH_WAIT_MS,
-      turnSettleMs: DEFAULT_TURN_SETTLE_MS,
-      postAbortTurnWaitMs: DEFAULT_POST_ABORT_TURN_WAIT_MS,
-      afterTimeoutMs: DEFAULT_AFTER_TIMEOUT_MS,
-      caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
-    });
     let caseResult;
-    try {
-      caseResult = await runCaseWithTimeout({
-        label: `case ${testCase.id}`,
-        timeoutMs: caseTimeoutMs,
-        cancellationDrainTimeoutMs:
-          testCase.cancellationDrainTimeoutMs ?? DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS,
-        run: (signal) => runCase(testCase, ctx, signal),
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const failure = classifyCaseFailure(error);
+    if (coverageHoleReason) {
       caseResult = buildHarnessErrorResult(
         testCase,
-        errorMessage,
-        failure.status,
-        failure.reason,
+        `Case ${testCase.id} skipped: ${coverageHoleReason}`,
+        'coverage_hole',
+        coverageHoleReason,
       );
+    } else {
+      const caseTimeoutMs = resolveCaseTimeoutMs(testCase, {
+        fetchTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+        busyRetryWindowMs: DEFAULT_BUSY_RETRY_WINDOW_MS,
+        turnMatchWaitMs: DEFAULT_TURN_MATCH_WAIT_MS,
+        turnSettleMs: DEFAULT_TURN_SETTLE_MS,
+        postAbortTurnWaitMs: DEFAULT_POST_ABORT_TURN_WAIT_MS,
+        afterTimeoutMs: DEFAULT_AFTER_TIMEOUT_MS,
+        caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
+      });
+      try {
+        caseResult = await runCaseWithTimeout({
+          label: `case ${testCase.id}`,
+          timeoutMs: caseTimeoutMs,
+          cancellationDrainTimeoutMs:
+            testCase.cancellationDrainTimeoutMs ?? DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS,
+          run: (signal) => runCase(testCase, ctx, signal),
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const failure = classifyCaseFailure(error);
+        caseResult = buildHarnessErrorResult(
+          testCase,
+          errorMessage,
+          failure.status,
+          failure.reason,
+        );
+      }
     }
-    if (typeof testCase.cleanup === 'function') {
+    if (!coverageHoleReason && typeof testCase.cleanup === 'function') {
       let finalCleanup;
       try {
         finalCleanup = await withTimeout(
@@ -3774,7 +3779,9 @@ async function main() {
       process.exitCode = 2;
       break;
     }
-    await sleep(testCase.postCaseDelayMs ?? DEFAULT_CASE_DELAY_MS);
+    if (!coverageHoleReason) {
+      await sleep(testCase.postCaseDelayMs ?? DEFAULT_CASE_DELAY_MS);
+    }
   }
 
   const postStats = {
@@ -3796,13 +3803,6 @@ async function main() {
     ? [...new Set(
       adaptiveTools.body.state.lastSnapshot.skipped
         .map((tool) => tool?.toolName ?? tool?.name)
-        .filter((name) => typeof name === 'string' && name.length > 0),
-    )].sort()
-    : [];
-  const catalogToolNames = Array.isArray(adaptiveTools.body?.catalog?.tools)
-    ? [...new Set(
-      adaptiveTools.body.catalog.tools
-        .map((tool) => tool?.name)
         .filter((name) => typeof name === 'string' && name.length > 0),
     )].sort()
     : [];

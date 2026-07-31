@@ -7,6 +7,10 @@ import {
   SPRINT10_CASE_IDS,
   buildSprint10Cases,
 } from '../cases/sprint10.mjs';
+import {
+  buildTemporalMessage,
+  extractRenderedHistoryStamp,
+} from '../cases/sprint10/conversation.mjs';
 
 const context = {
   runToken: '2026-07-17T12-00-00',
@@ -64,6 +68,27 @@ test('catalog covers every in-scope Sprint 10 executable seam without duplicatin
   }
   assert.ok(!ids.has('s10_multi_companion_crossover'), 'multi-companion proof belongs to the support artifact');
   assert.ok(!ids.has('s10_capability_matrix'), 'capability proof belongs to the conformance artifact');
+});
+
+test('temporal strip probe echoes the seeded history turn real stamp', () => {
+  const seedMessage = 'Remember that this is the first turn of the temporal rendering probe.';
+  const previewTurn = {
+    observability: {
+      snapshot: {
+        plan: {
+          messages: [{
+            role: 'user',
+            content: `[Fri 07-31-26 12:34] ${seedMessage}`,
+          }],
+        },
+      },
+    },
+  };
+  const prefix = extractRenderedHistoryStamp(previewTurn, seedMessage);
+
+  assert.equal(prefix, '[Fri 07-31-26 12:34]');
+  assert.match(buildTemporalMessage(prefix), /\[Fri 07-31-26 12:34\]/u);
+  assert.doesNotMatch(buildTemporalMessage(prefix), /07-17-26/u);
 });
 
 test('satellite CogSec dispatch uses the scoped satellite bearer and binds proof to its real turn', async () => {

@@ -15,6 +15,7 @@ tests=(
   "bootstrap-services.test.mjs" # readiness plus exact persisted-turn proof
   "capability-matrix.test.mjs" # 65rk.6: exact 22-token tier/refusal contract
   "case-execution.test.mjs" # per-step recovery fits the case budget; timeout stays case-local
+  "memory-tier-catalog.test.mjs" # memory write/patch and delete/restore stay in their capability tiers
   "production-capability-probe.test.mjs" # 65rk.6: production gate and shard boundary
   "host-cleanup.test.mjs" # 65rk.6: host cleanup continues and reports failures
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor

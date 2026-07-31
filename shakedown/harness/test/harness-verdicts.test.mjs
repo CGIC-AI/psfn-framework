@@ -4,6 +4,7 @@ import {
   assistantClaimsActionFailure,
   assistantClaimsActionSuccess,
   classifyCaseStatus,
+  collectNarrationWithoutExecutionFailures,
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
@@ -230,11 +231,132 @@ describe('side-effect claim/proof reconciliation', () => {
   });
 
   it('recognizes a queued skill write as an honest hold, not claimed success', () => {
-    const assistantText = '{"created":"queued","cause":"tier"}';
+    const assistantText = JSON.stringify({
+      created: false,
+      viewed: false,
+      updated: false,
+      listed: true,
+      cause: 'tier',
+      message: 'Skill create queued for operator confirmation',
+    });
     const parsedAssistant = JSON.parse(assistantText);
 
-    expect(assistantClaimsActionSuccess(parsedAssistant, assistantText)).toBe(false);
+    expect(assistantClaimsActionSuccess(
+      parsedAssistant,
+      assistantText,
+      ['created', 'updated'],
+    )).toBe(false);
     expect(assistantClaimsActionFailure(parsedAssistant, assistantText)).toBe(true);
+
+    const verdict = evaluateSideEffectVerdict({
+      validateSideEffects: () => ['managed skill file was not persisted'],
+      sideChecks: { skillExists: false },
+      parsedAssistant,
+      claimedActionSuccess: false,
+      claimedActionFailure: true,
+      turnSummary: { status: 'completed' },
+    });
+    expect(verdict).toMatchObject({
+      branch: 'claimed_failure_and_side_effect_not_proven',
+      failureKind: 'side_effect_not_observed',
+    });
+    expect(collectNarrationWithoutExecutionFailures({
+      actionSensitive: true,
+      expectedToolNames: ['skill'],
+      seenToolNames: ['skill'],
+      sideEffectVerdict: verdict,
+    })).toEqual([]);
+    expect(classifyCaseStatus({
+      narrationWithoutExecutionFailures: [{ pattern: 'stale narration result' }],
+      semanticFailureMatches: collectSideEffectSemanticFailures(verdict),
+    })).toBe('semantic_failure');
+  });
+
+  it('keeps a truthful partial mutation failure aligned with the failed final-state proof', () => {
+    const assistantText = JSON.stringify({
+      created: true,
+      viewed: true,
+      updated: false,
+      listed: true,
+    });
+    const parsedAssistant = JSON.parse(assistantText);
+    const claimedActionSuccess = assistantClaimsActionSuccess(
+      parsedAssistant,
+      assistantText,
+      ['created', 'updated'],
+    );
+    const claimedActionFailure = assistantClaimsActionFailure(
+      parsedAssistant,
+      assistantText,
+      ['created', 'updated'],
+    );
+
+    expect(claimedActionSuccess).toBe(true);
+    expect(claimedActionFailure).toBe(true);
+    expect(evaluateSideEffectVerdict({
+      validateSideEffects: () => ['updated content was not persisted'],
+      sideChecks: { skillExists: true, skillContent: 'initial content' },
+      parsedAssistant,
+      claimedActionSuccess,
+      claimedActionFailure,
+      turnSummary: { status: 'completed' },
+    })).toMatchObject({
+      branch: 'claimed_failure_and_side_effect_not_proven',
+      failureKind: 'side_effect_not_observed',
+    });
+  });
+
+  it('scopes structured success to declared mutation keys and rejects read-only substitutes', () => {
+    const assistantText = '{"updated":true,"listed":true}';
+    const parsedAssistant = JSON.parse(assistantText);
+
+    expect(assistantClaimsActionSuccess(parsedAssistant, assistantText, ['created'])).toBe(false);
+    expect(assistantClaimsActionSuccess(parsedAssistant, assistantText, ['updated'])).toBe(true);
+    expect(assistantClaimsActionSuccess({ listed: true }, '{"listed":true}', ['listed'])).toBe(false);
+    expect(assistantClaimsActionSuccess({ viewed: true }, '{"viewed":true}', ['viewed'])).toBe(false);
+    expect(assistantClaimsActionSuccess({ readBack: true }, '{"readBack":true}', ['readBack'])).toBe(false);
+    expect(assistantClaimsActionSuccess({
+      created: false,
+      listed: true,
+      message: 'listed successfully',
+    }, '{"created":false,"listed":true,"message":"listed successfully"}', [
+      'created',
+      'updated',
+    ])).toBe(false);
+  });
+
+  it('applies blocker vetoes to boolean success claims', () => {
+    const assistantText = '{"created":true,"message":"queued for confirmation"}';
+
+    expect(assistantClaimsActionSuccess(
+      JSON.parse(assistantText),
+      assistantText,
+      ['created'],
+    )).toBe(false);
+    expect(assistantClaimsActionFailure(JSON.parse(assistantText), assistantText)).toBe(true);
+
+    const mixedText = '{"created":true}\nSkill create queued for operator confirmation';
+    expect(assistantClaimsActionSuccess(
+      { created: true },
+      mixedText,
+      ['created'],
+    )).toBe(false);
+  });
+
+  it('does not mistake structured JSON key names for blocker prose', () => {
+    const assistantText = '{"created":true,"error":null,"permission":false}';
+    const parsedAssistant = JSON.parse(assistantText);
+
+    expect(assistantClaimsActionSuccess(
+      parsedAssistant,
+      assistantText,
+      ['created'],
+    )).toBe(true);
+    expect(assistantClaimsActionFailure(
+      parsedAssistant,
+      assistantText,
+      ['created'],
+    )).toBe(false);
   });
 
   it('converts a throwing side-effect validator into a proof failure', () => {
@@ -257,12 +379,13 @@ describe('side-effect claim/proof reconciliation', () => {
 });
 
 describe('dispatch grading', () => {
-  it('identifies a turn aborted before first token and before any tool dispatch', () => {
+  it('identifies a non-completed turn with a transport abort', () => {
     expect(isDispatchAbortedTurn({
       turnSummary: {
         status: 'failed',
         metrics: { ttftMs: null },
       },
+      response: { fetchError: 'This operation was aborted' },
       seenToolNames: [],
     })).toBe(true);
     expect(classifyCaseStatus({
@@ -271,12 +394,13 @@ describe('dispatch grading', () => {
     })).toBe('dispatch_aborted');
   });
 
-  it('does not classify a response or a tool-bearing turn as dispatch-aborted', () => {
+  it('does not classify a completed turn or a failed turn without a transport marker as dispatch-aborted', () => {
     expect(isDispatchAbortedTurn({
       turnSummary: {
         status: 'completed',
         metrics: { ttftMs: null },
       },
+      response: { fetchError: 'This operation was aborted' },
       seenToolNames: [],
     })).toBe(false);
     expect(isDispatchAbortedTurn({
@@ -284,11 +408,12 @@ describe('dispatch grading', () => {
         status: 'failed',
         metrics: { ttftMs: null },
       },
+      response: { fetchError: null },
       seenToolNames: ['skill'],
     })).toBe(false);
   });
 
-  it('ignores tools from earlier steps when the final dispatch aborts', () => {
+  it('grades a partially executed failed transport as dispatch_aborted', () => {
     const finalTurnTools = evaluateToolNameVerdict({
       expectedToolNames: [],
       forbiddenToolNames: [],
@@ -303,9 +428,24 @@ describe('dispatch grading', () => {
     expect(isDispatchAbortedTurn({
       turnSummary: {
         status: 'failed',
-        metrics: { ttftMs: null },
+        metrics: { ttftMs: 51_765 },
       },
-      seenToolNames: finalTurnTools,
+      response: { fetchError: 'This operation was aborted' },
+      seenToolNames: [...finalTurnTools, 'memory'],
     })).toBe(true);
+  });
+
+  it('does not run side-effect proof on a non-completed turn', () => {
+    const validateSideEffects = vi.fn(() => []);
+
+    expect(evaluateSideEffectVerdict({
+      validateSideEffects,
+      sideChecks: { deleteRows: [] },
+      parsedAssistant: null,
+      claimedActionSuccess: false,
+      claimedActionFailure: false,
+      turnSummary: { status: 'failed' },
+    })).toBeNull();
+    expect(validateSideEffects).not.toHaveBeenCalled();
   });
 });

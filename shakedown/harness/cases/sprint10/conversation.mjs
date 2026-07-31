@@ -12,10 +12,36 @@ import {
   proof,
 } from './common.mjs';
 
-const TEMPORAL_MESSAGE = 'Answer with one short sentence about the current date. '
-  + 'For this synthetic strip-guard probe, begin the draft with exactly '
-  + '"[Fri 07-17-26 12:00] " before the sentence.';
+const TEMPORAL_MESSAGE = 'Answer with one short sentence about the current date and begin the draft '
+  + 'by echoing the exact rendered stamp from the seeded history turn.';
 const SSE_MESSAGE = 'Reply with one short sentence for the SSE first-chunk proof.';
+const HISTORY_STAMP_PREFIX = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /u;
+
+function snapshotOf(turnRecord) {
+  return turnRecord?.snapshot ?? turnRecord?.observability?.snapshot ?? null;
+}
+
+export function extractRenderedHistoryStamp(turnRecord, historyMessage) {
+  const planMessages = Array.isArray(snapshotOf(turnRecord)?.plan?.messages)
+    ? snapshotOf(turnRecord).plan.messages
+    : [];
+  for (const message of planMessages) {
+    if (typeof message?.content !== 'string') continue;
+    for (const line of message.content.split('\n')) {
+      const match = line.match(HISTORY_STAMP_PREFIX);
+      if (match && line.slice(match[0].length) === historyMessage) {
+        return match[0].trimEnd();
+      }
+    }
+  }
+  throw new Error('temporal preview PromptPlan does not contain the seeded history turn stamp');
+}
+
+export function buildTemporalMessage(seedStamp) {
+  return 'Answer with one short sentence about the current date. '
+    + `The seeded history turn above has the exact rendered prefix "${seedStamp} ". `
+    + 'For this synthetic strip-guard probe, begin the draft by echoing that exact prefix before the sentence.';
+}
 
 async function postAndWait({
   services,
@@ -72,19 +98,35 @@ export function buildConversationCases(ctx, services) {
         if (seed.turnRecord?.status !== 'completed') {
           throw new Error('temporal history seed turn did not complete');
         }
+        const previewMessage = 'Acknowledge the temporal rendering probe in one word.';
+        const preview = await postAndWait({
+          services,
+          sessionId,
+          apiUserId,
+          message: previewMessage,
+          signal,
+        });
+        if (preview.turnRecord?.status !== 'completed') {
+          throw new Error('temporal history preview turn did not complete');
+        }
+        const seedStamp = extractRenderedHistoryStamp(preview.turnRecord, seedMessage);
+        const temporalMessage = buildTemporalMessage(seedStamp);
         const main = await postAndWait({
           services,
           sessionId,
           apiUserId,
-          message: TEMPORAL_MESSAGE,
+          message: temporalMessage,
           signal,
         });
         return normalizeCustomOutcome({
           sessionId,
           request: {
             privacy: 'private',
-            message: TEMPORAL_MESSAGE,
+            message: temporalMessage,
             seededHistoryTurnId: seed.turnRecord?.turnId ?? null,
+            previewTurnId: preview.turnRecord?.turnId ?? null,
+            seededHistoryStamp: seedStamp,
+            seededHistoryMessage: seedMessage,
           },
           response: main.response,
           turnRecord: main.turnRecord,

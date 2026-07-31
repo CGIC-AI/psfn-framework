@@ -314,7 +314,7 @@ export function validateCogSecDocumentProof({ sideChecks }) {
   return failures;
 }
 
-export function validateTemporalProof({ turnRecord }) {
+export function validateTemporalProof({ turnRecord, outcome }) {
   const failures = completedTurnFailures(turnRecord);
   const section = sectionById(turnRecord, 'finalSystemSections', 'runtime.current_datetime');
   const content = sectionText(section);
@@ -331,6 +331,22 @@ export function validateTemporalProof({ turnRecord }) {
   const rawResponse = snapshotOf(turnRecord)?.promptContext?.response?.content;
   if (typeof rawResponse !== 'string' || !HISTORY_STAMP_LINE_PREFIX.test(rawResponse)) {
     failures.push('raw persisted model response did not exercise the history-stamp strip guard');
+  }
+  const expectedHistoryStamp = outcome?.request?.seededHistoryStamp;
+  if (typeof expectedHistoryStamp === 'string' && expectedHistoryStamp.length > 0) {
+    const expectedStampedSeed = `${expectedHistoryStamp} `;
+    const expectedHistoryMessage = outcome?.request?.seededHistoryMessage;
+    if (!planMessages.some((message) => (
+      typeof message?.content === 'string'
+      && message.content.split('\n').some((line) => (
+        line === `${expectedStampedSeed}${String(expectedHistoryMessage ?? '')}`
+      ))
+    ))) {
+      failures.push('persisted PromptPlan does not contain the exact seeded history stamp');
+    }
+    if (typeof rawResponse !== 'string' || !rawResponse.startsWith(expectedStampedSeed)) {
+      failures.push('raw persisted model response did not echo the exact seeded history stamp');
+    }
   }
   const assistant = turnRecord?.assistantMessage?.content;
   if (typeof assistant !== 'string' || assistant.trim().length === 0) {

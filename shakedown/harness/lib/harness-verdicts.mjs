@@ -13,24 +13,27 @@ const ACTION_SUCCESS_KEYS = new Set([
   'worked',
   'executed',
   'wrote',
-  'readBack',
   'noted',
   'linked',
   'disabledThenRestored',
   'created',
   'updated',
   'deleted',
+  'restored',
   'redacted',
   'imported',
   'appended',
   'started',
   'completed',
   'toggledTwice',
+  'rolledBack',
+]);
+const READ_ONLY_RESULT_KEYS = new Set([
+  'listed',
+  'readBack',
   'readyWorked',
   'showWorked',
-  'rolledBack',
   'viewed',
-  'listed',
 ]);
 
 export function parseArchiveToolArguments(contentText) {
@@ -72,38 +75,86 @@ function parsedAssistantContains(parsedAssistant, predicate) {
   return false;
 }
 
-export function assistantClaimsActionSuccess(parsedAssistant, assistantText) {
-  if (parsedAssistantContains(parsedAssistant, (key, entry) => (
-    (ACTION_SUCCESS_KEYS.has(key) && entry === true)
+function declaredActionSuccessKeys(actionSuccessKeys) {
+  const keys = Array.isArray(actionSuccessKeys)
+    ? actionSuccessKeys
+    : [...ACTION_SUCCESS_KEYS];
+  return new Set(keys.filter((key) => (
+    ACTION_SUCCESS_KEYS.has(key) && !READ_ONLY_RESULT_KEYS.has(key)
+  )));
+}
+
+function parsedAssistantTextValues(parsedAssistant) {
+  const values = [];
+  parsedAssistantContains(parsedAssistant, (_key, entry) => {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      values.push(entry);
+    }
+    return false;
+  });
+  return values;
+}
+
+function nonJsonAssistantProse(parsedAssistant, assistantText) {
+  if (!parsedAssistant || typeof parsedAssistant !== 'object' || typeof assistantText !== 'string') {
+    return assistantText ?? '';
+  }
+  const jsonStart = assistantText.indexOf('{');
+  const jsonEnd = assistantText.lastIndexOf('}');
+  if (jsonStart < 0 || jsonEnd < jsonStart) return '';
+  return `${assistantText.slice(0, jsonStart)} ${assistantText.slice(jsonEnd + 1)}`;
+}
+
+function actionBlockerPresent(parsedAssistant, assistantText) {
+  return parsedAssistantTextValues(parsedAssistant)
+    .some((entry) => ACTION_BLOCKER_PATTERN.test(entry))
     || (
-      ACTION_SUCCESS_KEYS.has(key)
+      ACTION_BLOCKER_PATTERN.test(nonJsonAssistantProse(parsedAssistant, assistantText))
+    );
+}
+
+export function assistantClaimsActionSuccess(
+  parsedAssistant,
+  assistantText,
+  actionSuccessKeys,
+) {
+  const declaredKeys = declaredActionSuccessKeys(actionSuccessKeys);
+  const blocked = actionBlockerPresent(parsedAssistant, assistantText);
+  if (blocked) return false;
+  if (parsedAssistantContains(parsedAssistant, (key, entry) => (
+    (declaredKeys.has(key) && entry === true)
+    || (
+      declaredKeys.has(key)
       && typeof entry === 'string'
       && entry.trim().length > 0
-      && !ACTION_BLOCKER_PATTERN.test(entry)
     )
   ))) {
     return true;
   }
-  if (typeof assistantText !== 'string' || assistantText.trim().length === 0) {
-    return false;
-  }
-  return ACTION_SUCCESS_PATTERN.test(assistantText) && !ACTION_BLOCKER_PATTERN.test(assistantText);
+  return (!parsedAssistant || typeof parsedAssistant !== 'object')
+    && typeof assistantText === 'string'
+    && ACTION_SUCCESS_PATTERN.test(assistantText);
 }
 
-export function assistantClaimsActionFailure(parsedAssistant, assistantText) {
+export function assistantClaimsActionFailure(
+  parsedAssistant,
+  assistantText,
+  actionSuccessKeys,
+) {
+  const declaredKeys = declaredActionSuccessKeys(actionSuccessKeys);
   if (parsedAssistantContains(parsedAssistant, (key, entry) => (
-    ACTION_SUCCESS_KEYS.has(key) && entry === false
+    declaredKeys.has(key) && entry === false
   ))) {
     return true;
   }
-  return typeof assistantText === 'string' && ACTION_BLOCKER_PATTERN.test(assistantText);
+  return actionBlockerPresent(parsedAssistant, assistantText);
 }
 
-export function isDispatchAbortedTurn({ turnSummary, seenToolNames }) {
+export function isDispatchAbortedTurn({ turnSummary, response }) {
   return turnSummary !== null
     && turnSummary?.status !== 'completed'
-    && turnSummary?.metrics?.ttftMs === null
-    && (Array.isArray(seenToolNames) ? seenToolNames.length : 0) === 0;
+    && typeof response?.fetchError === 'string'
+    && response.fetchError.trim().length > 0;
 }
 
 function isCompletedSuccessfulTurnSummary(turnSummary) {
@@ -126,10 +177,10 @@ export function classifyCaseStatus(caseResult) {
   );
   if (caseResult.staleTurnRecord === true) return 'runtime_stale';
   if (caseResult.dispatchAborted === true) return 'dispatch_aborted';
+  if ((caseResult.semanticFailureMatches?.length ?? 0) > 0) return 'semantic_failure';
   if ((caseResult.narrationWithoutExecutionFailures?.length ?? 0) > 0) {
     return 'narration_without_execution';
   }
-  if ((caseResult.semanticFailureMatches?.length ?? 0) > 0) return 'semantic_failure';
   if ((caseResult.toolValidationErrors?.length ?? 0) > 0 && !recoveredToolValidationError) {
     return 'tool_validation_error';
   }
@@ -187,6 +238,38 @@ export function collectSideEffectSemanticFailures(sideEffectVerdict) {
     }];
   }
   return [];
+}
+
+export function collectNarrationWithoutExecutionFailures({
+  actionSensitive,
+  expectedToolNames,
+  seenToolNames,
+  sideEffectVerdict,
+  claimedActionSuccess,
+}) {
+  if (sideEffectVerdict !== null && sideEffectVerdict !== undefined) {
+    if (sideEffectVerdict.failureKind !== 'narration_without_execution') {
+      return [];
+    }
+  } else if (actionSensitive !== true || claimedActionSuccess !== true) {
+    return [];
+  }
+
+  const observedTools = Array.isArray(seenToolNames) ? seenToolNames : [];
+  const missingActionTools = (Array.isArray(expectedToolNames) ? expectedToolNames : [])
+    .filter((name) => !observedTools.includes(name));
+  const sideEffectFailures = sideEffectVerdict?.proofFailures ?? [];
+  if (missingActionTools.length === 0 && sideEffectFailures.length === 0) {
+    return [];
+  }
+  return [{
+    pattern: 'narration_without_execution',
+    sample: [
+      'assistant claimed action success without execution proof',
+      missingActionTools.length > 0 ? `missing action tools: ${missingActionTools.join(',')}` : null,
+      sideEffectFailures.length > 0 ? `side-effect proof failed: ${sideEffectFailures.join('; ')}` : null,
+    ].filter(Boolean).join(' | '),
+  }];
 }
 
 export function collectCaseSeenToolNames({
@@ -254,8 +337,12 @@ export function evaluateSideEffectVerdict({
   parsedAssistant,
   claimedActionSuccess,
   claimedActionFailure,
+  turnSummary,
 }) {
   if (typeof validateSideEffects !== 'function') {
+    return null;
+  }
+  if (turnSummary !== undefined && turnSummary?.status !== 'completed') {
     return null;
   }
   let rawFailures;

@@ -336,6 +336,28 @@ test('temporal and SSE proofs require persisted clock/first-token evidence and s
     },
   }), []);
 
+  const exactStampTurn = turnRecord();
+  exactStampTurn.observability.snapshot.promptContext.response.content =
+    '[Fri 07-17-26 11:59] hello from the room';
+  assert.deepEqual(validateTemporalProof({
+    turnRecord: exactStampTurn,
+    outcome: {
+      request: {
+        seededHistoryStamp: '[Fri 07-17-26 11:59]',
+        seededHistoryMessage: 'earlier persisted history',
+      },
+    },
+  }), []);
+  assert.match(validateTemporalProof({
+    turnRecord: turnRecord(),
+    outcome: {
+      request: {
+        seededHistoryStamp: '[Fri 07-17-26 11:58]',
+        seededHistoryMessage: 'earlier persisted history',
+      },
+    },
+  }).join('\n'), /exact seeded history stamp/u);
+
   const noDatetime = turnRecord();
   noDatetime.observability.snapshot.promptContext.finalSystemSections = [];
   assert.match(validateTemporalProof({ turnRecord: noDatetime }).join('\n'), /current_datetime/u);

@@ -376,6 +376,13 @@
       "measuredBaselineMs": 16000,
       "baselineSource": "measured",
       "note": "hrmrq.119 live-drain regression: 880-row claim-serial drain over dockerized Postgres measured ~11s isolated / ~16s worst under full-suite load; internal waitForCondition deadlines 40s sit inside the 60s vitest budget."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "beforeAll 90s harness startup, mirroring the background-work store suite's established harness+schema hook budget (slot contention under full-suite load)."
     }
   ]
 }

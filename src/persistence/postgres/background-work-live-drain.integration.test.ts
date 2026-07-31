@@ -149,7 +149,7 @@ describe('Postgres background-work live drain regression', () => {
 
   beforeAll(async () => {
     harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
-  });
+  }, 90_000);
 
   afterAll(async () => {
     await harness?.stop();

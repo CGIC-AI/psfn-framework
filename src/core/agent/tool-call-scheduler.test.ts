@@ -121,12 +121,14 @@ describe('tool-call-scheduler', () => {
       { maxParallelToolCalls: 1 },
     );
 
-    expect(getToolResultInvocationAudit(result.toolResults[0]!)).toEqual({
+    const serializedToolResult = JSON.stringify(result.toolResults[0]!);
+    const rematerializedToolResult = JSON.parse(serializedToolResult) as ToolResultMessage;
+
+    expect(getToolResultInvocationAudit(rematerializedToolResult)).toEqual({
       arguments: { action: 'list' },
       rationale: 'Need to inspect the world.',
       thoughtSignature: 'sig-world',
     });
-    expect(JSON.stringify(result.toolResults[0])).not.toContain('psfnToolInvocation');
 
     const turnRecord = buildTurnRecord({
       message: {
@@ -154,7 +156,7 @@ describe('tool-call-scheduler', () => {
           durationMs: 250,
         },
       },
-      turnMessages: result.toolResults,
+      turnMessages: [rematerializedToolResult],
       promptMode: 'default',
       promptText: 'system prompt',
       contextMessageCount: 1,

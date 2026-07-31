@@ -173,8 +173,8 @@ describe('intake policy owner file', () => {
 
   it('rejects invalid config on save (never writes a broken owner file)', () => {
     const dataDir = makeDataDir();
-    expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 3 }))
-      .toThrow(/schemaVersion must be 2/);
+    expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
+      .toThrow(/schemaVersion must be 3/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 
@@ -506,8 +506,10 @@ describe('intake policy owner file', () => {
       expect(['allow', 'deny']).toContain(rule.unscreened);
     }
     // Inform-not-instruct: state-mutation sinks cap below the inform sinks.
-    expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
-    expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
+    // Self-authored mutation fields are screened as tool_output (untrusted);
+    // the sink label denylist still blocks hostile findings.
+    expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
+    expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
     expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
     expect(policy.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
     expect(policy.sinkGates.sinks.skill_write.unscreened).toBe('deny');
@@ -562,6 +564,16 @@ describe('intake policy owner file', () => {
     };
     expect(validateIntakePolicy(trustAllow, INTAKE_POLICY_FILE_NAME)
       .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
+  });
+
+  it('requires screen-then-allow sinks to admit the configured tool_output tier', () => {
+    const policy = seedPolicy();
+    for (const sink of ['persona_mutation', 'wiki_write', 'trust_mutation'] as const) {
+      const tampered = structuredClone(policy);
+      tampered.sinkGates.sinks[sink].maxSourceRiskTier = 'standard';
+      expect(() => validateIntakePolicy(tampered, 'intake-policy.test'))
+        .toThrow(new RegExp(`sinkGates\\.sinks\\.${sink}\\.maxSourceRiskTier must admit`));
+    }
   });
 
   it('fails closed on missing/unknown sink-gate config (htm9.3)', () => {

@@ -52,12 +52,15 @@ describe('intake policy owner migration', () => {
       sinks: Record<string, unknown>;
     };
     delete sinkGates.sinks.skill_write;
+    for (const sink of ['persona_mutation', 'trust_mutation']) {
+      (sinkGates.sinks[sink] as Record<string, unknown>).maxSourceRiskTier = 'standard';
+    }
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
     writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`);
     return { dataDir, filePath, legacy };
   }
 
-  it('dry-runs without changing the v1 owner, then atomically applies v2', () => {
+  it('dry-runs without changing the v1 owner, then atomically applies v3', () => {
     const { dataDir, filePath } = makeOwner();
     const before = readFileSync(filePath, 'utf8');
 
@@ -67,6 +70,10 @@ describe('intake policy owner migration', () => {
       fromSchemaVersion: 1,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       addedPaths: ['sinkGates.sinks.skill_write'],
+      updatedPaths: [
+        'sinkGates.sinks.persona_mutation.maxSourceRiskTier',
+        'sinkGates.sinks.trust_mutation.maxSourceRiskTier',
+      ],
       removedPaths: [
         'l2Screener.model',
         'l3Screener.model',
@@ -85,11 +92,44 @@ describe('intake policy owner migration', () => {
     const loaded = loadIntakePolicyConfig(dataDir);
     expect(loaded.schemaVersion).toBe(INTAKE_POLICY_SCHEMA_VERSION);
     expect(loaded.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
+    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
+    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
     expect(loaded.l3Screener.dualModel).toBe(false);
     expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
       status: 'not_needed',
       fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
     });
+  });
+
+  it('upgrades a v2 owner so screened persona and trust writes are admitted', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const legacy = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    legacy.schemaVersion = 2;
+    const sinks = (legacy.sinkGates as { sinks: Record<string, Record<string, unknown>> }).sinks;
+    sinks.persona_mutation.maxSourceRiskTier = 'standard';
+    sinks.trust_mutation.maxSourceRiskTier = 'standard';
+    writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      fromSchemaVersion: 2,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      updatedPaths: [
+        'sinkGates.sinks.persona_mutation.maxSourceRiskTier',
+        'sinkGates.sinks.trust_mutation.maxSourceRiskTier',
+      ],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      fromSchemaVersion: 2,
+    });
+    const loaded = loadIntakePolicyConfig(dataDir);
+    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
+    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
   });
 
   it('fails closed on malformed or ambiguous legacy sink maps', () => {
@@ -119,6 +159,7 @@ describe('intake policy owner migration', () => {
     const invalidV2 = JSON.parse(
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
     ) as Record<string, unknown>;
+    invalidV2.schemaVersion = 2;
     const sinkGates = invalidV2.sinkGates as { sinks: Record<string, unknown> };
     delete sinkGates.sinks.skill_write;
     writeFileSync(filePath, `${JSON.stringify(invalidV2, null, 2)}\n`);
@@ -126,10 +167,10 @@ describe('intake policy owner migration', () => {
     expect(() => migrateIntakePolicyOwner({ dataDir, apply: true }))
       .toThrow(/sinkGates\.sinks\.skill_write is required/);
     expect(() => loadIntakePolicyConfig(dataDir))
-      .toThrow(/sinkGates\.sinks\.skill_write is required/);
+      .toThrow(/schemaVersion 2 owners require the explicit migrate:intake-policy-owner command/);
   });
 
-  it('dry-runs and atomically removes retired screener model keys from a v2 owner', () => {
+  it('dry-runs and atomically removes retired screener model keys from a v3 owner', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
     tempDirs.push(dataDir);
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);

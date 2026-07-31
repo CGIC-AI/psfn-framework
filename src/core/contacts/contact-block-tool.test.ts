@@ -4,11 +4,25 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContactStorePort } from './contact-store-port.js';
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
-import { createContactTool } from './tools.js';
+import {
+  createContactTool as createContactToolImpl,
+  type CreateContactToolOptions,
+} from './tools.js';
 import { ContactBlockListStore } from '../cogsec/contact-block-list.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../session/intake-sink-gating.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content.map((c) => c.text).join('');
+}
+
+function createContactTool(
+  store: ContactStorePort,
+  options: Partial<CreateContactToolOptions> = {},
+) {
+  return createContactToolImpl(store, {
+    intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    ...options,
+  });
 }
 
 describe('contact tool blocking (htm9.16 companion agency)', () => {

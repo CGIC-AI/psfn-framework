@@ -13,6 +13,7 @@ import type {
   ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
 } from './types.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../session/intake-sink-gating.js';
 
 function identityKey(channel: string, userId: string): string {
   return `${channel.trim().toLowerCase()}:${userId.trim()}`;
@@ -92,10 +93,13 @@ class InMemoryContactStore {
 async function wireContactRuntime(
   target: ContactRuntimeTarget,
   primaryUserId?: string,
-  options: ContactRuntimeOptions = {},
+  options: Partial<ContactRuntimeOptions> = {},
 ): Promise<ContactStorePort> {
   const contactStore = new InMemoryContactStore(primaryUserId) as unknown as ContactStorePort;
-  return await registerContactRuntime(target, contactStore, primaryUserId, options);
+  return await registerContactRuntime(target, contactStore, primaryUserId, {
+    intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    ...options,
+  });
 }
 
 class FakeTarget implements ContactRuntimeTarget {

@@ -26,6 +26,7 @@ import { createPublicationTool } from '../../cogsec/disclosure/publication-tool.
 import { createGenerateImageTool, createSelfieTool } from '../../../primitives/images/tools.js';
 import { createResponseControlTool } from '../no-reply-tool.js';
 import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../session/intake-sink-gating.js';
 
 export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
   const inert = {} as never;
@@ -33,10 +34,16 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createToolSearchTool(inert), createToolsetTool(inert),
     createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
-    createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert),
-    createMemoryTool(inert, inert), createScratchpadTool(inert), createContactTool(inert),
+    createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert, {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    }),
+    createMemoryTool(inert, inert), createScratchpadTool(inert), createContactTool(inert, {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    }),
     createSessionTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
-    createSkillTool(inert), createWikiTool(inert), createScheduleTool(inert),
+    createSkillTool(inert), createWikiTool(inert, {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    }), createScheduleTool(inert),
     createNorthStarTool(inert), createBeadsTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
     createVaultTool(inert), createJournalTool(inert), createPublicationTool(inert),

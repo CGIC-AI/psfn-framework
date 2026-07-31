@@ -3,7 +3,7 @@ import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
 import type { ContactBlockListStore } from '../cogsec/contact-block-list.js';
-import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import type { SelfAuthoredMutationIntakeRuntime } from '../session/intake-sink-gating.js';
 import { createContactTool } from './tools.js';
 import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
@@ -35,19 +35,16 @@ export interface ContactRuntimeOptions {
   blockList?: ContactBlockListStore;
   /** Gateway-owned invalidation that must commit before companion blocks. */
   permitInvalidation?: ContactBlockPermitInvalidationPort;
-  /**
-   * Intake sink gate provider (htm9.3): trust_mutation gate for
-   * contact action=set_trust. Absent/null = firewall off.
-   */
-  getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Screen-then-gate runtime for contact trust mutations. */
+  intake: SelfAuthoredMutationIntakeRuntime;
   peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>;
 }
 
 export async function registerContactRuntime(
   target: ContactRuntimeTarget,
   contactStore: ContactStorePort,
-  primaryUserId?: string,
-  options: ContactRuntimeOptions = {},
+  primaryUserId: string | undefined,
+  options: ContactRuntimeOptions,
 ): Promise<ContactStorePort> {
   target.contactStore = contactStore;
 
@@ -71,7 +68,7 @@ export async function registerContactRuntime(
     proposalQueue: options.proposalQueue,
     ...(options.blockList ? { blockList: options.blockList } : {}),
     ...(options.permitInvalidation ? { permitInvalidation: options.permitInvalidation } : {}),
-    ...(options.getIntakeSinkGate ? { getIntakeSinkGate: options.getIntakeSinkGate } : {}),
+    intake: options.intake,
     ...(options.peerAvailability ? { peerAvailability: options.peerAvailability } : {}),
   }));
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import { createContactTool } from '../../contacts/tools.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../session/intake-sink-gating.js';
 import { readActiveTurnToolSchemas } from './turn-tool-context.js';
 import { toPiTools } from '../../../primitives/llm/conversion.js';
 import type { ToolSchema } from '../../../shared/contracts/runtime.js';
@@ -42,7 +43,9 @@ describe('readActiveTurnToolSchemas', () => {
   });
 
   it('preserves improved contact search guidance for Garden turn snapshots', () => {
-    const contactTool = createContactTool({} as ContactStorePort);
+    const contactTool = createContactTool({} as ContactStorePort, {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    });
     const schemas = readActiveTurnToolSchemas({
       state: {
         tools: [{

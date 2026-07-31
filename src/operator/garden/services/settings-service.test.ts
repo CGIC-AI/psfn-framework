@@ -21,6 +21,7 @@ import {
 } from './settings-service.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
+import { INTAKE_POLICY_SCHEMA_VERSION } from '../../../system/config/intake-policy-config.js';
 
 let tempDir: string | null = null;
 
@@ -129,7 +130,7 @@ describe('AdminSettingsDataService', () => {
     const service = buildService(buildConfig(root));
 
     expect(service.getIntakePolicyOverview()).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       sinkGates: {
         sinks: {
           skill_write: {

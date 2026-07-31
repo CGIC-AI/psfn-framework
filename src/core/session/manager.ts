@@ -264,7 +264,7 @@ export class SessionManager implements SessionManagerTypeSurface {
    * the firewall is off or predates this wiring — recording is unchanged.
    * Must be an L1-only (synchronous) service: recordToolObservation is sync.
    */
-  intakeScreening: Pick<IntakeScreeningService, 'mode' | 'screenSync'> | null = null;
+  intakeScreening: IntakeScreeningService | null = null;
   /**
    * Intake sink gate (htm9.3). Assigned by composition from
    * intake-policy.json alongside `intakeScreening`; null means the firewall

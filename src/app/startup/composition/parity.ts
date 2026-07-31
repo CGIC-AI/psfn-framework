@@ -86,7 +86,7 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: IdentityToolOptions & PromptCacheInvalidationOptions = {},
+  options: IdentityToolOptions & PromptCacheInvalidationOptions,
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),

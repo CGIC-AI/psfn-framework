@@ -7,7 +7,7 @@ import {
   type WikiRetrievalConfigLike,
 } from '../../shared/context-budget.js';
 import { createWikiTool } from './tools.js';
-import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { SelfAuthoredMutationIntakeRuntime } from '../../core/session/intake-sink-gating.js';
 import { SharedWorldWikiStore, WikiStore } from './store.js';
 import {
   createWikiPgvectorProjectionStore,
@@ -72,11 +72,8 @@ export interface WikiRuntimeDeps {
   postgresSchema?: string;
   /** Topology-owned role paired with postgresSchema for tenant pool pinning. */
   postgresRole?: string;
-  /**
-   * Intake sink gate provider (htm9.3), threaded to the wiki tool's
-   * wiki_write gate. Absent/null = firewall off.
-   */
-  getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Screen-then-gate runtime threaded to companion-authored wiki writes. */
+  intake: SelfAuthoredMutationIntakeRuntime;
   /** Runtime identity stamped on companion-authored shared-world proposals. */
   companionId?: string;
   /** System owner root containing places.json; used only to validate proposal site ids. */
@@ -149,7 +146,7 @@ async function closeWikiRuntimeAfterFailure(
 export async function wireWikiRuntime(
   target: WikiRuntimeTarget,
   workspacePath: string,
-  deps: WikiRuntimeDeps = {},
+  deps: WikiRuntimeDeps,
 ): Promise<WikiRuntimeWiring> {
   const multiCompanion = deps.getMultiCompanion?.() === true;
   const systemDataWriter = deps.systemDataWriter;
@@ -332,7 +329,7 @@ export async function wireWikiRuntime(
   try {
     target.registerTool(createWikiTool(store, {
       ...(semanticSearch ? { semanticSearch } : {}),
-      ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
+      intake: deps.intake,
       ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
       personalProjects,
       personalWishlist,

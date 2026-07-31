@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { normalizeTrustLevel } from '../../core/contacts/store/identity-utils.js';
 import { createContactSetTrustTool } from '../../core/contacts/tools.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/session/intake-sink-gating.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
@@ -433,7 +434,10 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'public',
       discordUserId: 'target-user-1',
     });
-    const trustTool = createContactSetTrustTool(contactStore);
+    const trustTool = createContactSetTrustTool(
+      contactStore,
+      INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    );
 
     const blockedAutonomousEscalation = await contactStore.setTrustLevel(
       target.id,

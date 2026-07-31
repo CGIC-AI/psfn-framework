@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
@@ -138,7 +138,7 @@
         "unscreened": "deny"
       },
       "persona_mutation": {
-        "maxSourceRiskTier": "standard",
+        "maxSourceRiskTier": "untrusted",
         "denyRiskLabels": [
           "injection/override_attempt",
           "injection/indirect",
@@ -157,7 +157,7 @@
         "unscreened": "deny"
       },
       "trust_mutation": {
-        "maxSourceRiskTier": "standard",
+        "maxSourceRiskTier": "untrusted",
         "denyRiskLabels": [
           "injection/override_attempt",
           "injection/indirect",

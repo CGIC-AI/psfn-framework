@@ -15,8 +15,14 @@
 // the appraisal/memory exclusions key on).
 
 import { createComponentLogger } from '../../shared/logger.js';
+import type {
+  IntakeEnvelopeSnapshot,
+  IntakeSink,
+} from '../../shared/contracts/intake-envelope.js';
+import { isRecord } from '../../shared/utils/types.js';
 import type { SessionEntry } from './types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
+import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { renderMarkedContent } from '../cogsec/intake/marking.js';
 import {
@@ -30,6 +36,127 @@ const METADATA_KEY_MARKER = `"${INTAKE_SCREENING_METADATA_KEY}"`;
 // Bound synchronous prompt-assembly marking across the whole context. Entries
 // beyond the budget keep their provenance wrapper but use the reduced form.
 const PROMPT_ASSEMBLY_MARKING_WORK_LIMIT_CHARS = 256 * 1024;
+
+export type SelfAuthoredMutationSink =
+  | 'persona_mutation'
+  | 'wiki_write'
+  | 'trust_mutation';
+
+export interface SelfAuthoredMutationIntakeRuntime {
+  getIntakeSinkGate: () => IntakeSinkGate | null;
+  getIntakeScreening: () => IntakeScreeningService | null;
+  getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
+}
+
+/** Explicit dependency for tool compositions where the intake firewall is off. */
+export const INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME:
+SelfAuthoredMutationIntakeRuntime = Object.freeze({
+  getIntakeSinkGate: () => null,
+  getIntakeScreening: () => null,
+  getActiveTurnIntakeEnvelopes: () => [],
+});
+
+export interface ScreenedSelfAuthoredMutation {
+  allowed: boolean;
+  params: Record<string, unknown>;
+}
+
+function assertSelfAuthoredMutationSink(sink: IntakeSink): asserts sink is SelfAuthoredMutationSink {
+  if (sink !== 'persona_mutation' && sink !== 'wiki_write' && sink !== 'trust_mutation') {
+    throw new Error(`Unsupported self-authored mutation sink: ${sink}`);
+  }
+}
+
+/**
+ * Screen model-authored mutation arguments before they can reach durable
+ * persona, wiki, or trust state. Every string leaf gets its own envelope so
+ * sanitization is applied to the exact value the sink consumes. The active
+ * turn's envelopes join those proposed-content envelopes, matching managed
+ * skill writes: a clean-looking derivative cannot shed hostile provenance.
+ *
+ * A partially wired runtime fails loudly before gate evaluation. In
+ * particular, this function never calls a mutation sink with an empty
+ * envelope list; doing so would silently reduce every enforce-mode mutation
+ * to the sink's unscreened default.
+ */
+export async function screenSelfAuthoredMutation(
+  sink: SelfAuthoredMutationSink,
+  params: Readonly<Record<string, unknown>>,
+  intake: SelfAuthoredMutationIntakeRuntime,
+  context: { tool: string; action: string },
+): Promise<ScreenedSelfAuthoredMutation> {
+  assertSelfAuthoredMutationSink(sink);
+  const gate = intake.getIntakeSinkGate();
+  const screening = intake.getIntakeScreening();
+  if (!gate && !screening) {
+    return { allowed: true, params: structuredClone(params) };
+  }
+  if (!gate) {
+    throw new Error(
+      `Self-authored ${sink} intake screening is wired without the canonical sink gate`,
+    );
+  }
+  if (!screening) {
+    throw new Error(
+      `Self-authored ${sink} sink gate is active but intake screening is unavailable; `
+      + 'refusing an unscreened mutation',
+    );
+  }
+
+  const proposedContentEnvelopes: IntakeEnvelopeSnapshot[] = [];
+
+  const screenValue = async (value: unknown, path: string): Promise<unknown> => {
+    if (typeof value === 'string') {
+      const screened = await screening.screen(value, {
+        sourceClass: 'tool_output',
+        origin: { ref: `tool:${context.tool}:${context.action}:${path}` },
+        scope: 'strict',
+      });
+      proposedContentEnvelopes.push(screened.snapshot);
+      return screened.effectiveText;
+    }
+    if (Array.isArray(value)) {
+      const screenedItems: unknown[] = [];
+      for (const [index, item] of value.entries()) {
+        screenedItems.push(await screenValue(item, `${path}.${String(index)}`));
+      }
+      return screenedItems;
+    }
+    if (isRecord(value)) {
+      const screenedRecord: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) {
+        screenedRecord[key] = await screenValue(item, path ? `${path}.${key}` : key);
+      }
+      return screenedRecord;
+    }
+    return value;
+  };
+
+  const screenedParams = await screenValue(params, '');
+  if (!isRecord(screenedParams)) {
+    throw new Error(`Self-authored ${sink} mutation parameters must be an object`);
+  }
+  if (proposedContentEnvelopes.length === 0) {
+    throw new Error(
+      `Self-authored ${sink} mutation supplied no textual content to screen; `
+      + 'refusing an empty-envelope sink evaluation',
+    );
+  }
+
+  const activeTurnEnvelopes = intake.getActiveTurnIntakeEnvelopes();
+  const envelopes = [...activeTurnEnvelopes, ...proposedContentEnvelopes];
+  const decision = gate.evaluate(sink, envelopes, {
+    ...context,
+    activeTurnEnvelopeCount: activeTurnEnvelopes.length,
+    screenedFieldCount: proposedContentEnvelopes.length,
+  });
+  if (decision.unscreened) {
+    throw new Error(
+      `Self-authored ${sink} mutation unexpectedly reached an unscreened sink-gate path`,
+    );
+  }
+  return { allowed: decision.allowed, params: screenedParams };
+}
 
 export interface PromptAssemblyGateSummary {
   /** Entries whose content was replaced by the withheld placeholder (enforce mode). */

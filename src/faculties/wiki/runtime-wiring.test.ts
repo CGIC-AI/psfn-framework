@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { closeWikiRuntimeResources, wireWikiRuntime } from './runtime-wiring.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/session/intake-sink-gating.js';
 
 const embedding: EmbeddingProviderPort = {
   dims: 2,
@@ -15,6 +16,7 @@ describe('multi-companion wiki runtime prerequisites', () => {
   it('fails closed when a tenant schema has no topology-owned role', async () => {
     const registerTool = vi.fn();
     await expect(wireWikiRuntime({ registerTool }, '/unused', {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
       databaseUrl: 'postgresql://unused/unused',
       postgresSchema: 'companion_alpha',
       embedding,
@@ -28,6 +30,7 @@ describe('multi-companion wiki runtime prerequisites', () => {
   it('fails closed before registration when PostgreSQL is missing', async () => {
     const registerTool = vi.fn();
     await expect(wireWikiRuntime({ registerTool }, '/unused', {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
       embedding,
       companionId: 'companion-a',
       systemDataDir: '/unused',
@@ -39,6 +42,7 @@ describe('multi-companion wiki runtime prerequisites', () => {
   it('fails closed before registration when the embedding provider is missing', async () => {
     const registerTool = vi.fn();
     await expect(wireWikiRuntime({ registerTool }, '/unused', {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
       databaseUrl: 'postgresql://unused/unused',
       companionId: 'companion-a',
       systemDataDir: '/unused',
@@ -52,6 +56,7 @@ describe('multi-companion wiki runtime prerequisites', () => {
     const registerTool = vi.fn();
     try {
       await expect(wireWikiRuntime({ registerTool }, '/unused', {
+        intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
         databaseUrl: 'postgresql://unused/unused',
         embedding,
         companionId: 'companion-a',
@@ -75,6 +80,7 @@ describe('multi-companion wiki runtime prerequisites', () => {
     }), 'utf8');
     try {
       await expect(wireWikiRuntime({ registerTool }, '/unused', {
+        intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
         databaseUrl: 'postgresql://unused/unused',
         embedding,
         companionId: 'companion-a',

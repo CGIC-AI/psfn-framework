@@ -733,6 +733,12 @@ function createTestServices(): GardenAdminDomainServices {
             coveragePercent: 0,
           }])) as ModelUsageAttributionCoverage['byDimension'],
         },
+        attributionAnomalies: {
+          unknownChargeLaneCalls: 1,
+          unknownChargeLaneRatePercent: 100,
+          unknownSessionCalls: 1,
+          unknownSessionRatePercent: 100,
+        },
         recentEvents: [],
         expensiveEvents: [],
       })),

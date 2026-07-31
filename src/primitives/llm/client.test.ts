@@ -5521,6 +5521,7 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
         disableRetry: true,
         correlation: {
           companionId: 'companion-x',
+          sessionId: 'session-x',
           callType: 'background',
           originStage: 'memory.extraction',
         },
@@ -5532,10 +5533,114 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
       model: expect.stringContaining('deepseek'),
       attribution: expect.objectContaining({
         companionId: 'companion-x',
+        sessionId: 'session-x',
         runtimeLaneClass: 'maintenance_reflection',
+        chargeLane: 'background',
         originStage: 'memory.extraction',
       }),
     }));
+  });
+
+  it('classifies a session-attributed background appraisal in the background charge lane', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'companion-x' }), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'appraised' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Appraise' }],
+      },
+      'background',
+      {
+        disableRetry: true,
+        correlation: {
+          sessionId: 'session-appraisal',
+          callType: 'background',
+          originStage: 'emotion.appraisal',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attribution: expect.objectContaining({
+        companionId: 'companion-x',
+        sessionId: 'session-appraisal',
+        chargeLane: 'background',
+        originStage: 'emotion.appraisal',
+      }),
+    }));
+  });
+
+  it('classifies an interactive turn without a charge context in the interactive lane', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'companion-x' }), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'answered' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Answer' }],
+      },
+      'chat',
+      {
+        disableRetry: true,
+        correlation: {
+          sessionId: 'session-interactive',
+          callType: 'chat',
+          originStage: 'agent.turn.prompt',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attribution: expect.objectContaining({
+        sessionId: 'session-interactive',
+        chargeLane: 'interactive',
+        originStage: 'agent.turn.prompt',
+      }),
+    }));
+  });
+
+  it('leaves the session-less active health-probe shape unresolved for anomaly accounting', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'companion-x' }), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'OK' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 8, output: 1 },
+      stopReason: 'stop',
+    });
+
+    // Mirrors api-surface's active LLM health probe: reasoning purpose, no
+    // request correlation, and therefore no companion conversation to charge.
+    await client.complete(
+      {
+        systemPrompt: 'You are a health check. Respond with exactly: OK',
+        messages: [{ role: 'user', content: 'health probe' }],
+      },
+      'reasoning',
+      { disableRetry: true },
+    );
+
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event?.attribution).toMatchObject({
+      companionId: 'companion-x',
+      callType: 'tool',
+      purpose: 'reasoning',
+    });
+    expect(event?.attribution).not.toHaveProperty('sessionId');
+    expect(event?.attribution).not.toHaveProperty('chargeLane');
   });
 
   it('attributes the declared work-spec lane across the provider seam (psfn-framework-d8vq.2: spec.lane in == lane out)', async () => {

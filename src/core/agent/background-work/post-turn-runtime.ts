@@ -25,6 +25,7 @@ import type { BackgroundWorkPostTurnTuning } from './config.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import type { SocialDesireFeltSignalWriter } from '../../intention/social-desire-felt-signal.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 export type PostTurnBackgroundSessionManager = Pick<
   SessionManager,
@@ -66,6 +67,26 @@ type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
 > & {
   sessionManager: AdmittedPostTurnBackgroundSessionManager;
 };
+
+function runWithPostTurnUsageAttribution<T>(
+  record: TurnRecord,
+  source: BackgroundWorkSourceRef,
+  originStage: 'extraction' | 'emotion.appraisal',
+  operation: () => Promise<T>,
+): Promise<T> {
+  return runWithRequestContext({
+    sessionId: source.logicalSessionId,
+    channelId: source.channelId,
+    channelType: record.channelType,
+    turnId: record.turnId,
+    requestId: record.requestId,
+    callType: 'background',
+    purpose: originStage,
+    originType: 'background',
+    originStage,
+    ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
+  }, operation);
+}
 
 async function requireCanonicalTurnRecord(
   source: BackgroundWorkSourceRef,
@@ -281,39 +302,44 @@ async function runPostTurnBackgroundWork(
         const record = await requireCanonicalTurnRecord(payload.source, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         try {
-          await input.effects.run('memory-extraction', async (crossBoundary) => {
-            // Extraction has a long, failable pre-write phase (LLM call, parse, DB
-            // reads) before its first durable write. Guard that phase with the
-            // NON-crossing `assertOwned` fence so a transient pre-write failure
-            // leaves the receipt `pending` and the job retryable; `crossBoundary`
-            // is called only at the durable write sites, where a post-write crash
-            // must instead fail closed. Passing both keeps pre-write work
-            // retryable while the write phase stays exactly-once.
-            const outputs = await extractor.maybeExtract(
-              payload.source.logicalSessionId,
-              payload.canonicalContactId,
-              record.turnId,
-              payload.placeId,
-              payload.icpCorrelation,
-              crossBoundary,
-              recentEntries,
-              input.effects.assertOwned,
-              // mmo9.7.4: a welfare-escalated claim protects its model call from
-              // gate preemption so the aged memory job runs to completion instead
-              // of re-entering the preempt→defer loop. fxt1: pair the flag with
-              // the granting job id so the gateway can re-verify the escalation
-              // against the store; the id rides only when the claim is welfare.
-              job.welfareClaimed
-                ? { preemptionProtected: true, welfareGrantJobId: job.jobId }
-                : { preemptionProtected: false },
-            );
-            if (!outputs) return [];
-            return [
-              ...outputs.memoryIds.map(id => buildSubsystemOutputRef('memory', id)),
-              ...outputs.concernIds.map(id => buildSubsystemOutputRef('concern', id)),
-              ...outputs.contactIds.map(id => buildSubsystemOutputRef('contact', id)),
-            ];
-          }, { projectsSubsystemOutputs: true });
+          await runWithPostTurnUsageAttribution(
+            record,
+            payload.source,
+            'extraction',
+            () => input.effects.run('memory-extraction', async (crossBoundary) => {
+              // Extraction has a long, failable pre-write phase (LLM call, parse, DB
+              // reads) before its first durable write. Guard that phase with the
+              // NON-crossing `assertOwned` fence so a transient pre-write failure
+              // leaves the receipt `pending` and the job retryable; `crossBoundary`
+              // is called only at the durable write sites, where a post-write crash
+              // must instead fail closed. Passing both keeps pre-write work
+              // retryable while the write phase stays exactly-once.
+              const outputs = await extractor.maybeExtract(
+                payload.source.logicalSessionId,
+                payload.canonicalContactId,
+                record.turnId,
+                payload.placeId,
+                payload.icpCorrelation,
+                crossBoundary,
+                recentEntries,
+                input.effects.assertOwned,
+                // mmo9.7.4: a welfare-escalated claim protects its model call from
+                // gate preemption so the aged memory job runs to completion instead
+                // of re-entering the preempt→defer loop. fxt1: pair the flag with
+                // the granting job id so the gateway can re-verify the escalation
+                // against the store; the id rides only when the claim is welfare.
+                job.welfareClaimed
+                  ? { preemptionProtected: true, welfareGrantJobId: job.jobId }
+                  : { preemptionProtected: false },
+              );
+              if (!outputs) return [];
+              return [
+                ...outputs.memoryIds.map(id => buildSubsystemOutputRef('memory', id)),
+                ...outputs.concernIds.map(id => buildSubsystemOutputRef('concern', id)),
+                ...outputs.contactIds.map(id => buildSubsystemOutputRef('contact', id)),
+              ];
+            }, { projectsSubsystemOutputs: true }),
+          );
         } catch (error) {
           // u5bv.11: the queued durable extraction found the extractor draining
           // before its serialized run wrote any fact. It crossed no write
@@ -370,22 +396,27 @@ async function runPostTurnBackgroundWork(
             });
           });
         }
-        await input.effects.run('emotion-appraisal', async (assertOwned) => {
-          const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
-          await dependencies.emotionRuntime.triggerEmotionAppraisal({
-            sessionChannelId: payload.emotionSessionId,
-            turnId: record.turnId,
-            appraisalState: payload.appraisalState,
-            templateVariables: canonicalTemplateVariables,
-            assertEffectAllowed: assertOwned,
-            recentEntries,
-            // mmo9.7.4: protect the welfare-escalated appraisal model call.
-            // fxt1: pair the flag with the granting job id for gateway re-verify.
-            preemptionProtected: job.welfareClaimed,
-            ...(job.welfareClaimed ? { welfareGrantJobId: job.jobId } : {}),
-            ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
-          });
-        });
+        await runWithPostTurnUsageAttribution(
+          record,
+          payload.source,
+          'emotion.appraisal',
+          () => input.effects.run('emotion-appraisal', async (assertOwned) => {
+            const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
+            await dependencies.emotionRuntime.triggerEmotionAppraisal({
+              sessionChannelId: payload.emotionSessionId,
+              turnId: record.turnId,
+              appraisalState: payload.appraisalState,
+              templateVariables: canonicalTemplateVariables,
+              assertEffectAllowed: assertOwned,
+              recentEntries,
+              // mmo9.7.4: protect the welfare-escalated appraisal model call.
+              // fxt1: pair the flag with the granting job id for gateway re-verify.
+              preemptionProtected: job.welfareClaimed,
+              ...(job.welfareClaimed ? { welfareGrantJobId: job.jobId } : {}),
+              ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+            });
+          }),
+        );
       },
     );
     return;

@@ -50,6 +50,12 @@ function makeUsageData(
         coveragePercent: 0,
       }])) as ModelUsageData['attributionCoverage']['byDimension'],
     },
+    attributionAnomalies: {
+      unknownChargeLaneCalls: totals.calls,
+      unknownChargeLaneRatePercent: totals.calls > 0 ? 100 : 0,
+      unknownSessionCalls: totals.calls,
+      unknownSessionRatePercent: totals.calls > 0 ? 100 : 0,
+    },
     recentEvents: [],
     expensiveEvents: [],
   };

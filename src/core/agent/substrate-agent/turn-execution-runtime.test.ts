@@ -6188,7 +6188,11 @@ describe('handleMessageForTurn pre-response concurrency', () => {
 
   it('threads temporal retrieval mode through active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
-    const refreshActiveMemoryContext = vi.fn(async () => null);
+    let refreshRequestContext: ReturnType<typeof getRequestContext>;
+    const refreshActiveMemoryContext = vi.fn(async () => {
+      refreshRequestContext = getRequestContext();
+      return null;
+    });
     const rolledOutSessionBoundary = {
       sessionId: 'ch1',
       beforeMs: Date.parse('2026-07-17T12:00:00.000Z'),
@@ -6240,6 +6244,13 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       callerContext: { retrievalMode: 'temporal' },
       retrievalMode: 'temporal',
     }));
+    expect(refreshRequestContext).toMatchObject({
+      sessionId: 'ch1',
+      channelId: 'ch1',
+      callType: 'memory',
+      originType: 'memory',
+      originStage: 'memory.active_context.refresh',
+    });
   });
 
   it('attaches structured observability warnings to the context stage when chat context is stale or contradictory', async () => {

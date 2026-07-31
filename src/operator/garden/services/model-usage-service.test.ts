@@ -101,6 +101,12 @@ function usageFixture(): ModelUsageData {
         knownCalls: 0, unknownCalls: 1, coveragePercent: 0,
       }])) as ModelUsageData['attributionCoverage']['byDimension'],
     },
+    attributionAnomalies: {
+      unknownChargeLaneCalls: 0,
+      unknownChargeLaneRatePercent: 0,
+      unknownSessionCalls: 0,
+      unknownSessionRatePercent: 0,
+    },
     recentEvents: [recentEvent],
     expensiveEvents: [],
   };

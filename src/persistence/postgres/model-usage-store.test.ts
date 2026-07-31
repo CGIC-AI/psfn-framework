@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const postgresMocks = vi.hoisted(() => ({
   seriesOverflow: false,
+  clientQueries: [] as Array<{ sql: string; values: unknown[] }>,
   ensurePostgresSchemaWithAdvisoryLock: vi.fn(async () => undefined),
   queryOne: vi.fn(async (_pool: unknown, sql: string, values: unknown[] = []) => {
     if (!sql.includes('COUNT(*) AS calls,')) return undefined;
@@ -34,7 +35,16 @@ vi.mock('../postgres.js', () => ({
   ensurePostgresSchemaWithAdvisoryLock: postgresMocks.ensurePostgresSchemaWithAdvisoryLock,
   queryOne: postgresMocks.queryOne,
   queryRows: postgresMocks.queryRows,
-  withPostgresClient: vi.fn(),
+  withPostgresClient: vi.fn(async (_pool: unknown, operation: (client: unknown) => Promise<unknown>) => (
+    operation({
+      query: async (sql: string, values: unknown[] = []) => {
+        postgresMocks.clientQueries.push({ sql, values });
+        return sql.includes('INSERT INTO model_usage_events')
+          ? { rows: [{ id: values[0] }] }
+          : { rows: [] };
+      },
+    })
+  )),
 }));
 
 import { PostgresModelUsageStore } from './model-usage-store.js';
@@ -45,6 +55,7 @@ describe('PostgresModelUsageStore previous-period totals', () => {
     postgresMocks.queryOne.mockClear();
     postgresMocks.queryRows.mockClear();
     postgresMocks.seriesOverflow = false;
+    postgresMocks.clientQueries.length = 0;
   });
 
   it('queries only totals for the shifted window with every ledger filter preserved', async () => {
@@ -69,6 +80,12 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       sinceMs: 100,
       untilMs: 200,
       totals: { calls: 2, totalTokens: 150, totalCostUsd: 0.15 },
+    });
+    expect(data.attributionAnomalies).toEqual({
+      unknownChargeLaneCalls: 0,
+      unknownChargeLaneRatePercent: 0,
+      unknownSessionCalls: 0,
+      unknownSessionRatePercent: 0,
     });
 
     const totalsQueries = postgresMocks.queryOne.mock.calls.filter(([, sql]) => (
@@ -142,5 +159,34 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       untilMs: 300,
       groupBy: ['sessionId'],
     })).rejects.toThrow('dimension time series exceeds the 5000-row safety limit');
+  });
+
+  it('preserves the enclosing session but records embedding as the model-operation origin', async () => {
+    const store = new PostgresModelUsageStore({} as Pool, { companionId: 'companion-a' });
+
+    await store.recordUsageEvent({
+      logicalCallId: 'extraction-embedding',
+      status: 'success',
+      callKind: 'embedding',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-a',
+        channelId: 'channel-a',
+        callType: 'memory',
+        purpose: 'embedding',
+        originStage: 'extraction',
+      },
+      provider: 'embedding-provider',
+      model: 'embedding-model',
+      inputTokens: 2,
+      outputTokens: 0,
+    });
+
+    const insert = postgresMocks.clientQueries.find(({ sql }) => (
+      sql.includes('INSERT INTO model_usage_events')
+    ));
+    expect(insert?.values[16]).toBe('embedding');
+    expect(insert?.values[20]).toBe('session-a');
+    expect(insert?.values[27]).toBe('background');
   });
 });

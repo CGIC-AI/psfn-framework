@@ -14,6 +14,7 @@ import {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ModelUsageBreakdown,
+  ModelUsageAttributionAnomalies,
   ModelUsageAttributionCoverage,
   ModelUsageBudgetQueryPort,
   ModelUsageBudgetSpendSnapshot,
@@ -658,6 +659,10 @@ function normalizeEvent(
           toolName: undefined,
           toolCallId: undefined,
         }),
+    // Embedding is the ledger origin even when it runs inside extraction or
+    // retrieval request context. Preserve the enclosing session attribution,
+    // but do not mislabel the metered model operation itself.
+    ...(input.callKind === 'embedding' ? { originStage: 'embedding' } : {}),
   });
 
   return {
@@ -756,6 +761,10 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
         rootInitiationId: row.root_initiation_id,
         workloadType: row.workload_type,
         workloadId: row.workload_id,
+      }, {
+        // A stored `unknown` is durable evidence, not permission to reclassify
+        // history using today's inference rules.
+        inferChargeLane: false,
       }),
       chargeSurface: normalizeStoredModelUsageChargeSurface(row.charge_surface),
     },
@@ -801,6 +810,24 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
   if (row.error_code) event.errorCode = row.error_code;
   if (row.error_message) event.errorMessage = row.error_message;
   return event;
+}
+
+function attributionAnomaliesFromCoverage(
+  coverage: ModelUsageAttributionCoverage,
+): ModelUsageAttributionAnomalies {
+  const chargeLane = coverage.byDimension.chargeLane;
+  const session = coverage.byDimension.sessionId;
+  const unknownRatePercent = (dimension: typeof chargeLane): number => (
+    coverage.totalCalls === 0
+      ? 0
+      : Math.round((dimension.unknownCalls / coverage.totalCalls) * 10_000) / 100
+  );
+  return {
+    unknownChargeLaneCalls: chargeLane.unknownCalls,
+    unknownChargeLaneRatePercent: unknownRatePercent(chargeLane),
+    unknownSessionCalls: session.unknownCalls,
+    unknownSessionRatePercent: unknownRatePercent(session),
+  };
 }
 
 function mapCostBreakdown(
@@ -1754,6 +1781,17 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         ]);
       }
     });
+    if (event.attribution.chargeLane === MODEL_USAGE_UNKNOWN_DIMENSION) {
+      log.warn('Model usage recorded with unknown charge-lane attribution', {
+        reason: 'unknown_charge_lane',
+        provider: event.provider,
+        model: event.model,
+        originStage: event.attribution.originStage,
+        sessionAttribution: event.attribution.sessionId === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? 'unknown'
+          : 'known',
+      });
+    }
   }
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
@@ -1829,6 +1867,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       byCallKind,
       groupedBy: Object.fromEntries(groupedByEntries),
       attributionCoverage,
+      attributionAnomalies: attributionAnomaliesFromCoverage(attributionCoverage),
       recentEvents,
       expensiveEvents,
     };

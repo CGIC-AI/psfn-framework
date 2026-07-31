@@ -9,6 +9,10 @@ import {
   deriveToolObservationContextShape,
   type ToolObservationContextDisplayMode,
 } from './tool-observation-context.js';
+import {
+  sanitizeToolResultInvocationAudit,
+  type ToolResultInvocationAudit,
+} from '../agent/tool-result-invocation-audit.js';
 
 interface SessionMetadataEnvelope {
   toolObservation?: unknown;
@@ -21,6 +25,7 @@ export interface ToolObservationInput {
   toolCallId?: string;
   outcome?: ToolCallOutcome;
   isError?: boolean;
+  invocationAudit?: ToolResultInvocationAudit;
 }
 
 export interface ToolObservationMetadata {
@@ -34,6 +39,7 @@ export interface ToolObservationMetadata {
   contextSummary?: string;
   contextDisplayMode?: ToolObservationContextDisplayMode;
   maskedContextSummary?: string;
+  invocationAudit?: ToolResultInvocationAudit;
 }
 
 export interface NormalizedToolObservation {
@@ -173,6 +179,9 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
       contextSummary: contextShape.summary,
       contextDisplayMode: contextShape.displayMode,
       maskedContextSummary,
+      ...(input.invocationAudit
+        ? { invocationAudit: sanitizeToolResultInvocationAudit(input.invocationAudit) }
+        : {}),
     },
   };
 }
@@ -234,6 +243,13 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     toolObservation.maskedContextSummary,
     'toolObservation.maskedContextSummary',
   );
+  if (toolObservation.invocationAudit !== undefined
+    && !isRecord(toolObservation.invocationAudit)) {
+    throw new Error('Tool observation field "toolObservation.invocationAudit" must be an object');
+  }
+  const invocationAudit = toolObservation.invocationAudit === undefined
+    ? undefined
+    : sanitizeToolResultInvocationAudit(toolObservation.invocationAudit);
 
   return {
     schemaVersion: TOOL_OBSERVATION_SCHEMA_VERSION,
@@ -250,6 +266,7 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     ...(contextSummary ? { contextSummary } : {}),
     ...(contextDisplayMode ? { contextDisplayMode } : {}),
     ...(maskedContextSummary ? { maskedContextSummary } : {}),
+    ...(invocationAudit ? { invocationAudit } : {}),
   };
 }
 

@@ -297,6 +297,7 @@ export function recordToolObservations(input: {
     // the SAME envelope lands in the session metadata without a second,
     // side-effecting screen (and without doubling a quarantine hold).
     const schedulerScreening = getToolResultIntakeScreening(entry);
+    const invocationAudit = getToolResultInvocationAudit(entry);
     const result = input.sessionManager.recordToolObservation(
       input.turnSessionIdentity.logicalSessionId,
       {
@@ -308,6 +309,7 @@ export function recordToolObservations(input: {
           : typeof entry.isError === 'boolean'
             ? { isError: entry.isError }
             : {}),
+        ...(invocationAudit ? { invocationAudit } : {}),
       },
       input.message.isDirectMessage,
       {

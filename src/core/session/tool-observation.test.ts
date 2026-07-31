@@ -1,11 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildToolObservationMetadata,
   formatToolObservationForContext,
   MASKED_TOOL_OBSERVATION_CONTENT,
   normalizeToolObservation,
+  parseToolObservationMetadata,
 } from './tool-observation.js';
 
 describe('tool observation context shaping', () => {
+  it('round-trips redacted invocation audit through guarded session metadata', () => {
+    const observation = normalizeToolObservation({
+      toolName: 'notify',
+      toolCallId: 'notify-1',
+      content: 'sent',
+      invocationAudit: {
+        arguments: {
+          action: 'send',
+          initiation_permit: '44444444-4444-4444-8444-444444444444',
+        },
+        rationale: 'Send the permitted companion notification.',
+      },
+    });
+
+    const metadata = buildToolObservationMetadata(undefined, observation.metadata);
+
+    expect(metadata).not.toContain('44444444-4444-4444-8444-444444444444');
+    expect(parseToolObservationMetadata(metadata)?.invocationAudit).toEqual({
+      arguments: {
+        action: 'send',
+        initiation_permit: '[REDACTED_SECRET]',
+      },
+      rationale: 'Send the permitted companion notification.',
+    });
+  });
+
   it('preserves the stable outcome while deriving legacy isError metadata', () => {
     const observation = normalizeToolObservation({
       toolName: 'fs',

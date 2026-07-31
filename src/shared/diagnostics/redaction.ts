@@ -3,6 +3,8 @@ const CONTENT_VALUE = '[REDACTED_CONTENT]';
 const MAX_DIAGNOSTIC_TEXT_CHARS = 240;
 
 const SECRET_KEY_PATTERN = /(?:authorization|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|password|credential|private[_-]?key)/i;
+const CAPABILITY_SECRET_KEY_PATTERN = /(?:^|[_-])(?:permit(?:[_-]?(?:id|token))?|grant[_-]?(?:id|digest)|csrf(?:[_-]?token)?)(?:$|[_-])|^x-psfn-(?:csrf|escalation(?:-grant)?)$/i;
+const CAMEL_CAPABILITY_SECRET_KEY_PATTERN = /(?:Permit(?:Id|Token)?|Grant(?:Id|Digest)|Csrf(?:Token)?)$|^(?:permit(?:Id|Token)?|grant(?:Id|Digest)|csrf(?:Token)?)$/;
 const EXACT_SECRET_KEY_PATTERN = /^(?:auth|code|key|session|sig|signature)$/i;
 const CONTENT_KEY_PATTERN = /(?:content|conversation|message|messages|prompt|response|transcript|utterance|delta|partialresult|body|text)/i;
 
@@ -12,7 +14,9 @@ function truncateDiagnosticText(value: string): string {
 }
 
 export function isDiagnosticSecretKey(key: string): boolean {
-  return SECRET_KEY_PATTERN.test(key);
+  return SECRET_KEY_PATTERN.test(key)
+    || CAPABILITY_SECRET_KEY_PATTERN.test(key)
+    || CAMEL_CAPABILITY_SECRET_KEY_PATTERN.test(key);
 }
 
 export function isDiagnosticContentKey(key: string): boolean {

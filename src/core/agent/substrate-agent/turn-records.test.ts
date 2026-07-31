@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildTurnRecord,
+  recordToolObservations,
   resolveTurnRecordAuditPrivacy,
   sanitizePersistedReasoningText,
+  type TurnSessionWriteManager,
 } from './turn-records.js';
 import { executeToolCallsWithScheduler } from '../tool-call-scheduler.js';
+import type { ToolResultMessage } from '@mariozechner/pi-ai';
 
 const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
 const AUDIT_REQUEST_ID = 'request-audit-privacy';
@@ -89,10 +92,11 @@ async function buildScheduledFallbackToolRecord(input: {
     { maxParallelToolCalls: 1 },
   );
   const serializedToolResult = JSON.stringify(execution.toolResults[0]!);
-  const rematerializedToolResult = JSON.parse(serializedToolResult) as Record<string, unknown>;
+  const rematerializedToolResult = JSON.parse(serializedToolResult) as ToolResultMessage;
   return {
-    record: buildFallbackToolRecord(rematerializedToolResult),
+    record: buildFallbackToolRecord(rematerializedToolResult as unknown as Record<string, unknown>),
     serializedToolResult,
+    toolResult: rematerializedToolResult,
   };
 }
 
@@ -438,6 +442,16 @@ describe('turn-records tool persistence', () => {
         api_key: 'sk-live-secret-value',
         openaiApiKey: 'sk-live-compound-secret',
         code: 'oauth-secret-code',
+        initiation_permit: '44444444-4444-4444-8444-444444444444',
+        capability_token: 'shard-capability-token-value',
+        grantId: '55555555-5555-4555-8555-555555555555',
+        grantDigest: 'sha256:grant-digest-value',
+        operator_grant_id: '66666666-6666-4666-8666-666666666666',
+        csrfToken: 'csrf-token-value',
+        'x-psfn-csrf': 'csrf-header-value',
+        'x-psfn-escalation-grant': '77777777-7777-4777-8777-777777777777',
+        key: 'vault-adjacent-key-value',
+        private_key: 'private-key-value',
         nested: {
           authorization: 'Bearer live-secret-token',
           header: 'Bearer nested-value-secret',
@@ -452,6 +466,16 @@ describe('turn-records tool persistence', () => {
       api_key: '[REDACTED_SECRET]',
       openaiApiKey: '[REDACTED_SECRET]',
       code: '[REDACTED_SECRET]',
+      initiation_permit: '[REDACTED_SECRET]',
+      capability_token: '[REDACTED_SECRET]',
+      grantId: '[REDACTED_SECRET]',
+      grantDigest: '[REDACTED_SECRET]',
+      operator_grant_id: '[REDACTED_SECRET]',
+      csrfToken: '[REDACTED_SECRET]',
+      'x-psfn-csrf': '[REDACTED_SECRET]',
+      'x-psfn-escalation-grant': '[REDACTED_SECRET]',
+      key: '[REDACTED_SECRET]',
+      private_key: '[REDACTED_SECRET]',
       nested: {
         authorization: '[REDACTED_SECRET]',
         header: 'Bearer [REDACTED_SECRET]',
@@ -459,12 +483,72 @@ describe('turn-records tool persistence', () => {
         safe: 'keep-me',
       },
     });
-    expect(JSON.stringify(record.toolCalls)).not.toContain('live-secret');
-    expect(JSON.stringify(record.toolCalls)).not.toContain('oauth-secret-code');
-    expect(JSON.stringify(record.toolCalls)).not.toContain('1234567890abcdef');
-    expect(serializedToolResult).not.toContain('live-secret');
-    expect(serializedToolResult).not.toContain('oauth-secret-code');
-    expect(serializedToolResult).not.toContain('1234567890abcdef');
+    const persistedAudit = JSON.stringify(record.toolCalls);
+    for (const secret of [
+      'live-secret',
+      'oauth-secret-code',
+      '1234567890abcdef',
+      '44444444-4444-4444-8444-444444444444',
+      'shard-capability-token-value',
+      '55555555-5555-4555-8555-555555555555',
+      '66666666-6666-4666-8666-666666666666',
+      'grant-digest-value',
+      'csrf-token-value',
+      'csrf-header-value',
+      '77777777-7777-4777-8777-777777777777',
+      'vault-adjacent-key-value',
+      'private-key-value',
+    ]) {
+      expect(persistedAudit).not.toContain(secret);
+      expect(serializedToolResult).not.toContain(secret);
+    }
+  });
+
+  it('carries invocation audit into the guarded session tool-observation metadata path', async () => {
+    const { toolResult } = await buildScheduledFallbackToolRecord({
+      toolName: 'world',
+      arguments: { action: 'list', place_id: 'living_room' },
+      rationale: 'Inspect the available world state.',
+      thoughtSignature: 'sig-world-list',
+    });
+    const recordToolObservation = vi.fn().mockReturnValue({
+      entryId: 3,
+      intakeSnapshot: null,
+    });
+
+    recordToolObservations({
+      sessionManager: { recordToolObservation } as unknown as TurnSessionWriteManager,
+      message: {
+        id: 'source-message-session-audit',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'Inspect the world.',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnSessionIdentity: {
+        sourceChannelId: 'api:test',
+        logicalSessionId: 'api:test',
+      },
+      turnId: AUDIT_TURN_ID,
+      requestId: AUDIT_REQUEST_ID,
+      turnMessages: [toolResult],
+      trustLevel: 'regular',
+    });
+
+    expect(recordToolObservation).toHaveBeenCalledWith(
+      'api:test',
+      expect.objectContaining({
+        invocationAudit: {
+          arguments: { action: 'list', place_id: 'living_room' },
+          rationale: 'Inspect the available world state.',
+          thoughtSignature: 'sig-world-list',
+        },
+      }),
+      undefined,
+      expect.any(Object),
+    );
   });
 
   it('preserves tool arguments, results, and rationale in the turn record', () => {

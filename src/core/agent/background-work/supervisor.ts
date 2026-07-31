@@ -151,7 +151,7 @@ function isBackgroundWorkKind(value: string): value is BackgroundWorkKind {
 
 function telemetryDisposition(job: StoredBackgroundWorkJob): TurnPerformanceDeferReason {
   switch (job.state) {
-    case 'queued': return job.reasonCode === 'foreground_active' ? 'resumed' : 'queued';
+    case 'queued': return 'queued';
     case 'deferred': return 'rescheduled';
     case 'retry_wait': return 'retry_scheduled';
     case 'running': return 'started';
@@ -186,7 +186,6 @@ export class BackgroundWorkSupervisor {
     fence: { lost: boolean };
     controller: AbortController;
   }>();
-  private sessionTransitionTail: Promise<void> = Promise.resolve();
   private tickPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
   private stopping = false;
@@ -252,16 +251,12 @@ export class BackgroundWorkSupervisor {
     if (this.stopping) throw new Error('Background work supervisor is stopping');
     const results = await this.store.enqueueBatch(inputs);
     for (let index = 0; index < inputs.length; index += 1) {
-      const input = inputs[index]!;
       const result = results[index]!;
       if (result.outcome === 'already_accepted') continue;
       this.emitJobTelemetry(result.job, result.outcome === 'deduplicated' ? 'deduplicated' : undefined);
       for (const staleJobId of result.staleDiscardedJobIds) {
         const stale = await this.store.get(staleJobId);
         if (stale) this.emitJobTelemetry(stale);
-      }
-      if (this.foregroundCounts.has(input.logicalSessionId)) {
-        this.queueForegroundDeferral(input.logicalSessionId);
       }
     }
   }
@@ -325,18 +320,11 @@ export class BackgroundWorkSupervisor {
       return;
     }
     this.foregroundCounts.delete(lease.logicalSessionId);
-    const idle = await this.store.endForeground({
+    await this.store.endForeground({
       logicalSessionId: lease.logicalSessionId,
       leaseOwner: this.leaseOwner,
       leaseId: lease.id,
       nowMs: this.now(),
-    });
-    if (idle) this.queueSessionTransition(async () => {
-      const resumed = await this.store.resumeDeferredForSession({
-        logicalSessionId: lease.logicalSessionId,
-        nowMs: this.now(),
-      });
-      for (const job of resumed) this.emitJobTelemetry(job, 'resumed');
     });
     if (this.running.size === 0 && this.readyForegroundLeaseIds.size === 0) this.stopHeartbeat();
   }
@@ -352,10 +340,6 @@ export class BackgroundWorkSupervisor {
     await Promise.allSettled([...this.running.values()].map(entry => entry.promise));
   }
 
-  async waitForSessionTransitions(): Promise<void> {
-    await this.sessionTransitionTail;
-  }
-
   async stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopping = true;
@@ -366,7 +350,6 @@ export class BackgroundWorkSupervisor {
     }
     const stopAttempt = (async () => {
       await this.tickPromise;
-      await this.waitForSessionTransitions();
       const runningPromises = [...this.running.values()].map(entry => entry.promise);
       if (runningPromises.length > 0 && this.shutdownTimeoutMs > 0) {
         await Promise.race([
@@ -414,8 +397,9 @@ export class BackgroundWorkSupervisor {
     while (!this.stopping && this.running.size < this.maxConcurrentSessions) {
       // Split the exclusion set: a session running a claim is a HARD exclusion
       // (one running job per session is a durable invariant), while a session
-      // that merely has foreground activity is a SOFT exclusion a welfare-aged
-      // job may bypass into a bounded reserve slot (mmo9.7.4).
+      // with foreground activity excludes only the foreground-exclusive
+      // auto_compaction kind — everything else claims concurrently with the
+      // turn (hrmrq.119).
       const runningExcluded = new Set<string>();
       for (const entry of this.running.values()) {
         runningExcluded.add(entry.job.logicalSessionId);
@@ -457,13 +441,12 @@ export class BackgroundWorkSupervisor {
     fence: { lost: boolean },
     controller: AbortController,
   ): Promise<void> {
-    // A welfare-admitted claim (mmo9.7.4) is deliberately immune to the
-    // in-memory foreground re-defer here: it was aged past the threshold and
-    // granted a protected completion in a bounded reserve slot, so re-deferring
-    // it now would restart the preempt→defer→preempt starvation loop the welfare
-    // path exists to break. Its durable effect fences are correspondingly immune
-    // in the store. Non-welfare claims keep the original fail-safe re-defer.
-    if (!job.welfareClaimed && this.foregroundCounts.has(job.logicalSessionId)) {
+    // Background automata run concurrently with chat turns (hrmrq.119); only
+    // the foreground-exclusive auto_compaction kind yields to an active turn,
+    // because it rewrites the live session context the turn is reading. This
+    // covers the race where a turn began between claimNext's exclusion check
+    // and this execution; the durable effect fences enforce the same rule.
+    if (job.kind === 'auto_compaction' && this.foregroundCounts.has(job.logicalSessionId)) {
       await this.transitionClaimToDeferred(job, 'foreground_active', this.retryBaseDelayMs);
       return;
     }
@@ -846,26 +829,6 @@ export class BackgroundWorkSupervisor {
 
   private executionDurationMs(job: ClaimedBackgroundWorkJob): number {
     return Math.max(0, this.now() - job.updatedAtMs);
-  }
-
-  private queueSessionTransition(operation: () => Promise<void>): void {
-    this.sessionTransitionTail = this.sessionTransitionTail
-      .then(operation)
-      .catch(() => {
-        log.warn('Background session transition failed', {});
-      });
-  }
-
-  private queueForegroundDeferral(logicalSessionId: string): void {
-    this.queueSessionTransition(async () => {
-      const nowMs = this.now();
-      const deferred = await this.store.deferRunnableForSession({
-        logicalSessionId,
-        nowMs,
-        resumeFallbackAtMs: nowMs + this.leaseDurationMs,
-      });
-      for (const job of deferred) this.emitJobTelemetry(job);
-    });
   }
 
   private emitJobTelemetry(

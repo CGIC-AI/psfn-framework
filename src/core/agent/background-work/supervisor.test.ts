@@ -28,6 +28,7 @@ import type {
 import {
   createBackgroundWorkIdentity,
   fingerprintBackgroundWorkPayload,
+  type AutoCompactionBackgroundPayload,
   type MemoryExtractionBackgroundPayload,
 } from './types.js';
 
@@ -84,6 +85,44 @@ function makeInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInpu
       turnRecordFingerprint: 'a'.repeat(64),
       createdAtMs: 100,
     },
+  };
+  return {
+    ...createBackgroundWorkIdentity({ logicalSessionId: sessionId, turnId, kind: payload.kind }),
+    logicalSessionId: sessionId,
+    kind: payload.kind,
+    payload,
+    payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+    sourceTurnId: turnId,
+    sourceRequestId: `request-${turnId}`,
+    sourceChannelId: sessionId,
+    createdAtMs: 100,
+    maxAttempts: 3,
+  };
+}
+
+function makeCompactionInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInput {
+  const payload: AutoCompactionBackgroundPayload = {
+    schemaVersion: 1,
+    kind: 'auto_compaction',
+    source: {
+      schemaVersion: 1,
+      logicalSessionId: sessionId,
+      channelId: sessionId,
+      turnId,
+      requestId: `request-${turnId}`,
+      turnRecordFingerprint: 'a'.repeat(64),
+      createdAtMs: 100,
+    },
+    systemPromptTokenCount: 10,
+    memoriesTokenCount: 5,
+    adaptiveProfile: {
+      enabled: false,
+      source: 'disabled',
+      category: 'default',
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+    },
+    turnBudgetCharacteristics: {},
   };
   return {
     ...createBackgroundWorkIdentity({ logicalSessionId: sessionId, turnId, kind: payload.kind }),
@@ -188,11 +227,6 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
       leaseOwner: input.leaseOwner,
       expiresAtMs: input.nowMs + input.leaseDurationMs,
     });
-    await this.deferRunnableForSession({
-      logicalSessionId: input.logicalSessionId,
-      nowMs: input.nowMs,
-      resumeFallbackAtMs: input.nowMs,
-    });
   }
 
   async renewForeground(input: {
@@ -237,35 +271,6 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     ));
   }
 
-  async deferRunnableForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-    resumeFallbackAtMs: number;
-  }): Promise<StoredBackgroundWorkJob[]> {
-    return this.transitionSession(
-      input.logicalSessionId,
-      ['queued', 'retry_wait'],
-      'deferred',
-      'foreground_active',
-      input.nowMs,
-      input.resumeFallbackAtMs,
-    );
-  }
-
-  async resumeDeferredForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-  }): Promise<StoredBackgroundWorkJob[]> {
-    return this.transitionSession(
-      input.logicalSessionId,
-      ['deferred'],
-      'queued',
-      'foreground_active',
-      input.nowMs,
-      input.nowMs,
-    );
-  }
-
   async claimNext(input: {
     leaseOwner: string;
     nowMs: number;
@@ -279,9 +284,12 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     const candidate = [...this.jobs.values()]
       .filter(job => ['queued', 'deferred', 'retry_wait'].includes(job.state))
       .filter(job => job.availableAtMs <= input.nowMs)
-      .filter(job => ![...this.foreground.values()].some(lease => (
-        lease.logicalSessionId === job.logicalSessionId && lease.expiresAtMs > input.nowMs
-      )))
+      // Only the foreground-exclusive kind yields to an active turn lease
+      // (hrmrq.119); all other kinds claim concurrently with foreground work.
+      .filter(job => job.kind !== 'auto_compaction'
+        || ![...this.foreground.values()].some(lease => (
+          lease.logicalSessionId === job.logicalSessionId && lease.expiresAtMs > input.nowMs
+        )))
       .filter(job => !excluded.has(job.logicalSessionId) && !runningSessions.has(job.logicalSessionId))
       .sort((left, right) => left.createdAtMs - right.createdAtMs || left.jobId.localeCompare(right.jobId))
       .at(0);
@@ -343,7 +351,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
       || current.leaseOwner !== input.leaseOwner
       || current.revision !== input.expectedRevision
       || (current.leaseExpiresAtMs ?? 0) <= input.nowMs) return 'lease_lost';
-    return [...this.foreground.values()].some(lease => (
+    return current.kind === 'auto_compaction' && [...this.foreground.values()].some(lease => (
       lease.logicalSessionId === current.logicalSessionId && lease.expiresAtMs > input.nowMs
     )) ? 'foreground_active' : 'owned';
   }
@@ -611,40 +619,6 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     this.foregroundRenewalLoss = true;
   }
 
-  private transitionSession(
-    logicalSessionId: string,
-    expectedStates: StoredBackgroundWorkJob['state'][],
-    state: StoredBackgroundWorkJob['state'],
-    reasonCode: BackgroundWorkReasonCode,
-    nowMs: number,
-    availableAtMs?: number,
-  ): StoredBackgroundWorkJob[] {
-    const changed: StoredBackgroundWorkJob[] = [];
-    for (const current of [...this.jobs.values()]) {
-      if (current.logicalSessionId !== logicalSessionId || !expectedStates.includes(current.state)) continue;
-      const restoredState = state === 'queued' && current.deferredFromState
-        ? current.deferredFromState
-        : state;
-      const next = {
-        ...current,
-        state: restoredState,
-        reasonCode,
-        updatedAtMs: nowMs,
-        ...(state === 'deferred'
-          ? { deferredFromState: current.state === 'retry_wait' ? 'retry_wait' as const : 'queued' as const }
-          : {}),
-        ...(availableAtMs !== undefined && reasonCode !== 'foreground_active'
-          ? { availableAtMs }
-          : {}),
-        revision: current.revision + 1,
-      };
-      if (state !== 'deferred') delete next.deferredFromState;
-      this.jobs.set(next.jobId, next);
-      changed.push({ ...next });
-    }
-    return changed;
-  }
-
   private requireClaim(input: {
     jobId: string;
     leaseOwner: string;
@@ -753,7 +727,7 @@ describe('BackgroundWorkSupervisor', () => {
     expect((await store.get(makeInput('session-a', 'turn-a').jobId))?.state).toBe('succeeded');
   });
 
-  it('durably defers unstarted same-session work during foreground activity and resumes it', async () => {
+  it('claims and completes queued autonomic work concurrently with an active foreground turn (hrmrq.119)', async () => {
     const store = new MemoryBackgroundWorkStore();
     const executor = vi.fn(async () => undefined);
     const supervisor = createBackgroundWorkSupervisor({
@@ -763,24 +737,102 @@ describe('BackgroundWorkSupervisor', () => {
       executor,
     });
     const input = makeInput('session-a', 'turn-a');
+    const lease = supervisor.beginForeground('session-a');
+    await lease.ready;
+    await supervisor.enqueue([input]);
+
+    // The turn is still active, yet the autonomic job runs to completion.
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect((await store.get(input.jobId))?.state).toBe('succeeded');
+    await supervisor.endForeground(lease);
+  });
+
+  it('holds queued auto_compaction untouched while a turn is active and claims it after release', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const executor = vi.fn(async () => undefined);
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor,
+    });
+    const input = makeCompactionInput('session-a', 'turn-a');
     await supervisor.enqueue([input]);
 
     const lease = supervisor.beginForeground('session-a');
     await lease.ready;
-    await supervisor.waitForSessionTransitions();
     await supervisor.tick();
     expect(executor).not.toHaveBeenCalled();
-    expect((await store.get(input.jobId))?.state).toBe('deferred');
+    // The blocked job is merely not claimed — its row is never rewritten.
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'queued', revision: 1 });
 
     await supervisor.endForeground(lease);
-    await supervisor.waitForSessionTransitions();
     await supervisor.tick();
     await supervisor.waitForIdle();
     expect(executor).toHaveBeenCalledTimes(1);
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
   });
 
-  it('defers a claimed job when foreground begins before its effect boundary, then resumes once', async () => {
+  it('keeps the turn path free of job-row work regardless of queued depth (hrmrq.119)', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const inputs = Array.from({ length: 40 }, (_, index) => makeInput('session-a', `turn-${String(index)}`));
+    for (const input of inputs) await store.enqueue(input);
+    const beginSpy = vi.spyOn(store, 'beginForeground');
+    const endSpy = vi.spyOn(store, 'endForeground');
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor: async () => undefined,
+    });
+
+    const lease = supervisor.beginForeground('session-a');
+    await lease.ready;
+    await supervisor.endForeground(lease);
+
+    // One lease insert and one lease delete — independent of the 40 queued jobs,
+    // every one of which is left byte-for-byte untouched.
+    expect(beginSpy).toHaveBeenCalledTimes(1);
+    expect(endSpy).toHaveBeenCalledTimes(1);
+    for (const input of inputs) {
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'enqueued',
+        revision: 1,
+        deferCount: 0,
+      });
+    }
+  });
+
+  it('makes steady autonomic progress in every turn window of a sustained conversation', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async () => undefined,
+    });
+
+    // Ten back-to-back turns with no idle gap: each turn's memory-extraction
+    // job must complete DURING some turn window of the conversation, not after
+    // it ends. Slow is fine; stoppage is the violation class.
+    for (let turn = 0; turn < 10; turn += 1) {
+      const lease = supervisor.beginForeground('session-a');
+      await lease.ready;
+      const input = makeInput('session-a', `turn-${String(turn)}`);
+      await supervisor.enqueue([input]);
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      expect((await store.get(input.jobId))?.state).toBe('succeeded');
+      await supervisor.endForeground(lease);
+      now += 1_000;
+    }
+  });
+
+  it('defers a claimed auto_compaction when foreground begins before its effect boundary, then resumes once', async () => {
     let now = 1_000;
     const store = new MemoryBackgroundWorkStore();
     const claimEnteredExecutor = deferred();
@@ -796,7 +848,7 @@ describe('BackgroundWorkSupervisor', () => {
         await effects.run('durable-sink', async () => effect());
       },
     });
-    const input = makeInput('session-a', 'turn-a');
+    const input = makeCompactionInput('session-a', 'turn-a');
     await supervisor.enqueue([input]);
 
     await supervisor.tick();
@@ -814,7 +866,6 @@ describe('BackgroundWorkSupervisor', () => {
     });
 
     await supervisor.endForeground(foreground);
-    await supervisor.waitForSessionTransitions();
     now = 2_000;
     await supervisor.tick();
     await supervisor.waitForIdle();
@@ -954,7 +1005,7 @@ describe('BackgroundWorkSupervisor', () => {
       await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
       expect(foreground.signal.aborted).toBe(true);
 
-      const input = makeInput('session-a', 'turn-a');
+      const input = makeCompactionInput('session-a', 'turn-a');
       await second.enqueue([input]);
       await second.tick();
       await second.waitForIdle();
@@ -974,7 +1025,6 @@ describe('BackgroundWorkSupervisor', () => {
 
       await first.endForeground(foreground);
       await first.endForeground(foreground);
-      await first.waitForSessionTransitions();
       await second.tick();
       await second.waitForIdle();
       expect(effect).toHaveBeenCalledTimes(1);
@@ -1000,7 +1050,7 @@ describe('BackgroundWorkSupervisor', () => {
         await effects.run('durable-sink', async () => effect());
       },
     });
-    const input = makeInput('session-a', 'turn-a');
+    const input = makeCompactionInput('session-a', 'turn-a');
     await supervisor.enqueue([input]);
     await supervisor.tick();
     await effectStarted.promise;

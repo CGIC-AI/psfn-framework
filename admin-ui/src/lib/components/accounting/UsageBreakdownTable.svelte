@@ -6,7 +6,7 @@
     ModelUsageGroupSort,
     ModelUsageSortDirection,
   } from '../../../../../src/shared/telemetry/model-usage.js';
-  import { formatDurationMs, formatInteger, formatPercent, formatUsd, labelDimension, shortId } from '$lib/accounting/format';
+  import { formatDimensionValue, formatDurationMs, formatInteger, formatPercent, formatUsd, labelDimension, shortId } from '$lib/accounting/format';
 
   interface Props {
     groups: ModelUsageGroup[];
@@ -82,7 +82,7 @@
                       class="rounded border border-bark-300 bg-bark-50 px-2 py-1 text-left text-xs text-shadow-700 hover:border-gold-400 hover:bg-gold-50"
                       title={`Filter ${labelDimension(dimension)} to ${value}`}
                     >
-                      <span class="text-shadow-500">{labelDimension(dimension)}</span> {shortId(value)}
+                      <span class="text-shadow-500">{labelDimension(dimension)}</span> {shortId(formatDimensionValue(dimension, value))}
                     </button>
                   {/each}
                 {/if}

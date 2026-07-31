@@ -482,6 +482,31 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }
     }
 
+    const encodedTimezonePaths = [
+      '/api/admin/model-usage?range=month&timezone=America%2FNew_York',
+      '/api/admin/fleet-model-usage?range=month&timezone=America%2FNew_York',
+      '/api/admin/model-usage/export?format=csv&range=month&timezone=America%2FNew_York',
+    ] as const;
+    for (const encodedTimezonePath of encodedTimezonePaths) {
+      const encodedTimezone = await get(
+        edgePort,
+        `/companions/${COMPANION_A}/garden${encodedTimezonePath}`,
+        SESSION_A,
+      );
+      expect(encodedTimezone.status, encodedTimezonePath).toBe(200);
+      expect(JSON.parse(encodedTimezone.body).path).toBe(encodedTimezonePath);
+    }
+
+    const malformedTarget = await get(
+      edgePort,
+      `/companions/${COMPANION_A}/garden/api/admin/model-usage%2Fexport?format=csv`,
+      SESSION_A,
+    );
+    expect(malformedTarget.status).toBe(400);
+    expect(JSON.parse(malformedTarget.body)).toEqual({
+      error: { type: 'invalid_request_target' },
+    });
+
     // The reveal surface carries no browser-authored envelope: the audited
     // escalation grant, bound to the exact compiled route, is what opens it.
     const revealBody = '';
@@ -695,6 +720,29 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(companionUiRedirect.headers.location).toBe('/companion-ui/signed-in');
     expect(companionUiHits).toHaveLength(3);
 
+    const sweptRequests = GARDEN_CLIENT_ROUTES.reduce(
+      (total, pagePath) => (
+        total + 1 + (OPERATOR_WALKTHROUGH_PRIMARY_APIS.get(pagePath)?.length ?? 0)
+      ),
+      0,
+    );
+    const authorizedNonSweepWorkloadPaths = [
+      resourcePath,
+      revealPath,
+      breakGlassConfirmPath,
+      breakGlassDecidePath,
+    ] as const;
+    // These three requests used to die at the outer target parser. They now
+    // correctly reach the authorized workload before revocation; the malformed
+    // encoded-path request above still contributes no hit.
+    const authorizedHitsBeforeRevocation = await getHitCount(workloadA.port);
+    expect(authorizedHitsBeforeRevocation).toEqual({
+      hits: authorizedNonSweepWorkloadPaths.length
+        + sweptRequests
+        + encodedTimezonePaths.length,
+      pid: workloadA.pid,
+    });
+
     revokedA = true;
     const revokedCompanionUi = await get(edgePort, '/companion-ui/app.js', SESSION_A);
     expect(revokedCompanionUi.status).toBe(200);
@@ -706,16 +754,9 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       SESSION_A,
     );
     expect(revoked.status).toBe(404);
-    const sweptRequests = GARDEN_CLIENT_ROUTES.reduce(
-      (total, pagePath) => (
-        total + 1 + (OPERATOR_WALKTHROUGH_PRIMARY_APIS.get(pagePath)?.length ?? 0)
-      ),
-      0,
-    );
-    expect(await getHitCount(workloadA.port)).toEqual({
-      hits: 4 + sweptRequests,
-      pid: workloadA.pid,
-    });
+    // Authorization revocation must stop both UI and Garden requests before
+    // either can add another workload hit.
+    expect(await getHitCount(workloadA.port)).toEqual(authorizedHitsBeforeRevocation);
   });
 
   it('certifies disjoint bounded projections, stateless links, and outages', async () => {

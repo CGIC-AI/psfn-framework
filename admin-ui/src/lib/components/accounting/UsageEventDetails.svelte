@@ -2,9 +2,11 @@
   import type {
     ModelUsageCostBreakdown,
     ModelUsageEvent,
+    ModelUsageGroupDimension,
   } from '../../../../../src/shared/telemetry/model-usage.js';
   import {
     formatDurationMs,
+    formatDimensionValue,
     formatUsd,
     labelDimension,
     shortId,
@@ -21,6 +23,7 @@
     label: string;
     value: string;
     copy?: boolean;
+    dimension?: ModelUsageGroupDimension;
   }
 
   interface DetailSection {
@@ -67,7 +70,11 @@
     { label: 'Tool call ID', value: event.attribution.toolCallId, copy: true },
     { label: 'Runtime lane class', value: event.attribution.runtimeLaneClass },
     { label: 'Charge lane', value: event.attribution.chargeLane },
-    { label: 'Charge surface', value: event.attribution.chargeSurface },
+    {
+      label: 'Charge surface',
+      value: event.attribution.chargeSurface,
+      dimension: 'chargeSurface',
+    },
     { label: 'Charge event ID', value: event.attribution.chargeEventId, copy: true },
     { label: 'Charge run ID', value: event.attribution.chargeRunId, copy: true },
     { label: 'Charge root run ID', value: event.attribution.chargeRootRunId, copy: true },
@@ -90,10 +97,6 @@
     { label: 'Estimated', cost: event.estimatedCost },
     { label: 'Effective', cost: event.effectiveCost },
   ]);
-
-  function detailValue(value: string): string {
-    return value === 'unknown' ? 'Unknown' : value;
-  }
 
   function formatDetailedTimestamp(value: number | undefined): string {
     if (value === undefined || !Number.isFinite(value)) return 'Unknown';
@@ -144,7 +147,7 @@
                   <span class="truncate">{shortId(detail.value)}</span><span aria-hidden="true">⧉</span>
                 </button>
               {:else}
-                {detailValue(detail.value)}
+                {formatDimensionValue(detail.dimension, detail.value)}
               {/if}
             </dd>
           </div>

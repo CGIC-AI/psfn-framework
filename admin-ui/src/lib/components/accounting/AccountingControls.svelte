@@ -10,7 +10,7 @@
     type ModelUsageGroupDimension,
     type ModelUsageGroupSort,
   } from '../../../../../src/shared/telemetry/model-usage.js';
-  import { labelDimension, shortId } from '$lib/accounting/format';
+  import { formatDimensionValue, labelDimension, shortId } from '$lib/accounting/format';
 
   interface Props {
     queryState: AccountingQueryState;
@@ -207,7 +207,7 @@
                 class="inline-flex max-w-full items-center gap-1 rounded-full border border-gold-300 bg-gold-50 px-3 py-1 text-xs text-shadow-700 hover:bg-gold-100"
                 aria-label={`Remove ${labelDimension(dimension)} filter ${value}`}
               >
-                <strong>{labelDimension(dimension)}:</strong> <span class="truncate">{shortId(value)}</span> ×
+                <strong>{labelDimension(dimension)}:</strong> <span class="truncate">{shortId(formatDimensionValue(dimension, value))}</span> ×
               </button>
             {/each}
           </div>

@@ -33,8 +33,16 @@ export const MODEL_USAGE_CHARGE_LANES = [
   ...CHARGE_POLICY_RUNTIME_LANE_VALUES,
   MODEL_USAGE_UNKNOWN_DIMENSION,
 ] as const;
+export const MODEL_USAGE_RETIRED_CHARGE_SURFACE = 'retired' as const;
+export const MODEL_USAGE_RETIRED_CHARGE_SURFACE_VALUES = [
+  'ownerFileInspection',
+  'localFilesystem',
+  'localEmbedding',
+  'externalEmbedding',
+] as const;
 export const MODEL_USAGE_CHARGE_SURFACES = [
   ...CHARGE_POLICY_SURFACE_VALUES,
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE,
   MODEL_USAGE_UNKNOWN_DIMENSION,
 ] as const;
 
@@ -186,6 +194,9 @@ const CHANNEL_TYPE_SET: ReadonlySet<string> = new Set(CHANNEL_TYPES);
 const CHARGE_LANE_SET: ReadonlySet<string> = new Set(CHARGE_POLICY_RUNTIME_LANE_VALUES);
 const RUNTIME_LANE_CLASS_SET: ReadonlySet<string> = new Set(Object.values(RUNTIME_LANE_CLASSES));
 const CHARGE_SURFACE_SET: ReadonlySet<string> = new Set(CHARGE_POLICY_SURFACE_VALUES);
+const RETIRED_CHARGE_SURFACE_SET: ReadonlySet<string> = new Set(
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE_VALUES,
+);
 const MAX_DIMENSION_LENGTH = 512;
 const UNSAFE_DIMENSION_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/u;
 
@@ -219,6 +230,34 @@ function normalizeEnum<T extends string>(
     throw new Error(`${field} has unsupported value ${JSON.stringify(normalized)}`);
   }
   return normalized as T;
+}
+
+/**
+ * Historical ledger rows may contain charge surfaces retired by Law 38.
+ * Preserve those rows under one explicit read-only category without allowing
+ * the retired values through `ModelUsageAttributionInput` or the writer
+ * normalizer.
+ */
+export function normalizeStoredModelUsageChargeSurface(
+  value: unknown,
+): ModelUsageChargeSurface {
+  if (
+    value === undefined
+    || value === null
+    || value === MODEL_USAGE_UNKNOWN_DIMENSION
+  ) {
+    return MODEL_USAGE_UNKNOWN_DIMENSION;
+  }
+  const normalized = normalizeDimension(value, 'stored attribution.chargeSurface');
+  if (CHARGE_SURFACE_SET.has(normalized)) {
+    return normalized as ChargePolicySurface;
+  }
+  if (RETIRED_CHARGE_SURFACE_SET.has(normalized)) {
+    return MODEL_USAGE_RETIRED_CHARGE_SURFACE;
+  }
+  throw new Error(
+    `stored attribution.chargeSurface has unsupported value ${JSON.stringify(normalized)}`,
+  );
 }
 
 function normalizeObservabilityCallType(

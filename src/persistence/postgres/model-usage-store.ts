@@ -71,9 +71,12 @@ import {
   MODEL_USAGE_CHARGE_SURFACES,
   MODEL_USAGE_GROUP_DIMENSIONS,
   MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE,
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE_VALUES,
   MODEL_USAGE_RUNTIME_LANE_CLASSES,
   MODEL_USAGE_UNKNOWN_DIMENSION,
   normalizeModelUsageAttribution,
+  normalizeStoredModelUsageChargeSurface,
 } from '../../shared/telemetry/model-usage-attribution.js';
 import {
   reconcileModelUsageAccounting,
@@ -132,7 +135,7 @@ interface ModelUsageEventRow {
   tool_call_id: string | null;
   runtime_lane_class: ModelUsageEvent['attribution']['runtimeLaneClass'] | null;
   charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
-  charge_surface: ModelUsageEvent['attribution']['chargeSurface'] | null;
+  charge_surface: string | null;
   charge_event_id: string | null;
   charge_run_id: string | null;
   charge_root_run_id: string | null;
@@ -365,7 +368,12 @@ const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
   toolName: 'tool_name',
   runtimeLaneClass: 'runtime_lane_class',
   chargeLane: 'charge_lane',
-  chargeSurface: 'charge_surface',
+  chargeSurface: `CASE
+    WHEN charge_surface IN (${
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE_VALUES.map(value => `'${value}'`).join(', ')
+}) THEN '${MODEL_USAGE_RETIRED_CHARGE_SURFACE}'
+    ELSE charge_surface
+  END`,
   chargeEventId: 'charge_event_id',
   chargeRunId: 'charge_run_id',
   chargeRootRunId: 'charge_root_run_id',
@@ -708,49 +716,49 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     settlement: row.settlement,
     callKind: row.call_kind,
     telemetryVisibility: normalizeTelemetryVisibility(row.telemetry_visibility),
-    attribution: normalizeModelUsageAttribution({
-      companionId: row.companion_id,
-      sessionId: row.session_id,
-      channelId: row.channel_id ?? undefined,
-      channelType: row.channel_type === MODEL_USAGE_UNKNOWN_DIMENSION
-        ? undefined
-        : row.channel_type as Exclude<
-            ModelUsageEvent['attribution']['channelType'],
-            typeof MODEL_USAGE_UNKNOWN_DIMENSION
-          >,
-      callType: row.call_type,
-      purpose: row.purpose,
-      originType: row.origin_type === null || row.origin_type === MODEL_USAGE_UNKNOWN_DIMENSION
-        ? undefined
-        : row.origin_type,
-      originStage: row.origin_stage ?? undefined,
-      service: row.service ?? undefined,
-      process: row.process ?? undefined,
-      turnId: row.turn_id ?? undefined,
-      requestId: row.request_id ?? undefined,
-      toolName: row.tool_name ?? undefined,
-      toolCallId: row.tool_call_id ?? undefined,
-      runtimeLaneClass: row.runtime_lane_class === null
-        || row.runtime_lane_class === MODEL_USAGE_UNKNOWN_DIMENSION
-        ? undefined
-        : row.runtime_lane_class,
-      chargeLane: row.charge_lane === null || row.charge_lane === MODEL_USAGE_UNKNOWN_DIMENSION
-        ? undefined
-        : row.charge_lane,
-      chargeSurface: row.charge_surface === null || row.charge_surface === MODEL_USAGE_UNKNOWN_DIMENSION
-        ? undefined
-        : row.charge_surface,
-      chargeEventId: row.charge_event_id ?? undefined,
-      chargeRunId: row.charge_run_id ?? undefined,
-      chargeRootRunId: row.charge_root_run_id ?? undefined,
-      chargeParentRunId: row.charge_parent_run_id ?? undefined,
-      shardId: row.shard_id,
-      subagentId: row.subagent_id,
-      conversationId: row.conversation_id,
-      rootInitiationId: row.root_initiation_id,
-      workloadType: row.workload_type,
-      workloadId: row.workload_id,
-    }),
+    attribution: {
+      ...normalizeModelUsageAttribution({
+        companionId: row.companion_id,
+        sessionId: row.session_id,
+        channelId: row.channel_id ?? undefined,
+        channelType: row.channel_type === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? undefined
+          : row.channel_type as Exclude<
+              ModelUsageEvent['attribution']['channelType'],
+              typeof MODEL_USAGE_UNKNOWN_DIMENSION
+            >,
+        callType: row.call_type,
+        purpose: row.purpose,
+        originType: row.origin_type === null || row.origin_type === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? undefined
+          : row.origin_type,
+        originStage: row.origin_stage ?? undefined,
+        service: row.service ?? undefined,
+        process: row.process ?? undefined,
+        turnId: row.turn_id ?? undefined,
+        requestId: row.request_id ?? undefined,
+        toolName: row.tool_name ?? undefined,
+        toolCallId: row.tool_call_id ?? undefined,
+        runtimeLaneClass: row.runtime_lane_class === null
+          || row.runtime_lane_class === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? undefined
+          : row.runtime_lane_class,
+        chargeLane: row.charge_lane === null || row.charge_lane === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? undefined
+          : row.charge_lane,
+        chargeEventId: row.charge_event_id ?? undefined,
+        chargeRunId: row.charge_run_id ?? undefined,
+        chargeRootRunId: row.charge_root_run_id ?? undefined,
+        chargeParentRunId: row.charge_parent_run_id ?? undefined,
+        shardId: row.shard_id,
+        subagentId: row.subagent_id,
+        conversationId: row.conversation_id,
+        rootInitiationId: row.root_initiation_id,
+        workloadType: row.workload_type,
+        workloadId: row.workload_id,
+      }),
+      chargeSurface: normalizeStoredModelUsageChargeSurface(row.charge_surface),
+    },
     provider: row.provider,
     model: row.model,
     inputTokens: nonNegativeInteger(row.input_tokens),

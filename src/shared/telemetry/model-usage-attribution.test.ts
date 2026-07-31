@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE,
   MODEL_USAGE_UNKNOWN_DIMENSION,
+  normalizeStoredModelUsageChargeSurface,
   normalizeModelUsageAttribution,
 } from './model-usage-attribution.js';
 
@@ -101,6 +103,28 @@ describe('normalizeModelUsageAttribution', () => {
     expect(attribution.companionId).toBe('companion-alpha');
     expect(attribution.runtimeLaneClass).toBe('maintenance_reflection');
     expect(attribution.originStage).toBe('memory.sleeptime.run');
+  });
+
+  it.each([
+    'ownerFileInspection',
+    'localFilesystem',
+    'localEmbedding',
+    'externalEmbedding',
+  ])('maps the retired historical charge surface %s into one explicit read category', (
+    chargeSurface,
+  ) => {
+    expect(normalizeStoredModelUsageChargeSurface(chargeSurface))
+      .toBe(MODEL_USAGE_RETIRED_CHARGE_SURFACE);
+  });
+
+  it('keeps the writer strict while rejecting unknown historical charge surfaces', () => {
+    expect(() => normalizeModelUsageAttribution({
+      callType: 'chat',
+      purpose: 'chat',
+      chargeSurface: 'localEmbedding',
+    } as never)).toThrow('attribution.chargeSurface has unsupported value');
+    expect(() => normalizeStoredModelUsageChargeSurface('inventedLegacySurface'))
+      .toThrow('stored attribution.chargeSurface has unsupported value');
   });
 
   it.each([

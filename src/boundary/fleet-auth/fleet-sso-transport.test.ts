@@ -44,6 +44,19 @@ describe('companion-scoped Garden route parsing', () => {
     expect(parseCompanionScopedGardenRoute('/v1/fleet-auth/session')).toBeUndefined();
   });
 
+  it('preserves canonical encoded separators in query values without weakening path checks', () => {
+    const target = `/companions/${COMPANION_A}/garden/api/admin/model-usage`
+      + '?range=month&timezone=America%2FNew_York';
+
+    expect(parseFleetSsoOuterTarget(target)).toEqual({
+      rawPath: `/companions/${COMPANION_A}/garden/api/admin/model-usage`,
+      rawQuery: 'range=month&timezone=America%2FNew_York',
+    });
+    expect(parseCompanionScopedGardenRoute(target)).toMatchObject({
+      innerTarget: '/api/admin/model-usage?range=month&timezone=America%2FNew_York',
+    });
+  });
+
   it('fails closed on malformed companion selections without revealing existence', () => {
     for (const rawTarget of [
       '/companions/', // empty selection

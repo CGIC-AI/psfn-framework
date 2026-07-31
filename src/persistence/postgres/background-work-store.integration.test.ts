@@ -3476,6 +3476,104 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('normalizes rows stranded by the retired foreground sweep at connect and provably drains them (hrmrq.119 fixA)', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    let repairedStore: PostgresBackgroundWorkStore | null = null;
+    let supervisor: BackgroundWorkSupervisor | null = null;
+    try {
+      const batch = makeFourJobBatch('session-a', 'turn-legacy');
+      await store.enqueueBatch(batch);
+      const intention = batch.find(input => input.kind === 'intention_post_turn_hooks')!;
+      const compaction = batch.find(input => input.kind === 'auto_compaction')!;
+      // Exact live wedge shape (Artemis, 815 rows): the retired turn-boundary
+      // sweep parked queued/retry_wait jobs as deferred/foreground_active,
+      // pushed availability past any wall clock the process would see, stamped
+      // triple-digit defer pressure, and preserved the pre-sweep state in the
+      // deferred_from_* pair that only that sweep ever fully populated.
+      await inspectionPool.query(`
+        UPDATE agent_background_work_jobs
+        SET state = 'deferred',
+            reason_code = 'foreground_active',
+            deferred_from_state = 'queued',
+            deferred_from_available_at_ms = available_at_ms,
+            available_at_ms = 4102444800000,
+            defer_count = 278,
+            first_deferred_at_ms = 100,
+            revision = revision + 1
+      `);
+      await inspectionPool.query(`
+        UPDATE agent_background_work_jobs
+        SET deferred_from_state = 'retry_wait', deferred_from_available_at_ms = 500
+        WHERE job_id = $1
+      `, [intention.jobId]);
+
+      // The stranded shape is unreachable for the normal claim path at any
+      // realistic clock — this is the 815-row wedge, reproduced.
+      expect(await store.claimNext({
+        leaseOwner: 'worker-pre-repair',
+        nowMs: 1_000_000,
+        leaseDurationMs: 1_000,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+
+      // Reconnecting (process restart) restores every stranded row to its
+      // pre-sweep state and availability.
+      repairedStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: 'companion_a',
+      });
+      for (const input of batch) {
+        const restored = await repairedStore.get(input.jobId);
+        expect(restored).toMatchObject(input.jobId === intention.jobId
+          ? { state: 'retry_wait', availableAtMs: 500, deferCount: 278 }
+          : { state: 'queued', availableAtMs: 100, deferCount: 278 });
+        expect(restored?.deferredFromState).toBeUndefined();
+        expect(restored?.deferredFromAvailableAtMs).toBeUndefined();
+      }
+
+      // PROVEN drain, not assumed: a supervisor over the repaired store
+      // completes the backlog while a foreground turn lease stays live the
+      // whole time — except the foreground-exclusive compaction, which
+      // finishes right after the turn ends.
+      const executed = new Set<string>();
+      supervisor = createBackgroundWorkSupervisor({
+        store: repairedStore,
+        eventBus: new EventBus(),
+        now: () => 600,
+        executor: async ({ job }) => { executed.add(job.jobId); },
+      });
+      const lease = supervisor.beginForeground('session-a');
+      await lease.ready;
+      for (let pass = 0; pass < 8 && executed.size < 3; pass += 1) {
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+      }
+      expect(executed.size).toBe(3);
+      expect((await repairedStore.get(compaction.jobId))?.state).toBe('queued');
+      await supervisor.endForeground(lease);
+      for (let pass = 0; pass < 4 && executed.size < 4; pass += 1) {
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+      }
+      for (const input of batch) {
+        expect((await repairedStore.get(input.jobId))?.state).toBe('succeeded');
+      }
+    } finally {
+      if (supervisor) await supervisor.stop().catch(() => undefined);
+      await Promise.all([
+        inspectionPool.end(),
+        store.close(),
+        ...(repairedStore ? [repairedStore.close()] : []),
+      ]);
+    }
+  });
+
   it('deterministically keeps the newest unstarted compaction regardless of enqueue order', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {

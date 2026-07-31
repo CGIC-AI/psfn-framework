@@ -187,6 +187,7 @@ export class BackgroundWorkSupervisor {
     controller: AbortController;
   }>();
   private tickPromise: Promise<void> | null = null;
+  private chainedTickPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
   private stopping = false;
   private lastCleanupAtMs = Number.NEGATIVE_INFINITY;
@@ -259,6 +260,21 @@ export class BackgroundWorkSupervisor {
         if (stale) this.emitJobTelemetry(stale);
       }
     }
+    // Event-driven pump (hwars.3): accepted work triggers a claim pass now
+    // instead of waiting out the scheduler's coarse tick, which is demoted to
+    // a liveness backstop. Fire-and-forget: enqueue durability is already
+    // committed, and a failed pass is retried by the next kick or tick.
+    this.requestClaimPass();
+  }
+
+  /** Fire-and-forget claim pass; failures are logged and retried by the next kick or scheduler tick. */
+  private requestClaimPass(): void {
+    if (this.stopping) return;
+    void this.tick().catch((error) => {
+      log.error('Background claim pass failed', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    });
   }
 
   beginForeground(logicalSessionId: string): ForegroundWorkLease {
@@ -329,11 +345,28 @@ export class BackgroundWorkSupervisor {
     if (this.running.size === 0 && this.readyForegroundLeaseIds.size === 0) this.stopHeartbeat();
   }
 
+  /**
+   * Run a claim pass. Passes never run concurrently, but a request that
+   * arrives while one is in flight must not be swallowed by it: the in-flight
+   * pass captured its claim-time snapshot (`now`, exclusions) before this
+   * request existed, so deduping onto it can strand work that just became
+   * runnable until the next scheduler tick (the hrmrq.119 fixA wedge class).
+   * Instead, exactly one follow-up pass is chained after the in-flight one;
+   * concurrent late requests coalesce onto that same follow-up.
+   */
   async tick(): Promise<void> {
     if (this.stopping) return;
-    if (this.tickPromise) return this.tickPromise;
-    this.tickPromise = this.runTick().finally(() => { this.tickPromise = null; });
-    return this.tickPromise;
+    if (!this.tickPromise) {
+      this.tickPromise = this.runTick().finally(() => { this.tickPromise = null; });
+      return this.tickPromise;
+    }
+    this.chainedTickPromise ??= this.tickPromise
+      .catch(() => undefined)
+      .then(() => {
+        this.chainedTickPromise = null;
+        return this.tick();
+      });
+    return this.chainedTickPromise;
   }
 
   async waitForIdle(): Promise<void> {
@@ -350,6 +383,9 @@ export class BackgroundWorkSupervisor {
     }
     const stopAttempt = (async () => {
       await this.tickPromise;
+      // A chained follow-up pass no-ops under `stopping`; awaiting it here just
+      // guarantees no pass is left mid-flight when the store closes.
+      await this.chainedTickPromise;
       const runningPromises = [...this.running.values()].map(entry => entry.promise);
       if (runningPromises.length > 0 && this.shutdownTimeoutMs > 0) {
         await Promise.race([
@@ -431,6 +467,11 @@ export class BackgroundWorkSupervisor {
         .finally(() => {
           this.running.delete(job.jobId);
           if (this.running.size === 0 && this.foregroundLeases.size === 0) this.stopHeartbeat();
+          // Settlement pump: one running job per session is a durable
+          // invariant, so a deep single-session backlog drains one claim at a
+          // time — chaining the next pass off each settlement makes that drain
+          // continuous instead of one job per scheduler tick.
+          this.requestClaimPass();
         });
       this.running.set(job.jobId, { job, promise, fence, controller });
     }

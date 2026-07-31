@@ -19,6 +19,7 @@ import type {
 } from '../config/runtime-config-contracts.js';
 import { SETTINGS_FILE_NAME, type EditableSettings } from './contracts.js';
 import { normalizeEditableSettings } from './schema.js';
+import { loadRuntimeSettingsContractDefaults } from '../config/settings-contract-guard.js';
 
 export const DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS: WikiStartupHydrationSettings = {
   recentSessionLimit: 4,
@@ -44,6 +45,7 @@ export const DEFAULT_LIFECYCLE_KUBERNETES_SETTINGS: LifecycleKubernetesSettings 
 
 export interface RequiredSettingsBlocksMigrationOptions {
   dataDir: string;
+  seedDir?: string;
   apply?: boolean;
   faultInjection?: DurableWriteOptions['faultInjection'];
 }
@@ -55,7 +57,11 @@ export interface RequiredSettingsBlocksMigrationResult {
   addedPaths?: string[];
 }
 
-/** Explicitly upgrades owners written before the two runtime-required blocks existed. */
+/**
+ * Upgrade settings owners written before current default-bearing runtime
+ * contract fields existed. The legacy function name remains the stable CLI
+ * seam used by deployed init containers.
+ */
 export function migrateRequiredSettingsBlocks(
   options: RequiredSettingsBlocksMigrationOptions,
 ): RequiredSettingsBlocksMigrationResult {
@@ -90,17 +96,16 @@ export function migrateRequiredSettingsBlocks(
     }
     const candidate: Record<string, unknown> = structuredClone(raw);
     const addedPaths: string[] = [];
-    if (raw.wikiStartupHydration === undefined) {
-      candidate.wikiStartupHydration = structuredClone(
-        DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS,
-      );
-      addedPaths.push('wikiStartupHydration');
-    }
-    if (raw.lifecycleKubernetes === undefined) {
-      candidate.lifecycleKubernetes = structuredClone(
-        DEFAULT_LIFECYCLE_KUBERNETES_SETTINGS,
-      );
-      addedPaths.push('lifecycleKubernetes');
+    const defaults = loadRuntimeSettingsContractDefaults(
+      options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+    );
+    for (const [key, value] of Object.entries(defaults).sort(([left], [right]) => (
+      left.localeCompare(right)
+    ))) {
+      if (!Object.prototype.hasOwnProperty.call(raw, key)) {
+        candidate[key] = structuredClone(value);
+        addedPaths.push(key);
+      }
     }
 
     normalizeEditableSettings(candidate as EditableSettings);

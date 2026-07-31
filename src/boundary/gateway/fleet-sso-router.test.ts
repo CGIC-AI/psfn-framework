@@ -23,6 +23,10 @@ import {
   admitFleetGardenRequest,
   InMemoryRequestCapabilityReplayPort,
 } from '../../operator/garden/garden-admission.js';
+import {
+  clearGardenDenialsForTests,
+  getGardenDenialsLastHour,
+} from '../../operator/garden/garden-denial-observability.js';
 
 describe('Fleet Garden WebSocket rejection close contract', () => {
   it.each([
@@ -394,7 +398,7 @@ describe('unified Fleet SSO origin provenance', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it('issues a browser-principal capability after a consumed escalation grant without opening a socket', async () => {
+  it('records a browser-principal escalation denial at the unified-origin door', async () => {
     const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const nowSeconds = 1_783_000_000;
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -444,6 +448,8 @@ describe('unified Fleet SSO origin provenance', () => {
       expiresAt: new Date((nowSeconds + 300) * 1_000),
     }));
     const replay = vi.fn(async () => ({ outcome: 'mismatch' as const }));
+    const denialLogger = { warn: vi.fn() };
+    clearGardenDenialsForTests();
     const router = new GatewayFleetSsoRouter({
       canonicalOrigin,
       trustProxy: true,
@@ -472,6 +478,7 @@ describe('unified Fleet SSO origin provenance', () => {
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
       upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
       nowSeconds: () => nowSeconds,
+      denialLogger,
     });
     // The reveal surface carries no request body: the audited grant, not a
     // browser-supplied envelope, is what opens it.
@@ -486,23 +493,86 @@ describe('unified Fleet SSO origin provenance', () => {
       'x-forwarded-port': '443',
       'x-forwarded-for': '198.51.100.9',
       cookie: `__Host-psfn_session=${'s'.repeat(43)}`,
-      'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999',
       'content-type': 'application/json',
       'content-length': String(body.byteLength),
     };
     Object.defineProperty(incoming, 'socket', { value: {} });
+    let finishListener: (() => void) | undefined;
     const response = {
+      statusCode: 200,
       destroyed: false,
       writableEnded: false,
-      writeHead: vi.fn(),
-      end: vi.fn(),
+      once: vi.fn((event: string, listener: () => void) => {
+        if (event === 'finish') finishListener = listener;
+      }),
+      writeHead: vi.fn((status: number) => {
+        response.statusCode = status;
+      }),
+      end: vi.fn(() => {
+        response.writableEnded = true;
+        finishListener?.();
+      }),
     } as unknown as ServerResponse;
 
     await router.handle(incoming, response);
 
-    expect(consumeGrant).toHaveBeenCalledOnce();
-    expect(replay).toHaveBeenCalledOnce();
-    expect(response.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
+    expect(consumeGrant).not.toHaveBeenCalled();
+    expect(replay).not.toHaveBeenCalled();
+    expect(response.writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+    expect(denialLogger.warn).toHaveBeenCalledWith('Fleet Garden request denied', {
+      reasonCode: 'escalation_grant_required',
+      reason: 'escalation_grant_required',
+      status: 403,
+      routeId: 'POST /api/admin/memory/:id/reveal',
+      action: 'memory.reveal',
+      principalId: authorization.principalId,
+    });
+    expect(denialLogger.warn).toHaveBeenCalledOnce();
+    expect(getGardenDenialsLastHour()).toBe(1);
+
+    clearGardenDenialsForTests();
+    denialLogger.warn.mockClear();
+    const delegatedRequest = Readable.from([]) as IncomingMessage;
+    delegatedRequest.method = 'GET';
+    delegatedRequest.url = '/v1/fleet/portal';
+    delegatedRequest.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+    };
+    Object.defineProperty(delegatedRequest, 'socket', { value: {} });
+    let delegatedFinishListener: (() => void) | undefined;
+    const delegatedResponse = {
+      statusCode: 200,
+      destroyed: false,
+      writableEnded: false,
+      once: vi.fn((event: string, listener: () => void) => {
+        if (event === 'finish') delegatedFinishListener = listener;
+      }),
+      writeHead: vi.fn((status: number) => {
+        delegatedResponse.statusCode = status;
+      }),
+      end: vi.fn(() => {
+        delegatedResponse.writableEnded = true;
+        delegatedFinishListener?.();
+      }),
+    } as unknown as ServerResponse;
+
+    await router.handle(delegatedRequest, delegatedResponse);
+
+    expect(delegatedResponse.writeHead).toHaveBeenCalledWith(401, expect.any(Object));
+    expect(denialLogger.warn).toHaveBeenCalledWith('Fleet Garden request denied', {
+      reasonCode: 'capability_required',
+      reason: 'response_denied',
+      status: 401,
+      routeId: 'GET /v1/fleet/portal',
+      action: 'unresolved',
+      principalId: 'unknown',
+    });
+    expect(getGardenDenialsLastHour()).toBe(1);
+    clearGardenDenialsForTests();
   });
 
   it('mints the normal single-use capability tail for an allowlisted testing-harness request', async () => {

@@ -33,6 +33,7 @@ describe('Garden denial observability', () => {
 
     expect(logger.warn).toHaveBeenNthCalledWith(1, 'Fleet Garden request denied', {
       reasonCode: 'request_body_forbidden',
+      reason: 'request_body_forbidden',
       status: 400,
       routeId: 'GET /api/admin/dashboard',
       action: 'garden.read',
@@ -40,6 +41,7 @@ describe('Garden denial observability', () => {
     });
     expect(logger.warn).toHaveBeenNthCalledWith(2, 'Fleet Garden request denied', {
       reasonCode: 'subject_bound_session_required',
+      reason: 'subject_bound_session_required',
       status: 403,
       routeId: 'GET /session-recovery',
       action: 'recovery.begin',

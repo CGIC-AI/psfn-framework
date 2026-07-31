@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   buildSettingsContractData,
   ownerFileScope,
@@ -12,6 +14,12 @@ import {
   SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS,
   listGardenSettingsFieldExposureKeys,
 } from '../../shared/contracts/settings-garden-contract.js';
+import {
+  SETTINGS_FILE_NAME,
+  type EditableSettings,
+} from '../settings/contracts.js';
+import { parseRuntimeSettingsOwnerPayload } from '../settings/schema.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 export interface SettingsContractGuardOptions {
   contractData?: SettingsContractData;
@@ -22,6 +30,41 @@ export interface SettingsContractGuardOptions {
 export interface SettingsContractGuardResult {
   ok: boolean;
   errors: string[];
+}
+
+/**
+ * Resolve the default-bearing runtime fields from the canonical seed under the
+ * same ownership contract Garden exposes. Optional fields without a seed value
+ * remain optional; every future runtime field added with a seed default becomes
+ * backfillable without a key-specific migration.
+ */
+export function loadRuntimeSettingsContractDefaults(
+  seedDir: string,
+  contractData: SettingsContractData = buildSettingsContractData(),
+): EditableSettings {
+  const seedPath = join(seedDir, 'settings.seed.json');
+  const raw: unknown = JSON.parse(readFileSync(seedPath, 'utf8'));
+  if (!isRecord(raw)) {
+    throw new Error(`Canonical settings defaults at ${seedPath} must be an object`);
+  }
+  parseRuntimeSettingsOwnerPayload(raw);
+
+  const defaults: EditableSettings = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Object.prototype.hasOwnProperty.call(contractData.fields, key)) {
+      throw new Error(`Canonical settings default "${key}" has no settings contract field`);
+    }
+    const field = contractData.fields[key];
+    if (field.ownerFile !== SETTINGS_FILE_NAME || field.ownerSubsystem !== 'runtime') {
+      throw new Error(
+        `Canonical settings default "${key}" is owned by ${field.ownerFile}, not ${SETTINGS_FILE_NAME}`,
+      );
+    }
+    if (!field.deprecated) {
+      Object.assign(defaults, { [key]: structuredClone(value) });
+    }
+  }
+  return defaults;
 }
 
 function quoteList(values: readonly string[]): string {

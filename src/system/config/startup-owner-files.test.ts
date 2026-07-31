@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { saveSettings } from '../settings.js';
@@ -35,6 +42,7 @@ import {
   resolveCompanionFleetPaths,
   validateCompanionsConfig,
 } from './companions-config.js';
+import { createOwnerFileConfigStore } from './config-store.js';
 
 describe('startup owner-file loaders', () => {
   const tempDirs: string[] = [];
@@ -449,6 +457,45 @@ describe('startup owner-file loaders', () => {
     expect(result.errors[0]).toContain('Missing required JSON owner file');
     expect(result.errors[0]).toContain('Startup no longer copies distributed seed/example files');
     expect(result.errors[0]).toContain('copy the example template');
+  });
+
+  it('backfills missing runtime contract defaults once and exposes them through settings reads', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-backfill-'));
+    const seedDir = join(process.cwd(), 'config');
+    mkdirSync(rootDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir);
+
+    const settingsPath = join(rootDir, 'settings.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    delete settings.fsReadMaxBytes;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+
+    expect(verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    })).toEqual({ ok: true, errors: [] });
+
+    const migratedContents = readFileSync(settingsPath, 'utf8');
+    const migratedInode = statSync(settingsPath).ino;
+    expect(JSON.parse(migratedContents)).toEqual(expect.objectContaining({
+      fsReadMaxBytes: 100_000,
+    }));
+    expect(createOwnerFileConfigStore({
+      dataDir: rootDir,
+      seedDir,
+    }).loadEffectiveRuntimeSettings()).toEqual(expect.objectContaining({
+      fsReadMaxBytes: 100_000,
+    }));
+
+    expect(verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    })).toEqual({ ok: true, errors: [] });
+    expect(readFileSync(settingsPath, 'utf8')).toBe(migratedContents);
+    expect(statSync(settingsPath).ino).toBe(migratedInode);
   });
 
   it('validates system owners once and every exact resolved fleet companion root', () => {

@@ -73,6 +73,7 @@ import {
   resolveFleetAuthOwnerFile,
 } from './fleet-auth-config.js';
 import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
+import { backfillMissingRuntimeSettingsDefaults } from './settings-owner-backfill.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -170,12 +171,25 @@ function assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains: SettingsDoma
 }
 
 export function loadStartupRuntimeSettingsOwnerFile(
-  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir'>,
+  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir'> & {
+    backfillMissingDefaults?: boolean;
+  },
 ): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'> {
   const loadOptions = options.seedDir ? { seedDir: options.seedDir } : undefined;
-  const runtimeSettings = loadSettings(options.dataDir, loadOptions);
-  const settingsDomains = splitSettingsByDomain(runtimeSettings);
+  let runtimeSettings = loadSettings(options.dataDir, loadOptions);
+  let settingsDomains = splitSettingsByDomain(runtimeSettings);
   assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains);
+  if (options.backfillMissingDefaults) {
+    const backfill = backfillMissingRuntimeSettingsDefaults({
+      dataDir: options.dataDir,
+      seedDir: ownerFileSeedDir(options),
+    });
+    if (backfill.status === 'applied') {
+      runtimeSettings = loadSettings(options.dataDir, loadOptions);
+      settingsDomains = splitSettingsByDomain(runtimeSettings);
+      assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains);
+    }
+  }
   return {
     runtimeSettings,
     settingsDomains,
@@ -260,7 +274,11 @@ function systemOwnerFileChecks(
       label: 'settings',
       dataPath: join(options.dataDir, SETTINGS_FILE_NAME),
       seedPath: join(seedDir, 'settings.seed.json'),
-      run: () => loadStartupRuntimeSettingsOwnerFile({ dataDir: options.dataDir, seedDir: options.seedDir }),
+      run: () => loadStartupRuntimeSettingsOwnerFile({
+        dataDir: options.dataDir,
+        seedDir: options.seedDir,
+        backfillMissingDefaults: true,
+      }),
     },
     {
       label: 'models',

@@ -36,7 +36,11 @@ describe('migrateRequiredSettingsBlocks', () => {
     expect(migrateRequiredSettingsBlocks({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['wikiStartupHydration', 'lifecycleKubernetes'],
+      addedPaths: expect.arrayContaining([
+        'fsReadMaxBytes',
+        'wikiStartupHydration',
+        'lifecycleKubernetes',
+      ]),
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
     expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
@@ -46,6 +50,7 @@ describe('migrateRequiredSettingsBlocks', () => {
     expect(migrated.sessionHistoryBudgetPct).toBe(9);
     expect(migrated.wikiStartupHydration).toEqual(DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS);
     expect(migrated.lifecycleKubernetes).toEqual(DEFAULT_LIFECYCLE_KUBERNETES_SETTINGS);
+    expect(migrated.fsReadMaxBytes).toBe(100_000);
     const bytes = readFileSync(filePath, 'utf8');
     const inode = statSync(filePath).ino;
     expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
@@ -58,9 +63,11 @@ describe('migrateRequiredSettingsBlocks', () => {
   it('preserves a present block while adding only the absent block', () => {
     const customWiki = { recentSessionLimit: 7, recentMessageLimit: 22, maxContextChars: 7_000 };
     const { dataDir, filePath } = prepare({ wikiStartupHydration: customWiki });
-    expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
-      addedPaths: ['lifecycleKubernetes'],
+    const result = migrateRequiredSettingsBlocks({ dataDir, apply: true });
+    expect(result).toMatchObject({
+      addedPaths: expect.arrayContaining(['lifecycleKubernetes', 'fsReadMaxBytes']),
     });
+    expect(result.addedPaths).not.toContain('wikiStartupHydration');
     const migrated = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect(migrated.wikiStartupHydration).toEqual(customWiki);
   });

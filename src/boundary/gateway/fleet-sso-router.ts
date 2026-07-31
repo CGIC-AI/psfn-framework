@@ -88,6 +88,13 @@ import {
   TestingHarnessGardenDoorDeniedError,
   type TestingHarnessGardenDoorOptions,
 } from './testing-harness-garden-door.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import {
+  hasRecordedGardenDenial,
+  recordGardenDenial,
+  type GardenDenialDetails,
+  type GardenDenialLogger,
+} from '../../shared/observability/garden-denial-observability.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -167,6 +174,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly breakGlassLogin?: FleetBreakGlassLoginRegistration;
   readonly nowSeconds?: () => number;
   readonly testingHarness?: TestingHarnessGardenDoorOptions;
+  readonly denialLogger?: GardenDenialLogger;
 }
 
 export interface FleetGardenChatAdmission {
@@ -187,10 +195,39 @@ interface ParsedGardenRoute {
   publicPrefix: string;
 }
 
+type FleetSsoDenialDetails = Omit<GardenDenialDetails, 'response' | 'status'>;
+
+function defaultFleetSsoDenial(
+  status: FleetSsoRequestError['status'],
+): FleetSsoDenialDetails | undefined {
+  switch (status) {
+    case 400:
+      return { reasonCode: 'request_target_invalid' };
+    case 401:
+      return { reasonCode: 'capability_required' };
+    case 403:
+      return { reasonCode: 'fleet_authorization_denied' };
+    case 404:
+      return { reasonCode: 'fleet_target_not_found' };
+    case 413:
+      return { reasonCode: 'request_body_too_large' };
+    case 502:
+    case 503:
+      return undefined;
+  }
+}
+
 class FleetSsoRequestError extends Error {
-  constructor(readonly status: 400 | 401 | 403 | 404 | 413 | 502 | 503, message: string) {
+  readonly denial?: FleetSsoDenialDetails;
+
+  constructor(
+    readonly status: 400 | 401 | 403 | 404 | 413 | 502 | 503,
+    message: string,
+    denial?: FleetSsoDenialDetails,
+  ) {
     super(message);
     this.name = 'FleetSsoRequestError';
+    this.denial = denial ?? defaultFleetSsoDenial(status);
   }
 }
 
@@ -480,6 +517,7 @@ export class GatewayFleetSsoRouter {
   private gardenChatHandler: FleetGardenChatHandler | null = null;
   private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
   private readonly testingHarnessDoor?: TestingHarnessGardenDoor;
+  private readonly denialLogger: GardenDenialLogger;
   private readonly rejectedUpgradeServer = new WebSocketServer({
     noServer: true,
     clientTracking: false,
@@ -496,6 +534,7 @@ export class GatewayFleetSsoRouter {
     this.testingHarnessDoor = options.testingHarness
       ? new TestingHarnessGardenDoor(options.testingHarness)
       : undefined;
+    this.denialLogger = options.denialLogger ?? createComponentLogger('GatewayFleetSsoRouter');
     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
       projection: options.portalProjection,
       ui: options.portalUi ?? new FleetGardenUiAssets(),
@@ -562,6 +601,7 @@ export class GatewayFleetSsoRouter {
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.observeResponseDenial(request, response);
     try {
       resolveFleetSsoBrowserOrigin(request, this.options);
       const browserOrigin = singleHeader(request.headers.origin);
@@ -636,6 +676,14 @@ export class GatewayFleetSsoRouter {
           assertAllowedContext(context, companionUi.companionId, 'companion.read');
         } catch (error) {
           if (error instanceof FleetAuthorizationDeniedError) {
+            recordGardenDenial(this.denialLogger, {
+              reasonCode: 'fleet_authorization_denied',
+              reason: error.code,
+              status: 403,
+              routeId: `${request.method ?? 'GET'} ${rawPath}`,
+              action: 'companion.read',
+              response,
+            });
             this.loginLanding.send(response);
             return;
           }
@@ -692,6 +740,7 @@ export class GatewayFleetSsoRouter {
       }
       await this.proxyHttp(request, response, upstream, route, body, issued);
     } catch (error) {
+      this.recordRequestDenial(request, error, response);
       if (response.writableEnded || response.destroyed) return;
       if (error instanceof FleetSsoRequestError) {
         sendJson(response, error.status, {
@@ -715,8 +764,9 @@ export class GatewayFleetSsoRouter {
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     void this.proxyUpgrade(request, socket, head).catch((error) => {
-      if (socket.destroyed) return;
       const status = error instanceof FleetSsoRequestError ? error.status : 503;
+      this.recordRequestDenial(request, error);
+      if (socket.destroyed) return;
       if (error instanceof FleetSsoUpstreamUpgradeError
         && this.canSurfaceUpstreamUpgradeFailure(request)) {
         this.rejectedUpgradeServer.handleUpgrade(request, socket, head, (webSocket) => {
@@ -736,6 +786,77 @@ export class GatewayFleetSsoRouter {
     } catch {
       return false;
     }
+  }
+
+  private observeResponseDenial(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): void {
+    if (typeof response.once !== 'function') return;
+    response.once('finish', () => {
+      if (hasRecordedGardenDenial(response)) return;
+      const status = response.statusCode;
+      const reasonCode = status === 400
+        ? 'request_target_invalid'
+        : status === 401
+          ? 'capability_required'
+          : status === 403
+            ? 'fleet_authorization_denied'
+            : status === 404
+              ? 'fleet_target_not_found'
+              : status === 409
+                ? 'capability_already_consumed'
+                : status === 413
+                  ? 'request_body_too_large'
+                  : undefined;
+      if (!reasonCode) return;
+      recordGardenDenial(this.denialLogger, {
+        reasonCode,
+        reason: 'response_denied',
+        status,
+        routeId: `${request.method ?? 'GET'} ${request.url ?? '/'}`,
+        response,
+      });
+    });
+  }
+
+  private recordRequestDenial(
+    request: IncomingMessage,
+    error: unknown,
+    response?: ServerResponse,
+  ): void {
+    let status: GardenDenialDetails['status'] | undefined;
+    let denial: FleetSsoDenialDetails | undefined;
+    if (error instanceof FleetSsoRequestError) {
+      if (error.status === 502 || (error.status === 503 && !error.denial)) return;
+      status = error.status;
+      denial = error.denial;
+    } else if (error instanceof TestingHarnessGardenDoorDeniedError) {
+      status = 404;
+      denial = {
+        reasonCode: 'capability_testing_harness_disabled',
+        reason: 'testing_harness_policy_denied',
+        principalId: 'testing-harness',
+      };
+    } else if (error instanceof GardenRequestTargetError) {
+      status = error.code === 'route_not_declared' ? 404 : 400;
+      denial = {
+        reasonCode: error.code === 'route_not_declared'
+          ? 'route_not_declared'
+          : error.code === 'authority_forbidden'
+            ? 'browser_authority_forbidden'
+            : 'request_target_invalid',
+        reason: error.code,
+      };
+    }
+    if (status === undefined || !denial) return;
+
+    recordGardenDenial(this.denialLogger, {
+      ...denial,
+      status,
+      routeId: denial.routeId ?? `${request.method ?? 'GET'} ${request.url ?? '/'}`,
+      ...(response ? { response } : {}),
+    });
   }
 
   private async serveCompanionUi(
@@ -805,7 +926,12 @@ export class GatewayFleetSsoRouter {
     const isEscalationTarget = target.authorization.requirements.assurance === 'escalated'
       || isPrivacyConfirm;
     if (!isEscalationTarget && rawEscalationGrantId !== undefined) {
-      throw new FleetSsoRequestError(404, 'Resource not found');
+      throw new FleetSsoRequestError(404, 'Resource not found', {
+        reasonCode: 'request_target_invalid',
+        reason: 'unexpected_escalation_grant',
+        routeId: target.resource.routeId,
+        action: target.action,
+      });
     }
     const requestId = randomUUID();
     let context: FleetAuthorizationContext;
@@ -818,8 +944,15 @@ export class GatewayFleetSsoRouter {
         correlationId: requestId,
       });
       assertAllowedContext(context, input.route.companionId, target.action);
-    } catch {
-      throw new FleetSsoRequestError(404, 'Resource not found');
+    } catch (error) {
+      throw new FleetSsoRequestError(404, 'Resource not found', {
+        reasonCode: 'fleet_authorization_denied',
+        reason: error instanceof FleetAuthorizationDeniedError
+          ? error.code
+          : 'authorization_context_unavailable',
+        routeId: target.resource.routeId,
+        action: target.action,
+      });
     }
     const decisionId = context.provenance.authorizationEventId;
     const versions = authorityVersions(context);
@@ -828,7 +961,12 @@ export class GatewayFleetSsoRouter {
       if (!rawEscalationGrantId || !isRfc4122Uuid(rawEscalationGrantId)
         || !this.options.escalation) {
         // Fail closed, and say why: the surface requires an audited grant.
-        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required', {
+          reasonCode: 'escalation_grant_required',
+          routeId: target.resource.routeId,
+          action: target.action,
+          principalId: context.principalId,
+        });
       }
       try {
         consumedEscalation = await this.options.escalation.consumeGrant({
@@ -838,13 +976,25 @@ export class GatewayFleetSsoRouter {
           target,
         });
       } catch {
-        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required', {
+          reasonCode: 'escalation_grant_required',
+          reason: 'escalation_grant_rejected',
+          routeId: target.resource.routeId,
+          action: target.action,
+          principalId: context.principalId,
+        });
       }
       if (!timingSafeStringEqual(consumedEscalation.principalId, context.principalId)
         || !timingSafeStringEqual(consumedEscalation.browserSessionId, context.session.recordId)
         || consumedEscalation.expiresAt.getTime()
           <= (this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now())) {
-        throw new FleetSsoRequestError(403, 'Audited escalation grant required');
+        throw new FleetSsoRequestError(403, 'Audited escalation grant required', {
+          reasonCode: 'escalation_grant_required',
+          reason: 'escalation_grant_binding_invalid',
+          routeId: target.resource.routeId,
+          action: target.action,
+          principalId: context.principalId,
+        });
       }
     }
     const fleetAccessMode: FleetAccessMode = resolveFleetAccessMode(
@@ -869,7 +1019,13 @@ export class GatewayFleetSsoRouter {
           Date.parse(authContext.resolvedAt),
         );
       } catch {
-        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query');
+        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query', {
+          reasonCode: 'request_target_invalid',
+          reason: 'fleet_model_usage_query_invalid',
+          routeId: target.resource.routeId,
+          action: target.action,
+          principalId: context.principalId,
+        });
       }
     }
     return await this.issueCapability({
@@ -917,13 +1073,25 @@ export class GatewayFleetSsoRouter {
     if (testingHarnessParent
       && (!timingSafeStringEqual(input.authContext.principalId, 'testing-harness')
         || !timingSafeStringEqual(input.authContext.providerSubjectId, 'testing-harness'))) {
-      throw new FleetSsoRequestError(404, 'Resource not found');
+      throw new FleetSsoRequestError(404, 'Resource not found', {
+        reasonCode: 'capability_context_invalid',
+        reason: 'testing_harness_principal_invalid',
+        routeId: input.target.resource.routeId,
+        action: input.target.action,
+        principalId: input.context.principalId,
+      });
     }
     const token = testingHarnessParent
       ? this.options.signer.signTestingHarness(capabilityInput)
       : this.options.signer.signOperator(capabilityInput);
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
-      throw new FleetSsoRequestError(503, 'Issued capability exceeds the transport envelope');
+      throw new FleetSsoRequestError(503, 'Issued capability exceeds the transport envelope', {
+        reasonCode: 'capability_invalid',
+        reason: 'issued_capability_too_large',
+        routeId: input.target.resource.routeId,
+        action: input.target.action,
+        principalId: input.context.principalId,
+      });
     }
     const verifyInput = {
       token,
@@ -940,7 +1108,14 @@ export class GatewayFleetSsoRouter {
       compileRequestCapabilityReplayConsumption({ token, verified, target: input.target }),
     );
     if (replay.outcome !== 'consumed') {
-      throw new FleetSsoRequestError(404, 'Resource not found');
+      throw new FleetSsoRequestError(404, 'Resource not found', {
+        reasonCode: replay.outcome === 'replayed'
+          ? 'capability_already_consumed'
+          : 'capability_replay_mismatch',
+        routeId: input.target.resource.routeId,
+        action: input.target.action,
+        principalId: input.context.principalId,
+      });
     }
     return { token, verified, context: input.context };
   }

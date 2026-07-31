@@ -28,6 +28,12 @@ import type { ApprovalQueuePort, ConfirmationQueueEntry } from '../../system/cap
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  HELD_TOOL_CALL_RESULT_STATUS,
+  TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY,
+  type ToolCallIdempotency,
+  type ToolCallIdempotencySchemaMetadata,
+} from '../../shared/contracts/tool-call-outcome.js';
 
 const DEFAULT_DIFF_LINE_LIMIT = 160;
 const MAX_DIFF_LINE_LIMIT = 1_000;
@@ -48,17 +54,29 @@ const PERSONA_CONFLICT_PARAMETER_KEYS = [
   'max_diff_lines',
 ] as const;
 
-type IdentityAction =
-  | 'list_layers'
-  | 'get_layer'
-  | 'diff_layer'
-  | 'history'
-  | 'update_layer'
-  | 'rollback_layer'
-  | 'toggle_layer'
-  | 'update_persona'
-  | 'commit_stage'
-  | 'cancel_stage';
+const IDENTITY_ACTION_METADATA = {
+  list_layers: { idempotency: 'idempotent', screensMutation: false },
+  get_layer: { idempotency: 'idempotent', screensMutation: false },
+  diff_layer: { idempotency: 'idempotent', screensMutation: false },
+  history: { idempotency: 'idempotent', screensMutation: false },
+  update_layer: { idempotency: 'effectful', screensMutation: true },
+  rollback_layer: { idempotency: 'effectful', screensMutation: true },
+  toggle_layer: { idempotency: 'effectful', screensMutation: true },
+  update_persona: { idempotency: 'effectful', screensMutation: true },
+  commit_stage: { idempotency: 'effectful', screensMutation: true },
+  cancel_stage: { idempotency: 'effectful', screensMutation: false },
+} as const satisfies Record<string, {
+  idempotency: ToolCallIdempotency;
+  screensMutation: boolean;
+}>;
+
+type IdentityAction = keyof typeof IDENTITY_ACTION_METADATA;
+
+const IDENTITY_ACTIONS = Object.keys(IDENTITY_ACTION_METADATA) as IdentityAction[];
+const IDENTITY_ACTION_PATTERN = `^(?:${IDENTITY_ACTIONS.join('|')})$`;
+const IDENTITY_ACTION_IDEMPOTENCY = Object.fromEntries(
+  IDENTITY_ACTIONS.map(action => [action, IDENTITY_ACTION_METADATA[action].idempotency]),
+) as Record<IdentityAction, ToolCallIdempotency>;
 
 interface PromptLineDiffSummary {
   added: number;
@@ -437,21 +455,9 @@ function resolveIdentityAction(params: Record<string, unknown>): IdentityAction 
     return Object.keys(params).length === 0 ? 'list_layers' : null;
   }
 
-  switch (rawAction) {
-    case 'list_layers':
-    case 'get_layer':
-    case 'diff_layer':
-    case 'history':
-    case 'update_layer':
-    case 'rollback_layer':
-    case 'toggle_layer':
-    case 'update_persona':
-    case 'commit_stage':
-    case 'cancel_stage':
-      return rawAction;
-    default:
-      return null;
-  }
+  return Object.hasOwn(IDENTITY_ACTION_METADATA, rawAction)
+    ? rawAction as IdentityAction
+    : null;
 }
 
 function hasOwnDefinedValue(params: Record<string, unknown>, key: string): boolean {
@@ -535,18 +541,10 @@ export function createIdentityTool(
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.identity,
     label: 'identity',
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
-        Type.Literal('list_layers'),
-        Type.Literal('get_layer'),
-        Type.Literal('diff_layer'),
-        Type.Literal('history'),
-        Type.Literal('update_layer'),
-        Type.Literal('rollback_layer'),
-        Type.Literal('toggle_layer'),
-        Type.Literal('update_persona'),
-        Type.Literal('commit_stage'),
-        Type.Literal('cancel_stage'),
-      ], {
+      action: Type.Optional(Type.Unsafe<IdentityAction>({
+        type: 'string',
+        enum: [...IDENTITY_ACTIONS],
+        pattern: IDENTITY_ACTION_PATTERN,
         description:
           'Identity action. Required for all actions except empty-argument calls, which default to list_layers.',
       })),
@@ -581,17 +579,23 @@ export function createIdentityTool(
         description:
           'Set true only when intentionally replacing most of a long persona field instead of lightly editing it.',
       })),
+    }, {
+      [TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY]: {
+        default: 'effectful',
+        defaultAction: 'list_layers',
+        actions: IDENTITY_ACTION_IDEMPOTENCY,
+      } satisfies ToolCallIdempotencySchemaMetadata,
     }),
     execute: async (
       _toolCallId: string,
       params: Record<string, unknown>,
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<{ isError?: boolean; status?: 'held' }>> => {
       try {
         const action = resolveIdentityAction(params);
         if (!action) {
           return textResultWithError(
-            'action is required. Supported actions: list_layers, get_layer, diff_layer, history, update_layer, rollback_layer, toggle_layer, update_persona, commit_stage, cancel_stage.',
+            `action is required. Supported actions: ${IDENTITY_ACTIONS.join(', ')}.`,
             true,
           );
         }
@@ -604,10 +608,7 @@ export function createIdentityTool(
         // htm9.3: persona/self-model mutation is a consequential sink. Screen
         // every model-authored string field first, then evaluate the real
         // proposed-content envelopes plus the active turn's provenance.
-        const MUTATING_IDENTITY_ACTIONS: readonly string[] = [
-          'update_layer', 'rollback_layer', 'toggle_layer', 'update_persona', 'commit_stage',
-        ];
-        if (MUTATING_IDENTITY_ACTIONS.includes(action)) {
+        if (IDENTITY_ACTION_METADATA[action].screensMutation) {
           const screened = await screenSelfAuthoredMutation(
             'persona_mutation',
             params,
@@ -617,7 +618,10 @@ export function createIdentityTool(
           if (!screened.allowed) {
             // Soft, truthful, operator-reviewed wording (htm9.12); not an
             // error so the model does not spiral into retries.
-            return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+            return {
+              ...textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld),
+              details: { status: HELD_TOOL_CALL_RESULT_STATUS },
+            };
           }
           params = screened.params;
         }

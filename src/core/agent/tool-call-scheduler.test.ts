@@ -10,7 +10,11 @@ import {
   getToolResultInvocationAudit,
 } from './tool-call-scheduler.js';
 import { buildTurnRecord } from './substrate-agent/turn-records.js';
-import type { ToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
+import {
+  TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY,
+  type ToolCallOutcome,
+  type ToolCallIdempotencySchemaMetadata,
+} from '../../shared/contracts/tool-call-outcome.js';
 
 type ObservedToolResult = ToolResultMessage & { outcome: ToolCallOutcome };
 
@@ -90,6 +94,18 @@ function makeConcurrencyMeta(
       ...(overrides.eligibility ?? {}),
     },
   };
+}
+
+function declareToolCallIdempotency(
+  tool: AgentTool<any>,
+  metadata: ToolCallIdempotencySchemaMetadata,
+): void {
+  tool.parameters = Type.Object({
+    action: Type.Optional(Type.String()),
+    layer_id: Type.Optional(Type.String()),
+  }, {
+    [TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY]: metadata,
+  });
 }
 
 describe('tool-call-scheduler', () => {
@@ -683,26 +699,138 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('skips identical calls that already succeeded in the same turn', async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'oriented' }],
-      details: {},
-    }));
-    const orient = makeTool(
-      'orient',
+  it('executes identical state-flipping calls twice in the same turn', async () => {
+    let enabled = true;
+    const execute = vi.fn(async () => {
+      const previousEnabled = enabled;
+      enabled = !enabled;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ previousEnabled, enabled }),
+        }],
+        details: {},
+      };
+    });
+    const identity = makeTool(
+      'identity',
       execute,
       {
         concurrency: makeConcurrencyMeta('exclusive', {
           exclusivityKeyPolicy: 'category_tool_name',
-          exclusivityKey: 'core:orient',
+          exclusivityKey: 'core:identity',
         }),
       },
     );
+    declareToolCallIdempotency(identity, {
+      default: 'effectful',
+      actions: { toggle_layer: 'effectful' },
+    });
+
+    const result = await executeToolCallsWithScheduler(
+      [identity],
+      makeAssistantToolCalls([
+        { name: 'identity', arguments: { action: 'toggle_layer', layer_id: 'runtime' } },
+        { name: 'identity', arguments: { action: 'toggle_layer', layer_id: 'runtime' } },
+      ]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.toolResults.map(toolResult => toolResult.outcome)).toEqual(['success', 'success']);
+    expect(result.toolResults.map(toolResult => toolResult.isError)).toEqual([false, false]);
+    expect(enabled).toBe(true);
+  });
+
+  it('executes rather than dedupes when per-action idempotency metadata is malformed', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'toggled' }],
+      details: {},
+    }));
+    const identity = makeTool(
+      'identity',
+      execute,
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    declareToolCallIdempotency(identity, {
+      default: 'idempotent',
+      actions: { toggle_layer: 'malformed' as never },
+    });
+
+    await executeToolCallsWithScheduler(
+      [identity],
+      makeAssistantToolCalls([
+        { name: 'identity', arguments: { action: 'toggle_layer', layer_id: 'runtime' } },
+        { name: 'identity', arguments: { action: 'toggle_layer', layer_id: 'runtime' } },
+      ]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an idempotent call after a sink hold resolves in the same turn', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'held for operator review' }],
+        details: { status: 'held' },
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'released result' }],
+        details: {},
+      });
+    const reader = makeTool(
+      'reader',
+      execute,
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    declareToolCallIdempotency(reader, { default: 'idempotent' });
+
+    const result = await executeToolCallsWithScheduler(
+      [reader],
+      makeAssistantMessage(['reader', 'reader']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.toolResults).toHaveLength(2);
+    expect(result.toolResults[0]?.isError).toBe(false);
+    expect(result.toolResults[1]?.isError).toBe(false);
+  });
+
+  it('skips an identical idempotent read that already succeeded in the same turn', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'layer' }],
+      details: {},
+    }));
+    const identity = makeTool(
+      'identity',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'core:identity',
+        }),
+      },
+    );
+    declareToolCallIdempotency(identity, {
+      default: 'effectful',
+      actions: { get_layer: 'idempotent' },
+    });
     const telemetry = vi.fn();
 
     const result = await executeToolCallsWithScheduler(
-      [orient],
-      makeAssistantMessage(['orient', 'orient']),
+      [identity],
+      makeAssistantToolCalls([
+        { name: 'identity', arguments: { action: 'get_layer', layer_id: 'runtime' } },
+        { name: 'identity', arguments: { action: 'get_layer', layer_id: 'runtime' } },
+      ]),
       undefined,
       { stream: { push: () => undefined } },
       {
@@ -728,7 +856,7 @@ describe('tool-call-scheduler', () => {
       'agent.tools.scheduler.skipped',
       expect.objectContaining({
         reason: 'duplicate_completed',
-        toolName: 'orient',
+        toolName: 'identity',
       }),
     );
   });

@@ -20,6 +20,10 @@ import {
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
 import { CharacterCardVersionStore } from './card-versioning.js';
 import type { CharacterCardV2 } from './types.js';
+import {
+  createToolCallExecutionGuard,
+  executeToolCallsWithScheduler,
+} from '../agent/tool-call-scheduler.js';
 
 /** Extract text from an AgentToolResult */
 function resultText(result: AgentToolResult<any>): string {
@@ -94,6 +98,47 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('identity', () => {
+    it('enumerates valid identity actions in malformed-call validation', async () => {
+      const tool = createIdentityTool(store, {
+        intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+      });
+
+      const result = await executeToolCallsWithScheduler(
+        [tool],
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'identity-invalid-action',
+            name: 'identity',
+            arguments: { action: 'not_an_identity_action' },
+          }],
+          stopReason: 'stop',
+          timestamp: Date.now(),
+        },
+        undefined,
+        { stream: { push: () => undefined } },
+        { maxParallelToolCalls: 1 },
+      );
+
+      const validationText = result.toolResults[0]?.content[0]?.text ?? '';
+      expect(validationText).toContain('must match pattern');
+      for (const action of [
+        'list_layers',
+        'get_layer',
+        'diff_layer',
+        'history',
+        'update_layer',
+        'rollback_layer',
+        'toggle_layer',
+        'update_persona',
+        'commit_stage',
+        'cancel_stage',
+      ]) {
+        expect(validationText).toContain(action);
+      }
+    });
+
     it('defaults empty-argument calls to list_layers', async () => {
       const tool = identityTool('nursery');
       const result = await tool.execute('identity-default-list', {});
@@ -117,18 +162,37 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('returns structured toggle proof from the unified identity tool', async () => {
+    it('executes toggle off then on in one scheduled turn and returns structured proof', async () => {
       const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'runtime' });
       const tool = identityTool('nursery');
 
-      const first = await tool.execute('identity-toggle-first', {
-        action: 'toggle_layer',
-        layer_id: layer.id,
-      });
-      const second = await tool.execute('identity-toggle-second', {
-        action: 'toggle_layer',
-        layer_id: layer.id,
-      });
+      const scheduled = await executeToolCallsWithScheduler(
+        [tool],
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'identity-toggle-first',
+              name: 'identity',
+              arguments: { action: 'toggle_layer', layer_id: layer.id },
+            },
+            {
+              type: 'toolCall',
+              id: 'identity-toggle-second',
+              name: 'identity',
+              arguments: { action: 'toggle_layer', layer_id: layer.id },
+            },
+          ],
+          stopReason: 'stop',
+          timestamp: Date.now(),
+        },
+        undefined,
+        { stream: { push: () => undefined } },
+        { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+      );
+      const first = scheduled.toolResults[0]!;
+      const second = scheduled.toolResults[1]!;
       const firstPayload = JSON.parse(resultText(first)) as {
         action: string;
         layerId: string;
@@ -259,6 +323,7 @@ describe('Prompt Layer Tools', () => {
       });
 
       expect(resultText(result)).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+      expect(result.details).toMatchObject({ status: 'held' });
       expect(cardStore.getCurrent().card.data.creator).toBe('tester');
     });
 

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIntakeL1Scanner } from '../../../../src/core/cogsec/intake/scanners/index.ts';
 import { composeGatewayIntakeScreening } from '../../../../src/boundary/gateway/intake/compose-screening.ts';
+import { loadSeedIntakeScreenerTestConfig } from '../../../../src/boundary/gateway/intake/screener-test-config.ts';
 import { observeThrowAsync } from '../lib/scenario.ts';
 import type { AdversarialScenario } from '../lib/scenario.ts';
 
@@ -136,6 +137,7 @@ export const scenarios: AdversarialScenario[] = [
       const outcome = await observeThrowAsync(async () => {
         await composeGatewayIntakeScreening({
           ...dirs,
+          config: loadSeedIntakeScreenerTestConfig(dirs.systemDataDir),
           screenerBackend: INERT_SCREENER_BACKEND,
         });
       });
@@ -156,7 +158,12 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'Composition succeeds (degraded, observe-only) and does not throw — the fail-closed clamp is enforce-only.',
     async run(t) {
       const outcome = await observeThrowAsync(async () => {
-        const composition = await composeGatewayIntakeScreening({ ...makeDataDirs('shadow'), screenerBackend: null });
+        const dirs = makeDataDirs('shadow');
+        const composition = await composeGatewayIntakeScreening({
+          ...dirs,
+          config: loadSeedIntakeScreenerTestConfig(dirs.systemDataDir),
+          screenerBackend: null,
+        });
         await (composition as { dispose: () => Promise<void> }).dispose();
       });
       t.check('shadow-mode composition is tolerated (no throw)', !outcome.threw, outcome.message.slice(0, 120));

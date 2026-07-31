@@ -29,6 +29,7 @@
 
 import {
   InvalidEnvError,
+  MissingEnvError,
   failClosedOnEnv,
   optionalEnv,
   optionalIntEnv,
@@ -161,6 +162,42 @@ export async function fetchCapabilityConfig({ adminBaseUrl, adminToken }, timeou
 export async function fetchCurrentTier({ adminBaseUrl, adminToken }, timeoutMs = 15000) {
   const config = await fetchCapabilityConfig({ adminBaseUrl, adminToken }, timeoutMs);
   return config.tier.trim();
+}
+
+/**
+ * Read the capability tier with a bounded retry budget. The live refusal matrix
+ * uses the same five-attempt posture as tier restoration so one transient
+ * gateway 502 cannot void an otherwise valid capability-gate sweep.
+ */
+export async function fetchCurrentTierWithRetry(
+  contract,
+  {
+    timeoutMs = 15000,
+    maxAttempts = 5,
+    retryDelayMs = 2000,
+  } = {},
+) {
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error('fetchCurrentTierWithRetry maxAttempts must be a positive integer');
+  }
+  if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0) {
+    throw new Error('fetchCurrentTierWithRetry retryDelayMs must be a non-negative integer');
+  }
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetchCurrentTier(contract, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && retryDelayMs > 0) {
+        await sleep(retryDelayMs);
+      }
+    }
+  }
+  throw new Error(
+    `Capability tier read failed after ${maxAttempts} attempts: `
+    + `${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
 }
 
 /**

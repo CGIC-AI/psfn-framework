@@ -106,6 +106,10 @@ const liveHarnessSource = readFileSync(
   fileURLToPath(new URL('../live-system-shakedown.mjs', import.meta.url)),
   'utf8',
 );
+const harnessVerdictsSource = readFileSync(
+  fileURLToPath(new URL('../lib/harness-verdicts.mjs', import.meta.url)),
+  'utf8',
+);
 const matrixRunnerSource = readFileSync(
   fileURLToPath(new URL('../run-live-shakedown-matrix.sh', import.meta.url)),
   'utf8',
@@ -134,6 +138,11 @@ assert.match(
   liveHarnessSource,
   /const capabilityMatrix = \(CASE_IDS\.size === 0 \|\| CASE_IDS\.has\('capability_refusal_matrix'\)\)[\s\S]*?\? buildCapabilityMatrixCase\(ctx\)[\s\S]*?: null;/u,
   'explicit case selection skips capability-matrix construction and its unrelated validation',
+);
+assert.match(
+  liveHarnessSource,
+  /expectedShardBackend = EXPECTED_CAPABILITY_TIER === 'autonomous'[\s\S]*?denial: 'tier'[\s\S]*?shardBackend\?\.denial !== expectedShardBackend\.denial/u,
+  'the live matrix requires a non-autonomous shard rejection to reach the tier gate',
 );
 assert.doesNotMatch(
   readFileSync(
@@ -523,8 +532,8 @@ assert.match(
   'collectSemanticValidationFailures invokes validateParsedAssistant with no actionSensitive/narration gate',
 );
 assert.match(
-  liveHarnessSource,
-  /\(caseResult\.semanticFailureMatches\?\.length \?\? 0\) > 0\) \{\s*return 'semantic_failure';/u,
+  harnessVerdictsSource,
+  /\(caseResult\.semanticFailureMatches\?\.length \?\? 0\) > 0\) return 'semantic_failure';/u,
   'classifyCaseStatus promotes semantic-validation failures to the non-ok semantic_failure status',
 );
 

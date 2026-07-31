@@ -476,7 +476,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | World tool (perceive/list) + perception ingest | local (mock HA, synthetic telemetry to `/v1/telemetry/ingest`) | harness | `world.control` staged off by default |
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |
 | Hub identity ↔ contact enrollment, scoped presence observation | local | harness + Garden | fail-closed claim→contact; presence never moves or wakes a companion |
-| Shared-satellite response leases | local + kube, needs support companions | concurrent voice collision harness + lease audit | explicit/active conversation first, then Primary; exactly one Emanation Member speaks |
+| Shared-satellite response leases | local + kube, needs support companions | partner walk: concurrent voice collision + lease audit | explicit/active conversation first, then Primary; exactly one Emanation Member speaks |
 | Multi-companion substrate (mux, tenancy, one cluster Garden, cluster page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`psfn-framework-s10mc.8`, closed) is the entry gate |
 | ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC still fails closed, tracked by the open `psfn-framework-s10d6` voice rewrite |
 | Shared-world wiki | multi-companion | "toaster test": companion A learns a fact, companion B reads it later | |

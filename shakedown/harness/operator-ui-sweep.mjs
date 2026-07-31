@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   requireEnv,
   requireEnvOneOf,
+  optionalBoolEnv,
   optionalIntEnv,
   failClosedOnEnv,
 } from './lib/env.mjs';
@@ -41,6 +42,7 @@ const NAVIGATION_TIMEOUT_MS = optionalIntEnv('PSFN_UI_SWEEP_TIMEOUT_MS', 30000);
 const PAGE_SETTLE_MS = optionalIntEnv('PSFN_UI_SWEEP_SETTLE_MS', 1500);
 const VIEWPORT_WIDTH = optionalIntEnv('PSFN_UI_SWEEP_WIDTH', 1440);
 const VIEWPORT_HEIGHT = optionalIntEnv('PSFN_UI_SWEEP_HEIGHT', 2200);
+const IGNORE_HTTPS_ERRORS = optionalBoolEnv('PSFN_UI_SWEEP_IGNORE_HTTPS_ERRORS', false);
 
 const PAGES = [
   { name: 'dashboard', path: '/', expect: ['The Trunk', 'Dashboard overview'] },
@@ -216,6 +218,7 @@ async function main() {
   try {
     const context = await browser.newContext({
       ...devices['Desktop Chrome'],
+      ignoreHTTPSErrors: IGNORE_HTTPS_ERRORS,
       viewport: {
         width: VIEWPORT_WIDTH,
         height: VIEWPORT_HEIGHT,
@@ -237,6 +240,7 @@ async function main() {
             generatedAt: new Date().toISOString(),
             adminBase: ADMIN_BASE,
             browserProbeRoot: BROWSER_PROBE_ROOT,
+            ignoreHTTPSErrors: IGNORE_HTTPS_ERRORS,
             auth: {
               ok: false,
               reason: `Garden UI is not being served from ${ADMIN_BASE}. Received "${preflightBody}" after authentication; build the branch-local admin-ui and restart the operator surface.`,
@@ -267,6 +271,7 @@ async function main() {
       generatedAt: new Date().toISOString(),
       adminBase: ADMIN_BASE,
       browserProbeRoot: BROWSER_PROBE_ROOT,
+      ignoreHTTPSErrors: IGNORE_HTTPS_ERRORS,
       auth,
       pages,
       failures: pages.filter((page) => !page.ok).map((page) => page.name),

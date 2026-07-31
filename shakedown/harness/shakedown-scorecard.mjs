@@ -6,7 +6,7 @@
 //
 //  1. Non-green taxonomy. Every case status that is not 'ok' is a failure and
 //     is bucketed into the enforced taxonomy (semantic_failure,
-//     completed_after_abort, agent_busy, runtime_stale, matrix_aborted,
+//     dispatch_aborted, completed_after_abort, agent_busy, runtime_stale, matrix_aborted,
 //     unproven_tool_claim, unledgered_charge, plus other_failure). Failures
 //     count unless the operator records an explicit waiver.
 //
@@ -37,6 +37,7 @@ const COVERAGE_MAP_DEFAULT = join(HARNESS_DIR, 'coverage-map.json');
 // each. Any non-'ok' status not listed falls through to 'other_failure'.
 const TAXONOMY = {
   semantic_failure: ['semantic_failure'],
+  dispatch_aborted: ['dispatch_aborted'],
   completed_after_abort: ['completed_after_fetch_abort', 'completed_after_http_error'],
   agent_busy: ['agent_busy', 'accepted_during_busy'],
   runtime_stale: ['runtime_stale'],

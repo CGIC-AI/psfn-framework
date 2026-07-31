@@ -22,10 +22,16 @@
       "operator": "release operator",
       "reason": "kube-only real-HA control remains a trust-gated partner walk with gateway-audit proof"
     },
-    "hub-identity-contact-enrollment-presence-follow": {
+    "hub-identity-contact-enrollment-scoped-presence-observation": {
       "cases": ["s10_hub_identity_presence_follow"],
       "disposition": null,
-      "reason": "temporary enrollment, audit, internal-state place, and shared-presence rows"
+      "reason": "temporary enrollment, audit, and scoped presence observation without moving or waking the companion"
+    },
+    "shared-satellite-response-leases": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "the concurrent voice collision and lease-audit proof requires a real shared satellite with support companions, so it remains a partner-session check"
     },
     "multi-companion-substrate": {
       "cases": ["multi_companion_crossover_isolation"],
@@ -78,11 +84,11 @@
       "operator": "release operator",
       "reason": "current Garden behavioral sweep predates the final Sprint 10 route inventory; retain explicit operator UX coverage"
     },
-    "july-hardening-fleet-auth-sso-and-passkey-administration": {
+    "july-hardening-fleet-auth-sso-administration": {
       "cases": [],
-      "disposition": "manual",
+      "disposition": "partner",
       "operator": "release operator",
-      "reason": "operator-eyes: SSO subject-scoped admin is a Garden partner walk and the WebAuthn passkey register/authenticate ceremony cannot run headless"
+      "reason": "Discord SSO subject-scoped administration remains a Garden partner walk; escalation grants are scriptable but have no authored harness case in this catalog"
     },
     "july-hardening-dnll-owner-migration-upgrade-path": {
       "cases": [],

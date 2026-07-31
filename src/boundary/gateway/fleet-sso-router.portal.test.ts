@@ -261,9 +261,13 @@ describe('unified-origin fleet portal routing', () => {
     for (const input of [
       { path: '/v1/fleet/portal/', session: SESSION_TOKEN, expectedStatus: 404 },
       {
+        // An encoded slash in a query value is a VALID target since the
+        // hrmrq.27 outer-parser fix (encoded timezones must survive the door);
+        // the portal route's own no-query guard still rejects it before the
+        // projection — as not-found, no longer as malformed.
         path: '/v1/fleet/portal?return_to=%2Fcompanions',
         session: SESSION_TOKEN,
-        expectedStatus: 400,
+        expectedStatus: 404,
       },
       {
         path: '/v1/fleet/portal',

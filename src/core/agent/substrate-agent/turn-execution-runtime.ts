@@ -75,6 +75,8 @@ import {
   healMissingImageAttachmentClaim,
   MISSING_IMAGE_ATTACHMENT_CORRECTION,
   rejectsMissingImageAttachmentClaim,
+  rejectsUnfulfilledImageEditRequest,
+  UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION,
 } from '../../../primitives/images/attachment-claim-guard.js';
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import {
@@ -1318,6 +1320,27 @@ export async function handleMessageForTurn(
         turnId,
         requestId,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.tool_execution_claim.rejected'),
+      });
+    }
+
+    if (rejectsUnfulfilledImageEditRequest({
+      requestText: message.content,
+      requestHasImageInput: message.attachments?.some(
+        attachment => attachment.contentType.trim().toLowerCase().startsWith('image/'),
+      ) ?? false,
+      turnMessages,
+    })) {
+      safeResponseText = UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION;
+      log.warn('Rejected unfulfilled image-edit request without a successful edit tool outcome', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.image_edit_request.unfulfilled', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_edit_request.unfulfilled'),
       });
     }
 

@@ -252,7 +252,9 @@ describe('DefaultImageVisionReviewer', () => {
     await expect(reviewer.analyze({
       imageUrls: ['https://images.example.test/review.png'],
       question: 'Describe it.',
-    })).rejects.toThrow('vision review returned empty text from primary-vision-model');
+    })).rejects.toThrow(
+      'vision_empty_response: vision review returned empty text from primary-vision-model',
+    );
 
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });

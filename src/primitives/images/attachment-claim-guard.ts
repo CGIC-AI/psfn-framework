@@ -1,3 +1,10 @@
+import type { AgentMessage } from '../../boundary/pi-agent/index.js';
+import {
+  hasSuccessfulToolCallOutcome,
+  type ToolResultOutcomeProjection,
+} from '../../shared/contracts/tool-call-outcome.js';
+import { isRecord } from '../../shared/utils/types.js';
+
 const IMAGE_ATTACHMENT_CLAIM_PATTERNS = [
   {
     pattern: /(?:^|\n)\s*(?:\*{1,3}|_{1,3})\s*(?:image|photo|selfie)\s+(?:is\s+)?attached\s*(?:\*{1,3}|_{1,3})(?=\s|$)/iu,
@@ -41,6 +48,63 @@ const IMAGE_ATTACHMENT_MARKER_REMOVAL_PATTERNS = [
 export const MISSING_IMAGE_ATTACHMENT_CORRECTION =
   'I could not attach an image because no image tool completed successfully this turn. '
   + 'I need to call selfie_create or generate_image before saying an image is attached.';
+
+const IMAGE_EDIT_TOOL_NAMES = new Set([
+  'generate_image',
+  'media',
+  'image_edit',
+]);
+
+const IMAGE_EDIT_ACTION = String.raw`(?:edit|modify|retouch|crop|resize|remove|replace|change|adjust|make)`;
+const IMAGE_EDIT_REQUEST_MARKER = new RegExp(
+  String.raw`(?:\b(?:please|can you|could you|would you|will you|i (?:want|need|would like) you to)\b|^\s*${IMAGE_EDIT_ACTION}\b)`,
+  'iu',
+);
+const IMAGE_EDIT_ACTION_PATTERN = new RegExp(String.raw`\b${IMAGE_EDIT_ACTION}\b`, 'iu');
+const NEGATED_IMAGE_EDIT_PATTERN = new RegExp(
+  String.raw`\b(?:do not|don't|not asking you to|no need to)\s+(?:\w+\s+){0,2}${IMAGE_EDIT_ACTION}\b`,
+  'iu',
+);
+const IMAGE_EDIT_INSTRUCTION_REQUEST_PATTERN =
+  /\b(?:tell|explain|show)\s+me\s+how\s+to\b/iu;
+const IMAGE_SUBJECT_PATTERN = /\b(?:image|photo|picture|selfie)\b/iu;
+
+export const UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION =
+  'image_edit_execution_unconfirmed: I could not confirm that the requested image edit completed '
+  + 'because no successful generate_image action="edit" result was recorded this turn.';
+
+function isSuccessfulImageEditResult(result: ToolResultOutcomeProjection): boolean {
+  if (!IMAGE_EDIT_TOOL_NAMES.has(result.toolName) || !isRecord(result.details)) {
+    return false;
+  }
+  const imageResult = isRecord(result.details.mediaResult)
+    ? result.details.mediaResult
+    : isRecord(result.details.imageResult)
+      ? result.details.imageResult
+      : null;
+  return imageResult?.mode === 'edit';
+}
+
+export function rejectsUnfulfilledImageEditRequest(input: {
+  requestText: string;
+  requestHasImageInput: boolean;
+  turnMessages: readonly AgentMessage[];
+}): boolean {
+  const requestText = input.requestText.trim();
+  const isWellFormedEditRequest = (
+    IMAGE_EDIT_REQUEST_MARKER.test(requestText)
+    && IMAGE_EDIT_ACTION_PATTERN.test(requestText)
+    && (input.requestHasImageInput || IMAGE_SUBJECT_PATTERN.test(requestText))
+    && !NEGATED_IMAGE_EDIT_PATTERN.test(requestText)
+    && !IMAGE_EDIT_INSTRUCTION_REQUEST_PATTERN.test(requestText)
+  );
+  if (!isWellFormedEditRequest) return false;
+
+  return !hasSuccessfulToolCallOutcome(
+    input.turnMessages,
+    isSuccessfulImageEditResult,
+  );
+}
 
 export function rejectsMissingImageAttachmentClaim(input: {
   responseText: string;

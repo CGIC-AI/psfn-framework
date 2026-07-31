@@ -58,6 +58,7 @@ import {
   OPTIONAL_MODEL_HINT_NORMALIZATION,
   UnknownModelSelectionSlotError,
 } from '../../../primitives/llm/model-hint-routing.js';
+import { VisionPurposeResolvedNonVisionModelError } from '../../../primitives/llm/routing.js';
 
 const log = createComponentLogger('GatewayLLM');
 
@@ -102,6 +103,18 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
         error.message,
         GatewayErrors.UNKNOWN_MODEL_SELECTION_SLOT,
         { slotKey: error.slotKey },
+      );
+    }
+    if (error instanceof VisionPurposeResolvedNonVisionModelError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.VISION_PURPOSE_RESOLVED_NON_VISION_MODEL,
+        {
+          code: error.code,
+          provider: error.provider,
+          model: error.model,
+          ...(error.slotKey ? { slotKey: error.slotKey } : {}),
+        },
       );
     }
     throw error;

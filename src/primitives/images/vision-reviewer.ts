@@ -204,6 +204,18 @@ function extractVisionResponseSummary(response: { content?: unknown[] | string }
     : extractTextContent(response.content).trim();
 }
 
+export class VisionEmptyResponseError extends Error {
+  readonly code = 'vision_empty_response';
+
+  constructor(model?: string) {
+    super(
+      `vision_empty_response: vision review returned empty text`
+      + `${model ? ` from ${model}` : ''}`,
+    );
+    this.name = 'VisionEmptyResponseError';
+  }
+}
+
 function buildVisionReviewCorrelation(): CorrelationMetadata {
   const requestContext = getRequestContext();
   const requestId = normalizeCorrelationValue(requestContext?.requestId);
@@ -301,7 +313,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         );
         const summary = extractVisionResponseSummary(response);
         if (!summary) {
-          throw new Error(`vision review returned empty text from ${response.model}`);
+          throw new VisionEmptyResponseError(response.model);
         }
         const embodiment = activeReference
           ? parseEmbodimentConsistency(summary, activeReference)
@@ -334,7 +346,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     );
     const summary = extractVisionResponseSummary(response);
     if (!summary) {
-      throw new Error('vision review returned empty text');
+      throw new VisionEmptyResponseError(response.model ?? String(model.id));
     }
     const embodiment = activeReference
       ? parseEmbodimentConsistency(summary, activeReference)

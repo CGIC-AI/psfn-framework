@@ -18,6 +18,8 @@ import {
   runWithPaidDeliverableTracking,
 } from '../../shared/paid-deliverable-tracking.js';
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
+import { gateToolWithCapabilities } from '../../system/capabilities/gate.js';
+import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
@@ -204,6 +206,66 @@ describe('image tools', () => {
     expect(resolveToolRequiredCapabilities(mediaTool, { action: 'edit' })).toEqual([]);
     expect(resolveToolRequiredCapabilities(mediaTool, { action: 'analyze' })).toEqual([]);
     expect(resolveToolRequiredCapabilities(selfieTool, {})).toEqual([]);
+  });
+
+  it('executes a well-formed edit through the apprentice tool surface', async () => {
+    const edit = vi.fn(async () => ({
+      provider: 'fal' as const,
+      mode: 'edit' as const,
+      model: 'openai/gpt-image-2/edit',
+      fallbackUsed: false,
+      requestId: 'apprentice-edit-1',
+      images: [{
+        url: 'https://images.example.test/apprentice-edit.png',
+        fileName: 'apprentice-edit.png',
+      }],
+    }));
+    const tool = gateToolWithCapabilities(
+      createGenerateImageTool({ create: vi.fn(), edit }),
+      () => {
+        const granted = new Set(resolveTierCapabilityTokens('apprentice'));
+        return {
+          getTier: () => 'apprentice' as const,
+          getGrantedTokens: () => granted,
+          has: token => granted.has(token),
+        };
+      },
+    );
+
+    const result = await tool.execute('apprentice-edit-call', {
+      action: 'edit',
+      prompt: 'make the sky warmer',
+      input_urls: ['https://images.example.test/source.png'],
+    });
+
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'make the sky warmer',
+      imageUrls: ['https://images.example.test/source.png'],
+      sourceToolName: 'generate_image',
+    }));
+    expect(result.details?.isError).not.toBe(true);
+    expect(resultText(result)).toContain('"status": "image_generated"');
+  });
+
+  it('surfaces edit dispatch failure as a named tool error', async () => {
+    const tool = createGenerateImageTool({
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        throw new Error('provider edit queue unavailable');
+      }),
+    });
+
+    const result = await tool.execute('failed-edit-call', {
+      action: 'edit',
+      prompt: 'make the sky warmer',
+      input_urls: ['https://images.example.test/source.png'],
+    });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain(
+      'generate_image edit failed: provider edit queue unavailable',
+    );
   });
 
   it('returns generated media results plus an in-turn vision review from the unified media tool', async () => {
@@ -1251,6 +1313,32 @@ describe('image tools', () => {
     expect(result.details.visionReview?.model).toBe('vision-model');
     expect(resultText(result)).toContain('Vision review:');
     expect(resultText(result)).toContain('appearance is consistent');
+  });
+
+  it('surfaces an empty vision completion as a named analyze tool failure', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => {
+        throw new Error(
+          'vision_empty_response: vision review returned empty text from vendor/vision-model',
+        );
+      }),
+    };
+    const tool = createGenerateImageTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
+
+    const result = await tool.execute('empty-vision-call', {
+      action: 'analyze',
+      input_urls: ['https://images.example.test/review.png'],
+      question: 'What is visible?',
+    });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain(
+      'generate_image analyze failed: vision_empty_response',
+    );
+    expect(result.details?.visionReview).toBeUndefined();
   });
 
   it('reuses the current-turn vision review when media analyze is called with a mismatched stale url', async () => {

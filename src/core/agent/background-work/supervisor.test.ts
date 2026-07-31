@@ -806,7 +806,50 @@ describe('BackgroundWorkSupervisor', () => {
     }
   });
 
-  it('makes steady autonomic progress in every turn window of a sustained conversation', async () => {
+  it('claims accepted work immediately on enqueue without waiting for a scheduler tick (hwars.3)', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const executor = vi.fn(async () => undefined);
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor,
+    });
+    const input = makeInput('session-a', 'turn-a');
+
+    // No tick() anywhere: the enqueue itself must pump the claim pass.
+    await supervisor.enqueue([input]);
+    for (let i = 0; i < 10 && (await store.get(input.jobId))?.state !== 'succeeded'; i += 1) {
+      await flush();
+    }
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect((await store.get(input.jobId))?.state).toBe('succeeded');
+  });
+
+  it('drains a deep single-session backlog continuously via settlement-chained claim passes', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor: async () => undefined,
+    });
+    // Seeded directly on the store — pre-existing rows, no enqueue kick.
+    const inputs = Array.from({ length: 5 }, (_, index) => makeInput('session-a', `turn-${String(index)}`));
+    for (const input of inputs) await store.enqueue(input);
+
+    // One running job per session means a single pass claims exactly one job;
+    // ONE explicit tick must still drain all five through settlement chaining.
+    await supervisor.tick();
+    for (let i = 0; i < 40 && (await store.countPending()) > 0; i += 1) {
+      await flush();
+    }
+    for (const input of inputs) {
+      expect((await store.get(input.jobId))?.state).toBe('succeeded');
+    }
+  });
+
+  it('makes steady autonomic progress in every turn window, including for jobs enqueued before the conversation', async () => {
     let now = 1_000;
     const store = new MemoryBackgroundWorkStore();
     const supervisor = createBackgroundWorkSupervisor({
@@ -815,21 +858,38 @@ describe('BackgroundWorkSupervisor', () => {
       now: () => now,
       executor: async () => undefined,
     });
+    // Pre-existing backlog: seeded on the store before any turn happens.
+    const backlog = Array.from({ length: 5 }, (_, index) => makeInput('session-a', `turn-b${String(index)}`));
+    for (const input of backlog) await store.enqueue(input);
+    const allJobIds: string[] = backlog.map(input => input.jobId);
+    const countSucceeded = async (): Promise<number> => {
+      const jobs = await Promise.all(allJobIds.map(jobId => store.get(jobId)));
+      return jobs.filter(job => job?.state === 'succeeded').length;
+    };
 
-    // Ten back-to-back turns with no idle gap: each turn's memory-extraction
-    // job must complete DURING some turn window of the conversation, not after
-    // it ends. Slow is fine; stoppage is the violation class.
+    // Ten back-to-back turns with no idle gap: progress must be visible in
+    // EVERY turn window and the pre-conversation backlog must complete during
+    // the conversation, not after it ends. Slow is fine; stoppage is the
+    // violation class.
+    let succeededBefore = 0;
     for (let turn = 0; turn < 10; turn += 1) {
       const lease = supervisor.beginForeground('session-a');
       await lease.ready;
       const input = makeInput('session-a', `turn-${String(turn)}`);
+      allJobIds.push(input.jobId);
       await supervisor.enqueue([input]);
       await supervisor.tick();
       await supervisor.waitForIdle();
-      expect((await store.get(input.jobId))?.state).toBe('succeeded');
+      for (let i = 0; i < 40 && (await store.countPending()) > 0; i += 1) {
+        await flush();
+      }
+      const succeeded = await countSucceeded();
+      expect(succeeded).toBeGreaterThan(succeededBefore);
+      succeededBefore = succeeded;
       await supervisor.endForeground(lease);
       now += 1_000;
     }
+    expect(await countSucceeded()).toBe(allJobIds.length);
   });
 
   it('defers a claimed auto_compaction when foreground begins before its effect boundary, then resumes once', async () => {

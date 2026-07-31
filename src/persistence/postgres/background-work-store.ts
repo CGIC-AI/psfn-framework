@@ -33,6 +33,9 @@ import {
   POSTGRES_BACKGROUND_WORK_MIGRATIONS,
 } from './migrations.js';
 import { parseSubsystemOutputRef } from '../../shared/contracts/subsystem-output-refs.js';
+import { createComponentLogger } from '../../shared/logger.js';
+
+const log = createComponentLogger('PostgresBackgroundWorkStore');
 
 interface BackgroundWorkRow extends QueryResultRow {
   job_id: string;
@@ -336,10 +339,47 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         migrationStatements,
         POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK,
       );
+      await PostgresBackgroundWorkStore.repairStrandedForegroundSweepRows(pool);
       return new PostgresBackgroundWorkStore(pool);
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
+    }
+  }
+
+  /**
+   * Startup normalization for rows stranded by the retired turn-boundary sweep
+   * (hrmrq.119 fixA). The pre-decoupling `beginForeground` bulk UPDATE parked
+   * every queued/retry_wait job as `deferred`/`foreground_active` with its
+   * availability pushed past the lease window and the original availability
+   * preserved in `deferred_from_available_at_ms`; only the (also retired)
+   * resume sweep could flip them back. The retired sweep is the ONLY writer
+   * that ever set `deferred_from_available_at_ms` (claim-level `defer` nulls
+   * it), so that column being non-null is an exact legacy discriminator.
+   * Restore each such row to its pre-sweep state and availability — the same
+   * transition the old resume performed — so the normal claim path drains the
+   * backlog. Idempotent (the matched shape can no longer be produced) and
+   * fail-closed: a repair failure fails the connect.
+   */
+  private static async repairStrandedForegroundSweepRows(pool: Pool): Promise<void> {
+    const nowMs = Date.now();
+    const repaired = await pool.query(`
+      UPDATE agent_background_work_jobs
+      SET state = COALESCE(deferred_from_state, 'queued'),
+          available_at_ms = deferred_from_available_at_ms,
+          deferred_from_state = NULL,
+          deferred_from_available_at_ms = NULL,
+          updated_at_ms = $1,
+          revision = revision + 1
+      WHERE state = 'deferred'
+        AND reason_code = 'foreground_active'
+        AND deferred_from_available_at_ms IS NOT NULL
+    `, [nowMs]);
+    const repairedCount = repaired.rowCount ?? 0;
+    if (repairedCount > 0) {
+      log.info('Restored background jobs stranded by the retired foreground sweep', {
+        repairedCount,
+      });
     }
   }
 

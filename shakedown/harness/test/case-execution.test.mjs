@@ -8,6 +8,7 @@ import {
   classifyCaseFailure,
   caseFailureStatus,
   isMatrixAbortStatus,
+  resolveCaseCoverageHoleReason,
   resolveCaseTimeoutMs,
   runCaseWithTimeout,
   runCaseSetup,
@@ -153,4 +154,32 @@ test('an unexpected setup failure remains matrix-blocking', async () => {
 
   assert.deepEqual(caught, { status: 'harness_error', reason: 'harness_error:Error' });
   assert.equal(isMatrixAbortStatus(caught.status), true);
+});
+
+test('a target excluded by case variants is a named coverage hole', () => {
+  assert.equal(resolveCaseCoverageHoleReason({
+    id: 'backup_encryption_roundtrip',
+    variants: ['local'],
+  }, {
+    target: 'kube',
+    catalogToolNames: [],
+  }), 'variant_excluded:target=kube;supported=local');
+  assert.equal(resolveCaseCoverageHoleReason({
+    id: 'backup_encryption_roundtrip',
+    variants: ['local'],
+  }, {
+    target: 'local',
+    catalogToolNames: [],
+  }), null);
+});
+
+test('a requested suggested tool absent from the live catalog is a named coverage hole', () => {
+  assert.equal(resolveCaseCoverageHoleReason({
+    id: 'issue_create_update',
+    variants: ['local', 'kube'],
+    suggestTools: ['beads'],
+  }, {
+    target: 'local',
+    catalogToolNames: ['memory', 'skill'],
+  }), 'catalog_tool_missing:beads');
 });

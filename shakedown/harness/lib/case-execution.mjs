@@ -72,13 +72,13 @@ export function resolveCaseTimeoutMs(testCase, defaults) {
   const baseMessages = Array.isArray(testCase?.messages) && testCase.messages.length > 0
     ? testCase.messages
     : [{ message: testCase?.message }];
-  const activationSteps = Array.isArray(testCase?.activateTools) && testCase.activateTools.length > 0
+  const suggestionSteps = Array.isArray(testCase?.suggestTools) && testCase.suggestTools.length > 0
     ? [{
-        activateTools: testCase.activateTools,
-        timeoutMs: testCase.activationTimeoutMs ?? 60_000,
+        suggestTools: testCase.suggestTools,
+        timeoutMs: testCase.suggestionTimeoutMs ?? 60_000,
       }]
     : [];
-  const steps = [...activationSteps, ...baseMessages];
+  const steps = [...suggestionSteps, ...baseMessages];
   const dispatchBudgetMs = typeof testCase?.execute === 'function'
     ? chatStepBudgetMs(
         { timeoutMs: testCase.timeoutMs ?? defaults.fetchTimeoutMs },
@@ -206,4 +206,24 @@ export function classifyCaseFailure(error) {
 
 export function isMatrixAbortStatus(status) {
   return MATRIX_ABORT_STATUSES.has(status);
+}
+
+export function resolveCaseCoverageHoleReason(testCase, { target, catalogToolNames }) {
+  const variants = Array.isArray(testCase?.variants)
+    ? testCase.variants.filter((variant) => typeof variant === 'string' && variant.length > 0)
+    : [];
+  if (variants.length > 0 && !variants.includes(target)) {
+    return `variant_excluded:target=${String(target)};supported=${variants.join(',')}`;
+  }
+
+  const catalog = new Set(
+    (Array.isArray(catalogToolNames) ? catalogToolNames : [])
+      .filter((name) => typeof name === 'string' && name.length > 0),
+  );
+  const missingSuggestedTool = (
+    Array.isArray(testCase?.suggestTools) ? testCase.suggestTools : []
+  ).find((name) => typeof name === 'string' && !catalog.has(name));
+  return missingSuggestedTool
+    ? `catalog_tool_missing:${missingSuggestedTool}`
+    : null;
 }

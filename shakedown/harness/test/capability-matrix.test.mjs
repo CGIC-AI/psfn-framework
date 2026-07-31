@@ -120,6 +120,31 @@ assert.doesNotMatch(
   'the default three-tier matrix never executes destructive lifecycle cases',
 );
 assert.match(
+  matrixRunnerSource,
+  /APPRENTICE_CASES=.*memory_write_patch/u,
+  'the apprentice matrix keeps memory write and patch coverage',
+);
+assert.doesNotMatch(
+  matrixRunnerSource,
+  /APPRENTICE_CASES=.*memory_delete_restore/u,
+  'the apprentice matrix never requests autonomous-only memory.delete',
+);
+assert.match(
+  matrixRunnerSource,
+  /AUTONOMOUS_CASES=.*memory_delete_restore/u,
+  'the autonomous matrix owns memory delete and restore coverage',
+);
+assert.doesNotMatch(
+  liveHarnessSource,
+  /action "activate"/u,
+  'the harness never asks toolset to perform its retired activate action',
+);
+assert.equal(
+  [...liveHarnessSource.matchAll(/expectedTools:\s*\[[^\]]*'toolset'[^\]]*\]/gu)].length,
+  2,
+  'only the tool-discovery and promoted-tool cases genuinely require toolset',
+);
+assert.match(
   liveHarnessSource,
   /defaultAutonomous = autonomous\.filter\([\s\S]*?lifecycle_restart[\s\S]*?lifecycle_rebuild/u,
   'direct autonomous harness defaults also omit lifecycle execution cases',

@@ -13,6 +13,22 @@ export type ToolCallOutcome = typeof TOOL_CALL_OUTCOMES[number];
 
 export type ToolCallOutcomeCounts = Record<ToolCallOutcome, number>;
 
+export const TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY = 'x-psfn-tool-call-idempotency';
+export const HELD_TOOL_CALL_RESULT_STATUS = 'held';
+
+export type ToolCallIdempotency = 'idempotent' | 'effectful';
+
+/**
+ * JSON-Schema metadata used by the turn scheduler to decide whether identical
+ * calls are safe to collapse. Unknown and malformed declarations resolve to
+ * effectful so an undeclared action always executes.
+ */
+export interface ToolCallIdempotencySchemaMetadata {
+  default: ToolCallIdempotency;
+  defaultAction?: string;
+  actions?: Readonly<Record<string, ToolCallIdempotency>>;
+}
+
 export interface ToolResultOutcomeProjection {
   role: 'toolResult';
   toolName: string;
@@ -27,6 +43,52 @@ export const DUPLICATE_TOOL_CALL_SKIP_RESULT =
 
 export const SEQUENTIAL_DEPENDENCY_SKIP_RESULT =
   'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';
+
+function isToolCallIdempotency(value: unknown): value is ToolCallIdempotency {
+  return value === 'idempotent' || value === 'effectful';
+}
+
+export function resolveToolCallIdempotency(
+  parameters: unknown,
+  argumentsValue: unknown,
+): ToolCallIdempotency {
+  if (!isRecord(parameters)) return 'effectful';
+  const declaration = parameters[TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY];
+  if (!isRecord(declaration) || !isToolCallIdempotency(declaration.default)) {
+    return 'effectful';
+  }
+  if (
+    declaration.defaultAction !== undefined
+    && (typeof declaration.defaultAction !== 'string' || !declaration.defaultAction.trim())
+  ) {
+    return 'effectful';
+  }
+  if (declaration.actions !== undefined) {
+    if (!isRecord(declaration.actions)) return 'effectful';
+    if (Object.values(declaration.actions).some(value => !isToolCallIdempotency(value))) {
+      return 'effectful';
+    }
+  }
+
+  const declaredAction = isRecord(argumentsValue) ? argumentsValue.action : undefined;
+  const action = typeof declaredAction === 'string'
+    ? declaredAction.trim()
+    : typeof declaration.defaultAction === 'string'
+      ? declaration.defaultAction.trim()
+      : '';
+  if (!action || declaration.actions === undefined) {
+    return declaration.default;
+  }
+  const actionIdempotency = declaration.actions[action];
+  return isToolCallIdempotency(actionIdempotency)
+    ? actionIdempotency
+    : 'effectful';
+}
+
+/** A held call did not perform its intended action and is retryable after release. */
+export function isHeldToolCallResult(details: unknown): boolean {
+  return isRecord(details) && details.status === HELD_TOOL_CALL_RESULT_STATUS;
+}
 
 export function isToolCallOutcome(value: unknown): value is ToolCallOutcome {
   return typeof value === 'string'

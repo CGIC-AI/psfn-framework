@@ -6,7 +6,9 @@ import type { ToolCallOutcome } from '../../shared/contracts/runtime.js';
 import {
   classifyExecutedToolCallOutcome,
   DUPLICATE_TOOL_CALL_SKIP_RESULT,
+  isHeldToolCallResult,
   isToolCallErrorOutcome,
+  resolveToolCallIdempotency,
   SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
 } from '../../shared/contracts/tool-call-outcome.js';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
@@ -426,6 +428,7 @@ async function executeSingleToolCall(
   const tool = descriptor.resolveTool(toolCall.name) ?? descriptor.tool;
   const guard = options.guard;
   const signature = buildToolCallSignature(toolCall);
+  const deduplicate = resolveToolCallIdempotency(tool?.parameters, toolCall.arguments) === 'idempotent';
   const maxFailures = Number.isFinite(options.maxFailuresPerSignature)
     ? Math.max(1, Math.floor(options.maxFailuresPerSignature as number))
     : 2;
@@ -446,7 +449,7 @@ async function executeSingleToolCall(
         invocationAudit,
       );
     }
-    if (guard.inFlightSignatures.has(signature)) {
+    if (deduplicate && guard.inFlightSignatures.has(signature)) {
       options.onTelemetry?.('agent.tools.scheduler.skipped', {
         reason: 'duplicate_in_flight',
         toolName: toolCall.name,
@@ -459,7 +462,7 @@ async function executeSingleToolCall(
         invocationAudit,
       );
     }
-    if (guard.successfulSignatures.has(signature)) {
+    if (deduplicate && guard.successfulSignatures.has(signature)) {
       options.onTelemetry?.('agent.tools.scheduler.skipped', {
         reason: 'duplicate_completed',
         toolName: toolCall.name,
@@ -487,7 +490,7 @@ async function executeSingleToolCall(
         invocationAudit,
       );
     }
-    guard.inFlightSignatures.add(signature);
+    if (deduplicate) guard.inFlightSignatures.add(signature);
   }
 
   context.stream.push({
@@ -651,15 +654,15 @@ async function executeSingleToolCall(
   }
 
   if (guard) {
-    guard.inFlightSignatures.delete(signature);
+    if (deduplicate) guard.inFlightSignatures.delete(signature);
     if (isError) {
       guard.failureCountsBySignature.set(
         signature,
         (guard.failureCountsBySignature.get(signature) ?? 0) + 1,
       );
       recordMalformedArgumentFailure(guard, toolCall, result);
-    } else {
-      guard.successfulSignatures.add(signature);
+    } else if (outcome === 'success' && !isHeldToolCallResult(result.details)) {
+      if (deduplicate) guard.successfulSignatures.add(signature);
       if (guard.correctedToolNames.delete(toolCall.name)) {
         options.onTelemetry?.('agent.tools.correction.recovered', {
           toolName: toolCall.name,

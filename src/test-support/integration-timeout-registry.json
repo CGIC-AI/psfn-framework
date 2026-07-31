@@ -383,6 +383,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "beforeAll 90s harness startup, mirroring the background-work store suite's established harness+schema hook budget (slot contention under full-suite load)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/postgres-store.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "beforeAll 90s harness startup budget (standard harness pattern); pre-existing flake under full-suite postgres slot contention, exposed as the suite gained more harness consumers."
     }
   ]
 }

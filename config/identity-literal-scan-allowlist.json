@@ -2459,6 +2459,18 @@
       "contains": "x-psfn-escalation-grant",
       "reason": "Comment naming the escalation-grant protocol header; protocol constant.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/tool-call-outcome.ts",
+      "contains": "x-psfn-tool-call-idempotency",
+      "reason": "Wire-protocol schema key namespacing the tool-call idempotency metadata; a product identifier, not a companion identity literal.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/diagnostics/redaction.ts",
+      "contains": "x-psfn-",
+      "reason": "Redaction classifier matches the product's own x-psfn-csrf / x-psfn-escalation-grant header names so capability tokens are scrubbed; the header names are already allowlisted at their definition sites.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

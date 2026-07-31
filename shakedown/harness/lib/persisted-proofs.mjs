@@ -299,7 +299,10 @@ export function validateCogSecDocumentProof({ sideChecks }) {
   for (const kind of ['memory_extraction', 'emotion_appraisal']) {
     const job = jobs.find((candidate) => candidate?.kind === kind);
     if (job?.state !== 'succeeded') {
-      failures.push(`${kind} background proof did not reach succeeded state`);
+      failures.push(
+        `background-job-not-executed: ${kind} state=${String(job?.state ?? 'missing')}`
+        + ` reason=${String(job?.reasonCode ?? 'missing')}`,
+      );
     }
   }
   if (proof?.memoryLeakCount !== 0) {

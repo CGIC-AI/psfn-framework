@@ -130,6 +130,36 @@ test('a failed generic coverage artifact cannot produce a green scorecard', () =
   }
 });
 
+test('a case-local configuration skip is a red, named coverage hole', () => {
+  const root = createFixtureRoot();
+  try {
+    const harness = join(root, 'harness.json');
+    writeJson(harness, {
+      phase: 'coverage',
+      harnessStatus: 'complete',
+      completed: true,
+      results: [{
+        caseId: 'tier_tool_conformance',
+        caseStatus: 'coverage_hole',
+        failureReason: 'missing_env:PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY',
+      }],
+    });
+
+    const result = runScorecard(root, [harness]);
+    assert.equal(result.status, 1);
+    assert.equal(result.scorecard.summaries[0].cases[0].executed, false);
+    assert.deepEqual(result.scorecard.taxonomy.categories.coverage_hole, [{
+      caseId: 'tier_tool_conformance',
+      status: 'coverage_hole',
+      reason: 'missing_env:PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY',
+      artifact: 'harness.json',
+      waived: false,
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('completed or failing external artifacts cannot credit coverage proof', () => {
   const root = createFixtureRoot();
   try {

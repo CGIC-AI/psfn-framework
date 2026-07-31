@@ -39,10 +39,11 @@ import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 import { validatePersistedProof } from './lib/persisted-proofs.mjs';
 import {
   SUBAGENT_STEP_TIMEOUT_MS,
-  caseFailureStatus,
+  classifyCaseFailure,
   isMatrixAbortStatus,
   resolveCaseTimeoutMs,
   runCaseWithTimeout,
+  runCaseSetup,
   throwIfAborted,
   withTimeout,
 } from './lib/case-execution.mjs';
@@ -264,7 +265,12 @@ function getCaseDiagnostics(caseId) {
   return CASE_DISPATCH_DIAGNOSTICS.get(caseId) ?? [];
 }
 
-function buildHarnessErrorResult(testCase, errorMessage, caseStatus = 'harness_error') {
+function buildHarnessErrorResult(
+  testCase,
+  errorMessage,
+  caseStatus = 'harness_error',
+  failureReason = 'harness_error:Error',
+) {
   return {
     id: testCase.id,
     caseId: testCase.id,
@@ -296,8 +302,10 @@ function buildHarnessErrorResult(testCase, errorMessage, caseStatus = 'harness_e
     gatewayAudit: [],
     sideChecks: {
       error: errorMessage,
+      reason: failureReason,
       dispatchDiagnostics: getCaseDiagnostics(testCase.id),
     },
+    failureReason,
     parsedAssistant: null,
     semanticFailureMatches: [],
     toolValidationErrors: [],
@@ -3303,9 +3311,7 @@ async function runCase(testCase, ctx, signal) {
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
   throwIfAborted(signal);
-  const beforeChecks = typeof testCase.before === 'function'
-    ? await testCase.before({ ctx, signal })
-    : null;
+  const beforeChecks = await runCaseSetup(testCase, { ctx, signal });
   throwIfAborted(signal);
   const activationMessages = Array.isArray(testCase.activateTools) && testCase.activateTools.length > 0
     ? [{ activateTools: testCase.activateTools, timeoutMs: testCase.activationTimeoutMs ?? 60_000 }]
@@ -3401,6 +3407,17 @@ async function runCase(testCase, ctx, signal) {
   throwIfAborted(signal);
   const outcomeApiUserId = outcome.apiUserId ?? ctx.primaryApiUserId;
   const caseTurnIds = stepOutcomes.map((step) => step?.turnRecord?.turnId);
+  const caseTurnIdSet = new Set(
+    caseTurnIds.filter((turnId) => typeof turnId === 'string' && turnId.length > 0),
+  );
+  const sessionArchive = resolveSessionArchive(
+    testCase.sessionId,
+    outcomeApiUserId,
+    outcome.turnRecord,
+  );
+  const sessionEntries = Array.isArray(sessionArchive?.entries)
+    ? sessionArchive.entries.filter((entry) => caseTurnIdSet.has(sessionEntryTurnId(entry)))
+    : [];
   const archiveSummary = sessionArchiveSummary(
     testCase.sessionId,
     outcomeApiUserId,
@@ -3453,6 +3470,7 @@ async function runCase(testCase, ctx, signal) {
       preCaseHealth: {
         api: preCaseApiHealth,
       },
+      sessionEntries,
       signal,
     });
     throwIfAborted(signal);
@@ -3685,10 +3703,12 @@ async function main() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const failure = classifyCaseFailure(error);
       caseResult = buildHarnessErrorResult(
         testCase,
         errorMessage,
-        caseFailureStatus(error),
+        failure.status,
+        failure.reason,
       );
     }
     if (typeof testCase.cleanup === 'function') {

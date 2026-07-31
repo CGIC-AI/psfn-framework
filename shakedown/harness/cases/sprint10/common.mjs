@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { MissingEnvError } from '../../lib/env.mjs';
+
 export function envText(env, name, fallback = '') {
   const value = env?.[name];
   return typeof value === 'string' && value.trim().length > 0
@@ -10,7 +12,10 @@ export function envText(env, name, fallback = '') {
 export function requireCaseEnv(env, names, caseId) {
   const missing = names.filter((name) => !envText(env, name));
   if (missing.length > 0) {
-    throw new Error(`${caseId} requires ${missing.join(', ')}`);
+    throw new MissingEnvError(
+      missing[0],
+      `${caseId} requires ${missing.join(', ')}`,
+    );
   }
 }
 

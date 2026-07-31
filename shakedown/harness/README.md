@@ -39,7 +39,7 @@ targets, so nothing hardcodes a namespace, service, port, or `/mnt` path:
 | `PSFN_API_BASE` | gateway API base | point at a `kubectl port-forward svc/<gateway> 10053` |
 | `PSFN_ADMIN_BASE` | Garden admin base | point at a second `port-forward svc/<garden> 10054` |
 | `TESTING_HARNESS_API_KEY` | dedicated gateway credential for the persistent `api:testing-harness` room | required for all conversational harness traffic |
-| `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY` | enrolled per-satellite bearer for the satellite CogSec case only | must match the physical endpoint's authorized API-key principal |
+| `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY` | enrolled per-satellite bearer for the satellite CogSec case only | Helm `secrets.satelliteHubApiKey` (hub) or `secrets.extraSatelliteApiKeys` (additional satellites) feeds gateway `API_SATELLITE_KEYS`; list the derived principal in the physical endpoint's `satellites.json` `auth.apiKeyPrincipalIds` |
 | `API_KEY` | shared gateway credential used to start a fresh local runtime | local bootstrap/restart only; never use it for harness chat |
 | `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | Garden admin token | fleet-auth token also works |
 | `POSTGRES_DATABASE_URL` | round Postgres | reach the deployment DB via a port-forward; proofs run against it |
@@ -127,7 +127,12 @@ the corresponding `PSFN_SHAKEDOWN_*_PLACE_*` values in the Artie env template.
 The satellite CogSec document case additionally requires
 `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY`, set to the enrolled per-satellite
 bearer whose derived principal ID is authorized for that physical endpoint.
-It deliberately does not reuse or widen the persistent testing-harness bearer.
+For Helm/k3s, provision the same bearer through
+`secrets.satelliteHubApiKey` for the hub or `secrets.extraSatelliteApiKeys` for
+an additional satellite; the chart feeds those values into the gateway's
+`API_SATELLITE_KEYS`. List its derived principal under that endpoint's canonical
+`satellites.json` `auth.apiKeyPrincipalIds`. It deliberately does not reuse or
+widen the persistent testing-harness bearer.
 The hub probe resets to the physical fixture, creates and revokes its own opaque enrollment,
 then restores the physical place so a rerun starts from the same precondition
 (`PSFN_SHAKEDOWN_HUB_IDENTITY_ID` may override the generated handle). The CogSec
@@ -149,10 +154,12 @@ partner dispositions.
 ## Non-green taxonomy (enforced in `shakedown-scorecard.mjs`)
 
 Only `ok` is green. Every other case status is a failure and is bucketed into
-`semantic_failure`, `dispatch_aborted`, `completed_after_abort`, `agent_busy`,
+`coverage_hole`, `semantic_failure`, `dispatch_aborted`, `completed_after_abort`, `agent_busy`,
 `runtime_stale`, `matrix_aborted`, `unproven_tool_claim`, `unledgered_charge`,
-or `other_failure`. Failures count unless the operator records an explicit
-waiver (`PSFN_SCORECARD_WAIVERS`).
+or `other_failure`. A pre-dispatch case configuration failure is a
+`coverage_hole` with a stable reason such as `missing_env:<VARIABLE>`; it makes
+the scorecard red but does not abort later cases or tiers. Failures count unless
+the operator records an explicit waiver (`PSFN_SCORECARD_WAIVERS`).
 
 ## Coverage cross-check
 

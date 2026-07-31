@@ -15,6 +15,8 @@
 //   STUB_STATE_FILE       (optional) — current tier, recorded alongside the phase
 //   STUB_HARNESS_SLEEP_MS (optional) — sleep this long before exiting (0 = none)
 //   STUB_HARNESS_READY     (optional) — touch this file just before sleeping
+//   STUB_HARNESS_CASE_STATUS (optional) — emitted case status (default: ok)
+//   STUB_HARNESS_FAILURE_REASON (optional) — emitted named case failure reason
 
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -36,6 +38,8 @@ if (!ranLog) {
 }
 
 const phase = env('PSFN_SHAKEDOWN_PHASE') ?? 'unknown';
+const caseStatus = env('STUB_HARNESS_CASE_STATUS') ?? 'ok';
+const failureReason = env('STUB_HARNESS_FAILURE_REASON');
 const stateFile = env('STUB_STATE_FILE');
 let liveTier = 'unknown';
 if (stateFile) {
@@ -49,7 +53,11 @@ const payload = {
   completed: true,
   harnessStatus: 'ok',
   phase,
-  results: [{ caseId: 'stub_case', caseStatus: 'ok' }],
+  results: [{
+    caseId: 'stub_case',
+    caseStatus,
+    ...(failureReason ? { failureReason } : {}),
+  }],
 };
 writeFileSync(output, JSON.stringify(payload, null, 2));
 

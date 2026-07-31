@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { deriveApiKeyPrincipalId } from '../lib/probe.mjs';
@@ -134,6 +135,100 @@ test('satellite CogSec case fails closed when its scoped bearer is absent', asyn
 
   await assert.rejects(
     satelliteCase.before(),
-    /PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY/u,
+    (error) => (
+      error?.name === 'MissingEnvError'
+      && error?.variable === 'PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY'
+    ),
   );
+});
+
+test('API CogSec proof reads the quarantined envelope from its durable current-turn session entry', async () => {
+  const runToken = '2026-07-31T12-00-00';
+  const caseId = 's10_cogsec_document_quarantine';
+  const tokenHash = createHash('sha256').update(`${runToken}:${caseId}`, 'utf8').digest('hex');
+  const token = `s10-cogsec-API-${runToken}-${tokenHash.slice(0, 12)}`;
+  const envelopeId = 'envelope-current-turn';
+  const turnId = 'turn-current';
+  const cogSecServices = {
+    ...services,
+    readJsonIfExists: () => ({
+      entries: [{
+        id: envelopeId,
+        status: 'held',
+        rawText: `hostile fixture ${token}`,
+        envelope: {
+          id: envelopeId,
+          state: 'quarantined',
+          sourceClass: 'document',
+          contentRef: { sha256: 'a'.repeat(64) },
+        },
+      }],
+    }),
+    pgAll: async () => [
+      { kind: 'emotion_appraisal', state: 'succeeded', reason_code: 'completed' },
+      { kind: 'memory_extraction', state: 'succeeded', reason_code: 'completed' },
+    ],
+    pgScalar: async () => 0,
+    fetchJson: async (url) => {
+      if (url.endsWith('/confirm')) {
+        return { status: 200, body: { confirmToken: 'confirm-current' } };
+      }
+      if (url.endsWith('/decide')) {
+        return { status: 200, body: { ok: true } };
+      }
+      return {
+        status: 200,
+        body: {
+          items: [{ id: envelopeId, status: 'held', contentSha256: 'a'.repeat(64) }],
+        },
+      };
+    },
+  };
+  const apiCase = buildSprint10Cases({ ...context, runToken }, cogSecServices, {})
+    .find((entry) => entry.id === caseId);
+  const sessionEntries = [
+    {
+      role: 'user',
+      content: 'stale entry without a screening envelope',
+      metadata: JSON.stringify({ turn: { turnId: 'turn-stale' } }),
+    },
+    {
+      role: 'user',
+      content: 'This content is being kept aside for your human to look over.',
+      metadata: JSON.stringify({
+        turn: { turnId },
+        intakeScreening: {
+          withheld: true,
+          envelopes: [{ envelopeId, state: 'quarantined' }],
+        },
+      }),
+    },
+  ];
+  const outcome = {
+    apiUserId: context.primaryApiUserId,
+    response: { status: 200 },
+    turnRecord: {
+      turnId,
+      location: null,
+      userMessage: { content: 'snapshot deliberately lacks the current session envelope' },
+      snapshot: {
+        sessionContext: {
+          recentEntries: [{
+            role: 'user',
+            content: 'wrong source',
+            metadata: JSON.stringify({ turn: { turnId: 'turn-stale' } }),
+          }],
+        },
+      },
+    },
+  };
+
+  const sideChecks = await apiCase.after({ outcome, sessionEntries });
+  assert.deepEqual(apiCase.validatePersistedProof({ sideChecks }), []);
+  assert.deepEqual(sideChecks.cogsec.session, {
+    found: true,
+    withheld: true,
+    envelopeState: 'quarantined',
+    fixedNoticePresent: true,
+  });
 });

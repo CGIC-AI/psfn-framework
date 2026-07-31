@@ -15,6 +15,7 @@ import {
   validateBackgroundModelDriveProof,
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
+import { runCaseWithTimeout } from '../lib/case-execution.mjs';
 import {
   normalizeCustomOutcome,
   proof,
@@ -87,6 +88,17 @@ const BACKGROUND_APPRAISAL_ORIGIN_QUERY = `
 `;
 
 const TERMINAL_BACKGROUND_JOB_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
+export const MODEL_LANE_DISPATCH_TIMEOUT_MS = 120_000;
+const MODEL_LANE_CANCELLATION_DRAIN_TIMEOUT_MS = 10_000;
+
+export class ModelLaneAttributionDispatchTimeoutError extends Error {
+  constructor(stage, timeoutMs) {
+    super(`model_lane_attribution ${stage} timed out after ${timeoutMs}ms`);
+    this.name = 'ModelLaneAttributionDispatchTimeoutError';
+    this.stage = stage;
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 export const HARDENING_CASE_IDS = Object.freeze([
   'model_lane_attribution',
@@ -167,12 +179,25 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId, signal 
 async function waitForEmotionAppraisal(services, turnId, signal) {
   if (typeof turnId !== 'string' || turnId.length === 0) return null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    const jobs = await services.pgAll(
-      `select job_id, kind, source_turn_id, state
-       from agent_background_work_jobs
-       where source_turn_id = $1 and kind = 'emotion_appraisal';`,
-      [turnId],
-    );
+    let jobs;
+    try {
+      jobs = await services.pgAll(
+        `select job_id, kind, source_turn_id, state
+         from agent_background_work_jobs
+         where source_turn_id = $1 and kind = 'emotion_appraisal';`,
+        [turnId],
+      );
+    } catch (error) {
+      return {
+        jobId: null,
+        sourceTurnId: turnId,
+        state: 'proof_query_failed',
+        proofQueryFailure: {
+          stage: 'background_appraisal_poll',
+          error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        },
+      };
+    }
     const appraisal = Array.isArray(jobs)
       ? jobs.find((job) => job.kind === 'emotion_appraisal')
       : null;
@@ -198,7 +223,7 @@ async function waitForEmotionAppraisal(services, turnId, signal) {
 // successfully skipped gate and from intention appraisal on the same source turn.
 // Residual risk: if an operator raised the cadence above the warmup budget the
 // proof fails closed with a clear message.
-async function driveBackgroundLane({ services, sessionId, apiUserId, signal }) {
+async function driveBackgroundLane({ services, sessionId, apiUserId, signal, setStage }) {
   const maxWarmupTurns = 10;
   let warmupTurns = 0;
   let backgroundObserved = false;
@@ -206,7 +231,9 @@ async function driveBackgroundLane({ services, sessionId, apiUserId, signal }) {
   let backgroundJobState = null;
   let backgroundTurnId = null;
   let backgroundJobId = null;
+  const proofQueryFailures = [];
   for (let i = 0; i < maxWarmupTurns; i += 1) {
+    setStage?.('background_warmup_turn');
     const turn = await postAndWait({
       services,
       sessionId,
@@ -215,18 +242,33 @@ async function driveBackgroundLane({ services, sessionId, apiUserId, signal }) {
       signal,
     });
     warmupTurns += 1;
+    setStage?.('background_appraisal_poll');
     const appraisal = await waitForEmotionAppraisal(
       services,
       turn.turnRecord?.turnId,
       signal,
     );
     backgroundJobState = appraisal?.state ?? null;
+    if (appraisal?.proofQueryFailure) {
+      proofQueryFailures.push(appraisal.proofQueryFailure);
+      break;
+    }
     if (appraisal?.state !== 'succeeded') continue;
     const sourceTurnId = appraisal.sourceTurnId;
-    const originStage = await services.pgScalar(
-      BACKGROUND_APPRAISAL_ORIGIN_QUERY,
-      [sourceTurnId],
-    );
+    setStage?.('background_usage_origin_read');
+    let originStage;
+    try {
+      originStage = await services.pgScalar(
+        BACKGROUND_APPRAISAL_ORIGIN_QUERY,
+        [sourceTurnId],
+      );
+    } catch (error) {
+      proofQueryFailures.push({
+        stage: 'background_usage_origin_read',
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+      break;
+    }
     if (originStage === 'emotion.appraisal') {
       backgroundObserved = true;
       backgroundOriginStage = originStage;
@@ -242,7 +284,33 @@ async function driveBackgroundLane({ services, sessionId, apiUserId, signal }) {
     backgroundJobState,
     backgroundTurnId,
     backgroundJobId,
+    proofQueryFailures,
   };
+}
+
+async function runModelLaneAttributionDispatch({
+  timeoutMs,
+  parentSignal,
+  getStage,
+  run,
+}) {
+  const cancellationDrainTimeoutMs = Math.min(
+    MODEL_LANE_CANCELLATION_DRAIN_TIMEOUT_MS,
+    Math.max(1, Math.floor(timeoutMs / 2)),
+  );
+  const executionTimeoutMs = timeoutMs - cancellationDrainTimeoutMs;
+  return runCaseWithTimeout({
+    label: 'model_lane_attribution dispatch',
+    timeoutMs: executionTimeoutMs,
+    cancellationDrainTimeoutMs,
+    createTimeoutError: () => new ModelLaneAttributionDispatchTimeoutError(
+      getStage(),
+      executionTimeoutMs,
+    ),
+    run: (dispatchSignal) => run(parentSignal
+      ? AbortSignal.any([dispatchSignal, parentSignal])
+      : dispatchSignal),
+  });
 }
 
 export function buildModelLaneExpectations({
@@ -299,9 +367,14 @@ async function postBackupConfig(services, payload, signal) {
   };
 }
 
-export function buildHardeningCases(ctx, services) {
+export function buildHardeningCases(ctx, services, options = {}) {
   const modelsPath = join(services.systemDataDir, MODELS_OWNER_FILE);
   const backupPath = join(services.systemDataDir, BACKUP_OWNER_FILE);
+  const modelLaneDispatchTimeoutMs = options.modelLaneDispatchTimeoutMs
+    ?? MODEL_LANE_DISPATCH_TIMEOUT_MS;
+  if (!Number.isInteger(modelLaneDispatchTimeoutMs) || modelLaneDispatchTimeoutMs <= 0) {
+    throw new Error('modelLaneDispatchTimeoutMs must be a positive integer');
+  }
 
   // Durable-side-effect ledger for the idempotent top-level backup cleanup.
   // before() captures the original full backup.json payload; if a save/restore
@@ -321,73 +394,97 @@ export function buildHardeningCases(ctx, services) {
       feature: 'psfn-framework-osln',
       sessionId: `hardening-spend-${ctx.runToken}`,
       message: SPEND_MESSAGE,
+      timeoutMs: modelLaneDispatchTimeoutMs,
       proof: proof(
         'model_usage_events spend ledger cross-checked against models.json owner slots',
         'each charged lane resolves, via the owner file, to exactly the model that owner slot assigns',
       ),
       execute: async ({ sessionId, apiUserId, signal }) => {
-        // (1) Interactive lane: a plain foreground chat turn.
-        const interactive = await postAndWait({
-          services,
-          sessionId,
-          apiUserId,
-          message: SPEND_MESSAGE,
-          signal,
-        });
-        const interactiveTurnId = interactive.turnRecord?.turnId ?? null;
-        // (2) Vision workload: a foreground turn carrying an inline image, whose
-        //     turn record (and turnId) we recover so the image turn is attributed
-        //     at turn granularity against the models.json vision owner slot.
-        const vision = await postAndWaitVisionInline({
-          services,
-          sessionId,
-          apiUserId,
-          signal,
-        });
-        const visionTurnId = vision.turnRecord?.turnId ?? null;
-        // (3) Background lane: drive benign turns until the periodic
-        //     emotion-appraisal gate opens and its background-lane call lands.
-        const background = await driveBackgroundLane({
-          services,
-          sessionId,
-          apiUserId,
-          signal,
-        });
-        const ledgerRows = await services.pgAll(
-          MODEL_USAGE_QUERY,
-          [sessionId, background.backgroundTurnId],
-        );
-        const modelsConfig = services.readJsonIfExists(modelsPath);
-        return normalizeCustomOutcome({
-          sessionId,
-          request: { privacy: 'private', message: SPEND_MESSAGE },
-          response: interactive.response,
-          turnRecord: interactive.turnRecord,
-          sideChecks: {
-            modelLane: {
-              modelsConfig,
-              ledgerRows,
-              // Each purpose is bound to the exact turn this case drove. Chat and
-              // vision remain distinguishable despite sharing the interactive
-              // charge lane; background additionally intersects the exact source
-              // turn with charge_lane=background.
-              laneExpectations: buildModelLaneExpectations({
-                interactiveTurnId,
-                visionTurnId,
-                backgroundTurnId: background.backgroundTurnId,
-              }),
-              driven: {
-                interactiveTurnId,
-                visionInline: Boolean(vision.response),
-                visionTurnId,
-                backgroundWarmupTurns: background.warmupTurns,
-                backgroundObserved: background.backgroundObserved,
-                backgroundOriginStage: background.backgroundOriginStage,
-                backgroundJobState: background.backgroundJobState,
-                backgroundTurnId: background.backgroundTurnId,
-                backgroundJobId: background.backgroundJobId,
+        let stage = 'interactive_turn';
+        return runModelLaneAttributionDispatch({
+          timeoutMs: modelLaneDispatchTimeoutMs,
+          parentSignal: signal,
+          getStage: () => stage,
+          run: async (dispatchSignal) => {
+            // (1) Interactive lane: a plain foreground chat turn.
+            const interactive = await postAndWait({
+              services,
+              sessionId,
+              apiUserId,
+              message: SPEND_MESSAGE,
+              signal: dispatchSignal,
+            });
+            const interactiveTurnId = interactive.turnRecord?.turnId ?? null;
+            // (2) Vision workload: a foreground turn carrying an inline image, whose
+            //     turn record (and turnId) we recover so the image turn is attributed
+            //     at turn granularity against the models.json vision owner slot.
+            stage = 'vision_turn';
+            const vision = await postAndWaitVisionInline({
+              services,
+              sessionId,
+              apiUserId,
+              signal: dispatchSignal,
+            });
+            const visionTurnId = vision.turnRecord?.turnId ?? null;
+            // (3) Background lane: drive benign turns until the periodic
+            //     emotion-appraisal gate opens and its background-lane call lands.
+            const background = await driveBackgroundLane({
+              services,
+              sessionId,
+              apiUserId,
+              signal: dispatchSignal,
+              setStage: (nextStage) => {
+                stage = nextStage;
               },
-            },
+            });
+            stage = 'ledger_read';
+            let ledgerRows = [];
+            const proofQueryFailures = [...background.proofQueryFailures];
+            try {
+              ledgerRows = await services.pgAll(
+                MODEL_USAGE_QUERY,
+                [sessionId, background.backgroundTurnId],
+              );
+            } catch (error) {
+              proofQueryFailures.push({
+                stage,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
+            const modelsConfig = services.readJsonIfExists(modelsPath);
+            return normalizeCustomOutcome({
+              sessionId,
+              request: { privacy: 'private', message: SPEND_MESSAGE },
+              response: interactive.response,
+              turnRecord: interactive.turnRecord,
+              sideChecks: {
+                modelLane: {
+                  modelsConfig,
+                  ledgerRows,
+                  proofQueryFailures,
+                  // Each purpose is bound to the exact turn this case drove. Chat and
+                  // vision remain distinguishable despite sharing the interactive
+                  // charge lane; background additionally intersects the exact source
+                  // turn with charge_lane=background.
+                  laneExpectations: buildModelLaneExpectations({
+                    interactiveTurnId,
+                    visionTurnId,
+                    backgroundTurnId: background.backgroundTurnId,
+                  }),
+                  driven: {
+                    interactiveTurnId,
+                    visionInline: Boolean(vision.response),
+                    visionTurnId,
+                    backgroundWarmupTurns: background.warmupTurns,
+                    backgroundObserved: background.backgroundObserved,
+                    backgroundOriginStage: background.backgroundOriginStage,
+                    backgroundJobState: background.backgroundJobState,
+                    backgroundTurnId: background.backgroundTurnId,
+                    backgroundJobId: background.backgroundJobId,
+                  },
+                },
+              },
+            });
           },
         });
       },
@@ -404,6 +501,11 @@ export function buildHardeningCases(ctx, services) {
       validatePersistedProof: ({ outcome }) => {
         const modelLane = outcome?.sideChecks?.modelLane ?? {};
         return [
+          ...(Array.isArray(modelLane.proofQueryFailures)
+            ? modelLane.proofQueryFailures.map((failure) => (
+                `model-lane proof query failed at ${String(failure?.stage)}: ${String(failure?.error)}`
+              ))
+            : []),
           ...validateBackgroundModelDriveProof(modelLane.driven),
           ...validateModelLaneAttributionProof(modelLane),
         ];

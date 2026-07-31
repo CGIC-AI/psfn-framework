@@ -104,14 +104,16 @@ export function resolveCaseTimeoutMs(testCase, defaults) {
   );
 }
 
-export async function withTimeout(label, timeoutMs, run) {
+export async function withTimeout(label, timeoutMs, run, createTimeoutError) {
   let timer = null;
   try {
     return await Promise.race([
       Promise.resolve().then(run),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(createTimeoutError
+            ? createTimeoutError()
+            : new Error(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -139,12 +141,13 @@ export async function runCaseWithTimeout({
   label,
   timeoutMs,
   cancellationDrainTimeoutMs,
+  createTimeoutError,
   run,
 }) {
   const controller = new AbortController();
   const casePromise = Promise.resolve().then(() => run(controller.signal));
   try {
-    return await withTimeout(label, timeoutMs, () => casePromise);
+    return await withTimeout(label, timeoutMs, () => casePromise, createTimeoutError);
   } catch (error) {
     if (!isCaseTimeoutError(error)) throw error;
     controller.abort(error);

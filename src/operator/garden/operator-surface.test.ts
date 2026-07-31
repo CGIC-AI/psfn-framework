@@ -16,6 +16,7 @@ import {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
+import { createGatewayDisconnectRecovery } from '../../app/agent/gateway-disconnect-recovery.js';
 import { GardenOperatorSurface } from './operator-surface.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
 import type { ModelUsageAttributionCoverage } from '../../shared/telemetry/model-usage.js';
@@ -775,6 +776,9 @@ function createTestServices(): GardenAdminDomainServices {
       getSettingsContractData: vi.fn(),
       updateSettings: vi.fn(async () => ({ ok: true, message: 'Settings updated' })),
       getSubConfigJson: vi.fn((key: string) => {
+        if (key === 'capabilities') {
+          return JSON.stringify({ tier: 'nursery', customTokens: [] });
+        }
         if (key !== 'providers') return null;
         return JSON.stringify({
           schemaVersion: 1,
@@ -1437,12 +1441,51 @@ describe('Garden operator surface', () => {
       dependencies: {
         adminTransport: expect.objectContaining({
           mode: 'socket',
-          reachable: false,
+          reachable: true,
           status: 'degraded',
-          error: expect.any(String),
+          httpStatus: 503,
+          error: 'initializing',
         }),
       },
     });
+  });
+
+  it('keeps the capability control endpoint reachable while disconnect shutdown is wedged', async () => {
+    let releaseWedge: (() => void) | undefined;
+    const wedge = new Promise<void>((resolve) => {
+      releaseWedge = resolve;
+    });
+    const exit = vi.fn();
+    const recovery = createGatewayDisconnectRecovery({
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      withdrawReadiness: () => harness.transportServer.withdrawReadiness(),
+      runGracefulShutdown: () => wedge,
+      exit,
+      restartExitCode: 75,
+      forceExitTimeoutMs: 5_000,
+    });
+
+    recovery({ source: 'close' });
+    const capabilities = await requestPort(
+      harness.port,
+      'GET',
+      '/api/admin/settings/capabilities',
+    );
+    const unrelatedRuntimeRoute = await requestPort(
+      harness.port,
+      'GET',
+      '/api/admin/dashboard',
+    );
+    releaseWedge?.();
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(75));
+
+    expect(capabilities.status).toBe(200);
+    expect(JSON.parse(capabilities.body)).toEqual({ tier: 'nursery', customTokens: [] });
+    expect(unrelatedRuntimeRoute.status).toBe(503);
   });
 
   it('stops admitting admin connections before draining shutdown connections', () => {

@@ -29,6 +29,9 @@ metadata:
     psfn.io/fleet-target: registered
 spec:
   type: ClusterIP
+  # Runtime readiness and control-plane reachability are separate: Garden must
+  # retain the capability-tier recovery path while this agent drains a wedge.
+  publishNotReadyAddresses: true
   ports:
     - name: admin-https
       port: {{ $root.Values.ports.agentAdmin }}

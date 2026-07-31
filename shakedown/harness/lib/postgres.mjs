@@ -24,6 +24,8 @@ const { Pool } = pg;
 const SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 const SCHEMA_NAME_MAX_LENGTH = 63;
 const EXTENSION_SCHEMA_NAME = 'extensions';
+const POSTGRES_CONNECTION_TIMEOUT_MS = 5_000;
+const POSTGRES_PROOF_QUERY_TIMEOUT_MS = 10_000;
 
 let pool = null;
 
@@ -48,6 +50,9 @@ export function getPool() {
     application_name: 'psfn-shakedown-harness',
     allowExitOnIdle: true,
     max: 4,
+    connectionTimeoutMillis: POSTGRES_CONNECTION_TIMEOUT_MS,
+    statement_timeout: POSTGRES_PROOF_QUERY_TIMEOUT_MS,
+    query_timeout: POSTGRES_PROOF_QUERY_TIMEOUT_MS,
   };
   if (schema) {
     const validated = assertValidSchemaName(schema);

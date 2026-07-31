@@ -157,6 +157,14 @@ function assertAgentReadinessUsesAdminTransport(deployment, label) {
   }
 }
 
+function assertServicePublishesNotReadyAddresses(service, label) {
+  if (service?.spec?.publishNotReadyAddresses !== true) {
+    throw new Error(
+      `${label} must publish not-ready addresses for isolated capability-tier recovery`,
+    );
+  }
+}
+
 function parseRenderedDocuments(rendered, label) {
   const parsed = parseAllDocuments(rendered);
   const errors = parsed.flatMap(document => document.errors);
@@ -1100,6 +1108,12 @@ assertRenderFails(
 );
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
+const agentAdminService = findParsedDocumentByKindName(
+  rendered,
+  'Service',
+  'psfn-agent-admin',
+);
+assertServicePublishesNotReadyAddresses(agentAdminService, 'psfn-agent-admin');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');
 assertIncludes(
   agentDeployment,
@@ -1289,6 +1303,7 @@ const renderedGardenServices = fleetGardenServices.filter(document => document.m
 if (renderedGardenServices.length !== 1) {
   throw new Error(`fleet render must contain exactly one Garden Service, got ${renderedGardenServices.length}`);
 }
+assertServicePublishesNotReadyAddresses(renderedGardenServices[0], 'fleet psfn-garden');
 const shardGardens = fleetGardenDocuments.filter(document => (
   /garden/u.test(document.metadata?.name ?? '') && /shard/u.test(document.metadata?.name ?? '')
 ));
@@ -1324,6 +1339,12 @@ for (const companion of fleetGardenCompanions) {
   const agentService = findDocumentByKindName(fleetGardenRendered, 'Service', agentServiceName);
   if (!agentDeployment) throw new Error(`fleet render missing ${agentDeploymentName}`);
   if (!agentService) throw new Error(`fleet render missing ${agentServiceName}`);
+  const parsedAgentService = findParsedDocumentByKindName(
+    fleetGardenRendered,
+    'Service',
+    agentServiceName,
+  );
+  assertServicePublishesNotReadyAddresses(parsedAgentService, agentServiceName);
   // The fleet agent container is the DEFAULT shipped topology (values.yaml
   // fleet.enabled=true). It must render with an immutable root filesystem, the
   // same hardened contract as the non-fleet agent — a revert to the plain

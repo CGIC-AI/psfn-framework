@@ -272,25 +272,16 @@ export class GardenAdminTransportServer implements Lifecycle {
   }
 
   /**
-   * Stop accepting new admin transport connections immediately.
+   * Withdraw semantic runtime readiness without closing the control listener.
    *
-   * Kubernetes readiness probes use this listener in both single-agent and
-   * fleet deployments. Withdrawing the listener makes a disconnected agent
-   * NotReady before slower database/background cleanup finishes. `stop()`
-   * reuses the same close promise, so the normal shutdown sequence remains
-   * responsible for draining active connections and cleaning up socket state.
+   * The agent-admin Service publishes not-ready addresses so the narrowly
+   * admitted capability-tier recovery route remains available while a wedged
+   * data-plane shutdown drains. `stop()` alone owns closing the listener.
    */
   withdrawReadiness(): void {
     this.runtimeReady = false;
-    if (this.serverClosePromise) return;
     log.warn('Withdrawing Garden admin transport readiness', {
       endpoint: this.describeEndpoint(),
-    });
-    void this.beginServerClose().catch((error: unknown) => {
-      log.error('Garden admin transport readiness withdrawal failed', {
-        endpoint: this.describeEndpoint(),
-        error: toErrorMessage(error),
-      });
     });
   }
 
@@ -459,6 +450,15 @@ export class GardenAdminTransportServer implements Lifecycle {
         status: this.runtimeReady ? 'ok' : 'initializing',
         mode: this.config.endpoint.mode,
         gardenDenialsLastHour: getGardenDenialsLastHour(),
+      });
+      return;
+    }
+
+    const isCapabilityRecoveryRoute = requestPath === '/api/admin/settings/capabilities'
+      && (req.method === 'GET' || req.method === 'POST');
+    if (!this.runtimeReady && !isCapabilityRecoveryRoute) {
+      sendJson(res, 503, {
+        error: 'Agent runtime unavailable; only capability-tier recovery is admitted',
       });
       return;
     }
@@ -681,6 +681,12 @@ export class GardenAdminTransportServer implements Lifecycle {
         status: 403,
       });
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (!this.runtimeReady) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
       socket.destroy();
       return;
     }

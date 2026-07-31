@@ -63,13 +63,16 @@ export interface CompanionScopedGardenRoute {
  */
 export function parseFleetSsoOuterTarget(rawTarget: string): ParsedFleetSsoOuterTarget {
   if (!rawTarget.startsWith('/') || rawTarget.startsWith('//') || rawTarget.includes('#')
-    || rawTarget.includes('\\') || /%2f|%5c/iu.test(rawTarget)) {
+    || rawTarget.includes('\\')) {
     throw new CompanionScopedGardenRouteError('invalid_target', 'Request target is invalid');
   }
   const question = rawTarget.indexOf('?');
   const rawPath = question < 0 ? rawTarget : rawTarget.slice(0, question);
   const rawQuery = question < 0 ? '' : rawTarget.slice(question + 1);
-  if (rawQuery.includes('?') || rawPath.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(rawPath)) {
+  if (rawQuery.includes('?')
+    || /%2f|%5c/iu.test(rawPath)
+    || rawPath.includes('//')
+    || /(?:^|\/)\.\.?($|\/)/u.test(rawPath)) {
     throw new CompanionScopedGardenRouteError('invalid_target', 'Request target is invalid');
   }
   return Object.freeze({ rawPath, rawQuery });

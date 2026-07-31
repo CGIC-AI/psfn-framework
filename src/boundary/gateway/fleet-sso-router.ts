@@ -224,6 +224,7 @@ class FleetSsoRequestError extends Error {
     readonly status: 400 | 401 | 403 | 404 | 413 | 502 | 503,
     message: string,
     denial?: FleetSsoDenialDetails,
+    readonly responseType?: 'invalid_request_target',
   ) {
     super(message);
     this.name = 'FleetSsoRequestError';
@@ -356,7 +357,12 @@ function parseOuterPath(rawTarget: string): { rawPath: string; rawQuery: string 
     return parseFleetSsoOuterTarget(rawTarget);
   } catch (error) {
     if (error instanceof CompanionScopedGardenRouteError) {
-      throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
+      throw new FleetSsoRequestError(
+        400,
+        'Unified-origin request target is invalid',
+        undefined,
+        'invalid_request_target',
+      );
     }
     throw error;
   }
@@ -371,6 +377,8 @@ function parseGardenRoute(rawTarget: string): ParsedGardenRoute | undefined {
       throw new FleetSsoRequestError(
         error.code === 'not_found' ? 404 : 400,
         error.code === 'not_found' ? 'Resource not found' : 'Unified-origin request target is invalid',
+        undefined,
+        error.code === 'invalid_target' ? 'invalid_request_target' : undefined,
       );
     }
     throw error;
@@ -744,7 +752,10 @@ export class GatewayFleetSsoRouter {
       if (response.writableEnded || response.destroyed) return;
       if (error instanceof FleetSsoRequestError) {
         sendJson(response, error.status, {
-          error: { type: error.status === 404 ? 'not_found' : 'fleet_sso_request_denied' },
+          error: {
+            type: error.responseType
+              ?? (error.status === 404 ? 'not_found' : 'fleet_sso_request_denied'),
+          },
         });
         return;
       }

@@ -1930,6 +1930,75 @@ describe('PostgresModelUsageStore reconciliation', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('reads and exports historical retired charge surfaces without reopening the writer enum', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-usage-retired-surface-reader',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+    const recordedAtMs = Date.now();
+
+    try {
+      await expect(store.recordUsageEvent({
+        logicalCallId: 'retired-writer-rejection',
+        recordedAtMs,
+        status: 'success',
+        callKind: 'embedding',
+        attribution: {
+          callType: 'background',
+          purpose: 'memory.embedding',
+          chargeSurface: 'localEmbedding',
+        },
+        provider: 'local',
+        model: 'embedding-model',
+      } as never)).rejects.toThrow('attribution.chargeSurface has unsupported value');
+
+      await store.recordUsageEvent({
+        logicalCallId: 'historical-retired-reader',
+        recordedAtMs,
+        status: 'success',
+        callKind: 'embedding',
+        attribution: {
+          callType: 'background',
+          purpose: 'memory.embedding',
+        },
+        provider: 'local',
+        model: 'embedding-model',
+        inputTokens: 12,
+        totalTokens: 12,
+      });
+      await pool.query(
+        `UPDATE model_usage_events
+         SET charge_surface = 'localEmbedding'
+         WHERE logical_call_id = 'historical-retired-reader'`,
+      );
+
+      const service = new AdminModelUsageDataService(store);
+      const usage = await service.getModelUsageData({
+        range: 'month',
+        groupBy: ['chargeSurface'],
+      });
+      expect(usage.totals.calls).toBe(1);
+      expect(usage.recentEvents[0]?.attribution.chargeSurface).toBe('retired');
+      expect(usage.groupedBy.chargeSurface).toEqual([
+        expect.objectContaining({ key: 'retired', calls: 1 }),
+      ]);
+      expect(usage.groups[0]).toMatchObject({
+        dimensions: { chargeSurface: 'retired' },
+        metrics: { calls: 1 },
+      });
+
+      const csv = await service.exportModelUsageData({ range: 'month' }, 'csv');
+      expect(csv.rowCount).toBe(1);
+      expect(csv.body).toContain('"retired"');
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('projects UTC daily and monthly budgets from canonical chat and completion attempts', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();

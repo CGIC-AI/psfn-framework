@@ -1,3 +1,9 @@
+import {
+  MODEL_USAGE_RETIRED_CHARGE_SURFACE,
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+  type ModelUsageGroupDimension,
+} from '../../../../src/shared/telemetry/model-usage.js';
+
 export const EMPTY_VALUE = '—';
 
 export function formatInteger(value: number | undefined): string {
@@ -43,6 +49,20 @@ export function labelDimension(value: string): string {
     .replace(/_/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/\b\w/g, character => character.toUpperCase());
+}
+
+export function formatDimensionValue(
+  dimension: ModelUsageGroupDimension | undefined,
+  value: string,
+): string {
+  if (value === MODEL_USAGE_UNKNOWN_DIMENSION) return 'Unknown';
+  if (
+    dimension === 'chargeSurface'
+    && value === MODEL_USAGE_RETIRED_CHARGE_SURFACE
+  ) {
+    return 'Retired / legacy';
+  }
+  return value;
 }
 
 export function shortId(value: string): string {

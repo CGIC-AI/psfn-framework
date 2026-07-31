@@ -178,6 +178,10 @@ export interface BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
     retryAtMs: number;
+    /** Preserve a bounded zero-effect deferral's truthful nonterminal reason. */
+    retryReasonCode?: 'handler_failed';
+    /** Preserve its truthful reason if the normal attempt budget is exhausted. */
+    terminalReasonCode?: 'handler_failed';
   }): Promise<StoredBackgroundWorkJob>;
   markClaimMalformed(input: {
     jobId: string;
@@ -190,7 +194,7 @@ export interface BackgroundWorkStorePort {
     jobId: string;
     leaseOwner: string;
     expectedRevision: number;
-    reasonCode: 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
+    reasonCode: 'source_not_ready' | 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
     nowMs: number;
   }): Promise<StoredBackgroundWorkJob>;
   markClaimStale(input: {

@@ -231,7 +231,6 @@ function makeAutoCompactionExecution(record: TurnRecord) {
 
 function makeDependencies(input: {
   record: TurnRecord | null;
-  now?: number;
   maybeExtract?: ReturnType<typeof vi.fn>;
   runIntentionPostTurnHooks?: ReturnType<typeof vi.fn>;
   beforeSourceEligibilityFence?: () => void;
@@ -329,7 +328,6 @@ function makeDependencies(input: {
       emotionRuntime: { triggerEmotionAppraisal },
       getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
       tuning: input.tuning ?? TEST_POST_TURN_TUNING,
-      now: () => input.now ?? 100,
     },
     lookupSourceRecordedTurnEligibility,
     withSourceRecordedTurnEligibilityFence,
@@ -933,7 +931,7 @@ describe('executePostTurnBackgroundWork', () => {
     await expect(postTurnPromise).rejects.toEqual(
       expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
         name: 'BackgroundWorkDeferredError',
-        reasonCode: 'source_not_ready',
+        reasonCode: 'handler_failed',
         delayMs: 1_234,
       }),
     );
@@ -1029,26 +1027,46 @@ describe('executePostTurnBackgroundWork', () => {
     expect(fixture.maybeExtract).not.toHaveBeenCalled();
   });
 
-  it('defers a briefly missing canonical record instead of consuming an attempt', async () => {
+  it('preserves source_not_ready when a validation snapshot changes concurrently', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
-    const fixture = makeDependencies({ record: null, now: record.completedAt + 59_999 });
+    const fixture = makeDependencies({ record });
+    const changed = new Error('eligibility changed during the bounded read');
+    changed.name = 'TurnRecordEligibilitySnapshotChangedError';
+    fixture.withStableRecordedTurnEligibilitySnapshot.mockRejectedValueOnce(changed);
 
     await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
       .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
         name: 'BackgroundWorkDeferredError',
         reasonCode: 'source_not_ready',
+        terminalReasonCode: undefined,
+      }));
+
+    expect(execution.effects.run).not.toHaveBeenCalled();
+  });
+
+  it('classifies a missing canonical record as retryable with a truthful terminal reason', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const fixture = makeDependencies({ record: null });
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'source_not_ready',
+        terminalReasonCode: 'source_missing',
       }));
   });
 
-  it('fails permanently rather than stale-discarding missing or mismatched canonical work', async () => {
+  it('leaves missing-source budgeting to the supervisor but permanently fails mismatches', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
-    const missing = makeDependencies({ record: null, now: record.completedAt + 60_000 });
+    const missing = makeDependencies({ record: null });
     await expect(executePostTurnBackgroundWork(execution, missing.dependencies))
-      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkPermanentError>>({
-        name: 'BackgroundWorkPermanentError',
-        reasonCode: 'source_missing',
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'source_not_ready',
+        terminalReasonCode: 'source_missing',
       }));
 
     const mismatch = makeDependencies({
@@ -1057,7 +1075,6 @@ describe('executePostTurnBackgroundWork', () => {
         content: 'tampered response',
         timestamp: 100,
       } }),
-      now: record.completedAt + 60_000,
     });
     await expect(executePostTurnBackgroundWork(execution, mismatch.dependencies))
       .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkPermanentError>>({

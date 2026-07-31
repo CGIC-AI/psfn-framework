@@ -795,7 +795,15 @@ export class GatewayFleetSsoRouter {
     if (typeof response.once !== 'function') return;
     response.once('finish', () => {
       if (hasRecordedGardenDenial(response)) return;
-      const status = response.statusCode;
+      const status = response.statusCode === 400
+        || response.statusCode === 401
+        || response.statusCode === 403
+        || response.statusCode === 404
+        || response.statusCode === 409
+        || response.statusCode === 413
+        ? response.statusCode
+        : undefined;
+      if (status === undefined) return;
       const reasonCode = status === 400
         ? 'request_target_invalid'
         : status === 401
@@ -806,10 +814,7 @@ export class GatewayFleetSsoRouter {
               ? 'fleet_target_not_found'
               : status === 409
                 ? 'capability_already_consumed'
-                : status === 413
-                  ? 'request_body_too_large'
-                  : undefined;
-      if (!reasonCode) return;
+                : 'request_body_too_large';
       recordGardenDenial(this.denialLogger, {
         reasonCode,
         reason: 'response_denied',

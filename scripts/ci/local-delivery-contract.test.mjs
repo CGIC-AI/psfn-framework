@@ -164,6 +164,19 @@ test('pre-push allows durable branch checkpoints but blocks main, mismatched, an
       reason: 'Non-fast-forward checkpoint pushes are prohibited; pull/rebase without rewriting shared history.',
     },
   );
+  assert.deepEqual(
+    planPrePush({
+      updates: [pushUpdate('refs/heads/feature')],
+      head: HEAD,
+      currentBranch: 'feature',
+      isAncestor: () => false,
+      attestedPublication: true,
+    }),
+    {
+      action: 'allow',
+      reason: 'Exact-head attested publication may update the branch with force-with-lease.',
+    },
+  );
 });
 
 test('delivery-only gate stays fast while product changes retain full validation', () => {
@@ -973,11 +986,12 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.match(workflow, /steps\.scope\.outputs\.deployment == 'true'/);
   assert.match(
     workflow,
-    /Install root dependencies in a clean environment[\s\S]{0,240}if: steps\.scope\.outputs\.root_runtime == 'true' \|\| steps\.scope\.outputs\.deployment == 'true'[\s\S]{0,120}run: npm ci --ignore-scripts/,
+    /Install root dependencies in a clean environment[\s\S]{0,280}if: steps\.scope\.outputs\.root_runtime == 'true' \|\| steps\.scope\.outputs\.admin_ui == 'true' \|\| steps\.scope\.outputs\.deployment == 'true'[\s\S]{0,120}run: npm ci --ignore-scripts/,
   );
-  assert.doesNotMatch(
-    workflow,
-    /Install root dependencies in a clean environment[\s\S]{0,240}steps\.scope\.outputs\.admin_ui/,
+  assert.equal(
+    (workflow.match(/npm ci --prefix admin-ui/g) ?? []).length,
+    1,
+    'admin-ui must have exactly one explicit clean install; root postinstall is disabled',
   );
   assert.doesNotMatch(workflow, /run: npm run lint/);
   assert.doesNotMatch(workflow, /run: npm test/);

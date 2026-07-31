@@ -149,8 +149,10 @@ Publication floor: do not open a standalone PR for a small diff (roughly under 5
 
 When a coherent train completes its final check, publish it the same session
 through `npm run pr:publish`. After it lands, rebase the wave branch onto the new
-`main`, then assemble the next train. Keep cross-train activation in a final
-small PR. An independent lane validates the exact head and uses GitHub's rebase
+`main`, then assemble the next train. The publisher is the only sanctioned path
+for replacing a previously pushed rebased head: it validates the exact gate
+attestation and uses an exact-remote `--force-with-lease`. Keep cross-train
+activation in a final small PR. An independent lane validates the exact head and uses GitHub's rebase
 merge after required checks pass. Do not squash or create merge commits. Live
 deployment remains operator-driven.
 
@@ -363,14 +365,17 @@ Install dependencies in a prewarmed worktree with
 ### Checkpoint push versus publication
 
 Commit and push ordinary non-main checkpoints as soon as they are coherent. The
-pre-push hook protects the branch boundary: it rejects direct `main`, a ref that
-does not match the checked-out branch, and non-fast-forward history rewrites. It
-does **not** run the broad gate; a checkpoint is remote backup, not certification.
+pre-push hook protects the branch boundary: it rejects direct `main`, branch
+deletion, a ref that does not match the checked-out branch, and ordinary
+non-fast-forward history rewrites. It does **not** run the broad gate; a
+checkpoint is remote backup, not certification.
 
 Before publication, fetch, rebase rather than merge, commit a clean exact head,
 and run `npm run gate:pre-pr`. `npm run pr:publish` independently requires that
 exact-head attestation before it publishes status or creates/updates the PR.
-Never use `--no-verify` in the normal branch or PR flow.
+When a rebase replaced a previously pushed head, the publisher alone uses an
+attestation-checked, exact-remote `--force-with-lease`. Never use `--no-verify`
+or manually force-push in the normal branch or PR flow.
 
 ### Gate phases and machine-wide heavy lock
 
@@ -407,7 +412,9 @@ The pre-push hook protects checkpoint history by rejecting direct `main`,
 mismatched branch refs, and non-fast-forward updates. The publisher—not ordinary
 checkpoint push—rejects a missing or stale whole-gate attestation. After any base
 update, rebase the branch and rerun the gate. The clean-main baseline's recorded
-base and gate version make stale branch attestations visible immediately.
+base and gate version make stale branch attestations visible immediately. The
+publisher then updates the remote under an exact lease; ordinary checkpoint
+pushes still cannot rewrite it.
 
 ### Change-budget inputs
 
@@ -468,7 +475,8 @@ On failure, return the evidence to the owning implementer. Review claims are
 triaged under the cross-family bounded-remediation loop above; a P0/P1 badge is a
 claim, not an automatic severity ruling. Gate each corrected exact head before
 publication. When the hard cutoff is reached, park the pushed branch and surface
-an operator-visible blocker. Never force-push or rewrite a shared branch.
+an operator-visible blocker. Never manually force-push or rewrite a shared
+branch; the attested publisher's exact-remote lease is the sole exception.
 
 ### Publish-or-park (no stranded heads)
 

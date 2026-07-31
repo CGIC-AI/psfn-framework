@@ -160,6 +160,7 @@ export function planPrePush({
   head,
   currentBranch,
   isAncestor,
+  attestedPublication = false,
 }) {
   const branchUpdates = updates.filter(({ remoteRef }) => remoteRef.startsWith('refs/heads/'));
   if (branchUpdates.length === 0) {
@@ -186,6 +187,12 @@ export function planPrePush({
   }
   const [{ localSha, remoteSha }] = branchUpdates;
   if (remoteSha !== ZERO_SHA && !isAncestor(remoteSha, localSha)) {
+    if (attestedPublication) {
+      return {
+        action: 'allow',
+        reason: 'Exact-head attested publication may update the branch with force-with-lease.',
+      };
+    }
     return {
       action: 'block',
       reason: 'Non-fast-forward checkpoint pushes are prohibited; pull/rebase without rewriting shared history.',

@@ -166,15 +166,23 @@ function pushBranch(branch, head, { runCommand = run, spawnCommand = spawnSync }
   if (runCommand('git', ['rev-parse', 'HEAD']) !== head) {
     throw new Error('Branch HEAD changed after local validation; refusing to push');
   }
-  const result = spawnCommand('git', ['push', 'origin', buildValidatedPushRefspec(head, branch)], {
+  const remoteRef = `refs/heads/${branch}`;
+  const remoteBefore = runCommand('git', ['ls-remote', 'origin', remoteRef]).split(/\s+/)[0];
+  const pushArgs = ['push', 'origin'];
+  if (remoteBefore) {
+    pushArgs.push(`--force-with-lease=${remoteRef}:${remoteBefore}`);
+  }
+  pushArgs.push(buildValidatedPushRefspec(head, branch));
+  const result = spawnCommand('git', pushArgs, {
     stdio: 'inherit',
+    env: { ...process.env, PSFN_ATTESTED_PUBLISH: '1' },
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`git push failed with exit ${String(result.status)}`);
   if (runCommand('git', ['rev-parse', 'HEAD']) !== head) {
     throw new Error('Branch HEAD changed during push; refusing to publish an attestation');
   }
-  const remoteHead = runCommand('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`])
+  const remoteHead = runCommand('git', ['ls-remote', '--exit-code', 'origin', remoteRef])
     .split(/\s+/)[0];
   if (remoteHead !== head) throw new Error('Remote branch does not match the attested head');
   runCommand('git', ['branch', '--set-upstream-to', `origin/${branch}`, branch]);

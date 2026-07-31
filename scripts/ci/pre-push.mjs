@@ -5,6 +5,11 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { parsePrePushUpdates, planPrePush } from './local-delivery-contract.mjs';
+import {
+  readAttestation,
+  resolveLocalGateState,
+  validateStateAttestation,
+} from './run-local-gate.mjs';
 
 function git(args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -24,6 +29,26 @@ function isAncestor(ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed with exit ${String(result.status)}`);
 }
 
+function validateAttestedPublication(currentBranch) {
+  if (process.env.PSFN_ATTESTED_PUBLISH !== '1') return false;
+  const baseRef = git([
+    'config',
+    '--get',
+    '--default',
+    'origin/main',
+    `branch.${currentBranch}.psfnGateBase`,
+  ]);
+  const state = resolveLocalGateState({ baseRef });
+  const validation = validateStateAttestation(
+    readAttestation(state.attestationPath),
+    state,
+  ).result;
+  if (!validation.valid) {
+    throw new Error(`Attested publication denied: ${validation.reason}`);
+  }
+  return true;
+}
+
 export function main() {
   const updates = parsePrePushUpdates(readStdin());
   const head = git(['rev-parse', 'HEAD']);
@@ -33,6 +58,7 @@ export function main() {
     head,
     currentBranch,
     isAncestor,
+    attestedPublication: validateAttestedPublication(currentBranch),
   });
   console.log(`pre-push: ${plan.reason}`);
   return plan.action === 'allow' ? 0 : 1;

@@ -38,8 +38,9 @@ This repository opts into the **team-maintainer** profile.
   broad gates or review passed.
 - Before publication, run `npm run gate:pre-pr` on the exact committed head and
   publish through `npm run pr:publish`.
-- Never force-push or rewrite a shared branch. Rebase before publication when the
-  base moves.
+- Never manually force-push or rewrite a shared branch. Rebase before publication
+  when the base moves; the exact-head `pr:publish` wrapper alone may update that
+  branch with an attestation-checked, exact-remote `--force-with-lease`.
 - A parked lane is still remotely durable: its bead note records the remote
   branch, exact pushed head, validation state, and blocker. Local-only parking is
   forbidden.

@@ -23,6 +23,7 @@ function makePublisherFixture({
   authenticatedActor = 'publisher',
 }) {
   const calls = [];
+  const spawnCalls = [];
   const appliedLabels = [];
   const readyLabelSnapshots = [];
   let listCount = 0;
@@ -111,8 +112,9 @@ function makePublisherFixture({
     throw new Error(`Unexpected mock command: ${executable} ${args.join(' ')}`);
   }
 
-  function spawnCommand(executable, args) {
+  function spawnCommand(executable, args, options) {
     calls.push([executable, ...args]);
+    spawnCalls.push({ executable, args, options });
     if (executable !== 'git' || args[0] !== 'push') {
       throw new Error(`Unexpected mock spawn: ${executable} ${args.join(' ')}`);
     }
@@ -123,6 +125,7 @@ function makePublisherFixture({
     appliedLabels,
     calls,
     readyLabelSnapshots,
+    spawnCalls,
     dependencies: {
       runCommand,
       spawnCommand,
@@ -173,6 +176,13 @@ test('publisher updates only existing-PR title and body through REST before the 
     'body=Updated body\nwith detail.\n',
   ]);
   assert.ok(updateIndex < pushIndex, 'metadata API failure must be knowable before push');
+  assert.deepEqual(fixture.spawnCalls[0].args, [
+    'push',
+    'origin',
+    `--force-with-lease=refs/heads/work/publish-ordering:${HEAD}`,
+    `${HEAD}:refs/heads/work/publish-ordering`,
+  ]);
+  assert.equal(fixture.spawnCalls[0].options.env.PSFN_ATTESTED_PUBLISH, '1');
   assert.equal(
     fixture.calls.some(call => call[0] === 'gh' && call[1] === 'pr' && call[2] === 'edit'),
     false,

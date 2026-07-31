@@ -67,9 +67,11 @@ Commit coherent checkpoints and push the same-name non-main branch immediately:
 git push -u origin HEAD
 ```
 
-The pre-push hook blocks direct `main`, mismatched refs, and non-fast-forward
-history rewrites. It does not run the broad gate; checkpoint push is remote
-backup, not publication.
+The pre-push hook blocks direct `main`, mismatched refs, branch deletion, and
+ordinary non-fast-forward history rewrites. It does not run the broad gate;
+checkpoint push is remote backup, not publication. After a required rebase,
+only `pr:publish` may update the branch: it revalidates the exact gate
+attestation and uses `--force-with-lease` against the exact observed remote head.
 
 Before PR publication or update:
 

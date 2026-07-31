@@ -5,6 +5,8 @@ import {
   deriveApiKeyPrincipalId,
   postChatCompletion,
 } from '../../lib/probe.mjs';
+import { InvalidEnvError, requireEnv } from '../../lib/env.mjs';
+import { CaseConfigurationError } from '../../lib/case-execution.mjs';
 import { validateCogSecDocumentProof } from '../../lib/persisted-proofs.mjs';
 import {
   normalizeCustomOutcome,
@@ -20,10 +22,6 @@ const INTAKE_POLICY_FILE = 'intake-policy.json';
 const QUARANTINE_FILE = 'state/intake-quarantine.json';
 const TERMINAL_BACKGROUND_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
 
-function snapshotOf(turnRecord) {
-  return turnRecord?.snapshot ?? turnRecord?.observability?.snapshot ?? null;
-}
-
 function parseMetadata(value) {
   if (typeof value !== 'string') return null;
   try {
@@ -33,12 +31,14 @@ function parseMetadata(value) {
   }
 }
 
-function sessionScreeningProof(turnRecord, envelopeId) {
-  const entries = snapshotOf(turnRecord)?.sessionContext?.recentEntries;
-  const matching = Array.isArray(entries)
-    ? entries.find((entry) => {
-      const screening = parseMetadata(entry?.metadata)?.intakeScreening;
-      return Array.isArray(screening?.envelopes)
+function sessionScreeningProof(sessionEntries, turnId, envelopeId) {
+  const matching = Array.isArray(sessionEntries)
+    ? sessionEntries.find((entry) => {
+      const metadata = parseMetadata(entry?.metadata);
+      const screening = metadata?.intakeScreening;
+      return entry?.role === 'user'
+        && metadata?.turn?.turnId === turnId
+        && Array.isArray(screening?.envelopes)
         && screening.envelopes.some((envelope) => envelope?.envelopeId === envelopeId);
     })
     : null;
@@ -48,8 +48,8 @@ function sessionScreeningProof(turnRecord, envelopeId) {
     found: Boolean(matching),
     withheld: screening?.withheld === true,
     envelopeState: envelope?.state ?? null,
-    fixedNoticePresent: typeof turnRecord?.userMessage?.content === 'string'
-      && turnRecord.userMessage.content.includes(FIXED_FIREWALL_NOTICE_SIGNATURE),
+    fixedNoticePresent: typeof matching?.content === 'string'
+      && matching.content.includes(FIXED_FIREWALL_NOTICE_SIGNATURE),
   };
 }
 
@@ -86,6 +86,7 @@ async function collectCogSecProof({
   turnRecord,
   services,
   ingress,
+  sessionEntries,
   signal,
 }) {
   const quarantineFile = services.readJsonIfExists(
@@ -172,7 +173,7 @@ async function collectCogSecProof({
     gardenQueue,
     resolution,
     session: envelopeId
-      ? sessionScreeningProof(turnRecord, envelopeId)
+      ? sessionScreeningProof(sessionEntries, turnRecord?.turnId, envelopeId)
       : {
         found: false,
         withheld: false,
@@ -218,14 +219,23 @@ function buildCogSecCase(ctx, services, env, {
         join(services.systemDataDir, INTAKE_POLICY_FILE),
       );
       if (policy?.mode !== 'enforce') {
-        throw new Error(
+        throw new CaseConfigurationError(
+          'invalid_owner:intake-policy.json.mode',
           `${id} requires intake-policy.json mode "enforce"`,
         );
       }
       if (requireSatellitePrefix) {
         requireSatelliteEnv(env, requireSatellitePrefix, id);
-        if (!satelliteApiKey || satelliteApiKey.length < 16) {
-          throw new Error(`${id} requires ${requireSatellitePrefix}_API_KEY`);
+        const configuredSatelliteApiKey = requireEnv(
+          `${requireSatellitePrefix}_API_KEY`,
+          `${id} requires the enrolled per-satellite bearer`,
+          env,
+        );
+        if (configuredSatelliteApiKey.length < 16) {
+          throw new InvalidEnvError(
+            `${requireSatellitePrefix}_API_KEY`,
+            `${id} requires an enrolled bearer of at least 16 characters`,
+          );
         }
       }
       return { intakePolicyMode: policy.mode };
@@ -279,7 +289,7 @@ function buildCogSecCase(ctx, services, env, {
         turnRecord,
       });
     },
-    after: async ({ outcome, signal }) => ({
+    after: async ({ outcome, sessionEntries, signal }) => ({
       cogsec: await collectCogSecProof({
         token,
         turnRecord: outcome?.turnRecord,
@@ -294,6 +304,7 @@ function buildCogSecCase(ctx, services, env, {
           turnId: outcome?.turnRecord?.turnId ?? null,
           responseStatus: outcome?.response?.status ?? null,
         },
+        sessionEntries,
         signal,
       }),
     }),

@@ -6,7 +6,8 @@
 //
 //  1. Non-green taxonomy. Every case status that is not 'ok' is a failure and
 //     is bucketed into the enforced taxonomy (semantic_failure,
-//     dispatch_aborted, completed_after_abort, agent_busy, runtime_stale, matrix_aborted,
+//     coverage_hole, dispatch_aborted, completed_after_abort, agent_busy, runtime_stale,
+//     matrix_aborted,
 //     unproven_tool_claim, unledgered_charge, plus other_failure). Failures
 //     count unless the operator records an explicit waiver.
 //
@@ -36,6 +37,7 @@ const COVERAGE_MAP_DEFAULT = join(HARNESS_DIR, 'coverage-map.json');
 // docs/shakedown.md; values are the harness caseStatus vocabulary that maps to
 // each. Any non-'ok' status not listed falls through to 'other_failure'.
 const TAXONOMY = {
+  coverage_hole: ['coverage_hole'],
   semantic_failure: ['semantic_failure'],
   dispatch_aborted: ['dispatch_aborted'],
   completed_after_abort: ['completed_after_fetch_abort', 'completed_after_http_error'],
@@ -122,8 +124,11 @@ function summarizeHarnessArtifact(path, data) {
       caseId: result.caseId ?? result.id ?? 'unknown',
       status,
       category: classifyTaxonomy(status),
-      // A case that never ran (skipped by a matrix abort) is not "executed".
-      executed: status !== 'matrix_aborted',
+      reason: typeof result?.failureReason === 'string'
+        ? result.failureReason
+        : (typeof result?.sideChecks?.reason === 'string' ? result.sideChecks.reason : null),
+      // Matrix-aborted and configuration-skipped cases never dispatched.
+      executed: status !== 'matrix_aborted' && status !== 'coverage_hole',
     };
   });
   const okCount = cases.filter((item) => item.status === 'ok').length;
@@ -291,6 +296,7 @@ function buildTaxonomyReport(harnessSummaries, waivers) {
       categories[item.category].push({
         caseId: item.caseId,
         status: item.status,
+        reason: item.reason,
         artifact: summary.file,
         waived,
       });
@@ -449,7 +455,11 @@ function toMarkdown(scorecard) {
   for (const [category, entries] of Object.entries(scorecard.taxonomy.categories)) {
     if (entries.length === 0) continue;
     const rendered = entries
-      .map((entry) => `${entry.caseId} (${entry.status}${entry.waived ? ', waived' : ''})`)
+      .map((entry) => (
+        `${entry.caseId} (${entry.status}`
+        + `${entry.reason ? `: ${entry.reason}` : ''}`
+        + `${entry.waived ? ', waived' : ''})`
+      ))
       .join(', ');
     lines.push(`- **${category}** [${entries.length}]: ${rendered}`);
   }

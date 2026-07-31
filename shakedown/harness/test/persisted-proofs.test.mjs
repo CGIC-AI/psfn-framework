@@ -268,11 +268,21 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
       sideChecks: {
         cogsec: {
           ...proof,
-          backgroundJobs: [{ kind: 'memory_extraction', state: 'queued' }],
+          backgroundJobs: [{
+            kind: 'memory_extraction',
+            state: 'queued',
+            reasonCode: 'foreground_active',
+          }],
         },
       },
     }).join('\n'),
-    /background proof/u,
+    /background-job-not-executed: memory_extraction state=queued reason=foreground_active/u,
+  );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: { cogsec: { ...proof, backgroundJobs: [] } },
+    }).join('\n'),
+    /background-job-not-executed: emotion_appraisal state=missing reason=missing/u,
   );
 });
 

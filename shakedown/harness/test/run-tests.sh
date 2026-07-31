@@ -19,6 +19,7 @@ tests=(
   "host-cleanup.test.mjs" # 65rk.6: host cleanup continues and reports failures
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
+  "coverage-hole-continuation.test.mjs" # case-local config holes do not abort later tiers
   "persisted-proofs.test.mjs"  # S10 persisted-state proofs fail closed
   "revert-on-signal.test.mjs"  # B: pre-sweep tier restored on SIGINT/SIGTERM
   "tier-conformance-sweep.test.mjs" # D: 3-tier conformance sweep restores + counts ok:false

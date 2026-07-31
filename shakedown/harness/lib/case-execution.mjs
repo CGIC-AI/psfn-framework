@@ -4,6 +4,8 @@
 // The harness first waits for the exact turn and then, if needed, waits for any
 // settled turn. Both recovery waits must fit inside the enclosing case timeout.
 
+import { InvalidEnvError, MissingEnvError } from './env.mjs';
+
 export const OBSERVED_SUBAGENT_CHILD_TURN_P95_MS = 174_000;
 
 // hrmrq.116: observed apprentice subagent work spent about 32s queued plus 134s
@@ -18,6 +20,14 @@ export class CaseIsolationError extends Error {
   constructor(message, options) {
     super(message, options);
     this.name = 'CaseIsolationError';
+  }
+}
+
+export class CaseConfigurationError extends Error {
+  constructor(reason, message, options) {
+    super(message, options);
+    this.name = 'CaseConfigurationError';
+    this.reason = reason;
   }
 }
 
@@ -154,13 +164,44 @@ export async function runCaseWithTimeout({
   }
 }
 
+/**
+ * Run the case-owned pre-dispatch configuration seam.
+ *
+ * Typed configuration failures mean this case had no executable fixture. They
+ * are visible coverage holes, but cannot contaminate another case, so the
+ * matrix continues. Unexpected setup failures retain harness_error semantics.
+ */
+export async function runCaseSetup(testCase, context) {
+  if (typeof testCase?.before !== 'function') return null;
+  return testCase.before(context);
+}
+
 export function isCaseTimeoutError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return TIMEOUT_ERROR_PATTERN.test(message);
 }
 
 export function caseFailureStatus(error) {
-  return isCaseTimeoutError(error) ? 'case_timeout' : 'harness_error';
+  return classifyCaseFailure(error).status;
+}
+
+export function classifyCaseFailure(error) {
+  if (isCaseTimeoutError(error)) {
+    return { status: 'case_timeout', reason: 'case_timeout' };
+  }
+  if (error instanceof MissingEnvError) {
+    return { status: 'coverage_hole', reason: `missing_env:${error.variable}` };
+  }
+  if (error instanceof InvalidEnvError) {
+    return { status: 'coverage_hole', reason: `invalid_env:${error.variable}` };
+  }
+  if (error instanceof CaseConfigurationError) {
+    return { status: 'coverage_hole', reason: error.reason };
+  }
+  return {
+    status: 'harness_error',
+    reason: `harness_error:${error instanceof Error ? error.name : 'unknown'}`,
+  };
 }
 
 export function isMatrixAbortStatus(status) {

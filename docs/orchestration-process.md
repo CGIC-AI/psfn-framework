@@ -2,7 +2,10 @@
 
 ## Purpose
 
-This is the operating contract for multi-agent implementation waves. It keeps broad gates and internal review local, batches compatible work into economical PRs, and reserves GitHub for a small clean-environment delta plus Greptile.
+This is the on-demand operating contract for multi-agent implementation waves.
+It keeps every lane remotely durable, preserves one integration surface, lands
+reviewable PR-sized trains, and reserves broad certification for publication
+rather than ordinary checkpoint pushes.
 
 Use this with `AGENTS.md`; current operator instructions and `AGENTS.md` take precedence. Portable setup is in [`internal-review-workflow.md`](./internal-review-workflow.md).
 
@@ -10,15 +13,23 @@ Use this with `AGENTS.md`; current operator instructions and `AGENTS.md` take pr
 
 ### Orchestrator
 
-The orchestrator does not implement feature code. It:
+The orchestrator retains the wave-level intent and delivery state. It:
 
 - selects ready beads and feature boundaries;
-- creates feature branches, bead branches, and worktrees;
+- creates wave, train, bead branches, and worktrees;
 - assigns one worker to each worktree;
 - keeps two or three independent worker lanes active when dependencies allow;
 - resolves merges and merge conflicts;
+- reads the code, tests, and history needed to understand intent and independently
+  verify review claims;
+- may make localized merge, integration-glue, or delivery corrections that do not
+  introduce new feature behavior or expand acceptance criteria;
 - routes reviews, validation, tracker updates, and handoffs;
 - publishes the assembled exact head and returns external failures to its owning lane.
+
+The orchestrator delegates broad discovery and feature implementation. If a
+correction becomes a new behavior, crosses out of the integration seam, or starts
+consuming the main thread's wave context, return it to an implementation lane.
 
 ### Worker
 
@@ -27,38 +38,58 @@ Each worker owns one bead and one worktree. It:
 - reads `AGENTS.md`, runs `bd prime`, reads the full bead, and claims it;
 - implements only its assigned scope;
 - runs focused validation and commits stable checkpoints;
-- reports the exact branch, commit, validation, and remaining risks.
+- pushes every checkpoint to its same-name non-main remote branch;
+- reports the exact branch, remote commit, validation, and remaining risks.
 
 Workers do not merge into feature, release, or main branches.
 
-### Model lineup (current)
+### Model-family independence
 
-- **Orchestrator: Claude (Fable)** — plans, decomposes, dispatches, synthesizes, integrates. Never bulk-reads code itself; investigation/search fan-out runs on opus/sonnet subagents (see CLAUDE.md subagent model rule).
-- **Worker / primary implementer: Codex** — `gpt-5.6-sol`. Scale reasoning effort to bead difficulty: `high` for routine/small beads, `xhigh` only for genuinely hard work (novel design, concurrency, security-sensitive paths). Effort is a large latency multiplier; do not default to xhigh.
-- **Reviewer A: Opus 4.8** @ high.
-- **Reviewer B: Pi agent** — GLM 5.2 @ xhigh, an independent third harness. Dispatched identically to Reviewer A and blind to Reviewer A's findings. Engaged per the tiered review policy below, not on every bead.
-- Claude-side tool/dispatch wiring for these roles lives in `CLAUDE.md`.
+The durable rule is about model families, not product names. Harness-specific
+model and command mappings live in files such as `CLAUDE.md`.
+
+- A reviewer must use a different model family from the implementer. Two models
+  from OpenAI are not independent; neither are two Anthropic models.
+- When two reviewers are required, they must be blind to one another and use
+  families different from the implementer and, whenever available, from each
+  other. A typical Codex implementation uses Anthropic plus GLM/Kimi review.
+- Record implementer model/family and reviewer model/family in every review.
+- Greptile or another opaque service is additional signal unless its underlying
+  family is known and satisfies the independence rule.
+- If the active harness cannot dispatch a qualifying reviewer, push the branch,
+  park it with the exact remote head, and surface the missing capability. A
+  same-family substitute does not count as independent review.
 
 ### Tiered review policy (2026-07-14 operator decision)
 
-Every bead gets a UBS scan of the change range as a cheap baseline gate before any model review. Then:
+Every bead gets a UBS scan of the change range as a cheap baseline gate before
+any model review. Then:
 
-- **P0/P1 beads: dual blind adversarial review** (Reviewer A + Reviewer B, both mandatory).
-- **P2 and below: one adversarial reviewer is fine** (alternate A/B to avoid single-harness blind spots).
-- **Escalation:** if the single review or UBS scan looks suspicious — multiple blocking findings, a messy or surprising implementation, or touches to security/welfare/data paths that were not expected — add the second blind reviewer before synthesis. The two reviews stay blind to each other regardless of when they are dispatched.
+- **P0/P1 beads: two blind, cross-family adversarial reviewers.**
+- **P2 and below: one cross-family adversarial reviewer.** Rotate families to
+  avoid one-harness blind spots.
+- **Escalation:** if the single review or UBS scan exposes an unexpected
+  security, welfare, privacy, data, or core-path surface, add a second blind
+  cross-family reviewer before synthesis.
 
 The verification rule is unchanged at every tier: the orchestrator independently confirms every claimed blocker against the Blocking Risk Standard before remediation.
 
 ## Branch and Worktree Shape
 
-Large epics roll up to feature branches. Individual beads use short-lived work branches based on the feature branch.
+Each sprint or large batch has one remotely pushed wave branch as its integration
+surface. Individual beads use work branches based on that wave. Publication uses
+smaller coherent train branches; the integration branch is not permission to
+open one enormous PR.
 
 ```text
-main or release branch
-  └── feat/<epic>
-       ├── work/<epic>-<bead-a>
+main
+  └── wave/<sprint-or-epic>              # pushed integration surface
+       ├── work/<epic>-<bead-a>          # pushed worker checkpoint
        ├── work/<epic>-<bead-b>
        └── work/<epic>-<bead-c>
+
+main
+  └── train/<wave>-<n>                   # coherent reviewed PR-sized slice
 ```
 
 Use worktrees under:
@@ -74,14 +105,16 @@ git fetch origin main
 git switch --detach origin/main
 npm run gate:canary
 npm run prewarm
-git worktree add -b feat/<epic> <feature-worktree> <approved-base>
-git worktree add -b work/<epic>-<bead> <bead-worktree> feat/<epic>
+git worktree add -b wave/<epic> <feature-worktree> <approved-base>
+git -C <feature-worktree> push -u origin wave/<epic>
+git worktree add -b work/<epic>-<bead> <bead-worktree> wave/<epic>
 # In each new feature/bead worktree:
 npm ci --offline --ignore-scripts
 ```
 
-Use the canary-attested base SHA as `<approved-base>`; every lane then starts
-from the resulting feature branch.
+Use the baseline-attested SHA as `<approved-base>`; every lane then starts from
+the resulting wave branch. The current command remains `npm run gate:canary`;
+"canary" here means a clean-main baseline certification, not a deployment canary.
 
 The clean-main canary is mandatory before any multi-PR wave fans out. It fetches
 first, refuses a dirty tree or a checkout that is not exactly `origin/main`, and
@@ -105,28 +138,41 @@ attestation and cache without warming. Never share `node_modules` or `dist`
 between worktrees; install each worktree with
 `npm ci --offline --ignore-scripts` (normally about 15 seconds after prewarm).
 
-A bead is an ownership boundary, never a paid PR boundary. Every external review costs the same flat fee whether the diff is 100 lines or 2,000, so the unit of publication is the **train**: assemble compatible completed beads into one coherent PR near the budget target. Target at most 25 files, 1,500 counted changed lines, and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do not mix unrelated work or pad a diff.
+A bead is an ownership boundary, never a paid PR boundary. Every external review
+costs the same flat fee whether the diff is 100 lines or 2,000, so the unit of
+publication is the **train**: assemble compatible completed beads into one
+coherent PR near the budget target. Target at most 25 files, 1,500 counted lines,
+and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do
+not mix unrelated work or pad a diff.
 
 Publication floor: do not open a standalone PR for a small diff (roughly under 500 counted lines) while other compatible beads are completed or in flight — hold it for the train. A standalone small PR requires a recorded reason on its bead (security-urgent fix, conflict isolation, unblocking a dependent wave); "it was ready" is not a reason. The 2026-07-28 incident — fourteen single-fix PRs in one day, each paying a full external review, exhausting the review budget and stranding every remaining lane unpublished — is the failure mode this floor exists to prevent.
 
-When a coherent feature completes its final check, publish it the same session
-through `npm run pr:publish`. An independent lane validates the exact head and
-uses GitHub's rebase merge after `ci-required` and `Greptile Review` pass. Do not
-squash or create merge commits. Live deployment remains operator-driven.
+When a coherent train completes its final check, publish it the same session
+through `npm run pr:publish`. After it lands, rebase the wave branch onto the new
+`main`, then assemble the next train. Keep cross-train activation in a final
+small PR. An independent lane validates the exact head and uses GitHub's rebase
+merge after required checks pass. Do not squash or create merge commits. Live
+deployment remains operator-driven.
 
 ## Parallel Work Format
 
-Run three worker lanes plus the orchestrator by default; drop below three only when ready independent beads run out. Prefer independent seams; do not create fake parallelism across tightly coupled files. Serial single-lane waves pay full wall-clock latency with no amortization — a difficult bead in one lane must not idle the other two.
+Use up to three worker lanes plus the orchestrator when the ready graph contains
+three genuinely independent seams. This is the normal maximum, not a quota.
+Use fewer lanes for narrow or tightly coupled work; do not manufacture parallelism.
+A difficult bead in one lane should not idle other workers when independent work
+really exists.
 
 Track the live wave in this format:
 
 | Lane | Bead | Worktree | Branch | Base | State | Pushed checkpoint | Next gate |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| A | `<bead-id>` | `<path>` | `work/<name>` | `feat/<epic>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
-| B | `<bead-id>` | `<path>` | `work/<name>` | `feat/<epic>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
-| C | `<bead-id>` | `<path>` | `feat/<name>` | `<base>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
+| A | `<bead-id>` | `<path>` | `work/<name>` | `wave/<epic>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
+| B | `<bead-id>` | `<path>` | `work/<name>` | `wave/<epic>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
+| C | `<bead-id>` | `<path>` | `wave/<name>` | `<base>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
 
-When a lane finishes, immediately assign the next ready independent bead. A difficult bead must not monopolize the worker pool.
+When a lane finishes, assign the next ready independent bead when one exists. A
+difficult bead must not monopolize the worker pool, and an empty queue must not
+create fake work.
 
 Preflight work may fan out concurrently across all worktrees. The full test
 suite is the heavy phase and queues automatically on the machine-wide gate lock,
@@ -138,21 +184,23 @@ lanes or delete a lock held by a live PID.
 
 Use this order for every multi-PR implementation wave, including a two-PR wave:
 
-1. In a clean checkout exactly at `origin/main`, run `npm run gate:canary`.
-   Record its base SHA and gate version. Any failure stops fanout; repair `main`
-   and rerun the canary first.
+1. In a clean checkout exactly at `origin/main`, run the clean-main baseline
+   command `npm run gate:canary`. Record its base SHA and gate version. Any
+   failure stops fanout; repair `main` and rerun the baseline first.
 2. Run `npm run prewarm` once for the wave (or after a lockfile change), create
-   the feature branch from the canary-attested base and each lane from that
-   feature branch, and run
+   the wave branch from the baseline-attested base and each lane from that wave
+   branch, and run
    `npm ci --offline --ignore-scripts` in every new worktree. Use
    `npm run prewarm -- --check` when only verification is needed.
-3. Implement the independent lanes. Their lock-free PREFLIGHT stages may run
-   concurrently; their full-test HEAVY stages queue on the machine-wide lock.
-   Follow the waiter diagnostics and never remove a live holder's lock.
-4. Independently verify review claims. Only verified P0/P1 blockers receive one
-   scoped remediation pass, followed by re-verification of those fixed items
-   only. Put nonblocking observations in the wave handoff; never turn them into
-   beads mid-wave.
+3. Implement the independent lanes. Commit coherent checkpoints and push each
+   same-name non-main branch immediately; checkpoint pushes are remote backup and
+   do not run or imply the broad publication gate. Targeted tests and changed-file
+   lint remain the implementation loop. Full gate PREFLIGHT stages may run
+   concurrently; HEAVY stages queue on the machine-wide lock.
+4. Independently verify review claims against intent and the Blocking Risk
+   Standard. Only verified P0/P1 blockers enter remediation. The original
+   implementer fixes them to preserve context; re-verification checks only those
+   accepted findings. Put nonblocking observations in the wave handoff.
 5. Commit each exact branch head and run `npm run gate:pre-pr`. A rerun reuses
    passed stages for that exact head, base, gate version, and command. After any
    base change, rebase rather than merge, then rerun the gate; an attestation
@@ -173,27 +221,36 @@ Every bead gets this bounded loop:
    - Claim the bead.
    - Add regression-first coverage for the core behavior.
    - Run focused tests and changed-file lint.
-   - Commit a stable checkpoint.
+   - Commit and push stable checkpoints to the same-name non-main branch.
 2. **Review gate (tiered — see Tiered review policy above)**
    - Baseline: UBS scan of the immutable commit range on every bead.
-   - P0/P1: both reviewer lanes; P2 and below: one reviewer lane, escalating to the second when the first review or the UBS scan looks suspicious.
+   - P0/P1: two blind cross-family reviewers; P2 and below: one cross-family reviewer, escalating only for unexpected high-risk surface.
    - Each engaged reviewer lane reviews the same immutable commit range against the bead and the risk standard below — in parallel, blind to the other reviewer's findings and to the implementer's self-assessment.
-   - Reviewers are prompted to refute the work with concrete failure scenarios, not to approve it.
+   - Reviewers first restate intent and assess whether the implementation has the
+     right shape, then try to refute it with concrete failure scenarios.
    - Each reviewer separates blocking findings from nonblocking observations.
    - The orchestrator dedupes the reviews and **independently verifies every claimed blocking finding** against the risk standard before remediation. Reviewers systematically over-grade severity; a blocking finding requires reproducible evidence or a concrete failure path, not plausibility.
-3. **One remediation**
-   - Fix the verified blocking findings from the synthesized review.
+3. **Scoped remediation by the original implementer**
+   - Fix only the independently verified blockers from the synthesized review.
    - Add focused regressions.
-   - Commit the remediation.
-4. **One final check**
-   - Confirm the remediation and required gates.
-   - Do not start another review/remediation cycle.
+   - Commit and push the remediation without handing implementation to a reviewer.
+4. **Closure-only verification**
+   - A different-family reviewer checks only whether the accepted blockers are
+     closed. It does not perform another general sweep or mint a new work queue.
+   - A newly alleged P0/P1 requires both a concrete reproduction under the risk
+     standard and severity corroboration from another model family.
+   - One corroborated late blocker may receive one additional scoped fix-forward
+     pass by the original implementer. That is the hard cutoff.
 5. **Move on**
-   - Integrate the final implementation fixed point into its feature branch.
-   - If an important blocker remains, create a self-contained fix bead under the wave's fixes epic for a fresh agent.
+   - Integrate the final implementation fixed point into its wave branch.
+   - If an important blocker remains after the cutoff, keep the PR unmerged, park
+     the remote branch, and create a self-contained fix bead under the wave's fixes epic.
    - Put all nonblocking observations in the handoff report only.
 
-The same agent must not repeatedly fix findings generated by successive fresh reviews. A newly discovered blocker does not authorize another pass.
+The implementer never reviews its own work to generate new findings, reviewers
+never become implementers, and no successive fresh review sweeps are allowed.
+This preserves implementation context without reopening the overnight
+review/remediation loop.
 
 ## Epic Seam Review (pre-PR gate)
 
@@ -205,14 +262,22 @@ Per-bead review is necessary but not sufficient. A per-bead review is scoped to 
 
 These are the "won't appear until it's all done" P1s. A worked example: in the mmo9.6 voice epic the cancellation-identity bead and the WebSocket-interrupt bead each passed per-bead review, but the composite did not deliver barge-in in production — a production-glue file that neither bead owned never wired the abort signal into the model-generation RPC, so an interrupt released local state while the model kept generating. No per-bead review could have flagged it; it is a pure seam defect.
 
-Therefore, after the LAST bead of an epic integrates and **before** the PR to main opens, run an **epic seam review** on the assembled feature branch. This is NOT a re-review of every bead — it targets only the delta per-bead review could not see:
+Therefore, after the last bead of an epic integrates and before its train opens a
+PR to `main`, run an **epic seam review** on the assembled wave branch. This is
+not a re-review of every bead—it targets only the delta per-bead review could not see:
 
 1. every merge-resolution diff produced during integration;
 2. every file or contract touched by two or more beads in the epic (enumerate them from the integration history);
 3. the epic's stated end-to-end acceptance paths, exercised as a whole **through the production composition** — not merely each bead's unit seam or a test double;
 4. anything a per-bead handoff explicitly flagged as a cross-bead or "won't appear until it's all done" concern.
 
-Run it as a **dual blind adversarial pass** (two independent reviewers), because it is the last gate and the stakes are the entire epic. Verify every claimed blocker against the Blocking Risk Standard, then run **one** epic-level remediation round. Epic-level blockers are fixed on the feature branch or as children of the `<epic> fixes` epic — never by reopening an individual bead branch, because the defect lives in the interaction, which belongs to no single bead. Re-verify the fixed items, then open the PR.
+Run it as a **dual blind cross-family adversarial pass**, because it is the last
+gate and the stakes are the entire epic. Verify every claimed blocker against
+intent and the Blocking Risk Standard, then run one epic-level remediation round.
+Epic-level blockers are fixed on the wave branch or as children of the `<epic>
+fixes` epic—never by reopening an individual bead branch, because the defect
+lives in the interaction. Re-verify only the accepted fixed items, then open the
+PR. A late blocker follows the same corroboration and hard-cutoff rule as a bead.
 
 Keep the two tiers distinct: the per-bead loop owns bead-local correctness and regressions; the seam review owns interaction, merge-resolution, and composite acceptance. Skipping either lets a whole class of P1 through — the per-bead loop alone ships integration bugs; the seam pass alone ships a giant undifferentiated diff with diffuse blame and an unbounded remediation loop.
 
@@ -220,7 +285,12 @@ Keep the two tiers distinct: the per-bead loop owns bead-local correctness and r
 
 An implementation bead closes only after its integrated PR is merged. Record the worker and integrated commits, source and gate evidence, exact PR head, `ci-required`, Greptile, and merge. A green worktree or open PR is not completion. Manual, live, deployment, and release proof remain separate validation beads.
 
-Closure happens **in the same motion as the merge**: the session that merges a train closes every bead whose content that train delivered (with the evidence above) and refreshes the committed `.beads/issues.jsonl` export in that train or an immediately following chore commit. Closes must not ride a later train — deferred closes are how other instances see phantom open work and re-litigate finished lanes.
+Closure happens **in the same motion as the merge**: the session that merges a
+train closes every bead whose content that train delivered. In a direct-Dolt
+lane, commit the Beads database and do not stage the ignored export. A remote-only
+lane refreshes and commits `.beads/issues.jsonl` in the same train or an
+immediately following chore commit. Closes must not ride a later train—deferred
+closes are how other instances see phantom open work and re-litigate finished lanes.
 
 Cross-instance status must not lie between trains: `in_progress` means a live lane owns the bead right now. A lane that stops working a bead for any reason — parked, blocked, handed off, session ending — resets it from `in_progress` before the session ends, with a note saying where the work stands.
 
@@ -234,7 +304,9 @@ IMPORTANT corresponds to tracker priority P0/P1. A finding receives IMPORTANT tr
 - a broken core acceptance path that prevents the feature from doing its stated job;
 - a mandatory repository gate such as lint for changed code.
 
-Address IMPORTANT findings in the one remediation pass. Any that remain move to the wave's fixes epic and prevent the affected PR from merging until explicitly resolved.
+Address IMPORTANT findings through the bounded remediation and corroboration loop.
+Any that remain after its hard cutoff move to the wave's fixes epic and prevent
+the affected PR from merging until explicitly resolved.
 
 The following are normally nonblocking unless concrete production evidence raises their severity:
 
@@ -271,7 +343,9 @@ Important means a material defect in partner-data security, privacy, or isolatio
 
 Lesser and report-only observations belong only in the wave report or output. They do not create beads and do not block implementation closure.
 
-Assign each important fix to a fresh agent when needed. Do not keep the original worker in a review loop or reopen the completed implementation work.
+Assign each important fix as a fresh bounded task when needed. The original
+implementer may resume it when preserving implementation context is useful, but
+do not resume the same open-ended review loop or reopen completed implementation work.
 
 ## Separate Manual, Live, and Release Validation
 
@@ -284,9 +358,19 @@ Record validation results on the validation bead. Do not rewrite implementation 
 ## Local Gate, Publication, and Failure Handback
 
 Install dependencies in a prewarmed worktree with
-`npm ci --offline --ignore-scripts`, then run `npm run hooks:install` once. Before
-any push, fetch, rebase rather than merge, commit a clean exact head, and run
-`npm run gate:pre-pr`. Never use `--no-verify`.
+`npm ci --offline --ignore-scripts`, then run `npm run hooks:install` once.
+
+### Checkpoint push versus publication
+
+Commit and push ordinary non-main checkpoints as soon as they are coherent. The
+pre-push hook protects the branch boundary: it rejects direct `main`, a ref that
+does not match the checked-out branch, and non-fast-forward history rewrites. It
+does **not** run the broad gate; a checkpoint is remote backup, not certification.
+
+Before publication, fetch, rebase rather than merge, commit a clean exact head,
+and run `npm run gate:pre-pr`. `npm run pr:publish` independently requires that
+exact-head attestation before it publishes status or creates/updates the PR.
+Never use `--no-verify` in the normal branch or PR flow.
 
 ### Gate phases and machine-wide heavy lock
 
@@ -319,10 +403,11 @@ base, gate version, or command cannot reuse the record, and the tooling cannot
 bless a head that did not run. The whole-gate attestation is written only after
 every required stage passes.
 
-The pre-push hook rejects a missing or stale whole-gate attestation, a push from
-`main`, and hook recursion. After any base update, rebase the branch and rerun
-the gate. The wave canary's recorded base and gate version make stale branch
-attestations visible immediately.
+The pre-push hook protects checkpoint history by rejecting direct `main`,
+mismatched branch refs, and non-fast-forward updates. The publisher—not ordinary
+checkpoint push—rejects a missing or stale whole-gate attestation. After any base
+update, rebase the branch and rerun the gate. The clean-main baseline's recorded
+base and gate version make stale branch attestations visible immediately.
 
 ### Change-budget inputs
 
@@ -364,8 +449,9 @@ labeled `ready_for_review` payload the first CI-triggering event. Without
 For an already-open PR whose title and body do not need changes, run
 `npm run pr:publish`. The wrapper marks an existing draft ready **before** it
 pushes the attested head; it applies any requested labels before that push.
-Never push an existing PR while it is draft, because draft synchronizations
-receive no CI and Greptile skips them.
+Earlier checkpoint pushes may back up work on a draft branch, but they do not
+count as publication and intentionally receive no required CI/review authority.
+The ready transition makes the certified head enter the publication pipeline.
 
 The wrapper pushes only the attested head, publishes its authenticated
 exact-base status, and verifies that both CI and Greptile target exactly that
@@ -378,20 +464,19 @@ success while a live P0/P1-badged finding exists: a green review status is not
 review completion — the paid review's findings must be triaged in the PR
 thread, by every harness, before the publish counts as done.
 
-On failure, return the evidence to the owning lane. Make at most the one
-already-authorized evidence-driven corrective commit, gate the new exact head,
-and publish it once. A second failure is an operator-visible blocker. Keep stable
-checkpoints green; never force-push or rewrite a shared branch.
+On failure, return the evidence to the owning implementer. Review claims are
+triaged under the cross-family bounded-remediation loop above; a P0/P1 badge is a
+claim, not an automatic severity ruling. Gate each corrected exact head before
+publication. When the hard cutoff is reached, park the pushed branch and surface
+an operator-visible blocker. Never force-push or rewrite a shared branch.
 
 ### Publish-or-park (no stranded heads)
 
-Every lane ends a session in exactly one of two states: **published** — its
-content is on a PR train that merged or is awaiting checks — or **parked** — a
-bead note records the branch, the exact gated head, the gate attestation, and
-the specific blocker preventing publication, where the operator can see it. A
-branch that passed the local gate but never entered the publish pipeline, with
-nothing recording that fact, is a protocol violation: it is exactly how
-finished, reviewed work goes missing while its beads claim progress.
+Every lane ends a session in exactly one of two states: **published**—its content
+is on a PR train that merged or is awaiting checks—or **parked**—its branch and
+checkpoint are pushed, and a bead note records the remote branch, exact head,
+validation state, and blocker. A local-only branch or uncommitted worktree is a
+protocol violation even when the work is incomplete: it is how work disappears.
 
 Reserve the word **done** for merged-to-main with the bead closed. Earlier
 states are named precisely — "implemented", "gated at `<head>`", "published,
@@ -427,14 +512,18 @@ those timings.
 
 After the final check:
 
-1. The orchestrator merges the bead branch into the feature branch.
+1. The orchestrator merges the bead branch into the pushed wave branch.
 2. The orchestrator resolves conflicts once, preserving both feature intents without inventing new behavior.
 3. A worker validates the integrated branch with focused tests and the exact-head local gate.
-4. Publish the coherent branch through `npm run pr:publish`; the wrapper waits
+4. Assemble a coherent PR-sized train from the reviewed wave commits and publish
+   it through `npm run pr:publish`; the wrapper waits
    for both required checks on the exact pushed SHA.
 5. An independent lane validates and rebase-merges the PR.
-6. Close implementation beads with commit, source, local-gate, PR-head, external-check, and merge evidence; route remaining IMPORTANT defects to the fixes epic.
-7. Assign the next ready bead.
+6. Rebase the pushed wave branch onto the updated `main` before assembling the
+   next train.
+7. Close implementation beads with commit, source, local-gate, PR-head,
+   external-check, and merge evidence; route remaining IMPORTANT defects to the fixes epic.
+8. Assign the next ready bead.
 
 Do not close a bead merely because its worker branch is green; tracker state follows merged delivery.
 
@@ -461,6 +550,13 @@ One report per reviewer lane; the orchestrator synthesizes them and rules on eac
 ```text
 Verdict: PASS | FAIL
 Immutable range: <base>..<head>
+Intent: <the user/problem outcome in one sentence>
+Shape: <core | plugin | skill | refactor | should not exist>, with reason
+Implementer: <model> / <family>
+Reviewer: <model> / <family>
+Family independence: PASS | FAIL
+Trust boundaries touched: <none or exact boundaries>
+Agent navigability: <obvious names/pointers or concrete friction>
 
 Blocking findings:
 - <severity> <security/welfare/data/core category>: <path:line>, impact, remedy, test
@@ -474,6 +570,12 @@ Validation:
 - exact-head local gate
 - `ci-required` and Greptile when reviewing a published head
 - exact clean HEAD
+
+After-build questions:
+- What would you do differently now that it is built?
+- What should be refactored while context is full?
+- Are tests sufficient for intent and trust boundaries?
+- Where does the documentation live?
 ```
 
 A review must not use `FAIL` for nonblocking observations alone.
@@ -484,7 +586,7 @@ A review must not use `FAIL` for nonblocking observations alone.
 Bead: <id>
 Branch/worktree: <branch> / <path>
 Base and head: <base> / <head>
-Remote backup: origin/<branch> at <head>, or blocked reason
+Remote checkpoint: origin/<branch> at <head> (required)
 Implemented: <core behavior>
 Validation: <commands and counts>
 Blocking risks: <none or important bead ids>
@@ -514,4 +616,5 @@ Do not collapse these fields into a generic "remaining work" list. Decision-make
 - Use local PostgreSQL and local runtime/cluster testing only when the bead requires it.
 - Do not expand work into retired storage paths; separate removal beads own that cleanup.
 - Do not destroy branches, worktrees, stashes, or shared Git state without operator approval.
-- Do not merge feature branches into main during the implementation wave; when the wave completes, open the PR to main immediately (see Branch and Worktree Shape).
+- Do not dump the whole wave branch into `main`. Land coherent train branches by
+  PR; direct-main delivery requires an explicit current operator override.

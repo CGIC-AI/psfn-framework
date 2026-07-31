@@ -127,23 +127,25 @@ Everything else — beads workflow, validation gates, parallel-work rules, sessi
 
 ## Local delivery wiring
 
-Before a multi-PR wave fans out, run `npm run gate:canary` from a clean checkout
-exactly at `origin/main`; a failure stops the wave. Then run `npm run prewarm`
-once for the wave (and after lockfile changes), create the feature branch from
-the canary-attested base and each lane from that feature branch, and run
+Before a multi-PR wave fans out, run the clean-main baseline command
+`npm run gate:canary` from a clean checkout exactly at `origin/main`; a failure
+stops the wave. Then run `npm run prewarm` once for the wave (and after lockfile
+changes), create the pushed wave branch from the baseline-attested base and each
+lane from that wave branch, and run
 `npm ci --offline --ignore-scripts` plus `npm run hooks:install` in each.
 Never share `node_modules` or `dist` between worktrees.
 
 Lane PREFLIGHT phases may run concurrently. Their full-test HEAVY phases queue
 automatically on the machine-wide lock; read its 15-second holder diagnostics
-and never remove a lock held by a live PID. After the one verified-P0/P1
-remediation pass, commit each exact head and run `npm run gate:pre-pr`. Passed
-stages are reused only for the same head, base, gate version, and command. Rebase
-rather than merge after any base change, then rerun the gate.
+and never remove a lock held by a live PID. Commit and push ordinary non-main
+checkpoints immediately; the pre-push hook protects branch history but does not
+run the broad gate. Before publication, run `npm run gate:pre-pr` on the exact
+head. Passed stages are reused only for the same head, base, gate version, and
+command. Rebase rather than merge after any base change, then rerun the gate.
 
-Do not bypass the tracked pre-push hook or publish with raw `git push`,
-`gh pr create`, or `gh pr edit`. Assemble compatible small beads into one
-coherent review unit and publish its attested exact head with:
+Use ordinary `git push -u origin HEAD` for remote checkpoint durability. Do not
+publish with raw `gh pr create` or `gh pr edit`. Assemble compatible small beads
+into one coherent review unit and publish its attested exact head with:
 
 ```bash
 npm run pr:publish -- --title "<title>" --body-file <path>
@@ -166,76 +168,48 @@ machine setup and reviewer prompts are in
 
 ## Orchestration Loop (Claude-side wiring)
 
-AGENTS.md owns the delivery-loop policy, and [`docs/orchestration-process.md`](./docs/orchestration-process.md) is the full wave protocol (branch/worktree shape, lane tables, review format, fix epics, push policy, operational boundaries). This section is how Claude executes it.
+AGENTS.md owns the repository-wide boundaries, and [`docs/orchestration-process.md`](./docs/orchestration-process.md) owns the full wave protocol. This section is how Claude executes it.
 
-You (Fable) are the orchestrator: plan, decompose, dispatch, synthesize, integrate. You do not implement at scale or bulk-read code yourself.
+You (Fable) are the orchestrator: plan, decompose, dispatch, synthesize, and
+integrate. Read the code and tests needed to understand intent, verify blockers,
+and resolve integration seams. Delegate broad discovery and feature
+implementation so the main thread retains the wave-level state. Localized merge
+or integration corrections are allowed; new behavior returns to a worker lane.
 
 Role wiring:
 
 - **Primary implementer: Codex — `gpt-5.6-sol`**, effort scaled to bead difficulty (`high` for routine beads, `xhigh` only for genuinely hard work — effort is a large latency multiplier). Dispatch directly via the codex-companion runtime with a brief file in the worktree (`node <codex plugin>/scripts/codex-companion.mjs task ...` from the worktree cwd — NOT via the `/codex:rescue` wrapper, which is fire-and-forget and can't be monitored; see memory `codex-pi-dispatch-wiring` for the full mechanics: per-cwd job registry, read-only git sandbox → bundle import, offline npm ci). Treat as a peer engineer, not a reviewer. One bead/stream per dispatch, worktree-isolated per AGENTS.md, explicit file ownership. Always check `status` from the target worktree cwd before dispatching or re-dispatching.
 - **Reviewer A: Opus 4.8 @ high** — Agent tool with `model: opus`. Validation and adversarial review, plus all investigation/search fan-out.
 - **Reviewer B: Pi agent — GLM 5.2 @ xhigh** via the pi-companion runtime (`node <pi plugin>/scripts/pi-companion.mjs task --effort xhigh ...` from the worktree; read-only without `--write`, so pre-export the review diff to a file). Independent third harness; dispatch it exactly like Reviewer A, blind to Reviewer A's findings.
-- **Tiered review (operator decision 2026-07-14):** UBS scan of the change range on every bead as the baseline gate. P0/P1 → both reviewers, blind. P2 and below → one reviewer (alternate A/B), escalating to the second when the review or scan looks suspicious (multiple blockers, messy implementation, unexpected security/welfare/data touches). Blocker verification is unchanged at every tier.
+- **Tiered review:** UBS scans every bead. P0/P1 uses Opus plus GLM, blind; P2
+  and below uses one of them. Every reviewer must be from a different model family
+  than the implementer. If Fable authored an integration correction, Opus cannot
+  count as its independent reviewer; use Codex or GLM instead.
 - **deep-reasoner** (`.claude/agents/deep-reasoner.md`, opus): reasoning-heavy phases — architecture, hard debugging, algorithm design.
 - High-stakes decisions: task Opus and Codex on the same problem in parallel, blind to each other's answers; synthesize the best of both. Keep your own context lean.
 
-**SUBAGENT MODEL RULE (hard):** Explore/search/investigation subagents run on `model: opus` or `model: sonnet` — NEVER fable. Fable tokens are the most precious resource in this setup; burning them on reading/grepping code is forbidden. Every Agent call that fans out to read code MUST set the model explicitly (default inheritance would silently use fable). Fable is for orchestration and synthesis only.
+**SUBAGENT MODEL RULE:** Broad exploration/search fanout runs on `model: opus`
+or `model: sonnet`, never inherited Fable. Fable still reads the targeted source
+needed for orchestration judgments and blocker verification.
 
 Loop, per bead/stream:
 
-1. Decompose to beads; dispatch implementation to Codex in a worktree on a `work/<epic>-<bead>` branch cut from the feature branch (branch shape and push policy per `docs/orchestration-process.md`).
-2. On completion, run the tiered review gate: UBS scan always; reviewer lanes per the tier above, dispatched independently and adversarially — prompted to refute and produce concrete failure scenarios, not to approve; no reviewer sees another's review or the implementer's self-assessment. Run three worker lanes by default; a hard bead must not idle the other two.
-3. Synthesize findings: dedupe, then independently verify every claimed blocker against the Blocking Risk Standard (IMPORTANT ≙ P0/P1) before accepting it — reviewers systematically over-grade severity (confirmed pattern; a blocker claim needs a reproducible failure, not vibes).
-4. **One remediation pass** (Codex) scoped to verified blockers only, then one final check. Re-verify the fixed items only — no full re-review, no successive review/remediation cycles. A newly discovered blocker is surfaced to the operator or routed to the fixes epic; it does not authorize another pass.
-5. Integrate compatible completed beads into one coherent PR-sized branch, run `npm run gate:pre-pr` on the exact head, and publish once through `npm run pr:publish`. The owning lane receives any CI or Greptile failure and makes no more than the already-authorized remediation commit.
-6. Merge and close only after the exact PR head has both required checks green. Leftover IMPORTANT defects → self-contained beads under the wave's `<wave> fixes` epic for a fresh agent; **nonblocking observations go in the handoff report only, never beads**.
+1. Decompose to beads; dispatch Codex in worktrees cut from the pushed wave
+   branch. Require each lane to commit and push checkpoints.
+2. On completion, run UBS and the tiered cross-family review. Reviewers first
+   restate intent and shape, then refute with concrete failure scenarios. Use up
+   to three workers only when independent seams exist.
+3. Dedupe and independently reproduce every blocker claim against the Blocking
+   Risk Standard. A reviewer badge or confidence statement is not severity proof.
+4. Return verified blockers to the original implementer. Final review is
+   closure-only. A new alleged P0/P1 needs a concrete reproduction plus
+   corroboration from another model family; one corroborated late blocker gets
+   one last scoped pass. Then park the pushed branch if a blocker remains.
+5. Integrate compatible beads into the wave branch, assemble a PR-sized train,
+   gate its exact head, and publish through `npm run pr:publish`.
+6. Merge and close only after required checks are green. Leftover IMPORTANT
+   defects go under the wave's fixes epic; nonblocking observations stay in the
+   handoff report and never become mid-wave beads.
 
-````markdown
-## UBS Quick Reference for AI Agents
-
-UBS stands for "Ultimate Bug Scanner": **The AI Coding Agent's Secret Weapon: Flagging Likely Bugs for Fixing Early On**
-
-**Install:** `curl -sSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main/install.sh | bash`
-
-**Golden Rule:** `ubs <changed-files>` before every commit. Exit 0 = safe. Exit >0 = fix & re-run.
-
-**Commands:**
-```bash
-ubs file.ts file2.py                    # Specific files (< 1s) — USE THIS
-ubs $(git diff --name-only --cached)    # Staged files — before commit
-ubs --only=js,python src/               # Language filter (3-5x faster)
-ubs --ci --fail-on-warning .            # CI mode — before PR
-ubs --help                              # Full command reference
-ubs sessions --entries 1                # Tail the latest install session log
-ubs .                                   # Whole project (ignores things like .venv and node_modules automatically)
-```
-
-**Output Format:**
-```
-⚠️  Category (N errors)
-    file.ts:42:5 – Issue description
-    💡 Suggested fix
-Exit code: 1
-```
-Parse: `file:line:col` → location | 💡 → how to fix | Exit 0/1 → pass/fail
-
-**Fix Workflow:**
-1. Read finding → category + fix suggestion
-2. Navigate `file:line:col` → view context
-3. Verify real issue (not false positive)
-4. Fix root cause (not symptom)
-5. Re-run `ubs <file>` → exit 0
-6. Commit
-
-**Speed Critical:** Scope to changed files. `ubs src/file.ts` (< 1s) vs `ubs .` (30s). Never full scan for small edits.
-
-**Bug Severity:**
-- **Critical** (always fix): Null safety, XSS/injection, async/await, memory leaks
-- **Important** (production): Type narrowing, division-by-zero, resource leaks
-- **Contextual** (judgment): TODO/FIXME, console logs
-
-**Anti-Patterns:**
-- ❌ Ignore findings → ✅ Investigate each
-- ❌ Full scan per edit → ✅ Scope to file
-- ❌ Fix symptom (`if (x) { x.y }`) → ✅ Root cause (`x?.y`)
-````
+UBS installation and usage live in `docs/internal-review-workflow.md`; do not
+duplicate or replace its pinned installer with a floating upstream command.

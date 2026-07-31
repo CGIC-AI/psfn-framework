@@ -61,7 +61,17 @@ editing. A bead is an ownership unit, not automatically a PR: batch compatible
 small beads into one coherent unit, aiming for at most 25 files, 1,500 counted
 lines, and 5 commits. Never batch unrelated changes or add filler.
 
-Before the first push or PR update:
+Commit coherent checkpoints and push the same-name non-main branch immediately:
+
+```bash
+git push -u origin HEAD
+```
+
+The pre-push hook blocks direct `main`, mismatched refs, and non-fast-forward
+history rewrites. It does not run the broad gate; checkpoint push is remote
+backup, not publication.
+
+Before PR publication or update:
 
 ```bash
 git fetch origin main
@@ -77,10 +87,11 @@ lockfile changes. UI and deployment changes use their focused checks instead
 of the backend/Postgres suite; Semgrep rule tests and changed-workflow
 actionlint/zizmor run only when their own files change.
 
-It refuses dirty, detached, `main`, empty, or non-rebased delivery. Attestation
-and logs live under the worktree Git directory in `local-delivery-gate/`, never in
-tracked files. The cache matches only the exact head and base. The pre-push hook
-invokes the same gate and prevents recursion; never use `--no-verify`.
+The publication gate refuses dirty, detached, `main`, empty, or non-rebased
+delivery. Attestation and logs live under the worktree Git directory in
+`local-delivery-gate/`, never in tracked files. The cache matches only the exact
+head and base. `npm run pr:publish` runs and verifies the same gate before
+publishing the exact head; never use `--no-verify` in the normal flow.
 
 ## Internal adversarial review
 
@@ -93,11 +104,18 @@ git diff --stat "$review_base..$review_head"
 git diff --check "$review_base..$review_head"
 ```
 
-Give each reviewer that same range without sharing another reviewer's output:
+Give each reviewer that same range without sharing another reviewer's output.
+Every reviewer must use a model family different from the implementer; dual
+reviews also use different reviewer families whenever available:
 
 ```text
-Adversarially review immutable range <base>..<head> against the bead acceptance
-criteria and AGENTS.md. Refute it with concrete, reproducible failure scenarios.
+First restate the intent of immutable range <base>..<head> in one sentence and
+say whether the implementation has the right shape. Then review it against the
+bead acceptance criteria and AGENTS.md. Refute it with concrete, reproducible
+failure scenarios.
+
+Record implementer model/family, reviewer model/family, trust boundaries, and
+whether family independence is satisfied.
 
 Blocking findings are only P0/P1 partner-data security/privacy/isolation,
 companion welfare/consent/autonomy, real data or secret loss, a broken core
@@ -108,12 +126,15 @@ Report every other observation as nonblocking; it triggers no fixes or beads.
 Do not approve on plausibility or review outside the immutable range.
 ```
 
-Use Opus and Pi, independently and blind, for P0/P1 or high-risk composite work.
-One alternating reviewer is enough for P2 and below unless concrete unexpected
-high-risk behavior appears. The orchestrator reproduces alleged blockers,
-combines verified ones into one remediation commit, and performs one targeted
-final check. Do not restart the review cycle. A multi-bead seam pass covers only
-merge resolutions, shared contracts, and composite acceptance.
+Use two blind cross-family reviewers for P0/P1 or high-risk composite work. One
+cross-family reviewer is enough for P2 and below unless concrete unexpected
+high-risk behavior appears. The orchestrator reproduces alleged blockers and
+returns only verified P0/P1 findings to the original implementer. Final review
+is closure-only: it checks accepted findings, not the whole range again. A newly
+alleged P0/P1 needs a concrete reproduction plus severity corroboration from a
+second model family; one corroborated late blocker gets one last scoped pass.
+Then stop and park the pushed branch if a blocker remains. A multi-bead seam pass
+covers only merge resolutions, shared contracts, and composite acceptance.
 
 ## Publish and wait
 
@@ -134,10 +155,12 @@ deployment contracts run only for applicable paths. GitHub never runs the full
 repository product/Postgres suite, while local lint, typecheck, hygiene, UBS,
 Semgrep, and specialist checks are not repeated wholesale.
 
-On external failure, the wrapper returns evidence to the owning lane. Make one
-evidence-driven corrective commit and publish the new exact head once. Never
-rerun Actions, re-request Greptile, toggle labels to create events, or start
-successive review/fix agents. A second failure is an operator-visible blocker.
+On external failure, the wrapper returns evidence to the owning implementer.
+Triage review claims under the bounded cross-family loop above; an external P0/P1
+badge is not itself a severity ruling. Gate every corrected exact head. Never
+rerun Actions, re-request review, toggle labels to manufacture events, or start
+successive general review sweeps. At the hard cutoff, park the pushed branch and
+surface the blocker.
 
 ## Troubleshooting
 

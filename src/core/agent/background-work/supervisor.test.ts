@@ -100,6 +100,13 @@ function makeInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInpu
   };
 }
 
+function backgroundWorkKindPriority(kind: string): number {
+  if (kind === 'intention_post_turn_hooks') return 0;
+  if (kind === 'emotion_appraisal') return 1;
+  if (kind === 'memory_extraction') return 2;
+  return 3;
+}
+
 function makeCompactionInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInput {
   const payload: AutoCompactionBackgroundPayload = {
     schemaVersion: 1,
@@ -281,7 +288,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     const runningSessions = new Set([...this.jobs.values()]
       .filter(job => job.state === 'running')
       .map(job => job.logicalSessionId));
-    const candidate = [...this.jobs.values()]
+    const eligible = [...this.jobs.values()]
       .filter(job => ['queued', 'deferred', 'retry_wait'].includes(job.state))
       .filter(job => job.availableAtMs <= input.nowMs)
       // Only the foreground-exclusive kind yields to an active turn lease
@@ -290,8 +297,25 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
         || ![...this.foreground.values()].some(lease => (
           lease.logicalSessionId === job.logicalSessionId && lease.expiresAtMs > input.nowMs
         )))
-      .filter(job => !excluded.has(job.logicalSessionId) && !runningSessions.has(job.logicalSessionId))
-      .sort((left, right) => left.createdAtMs - right.createdAtMs || left.jobId.localeCompare(right.jobId))
+      .filter(job => !excluded.has(job.logicalSessionId) && !runningSessions.has(job.logicalSessionId));
+    const sessionCandidates = new Map<string, StoredBackgroundWorkJob>();
+    for (const job of eligible) {
+      const current = sessionCandidates.get(job.logicalSessionId);
+      if (!current || (
+        job.updatedAtMs - current.updatedAtMs
+        || job.createdAtMs - current.createdAtMs
+        || backgroundWorkKindPriority(job.kind) - backgroundWorkKindPriority(current.kind)
+        || job.jobId.localeCompare(current.jobId)
+      ) < 0) {
+        sessionCandidates.set(job.logicalSessionId, job);
+      }
+    }
+    const candidate = [...sessionCandidates.values()]
+      .sort((left, right) => (
+        left.createdAtMs - right.createdAtMs
+        || backgroundWorkKindPriority(left.kind) - backgroundWorkKindPriority(right.kind)
+        || left.jobId.localeCompare(right.jobId)
+      ))
       .at(0);
     if (!candidate) return null;
     const claimed: ClaimedBackgroundWorkJob = {
@@ -469,6 +493,8 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
     retryAtMs: number;
+    retryReasonCode?: 'handler_failed';
+    terminalReasonCode?: 'handler_failed';
   }): Promise<StoredBackgroundWorkJob> {
     const current = this.requireClaim(input);
     const attemptCount = current.attemptCount + 1;
@@ -476,7 +502,9 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     const next: StoredBackgroundWorkJob = {
       ...current,
       state: terminal ? 'failed' : 'retry_wait',
-      reasonCode: terminal ? 'retry_exhausted' : 'retry_scheduled',
+      reasonCode: terminal
+        ? (input.terminalReasonCode ?? 'retry_exhausted')
+        : (input.retryReasonCode ?? 'retry_scheduled'),
       attemptCount,
       availableAtMs: input.retryAtMs,
       updatedAtMs: input.nowMs,
@@ -504,7 +532,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     jobId: string;
     leaseOwner: string;
     expectedRevision: number;
-    reasonCode: 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
+    reasonCode: 'source_not_ready' | 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
     nowMs: number;
   }): Promise<StoredBackgroundWorkJob> {
     return this.transitionClaim(input, 'failed', input.reasonCode);
@@ -847,6 +875,36 @@ describe('BackgroundWorkSupervisor', () => {
     for (const input of inputs) {
       expect((await store.get(input.jobId))?.state).toBe('succeeded');
     }
+  });
+
+  it('rotates a just-deferred job behind untouched same-session work', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const inputs = [makeInput('session-a', 'turn-a'), makeInput('session-a', 'turn-b')];
+    for (const input of inputs) await store.enqueue(input);
+    const first = await store.claimNext({
+      leaseOwner: 'worker-a',
+      nowMs: 100,
+      leaseDurationMs: 1_000,
+      excludedLogicalSessionIds: [],
+    });
+    expect(first).not.toBeNull();
+    const untouchedJobId = inputs.find(input => input.jobId !== first!.jobId)!.jobId;
+    await store.defer({
+      jobId: first!.jobId,
+      leaseOwner: first!.leaseOwner,
+      expectedRevision: first!.revision,
+      reasonCode: 'source_not_ready',
+      nowMs: 150,
+      availableAtMs: 200,
+    });
+
+    const next = await store.claimNext({
+      leaseOwner: 'worker-a',
+      nowMs: 200,
+      leaseDurationMs: 1_000,
+      excludedLogicalSessionIds: [],
+    });
+    expect(next?.jobId).toBe(untouchedJobId);
   });
 
   it('makes steady autonomic progress in every turn window, including for jobs enqueued before the conversation', async () => {
@@ -1404,6 +1462,103 @@ describe('BackgroundWorkSupervisor', () => {
     expect(await store.get(input.jobId)).toMatchObject({
       state: 'failed',
       reasonCode: 'source_missing',
+    });
+  });
+
+  it('keeps quick source validation cycles at attempt zero and succeeds when the source arrives later', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    let now = 100;
+    let sourceReady = false;
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async () => {
+        if (sourceReady) return;
+        throw new BackgroundWorkDeferredError('source_not_ready', 250, 'source_missing');
+      },
+    });
+    const input = makeInput('session-a', 'turn-source-arrives-late');
+    await store.enqueue(input);
+
+    for (let cycle = 1; cycle <= input.maxAttempts + 2; cycle += 1) {
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'deferred',
+        reasonCode: 'source_not_ready',
+        attemptCount: 0,
+      });
+      now += 250;
+    }
+
+    sourceReady = true;
+    now = 360_100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'succeeded',
+      attemptCount: 0,
+    });
+  });
+
+  it('terminalizes a source validation failure after the job-creation grace', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const eventBus = new EventBus();
+    const events: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.turn.performance', event => { events.push(event); });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus,
+      now: () => 60_100,
+      executor: async () => {
+        throw new BackgroundWorkDeferredError('source_not_ready', 250, 'source_missing');
+      },
+    });
+    const input = makeInput('session-a', 'turn-live-oscillator');
+    await store.enqueue(input);
+    store.corrupt(input.jobId, { deferCount: 96 });
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'source_missing',
+      attemptCount: 0,
+    });
+    await flush();
+    expect(events).toContainEqual(expect.objectContaining({
+      backgroundJobKind: 'memory_extraction',
+      backgroundJobState: 'failed',
+      backgroundJobReason: 'source_missing',
+    }));
+  });
+
+  it('bounds handler-drain requeues instead of leaving them at attempt zero', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    let now = 100;
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async () => {
+        throw new BackgroundWorkDeferredError('handler_failed', 50);
+      },
+    });
+    const input = makeInput('session-a', 'turn-handler-keeps-draining');
+    await store.enqueue(input);
+
+    for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      if (attempt < input.maxAttempts) now += 50;
+    }
+
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'handler_failed',
+      attemptCount: input.maxAttempts,
     });
   });
 

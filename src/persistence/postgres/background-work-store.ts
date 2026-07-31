@@ -339,7 +339,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         migrationStatements,
         POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK,
       );
-      await PostgresBackgroundWorkStore.repairStrandedForegroundSweepRows(pool);
+      await PostgresBackgroundWorkStore.logStartupQueueShape(pool);
       return new PostgresBackgroundWorkStore(pool);
     } catch (error) {
       await pool.end().catch(() => undefined);
@@ -347,40 +347,36 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     }
   }
 
-  /**
-   * Startup normalization for rows stranded by the retired turn-boundary sweep
-   * (hrmrq.119 fixA). The pre-decoupling `beginForeground` bulk UPDATE parked
-   * every queued/retry_wait job as `deferred`/`foreground_active` with its
-   * availability pushed past the lease window and the original availability
-   * preserved in `deferred_from_available_at_ms`; only the (also retired)
-   * resume sweep could flip them back. The retired sweep is the ONLY writer
-   * that ever set `deferred_from_available_at_ms` (claim-level `defer` nulls
-   * it), so that column being non-null is an exact legacy discriminator.
-   * Restore each such row to its pre-sweep state and availability — the same
-   * transition the old resume performed — so the normal claim path drains the
-   * backlog. Idempotent (the matched shape can no longer be produced) and
-   * fail-closed: a repair failure fails the connect.
-   */
-  private static async repairStrandedForegroundSweepRows(pool: Pool): Promise<void> {
-    const nowMs = Date.now();
-    const repaired = await pool.query(`
-      UPDATE agent_background_work_jobs
-      SET state = COALESCE(deferred_from_state, 'queued'),
-          available_at_ms = deferred_from_available_at_ms,
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          updated_at_ms = $1,
-          revision = revision + 1
-      WHERE state = 'deferred'
-        AND reason_code = 'foreground_active'
-        AND deferred_from_available_at_ms IS NOT NULL
-    `, [nowMs]);
-    const repairedCount = repaired.rowCount ?? 0;
-    if (repairedCount > 0) {
-      log.info('Restored background jobs stranded by the retired foreground sweep', {
-        repairedCount,
-      });
-    }
+  /** Content-free startup accounting for the two historical foreground shapes. */
+  private static async logStartupQueueShape(pool: Pool): Promise<void> {
+    const counts = await queryOne<{
+      live_legacy_queued_count: string;
+      retired_sweep_deferred_count: string;
+    }>(pool, `
+      SELECT
+        COUNT(*) FILTER (
+          WHERE state = 'queued'
+            AND reason_code = 'foreground_active'
+            AND deferred_from_available_at_ms IS NULL
+        )::text AS live_legacy_queued_count,
+        COUNT(*) FILTER (
+          WHERE state = 'deferred'
+            AND reason_code = 'foreground_active'
+            AND deferred_from_available_at_ms IS NOT NULL
+        )::text AS retired_sweep_deferred_count
+      FROM agent_background_work_jobs
+    `);
+    if (!counts) throw new Error('Background work startup queue accounting returned no row');
+    log.info('Background work startup queue shape', {
+      liveLegacyQueuedCount: safeInteger(
+        counts.live_legacy_queued_count,
+        'live legacy queued count',
+      ),
+      retiredSweepDeferredCount: safeInteger(
+        counts.retired_sweep_deferred_count,
+        'retired sweep deferred count',
+      ),
+    });
   }
 
   async enqueue(inputValue: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult> {
@@ -750,6 +746,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             candidate_job.job_id,
             candidate_job.logical_session_id,
             candidate_job.created_at_ms,
+            candidate_job.updated_at_ms,
             candidate_job.kind,
             -- via_welfare = NOT admissible-by-the-normal-path. The normal path
             -- requires the job to be available (backoff elapsed) AND, for the
@@ -827,11 +824,13 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             admissible.job_id,
             admissible.logical_session_id,
             admissible.created_at_ms,
+            admissible.updated_at_ms,
             admissible.kind,
             admissible.via_welfare,
             ROW_NUMBER() OVER (
               PARTITION BY admissible.logical_session_id
               ORDER BY
+                admissible.updated_at_ms ASC,
                 admissible.created_at_ms ASC,
                 CASE admissible.kind
                   WHEN 'intention_post_turn_hooks' THEN 0
@@ -1431,6 +1430,8 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
     retryAtMs: number;
+    retryReasonCode?: BackgroundWorkReasonCode;
+    terminalReasonCode?: BackgroundWorkReasonCode;
   }): Promise<StoredBackgroundWorkJob> {
     return withPostgresClient(this.pool, async (client) => {
       const jobId = requireText(input.jobId, 'jobId');
@@ -1438,6 +1439,16 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       const expectedRevision = positiveInteger(input.expectedRevision, 'expectedRevision');
       const nowMs = safeInteger(input.nowMs, 'nowMs');
       const retryAtMs = safeInteger(input.retryAtMs, 'retryAtMs');
+      if (input.retryReasonCode !== undefined
+        && input.retryReasonCode !== 'handler_failed') {
+        throw new Error(`Invalid background retry reason: ${String(input.retryReasonCode)}`);
+      }
+      if (input.terminalReasonCode !== undefined
+        && input.terminalReasonCode !== 'handler_failed') {
+        throw new Error(`Invalid background terminal retry reason: ${String(input.terminalReasonCode)}`);
+      }
+      const retryReasonCode = input.retryReasonCode ?? 'retry_scheduled';
+      const terminalReasonCode = input.terminalReasonCode ?? 'retry_exhausted';
       const locked = await client.query<BackgroundWorkRow>(`
         SELECT ${JOB_COLUMNS}
         FROM agent_background_work_jobs
@@ -1461,7 +1472,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       const terminal = unknownEffectKey !== undefined || retryExhausted;
       const reasonCode = unknownEffectKey !== undefined
         ? 'effect_outcome_unknown'
-        : (retryExhausted ? 'retry_exhausted' : 'retry_scheduled');
+        : (retryExhausted ? terminalReasonCode : retryReasonCode);
       const updated = await client.query<BackgroundWorkRow>(`
         UPDATE agent_background_work_jobs
         SET attempt_count = $5,
@@ -1518,7 +1529,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     jobId: string;
     leaseOwner: string;
     expectedRevision: number;
-    reasonCode: 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
+    reasonCode: 'source_not_ready' | 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
     nowMs: number;
   }): Promise<StoredBackgroundWorkJob> {
     return this.markClaimTerminal(input, 'failed');

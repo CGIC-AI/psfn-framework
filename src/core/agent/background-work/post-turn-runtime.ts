@@ -26,8 +26,6 @@ import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-out
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import type { SocialDesireFeltSignalWriter } from '../../intention/social-desire-felt-signal.js';
 
-const SOURCE_RECORD_GRACE_MS = 60_000;
-
 export type PostTurnBackgroundSessionManager = Pick<
   SessionManager,
   | 'createCapturedSessionReads'
@@ -60,7 +58,6 @@ export interface PostTurnBackgroundRuntimeDependencies {
    * lane is disabled (lane registration fails closed on the mismatch).
    */
   socialDesireFeltSignals?: SocialDesireFeltSignalWriter;
-  now?: () => number;
 }
 
 type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
@@ -72,7 +69,6 @@ type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
 
 async function requireCanonicalTurnRecord(
   source: BackgroundWorkSourceRef,
-  jobCreatedAtMs: number,
   dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
 ): Promise<TurnRecord> {
   const eligibility = await dependencies.sessionManager.lookupSourceRecordedTurnEligibility(
@@ -81,11 +77,7 @@ async function requireCanonicalTurnRecord(
     source.turnId,
   );
   if (eligibility.kind === 'missing') {
-    const nowMs = (dependencies.now ?? Date.now)();
-    if (nowMs - jobCreatedAtMs < SOURCE_RECORD_GRACE_MS) {
-      throw new BackgroundWorkDeferredError('source_not_ready', 250);
-    }
-    throw new BackgroundWorkPermanentError('source_missing');
+    throw new BackgroundWorkDeferredError('source_not_ready', 250, 'source_missing');
   }
   if (eligibility.kind === 'ineligible') {
     throw new BackgroundWorkPermanentError('source_missing');
@@ -184,6 +176,9 @@ async function withStableConsumedSnapshot<T>(
     );
   } catch (error) {
     if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotChangedError') {
+      // A concurrently changed validation snapshot is unavailable, not
+      // missing. Preserve that truthful terminal reason if the bounded
+      // deferral budget is exhausted.
       throw new BackgroundWorkDeferredError('source_not_ready', 250);
     }
     if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotInvalidError') {
@@ -203,7 +198,7 @@ function requireSourceSessionEntry(
   requiredSessionEntryId: number,
 ): void {
   if (!entries.some(entry => entry.id === requiredSessionEntryId)) {
-    throw new BackgroundWorkDeferredError('source_not_ready', 250);
+    throw new BackgroundWorkDeferredError('source_not_ready', 250, 'source_missing');
   }
 }
 
@@ -283,7 +278,7 @@ async function runPostTurnBackgroundWork(
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        const record = await requireCanonicalTurnRecord(payload.source, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         try {
           await input.effects.run('memory-extraction', async (crossBoundary) => {
@@ -328,7 +323,7 @@ async function runPostTurnBackgroundWork(
           // name to avoid a core -> faculties error-class import.
           if (error instanceof Error && error.name === 'ExtractionDrainRequeueError') {
             throw new BackgroundWorkDeferredError(
-              'source_not_ready',
+              'handler_failed',
               dependencies.tuning.extractionDrainRequeueDelayMs,
             );
           }
@@ -351,7 +346,7 @@ async function runPostTurnBackgroundWork(
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        const record = await requireCanonicalTurnRecord(payload.source, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         if (
           extractTurnRecordSelfSnapshotRef(record.internalStateSnapshotRef)
@@ -410,7 +405,7 @@ async function runPostTurnBackgroundWork(
       () => sessionReads.captureAutoCompactionRecentEntries(captureParams),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        await requireCanonicalTurnRecord(payload.source, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         await input.effects.run('auto-compaction', async (assertOwned) => {
           await sessionReads.scheduleAutoCompactionBetweenTurns({
@@ -440,7 +435,7 @@ async function runPostTurnBackgroundWork(
       // TurnRecord writers. Queue ownership and canonical eligibility are both
       // proved only after it is held, and raw content never leaves its scope.
       await input.effects.assertOwned();
-      const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+      const record = await requireCanonicalTurnRecord(payload.source, dependencies);
       // Source-only audit: the sole production hook records a behavioral
       // pattern from this canonical message/response pair; it does not read a
       // session window. Keep it on the one-source fence unless that hook

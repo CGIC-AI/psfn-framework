@@ -19,6 +19,10 @@ import {
 
 const log = createComponentLogger('BackgroundWorkSupervisor');
 const TERMINAL_PURGE_BATCH_SIZE = 500;
+// Code-owned source-integrity invariant: give canonical turn/session writers a
+// bounded publication window, measured from durable job creation rather than
+// scheduler frequency. This preserves the pre-durable-lane 60-second contract.
+const SOURCE_RECORD_GRACE_MS = 60_000;
 
 export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
@@ -109,8 +113,12 @@ export class BackgroundWorkShutdownRequeueError extends Error {
 
 export class BackgroundWorkDeferredError extends Error {
   constructor(
-    readonly reasonCode: 'foreground_active' | 'source_not_ready',
+    readonly reasonCode: 'foreground_active' | 'source_not_ready' | 'handler_failed',
     readonly delayMs: number,
+    readonly terminalReasonCode?:
+      | 'source_not_ready'
+      | 'source_missing'
+      | 'handler_failed',
   ) {
     super(`Background work deferred: ${reasonCode}`);
     this.name = 'BackgroundWorkDeferredError';
@@ -539,7 +547,45 @@ export class BackgroundWorkSupervisor {
         return;
       }
       if (error instanceof BackgroundWorkDeferredError) {
-        await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
+        if (error.reasonCode === 'foreground_active') {
+          await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
+          return;
+        }
+
+        if (error.reasonCode === 'source_not_ready') {
+          const nowMs = this.now();
+          if (nowMs - job.createdAtMs < SOURCE_RECORD_GRACE_MS) {
+            await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
+            return;
+          }
+          const terminalReasonCode = error.terminalReasonCode === 'source_missing'
+            ? 'source_missing'
+            : 'source_not_ready';
+          const failed = await this.store.markClaimFailed({
+            jobId: job.jobId,
+            leaseOwner: this.leaseOwner,
+            expectedRevision: job.revision,
+            reasonCode: terminalReasonCode,
+            nowMs,
+          });
+          this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+          return;
+        }
+
+        // Handler-drain requeues crossed no effect boundary, but they still
+        // need a durable budget. Route them through the ordinary attempt
+        // ceiling while preserving their actual reason.
+        const nowMs = this.now();
+        const settled = await this.store.failOrRetry({
+          jobId: job.jobId,
+          leaseOwner: this.leaseOwner,
+          expectedRevision: job.revision,
+          nowMs,
+          retryAtMs: nowMs + Math.max(0, error.delayMs),
+          retryReasonCode: 'handler_failed',
+          terminalReasonCode: 'handler_failed',
+        });
+        this.emitJobTelemetry(settled, undefined, this.executionDurationMs(job));
         return;
       }
       if (error instanceof BackgroundWorkStaleError) {

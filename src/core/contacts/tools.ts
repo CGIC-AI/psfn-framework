@@ -752,11 +752,11 @@ async function executeContactSearch(
 
 async function executeUnifiedContactAction(
   contactStore: ContactStorePort,
-  params: ContactToolParams = {},
+  params: ContactToolParams,
+  intake: SelfAuthoredMutationIntakeRuntime,
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
   permitInvalidation?: ContactBlockPermitInvalidationPort,
-  intake: SelfAuthoredMutationIntakeRuntime,
   peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
@@ -1141,10 +1141,10 @@ export function createContactTool(
         return await executeUnifiedContactAction(
           contactStore,
           params,
+          intake,
           proposalQueue,
           blockList,
           permitInvalidation,
-          intake,
           peerAvailability,
         );
       } catch (error) {

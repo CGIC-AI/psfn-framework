@@ -161,14 +161,18 @@ export function planPrePush({
   currentBranch,
   isAncestor,
 }) {
-  const branchUpdates = updates.filter(
-    ({ localSha, remoteRef }) => localSha !== ZERO_SHA && remoteRef.startsWith('refs/heads/'),
-  );
+  const branchUpdates = updates.filter(({ remoteRef }) => remoteRef.startsWith('refs/heads/'));
   if (branchUpdates.length === 0) {
     return { action: 'allow', reason: 'No branch update requires validation.' };
   }
   if (branchUpdates.some(({ remoteRef }) => remoteRef === 'refs/heads/main')) {
     return { action: 'block', reason: 'Direct pushes to main are prohibited.' };
+  }
+  if (branchUpdates.some(({ localSha }) => localSha === ZERO_SHA)) {
+    return {
+      action: 'block',
+      reason: 'Remote branch deletions are prohibited; preserve pushed checkpoints.',
+    };
   }
   if (
     branchUpdates.length !== 1 ||

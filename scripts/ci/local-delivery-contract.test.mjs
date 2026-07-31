@@ -106,7 +106,19 @@ test('pre-push allows durable branch checkpoints but blocks main, mismatched, an
       currentBranch: 'feature',
       isAncestor: () => true,
     }),
-    { action: 'allow', reason: 'No branch update requires validation.' },
+    {
+      action: 'block',
+      reason: 'Remote branch deletions are prohibited; preserve pushed checkpoints.',
+    },
+  );
+  assert.deepEqual(
+    planPrePush({
+      updates: [pushUpdate('refs/heads/main', '0'.repeat(40))],
+      head: HEAD,
+      currentBranch: 'feature',
+      isAncestor: () => true,
+    }),
+    { action: 'block', reason: 'Direct pushes to main are prohibited.' },
   );
   assert.deepEqual(
     planPrePush({

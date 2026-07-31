@@ -196,6 +196,22 @@ interface ParsedGardenRoute {
 }
 
 type FleetSsoDenialDetails = Omit<GardenDenialDetails, 'response' | 'status'>;
+type FleetSsoResponseType =
+  | 'fleet_sso_request_denied'
+  | 'fleet_sso_unavailable'
+  | 'garden_upstream_unavailable'
+  | 'invalid_request_target'
+  | 'not_found';
+type GardenUpstreamFailureCause = 'connect_refused' | 'setup_error' | 'socket_error' | 'timeout';
+
+interface GardenUpstreamFailureDetails {
+  readonly cause: GardenUpstreamFailureCause;
+  readonly routeId: string;
+  readonly action: string;
+  readonly principalId: string;
+  readonly errorName: string;
+  readonly errorCode?: string;
+}
 
 function defaultFleetSsoDenial(
   status: FleetSsoRequestError['status'],
@@ -224,11 +240,66 @@ class FleetSsoRequestError extends Error {
     readonly status: 400 | 401 | 403 | 404 | 413 | 502 | 503,
     message: string,
     denial?: FleetSsoDenialDetails,
-    readonly responseType?: 'invalid_request_target',
+    readonly responseType?: FleetSsoResponseType,
   ) {
     super(message);
     this.name = 'FleetSsoRequestError';
     this.denial = denial ?? defaultFleetSsoDenial(status);
+  }
+}
+
+class GardenUpstreamTimeoutError extends Error {
+  constructor() {
+    super('Garden upstream timed out');
+    this.name = 'GardenUpstreamTimeoutError';
+  }
+}
+
+class GardenUpstreamSocketError extends Error {
+  override readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super('Garden upstream socket failed');
+    this.name = 'GardenUpstreamSocketError';
+    this.cause = cause;
+  }
+}
+
+function gardenUpstreamFailureCause(error: unknown): GardenUpstreamFailureCause {
+  if (error instanceof GardenUpstreamTimeoutError) return 'timeout';
+  if (error instanceof GardenUpstreamSocketError) {
+    return error.cause instanceof Error
+      && 'code' in error.cause
+      && error.cause.code === 'ECONNREFUSED'
+      ? 'connect_refused'
+      : 'socket_error';
+  }
+  return 'setup_error';
+}
+
+function gardenUpstreamOriginalError(error: unknown): unknown {
+  return error instanceof GardenUpstreamSocketError ? error.cause : error;
+}
+
+function fleetSsoResponseType(error: FleetSsoRequestError): FleetSsoResponseType {
+  if (error.responseType) return error.responseType;
+  if (error.status === 404) return 'not_found';
+  if ((error.status === 502 || error.status === 503) && !error.denial) {
+    return 'fleet_sso_unavailable';
+  }
+  return 'fleet_sso_request_denied';
+}
+
+class FleetSsoUpstreamUnavailableError extends FleetSsoRequestError {
+  override readonly cause: unknown;
+
+  constructor(
+    readonly failure: GardenUpstreamFailureDetails,
+    cause: unknown,
+  ) {
+    super(502, 'Garden upstream is unavailable', undefined, 'garden_upstream_unavailable');
+    this.name = 'FleetSsoUpstreamUnavailableError';
+    this.cause = cause;
   }
 }
 
@@ -748,13 +819,12 @@ export class GatewayFleetSsoRouter {
       }
       await this.proxyHttp(request, response, upstream, route, body, issued);
     } catch (error) {
-      this.recordRequestDenial(request, error, response);
+      this.recordRequestFailure(request, error, response);
       if (response.writableEnded || response.destroyed) return;
       if (error instanceof FleetSsoRequestError) {
         sendJson(response, error.status, {
           error: {
-            type: error.responseType
-              ?? (error.status === 404 ? 'not_found' : 'fleet_sso_request_denied'),
+            type: fleetSsoResponseType(error),
           },
         });
         return;
@@ -776,7 +846,7 @@ export class GatewayFleetSsoRouter {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     void this.proxyUpgrade(request, socket, head).catch((error) => {
       const status = error instanceof FleetSsoRequestError ? error.status : 503;
-      this.recordRequestDenial(request, error);
+      this.recordRequestFailure(request, error);
       if (socket.destroyed) return;
       if (error instanceof FleetSsoUpstreamUpgradeError
         && this.canSurfaceUpstreamUpgradeFailure(request)) {
@@ -836,11 +906,19 @@ export class GatewayFleetSsoRouter {
     });
   }
 
-  private recordRequestDenial(
+  private recordRequestFailure(
     request: IncomingMessage,
     error: unknown,
     response?: ServerResponse,
   ): void {
+    if (error instanceof FleetSsoUpstreamUnavailableError) {
+      this.denialLogger.warn('Fleet Garden upstream unavailable', {
+        reasonCode: 'garden_upstream_unavailable',
+        ...error.failure,
+        status: error.status,
+      });
+      return;
+    }
     let status: GardenDenialDetails['status'] | undefined;
     let denial: FleetSsoDenialDetails | undefined;
     if (error instanceof FleetSsoRequestError) {
@@ -1198,15 +1276,32 @@ export class GatewayFleetSsoRouter {
           );
           proxyResponse.pipe(response);
           proxyResponse.on('end', resolve);
-          proxyResponse.on('error', reject);
+          proxyResponse.on('error', error => reject(new GardenUpstreamSocketError(error)));
         },
       );
-      proxyRequest.on('timeout', () => proxyRequest.destroy(new Error('Garden upstream timed out')));
-      proxyRequest.on('error', reject);
+      proxyRequest.on('timeout', () => proxyRequest.destroy(new GardenUpstreamTimeoutError()));
+      proxyRequest.on('error', error => reject(
+        error instanceof GardenUpstreamTimeoutError
+          ? error
+          : new GardenUpstreamSocketError(error),
+      ));
       if (body.byteLength > 0) proxyRequest.write(body);
       proxyRequest.end();
-    }).catch(() => {
-      throw new FleetSsoRequestError(502, 'Garden upstream is unavailable');
+    }).catch((error: unknown) => {
+      const cause = gardenUpstreamFailureCause(error);
+      const originalError = gardenUpstreamOriginalError(error);
+      throw new FleetSsoUpstreamUnavailableError({
+        cause,
+        routeId: `${request.method ?? 'GET'} ${route.upstreamTarget}`,
+        action: issued.verified.action,
+        principalId: issued.verified.authContext.principalId,
+        errorName: originalError instanceof Error ? originalError.name : 'UnknownError',
+        ...(originalError instanceof Error
+          && 'code' in originalError
+          && typeof originalError.code === 'string'
+          ? { errorCode: originalError.code }
+          : {}),
+      }, originalError);
     });
   }
 

@@ -369,6 +369,13 @@
       "measuredBaselineMs": 11400,
       "baselineSource": "measured",
       "note": "Bead 6oott redaction projection-drift fail-closed suite. Measured 11.4s standalone (harness container start + two real-Postgres tests); 120s matches the repo-standard integration cap to absorb harness-semaphore queueing under full-suite parallelism (headroom ratio >10x)."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-live-drain.integration.test.ts",
+      "timeoutMs": 60000,
+      "measuredBaselineMs": 16000,
+      "baselineSource": "measured",
+      "note": "hrmrq.119 live-drain regression: 880-row claim-serial drain over dockerized Postgres measured ~11s isolated / ~16s worst under full-suite load; internal waitForCondition deadlines 40s sit inside the 60s vitest budget."
     }
   ]
 }

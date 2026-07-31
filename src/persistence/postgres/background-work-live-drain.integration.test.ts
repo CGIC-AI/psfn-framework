@@ -319,10 +319,10 @@ describe('Postgres background-work live drain regression', () => {
         },
       });
       await supervisor.tick();
-      await waitForCondition(async () => (await restartedStore!.countPending()) === 0, 9_000);
+      await waitForCondition(async () => (await restartedStore!.countPending()) === 0, 40_000);
       await waitForCondition(() => Promise.resolve(
         [...latestHealth.values()].reduce((total, update) => total + update.counts.terminal, 0) === 881,
-      ), 9_000);
+      ), 40_000);
 
       expect(executionOrder.indexOf(oscillator.jobId)).toBeGreaterThanOrEqual(880);
       expect(await restartedStore.get(oscillator.jobId)).toMatchObject({

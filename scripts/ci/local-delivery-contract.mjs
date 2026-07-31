@@ -159,8 +159,7 @@ export function planPrePush({
   updates,
   head,
   currentBranch,
-  attestationValid,
-  gateActive,
+  isAncestor,
 }) {
   const branchUpdates = updates.filter(
     ({ localSha, remoteRef }) => localSha !== ZERO_SHA && remoteRef.startsWith('refs/heads/'),
@@ -178,19 +177,20 @@ export function planPrePush({
   ) {
     return {
       action: 'block',
-      reason: 'Push exactly the checked-out branch HEAD so the local attestation is unambiguous.',
+      reason: 'Push exactly the checked-out branch HEAD to its same-name remote branch.',
     };
   }
-  if (attestationValid) {
-    return { action: 'allow', reason: 'Exact-HEAD local gate attestation is current.' };
-  }
-  if (gateActive) {
+  const [{ localSha, remoteSha }] = branchUpdates;
+  if (remoteSha !== ZERO_SHA && !isAncestor(remoteSha, localSha)) {
     return {
       action: 'block',
-      reason: 'Local gate recursion detected without a valid exact-HEAD attestation.',
+      reason: 'Non-fast-forward checkpoint pushes are prohibited; pull/rebase without rewriting shared history.',
     };
   }
-  return { action: 'run-gate', reason: 'Exact-HEAD local gate attestation is missing or stale.' };
+  return {
+    action: 'allow',
+    reason: 'Checkpoint push is a fast-forward update of the checked-out non-main branch.',
+  };
 }
 
 function command(name, executable, args, options = {}) {

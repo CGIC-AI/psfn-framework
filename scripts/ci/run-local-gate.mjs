@@ -24,6 +24,7 @@ import {
   createAttestation,
   createCanaryAttestation,
   describeLockWait,
+  formatDuration,
   gateCommandString,
   isStageReusable,
   partitionGatePlan,
@@ -446,7 +447,7 @@ export function validateStateAttestation(attestation, state, options) {
 }
 
 function gateEnvironment(gate) {
-  const env = { ...process.env, PSFN_LOCAL_GATE_ACTIVE: '1' };
+  const env = { ...process.env };
   if (gate.nodeHeapMb) env.NODE_OPTIONS = `--max-old-space-size=${gate.nodeHeapMb}`;
   return env;
 }
@@ -459,6 +460,7 @@ export async function executeGate(gate, { cwd, logDir }) {
   mkdirSync(logDir, { recursive: true });
   const logPath = join(logDir, `${gate.name}.log`);
   const log = createWriteStream(logPath, { flags: 'w', mode: 0o600 });
+  const startedAt = Date.now();
   console.log(`==> ${gate.name}`);
 
   await new Promise((resolve, reject) => {
@@ -474,11 +476,15 @@ export async function executeGate(gate, { cwd, logDir }) {
     child.once('error', reject);
     child.once('close', (code, signal) => {
       log.end();
-      if (code === 0) resolve();
+      const duration = formatDuration(Date.now() - startedAt);
+      if (code === 0) {
+        console.log(`<== ${gate.name}: passed in ${duration}`);
+        resolve();
+      }
       else {
         reject(
           new Error(
-            `${gate.name} failed (${signal ? `signal ${signal}` : `exit ${String(code)}`}); log: ${logPath}`,
+            `${gate.name} failed after ${duration} (${signal ? `signal ${signal}` : `exit ${String(code)}`}); log: ${logPath}`,
           ),
         );
       }

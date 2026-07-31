@@ -44,8 +44,8 @@ function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
-function pushUpdate(remoteRef, localSha = HEAD) {
-  return { localSha, localRef: localSha === '0'.repeat(40) ? '(delete)' : 'HEAD', remoteRef, remoteSha: BASE };
+function pushUpdate(remoteRef, localSha = HEAD, remoteSha = BASE) {
+  return { localSha, localRef: localSha === '0'.repeat(40) ? '(delete)' : 'HEAD', remoteRef, remoteSha };
 }
 
 function makeGateRepository() {
@@ -89,14 +89,13 @@ test('attestation is valid only for the exact clean head and base', () => {
   assert.match(validateAttestation(attestation, { head: HEAD, base: BASE, gates: ['fake'] }).reason, /gate plan/i);
 });
 
-test('pre-push blocks direct main, skips deletions, reuses exact attestations, and never recurses', () => {
+test('pre-push allows durable branch checkpoints but blocks main, mismatched, and non-fast-forward updates', () => {
   assert.deepEqual(
     planPrePush({
       updates: [pushUpdate('refs/heads/main')],
       head: HEAD,
       currentBranch: 'feature',
-      attestationValid: false,
-      gateActive: false,
+      isAncestor: () => true,
     }),
     { action: 'block', reason: 'Direct pushes to main are prohibited.' },
   );
@@ -105,42 +104,52 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
       updates: [pushUpdate('refs/heads/old', '0'.repeat(40))],
       head: HEAD,
       currentBranch: 'feature',
-      attestationValid: false,
-      gateActive: false,
+      isAncestor: () => true,
     }),
     { action: 'allow', reason: 'No branch update requires validation.' },
   );
-  assert.equal(
+  assert.deepEqual(
     planPrePush({
-      updates: [pushUpdate('refs/heads/feature')],
+      updates: [pushUpdate('refs/heads/feature', HEAD, '0'.repeat(40))],
       head: HEAD,
       currentBranch: 'feature',
-      attestationValid: true,
-      gateActive: false,
-    }).action,
-    'allow',
-  );
-  assert.equal(
-    planPrePush({
-      updates: [pushUpdate('refs/heads/feature')],
-      head: HEAD,
-      currentBranch: 'feature',
-      attestationValid: false,
-      gateActive: false,
-    }).action,
-    'run-gate',
+      isAncestor: () => {
+        throw new Error('new branches have no remote commit to validate');
+      },
+    }),
+    { action: 'allow', reason: 'Checkpoint push is a fast-forward update of the checked-out non-main branch.' },
   );
   assert.deepEqual(
     planPrePush({
       updates: [pushUpdate('refs/heads/feature')],
       head: HEAD,
       currentBranch: 'feature',
-      attestationValid: false,
-      gateActive: true,
+      isAncestor: (ancestor, descendant) => ancestor === BASE && descendant === HEAD,
+    }),
+    { action: 'allow', reason: 'Checkpoint push is a fast-forward update of the checked-out non-main branch.' },
+  );
+  assert.deepEqual(
+    planPrePush({
+      updates: [pushUpdate('refs/heads/other')],
+      head: HEAD,
+      currentBranch: 'feature',
+      isAncestor: () => true,
     }),
     {
       action: 'block',
-      reason: 'Local gate recursion detected without a valid exact-HEAD attestation.',
+      reason: 'Push exactly the checked-out branch HEAD to its same-name remote branch.',
+    },
+  );
+  assert.deepEqual(
+    planPrePush({
+      updates: [pushUpdate('refs/heads/feature')],
+      head: HEAD,
+      currentBranch: 'feature',
+      isAncestor: () => false,
+    }),
+    {
+      action: 'block',
+      reason: 'Non-fast-forward checkpoint pushes are prohibited; pull/rebase without rewriting shared history.',
     },
   );
 });
@@ -950,6 +959,14 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.match(workflow, /steps\.scope\.outputs\.admin_ui == 'true'/);
   assert.match(workflow, /steps\.scope\.outputs\.companion_ui == 'true'/);
   assert.match(workflow, /steps\.scope\.outputs\.deployment == 'true'/);
+  assert.match(
+    workflow,
+    /Install root dependencies in a clean environment[\s\S]{0,240}if: steps\.scope\.outputs\.root_runtime == 'true' \|\| steps\.scope\.outputs\.deployment == 'true'[\s\S]{0,120}run: npm ci --ignore-scripts/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /Install root dependencies in a clean environment[\s\S]{0,240}steps\.scope\.outputs\.admin_ui/,
+  );
   assert.doesNotMatch(workflow, /run: npm run lint/);
   assert.doesNotMatch(workflow, /run: npm test/);
   assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
@@ -965,6 +982,17 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
     workflow,
     /npm run verify:commit-identities -- --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
   );
+});
+
+test('agent contracts keep one Beads block and no floating tool installers', () => {
+  const agents = readFileSync('AGENTS.md', 'utf8');
+  const claude = readFileSync('CLAUDE.md', 'utf8');
+
+  assert.equal((agents.match(/<!-- BEGIN BEADS/g) ?? []).length, 1);
+  assert.doesNotMatch(agents, /ultimate_bug_scanner\/main|npx -y fallow/);
+  assert.doesNotMatch(claude, /ultimate_bug_scanner\/main|npx -y fallow/);
+  assert.match(agents, /commit coherent checkpoints and push\s+every non-main work branch/);
+  assert.match(agents, /Direct pushes to `main` are prohibited/);
 });
 
 test('trusted PR label automation has the write scope required by the labels API', () => {

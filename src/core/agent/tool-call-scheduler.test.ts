@@ -10,6 +10,7 @@ import {
   getToolResultInvocationAudit,
 } from './tool-call-scheduler.js';
 import { buildTurnRecord } from './substrate-agent/turn-records.js';
+import { convertToLlm } from './messages.js';
 import {
   TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY,
   type ToolCallOutcome,
@@ -145,6 +146,8 @@ describe('tool-call-scheduler', () => {
       rationale: 'Need to inspect the world.',
       thoughtSignature: 'sig-world',
     });
+    expect(JSON.stringify(convertToLlm([rematerializedToolResult])))
+      .not.toContain('psfnInvocationAudit');
 
     const turnRecord = buildTurnRecord({
       message: {

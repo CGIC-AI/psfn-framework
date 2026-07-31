@@ -9,8 +9,17 @@ describe('shared secret redaction', () => {
   it('recognizes compound diagnostic keys without broadening generic diagnostics', () => {
     expect(isDiagnosticSecretKey('openaiApiKey')).toBe(true);
     expect(isDiagnosticSecretKey('db_password_file')).toBe(true);
+    expect(isDiagnosticSecretKey('initiation_permit')).toBe(true);
+    expect(isDiagnosticSecretKey('roleGrantId')).toBe(true);
+    expect(isDiagnosticSecretKey('grant_digest')).toBe(true);
+    expect(isDiagnosticSecretKey('csrfToken')).toBe(true);
+    expect(isDiagnosticSecretKey('x-psfn-csrf')).toBe(true);
+    expect(isDiagnosticSecretKey('x-psfn-escalation-grant')).toBe(true);
     expect(isDiagnosticSecretKey('code')).toBe(false);
     expect(isDiagnosticSecretKey('sessionId')).toBe(false);
+    expect(isDiagnosticSecretKey('permitOutcome')).toBe(false);
+    expect(isDiagnosticSecretKey('permittedDestinations')).toBe(false);
+    expect(isDiagnosticSecretKey('escalationDecision')).toBe(false);
   });
 
   it('redacts secret-shaped text without truncating safe forensic content', () => {

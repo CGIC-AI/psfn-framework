@@ -18,6 +18,10 @@ import {
   type MessageClassMetadata,
 } from './message-classes.js';
 import { renderSystemLanguageTemplate } from '../identity/system-language.js';
+import {
+  attachToolResultInvocationAudit,
+  stripToolResultInvocationAuditForModel,
+} from './tool-result-invocation-audit.js';
 
 // ── Custom message types ──
 
@@ -228,7 +232,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       result.push(message);
     } else {
       // Standard pi-ai Message — pass through, preserving canonical outward subtypes.
-      if (msg.role === 'user' || msg.role === 'assistant') {
+      const standardRole = (msg as { role?: unknown }).role;
+      if (standardRole === 'toolResult') {
+        result.push(stripToolResultInvocationAuditForModel(msg as ToolResultMessage));
+      } else if (standardRole === 'user' || standardRole === 'assistant') {
         result.push(tagMessageClass(msg, resolveStandardMessageClass(msg)) as Message);
       } else {
         result.push(msg as Message);
@@ -287,7 +294,7 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     if (!toolObservation) {
       throw new Error(`Tool session entry ${entry.channelId}:${entry.id} is missing tool observation metadata`);
     }
-    return {
+    const message = {
       role: 'toolResult',
       toolCallId: toolObservation.toolCallId ?? `${entry.channelId}:${entry.id}`,
       toolName: toolObservation.toolName,
@@ -295,6 +302,9 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
       isError: toolObservation.isError ?? false,
       timestamp: ts,
     } satisfies ToolResultMessage;
+    return toolObservation.invocationAudit
+      ? attachToolResultInvocationAudit(message, toolObservation.invocationAudit)
+      : message;
   }
 
   // assistant

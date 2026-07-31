@@ -30,6 +30,7 @@ import {
 } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
+import { getToolResultInvocationAudit } from './tool-result-invocation-audit.js';
 
 const NOW = Date.now();
 
@@ -360,6 +361,10 @@ describe('sessionEntryToMessage', () => {
           schemaVersion: 1,
           toolName: 'search_files',
           toolCallId: 'tool-1',
+          invocationAudit: {
+            arguments: { action: 'search', query: '*.ts' },
+            rationale: 'Find matching source files.',
+          },
           truncated: false,
           originalCharLength: 15,
         },
@@ -371,6 +376,11 @@ describe('sessionEntryToMessage', () => {
     expect(msg.toolCallId).toBe('tool-1');
     expect(msg.content).toEqual([{ type: 'text', text: 'matched 2 files' }]);
     expect(msg.isError).toBe(false);
+    expect(getToolResultInvocationAudit(msg)).toEqual({
+      arguments: { action: 'search', query: '*.ts' },
+      rationale: 'Find matching source files.',
+    });
+    expect(JSON.stringify(convertToLlm([msg]))).not.toContain('psfnInvocationAudit');
   });
 });
 

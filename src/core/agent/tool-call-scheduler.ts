@@ -31,6 +31,8 @@ const TOOL_CANCELLED_NOTICE =
   + 'needs interpreting. You can tell your person the operation did not complete.';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeMarkingPlan } from '../cogsec/intake/marking.js';
+import { redactSecretsInValue } from '../../shared/diagnostics/redaction.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 // ── Tool-result intake screening at the scheduler seam (hrmrq.54) ──
 //
@@ -89,27 +91,45 @@ export interface ToolResultInvocationAudit {
   thoughtSignature?: string;
 }
 
-const toolResultInvocationAudits = new WeakMap<ToolResultMessage, ToolResultInvocationAudit>();
+const TOOL_RESULT_INVOCATION_AUDIT_KEY = 'psfnInvocationAudit';
+
+export function redactSecretBearingToolArguments(
+  argumentsValue: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined;
+export function redactSecretBearingToolArguments(argumentsValue: unknown): unknown;
+export function redactSecretBearingToolArguments(argumentsValue: unknown): unknown {
+  return argumentsValue === undefined ? undefined : redactSecretsInValue(argumentsValue);
+}
+
+function sanitizeToolResultInvocationAudit(
+  audit: Record<string, unknown> | ToolResultInvocationAudit,
+): ToolResultInvocationAudit {
+  return {
+    ...(Object.hasOwn(audit, 'arguments')
+      ? { arguments: redactSecretBearingToolArguments(audit.arguments) }
+      : {}),
+    ...(typeof audit.rationale === 'string' && audit.rationale
+      ? { rationale: audit.rationale }
+      : {}),
+    ...(typeof audit.thoughtSignature === 'string' && audit.thoughtSignature
+      ? { thoughtSignature: audit.thoughtSignature }
+      : {}),
+  };
+}
 
 export function getToolResultInvocationAudit(
   message: ToolResultMessage,
 ): ToolResultInvocationAudit | undefined {
-  const record = toolResultInvocationAudits.get(message);
-  if (!record) return undefined;
-  return {
-    ...(Object.hasOwn(record, 'arguments') ? { arguments: record.arguments } : {}),
-    ...(record.rationale ? { rationale: record.rationale } : {}),
-    ...(record.thoughtSignature
-      ? { thoughtSignature: record.thoughtSignature }
-      : {}),
-  };
+  const audit = (message as unknown as Record<string, unknown>)[TOOL_RESULT_INVOCATION_AUDIT_KEY];
+  return isRecord(audit) ? sanitizeToolResultInvocationAudit(audit) : undefined;
 }
 
 function attachToolResultInvocationAudit<T extends ToolResultMessage>(
   message: T,
   invocationAudit: ToolResultInvocationAudit,
 ): T {
-  toolResultInvocationAudits.set(message, invocationAudit);
+  (message as unknown as Record<string, unknown>)[TOOL_RESULT_INVOCATION_AUDIT_KEY] =
+    sanitizeToolResultInvocationAudit(invocationAudit);
   return message;
 }
 

@@ -27,9 +27,11 @@ import {
   isToolCallOutcome,
 } from '../../../shared/contracts/tool-call-outcome.js';
 import { buildTurnRecordInternalStateSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
-import { getToolResultIntakeScreening } from '../tool-call-scheduler.js';
-import { redactSecretsInValue } from '../../../shared/diagnostics/redaction.js';
-import { getToolResultInvocationAudit } from '../tool-call-scheduler.js';
+import {
+  getToolResultIntakeScreening,
+  getToolResultInvocationAudit,
+  redactSecretBearingToolArguments,
+} from '../tool-call-scheduler.js';
 
 export type TurnSessionWriteManager = Pick<
   SessionManager,
@@ -739,13 +741,6 @@ function stripDerivableTurnSnapshotDuplicates(snapshot: TurnSnapshotRecord): voi
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {
   return Object.keys(value ?? {}).length > 0;
-}
-
-function redactSecretBearingToolArguments(
-  argumentsValue: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!argumentsValue) return undefined;
-  return redactSecretsInValue(argumentsValue) as Record<string, unknown>;
 }
 
 function collectToolProvenanceRefs(input: {

@@ -88,7 +88,12 @@ async function buildScheduledFallbackToolRecord(input: {
     { stream: { push: () => undefined } },
     { maxParallelToolCalls: 1 },
   );
-  return buildFallbackToolRecord(execution.toolResults[0]! as unknown as Record<string, unknown>);
+  const serializedToolResult = JSON.stringify(execution.toolResults[0]!);
+  const rematerializedToolResult = JSON.parse(serializedToolResult) as Record<string, unknown>;
+  return {
+    record: buildFallbackToolRecord(rematerializedToolResult),
+    serializedToolResult,
+  };
 }
 
 describe('turn-records tool persistence', () => {
@@ -406,7 +411,7 @@ describe('turn-records tool persistence', () => {
   });
 
   it('persists invocation arguments, rationale, and provenance from a result-only live transcript', async () => {
-    const record = await buildScheduledFallbackToolRecord({
+    const { record } = await buildScheduledFallbackToolRecord({
       toolName: 'world',
       arguments: { action: 'list', place_id: 'living_room' },
       rationale: 'Need to inspect the available world state.',
@@ -426,7 +431,7 @@ describe('turn-records tool persistence', () => {
   });
 
   it('redacts secret-bearing result-only invocation arguments before persistence', async () => {
-    const record = await buildScheduledFallbackToolRecord({
+    const { record, serializedToolResult } = await buildScheduledFallbackToolRecord({
       toolName: 'connector',
       arguments: {
         action: 'connect',
@@ -457,6 +462,9 @@ describe('turn-records tool persistence', () => {
     expect(JSON.stringify(record.toolCalls)).not.toContain('live-secret');
     expect(JSON.stringify(record.toolCalls)).not.toContain('oauth-secret-code');
     expect(JSON.stringify(record.toolCalls)).not.toContain('1234567890abcdef');
+    expect(serializedToolResult).not.toContain('live-secret');
+    expect(serializedToolResult).not.toContain('oauth-secret-code');
+    expect(serializedToolResult).not.toContain('1234567890abcdef');
   });
 
   it('preserves tool arguments, results, and rationale in the turn record', () => {

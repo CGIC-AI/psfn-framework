@@ -39,6 +39,7 @@ targets, so nothing hardcodes a namespace, service, port, or `/mnt` path:
 | `PSFN_API_BASE` | gateway API base | point at a `kubectl port-forward svc/<gateway> 10053` |
 | `PSFN_ADMIN_BASE` | Garden admin base | point at a second `port-forward svc/<garden> 10054` |
 | `TESTING_HARNESS_API_KEY` | dedicated gateway credential for the persistent `api:testing-harness` room | required for all conversational harness traffic |
+| `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY` | enrolled per-satellite bearer for the satellite CogSec case only | must match the physical endpoint's authorized API-key principal |
 | `API_KEY` | shared gateway credential used to start a fresh local runtime | local bootstrap/restart only; never use it for harness chat |
 | `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | Garden admin token | fleet-auth token also works |
 | `POSTGRES_DATABASE_URL` | round Postgres | reach the deployment DB via a port-forward; proofs run against it |
@@ -111,6 +112,10 @@ Those claims must match three synthetic entries in the round's canonical
 `satellites.json`: physical (`living_room`), deliberately placeless, and hub
 face telemetry (`kitchen`). The place IDs and labels can be overridden through
 the corresponding `PSFN_SHAKEDOWN_*_PLACE_*` values in the Artie env template.
+The satellite CogSec document case additionally requires
+`PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY`, set to the enrolled per-satellite
+bearer whose derived principal ID is authorized for that physical endpoint.
+It deliberately does not reuse or widen the persistent testing-harness bearer.
 The hub probe resets to the physical fixture, creates and revokes its own opaque enrollment,
 then restores the physical place so a rerun starts from the same precondition
 (`PSFN_SHAKEDOWN_HUB_IDENTITY_ID` may override the generated handle). The CogSec

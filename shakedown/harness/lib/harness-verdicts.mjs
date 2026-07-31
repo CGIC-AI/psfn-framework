@@ -33,6 +33,21 @@ const ACTION_SUCCESS_KEYS = new Set([
   'listed',
 ]);
 
+export function parseArchiveToolArguments(contentText) {
+  if (typeof contentText !== 'string' || contentText.length === 0) return null;
+  try {
+    const parsed = JSON.parse(contentText);
+    return parsed
+      && typeof parsed === 'object'
+      && !Array.isArray(parsed)
+      && typeof parsed.action === 'string'
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function parsedAssistantContains(parsedAssistant, predicate) {
   if (!parsedAssistant || typeof parsedAssistant !== 'object') {
     return false;
@@ -131,6 +146,20 @@ export function collectCaseSeenToolNames({
       .map((entry) => entry?.toolName),
   ])]
     .filter((toolName) => typeof toolName === 'string' && toolName.length > 0);
+}
+
+export function scopeArchiveToolMessagesToTurns(archiveToolMessages, turnIds) {
+  const caseTurnIds = new Set(
+    (Array.isArray(turnIds) ? turnIds : [])
+      .filter((turnId) => typeof turnId === 'string' && turnId.length > 0),
+  );
+  if (caseTurnIds.size === 0 || !Array.isArray(archiveToolMessages)) {
+    return [];
+  }
+  return archiveToolMessages.filter((entry) => (
+    typeof entry?.turnId === 'string'
+    && caseTurnIds.has(entry.turnId)
+  ));
 }
 
 export function evaluateToolNameVerdict({

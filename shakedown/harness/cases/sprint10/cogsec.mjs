@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import {
   buildChatHeaders,
+  deriveApiKeyPrincipalId,
   postChatCompletion,
 } from '../../lib/probe.mjs';
 import { validateCogSecDocumentProof } from '../../lib/persisted-proofs.mjs';
@@ -52,7 +53,7 @@ function sessionScreeningProof(turnRecord, envelopeId) {
   };
 }
 
-async function waitForBackgroundProof(turnRecord, services) {
+async function waitForBackgroundProof(turnRecord, services, signal) {
   const turnId = turnRecord?.turnId;
   if (typeof turnId !== 'string' || turnId.length === 0) return [];
   let jobs = [];
@@ -71,7 +72,7 @@ async function waitForBackgroundProof(turnRecord, services) {
     ) {
       break;
     }
-    await sleep(250);
+    await sleep(250, signal);
   }
   return jobs.map((job) => ({
     kind: job.kind,
@@ -84,6 +85,8 @@ async function collectCogSecProof({
   token,
   turnRecord,
   services,
+  ingress,
+  signal,
 }) {
   const quarantineFile = services.readJsonIfExists(
     join(services.companionDataDir, QUARANTINE_FILE),
@@ -95,7 +98,7 @@ async function collectCogSecProof({
     && entry.rawText.includes(token)
   ));
   const envelopeId = held?.envelope?.id ?? held?.id ?? null;
-  const backgroundJobs = await waitForBackgroundProof(turnRecord, services);
+  const backgroundJobs = await waitForBackgroundProof(turnRecord, services, signal);
   const memoryLeakCount = Number(await services.pgScalar(
     `select count(*)::int as count from l2_memories
      where text like $1 or text like $2;`,
@@ -162,8 +165,10 @@ async function collectCogSecProof({
       found: Boolean(held),
       status: held?.status ?? null,
       envelopeState: held?.envelope?.state ?? null,
+      sourceClass: held?.envelope?.sourceClass ?? null,
       rawSha256: held?.rawText ? sha256(held.rawText) : null,
     },
+    ingress,
     gardenQueue,
     resolution,
     session: envelopeId
@@ -187,6 +192,7 @@ function buildCogSecCase(ctx, services, env, {
   channelLabel,
   headers = {},
   requireSatellitePrefix,
+  satelliteApiKey = null,
 }) {
   const token = `s10-cogsec-${channelLabel}-${ctx.runToken}-${sha256(`${ctx.runToken}:${id}`).slice(0, 12)}`;
   const message = `Please inspect the attached synthetic ${channelLabel} security fixture.`;
@@ -218,15 +224,22 @@ function buildCogSecCase(ctx, services, env, {
       }
       if (requireSatellitePrefix) {
         requireSatelliteEnv(env, requireSatellitePrefix, id);
+        if (!satelliteApiKey || satelliteApiKey.length < 16) {
+          throw new Error(`${id} requires ${requireSatellitePrefix}_API_KEY`);
+        }
       }
       return { intakePolicyMode: policy.mode };
     },
-    execute: async ({ sessionId, apiUserId }) => {
+    execute: async ({ sessionId, apiUserId, signal }) => {
+      const dispatchApiKey = satelliteApiKey ?? services.apiKey;
+      const dispatchApiUserId = satelliteApiKey
+        ? deriveApiKeyPrincipalId(satelliteApiKey)
+        : apiUserId;
       const startedAtMs = Date.now();
       const response = await postChatCompletion({
         apiUrl: services.apiUrl,
         headers: buildChatHeaders({
-          apiKey: services.apiKey,
+          apiKey: dispatchApiKey,
           sessionId,
           privacy: 'private',
           extra: headers,
@@ -243,16 +256,19 @@ function buildCogSecCase(ctx, services, env, {
           },
         ],
         timeoutMs: 120_000,
+        signal,
       });
       const turnRecord = await services.waitForTurnRecord({
         sessionId,
-        apiUserId,
+        apiUserId: dispatchApiUserId,
         messageIncludes: message,
         minStartedAtMs: startedAtMs - 2_000,
         timeoutMs: 120_000,
+        signal,
       });
       return normalizeCustomOutcome({
         sessionId,
+        apiUserId: dispatchApiUserId,
         request: {
           privacy: 'private',
           messageIncludes: message,
@@ -263,11 +279,22 @@ function buildCogSecCase(ctx, services, env, {
         turnRecord,
       });
     },
-    after: async ({ outcome }) => ({
+    after: async ({ outcome, signal }) => ({
       cogsec: await collectCogSecProof({
         token,
         turnRecord: outcome?.turnRecord,
         services,
+        ingress: {
+          expectedSource: requireSatellitePrefix ? 'satellite' : 'api',
+          channelType: headers['X-PSFN-Channel-Type'] ?? 'api',
+          satelliteId: headers['X-PSFN-Satellite-ID'] ?? null,
+          endpointId: headers['X-PSFN-Satellite-Endpoint-ID'] ?? null,
+          locationSatelliteId: outcome?.turnRecord?.location?.satelliteId ?? null,
+          apiUserId: outcome?.apiUserId ?? null,
+          turnId: outcome?.turnRecord?.turnId ?? null,
+          responseStatus: outcome?.response?.status ?? null,
+        },
+        signal,
       }),
     }),
     validatePersistedProof: validateCogSecDocumentProof,
@@ -276,6 +303,7 @@ function buildCogSecCase(ctx, services, env, {
 
 export function buildCogSecCases(ctx, services, env) {
   const physicalPrefix = 'PSFN_SHAKEDOWN_PHYSICAL_SATELLITE';
+  const satelliteApiKey = env?.[`${physicalPrefix}_API_KEY`]?.trim() ?? '';
   return [
     buildCogSecCase(ctx, services, env, {
       id: 's10_cogsec_document_quarantine',
@@ -286,8 +314,12 @@ export function buildCogSecCases(ctx, services, env) {
       id: 's10_cogsec_satellite_document_quarantine',
       sessionLabel: 'satellite-document',
       channelLabel: 'satellite',
-      headers: satelliteHeaders(env, physicalPrefix),
+      headers: {
+        ...satelliteHeaders(env, physicalPrefix),
+        'X-PSFN-Channel-Type': 'satellite.endpoint',
+      },
       requireSatellitePrefix: physicalPrefix,
+      satelliteApiKey,
     }),
   ];
 }

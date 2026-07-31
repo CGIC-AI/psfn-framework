@@ -18,7 +18,25 @@ import { createHash } from 'node:crypto';
 export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 
-export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  if (!signal) {
+    setTimeout(resolve, ms);
+    return;
+  }
+  if (signal.aborted) {
+    reject(signal.reason instanceof Error ? signal.reason : new Error('operation aborted'));
+    return;
+  }
+  const timer = setTimeout(() => {
+    signal.removeEventListener('abort', onAbort);
+    resolve();
+  }, ms);
+  function onAbort() {
+    clearTimeout(timer);
+    reject(signal.reason instanceof Error ? signal.reason : new Error('operation aborted'));
+  }
+  signal.addEventListener('abort', onAbort, { once: true });
+});
 
 /** Build the OpenAI-compatible chat-completions URL from a gateway base. */
 export function chatCompletionsUrl(base) {
@@ -165,6 +183,7 @@ export async function waitForMatchingTurnRecord(
   timeoutMs,
   apiUserId,
   pollIntervalMs = 1500,
+  signal,
 ) {
   return waitForCaseTurnRecord(turnRecordsDir, {
     sessionId,
@@ -174,6 +193,7 @@ export async function waitForMatchingTurnRecord(
     apiUserId,
     pollIntervalMs,
     requireCompletedAssistant: true,
+    signal,
   });
 }
 
@@ -186,6 +206,7 @@ export async function waitForCaseTurnRecord(turnRecordsDir, {
   timeoutMs,
   pollIntervalMs = 1500,
   requireCompletedAssistant = false,
+  signal,
 }) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
@@ -211,7 +232,7 @@ export async function waitForCaseTurnRecord(turnRecordsDir, {
     ) {
       return latest;
     }
-    await sleep(pollIntervalMs);
+    await sleep(pollIntervalMs, signal);
   }
   return latest;
 }
@@ -228,6 +249,7 @@ export async function waitForTurnSettlement(
   timeoutMs,
   apiUserId,
   pollIntervalMs = 1500,
+  signal,
 ) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
@@ -236,7 +258,7 @@ export async function waitForTurnSettlement(
     if (latest && !isActiveTurnStatus(latest.status)) {
       return latest;
     }
-    await sleep(pollIntervalMs);
+    await sleep(pollIntervalMs, signal);
   }
   return latest;
 }
@@ -303,9 +325,16 @@ export async function postChatCompletion({
   model = 'psfn-live',
   responseStyle = 'concise',
   timeoutMs = 120000,
+  signal,
 }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else {
+    signal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
   const body = {
     model,
     stream: false,
@@ -343,5 +372,6 @@ export async function postChatCompletion({
     };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }

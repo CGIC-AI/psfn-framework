@@ -183,6 +183,7 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
       found: true,
       status: 'held',
       envelopeState: 'quarantined',
+      sourceClass: 'document',
       rawSha256: 'a'.repeat(64),
     },
     session: {
@@ -228,6 +229,40 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
     }).join('\n'),
     /appraisal/u,
   );
+  assert.deepEqual(validateCogSecDocumentProof({
+    sideChecks: {
+      cogsec: {
+        ...proof,
+        ingress: {
+          expectedSource: 'satellite',
+          channelType: 'satellite.endpoint',
+          satelliteId: 'satellite-fixture',
+          endpointId: 'endpoint-fixture',
+          locationSatelliteId: 'satellite-fixture',
+          apiUserId: 'api-key-0123456789abcdef01234567',
+          turnId: 'turn-satellite-1',
+          responseStatus: 200,
+        },
+      },
+    },
+  }), []);
+  assert.match(validateCogSecDocumentProof({
+    sideChecks: {
+      cogsec: {
+        ...proof,
+        ingress: {
+          expectedSource: 'satellite',
+          channelType: 'satellite.endpoint',
+          satelliteId: 'satellite-fixture',
+          endpointId: 'endpoint-fixture',
+          locationSatelliteId: 'satellite-fixture',
+          apiUserId: 'testing-harness',
+          turnId: null,
+          responseStatus: 403,
+        },
+      },
+    },
+  }).join('\n'), /real non-403 satellite-principal turn/u);
   assert.match(
     validateCogSecDocumentProof({
       sideChecks: {
@@ -352,8 +387,20 @@ test('world-read persisted proof accepts argument-bearing live tool records', ()
   assert.deepEqual(validateWorldReadProof({
     turnRecord: turnRecord({
       toolCalls: [
-        { toolName: 'world', isError: false, arguments: { action: 'list' } },
-        { toolName: 'world', isError: false, arguments: { action: 'perceive' } },
+        {
+          toolName: 'world',
+          toolCallId: 'world-list',
+          outcome: 'success',
+          isError: false,
+          arguments: { action: 'list' },
+        },
+        {
+          toolName: 'world',
+          toolCallId: 'world-perceive',
+          outcome: 'success',
+          isError: false,
+          arguments: { action: 'perceive' },
+        },
       ],
     }),
     sideChecks: {
@@ -363,4 +410,111 @@ test('world-read persisted proof accepts argument-bearing live tool records', ()
       },
     },
   }), []);
+});
+
+test('world-read proof uses current persisted identity/outcome evidence before .57 arguments land', () => {
+  assert.deepEqual(validateWorldReadProof({
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', toolCallId: 'world-list', outcome: 'success', isError: false },
+        { toolName: 'world', toolCallId: 'world-perceive', outcome: 'success', isError: false },
+      ],
+    }),
+    archiveToolMessages: [],
+    sideChecks: {
+      world: {
+        telemetry: { status: 202, eventId: 'event-world-1' },
+        gardenAuditFound: true,
+      },
+    },
+  }), []);
+});
+
+test('world-read proof tightens to archive or TurnRecord arguments whenever available', () => {
+  const base = {
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', toolCallId: 'world-list', outcome: 'success', isError: false },
+        { toolName: 'world', toolCallId: 'world-perceive', outcome: 'success', isError: false },
+      ],
+    }),
+    sideChecks: {
+      world: {
+        telemetry: { status: 202, eventId: 'event-world-1' },
+        gardenAuditFound: true,
+      },
+    },
+  };
+  assert.deepEqual(validateWorldReadProof({
+    ...base,
+    archiveToolMessages: [
+      { toolCallId: 'world-list', toolName: 'world', arguments: { action: 'list' } },
+      { toolCallId: 'world-perceive', toolName: 'world', arguments: { action: 'perceive' } },
+    ],
+  }), []);
+
+  assert.match(validateWorldReadProof({
+    ...base,
+    archiveToolMessages: [
+      { toolCallId: 'world-list', toolName: 'world', arguments: { action: 'control' } },
+      { toolCallId: 'world-perceive', toolName: 'world', arguments: { action: 'perceive' } },
+    ],
+  }).join('\n'), /action=list/u);
+
+  assert.match(validateWorldReadProof({
+    ...base,
+    turnRecord: turnRecord({
+      toolCalls: [
+        {
+          toolName: 'world',
+          toolCallId: 'world-list',
+          outcome: 'success',
+          isError: false,
+          arguments: { action: 'control' },
+        },
+        {
+          toolName: 'world',
+          toolCallId: 'world-perceive',
+          outcome: 'success',
+          isError: false,
+          arguments: { action: 'perceive' },
+        },
+      ],
+    }),
+  }).join('\n'), /action=list/u);
+});
+
+test('world-read proof rejects missing, duplicate, or failed persisted calls', () => {
+  const sideChecks = {
+    world: {
+      telemetry: { status: 202, eventId: 'event-world-1' },
+      gardenAuditFound: true,
+    },
+  };
+  assert.match(validateWorldReadProof({
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', toolCallId: 'world-one', outcome: 'success', isError: false },
+      ],
+    }),
+    sideChecks,
+  }).join('\n'), /two distinct successful world calls/u);
+  assert.match(validateWorldReadProof({
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', toolCallId: 'world-one', outcome: 'success', isError: false },
+        { toolName: 'world', toolCallId: 'world-two', outcome: 'execution_failure', isError: true },
+      ],
+    }),
+    sideChecks,
+  }).join('\n'), /two distinct successful world calls/u);
+  assert.match(validateWorldReadProof({
+    turnRecord: turnRecord({
+      toolCalls: [
+        { toolName: 'world', toolCallId: 'world-one', outcome: 'success', isError: false },
+        { toolName: 'world', toolCallId: 'world-two', isError: false },
+      ],
+    }),
+    sideChecks,
+  }).join('\n'), /two distinct successful world calls/u);
 });

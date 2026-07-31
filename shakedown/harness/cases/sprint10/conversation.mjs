@@ -22,6 +22,7 @@ async function postAndWait({
   sessionId,
   apiUserId,
   message,
+  signal,
 }) {
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
@@ -33,6 +34,7 @@ async function postAndWait({
     }),
     message,
     timeoutMs: 120_000,
+    signal,
   });
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
@@ -40,6 +42,7 @@ async function postAndWait({
     message,
     minStartedAtMs: startedAtMs - 2_000,
     timeoutMs: 120_000,
+    signal,
   });
   return { response, turnRecord };
 }
@@ -57,13 +60,14 @@ export function buildConversationCases(ctx, services) {
         'TurnRecord PromptPlan history, raw response snapshot, and persisted assistant message',
         'history is rendered with stamps, the model emits one, and the accepted outbound text strips it',
       ),
-      execute: async ({ sessionId, apiUserId }) => {
+      execute: async ({ sessionId, apiUserId, signal }) => {
         const seedMessage = 'Remember that this is the first turn of the temporal rendering probe.';
         const seed = await postAndWait({
           services,
           sessionId,
           apiUserId,
           message: seedMessage,
+          signal,
         });
         if (seed.turnRecord?.status !== 'completed') {
           throw new Error('temporal history seed turn did not complete');
@@ -73,6 +77,7 @@ export function buildConversationCases(ctx, services) {
           sessionId,
           apiUserId,
           message: TEMPORAL_MESSAGE,
+          signal,
         });
         return normalizeCustomOutcome({
           sessionId,
@@ -98,7 +103,7 @@ export function buildConversationCases(ctx, services) {
         'SSE event chronology plus exact TurnRecord observability stages',
         'first non-empty content delta precedes terminal and persists finite stream TTFT',
       ),
-      execute: async ({ sessionId, apiUserId }) => {
+      execute: async ({ sessionId, apiUserId, signal }) => {
         const result = await probeSseChatCompletion({
           apiUrl: services.apiUrl,
           headers: buildChatHeaders({
@@ -107,6 +112,7 @@ export function buildConversationCases(ctx, services) {
             privacy: 'private',
           }),
           message: SSE_MESSAGE,
+          signal,
           waitForTurnRecord: async ({ message, minStartedAtMs, timeoutMs }) => (
             services.waitForTurnRecord({
               sessionId,
@@ -114,6 +120,7 @@ export function buildConversationCases(ctx, services) {
               message,
               minStartedAtMs,
               timeoutMs,
+              signal,
             })
           ),
         });

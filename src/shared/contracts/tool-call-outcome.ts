@@ -13,6 +13,15 @@ export type ToolCallOutcome = typeof TOOL_CALL_OUTCOMES[number];
 
 export type ToolCallOutcomeCounts = Record<ToolCallOutcome, number>;
 
+export interface ToolResultOutcomeProjection {
+  role: 'toolResult';
+  toolName: string;
+  outcome?: unknown;
+  details?: unknown;
+  isError?: unknown;
+  resultText?: unknown;
+}
+
 export const DUPLICATE_TOOL_CALL_SKIP_RESULT =
   'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.';
 
@@ -91,6 +100,25 @@ export function resolveToolCallOutcome(input: {
     details: input.details,
     isError: input.isError,
   });
+}
+
+export function isToolResultOutcomeProjection(
+  value: unknown,
+): value is ToolResultOutcomeProjection {
+  return isRecord(value)
+    && value.role === 'toolResult'
+    && typeof value.toolName === 'string';
+}
+
+export function hasSuccessfulToolCallOutcome(
+  values: readonly unknown[],
+  accepts: (result: ToolResultOutcomeProjection) => boolean = () => true,
+): boolean {
+  return values.some((value) => (
+    isToolResultOutcomeProjection(value)
+    && accepts(value)
+    && resolveToolCallOutcome(value) === 'success'
+  ));
 }
 
 export function createEmptyToolCallOutcomeCounts(): ToolCallOutcomeCounts {

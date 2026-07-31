@@ -785,6 +785,40 @@ describe('registerLLMMethods', () => {
     });
   });
 
+  it('preserves a non-vision vision-lane failure across JSON-RPC before provider dispatch', async () => {
+    const { VisionPurposeResolvedNonVisionModelError } = await import(
+      '../../../primitives/llm/routing.js'
+    );
+    const failingComplete = vi.fn(async () => {
+      throw new VisionPurposeResolvedNonVisionModelError({
+        provider: 'openrouter',
+        model: 'vendor/text-only',
+        slotKey: 'text-only',
+      });
+    });
+    const harness = createHarness({
+      llmProvider: { complete: failingComplete } as unknown as GatewayMethodRuntime['llmProvider'],
+    });
+
+    await expect(harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      slotKey: 'text-only',
+      messages: [{ role: 'user', content: 'describe the image' }],
+      systemPrompt: 'system',
+      purpose: 'vision',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.VISION_PURPOSE_RESOLVED_NON_VISION_MODEL,
+      message: expect.stringContaining('vision_purpose_resolved_non_vision_model'),
+      data: {
+        code: 'vision_purpose_resolved_non_vision_model',
+        provider: 'openrouter',
+        model: 'vendor/text-only',
+        slotKey: 'text-only',
+      },
+    });
+  });
+
   it('routes model discovery through the privileged discovery backend', async () => {
     const harness = createHarness();
 

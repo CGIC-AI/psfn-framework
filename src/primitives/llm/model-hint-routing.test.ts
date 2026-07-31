@@ -16,6 +16,7 @@ interface RegistryModelInput {
   model: string;
   maxOutputTokens: number;
   contextWindow: number;
+  supportsVision?: boolean;
   purposes: Array<{ purpose: CanonicalModelPurpose; primary: boolean }>;
 }
 
@@ -35,6 +36,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
       capabilities: {
         maxOutputTokens: model.maxOutputTokens,
         contextWindow: model.contextWindow,
+        ...(model.supportsVision !== undefined ? { supportsVision: model.supportsVision } : {}),
       },
       tuning: {
         maxOutputTokens: model.maxOutputTokens,
@@ -58,9 +60,18 @@ function makeBaseRegistry(): CanonicalModelRegistry {
         { purpose: 'summary', primary: true },
         { purpose: 'reasoning', primary: true },
         { purpose: 'longContext', primary: true },
-        { purpose: 'vision', primary: true },
         { purpose: 'moa', primary: true },
       ],
+    },
+    {
+      id: 'vision-primary',
+      rank: 24,
+      provider: 'openrouter',
+      model: 'vision/primary',
+      maxOutputTokens: 4096,
+      contextWindow: 128_000,
+      supportsVision: true,
+      purposes: [{ purpose: 'vision', primary: true }],
     },
     {
       id: 'vision-flash',
@@ -69,6 +80,7 @@ function makeBaseRegistry(): CanonicalModelRegistry {
       model: 'vision/flash',
       maxOutputTokens: 4096,
       contextWindow: 96_000,
+      supportsVision: true,
       purposes: [{ purpose: 'vision', primary: false }],
     },
     {
@@ -140,7 +152,7 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
   it('is byte-identical to purpose routing when no hint and no selection are set', () => {
     const config = makeConfig();
     const withoutHint = resolveCandidates(config, 'vision', undefined);
-    expect(withoutHint[0]).toMatchObject({ model: 'chat/model', provider: 'openrouter' });
+    expect(withoutHint[0]).toMatchObject({ model: 'vision/primary', provider: 'openrouter' });
   });
 
   it('leads the lane with the config-level selection and keeps the fallback chain', () => {
@@ -148,7 +160,7 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     const candidates = resolveCandidates(config, 'vision', undefined);
     expect(candidates[0]).toMatchObject({ model: 'vision/flash', provider: 'openrouter' });
     // Registry-primary vision model remains as fallback — selection is not a pin.
-    expect(candidates.some((candidate) => candidate.model === 'chat/model')).toBe(true);
+    expect(candidates.some((candidate) => candidate.model === 'vision/primary')).toBe(true);
   });
 
   it('resolves a hint-transported slot key (agent→gateway wire) to the registry model', () => {
@@ -157,13 +169,28 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(candidates[0]).toMatchObject({ model: 'vision/flash', provider: 'openrouter' });
   });
 
+  it('rejects a selected text-only slot for the vision lane before provider dispatch', () => {
+    const config = makeConfig({ modelPurposeSelection: { vision: 'chat-primary' } });
+
+    expect(() => resolveCandidates(config, 'vision', undefined))
+      .toThrow(/vision_purpose_resolved_non_vision_model.*chat\/model/s);
+  });
+
+  it('rejects an explicit text-only model hint for the vision lane', () => {
+    const config = makeConfig();
+
+    expect(() => resolveCandidates(config, 'vision', {
+      model: 'openrouter:chat/model',
+    })).toThrow(/vision_purpose_resolved_non_vision_model.*chat\/model/s);
+  });
+
   it('lets two companions diverge on the same gateway registry', () => {
     const config = makeConfig();
-    // Companion A selected vision-flash; companion B has no selection.
+    // Companion A selected vision-flash; companion B uses the registry primary.
     const companionA = resolveCandidates(config, 'vision', { slotKey: 'vision-flash' });
     const companionB = resolveCandidates(config, 'vision', undefined);
     expect(companionA[0]?.model).toBe('vision/flash');
-    expect(companionB[0]?.model).toBe('chat/model');
+    expect(companionB[0]?.model).toBe('vision/primary');
     expect(companionA[0]?.model).not.toBe(companionB[0]?.model);
   });
 
@@ -172,7 +199,7 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(() => resolveCandidates(config, 'chat', { slotKey: 'no-such-slot' }))
       .toThrow(UnknownModelSelectionSlotError);
     expect(() => resolveCandidates(config, 'chat', { slotKey: 'no-such-slot' }))
-      .toThrow(/no-such-slot.*chat-primary, vision-flash, background-primary/s);
+      .toThrow(/no-such-slot.*chat-primary, vision-primary, vision-flash, background-primary/s);
   });
 
   it('rejects config-level selections that reference disabled entries', () => {
@@ -218,7 +245,7 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(unslotted).toEqual(baseline);
     expect(unslotted[0]).toMatchObject({ model: 'chat/model' });
     expect(resolveCandidates(multiConfig, 'vision', undefined)[0]).toMatchObject({
-      model: 'chat/model',
+      model: 'vision/primary',
     });
   });
 

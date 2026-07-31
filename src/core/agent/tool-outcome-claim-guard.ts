@@ -1,5 +1,8 @@
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
-import { resolveToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
+import {
+  isToolResultOutcomeProjection,
+  resolveToolCallOutcome,
+} from '../../shared/contracts/tool-call-outcome.js';
 
 const EXECUTION_SUCCESS_CLAIM_PATTERNS = [
   /(?:^|[.!?]\s+)\s*(?:done|completed|finished|success)\s*[.!?]?(?:\s|$)/iu,
@@ -24,13 +27,8 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
 }): boolean {
   let observedNonExecutionOutcome = false;
   for (const message of input.turnMessages) {
-    if ((message as { role?: unknown }).role !== 'toolResult') continue;
-    const result = message as unknown as {
-      outcome?: unknown;
-      details?: unknown;
-      isError?: unknown;
-    };
-    const outcome = resolveToolCallOutcome(result);
+    if (!isToolResultOutcomeProjection(message)) continue;
+    const outcome = resolveToolCallOutcome(message);
     if (outcome === 'success') return false;
     if (
       outcome === 'validation_rejection'

@@ -1294,4 +1294,10 @@ export const GatewayErrors = {
    * console.warn no-op while the provider keeps burning tokens.
    */
   INVALID_LLM_CANCELLATION: -32021,
+  /**
+   * The vision lane resolved to a catalog model without explicit image-input
+   * capability. Rejected before provider I/O so image analysis never degrades
+   * into an ungrounded text-only completion.
+   */
+  VISION_PURPOSE_RESOLVED_NON_VISION_MODEL: -32022,
 } as const;

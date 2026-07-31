@@ -12,6 +12,7 @@ interface RegistryModelInput {
   source?: ModelRegistryEntry['identity']['source'];
   maxOutputTokens: number;
   contextWindow: number;
+  supportsVision?: boolean;
   purposes: Array<{ purpose: CanonicalModelPurpose; primary: boolean }>;
   cost?: { inputPer1MUsd?: number; outputPer1MUsd?: number };
 }
@@ -32,6 +33,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
       capabilities: {
         maxOutputTokens: model.maxOutputTokens,
         contextWindow: model.contextWindow,
+        ...(model.supportsVision !== undefined ? { supportsVision: model.supportsVision } : {}),
       },
       tuning: {
         maxOutputTokens: model.maxOutputTokens,
@@ -56,9 +58,19 @@ function makeBaseRegistry(): CanonicalModelRegistry {
         { purpose: 'summary', primary: true },
         { purpose: 'reasoning', primary: true },
         { purpose: 'longContext', primary: true },
-        { purpose: 'vision', primary: true },
         { purpose: 'moa', primary: true },
       ],
+      cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 },
+    },
+    {
+      id: 'vision-primary',
+      rank: 25,
+      provider: 'openrouter',
+      model: 'vision/model',
+      maxOutputTokens: 4096,
+      contextWindow: 1_000_000,
+      supportsVision: true,
+      purposes: [{ purpose: 'vision', primary: true }],
       cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 },
     },
     {
@@ -349,6 +361,83 @@ describe('resolveRoutingCandidates(background)', () => {
       model: 'z-ai/glm-5.2',
       requestApiKeyEnv: 'CUSTOM_OPENROUTER_KEY',
     }));
+  });
+});
+
+describe('resolveRoutingCandidates(vision)', () => {
+  it('rejects a text-only primary instead of silently falling back to a vision-capable secondary', () => {
+    expect(() => resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'text-primary',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'text/primary',
+          maxOutputTokens: 4096,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'vision', primary: true }],
+        },
+        {
+          id: 'vision-secondary',
+          rank: 2,
+          provider: 'openrouter',
+          model: 'vision/secondary',
+          maxOutputTokens: 4096,
+          contextWindow: 1_000_000,
+          supportsVision: true,
+          purposes: [{ purpose: 'vision', primary: false }],
+        },
+      ]),
+    }), 'vision')).toThrow(/vision_purpose_resolved_non_vision_model.*text\/primary/s);
+  });
+
+  it('keeps only explicitly vision-capable fallback candidates', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'vision-primary',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'vision/primary',
+          maxOutputTokens: 4096,
+          contextWindow: 1_000_000,
+          supportsVision: true,
+          purposes: [{ purpose: 'vision', primary: true }],
+        },
+        {
+          id: 'text-secondary',
+          rank: 2,
+          provider: 'openrouter',
+          model: 'text/secondary',
+          maxOutputTokens: 4096,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'vision', primary: false }],
+        },
+      ]),
+    }), 'vision');
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        model: 'vision/primary',
+        supportsVision: true,
+      }),
+    ]);
+  });
+
+  it('fails by name before dispatch when every resolved vision model is text-only', () => {
+    expect(() => resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'text-primary',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'text/primary',
+          maxOutputTokens: 4096,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'vision', primary: true }],
+        },
+      ]),
+    }), 'vision')).toThrow(/vision_purpose_resolved_non_vision_model.*text\/primary/s);
   });
 });
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   healMissingImageAttachmentClaim,
   rejectsMissingImageAttachmentClaim,
+  rejectsUnfulfilledImageEditRequest,
+  UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION,
 } from './attachment-claim-guard.js';
 
 describe('rejectsMissingImageAttachmentClaim', () => {
@@ -127,5 +129,82 @@ describe('healMissingImageAttachmentClaim', () => {
     const responseText = '  I could not attach an image.\nThe written concept is still ready.  ';
 
     expect(healMissingImageAttachmentClaim(responseText)).toBe(responseText);
+  });
+});
+
+describe('rejectsUnfulfilledImageEditRequest', () => {
+  it('rejects a well-formed edit request when no image tool call was recorded', () => {
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: 'Please edit this photo to make the lighting warmer.',
+      requestHasImageInput: false,
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('allows the claim when generate_image actually succeeded', () => {
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: 'Please edit this photo to make the lighting warmer.',
+      requestHasImageInput: false,
+      turnMessages: [{
+        role: 'toolResult',
+        toolCallId: 'edit-call-1',
+        toolName: 'generate_image',
+        content: [{ type: 'text', text: 'image_generated' }],
+        details: {
+          mediaResult: {
+            mode: 'edit',
+          },
+        },
+        isError: false,
+        outcome: 'success',
+        timestamp: 1,
+      }],
+    })).toBe(false);
+  });
+
+  it('does not treat a successful analyze call as proof that the edit executed', () => {
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: 'Please edit this photo to make the lighting warmer.',
+      requestHasImageInput: false,
+      turnMessages: [{
+        role: 'toolResult',
+        toolCallId: 'analyze-call-1',
+        toolName: 'generate_image',
+        content: [{ type: 'text', text: 'Vision review.' }],
+        details: {
+          visionReview: {
+            summary: 'The image is cool-toned.',
+          },
+        },
+        isError: false,
+        outcome: 'success',
+        timestamp: 1,
+      }],
+    })).toBe(true);
+  });
+
+  it.each([
+    'Can you tell me how to edit this photo?',
+    "I don't want you to edit this photo.",
+    'The photo edit is ready; what changes do you want?',
+  ])('does not rewrite non-execution conversation: %s', (requestText) => {
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText,
+      requestHasImageInput: false,
+      turnMessages: [],
+    })).toBe(false);
+  });
+
+  it('recognizes an attached image as the edit subject when the request omits the noun', () => {
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: 'Could you crop this tighter?',
+      requestHasImageInput: true,
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('uses a named, user-visible correction', () => {
+    expect(UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION)
+      .toContain('image_edit_execution_unconfirmed');
   });
 });

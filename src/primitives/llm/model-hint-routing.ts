@@ -18,6 +18,7 @@ import {
   resolveRoutingCandidates,
   type RoutingCandidate,
   type RoutingPurpose,
+  VisionPurposeResolvedNonVisionModelError,
 } from './routing.js';
 
 const log = createComponentLogger('LLMClient');
@@ -281,9 +282,12 @@ function resolveModelHintCandidate(
   const topK = modelHint.topK ?? baseCandidate.topK;
   const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
   const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
+  const hasExplicitIdentityHint = hintedModel !== undefined || modelHint.provider !== undefined;
   const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
     ? registryEntry.capabilities.supportsVision
-    : baseCandidate.supportsVision;
+    : hasExplicitIdentityHint
+      ? undefined
+      : baseCandidate.supportsVision;
   const supportsReasoning = typeof registryEntry?.capabilities?.supportsReasoning === 'boolean'
     ? registryEntry.capabilities.supportsReasoning
     : baseCandidate.supportsReasoning;
@@ -458,6 +462,9 @@ export function resolveCandidates(
     exactSelection,
   );
   if (!hintedCandidate) return candidates;
+  if (purpose === 'vision' && hintedCandidate.supportsVision !== true) {
+    throw new VisionPurposeResolvedNonVisionModelError(hintedCandidate);
+  }
 
   log.debug('Applying completion model hint', {
     purpose,

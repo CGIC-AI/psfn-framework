@@ -1247,6 +1247,46 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
       }),
     );
   });
+
+  it('replaces a zero-call image-edit success narration with a named failure', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => "worked:true, 'image edit generated via fal (openai/gpt-image-2/edit), pending attachment delivery'",
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-zero-call-edit', {
+      content: 'Please edit this photo to make the lighting warmer.',
+    }));
+
+    expect(response.content).toContain('image_edit_execution_unconfirmed');
+    expect(response.content).toContain('no successful generate_image action="edit" result');
+    expect(response.attachments).toBeUndefined();
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(response.content);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_edit_request.unfulfilled',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-zero-call-edit',
+      }),
+    );
+  });
 });
 
 describe('handleMessageForTurn generated media delivery', () => {

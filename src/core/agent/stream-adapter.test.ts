@@ -1252,7 +1252,8 @@ describe('resolveModel', () => {
       },
     });
 
-    expect(() => resolveModel(config, 'vision')).toThrow(/not configured for vision input/);
+    expect(() => resolveModel(config, 'vision'))
+      .toThrow(/vision_purpose_resolved_non_vision_model.*z-ai\/glm-5/s);
   });
 
   it('fails closed when no eligible model exists for a requested purpose', () => {

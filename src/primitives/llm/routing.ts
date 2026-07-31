@@ -91,6 +91,25 @@ export interface RoutingCandidate {
   importRouteMode?: ImportProcessingRouteMode;
 }
 
+export class VisionPurposeResolvedNonVisionModelError extends Error {
+  readonly code = 'vision_purpose_resolved_non_vision_model';
+  readonly provider: string;
+  readonly model: string;
+  readonly slotKey?: string;
+
+  constructor(candidate: Pick<RoutingCandidate, 'provider' | 'model' | 'slotKey'>) {
+    super(
+      `vision_purpose_resolved_non_vision_model: vision purpose resolved to `
+      + `"${candidate.provider}/${candidate.model}" without supportsVision=true catalog metadata; `
+      + 'provider dispatch was blocked. Configure a genuinely vision-capable models.json slot.',
+    );
+    this.name = 'VisionPurposeResolvedNonVisionModelError';
+    this.provider = candidate.provider;
+    this.model = candidate.model;
+    if (candidate.slotKey) this.slotKey = candidate.slotKey;
+  }
+}
+
 export interface ImportPolicyAuditRecord {
   purpose: RoutingPurpose;
   strictPolicyEnabled: boolean;
@@ -585,7 +604,16 @@ function selectCandidatesForPurpose(
 
   const scoredCandidates = scoreCandidates(purpose, rawCandidates);
   scoredCandidates.sort(compareScoredCandidates);
-  return scoredCandidates.map(entry => entry.candidate);
+  if (purpose !== 'vision') {
+    return scoredCandidates.map(entry => entry.candidate);
+  }
+
+  if (scoredCandidates[0] && scoredCandidates[0].candidate.supportsVision !== true) {
+    throw new VisionPurposeResolvedNonVisionModelError(scoredCandidates[0].candidate);
+  }
+  const visionCandidates = scoredCandidates
+    .filter(entry => entry.candidate.supportsVision === true);
+  return visionCandidates.map(entry => entry.candidate);
 }
 
 function buildStandardCandidates(

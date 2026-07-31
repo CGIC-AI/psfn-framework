@@ -379,6 +379,13 @@ export interface ModelUsageAttributionCoverage {
   byDimension: Record<ModelUsageGroupDimension, ModelUsageDimensionCoverage>;
 }
 
+export interface ModelUsageAttributionAnomalies {
+  unknownChargeLaneCalls: number;
+  unknownChargeLaneRatePercent: number;
+  unknownSessionCalls: number;
+  unknownSessionRatePercent: number;
+}
+
 export interface ModelUsagePeriodComparison {
   sinceMs: number;
   untilMs: number;
@@ -401,6 +408,8 @@ export interface ModelUsageData {
   byCallKind: ModelUsageBreakdown[];
   groupedBy: Partial<Record<ModelUsageGroupDimension, ModelUsageBreakdown[]>>;
   attributionCoverage: ModelUsageAttributionCoverage;
+  /** Loud durable counters for attribution gaps that must not disappear into `unknown`. */
+  attributionAnomalies: ModelUsageAttributionAnomalies;
   recentEvents: ModelUsageEvent[];
   expensiveEvents: ModelUsageEvent[];
 }

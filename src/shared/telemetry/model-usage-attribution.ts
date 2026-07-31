@@ -60,8 +60,11 @@ type ModelUsageChargeAttributionKey =
 
 /**
  * Native baseline work may retain provider-cost telemetry, but Law 38 forbids
- * attaching it to the charge roll. Strip both the charge classification and
- * its lineage before crossing a native usage boundary.
+ * attaching it to an existing charge roll. Strip the producer's charge
+ * classification and lineage before crossing a native usage boundary. The
+ * model-usage recorder may still derive a reporting lane from canonical
+ * call/session attribution; that lane does not recreate a charge event,
+ * surface, or lineage.
  */
 export function stripChargeAttribution<T extends object>(
   input: T,
@@ -129,6 +132,45 @@ export type ModelUsageGroupDimension = typeof MODEL_USAGE_GROUP_DIMENSIONS[numbe
 export type ModelUsageChannelType = typeof MODEL_USAGE_CHANNEL_TYPES[number];
 export type ModelUsageChargeLane = typeof MODEL_USAGE_CHARGE_LANES[number];
 export type ModelUsageChargeSurface = typeof MODEL_USAGE_CHARGE_SURFACES[number];
+
+export interface ModelUsageChargeLaneResolutionInput {
+  explicitChargeLane?: ChargePolicyRuntimeLane;
+  callType: ObservabilityCallType;
+  runtimeLaneClass?: RuntimeLaneClass;
+  sessionId?: string;
+  channelId?: string;
+}
+
+/**
+ * Resolve the ledger's charge lane from canonical call attribution.
+ *
+ * Explicit charge context always wins. Otherwise foreground work is
+ * interactive, session-attributed companion cognition is background (including
+ * extraction/embedding work whose scheduler runtime class is maintenance), and
+ * scheduled session work is maintenance. Genuinely session-less system work
+ * remains unresolved so the durable ledger records the loud `unknown` anomaly.
+ */
+export function resolveModelUsageChargeLane(
+  input: ModelUsageChargeLaneResolutionInput,
+): ChargePolicyRuntimeLane | undefined {
+  if (input.explicitChargeLane) return input.explicitChargeLane;
+  if (input.callType === 'chat') {
+    return 'interactive';
+  }
+  if (input.callType === 'scheduled') {
+    return input.sessionId?.trim() ? 'maintenance' : undefined;
+  }
+  const hasSessionAttribution = Boolean(input.sessionId?.trim() || input.channelId?.trim());
+  if (!hasSessionAttribution) return undefined;
+  if (
+    input.callType === 'tool'
+    || input.runtimeLaneClass === RUNTIME_LANE_CLASSES.foregroundChat
+  ) {
+    return 'interactive';
+  }
+
+  return 'background';
+}
 
 export interface ModelUsageAttributionInput {
   companionId?: string;
@@ -291,9 +333,38 @@ function deriveWorkerId(channelId: string, prefix: 'shard:' | 'subagent:'): stri
 
 export function normalizeModelUsageAttribution(
   input: ModelUsageAttributionInput,
+  options: { inferChargeLane?: boolean } = {},
 ): ModelUsageAttribution {
   const channelId = normalizeDimension(input.channelId, 'attribution.channelId');
   const explicitSessionId = input.sessionId === undefined ? undefined : input.sessionId;
+  const sessionId = normalizeDimension(explicitSessionId ?? (
+    input.callType !== 'scheduled' && channelId !== MODEL_USAGE_UNKNOWN_DIMENSION
+      ? channelId
+      : undefined
+  ), 'attribution.sessionId');
+  const runtimeLaneClass = normalizeEnum<RuntimeLaneClass>(
+    input.runtimeLaneClass,
+    'attribution.runtimeLaneClass',
+    RUNTIME_LANE_CLASS_SET,
+  );
+  const explicitChargeLane = normalizeEnum<ChargePolicyRuntimeLane>(
+    input.chargeLane,
+    'attribution.chargeLane',
+    CHARGE_LANE_SET,
+  );
+  const resolvedChargeLane = options.inferChargeLane === false
+    ? (explicitChargeLane === MODEL_USAGE_UNKNOWN_DIMENSION ? undefined : explicitChargeLane)
+    : resolveModelUsageChargeLane({
+        ...(explicitChargeLane === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? {}
+          : { explicitChargeLane }),
+        callType: input.callType,
+        ...(runtimeLaneClass === MODEL_USAGE_UNKNOWN_DIMENSION
+          ? {}
+          : { runtimeLaneClass }),
+        ...(sessionId === MODEL_USAGE_UNKNOWN_DIMENSION ? {} : { sessionId }),
+        ...(channelId === MODEL_USAGE_UNKNOWN_DIMENSION ? {} : { channelId }),
+      });
   const shardId = input.shardId
     ?? (channelId === MODEL_USAGE_UNKNOWN_DIMENSION ? undefined : deriveWorkerId(channelId, 'shard:'));
   const subagentId = input.subagentId
@@ -304,9 +375,7 @@ export function normalizeModelUsageAttribution(
 
   return {
     companionId: normalizeDimension(input.companionId, 'attribution.companionId'),
-    sessionId: normalizeDimension(explicitSessionId ?? (channelId !== MODEL_USAGE_UNKNOWN_DIMENSION
-      ? channelId
-      : undefined), 'attribution.sessionId'),
+    sessionId,
     channelId,
     channelType: normalizeEnum<ChannelType>(
       input.channelType,
@@ -330,16 +399,8 @@ export function normalizeModelUsageAttribution(
     requestId: normalizeDimension(input.requestId, 'attribution.requestId'),
     toolName: normalizeDimension(input.toolName, 'attribution.toolName'),
     toolCallId: normalizeDimension(input.toolCallId, 'attribution.toolCallId'),
-    runtimeLaneClass: normalizeEnum<RuntimeLaneClass>(
-      input.runtimeLaneClass,
-      'attribution.runtimeLaneClass',
-      RUNTIME_LANE_CLASS_SET,
-    ),
-    chargeLane: normalizeEnum<ChargePolicyRuntimeLane>(
-      input.chargeLane,
-      'attribution.chargeLane',
-      CHARGE_LANE_SET,
-    ),
+    runtimeLaneClass,
+    chargeLane: resolvedChargeLane ?? MODEL_USAGE_UNKNOWN_DIMENSION,
     chargeSurface: normalizeEnum<ChargePolicySurface>(
       input.chargeSurface,
       'attribution.chargeSurface',

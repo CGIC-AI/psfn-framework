@@ -809,8 +809,8 @@ export async function computePreTurnState(input: {
     const refresh = (): Promise<ActiveMemoryContextSnapshot | null> => (
       refreshActiveMemoryContext(activeMemoryRequest)
     );
-    const refreshPromise = selfCreationCallerContext
-      ? runWithRequestContext({
+    const refreshCorrelation: CorrelationMetadata = selfCreationCallerContext
+      ? {
           ...turnCorrelationBase,
           channelId: message.channelId,
           callType: 'background',
@@ -819,8 +819,16 @@ export async function computePreTurnState(input: {
           purpose: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
           requesterProvenance: 'self_directed',
           requestAudience: 'self',
-        }, refresh)
-      : refresh();
+        }
+      : {
+          ...turnCorrelationBase,
+          channelId: message.channelId,
+          callType: 'memory',
+          originType: 'memory',
+          originStage: 'memory.active_context.refresh',
+          purpose: 'memory.active_context.refresh',
+        };
+    const refreshPromise = runWithRequestContext(refreshCorrelation, refresh);
     void refreshPromise.catch((error: unknown) => {
       const errorText = toErrorMessage(error);
       log.error('Active memory context refresh failed after scheduling', {

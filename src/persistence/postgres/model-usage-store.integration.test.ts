@@ -223,6 +223,42 @@ describe('PostgresModelUsageStore fleet token summary', () => {
   }, INTEGRATION_TIMEOUT_MS);
 });
 
+describe('PostgresModelUsageStore attribution anomalies', () => {
+  it('persists the session-less active health probe as unknown and exposes its anomaly rate', async () => {
+    await withStore(async (store) => {
+      await store.recordUsageEvent({
+        logicalCallId: 'sessionless-system-work',
+        recordedAtMs: Date.parse('2026-07-31T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'tool',
+          purpose: 'reasoning',
+          originType: 'tool',
+          originStage: 'reasoning',
+        },
+        provider: 'litellm',
+        model: 'model-a',
+        inputTokens: 1,
+        outputTokens: 1,
+      });
+
+      const usage = await store.getUsageData({ range: 'all' });
+      expect(usage.recentEvents[0]?.attribution).toMatchObject({
+        sessionId: 'unknown',
+        chargeLane: 'unknown',
+      });
+      expect(usage.attributionAnomalies).toEqual({
+        unknownChargeLaneCalls: 1,
+        unknownChargeLaneRatePercent: 100,
+        unknownSessionCalls: 1,
+        unknownSessionRatePercent: 100,
+      });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
 describe('PostgresModelUsageStore private telemetry', () => {
   it('retains aggregate cost while filtering private details and source correlation', async () => {
     await withStore(async (store) => {
@@ -1378,7 +1414,10 @@ describe('PostgresModelUsageStore reconciliation', () => {
         },
       }, store, { companionId: 'companion-a' });
 
-      await runWithRequestContext(correlation, async () => {
+      await runWithRequestContext({
+        ...correlation,
+        originStage: 'extraction',
+      }, async () => {
         await accountedEmbedding.embedBatch(['hello']);
       });
 
@@ -1393,7 +1432,15 @@ describe('PostgresModelUsageStore reconciliation', () => {
         channelId: sourceChannelId,
         conversationId: reset.newLogicalSessionId,
         rootInitiationId: 'root-initiation-1',
+        originStage: 'embedding',
+        chargeLane: 'background',
         chargeSurface: 'unknown',
+      });
+      expect(usage.attributionAnomalies).toMatchObject({
+        unknownChargeLaneCalls: 0,
+        unknownChargeLaneRatePercent: 0,
+        unknownSessionCalls: 0,
+        unknownSessionRatePercent: 0,
       });
       expect(usage.groupedBy.sessionId?.[0]?.key).toBe(reset.newLogicalSessionId);
       expect(usage.groupedBy.channelId?.[0]?.key).toBe(sourceChannelId);

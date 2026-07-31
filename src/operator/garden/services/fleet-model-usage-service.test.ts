@@ -102,6 +102,12 @@ function usageResponse(companionTotals: ModelUsageTotals, modelKey: string): Mod
         { knownCalls: 0, unknownCalls: companionTotals.calls, coveragePercent: 0 },
       ])) as ModelUsageData['attributionCoverage']['byDimension'],
     },
+    attributionAnomalies: {
+      unknownChargeLaneCalls: companionTotals.calls,
+      unknownChargeLaneRatePercent: companionTotals.calls > 0 ? 100 : 0,
+      unknownSessionCalls: companionTotals.calls,
+      unknownSessionRatePercent: companionTotals.calls > 0 ? 100 : 0,
+    },
     recentEvents: [],
     expensiveEvents: [],
   };

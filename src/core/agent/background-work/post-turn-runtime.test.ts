@@ -28,6 +28,7 @@ import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import {
   executePostTurnBackgroundWork,
   type PostTurnBackgroundRuntimeDependencies,
@@ -431,6 +432,40 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       { preemptionProtected: false },
     );
+  });
+
+  it('binds extraction-issued provider work to its originating logical session', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+    }];
+    const observedContexts: Array<ReturnType<typeof getRequestContext>> = [];
+    const fixture = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract: vi.fn(async () => {
+        observedContexts.push(getRequestContext());
+        return undefined;
+      }),
+    });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(observedContexts).toEqual([expect.objectContaining({
+      sessionId: record.sessionId,
+      channelId: record.channelId,
+      channelType: record.channelType,
+      turnId: record.turnId,
+      requestId: record.requestId,
+      callType: 'background',
+      originType: 'background',
+      originStage: 'extraction',
+    })]);
   });
 
   it('keeps the real compaction drain on its captured API owner across an active-context switch', async () => {

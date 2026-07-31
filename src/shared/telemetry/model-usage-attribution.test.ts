@@ -84,9 +84,50 @@ describe('normalizeModelUsageAttribution', () => {
     expect(attribution.originType).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.toolName).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.runtimeLaneClass).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
-    expect(attribution.chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+    expect(attribution.chargeLane).toBe('interactive');
     expect(attribution.chargeEventId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.conversationId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+  });
+
+  it('classifies session-attributed embeddings as background spend', () => {
+    expect(normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      sessionId: 'session-extraction',
+      callType: 'memory',
+      purpose: 'embedding',
+      originStage: 'embedding',
+    }).chargeLane).toBe('background');
+  });
+
+  it('never records foreground chat as unknown even without session metadata', () => {
+    expect(normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      callType: 'chat',
+      purpose: 'agent.turn.prompt',
+    }).chargeLane).toBe('interactive');
+  });
+
+  it('does not rewrite a durable unknown lane while normalizing a stored row', () => {
+    expect(normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      sessionId: 'session-a',
+      callType: 'chat',
+      purpose: 'agent.turn.prompt',
+    }, { inferChargeLane: false }).chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+  });
+
+  it('keeps genuinely session-less scheduled work unknown for anomaly accounting', () => {
+    const attribution = normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      channelId: 'internal:health',
+      callType: 'scheduled',
+      purpose: 'system.health',
+      originStage: 'system.health',
+    });
+
+    expect(attribution.sessionId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+    expect(attribution.channelId).toBe('internal:health');
+    expect(attribution.chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
   });
 
   it('keeps companion, gate-resolved lane, and origin stage independently attributable', () => {

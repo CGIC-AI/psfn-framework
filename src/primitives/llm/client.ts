@@ -92,6 +92,7 @@ import type {
   ModelUsageBudgetQueryPort,
   ModelUsageRecorder,
 } from '../../shared/telemetry/model-usage.js';
+import { resolveModelUsageChargeLane } from '../../shared/telemetry/model-usage-attribution.js';
 import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
@@ -936,6 +937,15 @@ export class LLMClient {
     // always available, even for autonomous calls with no run-charge snapshot.
     const runtimeLaneClass = this.resolveModelCallRuntimeClass(purpose, correlation);
     const chargeSnapshot = getRunChargeSnapshot();
+    const chargeLane = resolveModelUsageChargeLane({
+      ...(chargeSnapshot?.lane
+        ? { explicitChargeLane: chargeSnapshot.lane }
+        : (correlation?.chargeLane ? { explicitChargeLane: correlation.chargeLane } : {})),
+      callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
+      runtimeLaneClass,
+      ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
+      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    });
     const capturedProviderCost = this.providerCostResolver?.();
     const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
     const syntheticRoutedEndpointCost = candidate.requestBaseUrl !== undefined
@@ -1062,9 +1072,7 @@ export class LLMClient {
         ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
         ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
         runtimeLaneClass,
-        ...(chargeSnapshot?.lane
-          ? { chargeLane: chargeSnapshot.lane }
-          : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
+        ...(chargeLane ? { chargeLane } : {}),
         ...(chargeSnapshot?.surface
           ? { chargeSurface: chargeSnapshot.surface }
           : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),

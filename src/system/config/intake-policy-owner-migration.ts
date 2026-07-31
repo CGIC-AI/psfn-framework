@@ -62,14 +62,69 @@ function removeRetiredScreenerModelKeys(
   return { candidate, removedPaths };
 }
 
+function repairSelfAuthoredMutationPolicy(
+  raw: Record<string, unknown>,
+  filePath: string,
+  options: { rejectExistingCompanionSelf: boolean },
+): {
+    candidate: Record<string, unknown>;
+    addedPaths: string[];
+    updatedPaths: string[];
+  } {
+  const candidate = structuredClone(raw);
+  if (!isRecord(candidate.sourceRiskTiers)) {
+    throw new Error(
+      `Intake policy owner migration at ${filePath} requires sourceRiskTiers`,
+    );
+  }
+  const addedPaths: string[] = [];
+  const updatedPaths: string[] = [];
+  if (Object.hasOwn(candidate.sourceRiskTiers, 'companion_self')) {
+    if (options.rejectExistingCompanionSelf) {
+      throw new Error(
+        `Intake policy owner migration at ${filePath} refuses legacy schemaVersion `
+        + `${String(raw.schemaVersion)} with an existing sourceRiskTiers.companion_self; `
+        + 'resolve the ambiguous owner state explicitly',
+      );
+    }
+    if (candidate.sourceRiskTiers.companion_self !== 'trusted') {
+      candidate.sourceRiskTiers.companion_self = 'trusted';
+      updatedPaths.push('sourceRiskTiers.companion_self');
+    }
+  } else {
+    candidate.sourceRiskTiers.companion_self = 'trusted';
+    addedPaths.push('sourceRiskTiers.companion_self');
+  }
+
+  if (!isRecord(candidate.sinkGates) || !isRecord(candidate.sinkGates.sinks)) {
+    throw new Error(
+      `Intake policy owner migration at ${filePath} requires sinkGates.sinks to be an object`,
+    );
+  }
+  for (const sink of ['persona_mutation', 'trust_mutation'] as const) {
+    const rule = candidate.sinkGates.sinks[sink];
+    if (!isRecord(rule) || !isIntakeSourceRiskTier(rule.maxSourceRiskTier)) {
+      throw new Error(
+        `Intake policy owner migration at ${filePath} requires a valid `
+        + `sinkGates.sinks.${sink}.maxSourceRiskTier`,
+      );
+    }
+    if (compareIntakeSourceRiskTiers(rule.maxSourceRiskTier, 'standard') > 0) {
+      rule.maxSourceRiskTier = 'standard';
+      updatedPaths.push(`sinkGates.sinks.${sink}.maxSourceRiskTier`);
+    }
+  }
+  return { candidate, addedPaths, updatedPaths };
+}
+
 /**
  * Explicitly upgrades intake-policy schema v1/v2 owners to v3. V1 gains the
- * canonical skill_write sink rule; both legacy versions raise persona/trust
- * mutation caps to the configured tool_output tier so screened self-authored
- * content can reach those sinks. Retired screener model selectors are removed
- * at every supported version. Runtime loading never calls this function: an
- * operator must dry-run and apply it against the exact system owner root
- * before startup will accept the migrated owner.
+ * canonical skill_write sink rule; both legacy versions gain the explicit
+ * trusted companion_self source class used only for screened self-authored
+ * mutations. Retired screener model selectors are removed at every supported
+ * version. Runtime loading never calls this function: an operator must dry-run
+ * and apply it against the exact system owner root before startup will accept
+ * the migrated owner.
  */
 export function migrateIntakePolicyOwner(
   options: IntakePolicyOwnerMigrationOptions,
@@ -134,8 +189,15 @@ export function migrateIntakePolicyOwner(
     };
 
     if (raw.schemaVersion === INTAKE_POLICY_SCHEMA_VERSION) {
-      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(raw);
-      if (removedPaths.length > 0) {
+      const repaired = repairSelfAuthoredMutationPolicy(raw, filePath, {
+        rejectExistingCompanionSelf: false,
+      });
+      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);
+      if (
+        repaired.addedPaths.length > 0
+        || repaired.updatedPaths.length > 0
+        || removedPaths.length > 0
+      ) {
         validateIntakePolicy(candidate, filePath);
         return finishCandidate(candidate, {
           mode,
@@ -143,7 +205,9 @@ export function migrateIntakePolicyOwner(
           filePath,
           fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
           toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-          removedPaths,
+          ...(repaired.addedPaths.length > 0 ? { addedPaths: repaired.addedPaths } : {}),
+          ...(repaired.updatedPaths.length > 0 ? { updatedPaths: repaired.updatedPaths } : {}),
+          ...(removedPaths.length > 0 ? { removedPaths } : {}),
         });
       }
       validateIntakePolicy(raw, filePath);
@@ -177,49 +241,20 @@ export function migrateIntakePolicyOwner(
     const upgraded: Record<string, unknown> = structuredClone(raw);
     upgraded.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
     const addedPaths: string[] = [];
-    const updatedPaths: string[] = [];
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();
       addedPaths.push('sinkGates.sinks.skill_write');
     }
-    const sourceRiskTiers = raw.sourceRiskTiers;
-    if (!isRecord(sourceRiskTiers) || !isIntakeSourceRiskTier(sourceRiskTiers.tool_output)) {
-      throw new Error(
-        `Intake policy owner migration at ${filePath} requires sourceRiskTiers.tool_output`,
-      );
-    }
-    for (const sink of [
-      'skill_write',
-      'persona_mutation',
-      'wiki_write',
-      'trust_mutation',
-    ] as const) {
-      const rule = upgradedSinks[sink];
-      if (!isRecord(rule)) {
-        throw new Error(
-          `Intake policy owner migration at ${filePath}: sinkGates.sinks.${sink} is required`,
-        );
-      }
-      if (!isIntakeSourceRiskTier(rule.maxSourceRiskTier)) {
-        throw new Error(
-          `Intake policy owner migration at ${filePath} requires a valid `
-          + `sinkGates.sinks.${sink}.maxSourceRiskTier`,
-        );
-      }
-      if (compareIntakeSourceRiskTiers(
-        rule.maxSourceRiskTier,
-        sourceRiskTiers.tool_output,
-      ) < 0) {
-        rule.maxSourceRiskTier = sourceRiskTiers.tool_output;
-        updatedPaths.push(`sinkGates.sinks.${sink}.maxSourceRiskTier`);
-      }
-    }
     upgraded.sinkGates = {
       ...raw.sinkGates,
       sinks: upgradedSinks,
     };
-    const { candidate, removedPaths } = removeRetiredScreenerModelKeys(upgraded);
+    const repaired = repairSelfAuthoredMutationPolicy(upgraded, filePath, {
+      rejectExistingCompanionSelf: true,
+    });
+    addedPaths.push(...repaired.addedPaths);
+    const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);
     validateIntakePolicy(candidate, filePath);
 
     const result: IntakePolicyOwnerMigrationResult = {
@@ -229,7 +264,7 @@ export function migrateIntakePolicyOwner(
       fromSchemaVersion: raw.schemaVersion,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       ...(addedPaths.length > 0 ? { addedPaths } : {}),
-      ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
+      ...(repaired.updatedPaths.length > 0 ? { updatedPaths: repaired.updatedPaths } : {}),
       ...(removedPaths.length > 0 ? { removedPaths } : {}),
     };
     return finishCandidate(candidate, result);

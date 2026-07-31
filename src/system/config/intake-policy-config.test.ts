@@ -506,10 +506,11 @@ describe('intake policy owner file', () => {
       expect(['allow', 'deny']).toContain(rule.unscreened);
     }
     // Inform-not-instruct: state-mutation sinks cap below the inform sinks.
-    // Self-authored mutation fields are screened as tool_output (untrusted);
-    // the sink label denylist still blocks hostile findings.
-    expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
-    expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
+    // Companion-authored mutation fields use their own trusted source class;
+    // released untrusted external content must remain unable to instruct.
+    expect(policy.sourceRiskTiers.companion_self).toBe('trusted');
+    expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
+    expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
     expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
     expect(policy.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
     expect(policy.sinkGates.sinks.skill_write.unscreened).toBe('deny');
@@ -566,13 +567,25 @@ describe('intake policy owner file', () => {
       .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
   });
 
-  it('requires screen-then-allow sinks to admit the configured tool_output tier', () => {
+  it('requires companion-self to stay trusted and skill writes to admit tool output', () => {
     const policy = seedPolicy();
-    for (const sink of ['persona_mutation', 'wiki_write', 'trust_mutation'] as const) {
-      const tampered = structuredClone(policy);
-      tampered.sinkGates.sinks[sink].maxSourceRiskTier = 'standard';
-      expect(() => validateIntakePolicy(tampered, 'intake-policy.test'))
-        .toThrow(new RegExp(`sinkGates\\.sinks\\.${sink}\\.maxSourceRiskTier must admit`));
+    const selfTierTampered = structuredClone(policy);
+    selfTierTampered.sourceRiskTiers.companion_self = 'standard';
+    expect(() => validateIntakePolicy(selfTierTampered, 'intake-policy.test'))
+      .toThrow(/sourceRiskTiers\.companion_self must be 'trusted'/);
+
+    const skillCapTampered = structuredClone(policy);
+    skillCapTampered.sinkGates.sinks.skill_write.maxSourceRiskTier = 'standard';
+    expect(() => validateIntakePolicy(skillCapTampered, 'intake-policy.test'))
+      .toThrow(/sinkGates\.sinks\.skill_write\.maxSourceRiskTier must admit/);
+
+    for (const sink of ['persona_mutation', 'trust_mutation'] as const) {
+      const mutationCapTampered = structuredClone(policy);
+      mutationCapTampered.sinkGates.sinks[sink].maxSourceRiskTier = 'untrusted';
+      expect(() => validateIntakePolicy(mutationCapTampered, 'intake-policy.test'))
+        .toThrow(new RegExp(
+          `sinkGates\\.sinks\\.${sink}\\.maxSourceRiskTier must not exceed 'standard'`,
+        ));
     }
   });
 

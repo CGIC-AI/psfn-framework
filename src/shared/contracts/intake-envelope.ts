@@ -24,6 +24,7 @@ import { isRecord } from '../utils/types.js';
 
 export const INTAKE_SOURCE_CLASSES = [
   'operator',
+  'companion_self',
   'primary_user',
   'trusted_contact',
   'regular_contact',

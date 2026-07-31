@@ -3,6 +3,7 @@
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
+    "companion_self": "trusted",
     "primary_user": "trusted",
     "trusted_contact": "standard",
     "regular_contact": "standard",
@@ -138,7 +139,7 @@
         "unscreened": "deny"
       },
       "persona_mutation": {
-        "maxSourceRiskTier": "untrusted",
+        "maxSourceRiskTier": "standard",
         "denyRiskLabels": [
           "injection/override_attempt",
           "injection/indirect",
@@ -157,7 +158,7 @@
         "unscreened": "deny"
       },
       "trust_mutation": {
-        "maxSourceRiskTier": "untrusted",
+        "maxSourceRiskTier": "standard",
         "denyRiskLabels": [
           "injection/override_attempt",
           "injection/indirect",

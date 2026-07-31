@@ -358,6 +358,12 @@ describe('screenSelfAuthoredMutation', () => {
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(evaluate.mock.calls[0]?.[1].length).toBeGreaterThan(0);
     expect(evaluate.mock.calls[0]?.[1]).not.toEqual([]);
+    expect(evaluate.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceClass: 'companion_self',
+        sourceRiskTier: 'trusted',
+      }),
+    ]));
   });
 
   it.each(mutationSinks)('holds hostile %s content and writes an operator queue entry', async (sink) => {

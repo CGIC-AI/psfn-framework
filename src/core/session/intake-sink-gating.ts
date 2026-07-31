@@ -108,7 +108,7 @@ export async function screenSelfAuthoredMutation(
   const screenValue = async (value: unknown, path: string): Promise<unknown> => {
     if (typeof value === 'string') {
       const screened = await screening.screen(value, {
-        sourceClass: 'tool_output',
+        sourceClass: 'companion_self',
         origin: { ref: `tool:${context.tool}:${context.action}:${path}` },
         scope: 'strict',
       });

@@ -129,10 +129,10 @@ inline content (`data:` URLs, newlines).
 
 ### Source classes and risk tiers
 
-Fourteen closed source classes (`INTAKE_SOURCE_CLASSES`): `operator`,
-`primary_user`, `trusted_contact`, `regular_contact`, `public_contact`,
-`web_fetch`, `web_search`, `document`, `image_ocr`, `audio_transcript`,
-`tool_output`, `subagent_output`, `shard_foldback`,
+Fifteen closed source classes (`INTAKE_SOURCE_CLASSES`): `operator`,
+`companion_self`, `primary_user`, `trusted_contact`, `regular_contact`,
+`public_contact`, `web_fetch`, `web_search`, `document`, `image_ocr`,
+`audio_transcript`, `tool_output`, `subagent_output`, `shard_foldback`,
 `mcp_tool_description`. Policy — never the contract — maps each class to one
 of four ordered risk tiers (`trusted < standard < untrusted < hostile`).
 The mapping is required for every class with no implicit defaults, so a new
@@ -954,12 +954,12 @@ silently ignores or aliases the retired keys.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `schemaVersion` | `2` | Must be 2. Schema 1 requires the explicit `migrate:intake-policy-owner` command. |
+| `schemaVersion` | `3` | Must be 3. Schema 1/2 and affected pre-remediation schema-3 owners require the explicit `migrate:intake-policy-owner` command. |
 | `mode` | `"shadow"` | `off`: no screening service or sink gate constructed, no envelopes exist. `shadow`: envelopes created, screened, journaled, and audited, but delivered content never changes and gates never block. `enforce`: `effectiveText` honors decisions (sanitize substitutes sanitized text; quarantine/block substitute the withheld notice) and sink-gate denials are real. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
 
-Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
+Seed `sourceRiskTiers`: `operator`/`companion_self`/`primary_user` → `trusted`;
 `trusted_contact`/`regular_contact`/`audio_transcript`/`shard_foldback` →
 `standard`; `public_contact`/`web_fetch`/`web_search`/`document`/
 `tool_output`/`subagent_output` → `untrusted`; `image_ocr`/

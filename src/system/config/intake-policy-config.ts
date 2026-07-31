@@ -1389,22 +1389,33 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     throw invalid(sourcePath, `mode must be one of: ${INTAKE_FIREWALL_MODES.join(', ')}`);
   }
   const sourceRiskTiers = validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath);
+  if (sourceRiskTiers.companion_self !== 'trusted') {
+    throw invalid(
+      sourcePath,
+      "sourceRiskTiers.companion_self must be 'trusted' so companion-authored "
+      + 'mutation content remains distinct from untrusted external tool output',
+    );
+  }
   const sinkGates = validateSinkGates(raw.sinkGates, sourcePath);
-  for (const sink of [
-    'skill_write',
-    'persona_mutation',
-    'wiki_write',
-    'trust_mutation',
-  ] as const) {
+  if (compareIntakeSourceRiskTiers(
+    sinkGates.sinks.skill_write.maxSourceRiskTier,
+    sourceRiskTiers.tool_output,
+  ) < 0) {
+    throw invalid(
+      sourcePath,
+      'sinkGates.sinks.skill_write.maxSourceRiskTier must admit the configured '
+      + `sourceRiskTiers.tool_output tier '${sourceRiskTiers.tool_output}'`,
+    );
+  }
+  for (const sink of ['persona_mutation', 'trust_mutation'] as const) {
     if (compareIntakeSourceRiskTiers(
       sinkGates.sinks[sink].maxSourceRiskTier,
-      sourceRiskTiers.tool_output,
-    ) < 0) {
+      'standard',
+    ) > 0) {
       throw invalid(
         sourcePath,
-        `sinkGates.sinks.${sink}.maxSourceRiskTier must admit the configured `
-        + `sourceRiskTiers.tool_output tier '${sourceRiskTiers.tool_output}' so screened `
-        + 'self-authored mutations do not fail closed as unscreenable',
+        `sinkGates.sinks.${sink}.maxSourceRiskTier must not exceed 'standard'; `
+        + 'released untrusted external content may inform but never instruct this sink',
       );
     }
   }

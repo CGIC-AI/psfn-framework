@@ -503,6 +503,10 @@ async function buildAgentFixture(input: {
   });
   await transportServer.init();
   await transportServer.start();
+  // Mirror the agent's own startup (app/agent/main.ts): semantic readiness is
+  // admitted only after init, so without it the transport serves nothing but
+  // the capability-tier recovery route (hrmrq.132).
+  transportServer.markRuntimeReady();
 
   return {
     companionId: input.companionId,

@@ -17,7 +17,7 @@ let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness();
-});
+}, 90_000);
 
 afterAll(async () => {
   await harness?.stop();

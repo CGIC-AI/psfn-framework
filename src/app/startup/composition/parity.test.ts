@@ -21,6 +21,7 @@ import {
   resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../../core/session/intake-sink-gating.js';
 
 function createInternalStateNarrativeFixture() {
   const internalState = new InternalStateComputer().computeState({
@@ -183,7 +184,9 @@ describe('wirePromptRuntime', () => {
       registerTool: vi.fn(),
     };
 
-    wirePromptRuntime(target as any, tempDir, 'Base prompt');
+    wirePromptRuntime(target as any, tempDir, 'Base prompt', {
+      intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
+    });
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.map(([tool]) => tool.name)).toEqual(['identity', 'north_star']);

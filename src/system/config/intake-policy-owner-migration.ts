@@ -5,6 +5,10 @@ import {
 } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
+  compareIntakeSourceRiskTiers,
+  isIntakeSourceRiskTier,
+} from '../../shared/contracts/intake-envelope.js';
+import {
   assertFilesystemIdentity,
   assertPinnedDirectoryAtLogicalPath,
   closePinnedDirectory,
@@ -33,6 +37,7 @@ export interface IntakePolicyOwnerMigrationResult {
   fromSchemaVersion: number;
   toSchemaVersion: typeof INTAKE_POLICY_SCHEMA_VERSION;
   addedPaths?: string[];
+  updatedPaths?: string[];
   removedPaths?: string[];
 }
 
@@ -58,11 +63,13 @@ function removeRetiredScreenerModelKeys(
 }
 
 /**
- * Explicitly upgrades intake-policy schema v1 owners to v2 by adding the
- * canonical skill_write sink rule, and removes retired screener model
- * selectors from current-schema owners. Runtime loading never calls this
- * function: an operator must dry-run and apply it against the exact system
- * owner root before startup will accept the migrated owner.
+ * Explicitly upgrades intake-policy schema v1/v2 owners to v3. V1 gains the
+ * canonical skill_write sink rule; both legacy versions raise persona/trust
+ * mutation caps to the configured tool_output tier so screened self-authored
+ * content can reach those sinks. Retired screener model selectors are removed
+ * at every supported version. Runtime loading never calls this function: an
+ * operator must dry-run and apply it against the exact system owner root
+ * before startup will accept the migrated owner.
  */
 export function migrateIntakePolicyOwner(
   options: IntakePolicyOwnerMigrationOptions,
@@ -149,9 +156,9 @@ export function migrateIntakePolicyOwner(
         toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       };
     }
-    if (raw.schemaVersion !== 1) {
+    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) {
       throw new Error(
-        `Intake policy owner migration at ${filePath} requires schemaVersion 1 or `
+        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, or `
         + `the current schemaVersion ${String(INTAKE_POLICY_SCHEMA_VERSION)}`,
       );
     }
@@ -160,7 +167,7 @@ export function migrateIntakePolicyOwner(
         `Intake policy owner migration at ${filePath} requires sinkGates.sinks to be an object`,
       );
     }
-    if (Object.hasOwn(raw.sinkGates.sinks, 'skill_write')) {
+    if (raw.schemaVersion === 1 && Object.hasOwn(raw.sinkGates.sinks, 'skill_write')) {
       throw new Error(
         `Intake policy owner migration at ${filePath} refuses schemaVersion 1 with an existing `
         + 'skill_write sink; resolve the ambiguous owner state explicitly',
@@ -169,12 +176,48 @@ export function migrateIntakePolicyOwner(
 
     const upgraded: Record<string, unknown> = structuredClone(raw);
     upgraded.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
+    const addedPaths: string[] = [];
+    const updatedPaths: string[] = [];
+    const upgradedSinks = structuredClone(raw.sinkGates.sinks);
+    if (raw.schemaVersion === 1) {
+      upgradedSinks.skill_write = createSkillWriteSinkRule();
+      addedPaths.push('sinkGates.sinks.skill_write');
+    }
+    const sourceRiskTiers = raw.sourceRiskTiers;
+    if (!isRecord(sourceRiskTiers) || !isIntakeSourceRiskTier(sourceRiskTiers.tool_output)) {
+      throw new Error(
+        `Intake policy owner migration at ${filePath} requires sourceRiskTiers.tool_output`,
+      );
+    }
+    for (const sink of [
+      'skill_write',
+      'persona_mutation',
+      'wiki_write',
+      'trust_mutation',
+    ] as const) {
+      const rule = upgradedSinks[sink];
+      if (!isRecord(rule)) {
+        throw new Error(
+          `Intake policy owner migration at ${filePath}: sinkGates.sinks.${sink} is required`,
+        );
+      }
+      if (!isIntakeSourceRiskTier(rule.maxSourceRiskTier)) {
+        throw new Error(
+          `Intake policy owner migration at ${filePath} requires a valid `
+          + `sinkGates.sinks.${sink}.maxSourceRiskTier`,
+        );
+      }
+      if (compareIntakeSourceRiskTiers(
+        rule.maxSourceRiskTier,
+        sourceRiskTiers.tool_output,
+      ) < 0) {
+        rule.maxSourceRiskTier = sourceRiskTiers.tool_output;
+        updatedPaths.push(`sinkGates.sinks.${sink}.maxSourceRiskTier`);
+      }
+    }
     upgraded.sinkGates = {
       ...raw.sinkGates,
-      sinks: {
-        ...raw.sinkGates.sinks,
-        skill_write: createSkillWriteSinkRule(),
-      },
+      sinks: upgradedSinks,
     };
     const { candidate, removedPaths } = removeRetiredScreenerModelKeys(upgraded);
     validateIntakePolicy(candidate, filePath);
@@ -183,9 +226,10 @@ export function migrateIntakePolicyOwner(
       mode,
       status: options.apply ? 'applied' : 'planned',
       filePath,
-      fromSchemaVersion: 1,
+      fromSchemaVersion: raw.schemaVersion,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      addedPaths: ['sinkGates.sinks.skill_write'],
+      ...(addedPaths.length > 0 ? { addedPaths } : {}),
+      ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
       ...(removedPaths.length > 0 ? { removedPaths } : {}),
     };
     return finishCandidate(candidate, result);

@@ -17,7 +17,10 @@ import { executePersonaUpdateAction, extractCardPatchFromRecord } from './card-v
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
-import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import {
+  screenSelfAuthoredMutation,
+  type SelfAuthoredMutationIntakeRuntime,
+} from '../session/intake-sink-gating.js';
 import {
   IdentityCoolingOffManager,
 } from '../../system/capabilities/safeguards.js';
@@ -523,7 +526,7 @@ export interface IdentityToolOptions extends PromptLayerUpdateToolOptions, Pick<
 
 export function createIdentityTool(
   store: PromptLayerStatePort,
-  options: IdentityToolOptions = {},
+  options: IdentityToolOptions,
 ): SubstrateAgentTool {
   const identityCoolingOff = options.identityCoolingOff;
 
@@ -598,27 +601,25 @@ export function createIdentityTool(
           return textResultWithError(shapeError, true);
         }
 
-        // htm9.3: persona/self-model mutation is a consequential sink. Every
-        // mutating identity action checks the persona_mutation gate. No
-        // envelope flows into this tool yet (agent-authored params), so this
-        // is the EXPLICIT unscreened path — the sink's `unscreened` policy
-        // default decides in enforce mode; every decision is audited.
+        // htm9.3: persona/self-model mutation is a consequential sink. Screen
+        // every model-authored string field first, then evaluate the real
+        // proposed-content envelopes plus the active turn's provenance.
         const MUTATING_IDENTITY_ACTIONS: readonly string[] = [
           'update_layer', 'rollback_layer', 'toggle_layer', 'update_persona', 'commit_stage',
         ];
         if (MUTATING_IDENTITY_ACTIONS.includes(action)) {
-          const intakeSinkGate = options.getIntakeSinkGate?.() ?? null;
-          if (intakeSinkGate) {
-            const gateDecision = intakeSinkGate.evaluate('persona_mutation', [], {
-              tool: 'identity',
-              action,
-            });
-            if (!gateDecision.allowed) {
-              // Soft, truthful, operator-reviewed wording (htm9.12); not an
-              // error so the model does not spiral into retries.
-              return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
-            }
+          const screened = await screenSelfAuthoredMutation(
+            'persona_mutation',
+            params,
+            options.intake,
+            { tool: 'identity', action },
+          );
+          if (!screened.allowed) {
+            // Soft, truthful, operator-reviewed wording (htm9.12); not an
+            // error so the model does not spiral into retries.
+            return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
           }
+          params = screened.params;
         }
 
         switch (action) {
@@ -873,11 +874,8 @@ export interface PromptLayerUpdateToolOptions {
   identityCoolingOff?: IdentityCoolingOffManager;
   getCapabilityTier?: () => CapabilityTier;
   confirmationQueue?: ApprovalQueuePort;
-  /**
-   * Intake sink gate provider (htm9.3): persona/self-model mutation gate,
-   * evaluated for every mutating identity action. Null/absent = firewall off.
-   */
-  getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Screen-then-gate runtime for persona/self-model mutations. */
+  intake: SelfAuthoredMutationIntakeRuntime;
 }
 
 async function executePromptLayerUpdateAction(

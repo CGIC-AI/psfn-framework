@@ -6,9 +6,7 @@ import type { SkillsRuntime } from './runtime.js';
 import type { SkillOwnership, SkillSource } from './types.js';
 import { detectDestructiveSkillContentReplace, type ManagedSkillRecord } from './store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
-import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { SelfAuthoredMutationIntakeRuntime } from '../../core/session/intake-sink-gating.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -249,11 +247,7 @@ function queuedSkillWriteResult(
   }, null, 2));
 }
 
-export interface SkillWriteIntakeRuntime {
-  getIntakeSinkGate: () => IntakeSinkGate | null;
-  getIntakeScreening: () => IntakeScreeningService | null;
-  getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
-}
+export type SkillWriteIntakeRuntime = SelfAuthoredMutationIntakeRuntime;
 
 interface ScreenedSkillWrite {
   allowed: boolean;

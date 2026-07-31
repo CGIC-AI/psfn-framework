@@ -10,7 +10,10 @@ import {
 } from '../../system/capabilities/requirements.js';
 import { VALID_SENSITIVITY_LEVELS } from '../../system/trust/types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
-import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import {
+  screenSelfAuthoredMutation,
+  type SelfAuthoredMutationIntakeRuntime,
+} from '../../core/session/intake-sink-gating.js';
 import type { SharedWorldWikiProposalSubmissionPort } from './shared-world-caretaker.js';
 import {
   type CompanionOwnedVisibility,
@@ -84,15 +87,8 @@ export interface WikiToolDeps {
    * with guidance rather than silently downgrading.
    */
   semanticSearch?: WikiSemanticSearchFn;
-  /**
-   * Intake sink gate provider (htm9.3). Wiki writes are a consequential sink:
-   * before any upsert the `wiki_write` gate is evaluated. No envelope flows
-   * into this tool yet (agent-authored params), so the evaluation is the
-   * EXPLICIT unscreened path — the sink's `unscreened` policy default decides
-   * in enforce mode, and every decision is audited. Null/absent = firewall
-   * off.
-   */
-  getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Screen-then-gate runtime for companion-authored wiki writes. */
+  intake: SelfAuthoredMutationIntakeRuntime;
   /**
    * Multi-companion-only enqueue surface. It exposes no SharedWorldWikiStore,
    * so a companion can propose a public world fact but cannot publish it.
@@ -233,7 +229,20 @@ function requirePersonalWishlist(deps: WikiToolDeps): PersonalWishlist {
   return deps.personalWishlist;
 }
 
-export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): SubstrateAgentTool {
+function isReservedManagedWikiParams(params: WikiToolParams): boolean {
+  let resolvedDocId = '';
+  try {
+    resolvedDocId = normalizeWikiDocumentId(params.id, params.title);
+  } catch {
+    // An unresolvable id cannot address the reserved namespace by id; fall
+    // back to the raw id for the tag/prefix check. Callers must run this check
+    // again after screening because sanitization can make an id resolvable.
+    resolvedDocId = typeof params.id === 'string' ? params.id : '';
+  }
+  return isReservedManagedWikiWrite({ documentId: resolvedDocId, tags: params.tags });
+}
+
+export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): SubstrateAgentTool {
   const semanticSearch = deps.semanticSearch;
   const tool: SubstrateAgentTool = {
     name: 'wiki',
@@ -395,16 +404,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
             // the legacy egress quarantine. Reject fail-closed; these manifests
             // are only ever written through the dedicated project_*/wardrobe_*
             // actions, which derive disclosure metadata from runtime state.
-            let resolvedDocId = '';
-            try {
-              resolvedDocId = normalizeWikiDocumentId(params.id, params.title);
-            } catch {
-              // An unresolvable id cannot address the reserved namespace by id;
-              // fall back to the raw id for the tag/prefix check and let the
-              // store's own upsert surface the canonical invalid-id error.
-              resolvedDocId = typeof params.id === 'string' ? params.id : '';
-            }
-            if (isReservedManagedWikiWrite({ documentId: resolvedDocId, tags: params.tags })) {
+            if (isReservedManagedWikiParams(params)) {
               return textResultWithError(
                 'wiki '
                 + action
@@ -416,18 +416,27 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
                 true,
               );
             }
-            const intakeSinkGate = deps.getIntakeSinkGate?.() ?? null;
-            if (intakeSinkGate) {
-              const gateDecision = intakeSinkGate.evaluate('wiki_write', [], {
-                tool: 'wiki',
-                action,
-                documentId: typeof params.id === 'string' ? params.id : undefined,
-              });
-              if (!gateDecision.allowed) {
-                // Soft, truthful, operator-reviewed wording (htm9.12); not an
-                // error so the model does not spiral into retries.
-                return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
-              }
+            const screened = await screenSelfAuthoredMutation(
+              'wiki_write',
+              params as unknown as Record<string, unknown>,
+              deps.intake,
+              { tool: 'wiki', action },
+            );
+            if (!screened.allowed) {
+              // Soft, truthful, operator-reviewed wording (htm9.12); not an
+              // error so the model does not spiral into retries.
+              return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+            }
+            params = screened.params as WikiToolParams;
+            if (isReservedManagedWikiParams(params)) {
+              return textResultWithError(
+                'wiki '
+                + action
+                + ' cannot create or modify personal-project or named-look manifests '
+                + 'after intake screening normalized the proposed id/tags into a reserved namespace. '
+                + 'Their disclosure metadata is runtime-derived and fails closed.',
+                true,
+              );
             }
             const document = store.upsert(buildUpsertInput(params, action === 'import'));
             return textResult(JSON.stringify({

@@ -307,6 +307,14 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     actor: 'agent:skill-write-intake',
   });
   sessionManager.intakeSinkGate = intakeSinkGate;
+  const selfAuthoredMutationIntake = {
+    getIntakeSinkGate: () => intakeSinkGate,
+    // main.ts wires the durable-quarantine-backed service after core
+    // composition and before any tool can execute. Resolve it lazily so skill,
+    // persona, wiki, and trust mutations all share that canonical instance.
+    getIntakeScreening: () => sessionManager.intakeScreening,
+    getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),
+  };
   if (intakeSinkGate) {
     log.info('Intake sink gates wired across consequential sinks', {
       mode: intakeSinkGate.mode,
@@ -529,7 +537,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     eventBus,
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,
-    getIntakeSinkGate: () => intakeSinkGate,
+    intake: selfAuthoredMutationIntake,
     ...(config.companionId ? { companionId: config.companionId } : {}),
     systemDataDir: pathSnapshot.systemDataDir,
     systemDataWriter: gateway,
@@ -571,7 +579,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       invalidatePromptCache,
-      getIntakeSinkGate: () => intakeSinkGate,
+      intake: selfAuthoredMutationIntake,
     },
   );
   wireCharacterCardRuntime(agentLoop, cardVersionStore, {
@@ -592,7 +600,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ),
     ...(config.multiCompanion === true ? { permitInvalidation: gateway } : {}),
     ...(icpAutonomyRuntime ? { peerAvailability: icpAutonomyRuntime } : {}),
-    getIntakeSinkGate: () => intakeSinkGate,
+    intake: selfAuthoredMutationIntake,
     ...(primaryTelegramUserId
       ? {
           bootstrapPrimaryIdentityLinks: [{

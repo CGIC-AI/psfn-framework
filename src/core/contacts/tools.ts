@@ -36,7 +36,10 @@ import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
-import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import {
+  screenSelfAuthoredMutation,
+  type SelfAuthoredMutationIntakeRuntime,
+} from '../session/intake-sink-gating.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
 import type {
@@ -230,31 +233,28 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
 async function executeContactSetTrust(
   contactStore: ContactStorePort,
   params: ContactSetTrustParams,
-  getIntakeSinkGate?: () => IntakeSinkGate | null,
+  intake: SelfAuthoredMutationIntakeRuntime,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
-  const { contactId, trustLevel, behaviorSignals, confirmSuggestion } = params;
+  const screened = await screenSelfAuthoredMutation(
+    'trust_mutation',
+    { action: 'set_trust', ...params },
+    intake,
+    { tool: 'contact', action: 'set_trust' },
+  );
+  if (!screened.allowed) {
+    // Soft, truthful, operator-reviewed wording (htm9.12); not an error so
+    // the model does not spiral into retries.
+    return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+  }
+  const {
+    contactId,
+    trustLevel,
+    behaviorSignals,
+    confirmSuggestion,
+  } = screened.params as unknown as ContactSetTrustParams;
 
   if (!contactId.trim()) {
     return textResultWithError('Missing contactId', true);
-  }
-
-  // htm9.3: trust-state mutation is a consequential sink. No envelope flows
-  // into this tool yet (agent-authored params), so this is the EXPLICIT
-  // unscreened path — the sink's `unscreened` policy default decides in
-  // enforce mode; every decision is audited.
-  const intakeSinkGate = getIntakeSinkGate?.() ?? null;
-  if (intakeSinkGate) {
-    const gateDecision = intakeSinkGate.evaluate('trust_mutation', [], {
-      tool: 'contact',
-      action: 'set_trust',
-      contactId,
-      ...(trustLevel ? { requestedTrustLevel: trustLevel } : {}),
-    });
-    if (!gateDecision.allowed) {
-      // Soft, truthful, operator-reviewed wording (htm9.12); not an error so
-      // the model does not spiral into retries.
-      return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
-    }
   }
 
   if (!behaviorSignals && !trustLevel) {
@@ -756,7 +756,7 @@ async function executeUnifiedContactAction(
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
   permitInvalidation?: ContactBlockPermitInvalidationPort,
-  getIntakeSinkGate?: () => IntakeSinkGate | null,
+  intake: SelfAuthoredMutationIntakeRuntime,
   peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
@@ -771,7 +771,7 @@ async function executeUnifiedContactAction(
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
-      return await executeContactSetTrust(contactStore, params as ContactSetTrustParams, getIntakeSinkGate);
+      return await executeContactSetTrust(contactStore, params as ContactSetTrustParams, intake);
     case 'propose_trust':
       return await executeContactProposeTrust(contactStore, proposalQueue, params);
     case 'set_relationship':
@@ -1029,23 +1029,20 @@ export interface CreateContactToolOptions {
    * post-write failure is surfaced while the safer fail-closed block remains.
    */
   permitInvalidation?: ContactBlockPermitInvalidationPort;
-  /**
-   * Intake sink gate provider (htm9.3): trust_mutation gate evaluated before
-   * action=set_trust applies. Null/absent = firewall off.
-   */
-  getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Screen-then-gate runtime for trust mutations. */
+  intake: SelfAuthoredMutationIntakeRuntime;
   /** Coarse availability for canonical, already-known MI contacts only. */
   peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>;
 }
 
 export function createContactTool(
   contactStore: ContactStorePort,
-  options: CreateContactToolOptions = {},
+  options: CreateContactToolOptions,
 ): SubstrateAgentTool {
   const proposalQueue = options.proposalQueue;
   const blockList = options.blockList;
   const permitInvalidation = options.permitInvalidation;
-  const getIntakeSinkGate = options.getIntakeSinkGate;
+  const intake = options.intake;
   const peerAvailability = options.peerAvailability;
   const tool: SubstrateAgentTool = {
     name: 'contact',
@@ -1147,7 +1144,7 @@ export function createContactTool(
           proposalQueue,
           blockList,
           permitInvalidation,
-          getIntakeSinkGate,
+          intake,
           peerAvailability,
         );
       } catch (error) {
@@ -1188,7 +1185,10 @@ export function createContactTool(
   );
 }
 
-export function createContactSetTrustTool(contactStore: ContactStorePort): SubstrateAgentTool {
+export function createContactSetTrustTool(
+  contactStore: ContactStorePort,
+  intake: SelfAuthoredMutationIntakeRuntime,
+): SubstrateAgentTool {
   return {
     name: 'contact_set_trust',
     description:
@@ -1221,7 +1221,7 @@ export function createContactSetTrustTool(contactStore: ContactStorePort): Subst
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        return await executeContactSetTrust(contactStore, params);
+        return await executeContactSetTrust(contactStore, params, intake);
       } catch (error) {
         return textResultWithError(`contact_set_trust failed: ${errorMessage(error)}`, true);
       }

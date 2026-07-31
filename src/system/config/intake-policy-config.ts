@@ -11,6 +11,7 @@ import {
   INTAKE_SINKS,
   INTAKE_SOURCE_CLASSES,
   INTAKE_SOURCE_RISK_TIERS,
+  compareIntakeSourceRiskTiers,
   isIntakeRiskLabel,
   isIntakeSourceRiskTier,
   type IntakeRiskLabel,
@@ -24,7 +25,7 @@ import { isRecord } from '../../shared/utils/types.js';
 
 export const INTAKE_POLICY_FILE_NAME = 'intake-policy.json';
 export const INTAKE_POLICY_SEED_FILE_NAME = 'intake-policy.seed.json';
-export const INTAKE_POLICY_SCHEMA_VERSION = 2 as const;
+export const INTAKE_POLICY_SCHEMA_VERSION = 3 as const;
 
 /**
  * Firewall rollout mode:
@@ -1374,8 +1375,9 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
   }
   if (raw.schemaVersion !== INTAKE_POLICY_SCHEMA_VERSION) {
-    const migrationGuidance = raw.schemaVersion === 1
-      ? '; schemaVersion 1 owners require the explicit migrate:intake-policy-owner command'
+    const migrationGuidance = raw.schemaVersion === 1 || raw.schemaVersion === 2
+      ? `; schemaVersion ${String(raw.schemaVersion)} owners require the explicit `
+        + 'migrate:intake-policy-owner command'
       : '';
     throw invalid(
       sourcePath,
@@ -1386,17 +1388,37 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   if (typeof mode !== 'string' || !(INTAKE_FIREWALL_MODES as readonly string[]).includes(mode)) {
     throw invalid(sourcePath, `mode must be one of: ${INTAKE_FIREWALL_MODES.join(', ')}`);
   }
+  const sourceRiskTiers = validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath);
+  const sinkGates = validateSinkGates(raw.sinkGates, sourcePath);
+  for (const sink of [
+    'skill_write',
+    'persona_mutation',
+    'wiki_write',
+    'trust_mutation',
+  ] as const) {
+    if (compareIntakeSourceRiskTiers(
+      sinkGates.sinks[sink].maxSourceRiskTier,
+      sourceRiskTiers.tool_output,
+    ) < 0) {
+      throw invalid(
+        sourcePath,
+        `sinkGates.sinks.${sink}.maxSourceRiskTier must admit the configured `
+        + `sourceRiskTiers.tool_output tier '${sourceRiskTiers.tool_output}' so screened `
+        + 'self-authored mutations do not fail closed as unscreenable',
+      );
+    }
+  }
   return {
     schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
     mode: mode as IntakeFirewallMode,
-    sourceRiskTiers: validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath),
+    sourceRiskTiers,
     sourceLists: validateSourceLists(raw.sourceLists, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
     visionScreener: validateVisionScreener(raw.visionScreener, sourcePath),
-    sinkGates: validateSinkGates(raw.sinkGates, sourcePath),
+    sinkGates,
     driftDetection: validateDriftDetection(raw.driftDetection, sourcePath),
   };
 }

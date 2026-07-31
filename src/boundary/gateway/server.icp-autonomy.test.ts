@@ -18,6 +18,7 @@ import {
 } from '../../core/icp/autonomy-store-ports.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { createContactTool } from '../../core/contacts/tools.js';
+import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/session/intake-sink-gating.js';
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   deriveIcpTransportMessageId,
@@ -1252,6 +1253,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       let invalidationCall = 0;
       let racedPermitId: string | undefined;
       const tool = createContactTool(contactStore, {
+        intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
         blockList,
         permitInvalidation: {
           invalidatePendingInitiationPermitsForBlock: async () => {

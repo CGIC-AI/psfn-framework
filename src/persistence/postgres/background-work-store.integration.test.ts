@@ -683,7 +683,7 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('holds a replica-visible foreground fence until the owning turn ends', async () => {
+  it('holds a replica-visible compaction fence until the owning turn ends while autonomic work claims through it', async () => {
     const database = await harness.createDatabase();
     const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
@@ -692,37 +692,51 @@ describe('PostgresBackgroundWorkStore', () => {
       schema: 'companion_a',
     });
     try {
-      const input = makeInput('session-a', 'turn-a');
-      await first.enqueue(input);
+      const compaction = makeCompactionInput('session-a', 'turn-a', 100);
+      const memory = makeInput('session-a', 'turn-b');
+      await first.enqueue(compaction);
+      await first.enqueue(memory);
       await first.beginForeground({
-        logicalSessionId: input.logicalSessionId,
+        logicalSessionId: 'session-a',
         leaseOwner: 'foreground-a',
         leaseId: 'foreground-lease-a',
         nowMs: 100,
         leaseDurationMs: 1_000,
       });
-      expect(await second.claimNext({
+      // The turn is active on this session, yet the autonomic memory job is
+      // claimed by another replica and completes concurrently (hrmrq.119).
+      const memoryClaim = await second.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 200,
         leaseDurationMs: 100,
         excludedLogicalSessionIds: [],
+      });
+      expect(memoryClaim?.jobId).toBe(memory.jobId);
+      await second.complete({
+        jobId: memoryClaim!.jobId,
+        leaseOwner: memoryClaim!.leaseOwner,
+        expectedRevision: memoryClaim!.revision,
+        nowMs: 250,
+      });
+      // Only the foreground-exclusive compaction stays fenced behind the turn.
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 260,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
       })).toBeNull();
       expect(await first.endForeground({
-        logicalSessionId: input.logicalSessionId,
+        logicalSessionId: 'session-a',
         leaseOwner: 'foreground-a',
         leaseId: 'foreground-lease-a',
         nowMs: 300,
       })).toBe(true);
-      await first.resumeDeferredForSession({
-        logicalSessionId: input.logicalSessionId,
-        nowMs: 300,
-      });
       expect((await second.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 300,
         leaseDurationMs: 100,
         excludedLogicalSessionIds: [],
-      }))?.jobId).toBe(input.jobId);
+      }))?.jobId).toBe(compaction.jobId);
     } finally {
       await Promise.all([first.close(), second.close()]);
     }
@@ -742,7 +756,7 @@ describe('PostgresBackgroundWorkStore', () => {
     });
     const blocker = await blockerPool.connect();
     try {
-      const input = makeInput('session-a', 'turn-a');
+      const input = makeCompactionInput('session-a', 'turn-a', 100);
       const otherBase = makeInput('session-b', 'turn-b');
       const otherPayload: MemoryExtractionBackgroundPayload = {
         ...otherBase.payload as MemoryExtractionBackgroundPayload,
@@ -796,7 +810,9 @@ describe('PostgresBackgroundWorkStore', () => {
 
       await blocker.query('COMMIT');
       await foreground;
-      expect(await first.get(input.jobId)).toMatchObject({ state: 'deferred' });
+      // Foreground acquisition records the lease only — the queued compaction
+      // row is untouched, yet the live lease keeps it un-claimable.
+      expect(await first.get(input.jobId)).toMatchObject({ state: 'queued', revision: 1 });
       expect(await second.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 101,
@@ -821,7 +837,7 @@ describe('PostgresBackgroundWorkStore', () => {
     });
     const blocker = await blockerPool.connect();
     try {
-      const input = makeInput('session-a', 'turn-a');
+      const input = makeCompactionInput('session-a', 'turn-a', 100);
       await store.enqueue(input);
       const claim = await store.claimNext({
         leaseOwner: 'worker-a',
@@ -920,7 +936,7 @@ describe('PostgresBackgroundWorkStore', () => {
       foreground.signal.addEventListener('abort', () => {
         foregroundEffectCapable = false;
       }, { once: true });
-      await second.enqueue([makeInput('session-a', 'turn-a')]);
+      await second.enqueue([makeCompactionInput('session-a', 'turn-a', 100)]);
 
       now = 301_001;
       await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
@@ -949,14 +965,12 @@ describe('PostgresBackgroundWorkStore', () => {
       await replacementForeground.ready;
       await first.endForeground(foreground);
       await first.endForeground(foreground);
-      await first.waitForSessionTransitions();
-      await first.enqueue([makeInput('session-a', 'turn-b')]);
+      await first.enqueue([makeCompactionInput('session-a', 'turn-b', 200)]);
       await first.tick();
       await first.waitForIdle();
       expect(firstReplicaEffects).toBe(0);
 
       await second.endForeground(replacementForeground);
-      await second.waitForSessionTransitions();
       await first.tick();
       await first.waitForIdle();
       expect(firstReplicaEffects).toBe(1);
@@ -978,7 +992,7 @@ describe('PostgresBackgroundWorkStore', () => {
       schema: 'companion_a',
     });
     try {
-      const input = makeInput('session-a', 'turn-a');
+      const input = makeCompactionInput('session-a', 'turn-a', 100);
       await first.enqueue(input);
       await first.beginForeground({
         logicalSessionId: input.logicalSessionId,
@@ -1010,7 +1024,7 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('preserves the original retry deadline across foreground defer and resume', async () => {
+  it('preserves the original retry deadline across a foreground turn without touching the row', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
@@ -1024,7 +1038,7 @@ describe('PostgresBackgroundWorkStore', () => {
         leaseDurationMs: 100,
         excludedLogicalSessionIds: [],
       });
-      await store.failOrRetry({
+      const retried = await store.failOrRetry({
         jobId: claim!.jobId,
         leaseOwner: claim!.leaseOwner,
         expectedRevision: claim!.revision,
@@ -1038,22 +1052,12 @@ describe('PostgresBackgroundWorkStore', () => {
         nowMs: 200,
         leaseDurationMs: 1_000,
       });
-      expect(await store.get(input.jobId)).toMatchObject({
-        state: 'deferred',
-        availableAtMs: 1_200,
-        deferredFromState: 'retry_wait',
-        deferredFromAvailableAtMs: 500,
-      });
-      await store.endForeground({
-        logicalSessionId: input.logicalSessionId,
-        leaseOwner: 'foreground-a',
-        leaseId: 'foreground-lease-a',
-        nowMs: 300,
-      });
-      await store.resumeDeferredForSession({ logicalSessionId: input.logicalSessionId, nowMs: 300 });
+      // A turn starting is invisible to the queue row (hrmrq.119): the retry
+      // deadline and revision are exactly what failOrRetry left behind.
       expect(await store.get(input.jobId)).toMatchObject({
         state: 'retry_wait',
         availableAtMs: 500,
+        revision: retried.revision,
       });
       expect(await store.claimNext({
         leaseOwner: 'worker-b',
@@ -1061,6 +1065,8 @@ describe('PostgresBackgroundWorkStore', () => {
         leaseDurationMs: 100,
         excludedLogicalSessionIds: [],
       })).toBeNull();
+      // The retry claims on schedule even though the turn lease is still live:
+      // backoff, not foreground presence, is the only thing that gated it.
       expect((await store.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 500,
@@ -3406,55 +3412,65 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('defers foreground work until a crash-safe fallback and resumes only foreground deferrals', async () => {
+  it('keeps every queued row untouched across begin/end foreground at any depth (hrmrq.119)', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
     });
     try {
-      const foregroundInput = makeInput('session-a', 'turn-a');
-      await store.enqueue(foregroundInput);
-      const deferred = await store.deferRunnableForSession({
-        logicalSessionId: 'session-a',
-        nowMs: 110,
-        resumeFallbackAtMs: 500,
-      });
-      expect(deferred).toHaveLength(1);
-      expect(await store.claimNext({
-        leaseOwner: 'worker-a',
-        nowMs: 499,
-        leaseDurationMs: 100,
-        excludedLogicalSessionIds: [],
-      })).toBeNull();
-      expect(await store.resumeDeferredForSession({ logicalSessionId: 'session-a', nowMs: 200 }))
-        .toHaveLength(1);
-      expect((await store.claimNext({
-        leaseOwner: 'worker-a',
-        nowMs: 200,
-        leaseDurationMs: 100,
-        excludedLogicalSessionIds: [],
-      }))?.jobId).toBe(foregroundInput.jobId);
+      // A deep backlog on one session — the regression class was an O(depth)
+      // bulk UPDATE on every turn boundary (TTFT tracked queue depth linearly).
+      const inputs = Array.from({ length: 50 }, (_, index) => (
+        makeInput('session-a', `turn-${String(index)}`)
+      ));
+      for (const input of inputs) await store.enqueue(input);
 
-      const sourceInput = makeInput('session-b', 'turn-b');
-      await store.enqueue(sourceInput);
-      const sourceClaim = await store.claimNext({
-        leaseOwner: 'worker-b',
+      await store.beginForeground({
+        logicalSessionId: 'session-a',
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
         nowMs: 200,
+        leaseDurationMs: 1_000,
+      });
+      // Turn acquisition wrote the lease row only: all 50 job rows keep their
+      // enqueue-time state, availability, and revision.
+      for (const input of inputs) {
+        expect(await store.get(input.jobId)).toMatchObject({
+          state: 'queued',
+          reasonCode: 'enqueued',
+          availableAtMs: 100,
+          revision: 1,
+          deferCount: 0,
+        });
+      }
+      // And the backlog is claimable DURING the turn — depth does not stall
+      // behind conversation.
+      const claimed = await store.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 300,
         leaseDurationMs: 100,
         excludedLogicalSessionIds: [],
       });
-      expect(sourceClaim?.jobId).toBe(sourceInput.jobId);
-      await store.defer({
-        jobId: sourceClaim!.jobId,
-        leaseOwner: sourceClaim!.leaseOwner,
-        expectedRevision: sourceClaim!.revision,
-        reasonCode: 'source_not_ready',
-        availableAtMs: 600,
-        nowMs: 210,
+      expect(claimed).not.toBeNull();
+      expect(claimed?.welfareClaimed).toBe(false);
+
+      await store.endForeground({
+        logicalSessionId: 'session-a',
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 400,
       });
-      expect(await store.resumeDeferredForSession({ logicalSessionId: 'session-b', nowMs: 220 }))
-        .toEqual([]);
-      expect((await store.get(sourceInput.jobId))?.reasonCode).toBe('source_not_ready');
+      // Release is equally row-free: everything not claimed is still pristine.
+      for (const input of inputs) {
+        if (input.jobId === claimed?.jobId) continue;
+        expect(await store.get(input.jobId)).toMatchObject({
+          state: 'queued',
+          reasonCode: 'enqueued',
+          availableAtMs: 100,
+          revision: 1,
+          deferCount: 0,
+        });
+      }
     } finally {
       await store.close();
     }
@@ -3520,7 +3536,7 @@ describe('PostgresBackgroundWorkStore', () => {
 
   // ── mmo9.7.4: anti-starvation welfare reserve ───────────────────────────────
 
-  it('stamps foreground defer pressure (defer_count / first_deferred_at_ms) for welfare aging', async () => {
+  it('stamps preemption defer pressure (defer_count / first_deferred_at_ms) for welfare aging', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: 'companion_a' });
     try {
@@ -3531,12 +3547,22 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(fresh?.firstDeferredAtMs).toBeUndefined();
       expect(fresh?.welfareClaimed).toBe(false);
 
-      await store.beginForeground({
-        logicalSessionId: 'session-a',
-        leaseOwner: 'foreground-a',
-        leaseId: 'fg-lease-1',
-        nowMs: 500,
+      // A claim-level preemption defer (e.g. the provider gate yielded the
+      // model call to a foreground turn) is the only remaining source of
+      // welfare defer pressure — turn boundaries no longer stamp job rows.
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 400,
         leaseDurationMs: 1_000,
+        excludedLogicalSessionIds: [],
+      });
+      await store.defer({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        reasonCode: 'foreground_active',
+        availableAtMs: 1_500,
+        nowMs: 500,
       });
       const deferred = await store.get(input.jobId);
       expect(deferred?.state).toBe('deferred');
@@ -3548,14 +3574,17 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('rescues a reflection job starved by sustained foreground once it ages into a welfare slot', async () => {
+  it('rescues a reflection job starved by repeated preemption backoff once it ages into a welfare slot', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: 'companion_a' });
     try {
       const input = makeInput('session-a', 'turn-a');
       await store.enqueue(input);
-      // Sustained interactive load: a long-lived foreground lease keeps the
-      // session busy, and the job is deferred behind it.
+      // Sustained interactive load, modeled at the real contention point: the
+      // claim ran, its model call yielded to a foreground turn at the provider
+      // gate, and the resulting defer pushed availability far into the future.
+      // A live turn lease stays active throughout — it must be irrelevant to
+      // this non-compaction kind (hrmrq.119).
       await store.beginForeground({
         logicalSessionId: 'session-a',
         leaseOwner: 'foreground-a',
@@ -3563,45 +3592,48 @@ describe('PostgresBackgroundWorkStore', () => {
         nowMs: 100,
         leaseDurationMs: 1_000_000,
       });
+      const preempted = await store.claimNext({
+        leaseOwner: 'worker',
+        nowMs: 200,
+        leaseDurationMs: 1_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(preempted?.jobId).toBe(input.jobId);
+      await store.defer({
+        jobId: preempted!.jobId,
+        leaseOwner: preempted!.leaseOwner,
+        expectedRevision: preempted!.revision,
+        reasonCode: 'foreground_active',
+        availableAtMs: 10_000_000,
+        nowMs: 300,
+      });
 
-      // BASE (welfare disabled): the job is starved forever under foreground,
-      // no matter how much time passes. This is the mmo9.5.1 gap.
+      // BASE (welfare disabled): the backed-off job is unreachable no matter
+      // how much time passes short of its pushed availability.
       for (const nowMs of [1_000, 100_000, 500_000]) {
         expect(await store.claimNext({
           leaseOwner: 'worker',
           nowMs,
           leaseDurationMs: 1_000,
           excludedLogicalSessionIds: [],
-          foregroundExcludedLogicalSessionIds: ['session-a'],
         })).toBeNull();
       }
 
       // AGED (welfare enabled): the identical call now admits the job into a
-      // bounded welfare-reserve slot despite the still-active foreground lease.
+      // bounded welfare-reserve slot past its accrued backoff.
       const claimed = await store.claimNext({
         leaseOwner: 'worker',
         nowMs: 500_000,
         leaseDurationMs: 1_000,
         excludedLogicalSessionIds: [],
-        foregroundExcludedLogicalSessionIds: ['session-a'],
         // Unreachable defer count on purpose: eligibility here is by AGE only.
         welfare: { deferThreshold: 999, ageThresholdMs: 60_000, reserveSlots: 1 },
       });
       expect(claimed?.jobId).toBe(input.jobId);
       expect(claimed?.welfareClaimed).toBe(true);
 
-      // Welfare yields to conversation, it does not preempt it: the foreground
-      // lease is untouched, so ordinary (non-welfare) work stays blocked...
-      expect(await store.claimNext({
-        leaseOwner: 'worker-2',
-        nowMs: 500_001,
-        leaseDurationMs: 1_000,
-        excludedLogicalSessionIds: [claimed!.logicalSessionId],
-        foregroundExcludedLogicalSessionIds: ['session-a'],
-      })).toBeNull();
-
-      // ...while the welfare-claimed job is immune to the foreground effect fence
-      // and runs to a protected completion.
+      // The welfare-claimed job is immune to every foreground fence and runs to
+      // a protected completion while the turn lease is still live.
       expect(await store.checkClaimFence({
         jobId: input.jobId,
         leaseOwner: claimed!.leaseOwner,
@@ -3630,19 +3662,24 @@ describe('PostgresBackgroundWorkStore', () => {
       const b = makeInput('session-b', 'turn-b');
       await store.enqueue(a);
       await store.enqueue(b);
-      // Both sessions are busy and both jobs cross the defer threshold once.
-      await store.beginForeground({
-        logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 100, leaseDurationMs: 1_000_000,
-      });
-      await store.beginForeground({
-        logicalSessionId: 'session-b', leaseOwner: 'fg', leaseId: 'fg-b', nowMs: 100, leaseDurationMs: 1_000_000,
-      });
+      // Both jobs cross the defer threshold once: each was claimed, preempted
+      // at its model call, and deferred with a far-future backoff.
+      for (let preemption = 0; preemption < 2; preemption += 1) {
+        const claim = await store.claimNext({
+          leaseOwner: 'worker', nowMs: 150, leaseDurationMs: 1_000,
+          excludedLogicalSessionIds: [],
+        });
+        expect(claim).not.toBeNull();
+        await store.defer({
+          jobId: claim!.jobId, leaseOwner: claim!.leaseOwner, expectedRevision: claim!.revision,
+          reasonCode: 'foreground_active', availableAtMs: 10_000_000, nowMs: 160,
+        });
+      }
       const welfare = { deferThreshold: 1, ageThresholdMs: 10_000_000, reserveSlots: 1 };
-      const foregroundExcludedLogicalSessionIds = ['session-a', 'session-b'];
 
       const first = await store.claimNext({
         leaseOwner: 'worker', nowMs: 200, leaseDurationMs: 1_000,
-        excludedLogicalSessionIds: [], foregroundExcludedLogicalSessionIds, welfare,
+        excludedLogicalSessionIds: [], welfare,
       });
       expect(first?.welfareClaimed).toBe(true);
 
@@ -3650,7 +3687,7 @@ describe('PostgresBackgroundWorkStore', () => {
       // session cannot also be welfare-admitted.
       expect(await store.claimNext({
         leaseOwner: 'worker', nowMs: 201, leaseDurationMs: 1_000,
-        excludedLogicalSessionIds: [], foregroundExcludedLogicalSessionIds, welfare,
+        excludedLogicalSessionIds: [], welfare,
       })).toBeNull();
 
       // Completing the first frees the reserve slot; the other aged job is then
@@ -3660,7 +3697,7 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       const second = await store.claimNext({
         leaseOwner: 'worker', nowMs: 203, leaseDurationMs: 1_000,
-        excludedLogicalSessionIds: [], foregroundExcludedLogicalSessionIds, welfare,
+        excludedLogicalSessionIds: [], welfare,
       });
       expect(second?.welfareClaimed).toBe(true);
       expect(second?.logicalSessionId).not.toBe(first?.logicalSessionId);
@@ -3669,22 +3706,27 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('never welfare-admits a fresh (never-deferred) job, so idle background work stays FIFO', async () => {
+  it('never welfare-admits a job without preemption defer pressure, so backoff stays authoritative', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: 'companion_a' });
     try {
       const input = makeInput('session-a', 'turn-a');
       await store.enqueue(input);
-      await store.beginForeground({
-        logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 100, leaseDurationMs: 1_000_000,
-      });
-      // defer_count is 1 after one foreground defer; a threshold of 5 and an
-      // unreachable age keep it below the welfare line, so foreground still wins.
-      expect(await store.claimNext({
-        leaseOwner: 'worker', nowMs: 200, leaseDurationMs: 1_000,
+      // A source_not_ready defer carries no welfare pressure: defer_count stays
+      // 0 and first_deferred_at_ms stays unset, so even a generous welfare
+      // policy must not lift the job past its availability backoff.
+      const claim = await store.claimNext({
+        leaseOwner: 'worker', nowMs: 150, leaseDurationMs: 1_000,
         excludedLogicalSessionIds: [],
-        foregroundExcludedLogicalSessionIds: ['session-a'],
-        welfare: { deferThreshold: 5, ageThresholdMs: 10_000_000, reserveSlots: 1 },
+      });
+      await store.defer({
+        jobId: claim!.jobId, leaseOwner: claim!.leaseOwner, expectedRevision: claim!.revision,
+        reasonCode: 'source_not_ready', availableAtMs: 10_000_000, nowMs: 160,
+      });
+      expect(await store.claimNext({
+        leaseOwner: 'worker', nowMs: 5_000_000, leaseDurationMs: 1_000,
+        excludedLogicalSessionIds: [],
+        welfare: { deferThreshold: 1, ageThresholdMs: 1_000, reserveSlots: 1 },
       })).toBeNull();
     } finally {
       await store.close();
@@ -3713,7 +3755,7 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('resumes a foreground-deferred job at its original FIFO availability (welfare aging preserves age)', async () => {
+  it('preserves FIFO availability across a foreground turn (no row is ever pushed forward)', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: 'companion_a' });
     try {
@@ -3735,25 +3777,19 @@ describe('PostgresBackgroundWorkStore', () => {
       await store.beginForeground({
         logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 300, leaseDurationMs: 1_000,
       });
-      // Both jobs deferred with their original availability preserved for resume.
-      expect((await store.get(first.jobId))?.deferredFromAvailableAtMs).toBe(100);
-      expect((await store.get(second.jobId))?.deferredFromAvailableAtMs).toBe(200);
-
-      expect(await store.endForeground({
-        logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 2_000,
-      })).toBe(true);
-      await store.resumeDeferredForSession({ logicalSessionId: 'session-a', nowMs: 2_000 });
-
-      // Availability is restored to the original values (not pushed forward), so
-      // FIFO order by created_at is intact: the older turn claims first.
+      // The turn never rewrites availability, so FIFO order by created_at is
+      // intact and the older turn claims first — even mid-conversation.
       expect((await store.get(first.jobId))?.availableAtMs).toBe(100);
       expect((await store.get(second.jobId))?.availableAtMs).toBe(200);
       const claimed = await store.claimNext({
-        leaseOwner: 'worker', nowMs: 2_001, leaseDurationMs: 1_000,
+        leaseOwner: 'worker', nowMs: 301, leaseDurationMs: 1_000,
         excludedLogicalSessionIds: [],
       });
       expect(claimed?.jobId).toBe(first.jobId);
       expect(claimed?.welfareClaimed).toBe(false);
+      expect(await store.endForeground({
+        logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 2_000,
+      })).toBe(true);
     } finally {
       await store.close();
     }

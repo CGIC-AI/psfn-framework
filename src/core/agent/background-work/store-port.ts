@@ -30,11 +30,12 @@ export type BackgroundWorkEnqueueResult =
 export type BackgroundWorkClaimFence = 'owned' | 'foreground_active' | 'lease_lost';
 
 /**
- * Bounded anti-starvation welfare policy (mmo9.7.4). A runnable job crosses the
- * welfare threshold once it has accrued `deferThreshold` foreground defers OR its
- * first foreground defer is at least `ageThresholdMs` old; such a job may then be
- * admitted past the foreground exclusion into one of `reserveSlots` globally
- * bounded welfare slots. This is a reservation in the EXISTING claimNext choke,
+ * Bounded anti-starvation welfare policy (mmo9.7.4). A job crosses the welfare
+ * threshold once it has accrued `deferThreshold` claim-level preemption defers
+ * OR its first such defer is at least `ageThresholdMs` old; such a job may then
+ * be admitted past the availability backoff those defers accrued, into one of
+ * `reserveSlots` globally bounded welfare slots whose model calls are protected
+ * from gate preemption. This is a reservation in the EXISTING claimNext choke,
  * not a second scheduler (Law 12.4). A `reserveSlots` of 0 disables welfare
  * admission entirely (fail-closed to pre-welfare FIFO behavior).
  */
@@ -48,6 +49,12 @@ export interface BackgroundWorkStorePort {
   enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
   /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
   enqueueBatch(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<BackgroundWorkEnqueueResult[]>;
+  /**
+   * Record turn presence as a lease row only — O(1) with respect to queue
+   * depth, never touching job rows (hrmrq.119). The lease excludes only the
+   * foreground-exclusive kind (`auto_compaction`) at claim/effect time; all
+   * other kinds claim and run concurrently with the turn.
+   */
   beginForeground(input: {
     logicalSessionId: string;
     leaseOwner: string;
@@ -67,15 +74,6 @@ export interface BackgroundWorkStorePort {
     leaseId: string;
     nowMs: number;
   }): Promise<boolean>;
-  deferRunnableForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-    resumeFallbackAtMs: number;
-  }): Promise<StoredBackgroundWorkJob[]>;
-  resumeDeferredForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-  }): Promise<StoredBackgroundWorkJob[]>;
   claimNext(input: {
     leaseOwner: string;
     nowMs: number;
@@ -86,11 +84,11 @@ export interface BackgroundWorkStorePort {
      */
     excludedLogicalSessionIds: readonly string[];
     /**
-     * Foreground-active sessions. Normally excluded, but a welfare-eligible job
-     * (mmo9.7.4) may bypass this into a bounded welfare-reserve slot so sustained
-     * foreground turns cannot starve it forever. Optional — omission preserves
-     * the pre-welfare behavior where the durable foreground-lease exclusion is
-     * the only foreground gate.
+     * Foreground-active sessions this supervisor knows about locally. Excludes
+     * only the foreground-exclusive kind (`auto_compaction`) — all other kinds
+     * are claimed concurrently with active turns (hrmrq.119). It supplements
+     * the durable lease check for the window before an in-flight
+     * `beginForeground` insert becomes visible.
      */
     foregroundExcludedLogicalSessionIds?: readonly string[];
     /** Anti-starvation welfare policy (mmo9.7.4). Absent/0-slot disables welfare admission. */

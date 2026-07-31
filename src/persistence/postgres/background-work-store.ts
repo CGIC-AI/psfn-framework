@@ -26,7 +26,6 @@ import {
   createPostgresPool,
   ensurePostgresSchemaWithAdvisoryLock,
   queryOne,
-  queryRows,
   withPostgresClient,
 } from '../postgres.js';
 import {
@@ -71,14 +70,16 @@ interface BackgroundWorkClaimCandidateRow extends QueryResultRow {
 }
 
 /**
- * Kinds eligible for welfare bypass (mmo9.7.4). `auto_compaction` is deliberately
- * excluded: it rewrites the live session context a concurrent foreground turn is
- * reading/appending, so granting it foreground-fence immunity would let a
- * compaction race a turn. The other three kinds write to separate stores
- * (memories, emotion/internal state, behavioral patterns) off a claim-time
- * snapshot, so a bounded concurrent welfare run is safe.
+ * The single kind the foreground turn lease excludes (hrmrq.119). Background
+ * automata are designed to run concurrently with chat turns; `auto_compaction`
+ * is the one exception because it rewrites the live session context a
+ * concurrent foreground turn is reading/appending. The same property makes it
+ * welfare-ineligible (mmo9.7.4): a welfare slot must never admit it past the
+ * turn exclusion. The other three kinds write to separate stores (memories,
+ * emotion/internal state, behavioral patterns) off a claim-time snapshot, so
+ * they claim and run regardless of foreground activity.
  */
-const WELFARE_INELIGIBLE_KIND = 'auto_compaction';
+const FOREGROUND_EXCLUSIVE_KIND = 'auto_compaction';
 
 function normalizeWelfarePolicy(
   welfare: BackgroundWorkWelfarePolicy | undefined,
@@ -564,20 +565,10 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         nowMs,
         leaseDurationMs,
       ]);
-      await client.query(`
-        UPDATE agent_background_work_jobs
-        SET state = 'deferred',
-            deferred_from_state = state,
-            deferred_from_available_at_ms = available_at_ms,
-            available_at_ms = GREATEST(available_at_ms, $2::bigint + $3::bigint),
-            reason_code = 'foreground_active',
-            updated_at_ms = $2::bigint,
-            defer_count = defer_count + 1,
-            first_deferred_at_ms = COALESCE(first_deferred_at_ms, $2::bigint),
-            revision = revision + 1
-        WHERE logical_session_id = $1
-          AND state IN ('queued', 'retry_wait')
-      `, [logicalSessionId, nowMs, leaseDurationMs]);
+      // Deliberately no job-row writes here (hrmrq.119): the lease row alone is
+      // the turn-presence signal, checked at claim/effect time for the one
+      // foreground-exclusive kind. Stamping every queued job made turn latency
+      // O(queue depth) and suspended the autonomic lane during chat.
     });
   }
 
@@ -677,58 +668,6 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     });
   }
 
-  async deferRunnableForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-    resumeFallbackAtMs: number;
-  }): Promise<StoredBackgroundWorkJob[]> {
-    safeInteger(input.resumeFallbackAtMs, 'resumeFallbackAtMs');
-    const rows = await queryRows<BackgroundWorkRow>(this.pool, `
-      UPDATE agent_background_work_jobs
-      SET state = 'deferred',
-          deferred_from_state = state,
-          deferred_from_available_at_ms = available_at_ms,
-          available_at_ms = GREATEST(available_at_ms, $3::bigint),
-          reason_code = 'foreground_active',
-          updated_at_ms = $2,
-          defer_count = defer_count + 1,
-          first_deferred_at_ms = COALESCE(first_deferred_at_ms, $2::bigint),
-          revision = revision + 1
-      WHERE logical_session_id = $1
-        AND state IN ('queued', 'retry_wait')
-      RETURNING ${JOB_COLUMNS}
-    `, [
-      requireText(input.logicalSessionId, 'logicalSessionId'),
-      safeInteger(input.nowMs, 'nowMs'),
-      safeInteger(input.resumeFallbackAtMs, 'resumeFallbackAtMs'),
-    ]);
-    return rows.map(mapRow);
-  }
-
-  async resumeDeferredForSession(input: {
-    logicalSessionId: string;
-    nowMs: number;
-  }): Promise<StoredBackgroundWorkJob[]> {
-    const rows = await queryRows<BackgroundWorkRow>(this.pool, `
-      UPDATE agent_background_work_jobs
-      SET state = COALESCE(deferred_from_state, 'queued'),
-          available_at_ms = COALESCE(deferred_from_available_at_ms, available_at_ms),
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          reason_code = 'foreground_active',
-          updated_at_ms = $2,
-          revision = revision + 1
-      WHERE logical_session_id = $1
-        AND state = 'deferred'
-        AND reason_code = 'foreground_active'
-      RETURNING ${JOB_COLUMNS}
-    `, [
-      requireText(input.logicalSessionId, 'logicalSessionId'),
-      safeInteger(input.nowMs, 'nowMs'),
-    ]);
-    return rows.map(mapRow);
-  }
-
   async claimNext(input: {
     leaseOwner: string;
     nowMs: number;
@@ -740,8 +679,9 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     const nowMs = safeInteger(input.nowMs, 'nowMs');
     const leaseDurationMs = positiveInteger(input.leaseDurationMs, 'leaseDurationMs');
     // Hard exclusion (running sessions): never bypassed. Foreground exclusion:
-    // normally excluded, welfare may bypass. A session may appear in both lists;
-    // the hard list always wins.
+    // applies only to the foreground-exclusive kind (auto_compaction) — all
+    // other kinds claim concurrently with an active turn (hrmrq.119). A session
+    // may appear in both lists; the hard list always wins.
     const excluded = input.excludedLogicalSessionIds.map(sessionId => (
       requireText(sessionId, 'excludedLogicalSessionId')
     ));
@@ -756,12 +696,14 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       // Candidate discovery deliberately takes no row lock: taking a job row
       // before this advisory lock would invert beginForeground's lock order.
       //
-      // A candidate is admissible via the NORMAL path (no foreground contention)
-      // or, once it has crossed the welfare threshold (mmo9.7.4), via the WELFARE
-      // path which bypasses the foreground exclusion into one of a bounded number
-      // of reserve slots. Non-admissible rows are filtered out before ranking, so
-      // an inadmissible sibling (e.g. a foreground-blocked auto_compaction) never
-      // occupies the session's rank-1 slot ahead of a welfare-eligible job.
+      // A candidate is admissible via the NORMAL path (available, and for the
+      // foreground-exclusive kind no turn contention) or, once it has crossed
+      // the welfare threshold (mmo9.7.4), via the WELFARE path which bypasses
+      // the availability backoff accrued from repeated claim-level preemption
+      // defers into one of a bounded number of reserve slots. Non-admissible
+      // rows are filtered out before ranking, so an inadmissible sibling (e.g.
+      // a foreground-blocked auto_compaction) never occupies the session's
+      // rank-1 slot ahead of a welfare-eligible job.
       const candidates = await client.query<BackgroundWorkClaimCandidateRow>(`
         WITH admissible AS (
           SELECT
@@ -770,17 +712,23 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             candidate_job.created_at_ms,
             candidate_job.kind,
             -- via_welfare = NOT admissible-by-the-normal-path. The normal path
-            -- requires the job to be available (backoff elapsed) AND free of any
-            -- foreground contention; anything else that still reaches this CTE
-            -- got here through the welfare branch below.
+            -- requires the job to be available (backoff elapsed) AND, for the
+            -- foreground-exclusive kind only, free of turn contention; anything
+            -- else that still reaches this CTE got here through the welfare
+            -- branch below.
             NOT (
               candidate_job.available_at_ms <= $1
-              AND NOT (candidate_job.logical_session_id = ANY($3::text[]))
-              AND NOT EXISTS (
-                SELECT 1
-                FROM agent_background_work_foreground_leases foreground
-                WHERE foreground.logical_session_id = candidate_job.logical_session_id
-                  AND foreground.expires_at_ms > $1
+              AND (
+                candidate_job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
+                OR (
+                  NOT (candidate_job.logical_session_id = ANY($3::text[]))
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM agent_background_work_foreground_leases foreground
+                    WHERE foreground.logical_session_id = candidate_job.logical_session_id
+                      AND foreground.expires_at_ms > $1
+                  )
+                )
               )
             ) AS via_welfare
           FROM agent_background_work_jobs candidate_job
@@ -793,26 +741,32 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
                 AND running_job.state = 'running'
             )
             AND (
-              -- normal admission: available and no foreground contention
+              -- normal admission: available; only the foreground-exclusive kind
+              -- additionally requires the session to be free of turn contention
               (
                 candidate_job.available_at_ms <= $1
-                AND NOT (candidate_job.logical_session_id = ANY($3::text[]))
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM agent_background_work_foreground_leases foreground
-                  WHERE foreground.logical_session_id = candidate_job.logical_session_id
-                    AND foreground.expires_at_ms > $1
+                AND (
+                  candidate_job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
+                  OR (
+                    NOT (candidate_job.logical_session_id = ANY($3::text[]))
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM agent_background_work_foreground_leases foreground
+                      WHERE foreground.logical_session_id = candidate_job.logical_session_id
+                        AND foreground.expires_at_ms > $1
+                    )
+                  )
                 )
               )
               -- welfare admission: aged past threshold, kind is welfare-safe, and a
-              -- reserve slot is free. Deliberately bypasses BOTH the foreground
-              -- exclusion AND the availability backoff: the deferred job's
-              -- available_at_ms was pushed past the foreground window, but the
-              -- welfare age is measured from the stable first_deferred_at_ms, so an
-              -- aged job runs now rather than waiting out a foreground that never ends.
+              -- reserve slot is free. Deliberately bypasses the availability
+              -- backoff: repeated claim-level preemption defers push
+              -- available_at_ms forward, but the welfare age is measured from the
+              -- stable first_deferred_at_ms, so an aged job runs now rather than
+              -- waiting out contention that never ends.
               OR (
                 $6 > 0
-                AND candidate_job.kind <> '${WELFARE_INELIGIBLE_KIND}'
+                AND candidate_job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
                 AND (
                   candidate_job.defer_count >= $4
                   OR (
@@ -887,7 +841,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
                 revision = revision + 1
             WHERE job.job_id = $4
               AND job.state IN ('queued', 'deferred', 'retry_wait')
-              AND job.kind <> '${WELFARE_INELIGIBLE_KIND}'
+              AND job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
               AND $7 > 0
               AND (
                 job.defer_count >= $5
@@ -929,11 +883,14 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             WHERE job.job_id = $4
               AND job.state IN ('queued', 'deferred', 'retry_wait')
               AND job.available_at_ms <= $2
-              AND NOT EXISTS (
-                SELECT 1
-                FROM agent_background_work_foreground_leases foreground
-                WHERE foreground.logical_session_id = job.logical_session_id
-                  AND foreground.expires_at_ms > $2
+              AND (
+                job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM agent_background_work_foreground_leases foreground
+                  WHERE foreground.logical_session_id = job.logical_session_id
+                    AND foreground.expires_at_ms > $2
+                )
               )
               AND NOT EXISTS (
                 SELECT 1
@@ -1012,7 +969,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           OR job.revision <> $3
           OR job.lease_expires_at_ms <= $4
           THEN 'lease_lost'
-        WHEN (NOT COALESCE(job.welfare_claimed, false)) AND EXISTS (
+        WHEN job.kind = '${FOREGROUND_EXCLUSIVE_KIND}' AND EXISTS (
           SELECT 1
           FROM agent_background_work_foreground_leases foreground
           WHERE foreground.logical_session_id = job.logical_session_id
@@ -1059,7 +1016,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             OR job.revision <> $3
             OR job.lease_expires_at_ms <= $4
             THEN 'lease_lost'
-          WHEN (NOT job.welfare_claimed) AND EXISTS (
+          WHEN job.kind = '${FOREGROUND_EXCLUSIVE_KIND}' AND EXISTS (
             SELECT 1 FROM agent_background_work_foreground_leases foreground
             WHERE foreground.logical_session_id = job.logical_session_id
               AND foreground.expires_at_ms > $4
@@ -1166,7 +1123,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             OR job.revision <> $3
             OR job.lease_expires_at_ms <= $4
             THEN 'lease_lost'
-          WHEN (NOT job.welfare_claimed) AND EXISTS (
+          WHEN job.kind = '${FOREGROUND_EXCLUSIVE_KIND}' AND EXISTS (
             SELECT 1 FROM agent_background_work_foreground_leases foreground
             WHERE foreground.logical_session_id = job.logical_session_id
               AND foreground.expires_at_ms > $4

@@ -38,6 +38,7 @@ describe('intake policy owner migration', () => {
     ) as Record<string, unknown>;
     const legacy = structuredClone(current);
     legacy.schemaVersion = 1;
+    delete (legacy.sourceRiskTiers as Record<string, unknown>).companion_self;
     Object.assign(legacy.l2Screener as Record<string, unknown>, {
       model: 'legacy/l2',
     });
@@ -69,10 +70,9 @@ describe('intake policy owner migration', () => {
       status: 'planned',
       fromSchemaVersion: 1,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      addedPaths: ['sinkGates.sinks.skill_write'],
-      updatedPaths: [
-        'sinkGates.sinks.persona_mutation.maxSourceRiskTier',
-        'sinkGates.sinks.trust_mutation.maxSourceRiskTier',
+      addedPaths: [
+        'sinkGates.sinks.skill_write',
+        'sourceRiskTiers.companion_self',
       ],
       removedPaths: [
         'l2Screener.model',
@@ -91,9 +91,10 @@ describe('intake policy owner migration', () => {
     });
     const loaded = loadIntakePolicyConfig(dataDir);
     expect(loaded.schemaVersion).toBe(INTAKE_POLICY_SCHEMA_VERSION);
+    expect(loaded.sourceRiskTiers.companion_self).toBe('trusted');
     expect(loaded.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
-    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
-    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
+    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
+    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
     expect(loaded.l3Screener.dualModel).toBe(false);
     expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
       status: 'not_needed',
@@ -101,7 +102,7 @@ describe('intake policy owner migration', () => {
     });
   });
 
-  it('upgrades a v2 owner so screened persona and trust writes are admitted', () => {
+  it('upgrades a v2 owner with the trusted companion-self source class', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
     tempDirs.push(dataDir);
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
@@ -109,6 +110,7 @@ describe('intake policy owner migration', () => {
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
     ) as Record<string, unknown>;
     legacy.schemaVersion = 2;
+    delete (legacy.sourceRiskTiers as Record<string, unknown>).companion_self;
     const sinks = (legacy.sinkGates as { sinks: Record<string, Record<string, unknown>> }).sinks;
     sinks.persona_mutation.maxSourceRiskTier = 'standard';
     sinks.trust_mutation.maxSourceRiskTier = 'standard';
@@ -118,18 +120,16 @@ describe('intake policy owner migration', () => {
       status: 'planned',
       fromSchemaVersion: 2,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      updatedPaths: [
-        'sinkGates.sinks.persona_mutation.maxSourceRiskTier',
-        'sinkGates.sinks.trust_mutation.maxSourceRiskTier',
-      ],
+      addedPaths: ['sourceRiskTiers.companion_self'],
     });
     expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
       fromSchemaVersion: 2,
     });
     const loaded = loadIntakePolicyConfig(dataDir);
-    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('untrusted');
-    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('untrusted');
+    expect(loaded.sourceRiskTiers.companion_self).toBe('trusted');
+    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
+    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
   });
 
   it('fails closed on malformed or ambiguous legacy sink maps', () => {
@@ -160,6 +160,7 @@ describe('intake policy owner migration', () => {
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
     ) as Record<string, unknown>;
     invalidV2.schemaVersion = 2;
+    delete (invalidV2.sourceRiskTiers as Record<string, unknown>).companion_self;
     const sinkGates = invalidV2.sinkGates as { sinks: Record<string, unknown> };
     delete sinkGates.sinks.skill_write;
     writeFileSync(filePath, `${JSON.stringify(invalidV2, null, 2)}\n`);
@@ -168,6 +169,42 @@ describe('intake policy owner migration', () => {
       .toThrow(/sinkGates\.sinks\.skill_write is required/);
     expect(() => loadIntakePolicyConfig(dataDir))
       .toThrow(/schemaVersion 2 owners require the explicit migrate:intake-policy-owner command/);
+  });
+
+  it('repairs a v3 owner created before the companion-self security remediation', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const affectedV3 = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    delete (affectedV3.sourceRiskTiers as Record<string, unknown>).companion_self;
+    const sinks = (affectedV3.sinkGates as {
+      sinks: Record<string, Record<string, unknown>>;
+    }).sinks;
+    sinks.persona_mutation.maxSourceRiskTier = 'untrusted';
+    sinks.trust_mutation.maxSourceRiskTier = 'untrusted';
+    writeFileSync(filePath, `${JSON.stringify(affectedV3, null, 2)}\n`);
+
+    expect(() => loadIntakePolicyConfig(dataDir))
+      .toThrow(/sourceRiskTiers\.companion_self is required/);
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      addedPaths: ['sourceRiskTiers.companion_self'],
+      updatedPaths: [
+        'sinkGates.sinks.persona_mutation.maxSourceRiskTier',
+        'sinkGates.sinks.trust_mutation.maxSourceRiskTier',
+      ],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+    });
+    const loaded = loadIntakePolicyConfig(dataDir);
+    expect(loaded.sourceRiskTiers.companion_self).toBe('trusted');
+    expect(loaded.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
+    expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
   });
 
   it('dry-runs and atomically removes retired screener model keys from a v3 owner', () => {

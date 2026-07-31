@@ -29,7 +29,7 @@ export function buildWorldCases(ctx, services, env) {
       'Garden audit plus TurnRecord.toolCalls',
       'synthetic telemetry has a Garden eventId and persisted world list/perceive calls',
     ),
-    before: async () => {
+    before: async ({ signal }) => {
       const nonce = `s10-world-${ctx.runToken}`;
       const telemetry = await services.fetchJson(`${services.apiBase}/v1/telemetry/ingest`, {
         method: 'POST',
@@ -47,6 +47,7 @@ export function buildWorldCases(ctx, services, env) {
             occupancyCount: 1,
           },
         }),
+        signal,
       });
       return {
         telemetry: {
@@ -55,14 +56,14 @@ export function buildWorldCases(ctx, services, env) {
         },
       };
     },
-    after: async ({ beforeChecks }) => {
+    after: async ({ beforeChecks, signal }) => {
       const eventId = beforeChecks?.telemetry?.eventId;
       const auditPath = join(services.companionDataDir, GARDEN_AUDIT_FILE);
       let gardenAuditFound = false;
       for (let attempt = 0; attempt < 20 && !gardenAuditFound; attempt += 1) {
         gardenAuditFound = typeof eventId === 'string'
           && artifactContainsEvent(services.readJsonl(auditPath), eventId);
-        if (!gardenAuditFound) await sleep(100);
+        if (!gardenAuditFound) await sleep(100, signal);
       }
       return {
         world: {

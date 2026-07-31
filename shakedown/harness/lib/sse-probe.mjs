@@ -32,6 +32,7 @@ export async function probeSseChatCompletion({
   responseStyle = 'concise',
   timeoutMs = 120_000,
   waitForTurnRecord,
+  signal,
 }) {
   if (typeof waitForTurnRecord !== 'function') {
     throw new Error('probeSseChatCompletion requires waitForTurnRecord');
@@ -39,6 +40,12 @@ export async function probeSseChatCompletion({
   const startedAtMs = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else {
+    signal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
   let response;
   let fetchError = null;
   let firstContent = '';
@@ -110,6 +117,7 @@ export async function probeSseChatCompletion({
     fetchError = error instanceof Error ? error.message : String(error);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 
   const turnRecord = await waitForTurnRecord({

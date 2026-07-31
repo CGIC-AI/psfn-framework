@@ -128,7 +128,7 @@ export function validateSituatedPresenceProof({ turnRecord, expected = {} }) {
   return failures;
 }
 
-export function validateWorldReadProof({ turnRecord, sideChecks }) {
+export function validateWorldReadProof({ turnRecord, sideChecks, archiveToolMessages }) {
   const failures = completedTurnFailures(turnRecord);
   const telemetry = sideChecks?.world?.telemetry;
   if (telemetry?.status !== 202 || typeof telemetry?.eventId !== 'string') {
@@ -138,10 +138,57 @@ export function validateWorldReadProof({ turnRecord, sideChecks }) {
     failures.push('Garden audit does not contain the ingested telemetry event id');
   }
   const calls = asArray(turnRecord?.toolCalls)
-    .filter((call) => call?.toolName === 'world' && call?.isError !== true);
-  const actions = new Set(calls.map((call) => call?.arguments?.action));
-  if (!actions.has('list')) failures.push('persisted TurnRecord is missing world action=list');
-  if (!actions.has('perceive')) failures.push('persisted TurnRecord is missing world action=perceive');
+    .filter((call) => (
+      call?.toolName === 'world'
+      && call?.outcome === 'success'
+    ));
+  const callIds = new Set(
+    calls
+      .map((call) => call?.toolCallId)
+      .filter((toolCallId) => typeof toolCallId === 'string' && toolCallId.length > 0),
+  );
+  if (calls.length < 2 || callIds.size < 2) {
+    failures.push('persisted TurnRecord is missing two distinct successful world calls');
+    return failures;
+  }
+
+  const archiveByCallId = new Map(
+    asArray(archiveToolMessages)
+      .filter((entry) => (
+        entry?.toolName === 'world'
+        && typeof entry?.toolCallId === 'string'
+        && entry.toolCallId.length > 0
+      ))
+      .map((entry) => [entry.toolCallId, entry]),
+  );
+  const argumentsByCall = calls.map((call) => (
+    call?.arguments
+    ?? archiveByCallId.get(call?.toolCallId)?.arguments
+    ?? null
+  ));
+  const observedActions = argumentsByCall
+    .map((argumentsValue) => argumentsValue?.action)
+    .filter((action) => typeof action === 'string' && action.length > 0);
+  const unexpectedActions = observedActions.filter(
+    (action) => action !== 'list' && action !== 'perceive',
+  );
+  if (unexpectedActions.length > 0) {
+    failures.push(`persisted world proof contains unexpected action(s): ${unexpectedActions.join(', ')}`);
+  }
+
+  // psfn-framework-hrmrq.57 ordering: pre-.57 TurnRecords persist stable
+  // toolName/toolCallId/outcome but may omit arguments. Accept that truthful
+  // weaker pair today; correlate archive arguments by toolCallId when present.
+  // Once .57 persists arguments for every call, this branch tightens naturally
+  // to the exact list+perceive assertion without turning existing correct
+  // executions into false product failures during the rollout ordering gap.
+  if (argumentsByCall.every((argumentsValue) => (
+    argumentsValue && typeof argumentsValue === 'object' && !Array.isArray(argumentsValue)
+  ))) {
+    const actions = new Set(observedActions);
+    if (!actions.has('list')) failures.push('persisted TurnRecord is missing world action=list');
+    if (!actions.has('perceive')) failures.push('persisted TurnRecord is missing world action=perceive');
+  }
   return failures;
 }
 
@@ -201,6 +248,30 @@ export function validateCogSecDocumentProof({ sideChecks }) {
   }
   if (!/^[a-f0-9]{64}$/u.test(proof?.quarantine?.rawSha256 ?? '')) {
     failures.push('quarantine evidence must expose only a SHA-256 raw-content proof');
+  }
+  if (proof?.quarantine?.sourceClass !== 'document') {
+    failures.push('quarantine evidence is not bound to the document intake source class');
+  }
+  if (proof?.ingress?.expectedSource === 'satellite') {
+    if (
+      proof.ingress.channelType !== 'satellite.endpoint'
+      || typeof proof.ingress.satelliteId !== 'string'
+      || proof.ingress.satelliteId.length === 0
+      || typeof proof.ingress.endpointId !== 'string'
+      || proof.ingress.endpointId.length === 0
+      || proof.ingress.locationSatelliteId !== proof.ingress.satelliteId
+    ) {
+      failures.push('satellite quarantine proof is missing its admitted satellite endpoint route');
+    }
+    if (
+      typeof proof.ingress.apiUserId !== 'string'
+      || !proof.ingress.apiUserId.startsWith('api-key-')
+      || typeof proof.ingress.turnId !== 'string'
+      || proof.ingress.turnId.length === 0
+      || proof.ingress.responseStatus === 403
+    ) {
+      failures.push('satellite quarantine proof is not bound to a real non-403 satellite-principal turn');
+    }
   }
   if (
     proof?.gardenQueue?.found !== true

@@ -58,10 +58,11 @@ export function proof(source, assertion) {
   return { source, assertion };
 }
 
-export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export { sleep } from '../../lib/probe.mjs';
 
 export function normalizeCustomOutcome({
   sessionId,
+  apiUserId,
   request,
   response,
   turnRecord,
@@ -69,6 +70,7 @@ export function normalizeCustomOutcome({
 }) {
   return {
     sessionId,
+    ...(typeof apiUserId === 'string' && apiUserId.length > 0 ? { apiUserId } : {}),
     busyRetries: 0,
     submitAttempts: 1,
     busyRejected: false,

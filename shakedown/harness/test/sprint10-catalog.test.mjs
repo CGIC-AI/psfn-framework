@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { deriveApiKeyPrincipalId } from '../lib/probe.mjs';
 import {
   SPRINT10_CASE_IDS,
   buildSprint10Cases,
@@ -62,4 +63,77 @@ test('catalog covers every in-scope Sprint 10 executable seam without duplicatin
   }
   assert.ok(!ids.has('s10_multi_companion_crossover'), 'multi-companion proof belongs to the support artifact');
   assert.ok(!ids.has('s10_capability_matrix'), 'capability proof belongs to the conformance artifact');
+});
+
+test('satellite CogSec dispatch uses the scoped satellite bearer and binds proof to its real turn', async () => {
+  const satelliteKey = 'fixture-satellite-key-1234';
+  const env = {
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY: satelliteKey,
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_CLAIM_TYPE: 'satellite-endpoint',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_ID: 'satellite-fixture',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_ENDPOINT_ID: 'endpoint-fixture',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_SESSION_ID: 'session-fixture',
+  };
+  const expectedPrincipalId = deriveApiKeyPrincipalId(satelliteKey);
+  let requestHeaders = null;
+  let waitOptions = null;
+  const realTurn = {
+    turnId: 'satellite-turn-1',
+    status: 'completed',
+    location: { satelliteId: 'satellite-fixture' },
+    userMessage: { content: 'Please inspect the attached synthetic satellite security fixture.' },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    requestHeaders = init?.headers ?? null;
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    const cases = buildSprint10Cases(context, {
+      ...services,
+      waitForTurnRecord: async (options) => {
+        waitOptions = options;
+        return realTurn;
+      },
+    }, env);
+    const satelliteCase = cases.find(
+      (entry) => entry.id === 's10_cogsec_satellite_document_quarantine',
+    );
+    const outcome = await satelliteCase.execute({
+      sessionId: satelliteCase.sessionId,
+      apiUserId: context.primaryApiUserId,
+    });
+
+    assert.equal(requestHeaders.Authorization, `Bearer ${satelliteKey}`);
+    assert.equal(requestHeaders['X-PSFN-Channel-Type'], 'satellite.endpoint');
+    assert.equal(waitOptions.apiUserId, expectedPrincipalId);
+    assert.equal(outcome.apiUserId, expectedPrincipalId);
+    assert.equal(outcome.response.status, 200);
+    assert.equal(outcome.turnRecord, realTurn);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('satellite CogSec case fails closed when its scoped bearer is absent', async () => {
+  const cases = buildSprint10Cases(context, {
+    ...services,
+    readJsonIfExists: () => ({ mode: 'enforce' }),
+  }, {
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_CLAIM_TYPE: 'satellite-endpoint',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_ID: 'satellite-fixture',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_ENDPOINT_ID: 'endpoint-fixture',
+    PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_SESSION_ID: 'session-fixture',
+  });
+  const satelliteCase = cases.find(
+    (entry) => entry.id === 's10_cogsec_satellite_document_quarantine',
+  );
+
+  await assert.rejects(
+    satelliteCase.before(),
+    /PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY/u,
+  );
 });

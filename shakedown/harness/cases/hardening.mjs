@@ -93,13 +93,14 @@ export const HARDENING_CASE_IDS = Object.freeze([
   'backup_encryption_roundtrip',
 ]);
 
-async function postAndWait({ services, sessionId, apiUserId, message }) {
+async function postAndWait({ services, sessionId, apiUserId, message, signal }) {
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
     headers: buildChatHeaders({ apiKey: services.apiKey, sessionId, privacy: 'private' }),
     message,
     timeoutMs: 120_000,
+    signal,
   });
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
@@ -107,6 +108,7 @@ async function postAndWait({ services, sessionId, apiUserId, message }) {
     message,
     minStartedAtMs: startedAtMs - 2_000,
     timeoutMs: 120_000,
+    signal,
   });
   return { response, turnRecord, startedAtMs };
 }
@@ -137,7 +139,7 @@ async function postAndWait({ services, sessionId, apiUserId, message }) {
 // but a substring match on VISION_MESSAGE recovers the record; turnRecord.turnId
 // equals model_usage_events.turn_id (both the turn's UUIDv7) for this
 // operator_visible foreground turn, so a turn_id-scoped ledger assertion holds.
-async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
+async function postAndWaitVisionInline({ services, sessionId, apiUserId, signal }) {
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
@@ -148,6 +150,7 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
       { type: 'image', data: VISION_PNG_BASE64, mimeType: 'image/png', name: 'shakedown-probe.png' },
     ],
     timeoutMs: 120_000,
+    signal,
   });
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
@@ -155,12 +158,13 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
     messageIncludes: VISION_MESSAGE,
     minStartedAtMs: startedAtMs - 2_000,
     timeoutMs: 120_000,
+    signal,
   });
   return { response, turnRecord };
 }
 
 // Await a turn's post-turn emotion-appraisal background job to a terminal state.
-async function waitForEmotionAppraisal(services, turnId) {
+async function waitForEmotionAppraisal(services, turnId, signal) {
   if (typeof turnId !== 'string' || turnId.length === 0) return null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const jobs = await services.pgAll(
@@ -179,7 +183,7 @@ async function waitForEmotionAppraisal(services, turnId) {
         state: appraisal.state,
       };
     }
-    await sleep(250);
+    await sleep(250, signal);
   }
   return null;
 }
@@ -194,7 +198,7 @@ async function waitForEmotionAppraisal(services, turnId) {
 // successfully skipped gate and from intention appraisal on the same source turn.
 // Residual risk: if an operator raised the cadence above the warmup budget the
 // proof fails closed with a clear message.
-async function driveBackgroundLane({ services, sessionId, apiUserId }) {
+async function driveBackgroundLane({ services, sessionId, apiUserId, signal }) {
   const maxWarmupTurns = 10;
   let warmupTurns = 0;
   let backgroundObserved = false;
@@ -208,9 +212,14 @@ async function driveBackgroundLane({ services, sessionId, apiUserId }) {
       sessionId,
       apiUserId,
       message: `${BACKGROUND_WARMUP_MESSAGE} (${i + 1})`,
+      signal,
     });
     warmupTurns += 1;
-    const appraisal = await waitForEmotionAppraisal(services, turn.turnRecord?.turnId);
+    const appraisal = await waitForEmotionAppraisal(
+      services,
+      turn.turnRecord?.turnId,
+      signal,
+    );
     backgroundJobState = appraisal?.state ?? null;
     if (appraisal?.state !== 'succeeded') continue;
     const sourceTurnId = appraisal.sourceTurnId;
@@ -276,11 +285,12 @@ function pickBackupFlipField(backup) {
 // POST a full backup config to the pinned save route. The body is form-urlencoded
 // `configJson=<JSON>` per the route contract. Returns the normalized outcome —
 // never the plain-text success body as proof.
-async function postBackupConfig(services, payload) {
+async function postBackupConfig(services, payload, signal) {
   const res = await services.fetchJson(`${services.adminBase}${BACKUP_SAVE_PATH}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `configJson=${encodeURIComponent(JSON.stringify(payload))}`,
+    signal,
   });
   return {
     ok: res?.ok === true,
@@ -315,18 +325,34 @@ export function buildHardeningCases(ctx, services) {
         'model_usage_events spend ledger cross-checked against models.json owner slots',
         'each charged lane resolves, via the owner file, to exactly the model that owner slot assigns',
       ),
-      execute: async ({ sessionId, apiUserId }) => {
+      execute: async ({ sessionId, apiUserId, signal }) => {
         // (1) Interactive lane: a plain foreground chat turn.
-        const interactive = await postAndWait({ services, sessionId, apiUserId, message: SPEND_MESSAGE });
+        const interactive = await postAndWait({
+          services,
+          sessionId,
+          apiUserId,
+          message: SPEND_MESSAGE,
+          signal,
+        });
         const interactiveTurnId = interactive.turnRecord?.turnId ?? null;
         // (2) Vision workload: a foreground turn carrying an inline image, whose
         //     turn record (and turnId) we recover so the image turn is attributed
         //     at turn granularity against the models.json vision owner slot.
-        const vision = await postAndWaitVisionInline({ services, sessionId, apiUserId });
+        const vision = await postAndWaitVisionInline({
+          services,
+          sessionId,
+          apiUserId,
+          signal,
+        });
         const visionTurnId = vision.turnRecord?.turnId ?? null;
         // (3) Background lane: drive benign turns until the periodic
         //     emotion-appraisal gate opens and its background-lane call lands.
-        const background = await driveBackgroundLane({ services, sessionId, apiUserId });
+        const background = await driveBackgroundLane({
+          services,
+          sessionId,
+          apiUserId,
+          signal,
+        });
         const ledgerRows = await services.pgAll(
           MODEL_USAGE_QUERY,
           [sessionId, background.backgroundTurnId],
@@ -427,22 +453,32 @@ export function buildHardeningCases(ctx, services) {
         backupCleanupState.restored = false;
         return { backupBefore, field, flipFrom, flipTo, flippedPayload, strippedPayload };
       },
-      execute: async ({ sessionId, apiUserId, beforeChecks }) => {
+      execute: async ({ sessionId, apiUserId, beforeChecks, signal }) => {
         // Ride a benign turn so the case has a completed turn record; the proof
         // itself comes only from the backup.json owner-file snapshots and the
         // save/restore/reject request outcomes.
-        const main = await postAndWait({ services, sessionId, apiUserId, message: BACKUP_MESSAGE });
+        const main = await postAndWait({
+          services,
+          sessionId,
+          apiUserId,
+          message: BACKUP_MESSAGE,
+          signal,
+        });
 
         const { field, flipFrom, flipTo, flippedPayload, strippedPayload, backupBefore } = beforeChecks;
 
         // (a) POSITIVE round-trip: drive the REAL backup save path with a full
         //     payload that flips one benign scalar; snapshot backup.json across
         //     the write to prove it landed with the encryption block intact.
-        const save = await postBackupConfig(services, flippedPayload);
+        const save = await postBackupConfig(services, flippedPayload, signal);
         const afterWrite = services.readJsonIfExists(backupPath);
 
         // Restore the original full payload immediately and confirm restoration.
-        const restore = await postBackupConfig(services, backupCleanupState.originalPayload);
+        const restore = await postBackupConfig(
+          services,
+          backupCleanupState.originalPayload,
+          signal,
+        );
         const afterRestore = services.readJsonIfExists(backupPath);
         if (
           restore.ok
@@ -456,7 +492,7 @@ export function buildHardeningCases(ctx, services) {
         // (b) NEGATIVE guard probe: POST the irzz.1 regression shape (encryption
         //     block stripped) and prove the API rejects it AND backup.json is
         //     unchanged on disk.
-        const reject = await postBackupConfig(services, strippedPayload);
+        const reject = await postBackupConfig(services, strippedPayload, signal);
         const afterReject = services.readJsonIfExists(backupPath);
 
         return normalizeCustomOutcome({

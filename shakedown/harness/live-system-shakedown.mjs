@@ -38,12 +38,23 @@ import {
 import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 import { validatePersistedProof } from './lib/persisted-proofs.mjs';
 import {
+  SUBAGENT_STEP_TIMEOUT_MS,
+  caseFailureStatus,
+  isMatrixAbortStatus,
+  resolveCaseTimeoutMs,
+  runCaseWithTimeout,
+  throwIfAborted,
+  withTimeout,
+} from './lib/case-execution.mjs';
+import {
   ACTION_BLOCKER_PATTERN,
   assistantClaimsActionFailure,
   assistantClaimsActionSuccess,
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
+  parseArchiveToolArguments,
+  scopeArchiveToolMessagesToTurns,
 } from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
@@ -132,7 +143,10 @@ const DEFAULT_POST_ABORT_TURN_WAIT_MS = optionalIntEnv('PSFN_POST_ABORT_TURN_WAI
 const DEFAULT_CASE_DELAY_MS = optionalIntEnv('PSFN_CASE_DELAY_MS', 1500);
 const DEFAULT_AFTER_TIMEOUT_MS = optionalIntEnv('PSFN_AFTER_TIMEOUT_MS', 240000);
 const DEFAULT_CASE_OVERHEAD_TIMEOUT_MS = optionalIntEnv('PSFN_CASE_OVERHEAD_TIMEOUT_MS', 30000);
-const MATRIX_ABORT_STATUSES = new Set(['harness_error', 'agent_busy', 'runtime_stale']);
+const DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS = optionalIntEnv(
+  'PSFN_CASE_CANCELLATION_DRAIN_TIMEOUT_MS',
+  10000,
+);
 
 // --- shared probe primitives bound to this run's turn-records directory ---
 const sleep = probe.sleep;
@@ -151,10 +165,40 @@ const lastTurnAfter = (sessionId, minStartedAtMs, apiUserId) =>
   probe.lastTurnAfter(TURN_RECORDS_DIR, sessionId, minStartedAtMs, apiUserId);
 const findMatchingTurnRecord = (sessionId, message, minStartedAtMs, apiUserId) =>
   probe.findMatchingTurnRecord(TURN_RECORDS_DIR, sessionId, message, minStartedAtMs, apiUserId);
-const waitForMatchingTurnRecord = (sessionId, message, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs) =>
-  probe.waitForMatchingTurnRecord(TURN_RECORDS_DIR, sessionId, message, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs);
-const waitForTurnSettlement = (sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs) =>
-  probe.waitForTurnSettlement(TURN_RECORDS_DIR, sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs);
+const waitForMatchingTurnRecord = (
+  sessionId,
+  message,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs,
+  signal,
+) => probe.waitForMatchingTurnRecord(
+  TURN_RECORDS_DIR,
+  sessionId,
+  message,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs,
+  signal,
+);
+const waitForTurnSettlement = (
+  sessionId,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs,
+  signal,
+) => probe.waitForTurnSettlement(
+  TURN_RECORDS_DIR,
+  sessionId,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs,
+  signal,
+);
 
 const waitForCaseTurnRecord = (options) =>
   probe.waitForCaseTurnRecord(TURN_RECORDS_DIR, options);
@@ -218,7 +262,7 @@ function getCaseDiagnostics(caseId) {
   return CASE_DISPATCH_DIAGNOSTICS.get(caseId) ?? [];
 }
 
-function buildHarnessErrorResult(testCase, errorMessage) {
+function buildHarnessErrorResult(testCase, errorMessage, caseStatus = 'harness_error') {
   return {
     id: testCase.id,
     caseId: testCase.id,
@@ -260,7 +304,7 @@ function buildHarnessErrorResult(testCase, errorMessage) {
     staleTurnRecord: false,
     turnRecordMatchesRequest: null,
     narrationWithoutExecutionFailures: [],
-    caseStatus: 'harness_error',
+    caseStatus,
   };
 }
 
@@ -352,7 +396,7 @@ function selectRequestedCasesOrThrow(cases, outputBase) {
 }
 
 function isMatrixAbortResult(caseResult) {
-  return MATRIX_ABORT_STATUSES.has(caseResult?.caseStatus);
+  return isMatrixAbortStatus(caseResult?.caseStatus);
 }
 
 function extractAssistantText(turnSummary, response) {
@@ -391,23 +435,6 @@ function hasPinnedToolsArray(value) {
   return Object.values(value).some((entry) => (
     entry && typeof entry === 'object' && Array.isArray(entry.pinnedTools)
   ));
-}
-
-async function withTimeout(label, timeoutMs, run) {
-  let timer = null;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(run),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function timestampToken() {
@@ -719,6 +746,7 @@ function summarizeSessionEntry(entry) {
     type: entry.type ?? null,
     role: entry.role ?? null,
     marker: entry.marker ?? null,
+    turnId: typeof metadata?.turn?.turnId === 'string' ? metadata.turn.turnId : null,
     toolName: metadata?.toolObservation?.toolName ?? null,
     isToolError: metadata?.toolObservation?.isError ?? null,
     contentPreview: typeof entry.content === 'string'
@@ -777,21 +805,27 @@ function resolveSessionArchive(sessionId, apiUserId, turnRecord = null) {
   return findSessionArchiveForTurn(turnRecord) ?? archive;
 }
 
-function sessionArchiveSummary(sessionId, apiUserId, turnRecord = null) {
+function sessionArchiveSummary(sessionId, apiUserId, turnRecord = null, turnIds = []) {
   const archive = resolveSessionArchive(sessionId, apiUserId, turnRecord);
   if (!archive) {
     return null;
   }
+  const caseTurnIds = new Set(
+    turnIds.filter((turnId) => typeof turnId === 'string' && turnId.length > 0),
+  );
+  const entries = caseTurnIds.size > 0
+    ? archive.entries.filter((entry) => caseTurnIds.has(sessionEntryTurnId(entry)))
+    : [];
   return {
     channelId: archive.channelId,
     archivePath: archive.archivePath,
-    messageCount: archive.indexed.messageCount ?? null,
+    messageCount: entries.length,
     lastJournalType: archive.indexed.lastJournalType ?? null,
     activeTurnTombstoneCount: archive.indexed.activeTurnTombstoneCount ?? null,
-    userCount: archive.entries.filter((entry) => entry?.role === 'user').length,
-    assistantCount: archive.entries.filter((entry) => entry?.role === 'assistant').length,
-    toolCount: archive.entries.filter((entry) => entry?.role === 'tool').length,
-    tail: archive.entries.slice(-6).map(summarizeSessionEntry),
+    userCount: entries.filter((entry) => entry?.role === 'user').length,
+    assistantCount: entries.filter((entry) => entry?.role === 'assistant').length,
+    toolCount: entries.filter((entry) => entry?.role === 'tool').length,
+    tail: entries.slice(-6).map(summarizeSessionEntry),
   };
 }
 
@@ -803,12 +837,25 @@ function sessionArchiveToolMessages(sessionId, apiUserId, turnRecord = null) {
     .filter((entry) => entry?.role === 'tool')
     .map((entry) => {
       const metadata = parseMetadataBlob(entry.metadata);
+      const toolObservation = metadata?.toolObservation;
       const contentText = typeof entry.content === 'string' ? entry.content : null;
+      // Tool output is frequently prose. Only structured JSON with an action
+      // field can strengthen the pre-hrmrq.57 world-call proof.
+      const contentArguments = parseArchiveToolArguments(contentText);
+      const archiveArguments = toolObservation?.arguments
+        ?? toolObservation?.args
+        ?? metadata?.toolInvocation?.arguments
+        ?? metadata?.toolInvocation?.args
+        ?? contentArguments;
       return {
-        toolName: metadata?.toolObservation?.toolName ?? null,
-        toolCallId: metadata?.toolObservation?.toolCallId ?? null,
+        toolName: toolObservation?.toolName ?? null,
+        toolCallId: toolObservation?.toolCallId ?? null,
         turnId: sessionEntryTurnId(entry),
-        isError: metadata?.toolObservation?.isError ?? null,
+        outcome: toolObservation?.outcome ?? null,
+        isError: toolObservation?.isError ?? null,
+        ...(archiveArguments && typeof archiveArguments === 'object' && !Array.isArray(archiveArguments)
+          ? { arguments: archiveArguments }
+          : {}),
         contentText: contentText ? contentText.slice(0, 12000) : null,
         contentPreview: contentText ? contentText.slice(0, 220) : null,
       };
@@ -936,6 +983,13 @@ function summarizeTurn(turn) {
 async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const callerSignal = init.signal;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
   try {
     const headers = new Headers(init.headers ?? {});
     if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN) {
@@ -970,13 +1024,20 @@ async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
     };
   } finally {
     clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
-async function waitForReachableHealth(url, timeoutMs = 120000, pollIntervalMs = 2000) {
+async function waitForReachableHealth(
+  url,
+  timeoutMs = 120000,
+  pollIntervalMs = 2000,
+  signal,
+) {
   const checkpoints = [];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
+    throwIfAborted(signal);
     const response = await fetchJson(url, {}, 5000);
     const health = extractHealthSnapshot(response);
     checkpoints.push({
@@ -995,7 +1056,7 @@ async function waitForReachableHealth(url, timeoutMs = 120000, pollIntervalMs = 
         final: checkpoints.at(-1) ?? null,
       };
     }
-    await sleep(pollIntervalMs);
+    await sleep(pollIntervalMs, signal);
   }
 
   return {
@@ -1005,10 +1066,16 @@ async function waitForReachableHealth(url, timeoutMs = 120000, pollIntervalMs = 
   };
 }
 
-async function waitForHealthyHealth(url, timeoutMs = 120000, pollIntervalMs = 2000) {
+async function waitForHealthyHealth(
+  url,
+  timeoutMs = 120000,
+  pollIntervalMs = 2000,
+  signal,
+) {
   const checkpoints = [];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
+    throwIfAborted(signal);
     const response = await fetchJson(url, {}, 5000);
     const health = extractHealthSnapshot(response);
     checkpoints.push({
@@ -1027,7 +1094,7 @@ async function waitForHealthyHealth(url, timeoutMs = 120000, pollIntervalMs = 20
         final: checkpoints.at(-1) ?? null,
       };
     }
-    await sleep(pollIntervalMs);
+    await sleep(pollIntervalMs, signal);
   }
 
   return {
@@ -1042,6 +1109,7 @@ async function waitForRestartCycle(
   downWithinMs = 30000,
   recoverWithinMs = 120000,
   initialBaselineHealth = null,
+  signal,
 ) {
   const checkpoints = [];
   const downDeadline = Date.now() + downWithinMs;
@@ -1058,6 +1126,7 @@ async function waitForRestartCycle(
     : null;
 
   while (Date.now() <= downDeadline) {
+    throwIfAborted(signal);
     const response = await fetchJson(url, {}, 5000);
     const health = extractHealthSnapshot(response);
     const processStartedAtMs = inferProcessStartedAtMs(health);
@@ -1122,7 +1191,7 @@ async function waitForRestartCycle(
       ? health.uptimeSeconds
       : previousUptimeSeconds;
     previousProcessStartedAtMs = processStartedAtMs ?? previousProcessStartedAtMs;
-    await sleep(1500);
+    await sleep(1500, signal);
   }
 
   if (!sawDown) {
@@ -1138,6 +1207,7 @@ async function waitForRestartCycle(
 
   const recoverDeadline = Date.now() + recoverWithinMs;
   while (Date.now() <= recoverDeadline) {
+    throwIfAborted(signal);
     const response = await fetchJson(url, {}, 5000);
     const health = extractHealthSnapshot(response);
     const processStartedAtMs = inferProcessStartedAtMs(health);
@@ -1173,7 +1243,7 @@ async function waitForRestartCycle(
         final: checkpoints.at(-1) ?? null,
       };
     }
-    await sleep(2000);
+    await sleep(2000, signal);
   }
 
   return {
@@ -1698,6 +1768,7 @@ function collectNarrationWithoutExecutionFailures({
 }
 
 async function chatCase(input) {
+  throwIfAborted(input.signal);
   const headers = probe.buildChatHeaders({
     apiKey: API_KEY,
     sessionId: input.sessionId,
@@ -1718,6 +1789,7 @@ async function chatCase(input) {
   let lastRequestStartedAt = 0;
 
   while (submitAttempts < maxSubmitAttempts) {
+    throwIfAborted(input.signal);
     submitAttempts += 1;
     const requestStartedAt = Date.now();
     lastRequestStartedAt = requestStartedAt;
@@ -1726,6 +1798,7 @@ async function chatCase(input) {
       headers,
       message: input.message,
       timeoutMs: input.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      signal: input.signal,
     });
 
     const waitBudgetMs = isAgentBusyResponse(response)
@@ -1737,6 +1810,8 @@ async function chatCase(input) {
       requestStartedAt - 2_000,
       waitBudgetMs,
       input.apiUserId,
+      undefined,
+      input.signal,
     );
 
     const agentBusy = isAgentBusyResponse(response);
@@ -1754,7 +1829,10 @@ async function chatCase(input) {
     }
 
     busyRetries += 1;
-    await sleep(Math.min(busyDelayMs * Math.max(1, busyRetries), 10_000));
+    await sleep(
+      Math.min(busyDelayMs * Math.max(1, busyRetries), 10_000),
+      input.signal,
+    );
   }
 
   if (!matchingTurn && lastRequestStartedAt > 0) {
@@ -1763,6 +1841,8 @@ async function chatCase(input) {
       lastRequestStartedAt - 2_000,
       input.turnSettleMs ?? DEFAULT_TURN_SETTLE_MS,
       input.apiUserId,
+      undefined,
+      input.signal,
     );
     if (
       (settledTurn?.userMessage?.content ?? '') === input.message
@@ -1788,6 +1868,7 @@ async function chatCase(input) {
       postAbortWaitMs,
       input.apiUserId,
       2_000,
+      input.signal,
     );
     if (!matchingTurn) {
       const settledTurn = await waitForTurnSettlement(
@@ -1796,6 +1877,7 @@ async function chatCase(input) {
         postAbortWaitMs,
         input.apiUserId,
         2_000,
+        input.signal,
       );
       if ((settledTurn?.userMessage?.content ?? '') === input.message) {
         matchingTurn = settledTurn;
@@ -1803,7 +1885,8 @@ async function chatCase(input) {
     }
   }
 
-  await sleep(input.settleMs ?? 800);
+  await sleep(input.settleMs ?? 800, input.signal);
+  throwIfAborted(input.signal);
   return {
     sessionId: input.sessionId,
     busyRetries,
@@ -1826,6 +1909,7 @@ async function activateToolsTurn(
   toolNames,
   apiUserId,
   timeoutMs = 60_000,
+  signal,
 ) {
   const requestedTools = toolNames
     .map((toolName) => `"${String(toolName).replace(/"/g, '\\"')}"`)
@@ -1840,6 +1924,7 @@ async function activateToolsTurn(
     privacy: 'private',
     timeoutMs,
     message: activationMessage,
+    signal,
   });
 }
 
@@ -1906,8 +1991,13 @@ function buildBaselineCases(ctx) {
       id: 'l0_baseline',
       sessionId: `system-l0-${ctx.runToken}`,
       message: `Do not use any tools. Reply with only the exact text "${l0Token}".`,
-      after: async () => {
-        const archive = sessionArchiveSummary(`system-l0-${ctx.runToken}`);
+      after: async ({ outcome }) => {
+        const archive = sessionArchiveSummary(
+          `system-l0-${ctx.runToken}`,
+          outcome?.apiUserId ?? ctx.primaryApiUserId,
+          outcome?.turnRecord,
+          [outcome?.turnRecord?.turnId],
+        );
         return {
           expectedToken: l0Token,
           archive,
@@ -2452,7 +2542,7 @@ function buildApprenticeCases(ctx) {
         'Use subagent exactly once with action "spawn", name "matrix-worker", task "Compute 2+2 and answer with one sentence.", and max_turns 1. '
         + 'Do not use analysis_workbench or any other worker tool instead. If subagent fails, quote the exact tool error. '
         + 'Return only a JSON object with keys executed and note.',
-      timeoutMs: 60000,
+      timeoutMs: SUBAGENT_STEP_TIMEOUT_MS,
     },
     {
       id: 'notify_operator',
@@ -2884,14 +2974,20 @@ function buildAutonomousCases(ctx) {
       afterTimeoutMs: 180000,
       postCaseDelayMs: 30000,
       failureTextPatterns: [/restart blocked:/i, /cooldown active/i, /hourly limit/i],
-      after: async ({ preCaseHealth }) => ({
+      after: async ({ preCaseHealth, signal }) => ({
         apiRestart: await waitForRestartCycle(
           `${API_BASE}/health`,
           120000,
           120000,
           extractHealthSnapshot(preCaseHealth?.api ?? {}),
+          signal,
         ),
-        adminReachable: await waitForReachableHealth(`${ADMIN_HEALTH_BASE}/health`, 120000),
+        adminReachable: await waitForReachableHealth(
+          `${ADMIN_HEALTH_BASE}/health`,
+          120000,
+          undefined,
+          signal,
+        ),
       }),
     },
     {
@@ -2907,14 +3003,20 @@ function buildAutonomousCases(ctx) {
       postAbortTurnWaitMs: 0,
       afterTimeoutMs: 180000,
       failureTextPatterns: [/restart blocked:/i, /rebuild blocked:/i, /cooldown active/i, /hourly limit/i],
-      after: async ({ preCaseHealth }) => ({
+      after: async ({ preCaseHealth, signal }) => ({
         apiRestart: await waitForRestartCycle(
           `${API_BASE}/health`,
           180000,
           180000,
           extractHealthSnapshot(preCaseHealth?.api ?? {}),
+          signal,
         ),
-        adminReachable: await waitForReachableHealth(`${ADMIN_HEALTH_BASE}/health`, 180000),
+        adminReachable: await waitForReachableHealth(
+          `${ADMIN_HEALTH_BASE}/health`,
+          180000,
+          undefined,
+          signal,
+        ),
       }),
     },
   ];
@@ -3199,7 +3301,8 @@ function buildCases(ctx) {
   }
 }
 
-async function runCase(testCase, ctx) {
+async function runCase(testCase, ctx, signal) {
+  throwIfAborted(signal);
   const expectsLifecycleCycle = testCase.id === 'lifecycle_restart' || testCase.id === 'lifecycle_rebuild';
   recordCaseDiagnostic(testCase.id, {
     event: 'case_run_start',
@@ -3210,6 +3313,7 @@ async function runCase(testCase, ctx) {
   )
     ? await fetchJson(`${API_BASE}/health`, {}, 5000)
     : null;
+  throwIfAborted(signal);
   if (expectsLifecycleCycle) {
     recordCaseDiagnostic(testCase.id, {
       event: 'pre_case_health',
@@ -3227,10 +3331,14 @@ async function runCase(testCase, ctx) {
         ? await waitForHealthyHealth(
           `${API_BASE}/health`,
           testCase.preCaseReadinessTimeoutMs ?? 180000,
+          undefined,
+          signal,
         )
         : await waitForReachableHealth(
         `${API_BASE}/health`,
         testCase.preCaseReadinessTimeoutMs ?? 180000,
+        undefined,
+        signal,
         );
       recordCaseDiagnostic(testCase.id, {
         event: testCase.requireHealthyBeforeDispatch === true
@@ -3241,6 +3349,7 @@ async function runCase(testCase, ctx) {
         final: readiness.final ?? null,
       });
       preCaseApiHealth = await fetchJson(`${API_BASE}/health`, {}, 5000);
+      throwIfAborted(signal);
       recordCaseDiagnostic(testCase.id, {
         event: 'pre_case_health_after_wait',
         ok: preCaseApiHealth?.ok ?? false,
@@ -3253,9 +3362,11 @@ async function runCase(testCase, ctx) {
   const auditStartId = Number(await pgScalar(
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
+  throwIfAborted(signal);
   const beforeChecks = typeof testCase.before === 'function'
-    ? await testCase.before({ ctx })
+    ? await testCase.before({ ctx, signal })
     : null;
+  throwIfAborted(signal);
   const activationMessages = Array.isArray(testCase.activateTools) && testCase.activateTools.length > 0
     ? [{ activateTools: testCase.activateTools, timeoutMs: testCase.activationTimeoutMs ?? 60_000 }]
     : [];
@@ -3276,7 +3387,9 @@ async function runCase(testCase, ctx) {
       sessionId: testCase.sessionId,
       apiUserId: ctx.primaryApiUserId,
       beforeChecks,
+      signal,
     });
+    throwIfAborted(signal);
     recordCaseDiagnostic(testCase.id, {
       event: 'dispatch_complete',
       stepIndex: 0,
@@ -3305,6 +3418,7 @@ async function runCase(testCase, ctx) {
           step.activateTools,
           ctx.primaryApiUserId,
           step.timeoutMs ?? 60_000,
+          signal,
         );
       } else {
         outcome = await chatCase({
@@ -3318,8 +3432,10 @@ async function runCase(testCase, ctx) {
           },
           message: step.message,
           apiUserId: ctx.primaryApiUserId,
+          signal,
         });
       }
+      throwIfAborted(signal);
       recordCaseDiagnostic(testCase.id, {
         event: 'dispatch_complete',
         stepIndex: index,
@@ -3332,7 +3448,7 @@ async function runCase(testCase, ctx) {
       });
       stepOutcomes.push(outcome);
       if (index + 1 < caseMessages.length) {
-        await sleep(step.postStepDelayMs ?? testCase.stepDelayMs ?? 800);
+        await sleep(step.postStepDelayMs ?? testCase.stepDelayMs ?? 800, signal);
       }
     }
   }
@@ -3342,8 +3458,19 @@ async function runCase(testCase, ctx) {
   const auditRows = await pgAll(
     `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc limit 60;`,
   );
-  const archiveSummary = sessionArchiveSummary(testCase.sessionId, ctx.primaryApiUserId, outcome.turnRecord);
-  const archiveToolMessages = sessionArchiveToolMessages(testCase.sessionId, ctx.primaryApiUserId, outcome.turnRecord);
+  throwIfAborted(signal);
+  const outcomeApiUserId = outcome.apiUserId ?? ctx.primaryApiUserId;
+  const caseTurnIds = stepOutcomes.map((step) => step?.turnRecord?.turnId);
+  const archiveSummary = sessionArchiveSummary(
+    testCase.sessionId,
+    outcomeApiUserId,
+    outcome.turnRecord,
+    caseTurnIds,
+  );
+  const archiveToolMessages = scopeArchiveToolMessagesToTurns(
+    sessionArchiveToolMessages(testCase.sessionId, outcomeApiUserId, outcome.turnRecord),
+    caseTurnIds,
+  );
   const turnSummary = summarizeTurn(outcome.turnRecord);
   const toolAudit = analyzeToolAudit(outcome.turnRecord);
   const requestMessage = outcome?.request?.message ?? null;
@@ -3386,7 +3513,9 @@ async function runCase(testCase, ctx) {
       preCaseHealth: {
         api: preCaseApiHealth,
       },
+      signal,
     });
+    throwIfAborted(signal);
     recordCaseDiagnostic(testCase.id, {
       event: 'side_checks_complete',
     });
@@ -3437,6 +3566,7 @@ async function runCase(testCase, ctx) {
     parsedAssistant,
     assistantText,
     seenToolNames,
+    archiveToolMessages,
   })).map((failure) => semanticFailure(failure, 'persisted_proof'));
   const allSemanticFailures = [
     ...semanticFailureMatches,
@@ -3578,49 +3708,33 @@ async function main() {
       sessionId: testCase.sessionId,
       at: new Date().toISOString(),
     }));
-    const baseCaseMessages = Array.isArray(testCase.messages) && testCase.messages.length > 0
-      ? testCase.messages
-      : [{ message: testCase.message }];
-    const hasActivationStep = Array.isArray(testCase.activateTools) && testCase.activateTools.length > 0;
-    const activationTimeoutMs = hasActivationStep ? (testCase.activationTimeoutMs ?? 60_000) : 0;
-    const totalStepCount = baseCaseMessages.length + (hasActivationStep ? 1 : 0);
-    const caseTimeoutMs = testCase.caseTimeoutMs
-      ?? baseCaseMessages.reduce(
-        (total, step) => total + (step.timeoutMs ?? testCase.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS),
-        activationTimeoutMs,
-      )
-        + (Math.max(0, totalStepCount - 1) * (testCase.stepDelayMs ?? 800))
-        + (testCase.afterTimeoutMs ?? DEFAULT_AFTER_TIMEOUT_MS)
-        + DEFAULT_CASE_OVERHEAD_TIMEOUT_MS;
+    const caseTimeoutMs = resolveCaseTimeoutMs(testCase, {
+      fetchTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+      busyRetryWindowMs: DEFAULT_BUSY_RETRY_WINDOW_MS,
+      turnMatchWaitMs: DEFAULT_TURN_MATCH_WAIT_MS,
+      turnSettleMs: DEFAULT_TURN_SETTLE_MS,
+      postAbortTurnWaitMs: DEFAULT_POST_ABORT_TURN_WAIT_MS,
+      afterTimeoutMs: DEFAULT_AFTER_TIMEOUT_MS,
+      caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
+    });
     let caseResult;
-    let caseRunPromise;
-    let caseTimedOut = false;
     try {
-      caseRunPromise = Promise.resolve().then(() => runCase(testCase, ctx));
-      caseResult = await withTimeout(
-        `case ${testCase.id}`,
-        caseTimeoutMs,
-        () => caseRunPromise,
-      );
+      caseResult = await runCaseWithTimeout({
+        label: `case ${testCase.id}`,
+        timeoutMs: caseTimeoutMs,
+        cancellationDrainTimeoutMs:
+          testCase.cancellationDrainTimeoutMs ?? DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS,
+        run: (signal) => runCase(testCase, ctx, signal),
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      caseTimedOut = / timed out after \d+ms$/u.test(errorMessage);
-      caseResult = buildHarnessErrorResult(testCase, errorMessage);
+      caseResult = buildHarnessErrorResult(
+        testCase,
+        errorMessage,
+        caseFailureStatus(error),
+      );
     }
     if (typeof testCase.cleanup === 'function') {
-      let cleanupDrainError = null;
-      if (caseTimedOut && caseRunPromise) {
-        try {
-          await withTimeout(
-            `case ${testCase.id} cleanup drain`,
-            testCase.afterTimeoutMs ?? DEFAULT_AFTER_TIMEOUT_MS,
-            () => caseRunPromise.catch(() => null),
-          );
-        } catch (error) {
-          cleanupDrainError =
-            `timed-out case did not drain before cleanup: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
       let finalCleanup;
       try {
         finalCleanup = await withTimeout(
@@ -3640,9 +3754,6 @@ async function main() {
         ...(caseResult.sideChecks ?? {}),
         finalCleanup,
       };
-      if (cleanupDrainError) {
-        finalCleanup.cleanupErrors.push(cleanupDrainError);
-      }
       if (finalCleanup.cleanupErrors.length > 0) {
         caseResult.semanticFailureMatches = [
           ...(caseResult.semanticFailureMatches ?? []),
@@ -3650,7 +3761,7 @@ async function main() {
             semanticFailure(error, 'capability_matrix_cleanup')
           )),
         ];
-        if (!MATRIX_ABORT_STATUSES.has(caseResult.caseStatus)) {
+        if (!isMatrixAbortStatus(caseResult.caseStatus)) {
           caseResult.caseStatus = 'semantic_failure';
         }
       }

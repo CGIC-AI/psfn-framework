@@ -13,7 +13,7 @@ import {
 
 const GARDEN_AUDIT_FILE = 'garden-audit-history.jsonl';
 
-async function postPresenceTelemetry(services, satelliteId, scope, payload, nonce) {
+async function postPresenceTelemetry(services, satelliteId, scope, payload, nonce, signal) {
   return services.fetchJson(`${services.apiBase}/v1/telemetry/ingest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,10 +25,11 @@ async function postPresenceTelemetry(services, satelliteId, scope, payload, nonc
       scope,
       payload: { satelliteId, ...payload },
     }),
+    signal,
   });
 }
 
-async function waitForInternalPlace(services, expectedPlaceId) {
+async function waitForInternalPlace(services, expectedPlaceId, signal) {
   let internalState = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     [internalState] = await services.pgAll(
@@ -36,7 +37,7 @@ async function waitForInternalPlace(services, expectedPlaceId) {
        from internal_state_snapshots where id = 'current';`,
     );
     if (internalState?.place_id === expectedPlaceId) break;
-    await sleep(100);
+    await sleep(100, signal);
   }
   return internalState;
 }
@@ -71,7 +72,7 @@ export function buildHubIdentityCases(ctx, services, env) {
       'telemetry audit plus Postgres enrollment/audit/internal state/shared presence',
       'an enrolled opaque face claim resolves to the contact and moves presence to its satellite place',
     ),
-    before: async () => {
+    before: async ({ signal }) => {
       requireSatelliteEnv(env, hubPrefix, 's10_hub_identity_presence_follow');
       requireSatelliteEnv(env, physicalPrefix, 's10_hub_identity_presence_follow');
       requireCaseEnv(env, ['COMPANION_ID'], 's10_hub_identity_presence_follow');
@@ -86,11 +87,16 @@ export function buildHubIdentityCases(ctx, services, env) {
         'presence',
         { present: true, confidence: 1, occupancyCount: 1 },
         `s10-hub-reset-${sha256(ctx.runToken).slice(0, 24)}`,
+        signal,
       );
       if (resetTelemetry.status !== 202) {
         throw new Error(`hub precondition telemetry failed with HTTP ${String(resetTelemetry.status)}`);
       }
-      const priorInternalState = await waitForInternalPlace(services, restorePlaceId);
+      const priorInternalState = await waitForInternalPlace(
+        services,
+        restorePlaceId,
+        signal,
+      );
       if (priorInternalState?.place_id !== restorePlaceId || restorePlaceId === hubPlaceId) {
         throw new Error('hub presence-follow requires distinct physical restore and hub destination places');
       }
@@ -111,6 +117,7 @@ export function buildHubIdentityCases(ctx, services, env) {
             satelliteId: envText(env, `${hubPrefix}_ID`),
             endpointId: envText(env, `${hubPrefix}_ENDPOINT_ID`),
           }),
+          signal,
         },
       );
       if (enrollmentResponse.status !== 201) {
@@ -125,6 +132,7 @@ export function buildHubIdentityCases(ctx, services, env) {
         'face',
         { identityClaim: { hubIdentityId, confidence: 1 } },
         `s10-hub-${sha256(`${ctx.runToken}:${hubIdentityId}`).slice(0, 32)}`,
+        signal,
       );
       if (telemetry.status !== 202) {
         await services.fetchJson(
@@ -142,7 +150,7 @@ export function buildHubIdentityCases(ctx, services, env) {
         priorPlaceId: priorInternalState.place_id,
       };
     },
-    after: async ({ beforeChecks }) => {
+    after: async ({ beforeChecks, signal }) => {
       const hubIdentityId = beforeChecks?.hubIdentityId;
       if (typeof hubIdentityId !== 'string') {
         throw new Error('hub identity setup did not return its opaque handle');
@@ -182,14 +190,14 @@ export function buildHubIdentityCases(ctx, services, env) {
           ) {
             break;
           }
-          await sleep(100);
+          await sleep(100, signal);
         }
         const eventId = beforeChecks?.telemetry?.eventId;
         const auditPath = join(services.companionDataDir, GARDEN_AUDIT_FILE);
         for (let attempt = 0; attempt < 20 && !gardenAuditFound; attempt += 1) {
           gardenAuditFound = typeof eventId === 'string'
             && artifactContainsEvent(services.readJsonl(auditPath), eventId);
-          if (!gardenAuditFound) await sleep(100);
+          if (!gardenAuditFound) await sleep(100, signal);
         }
       } finally {
         const revoke = await services.fetchJson(

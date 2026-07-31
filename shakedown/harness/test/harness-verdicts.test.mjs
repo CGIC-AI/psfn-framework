@@ -6,9 +6,30 @@ import {
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
+  parseArchiveToolArguments,
+  scopeArchiveToolMessagesToTurns,
 } from '../lib/harness-verdicts.mjs';
 
 describe('turn-scoped tool verdict evidence', () => {
+  it('recovers current archive-side world arguments from structured tool output', () => {
+    expect(parseArchiveToolArguments('{"action":"perceive","subject":"weather"}')).toEqual({
+      action: 'perceive',
+      subject: 'weather',
+    });
+    expect(parseArchiveToolArguments('plain tool output')).toBeNull();
+    expect(parseArchiveToolArguments('["not","arguments"]')).toBeNull();
+  });
+
+  it('gives downstream proof validators only this case own turns', () => {
+    expect(scopeArchiveToolMessagesToTurns([
+      { turnId: 'turn-current', toolName: 'generate_image', contentText: 'current proof' },
+      { turnId: 'turn-other', toolName: 'generate_image', contentText: 'foreign proof' },
+      { turnId: null, toolName: 'generate_image', contentText: 'unattributed proof' },
+    ], ['turn-current'])).toEqual([
+      { turnId: 'turn-current', toolName: 'generate_image', contentText: 'current proof' },
+    ]);
+  });
+
   it('excludes another turn from both expected and forbidden tool checks', () => {
     const verdict = evaluateToolNameVerdict({
       expectedToolNames: ['expected_current_tool', 'expected_foreign_tool'],

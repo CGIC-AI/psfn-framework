@@ -13,7 +13,11 @@
 // flip throws -> this test FAILS. Drop customTokens from the POST body and the
 // customTokens assertion FAILS.
 
-import { setTierAndConfirm, fetchCurrentTier } from '../lib/target.mjs';
+import {
+  fetchCurrentTier,
+  fetchCurrentTierWithRetry,
+  setTierAndConfirm,
+} from '../lib/target.mjs';
 import { startStubSettingsServer } from './support/stub-settings-server.mjs';
 
 const failures = [];
@@ -63,6 +67,26 @@ async function main() {
     check(!usedPatch, 'flip never used the rejected PATCH /api/admin/settings path');
   } finally {
     await stub.close();
+  }
+
+  const retryStub = await startStubSettingsServer({
+    tier: 'autonomous',
+    adminToken,
+    transientCapabilityReadFailures: 1,
+  });
+  try {
+    const tier = await fetchCurrentTierWithRetry(
+      { adminBaseUrl: retryStub.baseUrl, adminToken },
+      { maxAttempts: 5, retryDelayMs: 1 },
+    );
+    check(tier === 'autonomous', 'bounded tier read retries recover from a transient 502');
+    const reads = retryStub.log.filter(
+      request => request.method === 'GET'
+        && request.path === '/api/admin/settings/capabilities',
+    );
+    check(reads.length === 2, `transient tier read retried once (got ${reads.length} reads)`);
+  } finally {
+    await retryStub.close();
   }
 
   if (failures.length > 0) {

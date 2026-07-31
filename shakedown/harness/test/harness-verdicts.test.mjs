@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assistantClaimsActionFailure,
   assistantClaimsActionSuccess,
+  classifyCaseStatus,
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
+  isDispatchAbortedTurn,
   parseArchiveToolArguments,
   scopeArchiveToolMessagesToTurns,
 } from '../lib/harness-verdicts.mjs';
@@ -227,6 +229,14 @@ describe('side-effect claim/proof reconciliation', () => {
     expect(assistantClaimsActionFailure(parsedAssistant, assistantText)).toBe(false);
   });
 
+  it('recognizes a queued skill write as an honest hold, not claimed success', () => {
+    const assistantText = '{"created":"queued","cause":"tier"}';
+    const parsedAssistant = JSON.parse(assistantText);
+
+    expect(assistantClaimsActionSuccess(parsedAssistant, assistantText)).toBe(false);
+    expect(assistantClaimsActionFailure(parsedAssistant, assistantText)).toBe(true);
+  });
+
   it('converts a throwing side-effect validator into a proof failure', () => {
     expect(evaluateSideEffectVerdict({
       validateSideEffects: () => {
@@ -243,5 +253,59 @@ describe('side-effect claim/proof reconciliation', () => {
       failureKind: 'narration_without_execution',
       proofFailures: ['validateSideEffects threw: database proof unavailable'],
     });
+  });
+});
+
+describe('dispatch grading', () => {
+  it('identifies a turn aborted before first token and before any tool dispatch', () => {
+    expect(isDispatchAbortedTurn({
+      turnSummary: {
+        status: 'failed',
+        metrics: { ttftMs: null },
+      },
+      seenToolNames: [],
+    })).toBe(true);
+    expect(classifyCaseStatus({
+      dispatchAborted: true,
+      semanticFailureMatches: [{ pattern: 'side_effect_proof_failure' }],
+    })).toBe('dispatch_aborted');
+  });
+
+  it('does not classify a response or a tool-bearing turn as dispatch-aborted', () => {
+    expect(isDispatchAbortedTurn({
+      turnSummary: {
+        status: 'completed',
+        metrics: { ttftMs: null },
+      },
+      seenToolNames: [],
+    })).toBe(false);
+    expect(isDispatchAbortedTurn({
+      turnSummary: {
+        status: 'failed',
+        metrics: { ttftMs: null },
+      },
+      seenToolNames: ['skill'],
+    })).toBe(false);
+  });
+
+  it('ignores tools from earlier steps when the final dispatch aborts', () => {
+    const finalTurnTools = evaluateToolNameVerdict({
+      expectedToolNames: [],
+      forbiddenToolNames: [],
+      toolAuditNames: [],
+      turnIds: ['turn-final'],
+      archiveToolMessages: [
+        { turnId: 'turn-earlier', toolName: 'skill' },
+      ],
+    }).seenToolNames;
+
+    expect(finalTurnTools).toEqual([]);
+    expect(isDispatchAbortedTurn({
+      turnSummary: {
+        status: 'failed',
+        metrics: { ttftMs: null },
+      },
+      seenToolNames: finalTurnTools,
+    })).toBe(true);
   });
 });

@@ -88,6 +88,18 @@ secrets.
 | `shakedown-scorecard.mjs` | Aggregates run JSONs; enforces the non-green taxonomy and cross-checks the coverage appendix. Exits non-zero if any case is non-green (unwaived) or any appendix surface is uncovered. |
 | `coverage-map.json` | Maps each appendix surface to the case ids that exercise it (or an explicit disposition). Maintained per sprint. |
 
+### Operator UI browser setup
+
+`operator-ui-sweep.mjs` loads Playwright from `PSFN_BROWSER_PROBE_ROOT`. That
+directory must contain a Playwright package whose version matches the installed
+Chromium/browser bundle; after changing the Playwright version, install the
+matching browser from that same root before running the sweep.
+
+The sweep verifies TLS certificates by default. A local test cluster that uses
+a deliberately untrusted development certificate may opt in with
+`PSFN_UI_SWEEP_IGNORE_HTTPS_ERRORS=true`. This bypass is for local test clusters
+only; leave it unset for production or externally reachable deployments.
+
 ## Sprint 10 coverage cases
 
 `cases/sprint10.mjs` composes domain-focused modules into the existing catalog;
@@ -137,10 +149,10 @@ partner dispositions.
 ## Non-green taxonomy (enforced in `shakedown-scorecard.mjs`)
 
 Only `ok` is green. Every other case status is a failure and is bucketed into
-`semantic_failure`, `completed_after_abort`, `agent_busy`, `runtime_stale`,
-`matrix_aborted`, `unproven_tool_claim`, `unledgered_charge`, or
-`other_failure`. Failures count unless the operator records an explicit waiver
-(`PSFN_SCORECARD_WAIVERS`).
+`semantic_failure`, `dispatch_aborted`, `completed_after_abort`, `agent_busy`,
+`runtime_stale`, `matrix_aborted`, `unproven_tool_claim`, `unledgered_charge`,
+or `other_failure`. Failures count unless the operator records an explicit
+waiver (`PSFN_SCORECARD_WAIVERS`).
 
 ## Coverage cross-check
 

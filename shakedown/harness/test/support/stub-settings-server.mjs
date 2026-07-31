@@ -34,9 +34,11 @@ export async function startStubSettingsServer({
   tier = 'apprentice',
   customTokens = [],
   adminToken = 'stub-admin-token',
+  transientCapabilityReadFailures = 0,
 } = {}) {
   const state = { tier, customTokens: [...customTokens] };
   const log = [];
+  let remainingCapabilityReadFailures = transientCapabilityReadFailures;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -61,6 +63,12 @@ export async function startStubSettingsServer({
 
     if (url.pathname === '/api/admin/settings/capabilities') {
       if (req.method === 'GET') {
+        if (remainingCapabilityReadFailures > 0) {
+          remainingCapabilityReadFailures -= 1;
+          res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'transient upstream failure' }));
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ tier: state.tier, customTokens: state.customTokens }));
         return;

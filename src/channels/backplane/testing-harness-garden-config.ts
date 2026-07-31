@@ -21,6 +21,7 @@ export const TESTING_HARNESS_GARDEN_ADMIN_ACTIONS = Object.freeze([
   'devices.manage',
   'models.read',
   'prompts.read',
+  'sessions.read',
   'settings.read',
   'settings.write',
 ] as const satisfies readonly FleetAuthAction[]);

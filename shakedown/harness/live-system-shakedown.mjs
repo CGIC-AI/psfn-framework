@@ -26,7 +26,7 @@ import {
 } from './lib/probe.mjs';
 import {
   resolveTarget,
-  fetchCurrentTier,
+  fetchCurrentTierWithRetry,
 } from './lib/target.mjs';
 import {
   buildCapabilityMatrixExecutionPlan,
@@ -50,9 +50,11 @@ import {
   ACTION_BLOCKER_PATTERN,
   assistantClaimsActionFailure,
   assistantClaimsActionSuccess,
+  classifyCaseStatus,
   collectSideEffectSemanticFailures,
   evaluateSideEffectVerdict,
   evaluateToolNameVerdict,
+  isDispatchAbortedTurn,
   parseArchiveToolArguments,
   scopeArchiveToolMessagesToTurns,
 } from './lib/harness-verdicts.mjs';
@@ -574,7 +576,7 @@ function runProductionCapabilityProbe(tier) {
 }
 
 async function collectTierToolConformanceEvidence(tier) {
-  const observedTier = await fetchCurrentTier({
+  const observedTier = await fetchCurrentTierWithRetry({
     adminBaseUrl: ADMIN_BASE,
     adminToken: ADMIN_TOKEN,
   });
@@ -1254,71 +1256,6 @@ async function waitForRestartCycle(
     checkpoints,
     final: checkpoints.at(-1) ?? null,
   };
-}
-
-
-function isCompletedSuccessfulTurnSummary(turnSummary) {
-  return turnSummary?.status === 'completed'
-    && typeof turnSummary?.assistant === 'string'
-    && turnSummary.assistant.trim().length > 0
-    && turnSummary?.response?.stopReason !== 'error'
-    && typeof turnSummary?.response?.errorMessage !== 'string';
-}
-
-function classifyCaseStatus(caseResult) {
-  const recoveredCompletedSuccessfulTurn = (
-    caseResult.resolvedFromTurnRecord === true
-    && isCompletedSuccessfulTurnSummary(caseResult.turnSummary)
-  );
-  const recoveredToolValidationError = (
-    (caseResult.toolValidationErrors?.length ?? 0) > 0
-    && (caseResult.missingExpectedTools?.length ?? 0) === 0
-    && caseResult.turnSummary?.status === 'completed'
-  );
-  if (caseResult.staleTurnRecord === true) {
-    return 'runtime_stale';
-  }
-  if ((caseResult.narrationWithoutExecutionFailures?.length ?? 0) > 0) {
-    return 'narration_without_execution';
-  }
-  if ((caseResult.semanticFailureMatches?.length ?? 0) > 0) {
-    return 'semantic_failure';
-  }
-  if ((caseResult.toolValidationErrors?.length ?? 0) > 0 && !recoveredToolValidationError) {
-    return 'tool_validation_error';
-  }
-  if (caseResult.restartCheckFailed) {
-    return 'restart_not_observed';
-  }
-  if (
-    caseResult.sideChecks?.apiRestart?.recovered === true
-    && caseResult.sideChecks?.adminReachable?.reachable === true
-  ) {
-    return 'ok';
-  }
-  if (caseResult.response?.fetchError) {
-    if (recoveredCompletedSuccessfulTurn) {
-      return 'ok';
-    }
-    if (caseResult.turnSummary?.status === 'completed') return 'completed_after_fetch_abort';
-    return 'fetch_error';
-  }
-  if (isAgentBusyResponse(caseResult.response) && !caseResult.acceptedWhileBusy) {
-    return caseResult.resolvedFromTurnRecord ? 'accepted_during_busy' : 'agent_busy';
-  }
-  if (!caseResult.response?.ok && recoveredCompletedSuccessfulTurn) {
-    return 'ok';
-  }
-  if (!caseResult.response?.ok && caseResult.turnSummary?.status === 'completed') {
-    return 'completed_after_http_error';
-  }
-  if (!caseResult.turnSummary) {
-    return caseResult.response?.ok ? 'missing_turn_record' : 'http_error';
-  }
-  if (caseResult.turnSummary.status && caseResult.turnSummary.status !== 'completed') {
-    return `turn_${caseResult.turnSummary.status}`;
-  }
-  return caseResult.response?.ok ? 'ok' : 'http_error';
 }
 
 function collectSemanticFailureMatches(testCase, archiveToolMessages, archiveSummary, turnSummary) {
@@ -3110,7 +3047,7 @@ function buildCapabilityMatrixCase(ctx) {
     before: async () => {
       cleanupState.originalBranch = runGit(['branch', '--show-current']);
       cleanupState.originalHead = runGit(['rev-parse', 'HEAD']);
-      const observedTier = await fetchCurrentTier({
+      const observedTier = await fetchCurrentTierWithRetry({
         adminBaseUrl: ADMIN_BASE,
         adminToken: ADMIN_TOKEN,
       });
@@ -3134,7 +3071,7 @@ function buildCapabilityMatrixCase(ctx) {
           outcomes[activationOffset + index]?.turnRecord ?? null,
         ]),
       );
-      const observedTier = await fetchCurrentTier({
+      const observedTier = await fetchCurrentTierWithRetry({
         adminBaseUrl: ADMIN_BASE,
         adminToken: ADMIN_TOKEN,
       });
@@ -3216,18 +3153,21 @@ function buildCapabilityMatrixCase(ctx) {
       }
       const shardBackend = sideChecks?.shardBackendRouting;
       const expectedShardBackend = EXPECTED_CAPABILITY_TIER === 'autonomous'
-        ? { actual: 'accepted_unavailable', code: null }
-        : { actual: 'policy_denied', code: -32002 };
+        ? { actual: 'accepted_unavailable', code: null, denial: null }
+        : { actual: 'policy_denied', code: -32002, denial: 'tier' };
       if (
         shardBackend?.method !== 'shard.backend.request'
         || shardBackend?.callerTier !== EXPECTED_CAPABILITY_TIER
         || shardBackend?.authoritativeTier !== EXPECTED_CAPABILITY_TIER
         || shardBackend?.actual !== expectedShardBackend.actual
         || shardBackend?.code !== expectedShardBackend.code
+        || shardBackend?.denial !== expectedShardBackend.denial
       ) {
         failures.push(
-          `shard.backend.request expected ${expectedShardBackend.actual}/${expectedShardBackend.code} `
-          + `but observed ${shardBackend?.actual ?? 'missing'}/${shardBackend?.code ?? 'missing'}`,
+          `shard.backend.request expected ${expectedShardBackend.actual}/${expectedShardBackend.code}`
+          + `/${expectedShardBackend.denial ?? 'none'} but observed `
+          + `${shardBackend?.actual ?? 'missing'}/${shardBackend?.code ?? 'missing'}`
+          + `/${shardBackend?.denial ?? 'missing'}`,
         );
       }
       if (Array.isArray(sideChecks?.cleanupErrors) && sideChecks.cleanupErrors.length > 0) {
@@ -3530,6 +3470,17 @@ async function runCase(testCase, ctx, signal) {
     turnIds: stepOutcomes.map((step) => step?.turnRecord?.turnId),
   });
   const { seenToolNames, missingExpectedTools } = toolNameVerdict;
+  const dispatchTurnToolNames = evaluateToolNameVerdict({
+    expectedToolNames: [],
+    forbiddenToolNames: [],
+    toolAuditNames: toolAudit.toolNames,
+    archiveToolMessages,
+    turnIds: [outcome.turnRecord?.turnId],
+  }).seenToolNames;
+  const dispatchAborted = isDispatchAbortedTurn({
+    turnSummary,
+    seenToolNames: dispatchTurnToolNames,
+  });
   const forbiddenToolFailures = collectForbiddenToolFailures(toolNameVerdict.seenForbiddenToolNames);
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
   const semanticValidationFailures = collectSemanticValidationFailures(
@@ -3541,18 +3492,21 @@ async function runCase(testCase, ctx, signal) {
     ctx,
   );
   const assistantText = extractAssistantText(turnSummary, outcome.response);
-  const sideEffectVerdict = evaluateSideEffectVerdict({
-    validateSideEffects: testCase.validateSideEffects,
-    sideChecks,
-    parsedAssistant,
-    claimedActionSuccess: assistantClaimsActionSuccess(parsedAssistant, assistantText),
-    claimedActionFailure: assistantClaimsActionFailure(parsedAssistant, assistantText),
-  });
+  const sideEffectVerdict = dispatchAborted
+    ? null
+    : evaluateSideEffectVerdict({
+        validateSideEffects: testCase.validateSideEffects,
+        sideChecks,
+        parsedAssistant,
+        claimedActionSuccess: assistantClaimsActionSuccess(parsedAssistant, assistantText),
+        claimedActionFailure: assistantClaimsActionFailure(parsedAssistant, assistantText),
+      });
   const narrationWithoutExecutionFailures = collectNarrationWithoutExecutionFailures({
     testCase,
     parsedAssistant,
     assistantText,
     seenToolNames,
+    dispatchTurnToolNames,
     sideEffectVerdict,
   });
   const sideEffectSemanticFailures = collectSideEffectSemanticFailures(sideEffectVerdict);
@@ -3611,6 +3565,7 @@ async function runCase(testCase, ctx, signal) {
     sideEffectVerdict,
     narrationWithoutExecutionFailures,
     restartCheckFailed,
+    dispatchAborted,
     caseStatus: classifyCaseStatus({
       semanticFailureMatches: allSemanticFailures,
       toolValidationErrors,
@@ -3620,9 +3575,11 @@ async function runCase(testCase, ctx, signal) {
       restartCheckFailed,
       response: outcome.response,
       acceptedWhileBusy: outcome.acceptedWhileBusy ?? false,
+      agentBusyResponse: isAgentBusyResponse(outcome.response),
       resolvedFromTurnRecord: outcome.resolvedFromTurnRecord ?? false,
       turnSummary,
       sideChecks,
+      dispatchAborted,
     }),
   };
 }
@@ -3761,7 +3718,10 @@ async function main() {
             semanticFailure(error, 'capability_matrix_cleanup')
           )),
         ];
-        if (!isMatrixAbortStatus(caseResult.caseStatus)) {
+        if (
+          !isMatrixAbortStatus(caseResult.caseStatus)
+          && caseResult.caseStatus !== 'dispatch_aborted'
+        ) {
           caseResult.caseStatus = 'semantic_failure';
         }
       }

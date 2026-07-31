@@ -7,7 +7,7 @@ const SIDE_EFFECT_BRANCHES = Object.freeze({
   NO_CLAIM_AND_UNPROVEN: 'no_claim_and_side_effect_not_proven',
 });
 
-export const ACTION_BLOCKER_PATTERN = /\b(blocked|denied|unavailable|not available|disabled|not permitted|permission|forbidden|unauthorized|cannot|can't|failed|error|requires confirmation|pending confirmation|queued for confirmation|confirmation id|not active|not exposed|unknown action)\b/i;
+export const ACTION_BLOCKER_PATTERN = /\b(blocked|denied|unavailable|not available|disabled|not permitted|permission|forbidden|unauthorized|cannot|can't|failed|error|requires confirmation|pending confirmation|queued(?: for confirmation)?|confirmation id|not active|not exposed|unknown action)\b/i;
 const ACTION_SUCCESS_PATTERN = /\b(success|succeeded|successfully|done|completed|created|updated|deleted|restored|stored|wrote|written|sent|notified|spawned|executed|imported|redacted|appended|activated)\b/i;
 const ACTION_SUCCESS_KEYS = new Set([
   'worked',
@@ -97,6 +97,68 @@ export function assistantClaimsActionFailure(parsedAssistant, assistantText) {
     return true;
   }
   return typeof assistantText === 'string' && ACTION_BLOCKER_PATTERN.test(assistantText);
+}
+
+export function isDispatchAbortedTurn({ turnSummary, seenToolNames }) {
+  return turnSummary !== null
+    && turnSummary?.status !== 'completed'
+    && turnSummary?.metrics?.ttftMs === null
+    && (Array.isArray(seenToolNames) ? seenToolNames.length : 0) === 0;
+}
+
+function isCompletedSuccessfulTurnSummary(turnSummary) {
+  return turnSummary?.status === 'completed'
+    && typeof turnSummary?.assistant === 'string'
+    && turnSummary.assistant.trim().length > 0
+    && turnSummary?.response?.stopReason !== 'error'
+    && typeof turnSummary?.response?.errorMessage !== 'string';
+}
+
+export function classifyCaseStatus(caseResult) {
+  const recoveredCompletedSuccessfulTurn = (
+    caseResult.resolvedFromTurnRecord === true
+    && isCompletedSuccessfulTurnSummary(caseResult.turnSummary)
+  );
+  const recoveredToolValidationError = (
+    (caseResult.toolValidationErrors?.length ?? 0) > 0
+    && (caseResult.missingExpectedTools?.length ?? 0) === 0
+    && caseResult.turnSummary?.status === 'completed'
+  );
+  if (caseResult.staleTurnRecord === true) return 'runtime_stale';
+  if (caseResult.dispatchAborted === true) return 'dispatch_aborted';
+  if ((caseResult.narrationWithoutExecutionFailures?.length ?? 0) > 0) {
+    return 'narration_without_execution';
+  }
+  if ((caseResult.semanticFailureMatches?.length ?? 0) > 0) return 'semantic_failure';
+  if ((caseResult.toolValidationErrors?.length ?? 0) > 0 && !recoveredToolValidationError) {
+    return 'tool_validation_error';
+  }
+  if (caseResult.restartCheckFailed) return 'restart_not_observed';
+  if (
+    caseResult.sideChecks?.apiRestart?.recovered === true
+    && caseResult.sideChecks?.adminReachable?.reachable === true
+  ) {
+    return 'ok';
+  }
+  if (caseResult.response?.fetchError) {
+    if (recoveredCompletedSuccessfulTurn) return 'ok';
+    if (caseResult.turnSummary?.status === 'completed') return 'completed_after_fetch_abort';
+    return 'fetch_error';
+  }
+  if (caseResult.agentBusyResponse === true && !caseResult.acceptedWhileBusy) {
+    return caseResult.resolvedFromTurnRecord ? 'accepted_during_busy' : 'agent_busy';
+  }
+  if (!caseResult.response?.ok && recoveredCompletedSuccessfulTurn) return 'ok';
+  if (!caseResult.response?.ok && caseResult.turnSummary?.status === 'completed') {
+    return 'completed_after_http_error';
+  }
+  if (!caseResult.turnSummary) {
+    return caseResult.response?.ok ? 'missing_turn_record' : 'http_error';
+  }
+  if (caseResult.turnSummary.status && caseResult.turnSummary.status !== 'completed') {
+    return `turn_${caseResult.turnSummary.status}`;
+  }
+  return caseResult.response?.ok ? 'ok' : 'http_error';
 }
 
 export function collectSideEffectSemanticFailures(sideEffectVerdict) {

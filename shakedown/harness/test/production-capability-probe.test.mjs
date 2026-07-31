@@ -49,6 +49,7 @@ assert.deepEqual(apprentice.shardBackend, {
   authoritativeTier: 'apprentice',
   actual: 'policy_denied',
   code: -32002,
+  denial: 'tier',
 });
 
 const autonomous = runProbe('autonomous');
@@ -63,6 +64,7 @@ assert.deepEqual(autonomous.shardBackend, {
   authoritativeTier: 'autonomous',
   actual: 'accepted_unavailable',
   code: null,
+  denial: null,
 });
 
 console.log('production capability probe tests passed');

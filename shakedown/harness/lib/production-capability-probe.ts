@@ -13,6 +13,7 @@ import {
 } from '../../../src/system/capabilities/gate.js';
 import { withCapabilityRequirement } from '../../../src/system/capabilities/requirements.js';
 import { resolveTierCapabilityTokens } from '../../../src/system/capabilities/tiers.js';
+import { deriveShardCapabilityGrant } from '../../../src/system/capabilities/shard-derivation.js';
 import { createSelfStatusTool } from '../../../src/core/tools/self-status.js';
 import {
   buildCapabilityTierChange,
@@ -106,6 +107,17 @@ async function probeCapabilityGate(
 async function probeShardBackend(
   tier: Exclude<CapabilityTier, 'custom'>,
 ): Promise<Record<string, unknown>> {
+  const companionId = 'capability-matrix-probe';
+  const capabilitySnapshot = Object.freeze({
+    tier,
+    customTokens: [],
+    grantedTokens: resolveTierCapabilityTokens(tier),
+  });
+  const grant = deriveShardCapabilityGrant({
+    companionId,
+    tier,
+    customTokens: capabilitySnapshot.customTokens,
+  });
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const runtime = {
     target: {
@@ -115,7 +127,8 @@ async function probeShardBackend(
     },
     policyConfig: { workspacePath: process.cwd() },
     capabilityTierProvider: () => tier,
-    authenticatedCompanionId: () => 'capability-matrix-probe',
+    capabilityGrantSnapshotProvider: () => capabilitySnapshot,
+    authenticatedCompanionId: () => companionId,
     gated: (
       _method: string,
       handler: (params: Record<string, unknown>) => Promise<unknown>,
@@ -128,7 +141,8 @@ async function probeShardBackend(
     shardId: `matrix-${tier}`,
     name: 'capability-matrix',
     backend: 'container',
-    capabilityTier: tier,
+    ownerVersion: grant.ownerVersion,
+    grantDigest: grant.grantDigest,
   };
   try {
     const result = await handler(params);
@@ -143,6 +157,7 @@ async function probeShardBackend(
       authoritativeTier: tier,
       actual: status === 'unavailable' ? 'accepted_unavailable' : 'malformed_acceptance',
       code: null,
+      denial: null,
     };
   } catch (error) {
     const code = (
@@ -151,12 +166,18 @@ async function probeShardBackend(
       && 'code' in error
       && typeof error.code === 'number'
     ) ? error.code : null;
+    const message = error instanceof Error ? error.message : String(error);
     return {
       method: 'shard.backend.request',
       callerTier: tier,
       authoritativeTier: tier,
       actual: code === GatewayErrors.POLICY_DENIED ? 'policy_denied' : 'unexpected_error',
       code,
+      denial: /capability tier|current:/iu.test(message)
+        ? 'tier'
+        : /capability "shard\.spawn"/iu.test(message)
+          ? 'missing_token'
+          : 'other',
     };
   }
 }

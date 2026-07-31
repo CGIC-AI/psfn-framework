@@ -6,6 +6,7 @@ import {
   buildModelLaneExpectations,
   buildHardeningCases,
 } from '../cases/hardening.mjs';
+import { classifyCaseFailure } from '../lib/case-execution.mjs';
 
 const context = {
   runToken: '2026-07-18T12-00-00',
@@ -128,6 +129,150 @@ test('model attribution scopes chat, vision, and background to case-owned turns'
       },
     ],
   );
+});
+
+test('model attribution dispatch terminates with a named isolation failure when its proof query ignores cancellation', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  let turnIndex = 0;
+  const stalledQuery = new Promise(() => {});
+  const stalledServices = {
+    ...services,
+    waitForTurnRecord: async () => ({
+      turnId: `turn-${++turnIndex}`,
+      status: 'completed',
+      assistantMessage: { content: 'ok' },
+    }),
+    pgAll: async () => stalledQuery,
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, stalledServices, {
+      modelLaneDispatchTimeoutMs: 20,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const observed = await Promise.race([
+      attribution.execute({
+        ctx: context,
+        sessionId: 'hardening-spend-stalled-query',
+        apiUserId: context.primaryApiUserId,
+      }).then(
+        () => ({ settled: true, error: null }),
+        (error) => ({ settled: true, error }),
+      ),
+      new Promise((resolve) => setTimeout(
+        () => resolve({ settled: false, error: null }),
+        100,
+      )),
+    ]);
+
+    assert.equal(observed.settled, true, 'dispatch must settle inside its configured budget');
+    assert.equal(observed.error?.name, 'CaseIsolationError');
+    assert.match(
+      observed.error?.message ?? '',
+      /model_lane_attribution dispatch did not stop after cancellation/u,
+    );
+    assert.deepEqual(classifyCaseFailure(observed.error), {
+      status: 'harness_error',
+      reason: 'harness_error:CaseIsolationError',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('model attribution dispatch returns a named stage timeout when cancellation drains', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+  const cancellationAwareServices = {
+    ...services,
+    waitForTurnRecord: async ({ signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, cancellationAwareServices, {
+      modelLaneDispatchTimeoutMs: 20,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const observed = await Promise.race([
+      attribution.execute({
+        ctx: context,
+        sessionId: 'hardening-spend-cancellation-aware',
+        apiUserId: context.primaryApiUserId,
+      }).then(
+        () => ({ settled: true, error: null }),
+        (error) => ({ settled: true, error }),
+      ),
+      new Promise((resolve) => setTimeout(
+        () => resolve({ settled: false, error: null }),
+        100,
+      )),
+    ]);
+
+    assert.equal(observed.settled, true, 'dispatch must settle inside its configured budget');
+    assert.equal(observed.error?.name, 'ModelLaneAttributionDispatchTimeoutError');
+    assert.match(
+      observed.error?.message ?? '',
+      /model_lane_attribution interactive_turn timed out after 10ms/u,
+    );
+    assert.deepEqual(classifyCaseFailure(observed.error), {
+      status: 'case_timeout',
+      reason: 'case_timeout',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('model attribution turns a bounded proof-query rejection into a semantic verdict', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), { status: 200 });
+  let turnIndex = 0;
+  const rejectedServices = {
+    ...services,
+    waitForTurnRecord: async () => ({
+      turnId: `turn-rejected-${++turnIndex}`,
+      status: 'completed',
+      assistantMessage: { content: 'ok' },
+    }),
+    pgAll: async () => {
+      throw new Error('Query read timeout');
+    },
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, rejectedServices, {
+      modelLaneDispatchTimeoutMs: 100,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const outcome = await attribution.execute({
+      ctx: context,
+      sessionId: 'hardening-spend-rejected-query',
+      apiUserId: context.primaryApiUserId,
+    });
+    const failures = attribution.validatePersistedProof({ outcome });
+
+    assert.ok(failures.some((failure) => (
+      failure === 'model-lane proof query failed at background_appraisal_poll: Error: Query read timeout'
+    )));
+    assert.ok(failures.some((failure) => (
+      failure === 'model-lane proof query failed at ledger_read: Error: Query read timeout'
+    )));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('the backup round-trip case self-derives a benign scalar flip and full payloads from backup.json', async () => {

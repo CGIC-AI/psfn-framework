@@ -316,6 +316,10 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
+  # The agent may be semantically NotReady while its isolated capability-tier
+  # recovery route is still healthy. Keep that control endpoint routable so a
+  # failed case cannot strand the owner file at the test tier.
+  publishNotReadyAddresses: true
   ports:
     - name: admin-https
       port: {{ .Values.ports.agentAdmin }}
@@ -539,6 +543,11 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
+  {{- if .Values.fleet.enabled }}
+  # Fleet Garden readiness includes every agent's semantic readiness. Preserve
+  # the public recovery path while a not-ready agent is being restored.
+  publishNotReadyAddresses: true
+  {{- end }}
   ports:
     - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
       port: {{ .Values.ports.garden }}

@@ -226,4 +226,27 @@ describe('Helm runtime secret wiring', () => {
     expect(agentMain.indexOf("await eventBus.emit('system.ready', {});"))
       .toBeLessThan(agentMain.indexOf('adminTransport?.markRuntimeReady();'));
   });
+
+  it('keeps the agent admin Service routable while semantic runtime readiness is false', () => {
+    const agentAdminServices = renderedResources.filter(resource => (
+      isRecord(resource)
+      && resource.kind === 'Service'
+      && isRecord(resource.metadata)
+      && typeof resource.metadata.name === 'string'
+      && resource.metadata.name.startsWith('psfn-agent-admin')
+    ));
+
+    expect(agentAdminServices.length).toBeGreaterThan(0);
+    for (const service of agentAdminServices) {
+      expect(service.spec).toMatchObject({ publishNotReadyAddresses: true });
+    }
+
+    const gardenService = renderedResources.find(resource => (
+      isRecord(resource)
+      && resource.kind === 'Service'
+      && isRecord(resource.metadata)
+      && resource.metadata.name === 'psfn-garden'
+    ));
+    expect(gardenService?.spec).toMatchObject({ publishNotReadyAddresses: true });
+  });
 });

@@ -1,13 +1,15 @@
 # Shard Approval And Direct-Chat Contract
 
-Status: approved design direction; implementation pending.
+Status: implemented runtime and Companion UI contract. Request-scoped shard
+approval, approval-v2 relay, parent-scoped shard directory/history/chat, and
+strict action brokering are wired in the current repository. TTL-scoped grants
+remain unavailable pending a separately approved canonical server policy.
 
 Decision provenance: operator directive recorded on 2026-07-17 in
 `psfn-framework-yijy.2`.
 
-This specification extends the Companion UI approval and chat surfaces to
-companion shards. It is a target contract, not a description of currently
-shipped behavior.
+This specification defines the shipped Companion UI approval and chat surfaces
+for companion shards, plus the still-deferred TTL-grant contract.
 
 The Companion UI remains a client of the authenticated Satellite Hub/gateway
 path. It does not call PSFN core or `/api/admin/*`, hold approval authority, or
@@ -106,7 +108,7 @@ authenticated Hub/gateway connection. It MUST NOT open a browser-to-core or
 browser-to-Garden approval channel.
 
 For each browser session, the server derives the set of companion connections
-the human may use from current fleet-session and attachment authority. A
+the Partner may use from current fleet-session and attachment authority. A
 browser-supplied companion list is not accepted. Every request snapshot,
 streamed event, reconnect replay, and resolution is filtered server-side:
 
@@ -129,7 +131,7 @@ reauthorizes the stream before sending more events. The client clears
 authority-bound shard and approval state. Reconnection performs the same
 server-side filtering; cached cards do not confer resolution authority.
 
-## Shard Visibility And Human Chat
+## Shard Visibility And Partner Chat
 
 The Companion UI presents shards as deployed entities nested beneath their
 parent companion. The server supplies a bounded, redacted directory for the
@@ -144,22 +146,22 @@ currently authorized parent connection. A shard entry may contain:
 It MUST NOT expose private reasoning, raw work logs, credentials, grant
 tokens, unrestricted task context, or another parent's shards.
 
-A human may select one of these server-listed shards and open a direct chat
+A Partner may select one of these server-listed shards and open a direct chat
 thread. The selected `shardId` is a resource selector, not an authority claim.
 On every send, attach, interrupt, reconnect, and history read, the server
 revalidates:
 
 ```text
-human session -> connected parent companion -> deployed shard
+Partner session -> connected parent companion -> deployed shard
 ```
 
 The server routes the turn to the shard's isolated chat/session ingress with
-human and parent/shard provenance intact. It MUST NOT silently fall back to
+Partner and parent/shard provenance intact. It MUST NOT silently fall back to
 the parent companion if the shard is unavailable, unknown, expired, or no
 longer belongs to that parent.
 
-Direct human-to-shard chat is an operator interaction path. It does not replace
-ordinary shard-to-parent communication. Routine shard↔companion traffic,
+Direct Partner-to-shard chat is an authenticated interaction path. It does
+not replace ordinary shard-to-parent communication. Routine shard↔companion traffic,
 including the shard telling its parent that work is blocked, continues through
 ICP and its existing policy, intake, fatigue, and loop-safety gates. An
 approval event is a separate control-plane signal and does not duplicate or
@@ -182,7 +184,7 @@ surface. The card identifies:
 The default approval is the exact pending request. The browser cannot invent a
 TTL, broaden an action/scope, change a parent or shard, or convert a one-request
 offer into a time-limited grant. If a TTL option is offered, its duration and
-maximum scope are server-issued and displayed before the human decides.
+maximum scope are server-issued and displayed before the Partner decides.
 
 Approve and deny actions use the authenticated Companion UI confirmation
 resource. A stale, replayed, cross-parent, already resolved, or expired
@@ -228,7 +230,7 @@ revocation, and recovery rules) is implemented — see
 The remainder of this section specifies the contract that policy must satisfy.
 
 A TTL grant exists only when server policy explicitly offered it on the card
-and the human selected that offered mode. It is bound to:
+and the Partner selected that offered mode. It is bound to:
 
 - the same parent and shard identity;
 - the approved method/action;
@@ -263,7 +265,7 @@ Audit records for shard approvals include:
 - redacted method/action and normalized scope;
 - request, decision, execution/issuance, expiry, revocation, and replay
   outcomes; and
-- authenticated human/device resolver provenance already required by the
+- authenticated Partner/device resolver provenance already required by the
   approval surface.
 
 Audit and event payloads use allowlisted fields. They never include grant
@@ -293,7 +295,7 @@ The implementation denies without enqueueing or executing when:
 
 - a shard has no authenticated parent;
 - the parent/shard binding is mismatched, stale, or ambiguous;
-- an event or decision falls outside the human's connected companion set;
+- an event or decision falls outside the Partner's connected companion set;
 - the approvals telemetry/control capability is absent;
 - a decision names only a leaked or guessed approval ID;
 - a request or grant is expired, revoked, replayed, or already consumed;
@@ -307,7 +309,7 @@ tier widening, an ownerless queue entry, or a browser-trusted authority field.
 
 ## Implementation Seams And Acceptance Tests
 
-The implementation should extend existing primitives at these seams:
+The implementation extends existing primitives at these seams:
 
 - `src/boundary/gateway/approval-boundary.ts`: capture trusted parent/shard
   attribution, preserve ownerless refusal, and bind resolution/grants;
@@ -343,7 +345,7 @@ Acceptance coverage must prove:
    expiry or revocation;
 6. approval never changes the shard's standing tier or denial mask;
 7. an autonomous parent does not auto-clear a shard-specific fence;
-8. human direct chat reaches only the selected deployed shard under the
+8. Partner direct chat reaches only the selected deployed shard under the
    connected parent and never falls back to the parent;
 9. ordinary shard↔parent traffic continues over ICP; and
 10. ordinary non-shard approvals keep their existing event, queue, resolution,

@@ -1,8 +1,8 @@
 # Architecture
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-31.
 
-This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). For current feature status and active work, see [`docs/development-status.md`](./development-status.md). Historical sprint snapshots (Sprint 8 architecture report, Sprint 9 reviews) are archived off-repo with the working-docs archive.
+This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). Historical sprint snapshots (Sprint 8 architecture report, Sprint 9 reviews) are archived off-repo with the working-docs archive.
 
 ## Canonical Runtime Model
 
@@ -35,7 +35,7 @@ PostgreSQL + JSONL/session files + owner-file roots
 ### Runtime terminology
 
 A **PSFN installation** may host one or more peer Companion Cores. A
-**Companion Core** is the authoritative mind of exactly one companion; the
+**Companion Core** is the authoritative runtime continuity of exactly one companion; the
 isolated OS process that runs it is an **agent process**. A peer companion has
 its own root identity and is not a shard, subagent, or satellite.
 
@@ -109,6 +109,22 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 
 See [`docs/memory.md`](./memory.md) for the memory contract.
 
+### Emotion and appraisal
+
+- `EmotionObserver` maps admitted turn text into bounded classifier evidence;
+  `EmotionState` integrates it per conversation scope and maintains a slower
+  Companion-global mood baseline.
+- The self-model validates provenance, confidence, freshness, and disagreement
+  before any signal reaches bounded prompt variables or a post-turn appraisal.
+- Numeric VAD and discrete labels are automata-derived. Model-authored
+  appraisal is a separate first-person interpretation, and neither is a
+  Partner Affect estimate.
+- Observer-eval remains a downstream, non-authoritative sidecar and cannot
+  feed live state back into prompts, memory, contacts, or concerns.
+
+See [`docs/emotion.md`](./emotion.md) for the current subsystem map and
+authorship, configuration, persistence, evaluation, and failure boundaries.
+
 ### Identity and prompts
 
 - Character card loading and prompt composition live under `src/core/identity/`.
@@ -168,22 +184,36 @@ model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
 
 - A soft-registry `places.json` (`src/shared/contracts/places-registry.ts`,
   loaded by `src/channels/backplane/places-registry.ts`) models sites, places,
-  and affordances (perceivers/effectors). An absent file degrades to no world
-  surface rather than failing boot; a malformed file fails closed.
+  affordances (perceivers/effectors), and physical-to-virtual twin links. This is
+  operator-authored registry metadata, not a sensor observation. An absent file
+  degrades to no world surface rather than failing boot; a malformed file fails
+  closed.
+- Physical signals remain distinct by layer: a device makes an authenticated
+  routing claim; an edge adapter may classify raw sensor input into a typed
+  observation; registry metadata resolves stable IDs and affordances; and the
+  runtime derives current or last-known situated state. None of those layers by
+  itself proves a Participant's location, intent, or internal state.
 - A situated-presence context section
   (`src/core/agent/substrate-agent/runtime-context-sections/situated-presence.ts`)
   renders where the companion is, what it perceives, what it can act on, and who
   else is co-present. A turn with no resolvable place renders no block — the
   companion never fabricates a location.
-- Every turn is classified into one of two presence modes by device origin
-  (`turn-presence-mode.ts`): `physical` (a satellite/voice endpoint — the
-  companion emanates into a real room) or `mindspace` (a plain chat channel —
-  the companion is co-located with the partner in a virtual twin of the
-  last-known physical room, resolved via a place's `mirrorsPlaceId` twin link).
+- Every turn is classified into one of two presence modes by authenticated
+  device origin (`turn-presence-mode.ts`): `physical` for a satellite/voice
+  endpoint bound to a physical place, or `mindspace` for plain chat. Mindspace
+  may foreground a registry-declared virtual twin of the last-known physical
+  room through `mirrorsPlaceId`; that is virtual situated state, not a fresh
+  physical observation or a claim that the Partner is physically co-located.
 - The `world` tool (`src/boundary/integrations/world/`) exposes
-  `perceive`/`list`/`move`, with `control` staged off by default
-  (`WORLD_CONTROL_RUNTIME_ENABLED = false`) until proven on hardware. HA control
-  is a privileged gateway method holding the token behind a scoped SSRF lane.
+  `perceive`/`list`/`control`/`move`. `world.perceive` queries current Home
+  Assistant states through the authenticated gateway; `list` reads registry
+  metadata; `move` changes deliberate virtual situated state only; and
+  `control` remains behind independent capability, trust/provenance,
+  registered-effector, confirmation, and gateway policy gates.
+- Prompt rendering is the final presentation layer: the situated-presence block
+  renders the resolved physical or virtual context and omits itself when no
+  honest place resolves. Rendering does not upgrade last-known or derived state
+  into an observation.
 - Cross-companion presence (`companion_presence` in the shared schema) and the
   shared-world wiki are multi-companion deltas layered on this model — see
   [`docs/multi-companion.md`](./multi-companion.md) and
@@ -193,16 +223,17 @@ model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
 - Rest/me-time configuration owns sleeptime entirely: heavy passes (sleep consolidation, arc weaving, dream meaning, orientation rewrite) run only from the rest-window scheduler task, never from turn cadence. The lightweight near-turn lane and the gated episode-synthesis lane cover daytime work.
-- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the user-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
+- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the participant-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
 
 ## Persistence Topology
 
 - System-owned mutable config lives under `system-data/`.
 - Companion-owned state lives under `companion-data/`.
 - `WORKSPACE_PATH` is one companion's Personal Workspace, not runtime state.
-- A governed Shared Companion Workspace is planned for explicitly shared files
-  and common reference material; the existing Shared-world Wiki is a narrower,
-  site-scoped operator-owned knowledge surface.
+- The governed Shared Companion Workspace holds explicitly reviewed shared
+  files and common reference material behind authenticated Garden publication
+  and read surfaces; the Shared-world Wiki is a narrower, site-scoped
+  operator-owned knowledge surface.
 - Continuous mode can still use the legacy shared `data/` root.
 - Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
 
@@ -269,11 +300,13 @@ These are the main extension points that already exist in code:
 The direct first-party surface is declared in `src/core/agent/tool-surface/registry.ts` and implemented by the agent/gateway composition roots. The current important surfaces are:
 
 - adaptive control: `tool_search`, `toolset`, and `response_control action=no_reply`
-- workspace and external primitives: `fs`, `repo`, `shell`, `web`, `analysis_workbench`
+- workspace and external primitives: `fs`, `repo`, `shell`, `web`, `world`, `analysis_workbench`
 - companion state: `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `self_status`, `system`, `skill`, `wiki`, `journal`
-- operations and lifecycle: `beads`, `notify`, `generate_image`, `selfie_create`, `vault`
+- expression, operations, and lifecycle: `publication`, `beads`, `notify`, `generate_image`, `selfie_create`, `vault`
 - bounded workers: `subagent action=spawn|message|wait|cancel|status`
 
-Shard execution is implemented as an internal long-horizon runtime with fold-back lineage and review, but the direct model-facing `shard` surface is still a reserved extended control-plane entry. Use `subagent` for bounded worker control until the shard surface is fully registered and documented as live.
+Shard execution is implemented as an internal long-horizon runtime with
+fold-back lineage and review, but `shard` is not registered as a canonical
+model-facing surface. Use `subagent` for bounded worker control.
 
 If documentation and diagrams disagree with the code, prefer the entrypoints and composition files first.

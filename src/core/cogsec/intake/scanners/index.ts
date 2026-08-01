@@ -12,10 +12,10 @@
 //      alter codepoints we need to see) → strip;
 //   2. datamark-marker detection/stripping on the stripped raw text;
 //   3. NFKC-normalize (folds full-width homoglyphs onto ASCII keywords);
-//   4. everything else — rule engine, encoding smuggling, URLs,
-//      secrets/PII — runs on the normalized text, so zero-width-obfuscated
-//      keywords are matched after de-obfuscation;
-//   5. secrets redaction produces the final sanitized text.
+//   4. build a detection-only Unicode projection for keyword probes;
+//   5. everything else — rule engine and encoding smuggling use that
+//      projection; URLs and secrets/PII use the content-preserving NFKC text;
+//   6. secrets redaction produces the final sanitized text.
 //
 // FAILURE POSTURE: L1 is triage, not a security boundary (Hermes
 // SECURITY.md). A scanner that throws is recorded in scannerErrors and the
@@ -41,6 +41,7 @@ import { scanEncodingSmuggling } from './encoding-smuggling.js';
 import { scanUrls } from './urls.js';
 import { scanSecretsPii } from './secrets-pii.js';
 import { scanStructure } from './structure.js';
+import { normalizeForIntakeSecurityProbe } from './security-normalization.js';
 import {
   capScanText,
   isIntakeScanScope,
@@ -71,6 +72,10 @@ export { ENCODING_SMUGGLING_SCANNER_ID, scanEncodingSmuggling } from './encoding
 export { scanUrls, URL_SCANNER_ID } from './urls.js';
 export { scanSecretsPii, SECRETS_PII_SCANNER_ID } from './secrets-pii.js';
 export { scanStructure, STRUCTURE_SCANNER_ID } from './structure.js';
+export {
+  decodeUpsideDownForIntakeSecurityProbe,
+  normalizeForIntakeSecurityProbe,
+} from './security-normalization.js';
 
 export interface IntakeL1ScannerConfig {
   /** Rule file path. Default: `${CONFIG_DIR ?? ./config}/intake-l1-rules.json`. */
@@ -195,16 +200,21 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
 
     // 3. NFKC-normalize (AFTER raw invisible detection).
     const normalized = afterDatamark.normalize('NFKC');
+    const securityNormalized = normalizeForIntakeSecurityProbe(normalized);
 
-    // 4. Structure + rule engine + encoding + URLs + secrets on normalized.
+    // 4. Keyword probes use the security-only projection. Content-oriented
+    //    scanners and sanitizedText retain the content-preserving NFKC text.
     run('l1.structure', () => scanStructure({
       originalLength: text.length,
       text: capped,
       truncated,
       scope,
     }));
-    const ruleResult = run(INTAKE_RULE_ENGINE_SCANNER_ID, () => ruleEngine.scan(normalized, scope));
-    run('l1.encoding', () => scanEncodingSmuggling(normalized, scope));
+    const ruleResult = run(
+      INTAKE_RULE_ENGINE_SCANNER_ID,
+      () => ruleEngine.scan(securityNormalized, scope),
+    );
+    run('l1.encoding', () => scanEncodingSmuggling(securityNormalized, scope));
     const knownDomains = options.knownDomains ?? config.knownDomains;
     run('l1.urls', () => scanUrls(
       normalized,

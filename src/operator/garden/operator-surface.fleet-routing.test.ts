@@ -19,6 +19,7 @@ import {
 import { AtomicRequestCapabilityReplayPort } from './atomic-request-capability-replay.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
 import { FleetGardenDirectDatabase } from './fleet-garden-direct-database.js';
+import { FleetGardenIntakeQuarantineReads } from './fleet-garden-intake-quarantine-reads.js';
 import { FleetGardenTargetRegistry } from './fleet-garden-target-registry.js';
 import type { FleetGardenDirectDatabaseServices } from './local-admin-contract.js';
 import {
@@ -226,6 +227,64 @@ function createFleetProxySurface(
 }
 
 describe('GardenOperatorSurface fleet transport routing', () => {
+  it('keeps every quarantine queue read available while the selected agent transport is unavailable', async () => {
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+    }]);
+    const controlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(verifierConfig),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+    const directBindings: string[] = [];
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: config(),
+      fleetControlPlane: controlPlane,
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => {
+          throw new Error('quarantine reads must not wait for the selected agent');
+        },
+        handleTelemetryUpgrade: () => {
+          throw new Error('not used');
+        },
+      },
+      fleetIntakeQuarantineReads: {
+        handleHttp: ({ admission, res }) => {
+          if (admission.target.canonicalPath !== '/api/admin/intake/quarantine') {
+            return false;
+          }
+          directBindings.push(admission.companionId);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"items":[]}');
+          return true;
+        },
+      },
+    });
+    const handleFleetRequest = (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest.bind(surface);
+    const responses = Array.from({ length: 20 }, () => new CapturingResponse());
+
+    await Promise.all(responses.map((response, index) => handleFleetRequest(
+      signedRequestForTarget(
+        COMPANION_A,
+        String(index + 20),
+        '/api/admin/intake/quarantine',
+      ),
+      response as unknown as ServerResponse,
+    )));
+
+    expect(responses.every(response => response.status === 200)).toBe(true);
+    expect(directBindings).toEqual(Array.from({ length: 20 }, () => COMPANION_A));
+  });
+
   it.each([
     {
       label: 'wishlist',
@@ -456,6 +515,109 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       req: {} as IncomingMessage,
       res: {} as ServerResponse,
     })).toBe(false);
+  });
+
+  it('binds quarantine snapshots to the admitted companion and keeps decisions agent-owned', async () => {
+    const registry = new FleetGardenTargetRegistry([
+      {
+        companionId: COMPANION_A,
+        endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+      },
+      {
+        companionId: COMPANION_B,
+        endpoint: { mode: 'socket', socketPath: '/run/admin-b.sock', timeoutMs: 1_000 },
+      },
+    ]);
+    const controlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(verifierConfig),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+    const readBindings: string[] = [];
+    const quarantineReads = new FleetGardenIntakeQuarantineReads({
+      config: config(),
+      createReadService: (_config, companionId) => {
+        readBindings.push(companionId);
+        return {
+          listItems: () => ({ items: [] }),
+          getItem: id => ({ id, companionId } as never),
+        };
+      },
+    });
+    const routed: RoutedFleetRequest[] = [];
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: config(),
+      fleetControlPlane: controlPlane,
+      fleetIntakeQuarantineReads: quarantineReads,
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: (target, _req, _res, body, _headers, requestPath) => {
+          routed.push({ companionId: target.companionId, requestPath, body });
+        },
+        handleTelemetryUpgrade: () => {
+          throw new Error('not used');
+        },
+      },
+      fleetChildAssertions: {
+        exchange: async input => ({
+          token: `child-${input.parentVerified.jti}`,
+          context: {
+            requestId: input.parentVerified.requestId,
+            decisionId: input.parentVerified.decisionId,
+            versions: input.parentVerified.versions,
+            parent: {
+              audience: input.parentVerified.audience as RequestCapabilityParentBinding['audience'],
+              requestId: input.parentVerified.requestId,
+              decisionId: input.parentVerified.decisionId,
+              jti: input.parentVerified.jti,
+              targetDigest: input.parentVerified.targetDigest,
+            },
+          },
+        }),
+      },
+    });
+    const handleFleetRequest = (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest.bind(surface);
+    const queueResponse = new CapturingResponse();
+    const detailResponse = new CapturingResponse();
+    const mutationBody = Buffer.from(JSON.stringify({ action: 'discard' }));
+
+    await Promise.all([
+      handleFleetRequest(
+        signedRequestForTarget(COMPANION_A, '40', '/api/admin/intake/quarantine'),
+        queueResponse as unknown as ServerResponse,
+      ),
+      handleFleetRequest(
+        signedRequestForTarget(COMPANION_B, '41', '/api/admin/intake/quarantine/held-b'),
+        detailResponse as unknown as ServerResponse,
+      ),
+    ]);
+    await handleFleetRequest(
+      signedRequestForTarget(
+        COMPANION_A,
+        '42',
+        '/api/admin/intake/quarantine/held-a/confirm',
+        { method: 'POST', body: mutationBody },
+      ),
+      {} as ServerResponse,
+    );
+
+    expect(queueResponse.status).toBe(200);
+    expect(JSON.parse(detailResponse.body)).toMatchObject({
+      item: { id: 'held-b', companionId: COMPANION_B },
+    });
+    expect(readBindings.sort()).toEqual([COMPANION_A, COMPANION_B].sort());
+    expect(routed).toEqual([{
+      companionId: COMPANION_A,
+      requestPath: '/api/admin/intake/quarantine/held-a/confirm',
+      body: mutationBody,
+    }]);
   });
 
   it('keeps concurrent child exchanges and proxy dispatch bound to their admitted targets', async () => {

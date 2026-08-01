@@ -20,6 +20,7 @@ export const TURN_PERFORMANCE_STAGES = [
   'first_audible_playback',
   'cancellation_ack',
   'background_job_state',
+  'visible_turn_complete',
   'turn_complete',
 ] as const;
 

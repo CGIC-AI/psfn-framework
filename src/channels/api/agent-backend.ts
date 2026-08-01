@@ -76,7 +76,10 @@ import {
   singleHeader as firstHeaderValue,
 } from './http-policy.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
-import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
+import {
+  emitTurnPerformance,
+  monotonicEpochNowMs,
+} from '../../shared/telemetry/turn-performance.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { RequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
@@ -88,6 +91,11 @@ import {
 import { resolveSatelliteClaim } from '../backplane/satellite-registry.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
 import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
+import {
+  type ActiveApiTurnRequest,
+  type ApiTurnCancellationReason,
+  QueuedApiTurnCancellation,
+} from './turn-cancellation.js';
 
 const log = createComponentLogger('AgentApiBackend');
 
@@ -153,12 +161,6 @@ interface IdentityClaimHeaders {
   signature?: string;
 }
 
-interface ActiveRequestState {
-  channelId: string;
-  /** Direct model-room completions abort via their own controller instead of the agent loop. */
-  abort?: (reason: 'timeout' | 'client_disconnected') => SubstrateAgentAbortResult;
-}
-
 interface ObservedTurnCompletion {
   promise: Promise<AgentResponse>;
   attachFallback(turnPromise: Promise<AgentResponse>): void;
@@ -170,9 +172,12 @@ function isAbortSignalAborted(signal: AbortSignal): boolean {
 }
 
 export interface AgentApiBackendConfig {
-  agentLoop: SubstrateAgent;
+  agentLoop: Pick<SubstrateAgent, 'handleMessage' | 'abort'>;
   eventBus: EventBus;
-  sessionManager: SessionManager;
+  sessionManager: Pick<
+    SessionManager,
+    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage'
+  >;
   /** Required for direct (raw) model completions that bypass the companion turn pipeline. */
   llmProvider?: LLMProviderPort;
   contactStore?: ContactStorePort;
@@ -192,9 +197,12 @@ export interface AgentApiBackendConfig {
 }
 
 export class AgentApiBackend {
-  private readonly agentLoop: SubstrateAgent;
+  private readonly agentLoop: Pick<SubstrateAgent, 'handleMessage' | 'abort'>;
   private readonly eventBus: EventBus;
-  private readonly sessionManager: SessionManager;
+  private readonly sessionManager: Pick<
+    SessionManager,
+    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage'
+  >;
   private readonly llmProvider: LLMProviderPort | null;
   private readonly contactStore: ContactStorePort | null;
   private readonly healthChecks: ApiServerHealthChecks;
@@ -209,7 +217,7 @@ export class AgentApiBackend {
   private readonly shardDirectory: ShardDirectoryPort | null;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
-  private readonly activeRequests = new Map<string, ActiveRequestState>();
+  private readonly activeRequests = new Map<string, ActiveApiTurnRequest>();
   private lastSchedulerHealthcheckAtMs: number | null = null;
   private readonly unregisterSchedulerHealthcheck: () => void;
 
@@ -287,20 +295,21 @@ export class AgentApiBackend {
 
   private async cancelActiveRequest(
     requestId: string,
-    active: ActiveRequestState,
-    reason: 'timeout' | 'client_disconnected',
+    active: ActiveApiTurnRequest,
+    reason: ApiTurnCancellationReason,
   ): Promise<boolean> {
     let abortResult: SubstrateAgentAbortResult | null = null;
     try {
-      abortResult = active.abort
-        ? active.abort(reason)
-        : this.abortActiveTurn(requestId, active.channelId);
+      abortResult = active.cancel(reason);
     } catch (error) {
       log.error('API turn cancellation failed', {
         requestId,
         channelId: active.channelId,
         error: toErrorMessage(error),
       });
+    }
+    if (abortResult?.status === 'already_aborted') {
+      return false;
     }
     const cancelled = abortResult?.status === 'signaled';
     if (cancelled) {
@@ -452,6 +461,8 @@ export class AgentApiBackend {
     timeoutMs?: number;
     performance?: ApiChatCompletionRpcParams['performance'];
   }): Promise<ApiChatCompletionRpcResult> {
+    const requestReceivedMonotonicAtMs = params.performance?.receivedMonotonicAtMs
+      ?? monotonicEpochNowMs();
     if ((params.hubDevicePrincipal === undefined)
       !== (params.hubDeviceAttachment === undefined)) {
       return this.fail(
@@ -481,24 +492,11 @@ export class AgentApiBackend {
       return await this.executeDirectModelCompletion(params, overrides.value);
     }
 
-    const requestAbort = new AbortController();
-    const requestState: {
-      phase: 'queued' | 'active';
-      cancellationReason: 'timeout' | 'client_disconnected' | null;
-    } = {
-      phase: 'queued',
-      cancellationReason: null,
-    };
     let rejectActiveTimeout: ((error: Error) => void) | null = null;
-    const activeRequest: ActiveRequestState = {
-      channelId: this.deriveChannelId(params.headers, params.principal),
-      abort: (reason) => {
-        requestState.cancellationReason ??= reason;
-        if (!requestAbort.signal.aborted) requestAbort.abort();
-        if (requestState.phase === 'queued') return { status: 'signaled' };
-        return this.abortActiveTurn(params.requestId, activeRequest.channelId);
-      },
-    };
+    const activeRequest = new QueuedApiTurnCancellation(
+      this.deriveChannelId(params.headers, params.principal),
+      channelId => this.abortActiveTurn(params.requestId, channelId),
+    );
     this.activeRequests.set(params.requestId, activeRequest);
     const onAbort = () => {
       void this.cancelChatCompletion({ requestId: params.requestId });
@@ -514,7 +512,7 @@ export class AgentApiBackend {
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs !== null) {
       timeoutHandle = setTimeout(() => {
-        requestState.cancellationReason = 'timeout';
+        if (!activeRequest.claimTimeout()) return;
         void this.cancelActiveRequest(
           params.requestId,
           activeRequest,
@@ -541,18 +539,21 @@ export class AgentApiBackend {
         params.clientCert,
         params.hubDevicePrincipal,
         params.hubDeviceAttachment,
-        requestAbort.signal,
+        activeRequest.signal,
+        channelId => {
+          activeRequest.setChannelId(channelId);
+        },
       );
       if (!pendingTurn.ok) {
-        if (requestState.cancellationReason === 'timeout') {
+        if (activeRequest.cancellationReason === 'timeout') {
           return this.fail(504, 'request_timeout', 'Request timed out before turn started');
         }
         return pendingTurn.error;
       }
-      activeRequest.channelId = pendingTurn.value.channelId;
-      if (requestAbort.signal.aborted) {
+      activeRequest.setChannelId(pendingTurn.value.channelId);
+      if (activeRequest.signal.aborted) {
         pendingTurn.value.releaseChannel();
-        if (requestState.cancellationReason === 'timeout') {
+        if (activeRequest.cancellationReason === 'timeout') {
           return this.fail(504, 'request_timeout', 'Request timed out before turn started');
         }
         return this.fail(499, 'request_cancelled', 'Request cancelled before turn started');
@@ -583,7 +584,7 @@ export class AgentApiBackend {
         : () => {};
 
       turnCompletion = this.observeTurnCompletion(pendingTurn.value.substrateMsg.id);
-      requestState.phase = 'active';
+      activeRequest.markActive();
       const turnPromise = this.agentLoop.handleMessage(pendingTurn.value.substrateMsg);
       turnCompletion.attachFallback(turnPromise);
       this.attachTurnCleanup(pendingTurn.value.releaseChannel, turnPromise);
@@ -591,7 +592,7 @@ export class AgentApiBackend {
         ? null
         : new Promise<never>((_, reject) => {
           rejectActiveTimeout = reject;
-          if (requestState.cancellationReason === 'timeout') {
+          if (activeRequest.cancellationReason === 'timeout') {
             reject(new Error('api_chat_completion_timeout'));
           }
         });
@@ -600,6 +601,21 @@ export class AgentApiBackend {
           ? Promise.race([turnCompletion.promise, turnTimeoutPromise])
           : turnCompletion.promise
       );
+      const visibleCompletionAt = monotonicEpochNowMs();
+      void emitTurnPerformance(this.eventBus, {
+        traceId: params.requestId,
+        turnId: pendingTurn.value.substrateMsg.id,
+        requestId: params.requestId,
+        channelId: pendingTurn.value.channelId,
+        channelType: pendingTurn.value.substrateMsg.channelType,
+        stage: 'visible_turn_complete',
+        monotonicAtMs: visibleCompletionAt,
+        durationMs: Math.max(0, visibleCompletionAt - requestReceivedMonotonicAtMs),
+      }).catch(error => log.debug('API visible-completion performance telemetry emit failed', {
+        requestId: params.requestId,
+        channelId: pendingTurn.value.channelId,
+        error: toErrorMessage(error),
+      }));
       return {
         ok: true,
         response: {
@@ -712,9 +728,9 @@ export class AgentApiBackend {
     // cancelChatCompletion can find them, and pass the per-request AbortSignal
     // into the provider so cancellation can stop provider work.
     const abortController = new AbortController();
-    const activeRequest: ActiveRequestState = {
+    const activeRequest: ActiveApiTurnRequest = {
       channelId,
-      abort: () => {
+      cancel: () => {
         if (abortController.signal.aborted) return { status: 'already_aborted' };
         abortController.abort();
         return { status: 'signaled' };
@@ -945,6 +961,7 @@ export class AgentApiBackend {
     traceId: string,
     signal: AbortSignal,
   ): Promise<(() => void) | null> {
+    if (isAbortSignalAborted(signal)) return null;
     const queued = this.channelTurnLock.acquire(channelId);
     if (queued.contended) {
       this.emitQueueTelemetry(channelId, 'contended', {
@@ -954,36 +971,24 @@ export class AgentApiBackend {
       });
     }
 
-    if (isAbortSignalAborted(signal)) {
-      void queued.lease
-        .then(lease => lease.release())
-        .catch(error => log.debug('Cancelled API queue lease release failed', {
-          requestId: traceId,
-          channelId,
-          error: toErrorMessage(error),
-        }));
-      return null;
-    }
     const onAbort = () => rejectQueuedLease();
     let rejectQueuedLease: () => void = () => {};
-    const aborted = new Promise<never>((_, reject) => {
-      rejectQueuedLease = () => reject(new Error('api_chat_completion_cancelled_while_queued'));
+    const aborted = new Promise<null>((resolve) => {
+      rejectQueuedLease = () => resolve(null);
       signal.addEventListener('abort', onAbort, { once: true });
     });
-    let lease: FifoChannelLease;
+    let lease: FifoChannelLease | null;
     try {
       lease = await Promise.race([queued.lease, aborted]);
-    } catch {
-      void queued.lease
-        .then(lateLease => lateLease.release())
-        .catch(error => log.debug('Late API queue lease release failed', {
-          requestId: traceId,
-          channelId,
-          error: toErrorMessage(error),
-        }));
-      return null;
     } finally {
       signal.removeEventListener('abort', onAbort);
+    }
+    if (lease === null) {
+      if (!queued.cancel()) {
+        const acquiredLease = await queued.lease;
+        acquiredLease.release();
+      }
+      return null;
     }
     if (isAbortSignalAborted(signal)) {
       lease.release();
@@ -1545,6 +1550,7 @@ export class AgentApiBackend {
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
     signal: AbortSignal,
+    onChannelResolved: (channelId: string) => void,
   ): Promise<{ ok: true; value: PendingTurn } | { ok: false; error: ApiRpcFailure }> {
     if (isAbortSignalAborted(signal)) {
       return {
@@ -1647,6 +1653,7 @@ export class AgentApiBackend {
       claimedCanonicalContactId = hubDeviceCanonicalContactId;
       satellite = { ...satellite, hubDevicePrincipal };
     }
+    onChannelResolved(channelId);
 
     if (!hubDevicePrincipal) {
       const identityClaim = await this.enforceIdentityClaim(headers, authorId);

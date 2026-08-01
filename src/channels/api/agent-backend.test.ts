@@ -11,13 +11,15 @@ import {
   createRequestCapabilityVerifier,
   type RequestCapabilityAuthContext,
 } from '../../boundary/fleet-auth/request-capability.js';
+import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
+import type { AgentResponse } from '../../shared/contracts/runtime.js';
 
 function createSessionManagerStub() {
   return {
     getMessageCount: vi.fn(() => 0),
     recordUserMessage: vi.fn(),
     recordAssistantMessage: vi.fn(),
-  } as any;
+  };
 }
 
 describe('AgentApiBackend health RPC', () => {
@@ -332,16 +334,20 @@ describe('AgentApiBackend Hub device principal boundary', () => {
 
 describe('AgentApiBackend chat completion deadlines', () => {
   it('cancels a queued turn before it can enter the agent loop', async () => {
-    let resolveFirstTurn!: (response: any) => void;
-    const firstTurn = new Promise<any>((resolve) => {
+    let resolveFirstTurn!: (response: AgentResponse) => void;
+    const firstTurn = new Promise<AgentResponse>((resolve) => {
       resolveFirstTurn = resolve;
     });
     const eventBus = new EventBus();
     const cancellationOutcomes: string[] = [];
+    const queueEvents: Array<{ phase: string; queueDepth: number }> = [];
     eventBus.on('agent.turn.performance', event => {
       if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
         cancellationOutcomes.push(event.cancellationOutcome);
       }
+    });
+    eventBus.on('channel.queue.telemetry', event => {
+      queueEvents.push({ phase: event.phase, queueDepth: event.queueDepth });
     });
     const handleMessage = vi.fn()
       .mockImplementationOnce(() => firstTurn)
@@ -353,7 +359,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
     const abort = vi.fn(() => ({ status: 'signaled' as const }));
     const sessionManager = createSessionManagerStub();
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort } as any,
+      agentLoop: { handleMessage, abort },
       eventBus,
       sessionManager,
     });
@@ -377,10 +383,15 @@ describe('AgentApiBackend chat completion deadlines', () => {
       { role: 'user', content: 'Abandoned client-supplied history' },
       { role: 'assistant', content: 'Abandoned synthetic reply' },
     ]);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(queueEvents).toContainEqual({
+      phase: 'contended',
+      queueDepth: 1,
+    }));
 
-    await expect(backend.cancelChatCompletion({ requestId: 'req-queue-abandoned' }))
-      .resolves.toEqual({ cancelled: true });
+    const firstCancellation = backend.cancelChatCompletion({ requestId: 'req-queue-abandoned' });
+    const duplicateCancellation = backend.cancelChatCompletion({ requestId: 'req-queue-abandoned' });
+    await expect(firstCancellation).resolves.toEqual({ cancelled: true });
+    await expect(duplicateCancellation).resolves.toEqual({ cancelled: false });
     await expect(abandonedResult).resolves.toEqual({
       ok: false,
       error: {
@@ -411,14 +422,77 @@ describe('AgentApiBackend chat completion deadlines', () => {
     ]);
   });
 
+  it('propagates a local client AbortSignal while the turn is contended', async () => {
+    let resolveFirstTurn!: (response: AgentResponse) => void;
+    const firstTurn = new Promise<AgentResponse>((resolve) => {
+      resolveFirstTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const queueEvents: Array<{ phase: string; queueDepth: number }> = [];
+    eventBus.on('channel.queue.telemetry', event => {
+      queueEvents.push({ phase: event.phase, queueDepth: event.queueDepth });
+    });
+    const handleMessage = vi.fn()
+      .mockImplementationOnce(() => firstTurn)
+      .mockResolvedValue({
+        content: 'unexpected abandoned execution',
+        channelId: 'api:principal-1:signal-session',
+        metadata: { inputTokens: 1, outputTokens: 1 },
+      });
+    const backend = new AgentApiBackend({
+      agentLoop: {
+        handleMessage,
+        abort: vi.fn(() => ({ status: 'signaled' as const })),
+      },
+      eventBus,
+      sessionManager: createSessionManagerStub(),
+    });
+    const request = (content: string, signal?: AbortSignal) => backend.runChatCompletion({
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user' as const, content }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' as const },
+      headers: { 'x-session-id': 'signal-session' },
+      ...(signal ? { signal } : {}),
+    });
+
+    const firstResult = request('Keep the local channel busy');
+    await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const abandonedResult = request('Cancel this local turn', controller.signal);
+    await vi.waitFor(() => expect(queueEvents).toContainEqual({
+      phase: 'contended',
+      queueDepth: 1,
+    }));
+
+    controller.abort();
+    await expect(abandonedResult).resolves.toMatchObject({
+      ok: false,
+      error: { status: 499, type: 'request_cancelled' },
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+
+    resolveFirstTurn({
+      content: 'owner complete',
+      channelId: 'api:principal-1:signal-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(firstResult).resolves.toMatchObject({ ok: true });
+  });
+
   it('applies the existing RPC deadline while a turn is still queued', async () => {
     vi.useFakeTimers();
     try {
-      let resolveFirstTurn!: (response: any) => void;
-      const firstTurn = new Promise<any>((resolve) => {
+      let resolveFirstTurn!: (response: AgentResponse) => void;
+      const firstTurn = new Promise<AgentResponse>((resolve) => {
         resolveFirstTurn = resolve;
       });
       const eventBus = new EventBus();
+      const queueEvents: Array<{ phase: string; queueDepth: number }> = [];
+      eventBus.on('channel.queue.telemetry', event => {
+        queueEvents.push({ phase: event.phase, queueDepth: event.queueDepth });
+      });
       const handleMessage = vi.fn()
         .mockImplementationOnce(() => firstTurn)
         .mockResolvedValue({
@@ -428,7 +502,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
         });
       const abort = vi.fn(() => ({ status: 'signaled' as const }));
       const backend = new AgentApiBackend({
-        agentLoop: { handleMessage, abort } as any,
+        agentLoop: { handleMessage, abort },
         eventBus,
         sessionManager: createSessionManagerStub(),
       });
@@ -448,6 +522,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
       const firstResult = request('req-deadline-owner', 'Keep the channel busy');
       await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(1));
       const expiredResult = request('req-deadline-queued', 'Expire in the queue', 1_000);
+      await vi.waitFor(() => expect(queueEvents).toContainEqual({
+        phase: 'contended',
+        queueDepth: 1,
+      }));
 
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(expiredResult).resolves.toEqual({
@@ -482,7 +560,12 @@ describe('AgentApiBackend chat completion deadlines', () => {
     vi.useFakeTimers();
     try {
       const eventBus = new EventBus();
-      const performanceEvents: Array<{ traceId: string; stage: string; monotonicAtMs: number }> = [];
+      const performanceEvents: Array<{
+        traceId: string;
+        stage: string;
+        monotonicAtMs: number;
+        durationMs?: number;
+      }> = [];
       eventBus.on('agent.turn.performance', event => performanceEvents.push(event));
       const response = {
         content: 'visible answer',
@@ -506,6 +589,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
         eventBus,
         sessionManager: createSessionManagerStub(),
       });
+      const receivedMonotonicAtMs = monotonicEpochNowMs();
 
       const resultPromise = backend.handleChatCompletion({
         requestId: 'req-visible-complete',
@@ -520,8 +604,8 @@ describe('AgentApiBackend chat completion deadlines', () => {
         },
         timeoutMs: 1_000,
         performance: {
-          receivedMonotonicAtMs: 123_456,
-          receivedTimestampMs: 123_000,
+          receivedMonotonicAtMs,
+          receivedTimestampMs: Date.now(),
         },
       });
 
@@ -543,8 +627,17 @@ describe('AgentApiBackend chat completion deadlines', () => {
       expect(performanceEvents).toContainEqual(expect.objectContaining({
         traceId: 'req-visible-complete',
         stage: 'transport_received',
-        monotonicAtMs: 123_456,
+        monotonicAtMs: receivedMonotonicAtMs,
       }));
+      expect(performanceEvents).toContainEqual(expect.objectContaining({
+        traceId: 'req-visible-complete',
+        stage: 'visible_turn_complete',
+        durationMs: 10,
+      }));
+      const visibleDuration = performanceEvents.find(event => (
+        event.traceId === 'req-visible-complete' && event.stage === 'visible_turn_complete'
+      ))?.durationMs;
+      expect(visibleDuration).toBeLessThan(30_000);
     } finally {
       vi.useRealTimers();
     }

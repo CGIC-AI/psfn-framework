@@ -159,20 +159,32 @@ describe('FifoChannelLock', () => {
     expect(lock.pending('chan')).toBe(0);
   });
 
-  it('supports cancellation pattern by releasing a late-resolved lease', async () => {
+  it('removes a cancelled waiter immediately without disturbing FIFO order', async () => {
     const lock = new FifoChannelLock();
     const first = lock.acquire('chan');
     const cancelled = lock.acquire('chan');
+    const third = lock.acquire('chan');
 
     const firstLease = await first.lease;
-    void cancelled.lease.then((lease) => {
-      lease.release();
+    let thirdResolved = false;
+    void third.lease.then(() => {
+      thirdResolved = true;
     });
+    expect(lock.pending('chan')).toBe(3);
+
+    expect(cancelled.cancel()).toBe(true);
+    expect(cancelled.cancel()).toBe(false);
+    expect(lock.pending('chan')).toBe(2);
+    await Promise.resolve();
+    expect(thirdResolved).toBe(false);
 
     firstLease.release();
-    await cancelled.lease;
-    await Promise.resolve();
+    const thirdLease = await third.lease;
 
+    expect(thirdResolved).toBe(true);
+    expect(thirdLease.queuedAhead).toBe(2);
+    expect(lock.pending('chan')).toBe(1);
+    thirdLease.release();
     expect(lock.pending('chan')).toBe(0);
 
     const next = lock.acquire('chan');

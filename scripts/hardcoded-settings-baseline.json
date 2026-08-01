@@ -824,6 +824,12 @@
       "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
     },
     {
+      "file": "src/boundary/gateway/mcp/invocation-authority.ts",
+      "name": "MAX_PENDING_PERMITS",
+      "value": "128",
+      "note": "Code-owned security and DoS ceiling for short-lived, single-use gateway MCP invocation permits; changing it requires review of the authority lifecycle."
+    },
+    {
       "file": "src/boundary/gateway/mcp/sdk-client.ts",
       "name": "createMcpSdkClientFactory.create.client.versionNegotiation.probe.maxRetries",
       "value": "0",

@@ -13,5 +13,6 @@ Use this skill for normal conversation-facing turns.
 - Ask direct clarification questions when the request is underspecified.
 
 ## Tooling Notes
-- Use `load_tools` to activate specialized tools when needed.
+- Registered tools are callable without a loading step. Use `tool_search` to
+  discover long-tail tools and inspect their schemas when needed.
 - Use `skill` with `action="list"` to inspect available skills and why any were filtered.

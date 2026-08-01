@@ -5,14 +5,22 @@ import path from 'node:path';
 
 const SELF_PATH = 'scripts/verify-actor-terminology.mjs';
 const DEFAULT_SCAN_ROOTS = [
+  'AGENTS.md',
+  'CLAUDE.md',
   'README.md',
   'docs',
   'companion_docs',
   'companion-ui',
   'skills',
   'config/runtime-prompt-layers.seed.json',
+  'deploy',
+  'deployment',
+  'k8s',
+  'models',
   'src',
   'admin-ui/src',
+  'working_docs/public-release-post-draft.md',
+  'working_docs/public-roadmap-draft.md',
 ];
 
 const TEXT_EXTENSIONS = new Set([

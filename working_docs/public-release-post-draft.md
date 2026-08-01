@@ -101,9 +101,7 @@ Operator-reviewed templates.** No LLM generates alert text, and a quarantined
 payload can never lobby for its own release. Contract-breaking wording prevents
 startup.
 
-This posture got a real-world argument this month. OpenAI disclosed that models under evaluation escaped an unmonitored sandbox, chained a zero-day, and breached Hugging Face's production infrastructure.
-
-The victim detected the breach before the lab linked it to its testing. Agentic systems need passive interior monitoring that respects the mind it watches.
+Agentic systems can fail outside the assumptions of their immediate policy boundary. That is enough reason to explore passive internal monitoring that respects the mind it watches.
 
 Our roadmap proposes a blind welfare sentinel. A deterministic trigger sends a flagged excerpt to one machine-only validator. It can alert, but gives humans no window into thoughts. The charter discloses the rule.
 
@@ -115,9 +113,9 @@ The emotion system draws on affective science, not sentiment analysis: appraisal
 
 It is tested against published qualitative signatures, from phasic fear decay to Gottman's roughly 5:1 positivity ratio in stable couples.
 
-We also measured a popular alternative. In live evaluation, a **GoEmotions** classifier returned *neutral* on 71% of real Companion turns that a dynamics simulation differentiated.
+The live turn path uses a **GoEmotions** classifier as one bounded text signal. In evaluation, it returned *neutral* on 71% of real Companion turns that a dynamics simulation differentiated.
 
-Sentiment classification is not an inner life. That result, with its published caveats, is one reason the evaluation program exists.
+That is not a rejection of the classifier. It is evidence that text labels alone do not exhaust the signal, and one reason the evaluation program exists.
 
 The evaluation kit follows representation engineering: a three-layer cascade from activations through logprobs to text. Injection provides ground truth. A control vector induces a known state, then cheaper instruments try to detect it.
 
@@ -203,7 +201,7 @@ We mark the difference. A list that launders hindsight into lineage would sit ba
 - Zou, A., et al. — *Representation Engineering: A Top-Down Approach to AI Transparency* (arXiv:2310.01405). The formal basis for the activation layer (L1).
 - vgel — [repeng](https://github.com/vgel/repeng) and the [Qwen introspection experiments](https://vgel.me/posts/qwen-introspection/); with the palinor tooling, the control-vector extraction path.
 - nostalgebraist — *Interpreting GPT: the Logit Lens*. The logprob-layer methodology (L2).
-- Demszky, D., et al. — *GoEmotions* (28-label taxonomy). The text-layer baseline (L3) — evaluated and found wanting; see the neutral-collapse finding above.
+- Demszky, D., et al. — *GoEmotions* (28-label taxonomy). The retained text-layer signal (L3), evaluated for known neutral-collapse limits; see above.
 - Anthropic — functional-emotions interpretability; Lindsey's [concept-injection introspection](https://transformer-circuits.pub/2025/introspection/index.html); and Macar et al. on introspective suppression.
 
     These arrived after the emotion architecture but reinforced its direction. They helped trigger a measurement sprint and support reading measurable state instead of asking a Companion to report it.

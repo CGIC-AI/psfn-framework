@@ -40,6 +40,7 @@ import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabiliti
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { GatewaySystemDataWriter } from './system-data-writer.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
+import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -64,6 +65,8 @@ export interface GatewayPrivilegedCore {
    * artifact guard in fleet mode.
    */
   intakeScreening: GatewayIntakeScreeningRuntime;
+  /** Native external MCP client runtime; null broker when every server is disabled. */
+  mcp: McpGatewayRuntime;
   auditDb: null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
@@ -236,12 +239,18 @@ export async function buildGatewayPrivilegedCore(
   const cogSecEvents = new CogSecEventStore(
     resolveCogSecEventsPath(input.startupHydration.companionDataDir),
   );
+  const configStore = createOwnerFileConfigStore({
+    dataDir: input.startupHydration.systemDataDir,
+    companionDataDir: input.startupHydration.companionDataDir,
+    defaultContextWindow: input.config.defaultContextWindow,
+  });
+  const mcp = composeMcpGatewayRuntime({
+    config: configStore.loadStartupMcpServers(),
+    ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
+    screeningFor: companionId => intakeScreening.screeningFor(companionId),
+  });
   const systemDataWriter = new GatewaySystemDataWriter({
-    configStore: createOwnerFileConfigStore({
-      dataDir: input.startupHydration.systemDataDir,
-      companionDataDir: input.startupHydration.companionDataDir,
-      defaultContextWindow: input.config.defaultContextWindow,
-    }),
+    configStore,
     systemDataDir: input.startupHydration.systemDataDir,
   });
 
@@ -251,6 +260,7 @@ export async function buildGatewayPrivilegedCore(
     eligibilityGate,
     privilegedServices,
     intakeScreening,
+    mcp,
     auditDb: null,
     createGatewayServer: ({
       discordAdapter,
@@ -274,6 +284,7 @@ export async function buildGatewayPrivilegedCore(
       ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
       ...(sharedSatelliteQuietHoursAllows ? { sharedSatelliteQuietHoursAllows } : {}),
       systemDataWriter,
+      ...(mcp.broker ? { mcpBroker: mcp.broker } : {}),
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,

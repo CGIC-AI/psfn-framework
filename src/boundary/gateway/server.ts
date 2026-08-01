@@ -140,6 +140,7 @@ import {
   type InboundChannelReplayDrop,
 } from './inbound-channel-replay.js';
 import type { GatewaySystemDataWriterPort } from './system-data-writer.js';
+import type { McpGatewayBroker } from './mcp/broker.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -308,6 +309,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
   /** Gateway-owned single writer for system owner files and system state. */
   systemDataWriter?: GatewaySystemDataWriterPort;
+  /** Lazy external MCP client broker. It never connects until a catalog tool is selected. */
+  mcpBroker?: McpGatewayBroker;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   // an52.3: keyed on the authenticated companion so a fleet resolves each
@@ -3516,6 +3519,8 @@ export class GatewayServer {
         this.rpcServer!.close(() => resolve());
       });
     }
+
+    await this.options.mcpBroker?.close();
 
     log.info('Stopped');
   }

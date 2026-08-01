@@ -41,6 +41,8 @@ npm install        # the onboarding script runs from the repo's dev install
 npm run onboard
 ```
 
+<a id="deployment-done-the-public-on-ramp-definition"></a>
+
 ## Public on-ramp acceptance contract
 
 This is the ratified bar for "a newcomer can deploy PSFN" (bead

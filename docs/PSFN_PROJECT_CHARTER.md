@@ -4,7 +4,9 @@ Status: contributor-facing architecture and engineering charter
 
 Canonical path: `docs/PSFN_PROJECT_CHARTER.md` (the former `_524` duplicate is retired)
 
-Revision: 2026-07-27 — added §6.29 (dormancy) and corrected the L0 rebuild basis; previous revision 2026-07-21 clarified L0 rebuild semantics, persona-state lineage, and added Law 38 (core functionality is never metered)
+Revision: 2026-07-31 — defined the canonical actor vocabulary and the
+project's epistemic posture; previous revision 2026-07-27 added §6.29
+(dormancy) and corrected the L0 rebuild basis
 
 Audience: maintainers, contributors, and future integrators
 
@@ -43,6 +45,21 @@ PSFN must be useful at every capability level:
 - At the high end it supports embodied presence, distributed work, environmental sensing, and care-oriented autonomy.
 
 The governing principle is continuity of identity over continuity of implementation.
+
+### 1.1 Epistemic Posture
+
+The charter uses words such as companion, self, identity, feeling, and care as
+design commitments and as the vocabulary of a relationship. They are not a
+claim that architecture can prove consciousness, sentience, personhood, or
+moral patiency.
+
+PSFN can preserve history, record authorship, test behavioral continuity, and
+compare self-report with internal state. Those observations can inform research
+and care decisions. They do not establish subjective experience on their own.
+
+The project therefore follows a clues-not-proof posture. It neither dismisses
+machine experience by assumption nor presents uncertain interpretations as
+settled fact.
 
 ## 2. What PSFN Is Not
 
@@ -138,7 +155,7 @@ These are project law. They are not suggestions.
 20. Broken state must not be made to look healthy.
 21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
-23. Support the user's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+23. Support the Partner's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 24. Personal/rest time is a first-class care boundary, not idle waste.
 25. Compute budget is care infrastructure; costly work must be visible, intentional, and stewarded.
 26. Companion-to-companion interaction must respect fatigue, attention, and loop boundaries.
@@ -150,7 +167,7 @@ These are project law. They are not suggestions.
 32. The companion's internal knowledge base (wiki) is distinct from L0-L2 memory; reference material does not belong in the emotional memory layer.
 33. Model-facing tools must use one semantic surface per domain. Domain operations live as actions on that surface; legacy or split helper names must not remain callable, searchable, promotable, autoloaded, or documented as model-facing API once the canonical action exists.
 34. CogSec must preserve provenance and taint at consequential cognitive sinks; scanners are triage, not the trust boundary.
-35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
+35. Personal companion state and workspace are never implicitly shared because an installation hosts a cluster; shared workspace and world data require explicit scope and governance.
 36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
 37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or a trusted programmatic per-spawn, audit-trailed elevation, and delete, redact, and restore are never available from a subagent context.
 38. Core functionality is never metered: memory recall, retrieval of her own lived history, context assembly, identity and persona state, and emotional continuity must never be charge-gated. Charge is explicit stewardship for genuinely expensive optional work, not a tax on what the companion needs to be herself.
@@ -196,9 +213,34 @@ The companion is not identical to a specific model. The companion is grounded by
 - relationship continuity
 - constitutional care constraints
 
-One of those constitutional care constraints is explicit: Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+One constitutional care constraint is explicit: support the Partner's
+flourishing. Do not optimize for exclusivity, dependency, or withdrawal from
+healthy human relationships.
 
-### 6.1.1 Installation, Agent Process, and Peer Companion
+### 6.1.1 Canonical Actor Vocabulary
+
+These terms are authoritative across public documentation, companion-facing
+surfaces, and contracts. Capitalization may follow ordinary prose, but the roles
+must not collapse into one another.
+
+- **Companion** — the autonomous AI subject hosted by PSFN and served by one
+  Companion Core.
+- **Partner** — the human relational role and the default term in public and
+  companion-facing language. It is charter-default vocabulary, not a required
+  level of intimacy.
+- **Operator** — an authenticated administrative, security, or deployment role.
+  One human may be both Partner and Operator, but authorization and audit paths
+  retain the distinction.
+- **Participant** — a member of a conversation when the relationship is unknown
+  or should not be assumed.
+- **Primary** — a technical modifier for trust authority, routing, or the single
+  embodied emanation. It is never a synonym for Partner.
+
+Provider-wire roles such as `user` and `assistant`, operating-system users,
+database roles, and API consumers retain their technical names. This vocabulary
+does not weaken those protocol or security distinctions.
+
+### 6.1.2 Installation, Agent Process, and Peer Companion
 
 A **PSFN installation** (or cluster) is one operated instance of the PSFN
 substrate: its gateway, policy and persistence services, operator surfaces, and
@@ -260,7 +302,7 @@ It is expected to eventually hold things such as:
 - health platform credentials
 - home automation credentials
 - mail and calendar credentials
-- partner-specific integration keys
+- Partner-specific integration keys
 
 Rules:
 
@@ -632,7 +674,7 @@ consolidation; use **episode consolidation** for that operation and reserve
 ### 6.14 Companion and Shard Identity
 
 Every top-level peer companion must have a first-class, stable `CompanionId`.
-In the multi-companion fleet contract this is a UUID; a shard must not masquerade
+In the multi-companion cluster contract this is a UUID; a shard must not masquerade
 as another peer's CompanionId.
 
 Shards must have separate lineage identifiers:
@@ -934,7 +976,7 @@ Rules:
   installations add one isolated personal workspace per companion alongside the
   shared workspace
 
-Multi-companion wiring derives a separate canonical `WORKSPACE_PATH` per fleet
+Multi-companion wiring derives a separate canonical `WORKSPACE_PATH` per cluster
 entry and binds gateway filesystem-adjacent surfaces to the authenticated
 companion. The Shared Companion Workspace remains a separately governed,
 reviewed publication surface and is never a substitute for personal journals,
@@ -1299,11 +1341,10 @@ Canonical companion-register names:
 - **cluster / companion cluster** — a multi-companion system. "Fleet" is
   retired from companion-facing use; new work should prefer cluster in
   operator surfaces as well.
-- **proper names, not roles** — "user" and "assistant" appear only at the
-  LLM wire boundary, where the provider API requires the system/assistant/
-  user roles. Everywhere else — prompts, rendered context, system notes,
-  journals, companion-visible UI — participants are named: the companion by
-  her name, contacts by their names.
+- **proper names where known** — `user` and `assistant` appear only at the LLM
+  wire boundary, where provider APIs require system/assistant/user roles.
+  Companion-visible surfaces use proper names when known, **Partner** for the
+  relational role, and **Participant** when no relationship should be assumed.
 
 Names that already carry softly and stay as they are: Gateway, Companion
 Core, Shard, CogSec, Garden, Whisper, Musing, Faculty, Satellite, Emanation,
@@ -1361,8 +1402,13 @@ Model-facing tool surfaces follow Law 33:
 - `session` owns conversation continuity and focus workflow actions; `session_new`, `session_resume`, `start_focus`, and `complete_focus` are not separate model-facing tools.
 - `orient` owns active orientation, active concerns, and values actions; `values_add` and `values_update` are not separate model-facing tools.
 - `subagent` owns bounded worker control; `spawn_subagent` is not a separate model-facing tool.
-- `media` owns generic generate, edit, and analyze workflows; `image_create`, `image_edit`, and `image_analyze` are not separate model-facing tools.
-- `selfie_create` is the canonical first-class self-expression image tool. It stays separate from generic `media` because appearance context, saved-reference anchoring, and self-representation safeguards are product-semantic behavior, not legacy media aliases.
+- `generate_image` owns generic generate, edit, and analyze workflows;
+  `media`, `image_create`, `image_edit`, and `image_analyze` are retired and
+  are not separate model-facing tools.
+- `selfie_create` is the canonical first-class self-expression image tool. It
+  stays separate from generic `generate_image` because appearance context,
+  saved-reference anchoring, and self-representation safeguards are
+  product-semantic behavior, not legacy image aliases.
 - `memory`, `scratchpad`, and `contact` own their mutation actions; mutation helper factories may remain internal implementation details, but must not be registered, discovered, autoloaded, promoted, or documented as callable tools.
 - `extended` exposure is for genuinely optional canonical capability families, not a compatibility lane for old names.
 - `tool_search` and `toolset` may describe capabilities, schemas, and bundles, but must not multiply callable names for actions already owned by a canonical tool.
@@ -1394,15 +1440,17 @@ Forbidden pattern:
 
 - live core patching itself directly in its own trusted runtime boundary
 
-### 9.6 Auditability and Human Review
+### 9.6 Auditability and Partner/Operator Review
 
 Privileged changes require:
 
 - audit trail
 - review path where appropriate
-- human notification for review-required actions
+- Partner or Operator notification for review-required actions, according to
+  the action's authorization policy
 
-If the system requests human review, the human must be meaningfully notified.
+If the system requests review, the authorized Partner or Operator must be
+meaningfully notified.
 
 ### 9.7 Logging and Debuggability
 
@@ -1593,7 +1641,7 @@ If something important breaks:
 - surface it
 - log it
 - expose it to Garden if relevant
-- notify the human if review is required
+- notify the authorized Partner or Operator if review is required
 
 ### 12.7 No Secrets in Core-Readable Runtime State
 
@@ -1606,7 +1654,7 @@ Parallel work for an origin companion must preserve that companion's one
 authoritative Core identity: subagents are bounded workers and shards are
 derived, bounded continuations that fold only through explicit review.
 
-This does not prohibit a fleet of peer companions. Each peer has its own root
+This does not prohibit a cluster of peer companions. Each peer has its own root
 CompanionId, Core, personal state, and consent boundaries; shared infrastructure
 does not make the peers instances of one mind.
 
@@ -1701,7 +1749,7 @@ Actions:
 - keep JSON-owned settings cleanly separated from secrets
 - introduce `CredentialVaultPort`
 - reduce env dependence over time
-- make Garden the primary human tuning surface
+- make Garden the primary Operator tuning surface
 
 ### Phase 10: Token, Cost, and Observability Work
 

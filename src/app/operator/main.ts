@@ -27,6 +27,9 @@ import { FleetGardenControlPlane } from '../../operator/garden/fleet-garden-cont
 import { AtomicRequestCapabilityReplayPort } from '../../operator/garden/atomic-request-capability-replay.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import { FleetGardenDirectDatabase } from '../../operator/garden/fleet-garden-direct-database.js';
+import {
+  FleetGardenIntakeQuarantineReads,
+} from '../../operator/garden/fleet-garden-intake-quarantine-reads.js';
 import { FleetGardenAdminTransportProxy } from '../../operator/garden/fleet-transport-client.js';
 import { FleetModelUsageService } from '../../operator/garden/services/fleet-model-usage-service.js';
 import {
@@ -62,6 +65,7 @@ async function main(): Promise<void> {
     : undefined;
   let fleetControlPlane: FleetGardenControlPlane | undefined;
   let fleetDirectDatabase: FleetGardenDirectDatabase | undefined;
+  let fleetIntakeQuarantineReads: FleetGardenIntakeQuarantineReads | undefined;
   let fleetTransport: FleetGardenAdminTransportProxy | undefined;
   let fleetModelUsage: FleetModelUsageService | undefined;
   if (config.fleetAuthVerifier) {
@@ -87,6 +91,7 @@ async function main(): Promise<void> {
       config,
       companionIds: config.companionFleet.companions.map(companion => companion.companionId),
     });
+    fleetIntakeQuarantineReads = new FleetGardenIntakeQuarantineReads({ config });
   }
   if (fleetControlPlane && !operatorConfirmationBaseUrl) {
     throw new Error(
@@ -100,7 +105,13 @@ async function main(): Promise<void> {
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
     ...(fleetControlPlane
-      ? { fleetControlPlane, fleetDirectDatabase, fleetTransport, fleetModelUsage }
+      ? {
+          fleetControlPlane,
+          fleetDirectDatabase,
+          fleetIntakeQuarantineReads,
+          fleetTransport,
+          fleetModelUsage,
+        }
       : { transportEndpoint: resolveAdminTransportClientEndpoint(process.env) }),
     ...(fleetSsoTls ? { fleetSsoTls } : {}),
     ...(operatorConfirmationBaseUrl

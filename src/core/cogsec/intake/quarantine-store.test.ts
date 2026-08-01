@@ -25,6 +25,7 @@ import {
 } from '../../../shared/contracts/intake-envelope.js';
 import {
   captureOpenArtifactRegistration,
+  createIntakeQuarantineReadStore,
   createIntakeQuarantineStore,
   INTAKE_QUARANTINE_MAX_RAW_CHARS,
   type IntakeQuarantineStore,
@@ -135,6 +136,36 @@ describe('intake quarantine store (htm9.11)', () => {
     expect(loaded?.safeRepresentationText).toBe('Summary: a hostile page.');
     expect(loaded?.canonicalContactId).toBe('contact:alice');
     expect(loaded?.cogSecCaseId).toBe('cogsec_test1');
+  });
+
+  it('projects expiry for a read-only surface without consuming the owning runtime transition', () => {
+    const envelope = makeQuarantinedEnvelope();
+    store.hold({
+      envelope,
+      mode: 'enforce',
+      rawText: 'held hostile content',
+      safeRepresentationText: 'safe summary',
+    });
+    const persistedBeforeRead = readFileSync(filePath, 'utf8');
+    clock = NOW + TTL_MS + 1;
+    const reader = createIntakeQuarantineReadStore(filePath, {
+      itemTtlHours: TTL_HOURS,
+      maxHeldItems: 500,
+      now: () => clock,
+    });
+
+    expect(reader.getById(envelope.id)).toMatchObject({
+      status: 'expired',
+      rawText: '',
+      safeRepresentationText: '',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(persistedBeforeRead);
+
+    const onExpired = vi.fn();
+    const owningStore = makeStore({ onExpired });
+    expect(owningStore.getById(envelope.id)?.status).toBe('expired');
+    expect(onExpired).toHaveBeenCalledOnce();
+    expect(readFileSync(filePath, 'utf8')).not.toBe(persistedBeforeRead);
   });
 
   it('rejects non-quarantined envelopes and duplicate holds (fail closed)', () => {

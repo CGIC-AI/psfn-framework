@@ -239,6 +239,8 @@ export interface IntakeQuarantineStoreOptions {
   }) => void;
 }
 
+export type IntakeQuarantineReadStore = Pick<IntakeQuarantineStore, 'list' | 'getById'>;
+
 /** Storage cap for held raw text; larger content is truncated with a flag. */
 export const INTAKE_QUARANTINE_MAX_RAW_CHARS = 400_000;
 
@@ -510,9 +512,10 @@ const DECISION_TO_STATUS = {
   discard: 'discarded',
 } as const;
 
-export function createIntakeQuarantineStore(
+function createIntakeQuarantineStoreInternal(
   filePath: string,
   options: IntakeQuarantineStoreOptions,
+  persistLazyExpiry: boolean,
 ): IntakeQuarantineStore {
   if (!Number.isFinite(options.itemTtlHours) || options.itemTtlHours <= 0) {
     throw new Error('Intake quarantine store requires a positive itemTtlHours');
@@ -615,6 +618,13 @@ export function createIntakeQuarantineStore(
   const loadAfterLazySweep = (atMs: number): Map<string, IntakeQuarantineEntry> => {
     const entries = load();
     if (!hasExpiredEntries(entries, atMs)) return entries;
+    if (!persistLazyExpiry) {
+      for (const [id, entry] of entries) {
+        if (entry.status !== 'held' || entry.expiresAtMs > atMs) continue;
+        entries.set(id, expireEntry(entry, atMs, 'quarantine TTL elapsed'));
+      }
+      return entries;
+    }
     return withWriteLock(() => {
       const lockedEntries = load();
       sweepExpired(lockedEntries, atMs);
@@ -1078,5 +1088,29 @@ export function createIntakeQuarantineStore(
         return decided;
       });
     },
+  };
+}
+
+export function createIntakeQuarantineStore(
+  filePath: string,
+  options: IntakeQuarantineStoreOptions,
+): IntakeQuarantineStore {
+  return createIntakeQuarantineStoreInternal(filePath, options, true);
+}
+
+/**
+ * Read-only cross-process view for surfaces that do not own quarantine
+ * lifecycle events. Expired entries are projected as expired with content
+ * scrubbed, but the reader never persists the transition or consumes the
+ * owning agent/gateway's expiry-alert responsibility.
+ */
+export function createIntakeQuarantineReadStore(
+  filePath: string,
+  options: Pick<IntakeQuarantineStoreOptions, 'itemTtlHours' | 'maxHeldItems' | 'now'>,
+): IntakeQuarantineReadStore {
+  const store = createIntakeQuarantineStoreInternal(filePath, options, false);
+  return {
+    list: () => store.list(),
+    getById: id => store.getById(id),
   };
 }

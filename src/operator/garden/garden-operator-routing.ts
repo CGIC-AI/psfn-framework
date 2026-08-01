@@ -18,6 +18,7 @@ import type {
 import {
   FleetGardenOperatorRouter,
   type FleetGardenDirectDatabasePort,
+  type FleetGardenIntakeQuarantineReadPort,
 } from './fleet-garden-operator-router.js';
 import {
   FleetGardenAdminTransportProxy,
@@ -40,6 +41,7 @@ export interface GardenOperatorRoutingOptions {
   readonly fleetTransport?: FleetGardenTransportProxyPort;
   readonly fleetChildAssertions?: GardenFleetChildAssertionClient;
   readonly fleetDirectDatabase?: FleetGardenDirectDatabasePort;
+  readonly fleetIntakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
   readonly fleetModelUsage?: FleetModelUsageRouteService;
 }
 
@@ -77,6 +79,9 @@ export class GardenOperatorRouting {
           : {}),
         ...(options.fleetDirectDatabase
           ? { directDatabase: options.fleetDirectDatabase }
+          : {}),
+        ...(options.fleetIntakeQuarantineReads
+          ? { intakeQuarantineReads: options.fleetIntakeQuarantineReads }
           : {}),
         ...(options.fleetModelUsage
           ? { fleetModelUsage: options.fleetModelUsage }

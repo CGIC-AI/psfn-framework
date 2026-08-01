@@ -146,6 +146,11 @@ export interface AdminIntakeQuarantineService {
   ): Promise<AdminIntakeQuarantineResolveResult>;
 }
 
+export type AdminIntakeQuarantineReadService = Pick<
+  AdminIntakeQuarantineService,
+  'listItems' | 'getItem'
+>;
+
 /**
  * What the release re-delivery port is handed once an item is released
  * (jvbt). The envelope has already transitioned to its terminal
@@ -335,6 +340,39 @@ const DECISION_LABELS: Record<IntakeQuarantineDecisionAction, string> = {
   discard: 'discard the held content',
 };
 
+export function createAdminIntakeQuarantineReadService(deps: {
+  store: Pick<IntakeQuarantineStore, 'list' | 'getById'>;
+  now?: () => number;
+}): AdminIntakeQuarantineReadService {
+  const now = deps.now ?? Date.now;
+  return {
+    listItems() {
+      const nowMs = now();
+      return { items: deps.store.list().map((entry) => toItemView(entry, nowMs)) };
+    },
+
+    getItem(id: string): AdminIntakeQuarantineItemDetail | undefined {
+      const entry = deps.store.getById(id);
+      if (!entry) return undefined;
+      return {
+        ...toItemView(entry, now()),
+        rawText: entry.rawText,
+        ...(entry.safeRepresentationText !== undefined
+          ? { safeRepresentationText: entry.safeRepresentationText }
+          : {}),
+        extractedFields: { ...entry.envelope.extractedFields },
+        transitions: entry.envelope.transitions.map((record) => ({
+          from: record.from,
+          to: record.to,
+          at: toIso(record.atMs),
+          actor: record.actor,
+          reason: record.reason,
+        })),
+      };
+    },
+  };
+}
+
 export function createAdminIntakeQuarantineService(
   deps: AdminIntakeQuarantineServiceDeps,
 ): AdminIntakeQuarantineService {
@@ -389,30 +427,7 @@ export function createAdminIntakeQuarantineService(
   };
 
   return {
-    listItems() {
-      const nowMs = now();
-      return { items: deps.store.list().map((entry) => toItemView(entry, nowMs)) };
-    },
-
-    getItem(id: string): AdminIntakeQuarantineItemDetail | undefined {
-      const entry = deps.store.getById(id);
-      if (!entry) return undefined;
-      return {
-        ...toItemView(entry, now()),
-        rawText: entry.rawText,
-        ...(entry.safeRepresentationText !== undefined
-          ? { safeRepresentationText: entry.safeRepresentationText }
-          : {}),
-        extractedFields: { ...entry.envelope.extractedFields },
-        transitions: entry.envelope.transitions.map((record) => ({
-          from: record.from,
-          to: record.to,
-          at: toIso(record.atMs),
-          actor: record.actor,
-          reason: record.reason,
-        })),
-      };
-    },
+    ...createAdminIntakeQuarantineReadService({ store: deps.store, now }),
 
     beginDecision(request, context): AdminIntakeQuarantineBeginResult {
       const entry = deps.store.getById(request.id);

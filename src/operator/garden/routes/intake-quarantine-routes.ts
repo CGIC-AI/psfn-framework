@@ -25,6 +25,7 @@ import {
   isAdminIntakeQuarantineSourceListAction,
   INTAKE_QUARANTINE_SOURCE_LIST_ACTIONS,
   type AdminIntakeQuarantineService,
+  type AdminIntakeQuarantineReadService,
   type AdminIntakeQuarantineSourceListAction,
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
@@ -34,7 +35,7 @@ import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from 
 import type { GardenRequestContext } from '../garden-request-context.js';
 
 const ADMIN_INTAKE_POLICY_API_PATH = '/api/admin/intake/policy';
-const ADMIN_INTAKE_QUARANTINE_API_PATH = '/api/admin/intake/quarantine';
+export const ADMIN_INTAKE_QUARANTINE_API_PATH = '/api/admin/intake/quarantine';
 const ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX = `${ADMIN_INTAKE_QUARANTINE_API_PATH}/`;
 
 const MAX_REASON_CHARS = 1024;
@@ -100,6 +101,47 @@ function parseDecisionBody(
   return { ok: true, value: parsed };
 }
 
+export function buildAdminIntakeQuarantineReadRoutes(options: {
+  quarantineService: AdminIntakeQuarantineReadService;
+}): AdminApiRoute[] {
+  const { quarantineService } = options;
+  return [
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_INTAKE_QUARANTINE_API_PATH),
+      handle: (_req, res, _params, context) => {
+        try {
+          sendJson(res, 200, quarantineService.listItems(context), ADMIN_POLLED_QUEUE_JSON_HEADERS);
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load quarantine queue'),
+          });
+        }
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', {
+        exclude: (path) => path.endsWith('/confirm') || path.endsWith('/decide'),
+      }),
+      handle: (_req, res, { id }, context) => {
+        try {
+          const item = quarantineService.getItem(id, context);
+          if (!item) {
+            sendJson(res, 404, { error: 'Quarantine item not found' });
+            return;
+          }
+          sendJson(res, 200, { item }, ADMIN_DYNAMIC_JSON_HEADERS);
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load quarantine item'),
+          });
+        }
+      },
+    },
+  ];
+}
+
 export function buildAdminIntakeQuarantineRoutes(options: {
   quarantineService: AdminIntakeQuarantineService;
   settingsService: AdminSettingsService;
@@ -136,39 +178,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
         }
       },
     },
-    {
-      method: 'GET',
-      match: exactPath(ADMIN_INTAKE_QUARANTINE_API_PATH),
-      handle: (_req, res, _params, context) => {
-        try {
-          sendJson(res, 200, quarantineService.listItems(context), ADMIN_POLLED_QUEUE_JSON_HEADERS);
-        } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load quarantine queue'),
-          });
-        }
-      },
-    },
-    {
-      method: 'GET',
-      match: prefixedParamPath(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', {
-        exclude: (path) => path.endsWith('/confirm') || path.endsWith('/decide'),
-      }),
-      handle: (_req, res, { id }, context) => {
-        try {
-          const item = quarantineService.getItem(id, context);
-          if (!item) {
-            sendJson(res, 404, { error: 'Quarantine item not found' });
-            return;
-          }
-          sendJson(res, 200, { item }, ADMIN_DYNAMIC_JSON_HEADERS);
-        } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load quarantine item'),
-          });
-        }
-      },
-    },
+    ...buildAdminIntakeQuarantineReadRoutes({ quarantineService }),
     {
       method: 'POST',
       match: paramWithSuffix(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', '/confirm'),

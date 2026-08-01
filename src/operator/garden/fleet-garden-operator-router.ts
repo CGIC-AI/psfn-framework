@@ -31,10 +31,19 @@ export interface FleetGardenOperatorRouterOptions {
   readonly transport: FleetGardenTransportProxyPort;
   readonly childAssertions?: GardenFleetChildAssertionClient;
   readonly directDatabase?: FleetGardenDirectDatabasePort;
+  readonly intakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
   readonly fleetModelUsage?: FleetModelUsageRouteService;
 }
 
 export interface FleetGardenDirectDatabasePort {
+  handleHttp(input: {
+    readonly admission: FleetGardenAdmittedPrincipalRequest;
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+  }): boolean;
+}
+
+export interface FleetGardenIntakeQuarantineReadPort {
   handleHttp(input: {
     readonly admission: FleetGardenAdmittedPrincipalRequest;
     readonly req: IncomingMessage;
@@ -82,6 +91,13 @@ export class FleetGardenOperatorRouter {
       return;
     }
     if (this.options.directDatabase?.handleHttp({
+      admission: admitted,
+      req: input.req,
+      res: input.res,
+    })) {
+      return;
+    }
+    if (this.options.intakeQuarantineReads?.handleHttp({
       admission: admitted,
       req: input.req,
       res: input.res,

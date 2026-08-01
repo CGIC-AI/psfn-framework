@@ -948,7 +948,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       channelId: 'other:thread',
       participantContactIds: ['contact:tester'],
       salience: { score: 0.5, novelty: 0.3, emotionalIntensity: 0.2 },
-      affect: { valence: 0.1, arousal: 0.2, dominance: 0.4, labels: ['neutral'] },
+      affect: { labels: [] },
       themes: ['unrelated'],
       spanRefs: [{
         spanId: 'span-decoy',

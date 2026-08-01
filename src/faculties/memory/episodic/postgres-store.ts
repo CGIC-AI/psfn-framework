@@ -9,9 +9,7 @@ import {
 } from '../../../persistence/postgres.js';
 import {
   EPISODIC_CONTRACT_VERSION,
-  parseEpisode,
   parseEpisodeArc,
-  serializeEpisode,
   serializeEpisodeArc,
   type Episode,
   type EpisodeArc,
@@ -39,7 +37,11 @@ import type {
   EpisodeCandidateDecisionWriteInput,
   EpisodeClaimTransferInput,
   EpisodeClaimTransferResult,
+  CompanionAuthoredEpisodeCreateInput,
+  CompanionAuthoredEpisodeUpdateInput,
+  CompanionAuthoredEpisodicStorePort,
   EpisodeCreateInput,
+  EpisodeFirstPersonAuthorship,
   EpisodeLineage,
   EpisodeLineageWriteInput,
   EpisodeMessageClaim,
@@ -50,6 +52,9 @@ import type {
   EpisodeListOptions,
   EpisodeTimeSearchOptions,
   EpisodeUpdateInput,
+  FirstPersonPreservingEpisodeCreateInput,
+  FirstPersonPreservingEpisodeUpdateInput,
+  FirstPersonPreservingEpisodicStorePort,
   EpisodicProcessingWatermark,
   EpisodicProcessingWatermarkHealthSummary,
   EpisodicProcessingWatermarkScope,
@@ -94,6 +99,7 @@ import {
   type PostgresEpisodeRow,
   type PostgresProcessingWatermarkRow,
 } from './postgres-store/rows.js';
+import { PostgresEpisodeFirstPersonWriter } from './postgres-store/first-person-writer.js';
 
 type PostgresProcessingWatermarkHealthRow = PostgresProcessingWatermarkRow & {
   scope_count: number | string;
@@ -128,169 +134,64 @@ export function createPostgresEpisodicStoreFromPool(
   return new PostgresEpisodicStore(pool, options);
 }
 
-export class PostgresEpisodicStore implements EpisodicStorePort {
+export class PostgresEpisodicStore implements
+  EpisodicStorePort,
+  CompanionAuthoredEpisodicStorePort,
+  FirstPersonPreservingEpisodicStorePort {
   private readonly pool: Pool;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly firstPersonWriter: PostgresEpisodeFirstPersonWriter;
 
   constructor(pool: Pool, options: EpisodicStoreOptions = {}) {
     this.pool = pool;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.firstPersonWriter = new PostgresEpisodeFirstPersonWriter(
+      pool,
+      this.now,
+      this.idFactory,
+    );
   }
 
   async createEpisode(input: EpisodeCreateInput): Promise<Episode> {
-    const now = this.now().toISOString();
-    const lifecycleStatus = normalizeEpisodeLifecycleStatus(input.lifecycleStatus);
-    const { lifecycleStatus: _lifecycleStatus, ...episodeFields } = input;
-    const episode = parseEpisode({
-      ...episodeFields,
-      schemaVersion: EPISODIC_CONTRACT_VERSION,
-      id: input.id ?? this.idFactory(),
-      createdAt: input.createdAt ?? now,
-      updatedAt: input.updatedAt ?? input.createdAt ?? now,
-    });
+    return await this.firstPersonWriter.createMachineEpisode(input);
+  }
 
-    await executeQuery(this.pool, `
-      INSERT INTO l01_episodes (
-        id,
-        schema_version,
-        title,
-        landmark,
-        status,
-        canonical_episode_id,
-        merged_into_episode_id,
-        superseded_by_episode_id,
-        thread_id,
-        channel_id,
-        started_at,
-        ended_at,
-        participant_contact_ids,
-        salience_score,
-        salience_json,
-        affect_json,
-        themes,
-        artifact_refs,
-        provenance_refs,
-        scope_json,
-        consent_flags,
-        episode_json,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15::jsonb,$16::jsonb,
-        $17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,$23,$24
-      )
-    `, [
-      episode.id,
-      episode.schemaVersion,
-      episode.title,
-      episode.landmark,
-      lifecycleStatus,
-      episode.id,
-      null,
-      null,
-      episode.threadId ?? null,
-      episode.channelId ?? null,
-      episode.startedAt,
-      episode.endedAt,
-      json(episode.participantContactIds),
-      episode.salience.score,
-      json(episode.salience),
-      json(episode.affect),
-      json(episode.themes),
-      json(episode.artifactRefs),
-      json(episode.provenanceRefs),
-      json({}),
-      json({}),
-      serializeEpisode(episode),
-      episode.createdAt,
-      episode.updatedAt,
-    ]);
+  async createEpisodePreservingFirstPersonFields(
+    input: FirstPersonPreservingEpisodeCreateInput,
+  ): Promise<Episode> {
+    const { firstPersonFieldSources, ...episodeInput } = input;
+    return await this.firstPersonWriter.createMachineEpisode(
+      episodeInput,
+      firstPersonFieldSources,
+    );
+  }
 
-    return episode;
+  async createCompanionAuthoredEpisode(
+    input: CompanionAuthoredEpisodeCreateInput,
+  ): Promise<Episode> {
+    return await this.firstPersonWriter.createCompanionEpisode(input);
   }
 
   async updateEpisode(input: EpisodeUpdateInput): Promise<Episode> {
-    const current = await this.getEpisode(input.id);
-    if (!current) {
-      throw new Error(`episode "${input.id}" does not exist`);
-    }
+    return await this.firstPersonWriter.updateMachineEpisode(input);
+  }
 
-    // Fail closed on silent meaning loss (bead h4fp.6): updateEpisode is a
-    // full-row replace, so an input that omits `meaning` erases a
-    // companion-authored dream-pass note the next time the episode is touched.
-    // Dropping HER authored content must be explicit — a caller that truly
-    // intends to clear it passes `clearMeaning`. `clearMeaning` is a control
-    // sentinel, never a persisted field, so it is stripped before validation.
-    const { clearMeaning, ...episodeInput } = input;
-    if (current.meaning && episodeInput.meaning === undefined && !clearMeaning) {
-      throw new Error(
-        `episode "${input.id}" update would drop companion-authored meaning; `
-        + 'carry the existing meaning forward or pass clearMeaning to erase it explicitly',
-      );
-    }
+  async updateEpisodePreservingFirstPersonFields(
+    input: FirstPersonPreservingEpisodeUpdateInput,
+  ): Promise<Episode> {
+    const { firstPersonFieldSources, ...episodeInput } = input;
+    return await this.firstPersonWriter.updateMachineEpisode(
+      episodeInput,
+      firstPersonFieldSources,
+    );
+  }
 
-    const now = this.now().toISOString();
-    // Preserve the stored schemaVersion (no silent shape drift): a content
-    // update to a legacy v1 episode must not silently upgrade it to v2. Only
-    // explicit migration (bead h4fp.7) changes a persisted episode's version.
-    const episode = parseEpisode({
-      ...episodeInput,
-      schemaVersion: current.schemaVersion,
-      createdAt: current.createdAt,
-      updatedAt: input.updatedAt ?? now,
-    });
-
-    // Lifecycle columns (status, canonical/merged/superseded links) are
-    // intentionally NOT touched here: a content update must never silently
-    // promote a candidate to canonical or resurrect a folded episode.
-    await executeQuery(this.pool, `
-      UPDATE l01_episodes
-      SET
-        schema_version = $2,
-        title = $3,
-        landmark = $4,
-        thread_id = $5,
-        channel_id = $6,
-        started_at = $7,
-        ended_at = $8,
-        participant_contact_ids = $9::jsonb,
-        salience_score = $10,
-        salience_json = $11::jsonb,
-        affect_json = $12::jsonb,
-        themes = $13::jsonb,
-        artifact_refs = $14::jsonb,
-        provenance_refs = $15::jsonb,
-        scope_json = $16::jsonb,
-        consent_flags = $17::jsonb,
-        episode_json = $18::jsonb,
-        updated_at = $19
-      WHERE id = $1
-    `, [
-      episode.id,
-      episode.schemaVersion,
-      episode.title,
-      episode.landmark,
-      episode.threadId ?? null,
-      episode.channelId ?? null,
-      episode.startedAt,
-      episode.endedAt,
-      json(episode.participantContactIds),
-      episode.salience.score,
-      json(episode.salience),
-      json(episode.affect),
-      json(episode.themes),
-      json(episode.artifactRefs),
-      json(episode.provenanceRefs),
-      json({}),
-      json({}),
-      serializeEpisode(episode),
-      episode.updatedAt,
-    ]);
-
-    return episode;
+  async updateCompanionAuthoredEpisode(
+    input: CompanionAuthoredEpisodeUpdateInput,
+  ): Promise<Episode> {
+    return await this.firstPersonWriter.updateCompanionEpisode(input);
   }
 
   async markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): Promise<void> {
@@ -366,6 +267,12 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       LIMIT 1
     `, [normalizedId]);
     return row ? mapEpisodeRow(row) : undefined;
+  }
+
+  async getEpisodeFirstPersonAuthorship(
+    id: string,
+  ): Promise<EpisodeFirstPersonAuthorship | undefined> {
+    return await this.firstPersonWriter.getAuthorship(id);
   }
 
   async getEpisodesByIds(ids: readonly string[]): Promise<Episode[]> {

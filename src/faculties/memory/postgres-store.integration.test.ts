@@ -1321,7 +1321,7 @@ describe('postgres memory store integration', () => {
       const episodicStore = createPostgresEpisodicStoreFromPool(pool, {
         now: () => new Date('2026-07-30T12:00:00.000Z'),
       });
-      await episodicStore.createEpisode({
+      await episodicStore.createCompanionAuthoredEpisode({
         id: 'late-cutover-episode',
         threadId: 'thread-cutover',
         channelId: 'api:cutover',

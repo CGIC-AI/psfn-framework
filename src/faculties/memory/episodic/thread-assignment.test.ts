@@ -36,7 +36,7 @@ function episodeInput(id: string, threadId: string = id): EpisodeCreateInput {
     endedAt: '2026-06-01T10:30:00.000Z',
     participantContactIds: ['contact:vega'],
     salience: { score: 0.5 },
-    affect: { valence: 0, arousal: 0, dominance: 0.5, labels: ['neutral'] },
+    affect: { labels: [] },
     themes: ['memory'],
     spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
     artifactRefs: [],

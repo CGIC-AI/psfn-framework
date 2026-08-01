@@ -255,6 +255,8 @@ describe('createAgentPersistenceRuntime', () => {
       backend: 'postgres',
       memoryStore: runtimeFactoryMocks.postgresMemoryStore as MemoryStorePort,
       episodicStore: runtimeFactoryMocks.postgresEpisodicStore,
+      firstPersonPreservingEpisodicStore: runtimeFactoryMocks.postgresEpisodicStore,
+      companionAuthoredEpisodicStore: runtimeFactoryMocks.postgresEpisodicStore,
       reflectionStore: {
         kind: 'reflection-metacognition-journal-store',
         path: '/tmp/companion-data/state/notes/reflections/metacognition/journal.jsonl',

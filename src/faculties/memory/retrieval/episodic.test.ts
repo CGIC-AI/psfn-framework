@@ -40,9 +40,9 @@ describe('listEpisodeArcMemberships', () => {
 
   it('lists the arcs an episode belongs to with resolved members in order', async () => {
     const store = makeStore();
-    await store.createEpisode(episode('monday', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
-    await store.createEpisode(episode('wednesday', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
-    await store.createEpisode(episode('friday', '2026-06-05T20:00:00.000Z', '2026-06-05T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('monday', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('wednesday', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('friday', '2026-06-05T20:00:00.000Z', '2026-06-05T21:00:00.000Z'));
     const first = await store.writeEpisodeArc({
       sourceEpisodeId: 'monday',
       targetEpisodeId: 'wednesday',
@@ -83,8 +83,8 @@ describe('listEpisodeArcMemberships', () => {
 
   it('filters by arc kind and returns nothing for unlinked episodes', async () => {
     const store = makeStore();
-    await store.createEpisode(episode('a', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
-    await store.createEpisode(episode('b', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('a', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('b', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
     await store.writeEpisodeArc({
       sourceEpisodeId: 'a',
       targetEpisodeId: 'b',
@@ -99,15 +99,15 @@ describe('listEpisodeArcMemberships', () => {
 
     expect(await listEpisodeArcMemberships(store, 'a', { arcKind: 'same_theme' })).toEqual([]);
     expect(await listEpisodeArcMemberships(store, 'a', { arcKind: 'causal' })).toHaveLength(1);
-    const unlinked = await store.createEpisode(episode('c', '2026-06-05T20:00:00.000Z', '2026-06-05T21:00:00.000Z'));
+    const unlinked = await store.createCompanionAuthoredEpisode(episode('c', '2026-06-05T20:00:00.000Z', '2026-06-05T21:00:00.000Z'));
     expect(await listEpisodeArcMemberships(store, unlinked.id)).toEqual([]);
   });
 
   it('keeps arcs reachable from the consolidated episode after supersession', async () => {
     const store = makeStore();
-    await store.createEpisode(episode('canon', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
-    await store.createEpisode(episode('candidate', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
-    await store.createEpisode(episode('consolidated', '2026-06-03T19:00:00.000Z', '2026-06-03T22:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('canon', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('candidate', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('consolidated', '2026-06-03T19:00:00.000Z', '2026-06-03T22:00:00.000Z'));
     await store.claimEpisodeMessages({ episodeId: 'candidate', claims: [{ claimKey: 'm-1' }] });
     await store.writeEpisodeArc({
       sourceEpisodeId: 'canon',
@@ -135,8 +135,8 @@ describe('listEpisodeArcMemberships', () => {
 
   it('fails closed when an arc references an unavailable member episode', async () => {
     const store = makeStore();
-    await store.createEpisode(episode('a', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
-    await store.createEpisode(episode('b', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('a', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z'));
+    await store.createCompanionAuthoredEpisode(episode('b', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z'));
     const written = await store.writeEpisodeArc({
       sourceEpisodeId: 'a',
       targetEpisodeId: 'b',
@@ -179,7 +179,7 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       threadId?: string;
     },
   ): Promise<void> {
-    await store.createEpisode({
+    await store.createCompanionAuthoredEpisode({
       id: input.id,
       title: input.title,
       landmark: input.landmark,

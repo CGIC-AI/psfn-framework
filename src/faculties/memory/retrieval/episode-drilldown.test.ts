@@ -81,15 +81,15 @@ async function makeStore(): Promise<PostgresEpisodicStore> {
     new FakeEpisodicPool() as unknown as Pool,
     { now: () => NOW },
   );
-  await store.createEpisode(episode('root', '2026-07-18T10:00:00.000Z'));
-  await store.createEpisode(episode('arc-visible', '2026-07-18T10:05:00.000Z', { span: false }));
-  await store.createEpisode(episode('arc-hidden', '2026-07-18T10:10:00.000Z', {
+  await store.createCompanionAuthoredEpisode(episode('root', '2026-07-18T10:00:00.000Z'));
+  await store.createCompanionAuthoredEpisode(episode('arc-visible', '2026-07-18T10:05:00.000Z', { span: false }));
+  await store.createCompanionAuthoredEpisode(episode('arc-hidden', '2026-07-18T10:10:00.000Z', {
     channelId: 'api:protected-room',
     participantContactIds: ['contact:protected'],
     span: false,
   }));
-  await store.createEpisode(episode('thread-visible', '2026-07-18T10:15:00.000Z', { span: false }));
-  await store.createEpisode(episode('thread-hidden', '2026-07-18T10:20:00.000Z', {
+  await store.createCompanionAuthoredEpisode(episode('thread-visible', '2026-07-18T10:15:00.000Z', { span: false }));
+  await store.createCompanionAuthoredEpisode(episode('thread-hidden', '2026-07-18T10:20:00.000Z', {
     channelId: 'api:protected-room',
     participantContactIds: ['contact:protected'],
     span: false,
@@ -222,7 +222,7 @@ describe('retrieveEpisodeDrilldown', () => {
     );
     // The episode lives in a protected room the viewer is NOT in, but the viewer
     // is a participant contact and trusted, so it is visible cross-channel.
-    await store.createEpisode(episode('shared-cross-channel', '2026-07-18T10:00:00.000Z', {
+    await store.createCompanionAuthoredEpisode(episode('shared-cross-channel', '2026-07-18T10:00:00.000Z', {
       channelId: 'api:protected-room',
       participantContactIds: ['contact:viewer', 'contact:protected'],
     }));

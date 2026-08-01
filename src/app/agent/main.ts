@@ -303,6 +303,8 @@ async function main(): Promise<void> {
     backend: persistenceBackend,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
+    firstPersonPreservingEpisodicStore,
+    companionAuthoredEpisodicStore,
     backgroundWorkStore,
     reflectionStore,
     contactStore: persistedContactStore,
@@ -806,7 +808,7 @@ async function main(): Promise<void> {
       });
     });
   };
-  const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager, {
+  const episodicSynthesizer = new EpisodicSynthesizer(firstPersonPreservingEpisodicStore, sessionManager, {
     onThreadAssignment: emitThreadAssignment,
     transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
     maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
@@ -834,7 +836,7 @@ async function main(): Promise<void> {
       },
     },
   });
-  const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider, {
+  const sleepConsolidator = new SleepCycleEpisodeConsolidator(firstPersonPreservingEpisodicStore, sessionManager, llmProvider, {
     reviewWindowMs: schedulerConfig.sleepConsolidation.reviewWindowDays * DAY_MS,
     refinementWindowMs: schedulerConfig.sleepConsolidation.refinementWindowHours * HOUR_MS,
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
@@ -877,7 +879,14 @@ async function main(): Promise<void> {
     },
     personaPreamble,
   });
-  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop, {
+  const dreamMeaningPass = new DreamMeaningPass({
+    getProcessingWatermark: scope => episodicStore.getProcessingWatermark(scope),
+    searchByTime: options => episodicStore.searchByTime(options),
+    upsertProcessingWatermark: input => episodicStore.upsertProcessingWatermark(input),
+    updateCompanionAuthoredEpisode: input => (
+      companionAuthoredEpisodicStore.updateCompanionAuthoredEpisode(input)
+    ),
+  }, agentLoop, {
     // Ground each meaning in the real turns she lived, not the auto-summarized
     // title/landmark (bead dtym). Same reader synthesis/consolidation use.
     transcriptReader: sessionManager,

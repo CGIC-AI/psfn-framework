@@ -57,7 +57,7 @@ function episodeInput(id: string, threadId: string): EpisodeCreateInput {
     endedAt: '2026-07-28T10:10:00.000Z',
     participantContactIds: ['contact:integration'],
     salience: { score: 0.5 },
-    affect: { valence: 0, arousal: 0, dominance: 0.5, labels: ['neutral'] },
+    affect: { labels: [] },
     themes: ['integration'],
     spanRefs: [{ spanId: `span-${id}`, sessionId: 'api:episodic-repoint-integration' }],
     artifactRefs: [],
@@ -81,6 +81,49 @@ async function readRows(pool: Pool): Promise<EpisodeRepointRow[]> {
 }
 
 describe('PostgresEpisodicStore thread repoint integration', () => {
+  it('round-trips first-person authorship columns and exposes legacy NULL as unknown', async () => {
+    await withEpisodicDatabase(async (pool, store) => {
+      await expect(store.getEpisodeFirstPersonAuthorship('episode-anchor')).resolves.toEqual({
+        episodeId: 'episode-anchor',
+        affect: 'none',
+        meaning: 'none',
+      });
+
+      await store.createCompanionAuthoredEpisode({
+        ...episodeInput('companion-authored', 'thread-authored'),
+        affect: { valence: 0.4, labels: ['hopeful'] },
+        meaning: {
+          text: 'I chose these words for what the moment meant to me.',
+          recordedAt: CREATED_AT.toISOString(),
+          source: 'companion_direct',
+        },
+      });
+      await expect(store.getEpisodeFirstPersonAuthorship('companion-authored')).resolves.toEqual({
+        episodeId: 'companion-authored',
+        affect: 'companion',
+        meaning: 'companion',
+      });
+      await store.updateCompanionAuthoredEpisode({
+        id: 'companion-authored',
+        affect: { valence: 0.6, labels: ['hopeful', 'grounded'] },
+      });
+      await expect(store.getEpisode('companion-authored')).resolves.toMatchObject({
+        affect: { valence: 0.6, labels: ['hopeful', 'grounded'] },
+      });
+
+      await pool.query(`
+        UPDATE l01_episodes
+        SET affect_authorship = NULL, meaning_authorship = NULL
+        WHERE id = 'companion-authored'
+      `);
+      await expect(store.getEpisodeFirstPersonAuthorship('companion-authored')).resolves.toEqual({
+        episodeId: 'companion-authored',
+        affect: 'legacy_unknown',
+        meaning: 'legacy_unknown',
+      });
+    });
+  });
+
   it('keeps a failed multi-member repoint atomic, then writes one typed timestamp everywhere', async () => {
     await withEpisodicDatabase(async (pool, store) => {
       await pool.query(`

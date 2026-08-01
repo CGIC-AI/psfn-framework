@@ -7,7 +7,7 @@ import type {
 } from '../../../../shared/contracts/episodic-memory.js';
 import type {
   EpisodeCreateInput,
-  EpisodeUpdateInput,
+  FirstPersonPreservingEpisodeUpdateInput,
 } from '../store-port.js';
 
 interface EpisodeCandidateInput extends EpisodeCreateInput {
@@ -185,7 +185,7 @@ function mergeByKey<T>(left: readonly T[], right: readonly T[], keyFor: (value: 
 export function mergeEpisodeWithCandidate(
   canonical: Episode,
   candidate: EpisodeCandidateInput,
-): EpisodeUpdateInput {
+): FirstPersonPreservingEpisodeUpdateInput {
   return {
     id: canonical.id,
     title: canonical.title,
@@ -204,8 +204,8 @@ export function mergeEpisodeWithCandidate(
       ),
     },
     // Affect is never fabricated on merge (bead h4fp.6): carry forward only
-    // affect the companion actually authored. An affect-empty candidate must
-    // not gain a machine-derived arousal:0 claim; VAD lives in machineSignals.
+    // affect components from persisted source rows. The preservation port
+    // validates every component before carrying their authorship marker.
     affect: {
       ...canonical.affect,
       labels: mergeStringSets(canonical.affect.labels, candidate.affect.labels),
@@ -224,6 +224,12 @@ export function mergeEpisodeWithCandidate(
     ...((canonical.meaning ?? candidate.meaning)
       ? { meaning: canonical.meaning ?? candidate.meaning }
       : {}),
+    firstPersonFieldSources: {
+      affectEpisodeIds: [canonical.id],
+      ...((canonical.meaning ?? candidate.meaning)
+        ? { meaningEpisodeId: canonical.meaning ? canonical.id : candidate.id }
+        : {}),
+    },
     themes: mergeStringSets(canonical.themes, candidate.themes),
     spanRefs: mergeByKey(canonical.spanRefs, candidate.spanRefs, ref => ref.spanId),
     artifactRefs: mergeByKey(canonical.artifactRefs, candidate.artifactRefs, ref => ref.artifactId),

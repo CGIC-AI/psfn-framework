@@ -18,6 +18,7 @@ import type {
   EpisodicProcessingWatermark,
   EpisodicProcessingWatermarkScope,
   EpisodicStorePort,
+  FirstPersonPreservingEpisodicStorePort,
 } from './store-port.js';
 import {
   buildArcInput,
@@ -607,7 +608,6 @@ export class EpisodicSynthesizer {
   private readonly store: Pick<
     EpisodicStorePort,
     | 'createEpisode'
-    | 'updateEpisode'
     | 'getEpisode'
     | 'searchByTime'
     | 'searchByThread'
@@ -619,7 +619,7 @@ export class EpisodicSynthesizer {
     | 'writeEpisodeLineage'
     | 'claimEpisodeMessages'
     | 'listEpisodeMessageClaims'
-  >;
+  > & Pick<FirstPersonPreservingEpisodicStorePort, 'updateEpisodePreservingFirstPersonFields'>;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
   private readonly maxThreadEpisodes: number;
   private readonly onThreadAssignment?: (event: ThreadAssignmentEvent) => void;
@@ -642,7 +642,6 @@ export class EpisodicSynthesizer {
     store: Pick<
       EpisodicStorePort,
       | 'createEpisode'
-      | 'updateEpisode'
       | 'getEpisode'
       | 'searchByTime'
       | 'searchByThread'
@@ -654,7 +653,7 @@ export class EpisodicSynthesizer {
       | 'writeEpisodeLineage'
       | 'claimEpisodeMessages'
       | 'listEpisodeMessageClaims'
-    >,
+    > & Pick<FirstPersonPreservingEpisodicStorePort, 'updateEpisodePreservingFirstPersonFields'>,
     sessionReader: EpisodicSynthesisSessionReader,
     options: EpisodicSynthesisOptions = {},
   ) {
@@ -915,7 +914,7 @@ export class EpisodicSynthesizer {
         canonicalEpisode: episode,
       };
     } else if (consolidationTarget) {
-      episode = await this.store.updateEpisode(
+      episode = await this.store.updateEpisodePreservingFirstPersonFields(
         mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
       );
       const currentRunIndex = state.createdEpisodes.findIndex(candidate => candidate.id === episode.id);

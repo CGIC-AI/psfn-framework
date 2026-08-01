@@ -43,7 +43,7 @@ describe('EpisodeArcWeaver', () => {
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.6 },
-      affect: { labels: ['neutral'] },
+      affect: { labels: [] },
       themes: ['postgres', 'memory'],
       spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
       artifactRefs: [],

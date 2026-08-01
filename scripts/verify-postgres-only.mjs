@@ -37,7 +37,6 @@ const SCAN_TARGETS = [
   'docs/memory.md',
   'docs/architecture.md',
   'docs/operations.md',
-  'docs/development-status.md',
   'docs/specifications.md',
   'docs/PSFN_PROJECT_CHARTER.md',
   'docs/context-envelope.md',
@@ -92,18 +91,6 @@ const TEXT_REFERENCE_ALLOWLIST = [
     contains: 'SQLite-backed stores, migration readers, and native packages are removed',
     classification: 'cutover-contract',
     reason: 'Operations records the supported backend boundary.',
-  },
-  {
-    path: 'docs/development-status.md',
-    contains: 'original SQLite-centered prototype shape: SQLite implementations and packages are removed',
-    classification: 'cutover-history',
-    reason: 'Current status records the completed prototype-to-Postgres transition.',
-  },
-  {
-    path: 'docs/development-status.md',
-    contains: '| SQLite retirement | SQLite implementations, migration readers, native packages, and dead adapter tests are removed',
-    classification: 'cutover-history',
-    reason: 'The shipped milestone states exactly what was retired.',
   },
   {
     path: 'docs/specifications.md',

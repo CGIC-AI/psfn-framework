@@ -369,6 +369,14 @@ cannot widen it. Every tool must narrow it again with
 while email with multi-party input cannot be—even when the mailbox and MCP
 process are local.
 
+At call time PSFN compares those ceilings with the sensitivity of the context
+that actually produced the tool call. That classification is derived by the
+turn runtime from admitted session, memory, wiki, and tool-result sources and
+is bound by the gateway into the exact single-use invocation permit. A public
+turn can therefore use a public-only game or calendar tool, while a turn that
+has admitted confidential context cannot silently downgrade itself to do so.
+Missing lineage and autonomous/shard model runs receive no MCP call permit.
+
 Tool authorization is also bound to the exact CogSec-screened definition.
 Start a new tool entry without `metadataSha256`, run a lazy MCP search, and copy
 the tool's `observedMetadataSha256` from Tools health into the owner file only

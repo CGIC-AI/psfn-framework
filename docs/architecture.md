@@ -191,9 +191,13 @@ the context window.
 The gateway authorizes each action with a connection-scoped, single-use opaque
 permit minted only for the exact MCP tool call returned by the model provider.
 The permit binds the normalized server/tool/arguments payload, expires quickly,
-and is consumed once. Agent RPC fields cannot choose sensitivity or channel
-lineage; the gateway applies the confidential fail-closed ceiling and never
-mints a permit for a shard-originated generation.
+and is consumed once. The trusted turn runtime derives sensitivity from the
+sources already admitted into that generation; the agent-side gateway client
+carries it only on the provider request, and the gateway binds it into the
+returned permit before the MCP action exists. `mcp.execute` cannot choose or
+lower it. A missing lineage denies calls, any admitted tool output immediately
+tightens the next model step to confidential, and autonomous work-spec or
+shard-originated generations receive no MCP permit.
 
 All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized
 and hashed with SHA-256. An exact `(companion, hash)` hit reuses the prior

@@ -737,6 +737,7 @@ describe('registerLLMMethods', () => {
       messages: [{ role: 'user', content: 'search notes' }],
       systemPrompt: 'system',
       tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+      mcpOutboundSensitivity: 'public',
     });
     const permit = result.toolCalls[0]?.gatewayMcpPermit;
     expect(permit).toMatch(/^[0-9a-f-]{36}$/u);
@@ -749,7 +750,17 @@ describe('registerLLMMethods', () => {
         toolName: 'search_notes',
         arguments: { query: 'Ada' },
       },
-    })).toEqual({ outboundSensitivity: 'confidential' });
+    })).toEqual({ outboundSensitivity: 'public' });
+
+    const missingLineage = await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      channelId: 'discord:dm:operator',
+      messages: [{ role: 'user', content: 'search notes' }],
+      systemPrompt: 'system',
+      tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+    });
+    expect(missingLineage.toolCalls[0]).not.toHaveProperty('gatewayMcpPermit');
 
     const shardResult = await harness.invoke('llm.chat', {
       model: '',
@@ -758,8 +769,25 @@ describe('registerLLMMethods', () => {
       messages: [{ role: 'user', content: 'search notes' }],
       systemPrompt: 'system',
       tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+      mcpOutboundSensitivity: 'public',
     });
     expect(shardResult.toolCalls[0]).not.toHaveProperty('gatewayMcpPermit');
+
+    const autonomousResult = await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      channelId: 'discord:dm:operator',
+      messages: [{ role: 'user', content: 'search notes' }],
+      systemPrompt: 'system',
+      tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+      mcpOutboundSensitivity: 'public',
+      workSpec: toWorkSpecWireParams(buildLLMWorkSpec({
+        purpose: 'extraction',
+        durable: true,
+        correlation: { callType: 'background', originStage: 'memory.extraction' },
+      })),
+    });
+    expect(autonomousResult.toolCalls[0]).not.toHaveProperty('gatewayMcpPermit');
   });
 
   it('preserves model knob fields from llm.complete params into provider context hints', async () => {

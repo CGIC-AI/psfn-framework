@@ -59,6 +59,10 @@ import {
   UnknownModelSelectionSlotError,
 } from '../../../primitives/llm/model-hint-routing.js';
 import { VisionPurposeResolvedNonVisionModelError } from '../../../primitives/llm/routing.js';
+import {
+  SENSITIVITY_LEVELS,
+  type SensitivityLevel,
+} from '../../../system/trust/types.js';
 
 const log = createComponentLogger('GatewayLLM');
 
@@ -315,6 +319,10 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         captured.result,
         captured.finalAttemptProviderCostEvidence,
       );
+      const mcpOutboundSensitivity = typeof params.mcpOutboundSensitivity === 'string'
+        && (SENSITIVITY_LEVELS as readonly string[]).includes(params.mcpOutboundSensitivity)
+        ? params.mcpOutboundSensitivity as SensitivityLevel
+        : undefined;
       let shardOrigin = Boolean(shardRouting);
       if (!shardOrigin && params.channelId && runtime.resolveShardWorkloadForChannel) {
         try {
@@ -331,7 +339,8 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         eligibilityCompanionId
         && params.channelId?.trim()
         && params.tools?.some(tool => tool.name === 'mcp')
-        && !shardOrigin,
+        && !shardOrigin
+        && workSpec === undefined,
       );
       const toolCalls = response.toolCalls.map((toolCall) => {
         if (toolCall.name !== 'mcp' || !canMintMcpPermit || !eligibilityCompanionId) {
@@ -340,6 +349,7 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         const permit = runtime.mcpInvocationAuthority.mint({
           companionId: eligibilityCompanionId,
           modelInput: toolCall.input,
+          ...(mcpOutboundSensitivity ? { outboundSensitivity: mcpOutboundSensitivity } : {}),
         });
         return permit ? { ...toolCall, gatewayMcpPermit: permit } : toolCall;
       });

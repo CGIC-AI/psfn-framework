@@ -100,6 +100,7 @@ import type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
 } from '../../system/lifecycle/kube-self-management.js';
+import type { SensitivityLevel } from '../../system/trust/types.js';
 export type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
@@ -201,6 +202,8 @@ export interface LLMChatParams extends GatewayCorrelationParams, GatewayLLMCance
   repetitionPenalty?: number;
   frequencyPenalty?: number;
   tools?: ToolSchema[];
+  /** Runtime-derived disclosure classification; never model-visible or accepted by mcp.execute. */
+  mcpOutboundSensitivity?: SensitivityLevel;
   accounting?: LLMCallAccountingContext;
   /**
    * d8vq.2: declared work spec for an autonomous streamed call.

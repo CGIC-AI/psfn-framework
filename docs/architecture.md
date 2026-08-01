@@ -78,6 +78,8 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
 - `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
 - Gateway policy resolves filesystem scope, URL policy, SSRF checks, and approval-gated actions.
+- The native external MCP client, credential custody, TLS transport, system-trust
+  policy, and CogSec boundary all live in the gateway.
 - Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
 - Discord, Telegram, and Wyoming host-facing adapters are started from the gateway side when enabled.
 
@@ -156,6 +158,43 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 See [`docs/cognitive-security.md`](./cognitive-security.md) for the threat
 model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
+
+### External MCP client
+
+PSFN is the MCP host and client; external MCP servers are untrusted capability
+providers, never an alternate way to expose companion internals. The gateway
+owns one protocol client per `(companion, server)` session and uses the official
+TypeScript SDK's Streamable HTTP transport over HTTPS/TLS. Gateway credential
+custody, DNS/IP policy, TLS verification, redirect denial, response bounds,
+authentication, companion authorization, capability checks, trust ceilings,
+per-tool allowlists, and confirmation all remain outside the agent process.
+
+The model sees one stable first-party tool named `mcp`, not one injected tool
+definition per remote server. Its actions form a staged-loading boundary:
+
+1. `catalog` reads operator-owned server summaries without connecting.
+2. `search` lazily connects only to eligible servers and returns screened tool
+   summaries.
+3. `inspect` returns one screened input schema only when selected.
+4. `call` rechecks server/tool/capability/sensitivity/confirmation policy and
+   returns only a CogSec-screened result.
+5. `release` closes the selected session and drops its loaded schemas. Idle TTL
+   and companion disconnect perform the same unload automatically.
+
+Remote schemas are therefore absent from the fixed provider tool payload and
+from later turns unless selected again. Explicit release clears protocol
+connections and loaded definitions; the content-free static screening cache is
+not conversational context and may remain until broker shutdown. This gives
+multiple configured servers a cheap catalog without dumping every schema into
+the context window.
+
+All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized
+and hashed with SHA-256. An exact `(companion, hash)` hit reuses the prior
+screening decision; any byte-level semantic change produces a new hash and is
+screened again. The hash means "screened at this content version," not trusted.
+Tool-call results are dynamic and are screened on every invocation regardless
+of server trust or prior hashes. Raw remote metadata/output never crosses the
+broker's returned port.
 
 ### Channels and voice
 
@@ -268,6 +307,7 @@ These are the main extension points that already exist in code:
 - channel adapter factory manifests
 - module registry and loader
 - skills runtime
+- native gateway MCP client broker and protocol-client port
 - gateway-backed git, filesystem, vault, media, shell, web, journal, and beads tool surfaces
 
 ## Current Model-Facing Surface
@@ -276,6 +316,7 @@ The direct first-party surface is declared in `src/core/agent/tool-surface/regis
 
 - adaptive control: `tool_search`, `toolset`, and `response_control action=no_reply`
 - workspace and external primitives: `fs`, `repo`, `shell`, `web`, `analysis_workbench`
+- external integrations: `mcp` with `catalog|search|inspect|call|release`
 - companion state: `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `self_status`, `system`, `skill`, `wiki`, `journal`
 - operations and lifecycle: `beads`, `notify`, `generate_image`, `selfie_create`, `vault`
 - bounded workers: `subagent action=spawn|message|wait|cancel|status`

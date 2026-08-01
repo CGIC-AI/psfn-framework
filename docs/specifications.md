@@ -193,10 +193,51 @@ Out of boundary:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `mcp-servers.json`
 - `charge-policy.json`
 - `backup.json`
 
 Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
+
+## External MCP Client Contract
+
+- PSFN is an MCP host/client. It does not expose companion internals as an MCP
+  server.
+- The gateway owns external MCP egress, credentials, transport, policy,
+  confirmation, and screening. The agent receives no MCP credential or raw
+  protocol result.
+- Transport is remote Streamable HTTP over verified HTTPS/TLS 1.2 or newer.
+  Plain HTTP, stdio subprocesses, legacy SSE transport, redirects, and global
+  TLS-verification bypasses are unsupported.
+- The exact official TypeScript client dependency performs protocol negotiation
+  and bounded calls. Server-initiated elicitation is not auto-fulfilled; PSFN
+  advertises no automatic roots/sampling authority.
+- Authentication is bearer, explicit API-key header, or OAuth client
+  credentials. Owner files contain only credential references. OAuth issuer and
+  token endpoint are HTTPS and same-origin.
+- The model-facing surface is one stable `mcp` tool with
+  `catalog|search|inspect|call|release`. The fixed provider tool payload never
+  contains remote tool definitions. Catalog is config-only; connection,
+  summaries, and one selected schema load progressively.
+- One client session is scoped to `(companion, server)`. Explicit release, idle
+  expiry, disconnect, and shutdown drop loaded schemas and close transport
+  resources. Later selection reconnects lazily.
+- Every server has explicit companion allowlisting, factual hosting/data/input
+  trust factors, a trust level that cannot exceed their minimum ceiling, an
+  outbound-sensitivity ceiling, and a deny-by-default per-tool effect/
+  confirmation policy. Unknown tools reject; destructive/control effects always
+  require confirmation; approvals bind to exact arguments.
+- MCP descriptions and schemas are canonicalized, SHA-256 hashed, and screened
+  through CogSec. An exact companion/hash hit may reuse its prior screened
+  artifact. A changed hash must be screened again. "Screened" never means
+  trusted.
+- Every dynamic tool result is size-bounded and CogSec-screened on every call,
+  independent of trust and static-cache state. Only the screened projection may
+  cross the broker boundary.
+- Health and Garden lifecycle projections are content-free and companion-
+  scoped. They may reveal ids, policy, loaded state, and screening hash/time/
+  count, but never endpoints, credentials, descriptions, schemas, arguments, or
+  outputs.
 
 ## Persistence Layout Contract
 
@@ -334,6 +375,8 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - Agent startup probes outbound reachability and aborts unless the operator explicitly overrides isolation.
 - URL fetches, filesystem access, and sensitive tool actions are policy-gated.
 - Capability eligibility and confirmation queues gate privileged actions.
+- External MCP calls are gateway-only, deny-by-default, sensitivity-bounded,
+  and screened on every dynamic response.
 - Trust-aware memory retrieval withholds data by default when policy does not allow disclosure.
 - Unknown or malformed provider/settings data should reject rather than silently coerce.
 

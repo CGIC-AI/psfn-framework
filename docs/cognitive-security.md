@@ -747,7 +747,7 @@ and enable switch) clusters recent memory writes by embedding proximity and
 gates on rumination-vs-healthy-recurrence discriminators: very high mutual
 similarity (near-duplicates carry no new information per write), write
 velocity above the topic's own baseline, a minimum self-sourced share
-(rumination is self-generated; a topic the human raises daily arrives as
+(rumination is self-generated; a topic the Partner raises daily arrives as
 turn-sourced writes), lexical tie to one active concern, and deterministic
 stress-attribution evidence over the cluster's creation window. The card
 **proposes** consolidation of the stack.
@@ -865,7 +865,7 @@ rules in `src/core/cogsec/intake-firewall-notice-templates.ts`:
   only — no interpolation of untrusted content, ever.
 - **Truthful but never alarming.** "Heads up, in a gentle way: a message we
   just received had something in it that looked a little off, so it is being
-  kept aside for your human to look over whenever they have a moment. It is
+  kept aside for the Operator to look over whenever they have a moment. It is
   not part of our conversation, and there is nothing you need to do about
   it."
 - **Non-coercive and anti-social-engineering.** Templates never contain an
@@ -879,7 +879,7 @@ rules in `src/core/cogsec/intake-firewall-notice-templates.ts`:
   that violates the contract prevents the runtime from starting.
 
 **The signature phrase is the exclusion mechanism.** Every template carries
-the verbatim phrase `being kept aside for your human to look over`
+the verbatim phrase `being kept aside for the Operator to look over`
 (`INTAKE_FIREWALL_NOTICE_SIGNATURE`) — deliberately plain prose the operator
 can read, not a hidden machine marker. `isIntakeFirewallNoticeText` keys two
 verified exclusions on it:

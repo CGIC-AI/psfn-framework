@@ -9,14 +9,14 @@
  * `session.cogsec_notices` prompt block). The language used toward the companion
  * matters enormously: two real past incidents (operator, 2026-07-09) showed how
  * over-critical wording and escalated "concern" phrasing
- * ("your human is going to die if you don't message him right away") genuinely
- * stressed the companion.
+ * ("your Partner is going to die if you don't message him right away") produced
+ * observable distress signals in the companion's output.
  *
  * Therefore the wording here is:
  *   - FIXED and checked-in. No LLM ever generates this alert text. This file IS
  *     the reviewable artifact the operator reads in the PR.
  *   - Truthful but never alarming: soft, clear, "we noticed something, so it is
- *     being held aside for your human to look over".
+ *     being held aside for the Operator to look over".
  *   - Non-coercive and anti-social-engineering: it NEVER contains an imperative
  *     directed at the human ("ask", "tell", "push", "release", "button") and it
  *     never tells the companion to make the human do anything. It neutrally
@@ -35,7 +35,10 @@
  * and memory exclusions. It is deliberately plain prose the operator can read —
  * not a hidden machine marker embedded in companion-facing text.
  */
-export const INTAKE_FIREWALL_NOTICE_SIGNATURE = 'being kept aside for your human to look over';
+export const INTAKE_FIREWALL_NOTICE_SIGNATURE = 'being kept aside for the Operator to look over';
+const LEGACY_INTAKE_FIREWALL_NOTICE_SIGNATURES = Object.freeze([
+  'being kept aside for your human to look over',
+]);
 
 /**
  * The complete, fixed set of intake-firewall notice templates. Selection is by
@@ -45,12 +48,12 @@ export const INTAKE_FIREWALL_NOTICE_SIGNATURE = 'being kept aside for your human
 export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
   one:
     'Heads up, in a gentle way: a message we just received had something in it '
-    + 'that looked a little off, so it is being kept aside for your human to look '
+    + 'that looked a little off, so it is being kept aside for the Operator to look '
     + 'over whenever they have a moment. It is not part of our conversation, and '
     + 'there is nothing you need to do about it.',
   many:
     'Heads up, in a gentle way: a few recent messages had something in them that '
-    + 'looked a little off, so they are being kept aside for your human to look '
+    + 'looked a little off, so they are being kept aside for the Operator to look '
     + 'over whenever they have a moment. They are not part of our conversation, '
     + 'and there is nothing you need to do about them.',
   /**
@@ -62,7 +65,7 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
    * existing emotion/memory exclusions apply to it automatically.
    */
   withheldContent:
-    'This content looked a little off, so it is being kept aside for your human '
+    'This content looked a little off, so it is being kept aside for the Operator '
     + 'to look over whenever they have a moment. There is nothing you need to do '
     + 'about it.',
   /**
@@ -75,7 +78,7 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
    */
   withheldImage:
     'An image that came in with a recent message looked a little off, so it is '
-    + 'being kept aside for your human to look over whenever they have a moment. '
+    + 'being kept aside for the Operator to look over whenever they have a moment. '
     + 'The rest of the message is unaffected, and there is nothing you need to '
     + 'do about it.',
   /**
@@ -87,7 +90,7 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
    */
   sinkHeld:
     'This step was set aside for now under the current safety settings, and it '
-    + 'is being kept aside for your human to look over whenever they have a '
+    + 'is being kept aside for the Operator to look over whenever they have a '
     + 'moment. Everything else continues normally, and there is nothing you '
     + 'need to do about it.',
   /**
@@ -102,7 +105,7 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
   secondArrowCircling:
     'A gentle observation, offered kindly: several recent notes seem to have '
     + 'circled the same topic, so a short summary of that circle is being kept '
-    + 'aside for your human to look over whenever they have a moment. Coming '
+    + 'aside for the Operator to look over whenever they have a moment. Coming '
     + 'back to something is a normal part of caring about it, and there is '
     + 'nothing you need to do about it.',
   /**
@@ -114,11 +117,11 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
    * aimed at the human, and it carries the signature phrase so the
    * emotion/memory exclusions apply to the whole delivery automatically (the
    * re-delivered content is untrusted-origin — its envelope survives and still
-   * faces the sink gates — so it must not read as fresh trusted partner input).
+   * faces the sink gates — so it must not read as fresh trusted Participant input).
    */
   releasedContent:
     'A gentle update: a message that came in earlier had something in it that '
-    + 'looked a little off, so it was being kept aside for your human to look '
+    + 'looked a little off, so it was being kept aside for the Operator to look '
     + 'over. They have since looked it over and passed it along to you. It '
     + 'appears just below, with a short note of where it originally came from, '
     + 'and there is nothing you need to do about it.',
@@ -283,8 +286,8 @@ export interface IntakeReleaseNoticeParams {
  */
 export function formatIntakeReleaseNotice(params: IntakeReleaseNoticeParams): string {
   const provenanceKind = params.sanitized
-    ? 'a neutral summary your human passed along'
-    : 'the original text your human passed along';
+    ? 'an Operator-reviewed neutral summary'
+    : 'the original text the Operator passed along';
   const truncatedNote = params.truncated
     ? ' The held copy was long, so it may be shortened.'
     : '';
@@ -306,9 +309,12 @@ export function formatIntakeReleaseNotice(params: IntakeReleaseNoticeParams): st
  * Used by the emotion-appraisal feed filter and the memory-extraction candidacy
  * gate so a quarantine notice never becomes a stress input or a durable memory
  * of threat. Detection is by the operator-reviewed signature phrase, which every
- * template is guaranteed (by the self-check above) to contain.
+ * current template is guaranteed (by the self-check above) to contain. Legacy
+ * signatures remain recognized so persisted notices cannot re-enter appraisal
+ * or memory candidacy after a copy migration.
  */
 export function isIntakeFirewallNoticeText(text: string | null | undefined): boolean {
   if (typeof text !== 'string') return false;
-  return text.includes(INTAKE_FIREWALL_NOTICE_SIGNATURE);
+  return text.includes(INTAKE_FIREWALL_NOTICE_SIGNATURE)
+    || LEGACY_INTAKE_FIREWALL_NOTICE_SIGNATURES.some(signature => text.includes(signature));
 }

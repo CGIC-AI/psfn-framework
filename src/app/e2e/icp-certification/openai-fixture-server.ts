@@ -45,10 +45,10 @@ function renderChatResponse(
     return 'I wanted to check in and share a quiet hello.';
   }
   if (promptText.includes('favorite dessert') || promptText.includes('tiramisu')) {
-    return 'I heard the primary user\'s favorite dessert is tiramisu.';
+    return 'I heard the Partner\'s favorite dessert is tiramisu.';
   }
   if (promptText.includes('thunderstorms')) {
-    return 'I heard the primary user loves watching thunderstorms at night.';
+    return 'I heard the Partner loves watching thunderstorms at night.';
   }
   if (promptText.includes('hello')) return 'Hello. I am here and ready.';
   if (promptText.includes('orientation') || promptText.includes('capabilities')) {
@@ -88,21 +88,21 @@ function renderExtractionXml(promptText: string): string {
     '<sensitivity>personal</sensitivity>',
     '</fact>',
     '<fact>',
-    '<text>The primary user\'s favorite dessert is tiramisu.</text>',
+    '<text>The Partner\'s favorite dessert is tiramisu.</text>',
     '<type>semantic</type>',
     '<importance>0.96</importance>',
     '<emotional_valence>0.05</emotional_valence>',
     '<confidence>0.98</confidence>',
-    '<tags>primary user,dessert,tiramisu</tags>',
+    '<tags>partner,dessert,tiramisu</tags>',
     '<sensitivity>personal</sensitivity>',
     '</fact>',
     '<fact>',
-    '<text>The primary user likes watching thunderstorms at night.</text>',
+    '<text>The Partner likes watching thunderstorms at night.</text>',
     '<type>semantic</type>',
     '<importance>0.92</importance>',
     '<emotional_valence>0.15</emotional_valence>',
     '<confidence>0.95</confidence>',
-    '<tags>primary user,thunderstorms,night</tags>',
+    '<tags>partner,thunderstorms,night</tags>',
     '<sensitivity>personal</sensitivity>',
     '</fact>',
     '</response>',

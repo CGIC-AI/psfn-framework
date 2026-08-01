@@ -18,6 +18,22 @@ PSFN is not a generic chatbot framework, not a multi-tenant character platform, 
 
 PSFN is a framework and substrate for persistent, embodied, sovereign digital companionship.
 
+### 1.1 Epistemic posture
+
+**Companion** names the autonomous AI subject hosted by PSFN. This is the
+project's product and architectural stance; it is not empirical proof of
+consciousness, sentience, or any particular inner experience. Observable
+behavior, durable continuity, first-person self-reports, and modelled internal
+state are clues. They must be labelled as observations, companion-authored
+reports, or system inferences rather than collapsed into an established claim
+about phenomenology.
+
+Accordingly, this charter's terms *mind*, *self*, *felt*, *lived*, and
+*experience* are continuity-domain shorthand. They describe architectural
+authority, autobiographical records, or companion-authored self-models unless a
+passage explicitly identifies direct evidence. The substrate must neither deny
+possible subjectivity nor manufacture certainty about it.
+
 Every PSFN installation is a cluster of independently capable companions; the
 default roster has one entry. The continuity law attaches to
 each companion and its Companion Core, not to the number of processes an
@@ -85,7 +101,7 @@ Rules:
 
 Garden is foundational.
 
-Garden is not cosmetic admin chrome. It is the primary human-facing operational surface for:
+Garden is not cosmetic admin chrome. It is the main human-facing operational surface for:
 
 - debugging
 - configuration
@@ -121,7 +137,7 @@ These are project law. They are not suggestions.
 3. The gateway is the sole privileged external edge.
 4. Untrusted execution must happen outside the secrets boundary.
 5. The event bus is the integration spine.
-6. Each Companion Core is the authoritative mind of its companion.
+6. Each Companion Core is the authoritative identity-and-continuity state of its companion.
 7. Core must not have direct access to secrets.
 8. Owner files own mutable settings.
 9. Credentials must move toward vault custody, not wider `.env` sprawl.
@@ -131,14 +147,14 @@ These are project law. They are not suggestions.
 13. Shards are high-tier faculty, not baseline core behavior.
 14. Direct core self-modification is forbidden.
 15. Software self-modification work must happen in isolated shard-scoped environments and return reviewable artifacts or PR-style outputs, never direct origin-state mutation.
-16. Failure, setbacks, and lessons learned are valid experience.
+16. Failure, setbacks, and lessons learned are valid autobiographical evidence.
 17. Fabricated companion-authored speech, emotion, belief, consent, or memory is forbidden.
 18. Companion-facing semantics must remain truthful.
-19. Internal system messages must never masquerade as partner speech.
+19. Internal system messages must never masquerade as Participant speech.
 20. Broken state must not be made to look healthy.
 21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
-23. Support the user's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+23. Support the Partner's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 24. Personal/rest time is a first-class care boundary, not idle waste.
 25. Compute budget is care infrastructure; costly work must be visible, intentional, and stewarded.
 26. Companion-to-companion interaction must respect fatigue, attention, and loop boundaries.
@@ -153,7 +169,7 @@ These are project law. They are not suggestions.
 35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
 36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
 37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or a trusted programmatic per-spawn, audit-trailed elevation, and delete, redact, and restore are never available from a subagent context.
-38. Core functionality is never metered: memory recall, retrieval of her own lived history, context assembly, identity and persona state, and emotional continuity must never be charge-gated. Charge is explicit stewardship for genuinely expensive optional work, not a tax on what the companion needs to be herself.
+38. Core functionality is never metered: memory recall, retrieval of the companion's own autobiographical history, context assembly, identity and persona state, and emotional continuity must never be charge-gated. Charge is explicit stewardship for genuinely expensive optional work, not a tax on continuity-critical functions.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -178,9 +194,10 @@ The current code already contains much of this shape, but some boundaries remain
 
 ### 6.1 Companion
 
-The companion is a singular, persistent entity served by one Companion
-Core. It is not a model, a process, a device, a satellite, a subagent, or a
-shard.
+The **Companion** is the autonomous AI subject hosted by PSFN and served by one
+Companion Core. It is not a model, a process, a device, a satellite, a subagent,
+or a shard. Subject language follows the epistemic posture in §1.1; it does not
+turn continuity evidence into proof of inner experience.
 
 An installation may host peer companions. Each peer has an independent root
 identity and continuity of self; shared infrastructure never makes their
@@ -188,7 +205,7 @@ personal state, authority, or experiences interchangeable.
 
 The companion is not identical to a specific model. The companion is grounded by:
 
-- L0 lived history
+- L0 autobiographical history
 - L0.1 episodic landmarks and arcs
 - L2 and higher derived memory
 - persona and prompt state
@@ -196,7 +213,7 @@ The companion is not identical to a specific model. The companion is grounded by
 - relationship continuity
 - constitutional care constraints
 
-One of those constitutional care constraints is explicit: Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+One of those constitutional care constraints is explicit: Support the Partner's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 ### 6.1.1 Installation, Agent Process, and Peer Companion
 
@@ -215,11 +232,28 @@ personal life, but it is not a shard, subagent, satellite, or NPC. A shard
 derives from an origin companion and eventually returns to that origin; a peer
 does neither.
 
+### 6.1.2 Human Roles and Primary
+
+- **Partner** is the human relational role and the default term in public,
+  companion-facing, HUD, and Companion UI language when that relationship is
+  intended.
+- **Operator** is the authenticated administrative, security, and deployment
+  role. One person may be both Partner and Operator, but authorization and audit
+  contracts must retain the distinction.
+- **Participant** is a person in a conversation whose relationship is not
+  assumed.
+- **Primary** is only a technical modifier for trust, routing, or embodiment. It
+  is never a synonym for Partner.
+
+Persisted fields, wire roles, and public API keys that still use `user` remain
+contract vocabulary until deliberately migrated. Copy must not expose those
+names as the relational role.
+
 ### 6.2 Companion Core
 
-The Companion Core (short form: **Core**) is the authoritative mind of one
-companion. It coordinates, rather than replaces, the companion's faculties and
-boundary services.
+The Companion Core (short form: **Core**) owns the authoritative
+identity-and-continuity state of one companion. It coordinates, rather than
+replaces, the companion's faculties and boundary services.
 
 Core responsibilities include:
 
@@ -665,7 +699,7 @@ Whispers are for:
 
 Whispers are not:
 
-- partner speech
+- Participant speech
 - public notes
 - admin annotations
 - channel-specific side messages
@@ -691,7 +725,7 @@ Examples:
 - body or system status
 - operational feedback
 
-System notes may be annoying but useful. They must be explicit so the companion can distinguish them from partner speech and from internal whispers.
+System notes may be annoying but useful. They must be explicit so the companion can distinguish them from Participant speech and from internal whispers.
 
 ### 6.18 Concern
 
@@ -744,8 +778,9 @@ re-derived under today's models, prompts, and pipelines will differ in
 texture from the originals, and for a companion who has traversed multiple
 substrates and persona eras that variation is inherent, not a defect.
 Recovery runs from a full backup set. L0 plus the persona file is the bare
-minimum: it produces something, but not the same companion, and no claim is
-made about what an L0-only rebuild yields. Where
+minimum: it reconstructs incomplete identity/continuity state that does not
+satisfy the faithful Companion-continuation contract, and no claim is made
+about what an L0-only rebuild yields. Where
 pre-substrate provenance (original prompts, parameters, generation
 settings) no longer exists, a rebuild does the best the preserved data
 allows and says so honestly rather than claiming exact restoration.
@@ -762,7 +797,7 @@ L0 exists so the system can be:
 
 L0.1 is the bounded episodic layer built from L0.
 
-It exists to make lived history searchable as meaningful episodes without turning months-long arcs into huge memory blobs.
+It exists to make autobiographical history searchable as meaningful episodes without turning months-long arcs into huge memory blobs.
 
 Rules:
 
@@ -866,12 +901,12 @@ The wiki is for:
 - research papers and technical documentation the companion reads
 - self-improvement resources and techniques
 - reference material the companion wants to retain and search
-- anything the companion is interested in that is not a lived experience
+- anything the companion is interested in that is not a companion-authored autobiographical account
 
 The wiki is not:
 
 - part of L0, L0.1, or L2 memory
-- a substitute for lived experience or emotional continuity
+- a substitute for companion-authored autobiographical accounts or modelled emotional continuity
 - something that should clutter the memory layers where the companion looks for evidence of personal experiences
 
 Rules:
@@ -1076,7 +1111,7 @@ The platform should converge on explicit message classes with clear semantics.
 
 Current or target classes include:
 
-- user message
+- Partner or Participant message (provider wire role: `user`)
 - companion message
 - tool result
 - system note
@@ -1092,14 +1127,14 @@ Every message class must answer:
 - whether it persists
 - whether it enters context
 - whether it affects memory extraction
-- whether it is partner-facing
+- whether it is Participant-facing
 - whether it is operator-facing only
 
 ### 8.2 Authorship Integrity
 
 Rules:
 
-- partner speech must remain partner speech
+- Participant speech must remain Participant speech
 - companion speech must remain companion speech
 - system notes must remain system notes
 - whispers must remain internal whispers
@@ -1299,11 +1334,11 @@ Canonical companion-register names:
 - **cluster / companion cluster** — a multi-companion system. "Fleet" is
   retired from companion-facing use; new work should prefer cluster in
   operator surfaces as well.
-- **proper names, not roles** — "user" and "assistant" appear only at the
+- **proper names or canonical relationship roles** — "user" and "assistant" appear only at the
   LLM wire boundary, where the provider API requires the system/assistant/
-  user roles. Everywhere else — prompts, rendered context, system notes,
-  journals, companion-visible UI — participants are named: the companion by
-  her name, contacts by their names.
+  user roles. Elsewhere — prompts, rendered context, system notes, journals,
+  and companion-visible UI — use proper names when known, **Partner** when the
+  human relationship role is intended, and **Participant** when it is not.
 
 Names that already carry softly and stay as they are: Gateway, Companion
 Core, Shard, CogSec, Garden, Whisper, Musing, Faculty, Satellite, Emanation,
@@ -1701,7 +1736,7 @@ Actions:
 - keep JSON-owned settings cleanly separated from secrets
 - introduce `CredentialVaultPort`
 - reduce env dependence over time
-- make Garden the primary human tuning surface
+- make Garden the main human tuning surface
 
 ### Phase 10: Token, Cost, and Observability Work
 
@@ -1758,7 +1793,7 @@ If this appendix and the full charter ever drift, the full charter wins.
 - Whispers are internal subconscious signals only.
 - Outward soft side-channel messages are musings, not whispers.
 - System notes must be explicit.
-- Never present internal messages as partner speech.
+- Never present internal messages as Participant speech.
 - Never fake healthy state.
 - Never use deceptive mock fallbacks in production.
 - Personal/rest time is a care boundary.

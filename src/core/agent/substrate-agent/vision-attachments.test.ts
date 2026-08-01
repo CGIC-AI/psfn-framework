@@ -65,7 +65,7 @@ describe('buildTurnUserContent', () => {
     expect(result.content).toContain('dedicated vision pipeline');
     expect(result.content).toContain('Current image review (untrusted image-derived data):');
     expect(result.content).toContain('<untrusted_image_review>\nA catgirl sits on a server rack holding a pink rifle.\n</untrusted_image_review>');
-    expect(result.content).toContain('User text: My little satellite');
+    expect(result.content).toContain('Participant text: My little satellite');
     expect(result.currentTurnVisionReview).toEqual({
       imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
       question: 'Describe exactly what is visible in the current image input.',
@@ -207,7 +207,7 @@ describe('buildTurnUserContent', () => {
       visionReviewer: reviewer,
     });
 
-    expect(result.content).toContain('User text: ok love lets see if you can see');
+    expect(result.content).toContain('Participant text: ok love lets see if you can see');
     expect(result.content).not.toContain(imageUrl);
   });
 
@@ -231,7 +231,7 @@ describe('buildTurnUserContent', () => {
     expect(result.content).toContain('You cannot reliably see the current image');
     expect(result.content).toContain('Vision pipeline status: unavailable after dedicated review attempts.');
     expect(result.content).not.toContain('404 Not Found');
-    expect(result.content).toContain('User text: My little satellite');
+    expect(result.content).toContain('Participant text: My little satellite');
     expect(result.currentTurnVisionReview).toBeUndefined();
   });
 
@@ -473,7 +473,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     expect(analyze).not.toHaveBeenCalled();
     const content = result.content as string;
     expect(content).toContain(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage);
-    expect(content).toContain('User text: My little satellite');
+    expect(content).toContain('Participant text: My little satellite');
   });
 
   it('fails closed when the screening call itself throws: image withheld, never unscreened', async () => {

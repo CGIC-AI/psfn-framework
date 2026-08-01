@@ -106,7 +106,7 @@ label with an `auto` default — deliberately not a classification pipeline. In 
   rows.
 - A durable pending-contact request is enqueued
   (`companion-data/.../contacts/pending-approvals.json`) capturing name,
-  channel, channel user id, first-seen, and a small sample of message previews
+  channel, channel Participant ID, first-seen, and a small sample of message previews
   **from that channel only** (no cross-channel or DM content in the payload).
 - The first sighting produces an operator notification through the existing
   gateway notification path (`notify.ntfy`, system-derived sender

@@ -156,7 +156,7 @@ describe('session tool action=new', () => {
 
       expect(text).toContain('[System notice]');
       expect(text).toContain('internal runtime problem');
-      expect(text).toContain('tell your person');
+      expect(text).toContain('tell your Partner');
       expect(text).not.toContain('EACCES');
       expect(text).not.toContain('/private/runtime');
     } finally {

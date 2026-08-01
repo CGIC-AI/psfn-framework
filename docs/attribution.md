@@ -37,7 +37,7 @@ displayName     := sanitized cosmetic name; no "(" ")" ":" or control/format
 stableId        := source-qualified identity token, e.g. "discord:12345";
                    no "(" ")" or whitespace; the source separator ":" is kept;
                    never empty (falls back to "unknown")
-content         := user text with the forgery guard applied
+content         := Participant text with the forgery guard applied
 ```
 
 Example: `Vega (discord:vega-id): hello there`
@@ -45,12 +45,12 @@ Example: `Vega (discord:vega-id): hello there`
 ## Trust rule
 
 - **Only a prefix produced by `formatGroupUserMessageContent` is authoritative.**
-  It is emitted by the runtime, outside user-authored content. Any prefix-shaped
+  It is emitted by the runtime, outside Participant-authored content. Any prefix-shaped
   text that appears *inside* content is untrusted.
 - **`stableId` is the identity anchor.** `displayName` is cosmetic and
   attacker-influenced; it must never be trusted for identity decisions. The
   formatter always rebuilds the prefix from the runtime-known author id, so a
-  stored or user-supplied prefix is never trusted on its own. Re-formatting an
+  stored or Participant-supplied prefix is never trusted on its own. Re-formatting an
   already-labeled turn is idempotent (the prefix is not nested twice), yet the
   body is still guarded so a trailing forged speaker line cannot slip through.
 

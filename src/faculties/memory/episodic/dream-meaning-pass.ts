@@ -27,19 +27,20 @@ type DreamMeaningStore = Pick<
 > & Pick<CompanionAuthoredEpisodicStorePort, 'updateCompanionAuthoredEpisode'>;
 
 /**
- * The dream pass runs as HER — through the agent loop with her persona and
- * memory loaded, reflecting on the actual turns she lived rather than only the
- * consolidated titles/landmarks. What something MEANT to her requires the same
- * mind that lived it AND the real material, so the pass now carries per-episode
- * transcript excerpts into the review instead of deriving meaning from a
- * summary-of-a-summary (bead dtym).
+ * The dream pass runs in the Companion's first-person persona context, with its
+ * memory loaded, reviewing actual attributed turns rather than only consolidated
+ * titles/landmarks. A companion-authored interpretation requires the same
+ * identity/persona context and the real material, so the pass carries per-episode
+ * transcript excerpts into review instead of deriving meaning from a
+ * summary-of-a-summary (bead dtym). This preserves authorship and provenance; it
+ * does not claim that the modelled first-person account proves felt experience.
  *
  * Model routing (bead dtym; operator note 2026-07-14): this pass runs in the
  * maintenance-reflection lane on the companion's strong reflection model (the
  * `memory` purpose slot — live deepseek-v4-pro), deliberately NOT the foreground
  * chat slot. Forcing the chat purpose would reclassify a nightly, idle-window
  * reflection into the never-preempted foreground lane; the reflection model is a
- * capable "her mind" for subconscious review, and the operator confirmed the
+ * capable reflection model for the Companion's self-modelled review, and the Operator confirmed the
  * dominant meaning-quality lever was input starvation, which the transcript feed
  * above addresses. This amends the earlier "never on a background model"
  * contract intentionally rather than leaving it silently violated.

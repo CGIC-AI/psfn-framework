@@ -373,7 +373,7 @@ export function App() {
       await fleetSessionRef.current?.logout();
       login();
     } catch (error) {
-      setConfigError(error instanceof Error ? error.message : 'User switch failed');
+      setConfigError(error instanceof Error ? error.message : 'Partner switch failed');
     }
   }
 
@@ -414,7 +414,7 @@ export function App() {
         currentStore: () => storeRef.current,
       });
     } catch {
-      // The transport error event owns user-visible denial state.
+      // The transport error event owns Partner-visible denial state.
     }
   }
 
@@ -424,7 +424,7 @@ export function App() {
     try {
       readArtifactPreview(store, streamState, artifactId);
     } catch {
-      // The transport error event owns user-visible denial state.
+      // The transport error event owns Partner-visible denial state.
     }
   }
 
@@ -460,8 +460,8 @@ export function App() {
         <Settings aria-hidden />
       </button>
 
-      <section className="authority-summary" aria-label="Current human and device authority">
-        <span aria-label="Human authority">Human: {accessPresentation.humanLabel}</span>
+      <section className="authority-summary" aria-label="Current Partner and device authority">
+        <span aria-label="Partner authority">Partner: {accessPresentation.humanLabel}</span>
         <span aria-label="Device authority">Device: {streamState.session?.deviceName ?? 'not attached'}</span>
         <span aria-label="Place authority">Place: {streamState.session?.place?.name ?? 'not available'}</span>
       </section>
@@ -606,11 +606,11 @@ function presentAccess(access: AccessState): CompanionUiAccessPresentation {
     case 'offline':
       return { state: 'offline', humanLabel: 'Unavailable offline', humanDetail: 'Offline shell is not authenticated', guestAvailable: false };
     case 'signed_out':
-      return { state: 'signed_out', humanLabel: 'Signed out', humanDetail: 'No human attached', guestAvailable: access.guestMode === 'explicit' };
+      return { state: 'signed_out', humanLabel: 'Signed out', humanDetail: 'No Partner attached', guestAvailable: access.guestMode === 'explicit' };
     case 'signed_in':
       return { state: 'signed_in', humanLabel: access.human.label, humanDetail: `Discord · ${access.human.role}`, guestAvailable: false };
     case 'guest':
-      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No cluster human attached', guestAvailable: true };
+      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No cluster Partner attached', guestAvailable: true };
   }
 }
 

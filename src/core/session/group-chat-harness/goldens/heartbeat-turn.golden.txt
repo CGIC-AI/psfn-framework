@@ -31,7 +31,7 @@ Never present retrieved memory as partner-authored direct speech.
 <response_style_guidance>
 <style>concise</style>
 <delivery>Answer directly and keep wording tight.</delivery>
-<expansion>Expand only when the user asks for more detail.</expansion>
+<expansion>Expand only when the Participant asks for more detail.</expansion>
 </response_style_guidance>
 
 <runtime_state>

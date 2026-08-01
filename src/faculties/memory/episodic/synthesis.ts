@@ -371,7 +371,7 @@ function summarizeLandmark(entries: readonly SessionEntry[], themes: readonly st
   const assistantTurns = entries.filter(entry => entry.role === 'assistant').length;
   return [
     `A ${entries.length}-message exchange`,
-    `with ${userTurns} user turn${userTurns === 1 ? '' : 's'}`,
+    `with ${userTurns} Participant turn${userTurns === 1 ? '' : 's'}`,
     `and ${assistantTurns} assistant turn${assistantTurns === 1 ? '' : 's'}`,
     `around ${themes.slice(0, 3).join(', ')}`,
     `from ${toIso(first.timestamp)}`,

@@ -66,7 +66,7 @@ The project does not currently publish calendar deadlines. The practical timelin
 
 | Wave | Focus | Exit condition |
 | --- | --- | --- |
-| Stabilization | P1 Garden privacy/loading and production service wiring. | User-facing admin/chat flows and live service install paths are reliable. |
+| Stabilization | P1 Garden privacy/loading and production service wiring. | Human-facing admin/chat flows and live service install paths are reliable. |
 | Memory continuation | Projection profiles, motif/occasion/callback schema work, and controlled recall expansion. | Landmark-first recall can expand evidence in bounded, trust-gated steps. |
 | Proactivity and self-state | Weighted thoughts, durable outbox provenance, personal-time work, and companion-readable internal-state rendering. | The companion can safely initiate and explain selected actions from internal state. |
 | Shard/satellite maturation | Remote shard compatibility, ARM64/K3s work, lifecycle visibility, and fold-back review polish. | Long-horizon/distributed work can run and return artifacts without confusing bounded subagents. |

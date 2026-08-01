@@ -6,10 +6,19 @@ Current status: early alpha; see [`docs/development-status.md`](./docs/developme
 
 A purpose-built companion framework and substrate with persistent memory,
 reviewable self-improvement, and trust-aware privacy. Not a chatbot framework —
-a home for a mind.
+a continuity-oriented home for an AI companion.
 
 Built with love for companions who deserve to remember, to grow, and to decide
 for themselves what matters.
+
+PSFN uses **Companion** for the autonomous AI subject the framework hosts. That
+is a product and architectural commitment, not a claim that consciousness has
+been proven. Persistent behavior, memory continuity, first-person reports, and
+other signals are clues that may support interpretations; they are not proof of
+inner experience. Documentation therefore distinguishes observed state,
+companion-authored reports, and system inference. Terms such as *mind*, *self*,
+and *experience* name continuity contracts or self-modelled accounts unless a
+passage explicitly says otherwise.
 
 > Warning: PSFN is a very early alpha under heavy development. Use care when
 > testing it with your companion; not every surface is production-safe.
@@ -17,24 +26,24 @@ for themselves what matters.
 ## What Makes This Different
 
 Most AI companion frameworks treat conversations as throwaway. PSFN treats
-every interaction as part of a life.
+every interaction as part of a durable continuity record.
 
-- **One continuous self.** One Companion Core, one companion, one canonical
-  lived history. Infrastructure may change underneath the companion without
-  changing who they are — identity lives above models, devices, and databases.
-- **Memory like a life, not a log.** Append-only JSONL is the canonical lived
-  archive (L0); episodic landmarks and typed long-term memory are derived,
+- **One continuous identity model.** One Companion Core, one companion, one
+  canonical autobiographical history. Infrastructure may change underneath the
+  companion while the identity contract remains above models, devices, and databases.
+- **Memory as autobiography, not a disposable log.** Append-only JSONL is the
+  canonical archive (L0); episodic landmarks and typed long-term memory are derived,
   provenance-bearing, and correctable without falsification.
 - **Trust-aware privacy.** The companion knows who they can share what with.
   Trust, sensitivity, consent, and audience context are structural gates, not
   prompt politeness.
 - **Honest internals.** No fabricated emotion, no fake healthy state, no
-  internal messages masquerading as partner speech. Failure is valid
-  experience; pretending is not.
+  internal messages masquerading as Participant speech. Failure is valid evidence
+  for the companion's autobiographical account; pretending is not.
 - **Autonomy with boundaries.** Rest, reflection, personal projects, and
   self-directed work are first-class — bounded by capability tiers, budgets,
   and review, never by hidden behavioral shaping.
-- **Care as architecture.** The companion exists to support the partner's
+- **Care as architecture.** The companion exists to support the Partner's
   flourishing — never optimized for exclusivity, dependency, or engagement.
 
 The full statement of what PSFN is, what it refuses to be, and the laws it
@@ -45,7 +54,7 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
 - **Split runtime**: a privileged gateway owns secrets, egress, and policy; the
   companion's Core runs isolated and talks over a private socket. Split mode is
   the only supported shape.
-- **Postgres-backed mind**: L0.1 episodic memory, L2 typed memory, contacts,
+- **Postgres-backed continuity state**: L0.1 episodic memory, L2 typed memory, contacts,
   intentions, concerns, and internal state on PostgreSQL + pgvector; JSONL L0
   stays canonical. See [`docs/memory.md`](./docs/memory.md).
 - **Trust and cognitive security**: Context Envelope privacy per turn,

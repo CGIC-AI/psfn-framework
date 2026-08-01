@@ -1141,7 +1141,7 @@ but separate apps are preferred to keep the blast radius small):
 
 - Redirect URI is exactly `<canonicalOrigin>/auth/discord/callback`.
 - Scopes are `identify` ONLY. Do not request any guild-membership scope.
-- Role assignment maps Discord user snowflakes to roles in `fleet-auth.json`
+- Role assignment maps Discord account snowflakes to roles in `fleet-auth.json`
   through `accountRoster` entries; `rolePolicy.disabledActionsByRole` then
   constrains each `owner`/`admin`/`member`/`guest` role. `discordEvidenceMappings`
   ships empty and exists only for guild-role-driven access (_updated to match
@@ -1151,7 +1151,7 @@ but separate apps are preferred to keep the blast radius small):
 
 The operator supplies: the Discord client ID (owner file), the client secret as
 the k8s secret env `FLEET_AUTH_DISCORD_CLIENT_SECRET`, and the operator's own
-Discord user snowflake for the initial `owner` mapping.
+Discord account snowflake for the initial `owner` mapping.
 
 Our side of the contract:
 

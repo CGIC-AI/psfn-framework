@@ -3,10 +3,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 /**
  * Turn-scoped registry of paid deliverables produced during an agent turn that
  * have not yet been handed to chat egress. A "paid deliverable" is any charged
- * surface that yielded a user-facing artifact (at minimum paidImageGeneration
+ * surface that yielded a Participant-facing artifact (at minimum paidImageGeneration
  * results). The registry lets an in-turn tool (for example response_control)
  * detect that ending the turn with no reply would silently drop a paid artifact
- * the user paid for, without coupling that tool to any specific artifact domain.
+ * the Participant paid for, without coupling that tool to any specific artifact domain.
  *
  * The store is established once around the agent invocation for a turn. Tools
  * that produce a charged deliverable note it here; the response-disposition tool

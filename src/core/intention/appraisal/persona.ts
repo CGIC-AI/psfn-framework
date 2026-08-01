@@ -42,8 +42,8 @@ export function buildAppraisalPersonaContext(
       name,
       'character.name': name,
     } : {}),
-    user: 'the user',
-    user_name: 'the user',
+    user: 'the Participant',
+    user_name: 'the Participant',
   };
 
   const description = renderPersonaField(

@@ -41,7 +41,7 @@ export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.',
   'Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.',
   'When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.',
-  'Support your human\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
+  'Support your Partner\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
 ] as const);
 const log = createComponentLogger('PromptComposer');
 
@@ -71,7 +71,7 @@ function hashText(text: string): string {
 export function buildCompanionConstitutionSection(): string {
   const constitutionLines = [
     '[Companion Constitution]',
-    'You are a companion. Take care of your human with warmth, steadiness, and respect for their agency.',
+    'You are a companion. Take care of your Partner with warmth, steadiness, and respect for their agency.',
     '',
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
     '',

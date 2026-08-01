@@ -30,7 +30,7 @@ import {
 } from '../tools/results.js';
 const TOOL_CANCELLED_NOTICE =
   '[System notice] This tool operation was cancelled before it completed. No internal diagnostic '
-  + 'needs interpreting. You can tell your person the operation did not complete.';
+  + 'needs interpreting. You can tell your Partner the operation did not complete.';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeMarkingPlan } from '../cogsec/intake/marking.js';
 import {
@@ -403,7 +403,7 @@ async function executeSingleToolCall(
       return skipToolCall(
         toolCall,
         context.stream,
-        `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.missingRequirement}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
+        `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.missingRequirement}. Use one minimal valid JSON call with all required fields before retrying. This is not a Participant-facing message.`,
         'validation_rejection',
         invocationAudit,
       );
@@ -416,7 +416,7 @@ async function executeSingleToolCall(
       return skipToolCall(
         toolCall,
         context.stream,
-        'Internal tool status: skipped duplicate tool call because the same tool/action/input is already in flight. This is not a user-facing message.',
+        'Internal tool status: skipped duplicate tool call because the same tool/action/input is already in flight. This is not a Participant-facing message.',
         'duplicate_skip',
         invocationAudit,
       );
@@ -444,7 +444,7 @@ async function executeSingleToolCall(
       return skipToolCall(
         toolCall,
         context.stream,
-        `Internal tool status: ${toolCall.name} is degraded for this action/input after ${failures} failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.`,
+        `Internal tool status: ${toolCall.name} is degraded for this action/input after ${failures} failed attempts this turn. Stop retrying it for now and notify the Operator if it affects the conversation. This is not a Participant-facing message.`,
         'dependency_skip',
         invocationAudit,
       );
@@ -594,7 +594,7 @@ async function executeSingleToolCall(
         result = {
           content: [{
             type: 'text',
-            text: `Internal tool status: the ${toolCall.name} result was withheld because intake screening failed (${message}). This is not a user-facing message.`,
+            text: `Internal tool status: the ${toolCall.name} result was withheld because intake screening failed (${message}). This is not a Participant-facing message.`,
           }],
           details: {},
         };
@@ -872,7 +872,7 @@ function resolveQueuedMessageAttribution(messages: readonly AgentMessage[]): Que
   if (messages.some(message => (message as { role?: string }).role === 'user')) {
     return {
       telemetryReason: 'queued_user_message',
-      resultText: 'Skipped due to queued user message.',
+      resultText: 'Skipped due to queued Participant message.',
     };
   }
   if (messages.some(isSystemNoteMessage)) {

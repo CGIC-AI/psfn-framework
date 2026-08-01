@@ -39,7 +39,7 @@ export interface ToolResultOutcomeProjection {
 }
 
 export const DUPLICATE_TOOL_CALL_SKIP_RESULT =
-  'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.';
+  'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a Participant-facing message.';
 
 export const SEQUENTIAL_DEPENDENCY_SKIP_RESULT =
   'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';

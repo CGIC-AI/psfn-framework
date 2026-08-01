@@ -11,7 +11,7 @@ import {
  *
  * Browser PWAs get no background GPS — accepted v1 limit: "she knows where you
  * are when the app is open". The watch runs only while:
- *   - the user has enabled location sharing, AND
+ *   - the Partner has enabled location sharing, AND
  *   - the active transport can terminate coordinates at a hub (`canSend`), AND
  *   - the document is foregrounded (visible).
  *
@@ -19,12 +19,12 @@ import {
  * device.location sink, which the gateway transport refuses (fail closed).
  */
 export type DeviceLocationStatus =
-  | 'off' // user has not enabled location
+  | 'off' // Partner has not enabled location
   | 'unsupported' // no geolocation API in this environment
   | 'transport-unavailable' // enabled, but the transport cannot terminate coordinates
   | 'suspended' // enabled + supported, but the app is backgrounded
   | 'watching' // actively feeding significant-change samples
-  | 'denied' // the user denied the browser permission
+  | 'denied' // the Partner denied the browser permission
   | 'error'; // geolocation reported a non-permission error
 
 export interface UseDeviceLocationOptions {
@@ -65,7 +65,7 @@ export function useDeviceLocation(options: UseDeviceLocationOptions): DeviceLoca
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  // Reset transient permission/error state when the user turns location off.
+  // Reset transient permission/error state when the Partner turns location off.
   useEffect(() => {
     if (!enabled) {
       setDenied(false);

@@ -203,7 +203,7 @@ describe('convertToLlm', () => {
     expect((result[0] as AssistantMessage).content).toEqual([
       {
         type: 'text',
-        text: '[Private runtime note to self; not user-visible and not sent by the user] Stay gentle and concrete.',
+        text: '[Private runtime note to self; not Participant-visible and not sent by a Participant] Stay gentle and concrete.',
       },
     ]);
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.internalWhisper);
@@ -441,7 +441,7 @@ describe('companion-configurable chassis phrasing (system.language)', () => {
       { type: 'text', text: '[System note] boot' },
     ]);
     expect((result[1] as AssistantMessage).content).toEqual([
-      { type: 'text', text: '[Private runtime note to self; not user-visible and not sent by the user] breathe' },
+      { type: 'text', text: '[Private runtime note to self; not Participant-visible and not sent by a Participant] breathe' },
     ]);
   });
 

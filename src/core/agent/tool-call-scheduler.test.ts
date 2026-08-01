@@ -223,7 +223,7 @@ describe('tool-call-scheduler', () => {
       .join('\n') ?? '';
     expect(text).toContain('[System notice]');
     expect(text).toContain('failed safely');
-    expect(text).toContain('ask your operator');
+    expect(text).toContain('ask the Operator');
     expect(text).not.toContain('SessionManager');
     expect(text).not.toContain('resolveSessionChannelId');
     expect(text).not.toContain('api:other-session');
@@ -852,7 +852,7 @@ describe('tool-call-scheduler', () => {
     expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
-        text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+        text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a Participant-facing message.',
       },
     ]);
     expect(telemetry).toHaveBeenCalledWith(
@@ -915,7 +915,7 @@ describe('tool-call-scheduler', () => {
     expect((thirdResult.toolResults[0] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
-        text: 'Internal tool status: scratchpad is degraded for this action/input after 2 failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.',
+        text: 'Internal tool status: scratchpad is degraded for this action/input after 2 failed attempts this turn. Stop retrying it for now and notify the Operator if it affects the conversation. This is not a Participant-facing message.',
       },
     ]);
     expect(telemetry).toHaveBeenCalledWith(
@@ -997,7 +997,7 @@ describe('tool-call-scheduler', () => {
     expect((repeatedMalformed.toolResults[0] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
-        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: path or title. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.',
+        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: path or title. Use one minimal valid JSON call with all required fields before retrying. This is not a Participant-facing message.',
       },
     ]);
     expect((valid.toolResults[0] as ToolResultMessage).isError).toBe(false);
@@ -1065,7 +1065,7 @@ describe('tool-call-scheduler', () => {
     expect((repeatedMalformed.toolResults[0] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
-        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: content. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.',
+        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: content. Use one minimal valid JSON call with all required fields before retrying. This is not a Participant-facing message.',
       },
     ]);
     expect(telemetry).toHaveBeenCalledWith(

@@ -86,7 +86,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{current_date}}` | turn | `prompt-runtime:TOKEN_RESOLVERS` | Current calendar date in the active timezone (America/New_York). |
 | `{{current_time}}` | turn | `prompt-runtime:TOKEN_RESOLVERS` | Current time in the active timezone (America/New_York). |
 | `{{unix_timestamp}}` | turn | `prompt-runtime:TOKEN_RESOLVERS` | Current Unix epoch timestamp in seconds. |
-| `{{user}}` (aliases: `{{user_name}}`) | session_stable | `runtime-context:buildPromptTemplateVariables` | Current author/user display name from runtime context. |
+| `{{user}}` (aliases: `{{user_name}}`) | session_stable | `runtime-context:buildPromptTemplateVariables` | Current Participant display name from runtime context. |
 | `{{user_id}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Stable subject identity key for the current author. |
 | `{{char}}` (aliases: `{{char_name}}`, `{{character}}`, `{{character_name}}`) | static | `runtime-context:buildPromptTemplateVariables` | Character/assistant name from runtime context. |
 | `{{name}}` | static | `character-macro-map:buildCharacterMacroMap` | Raw character card name field. |
@@ -142,7 +142,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{runtime_conversation_state_available}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Whether compact conversation state is available for the current turn. |
 | `{{runtime_chat_type}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Conversation shape for this turn: direct_message or group. |
 | `{{runtime_room_id}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Room identity for the current turn; this is the channel ID. |
-| `{{runtime_current_message_author_xml}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Preformatted current message author XML with optional per-user timezone/local_time attributes when known. |
+| `{{runtime_current_message_author_xml}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Preformatted current message author XML with optional per-participant timezone/local_time attributes when known. |
 | `{{runtime_current_message_author_name}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Display name of the author of the current message. |
 | `{{runtime_current_message_author_id}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Stable platform/source ID of the author of the current message. |
 | `{{runtime_current_message_author_name_xml_attr}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | XML-attribute-safe display name of the current message author. |
@@ -157,8 +157,8 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{runtime_participant_relationships_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of participant-relationship lines rendered for the current group turn. |
 | `{{runtime_speaking_with_name}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved speaking-partner display name on DM turns; blank on group and internal turns so speaking_with sections prune. |
 | `{{runtime_speaking_with_trust_level}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Trust level for the current speaking partner on DM turns; blank on group and internal turns so speaking_with sections prune. |
-| `{{runtime_channel_type}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channel type for the current speaking context when user-facing. |
-| `{{runtime_channel_visibility}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channelPrivacy for the current speaking context when user-facing (broadcast is {{runtime_broadcast}}). |
+| `{{runtime_channel_type}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channel type for the current speaking context when Participant-facing. |
+| `{{runtime_channel_visibility}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channelPrivacy for the current speaking context when Participant-facing (broadcast is {{runtime_broadcast}}). |
 | `{{runtime_channel_privacy}}` | session_stable | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope channelPrivacy for the current turn (bare value: private \| invite_only \| public); blank on internal turns. |
 | `{{runtime_broadcast}}` | session_stable | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope broadcast flag for the current turn (bare boolean); blank on internal turns. |
 | `{{runtime_audience_scope}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope audienceScope for the current turn (bare value: one \| few \| many \| unbounded); blank on internal turns. |
@@ -169,7 +169,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 
 | Macro | Volatility | Producer | Value |
 |---|---|---|---|
-| `{{runtime_trust_is_primary}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with the primary person. |
+| `{{runtime_trust_is_primary}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current author has primary trust. |
 | `{{runtime_trust_is_trusted}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with a trusted contact. |
 | `{{runtime_trust_is_regular}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with a regular acquaintance. |
 | `{{runtime_trust_is_public}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is a public interaction. |

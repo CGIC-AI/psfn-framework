@@ -176,7 +176,7 @@ export function expectAttributedHistory(
 
 /**
  * Assert that the user turns in a one-on-one DM history are NOT group-attributed:
- * private DMs must keep raw partner speech without "Name (id):" prefixes.
+ * private DMs must keep raw Participant speech without "Name (id):" prefixes.
  */
 export function expectUnattributedHistory(
   messages: readonly HistoryMessageLike[],

@@ -228,7 +228,7 @@ function expectResolvedVisionPrompt(
   expect(blocks[0]?.text).toContain('Runtime note');
   expect(blocks[0]?.text).toContain('ground your reply in what is actually visible');
   if (expected.userText) {
-    expect(blocks[0]?.text).toContain(`User text: ${expected.userText}`);
+    expect(blocks[0]?.text).toContain(`Participant text: ${expected.userText}`);
   }
   expect(blocks[1]).toEqual({
     type: 'image',
@@ -248,7 +248,7 @@ function expectUnresolvedVisionPrompt(
   expect(text).toContain('Do not pretend you saw them');
   expect(text).toContain(expected.detailSubstring);
   if (expected.userText) {
-    expect(text).toContain(`User text: ${expected.userText}`);
+    expect(text).toContain(`Participant text: ${expected.userText}`);
   }
 }
 

@@ -76,16 +76,16 @@ provenance-tagged candidate to the Productivity Companion. It must not let that
 companion query the Pack's private state or use its connectors. This handoff is
 not part of the first implementation.
 
-### 2.3 One partner, not a user-management product
+### 2.3 One Partner, not an account-management product
 
-The Pack serves one designated partner identity. Durable Pack state must still
-carry the exact canonical partner contact identity so a routing or restoration
+The Pack serves one designated Partner identity. Durable Pack state must still
+carry the exact canonical Partner contact identity so a routing or restoration
 mistake cannot silently bind it to somebody else.
 
 The first implementation must not add organizations, workspaces, teams,
 tenant administration, billing, or generalized multi-user ownership.
 
-### 2.4 Human authority over inferred work
+### 2.4 Partner authority over inferred work
 
 An explicit instruction may create or change work directly. Passive or
 ambiguous inference may only create a Candidate.
@@ -464,7 +464,7 @@ File intake must:
 - respect configured namespaces rather than scanning the entire vault blindly;
 - distinguish personal notes, passive transcripts, research material, and
   Pack-authored projections;
-- never interpret a Pack projection as a fresh user-authored source.
+- never interpret a Pack projection as a fresh Partner-authored source.
 
 ### 7.5 Other sources
 

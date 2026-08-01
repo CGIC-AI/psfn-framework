@@ -84,7 +84,7 @@ export function buildAppraisalPromptPayload(input: {
   const promptRecentlyResolvedConcerns = normalized.recentlyResolvedConcerns.map((concern) => {
     const resolvedAtLabel = formatPromptTimestamp(concern.resolvedAt);
     // vw3w.2: render the captured emotional arc as prose (charter 8.6 — no score
-    // wall) so a resolved concern reads as lived experience. Present only when a
+    // wall) so a resolved concern reads as a modelled autobiographical arc. Present only when a
     // VAD was actually captured; a half-captured arc surfaces just its half.
     const emotionalArc = describeConcernEmotionalArc({
       ...(concern.formationVAD ? { formationVAD: concern.formationVAD } : {}),

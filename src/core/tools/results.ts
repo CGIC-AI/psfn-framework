@@ -85,7 +85,7 @@ const GATEWAY_PROVIDER_ERROR = -32003;
 export const INTERNAL_TOOL_FAILURE_NOTICE =
   '[System notice] This tool hit an internal runtime problem and failed safely. '
   + 'The underlying diagnostic was withheld because it is meant for operators, not for you to interpret. '
-  + 'You can tell your person the operation did not complete and ask your operator to inspect runtime '
+  + 'You can tell your Partner the operation did not complete and ask the Operator to inspect runtime '
   + 'diagnostics if it persists.';
 
 const SENSITIVE_QUERY_KEYS = new Set([

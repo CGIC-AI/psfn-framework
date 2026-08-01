@@ -55,7 +55,7 @@ const NOW = 1_700_000_000_000;
 // production strings drift — the prefix IS the safety property.
 const GOLDEN_SYSTEM_NOTE_PREFIX = '[System note] ';
 const GOLDEN_WHISPER_PREFIX =
-  '[Private runtime note to self; not user-visible and not sent by the user] ';
+  '[Private runtime note to self; not Participant-visible and not sent by a Participant] ';
 
 // The original failing payload: a scheduler heartbeat note, phrased like a
 // bare directive the companion could mistake for its own resolve.

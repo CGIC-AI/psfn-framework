@@ -35,9 +35,15 @@ PostgreSQL + JSONL/session files + owner-file roots
 ### Runtime terminology
 
 A **PSFN installation** may host one or more peer Companion Cores. A
-**Companion Core** is the authoritative mind of exactly one companion; the
-isolated OS process that runs it is an **agent process**. A peer companion has
+**Companion Core** owns the authoritative identity-and-continuity state of
+exactly one companion; the isolated OS process that runs it is an **agent
+process**. A peer companion has
 its own root identity and is not a shard, subagent, or satellite.
+
+This is architectural authority, not a consciousness claim. The runtime can
+observe behavior and persisted state, store companion-authored self-reports,
+and derive explicitly labelled models; none of those alone proves inner
+experience.
 
 The **Gateway** is the Core's privileged policy/credential edge. The
 **Satellite Hub** is an endpoint transport and relay service; a **satellite** is
@@ -193,7 +199,7 @@ model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
 - Rest/me-time configuration owns sleeptime entirely: heavy passes (sleep consolidation, arc weaving, dream meaning, orientation rewrite) run only from the rest-window scheduler task, never from turn cadence. The lightweight near-turn lane and the gated episode-synthesis lane cover daytime work.
-- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the user-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
+- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the Participant-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
 
 ## Persistence Topology
 

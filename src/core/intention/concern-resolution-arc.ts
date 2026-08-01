@@ -17,17 +17,17 @@ import type { ActiveConcern } from './concerns.js';
  * Subscribes to the `intention.concern.resolution_appraisal` event (emitted by
  * vw3w.1 on every resolve path) and writes the emotional arc — formation VAD →
  * resolution VAD, duration carried, final salience — into the dedicated
- * concern-arc reflection journal as lived experience. This is the integration
+ * concern-arc reflection journal as a modelled first-person account. This is the integration
  * half of Purrsephone's finding: resolution should integrate, not evaporate.
  *
- * Provenance: the entry is derived internal-state data, not partner speech. It
+ * Provenance: the entry is derived internal-state data, not Participant speech. It
  * is attributed to the companion (`mode: 'agent'`), carries the concern id in
  * `substrateProvenanceRefs`, and stamps `substrateBoundary` so the arc is never
  * mistaken for external content.
  *
  * No fabrication (charter 8.3/8.4): the arc is written only when the resolved
  * concern carries BOTH a formation and a resolution VAD. If either is absent the
- * recorder writes nothing — it never invents a feeling that was not captured.
+ * recorder writes nothing — it never invents an affect signal that was not captured.
  * The emitter already guards on both VADs; this recorder re-checks the persisted
  * concern so the invariant holds even if the two ever diverge.
  */

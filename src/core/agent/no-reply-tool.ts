@@ -98,7 +98,7 @@ export function createResponseControlTool(
       }
 
       // Fail closed: a paid deliverable produced this turn (at minimum a charged
-      // image generation) has not reached the user yet. Honoring no-reply here
+      // image generation) has not reached the Participant yet. Honoring no-reply here
       // would silently drop an artifact they already paid for. Reject the request
       // and require an explicit reply so the pending attachment rides out with it.
       const pendingPaidDeliverables = listPendingPaidDeliverables();
@@ -106,7 +106,7 @@ export function createResponseControlTool(
         return responseControlResult({
           ok: false,
           error:
-            'A paid attachment generated this turn is still pending delivery and has not been sent to the user. '
+            'A paid attachment generated this turn is still pending delivery and has not been sent to the Participant. '
             + 'Intentional no-reply is rejected so the paid artifact is not silently dropped. '
             + 'Send a reply this turn (even one short line) so the pending attachment is delivered with it. '
             + `Pending paid deliverables: ${describePendingPaidDeliverables(pendingPaidDeliverables)}.`,

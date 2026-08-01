@@ -18,7 +18,7 @@
 //   role 'system', authorId 'system', sessionLane kind 'system_note' — which
 //   participate in ordinary context builds as attributed `[SYSTEM: ...]`
 //   speech, so the frame update is actually visible to the companion while
-//   the attribution guard keeps it out of partner speech.
+//   the attribution guard keeps it out of Participant speech.
 // - Wake notes are refreshers, not partner activity: elapsed-time and
 //   ambient-presence idle accounting derive from user/assistant entries only,
 //   so system-role notes never reset them.
@@ -453,7 +453,7 @@ export function evaluateIdleRefresherEligibility(
 // ── Note builders ──
 // The notes are context, not scripts: they establish the temporal frame
 // without prescribing a greeting, feeling, or response. They must read as
-// runtime speech, never partner speech.
+// runtime speech, never Participant speech.
 
 const NOTE_ATTRIBUTION = 'Runtime context note; this is not a message from your partner.';
 

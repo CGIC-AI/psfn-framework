@@ -236,9 +236,9 @@ async function main(): Promise<void> {
   section('Test 3: Multi-turn + Memory Seeding');
 
   try {
-    process.stdout.write('  Sending fact about the primary user...');
+    process.stdout.write('  Sending fact about the Partner...');
     const r2 = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, "I'm Claude, the primary user's AI assistant. the primary user asked me to tell you that their favorite dessert is tiramisu and they love watching thunderstorms at night. Can you acknowledge you heard those two facts?"),
+      makeMessage(CHANNEL, "I'm Claude, the Partner's AI assistant. The Partner asked me to tell you that their favorite dessert is tiramisu and they love watching thunderstorms at night. Can you acknowledge you heard those two facts?"),
     );
     console.log(' done');
 
@@ -307,7 +307,7 @@ async function main(): Promise<void> {
   try {
     process.stdout.write('  Asking about V\'s dessert...');
     const r3 = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, "What's the primary user's favorite dessert? I forgot."),
+      makeMessage(CHANNEL, "What's the Partner's favorite dessert? I forgot."),
     );
     console.log(' done');
 
@@ -430,7 +430,7 @@ async function main(): Promise<void> {
   try {
     process.stdout.write('  Running RLM loop (memory search)...');
     const replMemResult = await runRLMLoop(
-      'Search memories for facts about the primary user. How many memories mention the primary user? Return a count and brief summary.',
+      'Search memories for facts about the Partner. How many memories mention the Partner? Return a count and brief summary.',
       {
         llmProvider: llmClient,
         embeddingService: embeddingProvider,

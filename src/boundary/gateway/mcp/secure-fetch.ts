@@ -46,7 +46,7 @@ function pinnedLookup(address: string, family: number) {
     callback: (...args: unknown[]) => void,
   ): void => {
     const normalizedFamily = family === 6 || isIP(address) === 6 ? 6 : 4;
-    if (lookupOptions?.all) {
+    if (lookupOptions.all) {
       callback(null, [{ address, family: normalizedFamily }]);
       return;
     }

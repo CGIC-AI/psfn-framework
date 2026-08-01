@@ -242,7 +242,9 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
   one opaque, expiring, single-use permit for the exact provider-emitted MCP
   tool call. Missing lineage, autonomous work specs, and shard-originated
   generations receive no call permit. The gateway consumes the permit before
-  capability, trust, approval, or broker execution.
+  capability, trust, approval, or broker execution. Screened discovery metadata
+  does not raise the turn sensitivity; remote call results and other admitted
+  tool outputs tighten subsequent calls to confidential.
 - Every dynamic tool result is size-bounded and CogSec-screened on every call,
   independent of trust and static-cache state. Only the screened projection may
   cross the broker boundary.

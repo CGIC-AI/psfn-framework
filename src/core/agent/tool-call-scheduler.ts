@@ -94,8 +94,11 @@ export interface ToolCallSchedulerOptions {
    * tool result closed: unscreened content never enters the turn.
    */
   toolResultScreener?: ToolResultIntakeScreener;
-  /** Tighten turn disclosure state before this admitted result reaches the next model step. */
-  onToolResultAdmitted?: () => void;
+  /** Update turn disclosure state before this admitted result reaches the next model step. */
+  onToolResultAdmitted?: (input: {
+    toolName: string;
+    arguments: unknown;
+  }) => void;
 }
 
 export interface ToolCallExecutionGuard {
@@ -683,7 +686,12 @@ async function executeSingleToolCall(
     // side-effecting screen (double quarantine hold).
     ...(intakeScreening ? { [TOOL_RESULT_INTAKE_SCREENING_KEY]: intakeScreening } : {}),
   }, invocationAudit);
-  if (!correction) options.onToolResultAdmitted?.();
+  if (!correction) {
+    options.onToolResultAdmitted?.({
+      toolName: toolCall.name,
+      arguments: toolCall.arguments,
+    });
+  }
   context.stream.push({ type: 'message_start', message: toolResultMessage });
   context.stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;

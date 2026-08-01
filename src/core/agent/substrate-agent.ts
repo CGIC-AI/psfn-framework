@@ -41,6 +41,7 @@ import {
   type CapsuleCustodyService,
   type DisclosureLineage,
 } from '../cogsec/disclosure/index.js';
+import { applyAdmittedToolResultDisclosureFloor } from '../cogsec/disclosure/mcp-turn-context.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
@@ -729,18 +730,14 @@ export class SubstrateAgent {
           ...(screened.markingPlan ? { markingPlan: screened.markingPlan } : {}),
         };
       },
-      onToolResultAdmitted: () => {
-        const lineage = this.currentTurnDisclosureLineage;
-        if (lineage && lineage.effectiveSensitivity !== 'confidential') {
-          this.currentTurnDisclosureLineage = {
-            ...lineage,
-            // Disclosure generation assigns every admitted tool result the
-            // most restrictive sensitivity floor. Tighten immediately so a
-            // later MCP call in the same model loop cannot reuse pre-tool data
-            // sensitivity.
-            effectiveSensitivity: 'confidential',
-          };
-        }
+      onToolResultAdmitted: (input) => {
+        // Discovery/release metadata preserves the admitted context's
+        // sensitivity; remote call results and other tool outputs retain the
+        // disclosure generation's confidential result floor.
+        this.currentTurnDisclosureLineage = applyAdmittedToolResultDisclosureFloor(
+          this.currentTurnDisclosureLineage,
+          input,
+        );
       },
       onTelemetry: (eventName, payload) => {
         this.turnSupportRuntime.emitTelemetry(eventName, {

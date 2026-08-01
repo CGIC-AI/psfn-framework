@@ -195,8 +195,10 @@ and is consumed once. The trusted turn runtime derives sensitivity from the
 sources already admitted into that generation; the agent-side gateway client
 carries it only on the provider request, and the gateway binds it into the
 returned permit before the MCP action exists. `mcp.execute` cannot choose or
-lower it. A missing lineage denies calls, any admitted tool output immediately
-tightens the next model step to confidential, and autonomous work-spec or
+lower it. A missing lineage denies calls. Screened MCP catalog/search/inspect
+metadata preserves the existing sensitivity so progressive discovery remains
+usable; remote call results and all other admitted tool outputs immediately
+tighten the next model step to confidential. Autonomous work-spec or
 shard-originated generations receive no MCP permit.
 
 All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized

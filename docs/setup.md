@@ -375,7 +375,10 @@ turn runtime from admitted session, memory, wiki, and tool-result sources and
 is bound by the gateway into the exact single-use invocation permit. A public
 turn can therefore use a public-only game or calendar tool, while a turn that
 has admitted confidential context cannot silently downgrade itself to do so.
-Missing lineage and autonomous/shard model runs receive no MCP call permit.
+Screened search and inspection metadata preserves that classification; a
+remote call result or any other admitted tool output tightens subsequent calls
+to confidential. Missing lineage and autonomous/shard model runs receive no
+MCP call permit.
 
 Tool authorization is also bound to the exact CogSec-screened definition.
 Start a new tool entry without `metadataSha256`, run a lazy MCP search, and copy

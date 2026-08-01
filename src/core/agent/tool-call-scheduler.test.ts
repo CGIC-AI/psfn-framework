@@ -1597,6 +1597,9 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
       { stream: { push: () => {} } },
       { maxParallelToolCalls: 1, onToolResultAdmitted },
     );
-    expect(onToolResultAdmitted).toHaveBeenCalledOnce();
+    expect(onToolResultAdmitted).toHaveBeenCalledWith({
+      toolName: 'fs',
+      arguments: {},
+    });
   });
 });

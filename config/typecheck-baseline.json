@@ -3,7 +3,7 @@
   "typescriptVersion": "5.9.3",
   "project": "tsconfig.json",
   "aggregation": "path-and-code-count",
-  "totalErrors": 225,
+  "totalErrors": 224,
   "filesWithErrors": 89,
   "errors": [
     {"path":"src/app/agent/companion-presence-wiring.ts","code":"TS2739","count":1},
@@ -66,7 +66,7 @@
     {"path":"src/core/contacts/postgres-adapter/store.ts","code":"TS2420","count":1},
     {"path":"src/core/icp/initiation-source-runtime.ts","code":"TS18047","count":12},
     {"path":"src/core/icp/initiation-source-runtime.ts","code":"TS2345","count":3},
-    {"path":"src/core/intention/concern-candidates.ts","code":"TS2322","count":2},
+    {"path":"src/core/intention/concern-candidates.ts","code":"TS2322","count":1},
     {"path":"src/core/session/continuity-redaction.ts","code":"TS2345","count":1},
     {"path":"src/core/session/group-chat-harness/fixtures.ts","code":"TS2353","count":1},
     {"path":"src/core/tools/analysis-workbench/loop.ts","code":"TS2322","count":1},

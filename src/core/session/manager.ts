@@ -820,7 +820,7 @@ export class SessionManager implements SessionManagerTypeSurface {
     const continuityKey = continuityUserId ?? authorId;
 
     // Authorship integrity guard (charter laws 17/19): internal-origin
-    // messages must never persist as partner speech. The read-time
+    // messages must never persist as Participant speech. The read-time
     // normalizer already classifies these signatures as system; storing
     // them as user lets a future consumer or a missed normalization path
     // present them as the partner talking inside her head.

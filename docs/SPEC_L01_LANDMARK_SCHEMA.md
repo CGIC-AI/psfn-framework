@@ -149,7 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_contact_emotional_samples_contact_time
 
 - `episode_json` denormalized contract mirror stays (schema_version'd; supports §6.23 rebuildability).
 - Episode status lifecycle, lineage relations, watermark machinery: unchanged.
-- L0 JSONL remains canonical (Law 2); nothing in this spec makes Postgres canonical for lived history.
+- L0 JSONL remains canonical (Law 2); nothing in this spec makes Postgres canonical for autobiographical history.
 - No hash-chaining is introduced; the integrity model remains append-only journals + audit tables. (If cryptographic chaining is ever wanted, it is a separate charter-level decision.)
 
 ## 4. Migration notes (ordering is the safety argument)

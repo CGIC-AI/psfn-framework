@@ -115,8 +115,8 @@ function formatDeliverySelectionContract(imageCount: number): string {
       ? 'This image is a pending chat attachment.'
       : 'These images are pending chat attachments.',
     singular
-      ? 'Send a reply (even one short line) this turn so a generated image reaches the user;'
-      : 'Send a reply (even one short line) this turn so generated images reach the user;',
+      ? 'Send a reply (even one short line) this turn so a generated image reaches the Participant;'
+      : 'Send a reply (even one short line) this turn so generated images reach the Participant;',
     singular
       ? 'if you end the turn with no reply, this generated image will NOT be delivered.'
       : 'if you end the turn with no reply, these generated images will NOT be delivered.',
@@ -238,7 +238,7 @@ function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): st
       'Current turn already includes live image attachment bytes.',
       `The URL passed to ${GENERATE_IMAGE_TOOL_NAME} action="analyze" does not match a current-turn attachment and may be stale or refer to a different image.`,
       'Do not use a mismatched prior-turn URL for this turn.',
-      'Inspect the current attached image already in context, or ask the user to resend or paste the specific URL if they want a different image checked.',
+      'Inspect the current attached image already in context, or ask the Participant to resend or paste the specific URL if they want a different image checked.',
     ].join(' ');
   }
 
@@ -442,7 +442,7 @@ function chargeImageGeneration(
     },
   });
   // Fal is a paid external surface: a successful generation always incurred real
-  // spend and produced a user-facing artifact. Register it as an undelivered
+  // spend and produced a Participant-facing artifact. Register it as an undelivered
   // paid deliverable so the turn cannot silently end in no-reply and drop it.
   const generationId = resolveGenerationId(result);
   notePendingPaidDeliverable({
@@ -518,7 +518,7 @@ function contentPolicyBlockedResult<TDetails extends { isError?: boolean }>(
     fallbackBlocked
       ? 'A safer edit fallback was attempted and was also blocked.'
       : 'The provider rejected this image request.',
-    'Do not retry the same prompt or minor wording variants in this turn; stop tool attempts, tell the user the provider blocked the image request, and ask for a safer non-explicit direction.',
+    'Do not retry the same prompt or minor wording variants in this turn; stop tool attempts, tell the Participant the provider blocked the image request, and ask for a safer non-explicit direction.',
     `Provider error: ${toErrorMessage(error)}`,
     ...(fallbackBlocked ? [`Fallback error: ${toErrorMessage(options.fallbackError)}`] : []),
   ].join(' ');

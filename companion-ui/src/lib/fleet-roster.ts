@@ -22,7 +22,7 @@ const MAX_APPROVALS = 1024;
 const AVATAR_REF_SEGMENT = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 /**
- * One companion the signed-in human may reach. `websocketPath` is the single
+ * One companion the signed-in Partner may reach. `websocketPath` is the single
  * canonical stream URL for this companion; the active companion is expressed
  * ONLY by which path the app opens (no client-side identity field). Source of
  * truth is the server roster — the app never invents this list.

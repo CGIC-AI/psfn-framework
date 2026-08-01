@@ -650,7 +650,7 @@ function buildPublicationStateNote(): string {
  * Fail-closed (charter / bible §20.4): an unresolvable contact/room, or a
  * projection collapse (nothing eligible for the outward destination), degrades
  * to a content-free private/self note — never a wrong-destination append. The
- * note is always an ATTRIBUTED SYSTEM note (never partner speech, hard
+ * note is always an ATTRIBUTED SYSTEM note (never Participant speech, hard
  * invariant, prior misattribution incident) and is non-initiating (a passive
  * context note; it surfaces only when a human next replies, never pushed).
  */

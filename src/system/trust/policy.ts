@@ -650,7 +650,7 @@ export function resolveChannelResponseStyle(
 
 export function getResponseStylePromptGuidance(style: ResponseStyle): string {
   if (style === 'concise') {
-    return 'Prefer concise responses: answer directly, keep wording tight, and expand only when the user asks for more detail.';
+    return 'Prefer concise responses: answer directly, keep wording tight, and expand only when the Participant asks for more detail.';
   }
   return 'Prefer expressive responses: keep your voice warm and vivid, and add personality-rich detail when it helps clarity.';
 }

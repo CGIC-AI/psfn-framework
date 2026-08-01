@@ -1,7 +1,15 @@
 #!/usr/bin/env node
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+
+import {
+  isTestSourceFile,
+  lineInfoForIndex,
+  listTrackedFiles,
+  readTextEntriesFromFiles,
+  SOURCE_TEXT_EXTENSIONS,
+  toPosixPath,
+} from './text-scan-utils.mjs';
 
 const SELF_PATH = 'scripts/identity-literal-scan.mjs';
 const DEFAULT_ALLOWLIST_PATH = 'config/identity-literal-scan-allowlist.json';
@@ -17,19 +25,6 @@ const EXCLUDED_PATH_PREFIXES = [
   'node_modules/',
   'admin-ui/node_modules/',
 ];
-
-const TEXT_EXTENSIONS = new Set([
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.svelte',
-  '.html',
-  '.css',
-  '.md',
-]);
 
 export const DEFAULT_PATTERNS = [
   { name: 'identity-proper-name', regex: /\bPSFN\b/g },
@@ -62,55 +57,22 @@ export const DEFAULT_PATTERNS = [
  */
 
 /**
- * @param {string} maybePath
- * @returns {string}
- */
-function toPosixRelativePath(maybePath) {
-  return maybePath.split(path.sep).join('/');
-}
-
-/**
- * @param {string} text
- * @param {number} idx
- * @returns {{ line: number; column: number; lineText: string; }}
- */
-function lineInfoForIndex(text, idx) {
-  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
-  const lineEnd = text.indexOf('\n', idx);
-  const boundedLineEnd = lineEnd === -1 ? text.length : lineEnd;
-  const lineText = text.slice(lineStart, boundedLineEnd);
-
-  let line = 1;
-  for (let i = 0; i < lineStart; i += 1) {
-    if (text.charCodeAt(i) === 10) line += 1;
-  }
-
-  return {
-    line,
-    column: idx - lineStart + 1,
-    lineText,
-  };
-}
-
-/**
  * @param {string} file
  * @param {string[]} roots
  * @returns {boolean}
  */
 export function shouldScanFile(file, roots = DEFAULT_SCAN_ROOTS) {
-  const normalized = toPosixRelativePath(file);
+  const normalized = toPosixPath(file);
   if (normalized === SELF_PATH) return false;
   if (normalized.endsWith('.d.ts')) return false;
-  if (normalized.includes('/__tests__/')) return false;
-  if (/\.test\.[cm]?[jt]sx?$/i.test(normalized)) return false;
-  if (/\.spec\.[cm]?[jt]sx?$/i.test(normalized)) return false;
+  if (isTestSourceFile(normalized)) return false;
 
   for (const prefix of EXCLUDED_PATH_PREFIXES) {
     if (normalized.startsWith(prefix)) return false;
   }
 
   const ext = path.extname(normalized).toLowerCase();
-  if (!TEXT_EXTENSIONS.has(ext)) return false;
+  if (!SOURCE_TEXT_EXTENSIONS.has(ext)) return false;
 
   return roots.some((root) => normalized === root || normalized.startsWith(`${root}/`));
 }
@@ -197,7 +159,7 @@ export function loadAllowlist(allowlistPath) {
   return parsed.entries
     .filter((entry) => entry && typeof entry === 'object')
     .map((entry) => ({
-      path: typeof entry.path === 'string' ? toPosixRelativePath(entry.path.trim()) : '',
+      path: typeof entry.path === 'string' ? toPosixPath(entry.path.trim()) : '',
       contains: typeof entry.contains === 'string' ? entry.contains : '',
       reason: typeof entry.reason === 'string' ? entry.reason : '',
       ...(typeof entry.pattern === 'string' && entry.pattern.length > 0 ? { pattern: entry.pattern } : {}),
@@ -212,13 +174,11 @@ export function loadAllowlist(allowlistPath) {
  * @returns {Array<{ path: string; text: string }>}
  */
 export function readScanEntriesFromFiles(trackedFiles, roots = DEFAULT_SCAN_ROOTS, options = {}) {
-  return trackedFiles
-    .filter((file) => shouldScanFile(file, roots))
-    .filter((file) => !(options.skipMissing === true && !existsSync(file)))
-    .map((file) => ({
-      path: file,
-      text: readFileSync(file, 'utf8'),
-    }));
+  return readTextEntriesFromFiles(
+    trackedFiles,
+    file => shouldScanFile(file, roots),
+    options,
+  );
 }
 
 /**
@@ -232,10 +192,7 @@ export function readScanEntriesFromFiles(trackedFiles, roots = DEFAULT_SCAN_ROOT
  * }}
  */
 export function scanRepositoryIdentityLiterals(options = {}) {
-  const trackedFiles = execSync('git ls-files -z', { encoding: 'utf8' })
-    .split('\0')
-    .filter(Boolean)
-    .map((file) => toPosixRelativePath(file));
+  const trackedFiles = listTrackedFiles();
   const roots = options.roots ?? DEFAULT_SCAN_ROOTS;
   const allowlistPath = options.allowlistPath ?? DEFAULT_ALLOWLIST_PATH;
   const allowlist = loadAllowlist(allowlistPath);

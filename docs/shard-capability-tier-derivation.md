@@ -113,7 +113,7 @@ uniformly across the mask:
 
 | Token | Request-scoped authority | TTL authority | Disposition |
 | --- | --- | --- | --- |
-| `world.control` | Eligible only after explicit human approval, bound to one parent, shard instance, request, normalized action, and effector scope. | Disabled by default. It may be offered only when a separately approved canonical JSON-owned server policy defines the eligible actions, maximum TTL, revocation, and recovery rules. Browser state, environment values, and shard input are never policy authority. | Delegable only through the exceptional-action path; it never enters the standing custom token set. |
+| `world.control` | Eligible only after explicit Operator approval, bound to one parent, shard instance, request, normalized action, and effector scope. | Disabled by default. It may be offered only when a separately approved canonical JSON-owned server policy defines the eligible actions, maximum TTL, revocation, and recovery rules. Browser state, environment values, and shard input are never policy authority. | Delegable only through the exceptional-action path; it never enters the standing custom token set. |
 | `lifecycle.restart` | Never. | Never. | Nondelegable: lifecycle remains with the parent, shard manager, gateway, and operator. |
 | `lifecycle.rebuild` | Never. | Never. | Nondelegable: rebuild remains an operator/deployment action. |
 | `identity.write.base` | Never. | Never. | Nondelegable: shards cannot temporarily become competing authors of canonical base identity. |

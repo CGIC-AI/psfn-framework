@@ -4,7 +4,7 @@
 // companion's own surface for the expressive-publication edit loop:
 //
 //   1. `submit`  — the companion authors an exact release candidate and proposes
-//      it for human approval. The runtime derives ALL disclosure metadata
+//      it for Operator approval. The runtime derives ALL disclosure metadata
 //      (effective sensitivity, provenance, subject contacts) from the live
 //      per-turn disclosure lineage (bible §9.2); the model supplies ONLY the
 //      content it authored (body + media refs) and its stated reason. Any
@@ -12,7 +12,7 @@
 //      fail-closed — that metadata is runtime authority, never self-asserted
 //      (bible §6.2, adjudication S2.4).
 //   2. `status`  — the companion reads the approval state of her publication
-//      candidates. The human raises specific concerns about WHAT is shared in
+//      candidates. The Operator raises specific concerns about WHAT is shared in
 //      conversation (never editing the prose); a denied candidate is the signal
 //      to revise.
 //   3. `revise`  — the companion edits herself and resubmits. A revision is a
@@ -276,7 +276,7 @@ function proposeCandidate(
     content: { body: input.body, mediaRefs: input.mediaRefs },
     // Expressive private publication (bible §10.10): the destination is the
     // autonomous publication surface, which is id-free — the companion supplies
-    // no audience scoping. Human approval is how strict auto-share filtering is
+    // no audience scoping. Operator approval is how strict auto-share filtering is
     // legitimately bypassed with provenance in view.
     proposedDestinations: [{ kind: 'publication' }],
     // Runtime authority — derived from the folded lineage, never model-asserted.

@@ -16,7 +16,7 @@ export interface OperationalTrace {
 
 export function deriveOperationalTraces(stream: HubStreamState): OperationalTrace[] {
   const companionName = normalizeParticipantName(stream.session?.identity?.companion?.name, 'Companion');
-  const personName = normalizeParticipantName(stream.session?.identity?.user?.name, 'Person');
+  const personName = normalizeParticipantName(stream.session?.identity?.user?.name, 'Partner');
   return stream.events.map((event) => eventToTrace(event, { companionName, personName }));
 }
 

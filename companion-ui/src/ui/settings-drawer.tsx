@@ -75,7 +75,7 @@ export function SettingsDrawer({
       <div className="drawer-content">
         <section className="settings-section" aria-label="Account and device authority">
           <h2>Account</h2>
-          <ReadOnlyAuthority label="Human" value={access.humanLabel} detail={access.humanDetail} />
+          <ReadOnlyAuthority label="Partner" value={access.humanLabel} detail={access.humanDetail} />
           <ReadOnlyAuthority
             label="Device"
             value={attached?.deviceName ?? 'Not attached'}
@@ -86,7 +86,7 @@ export function SettingsDrawer({
             value={attached?.place?.name ?? 'Not available'}
             detail={attached?.place ? 'Server-owned enrollment place' : 'No current place authority'}
           />
-          <p>Human login and enrolled device/place authority remain separate. Connecting or signing in never claims primary embodiment.</p>
+          <p>Partner login and enrolled device/place authority remain separate. Connecting or signing in never claims primary embodiment.</p>
           <div className="drawer-actions">
             {access.state === 'signed_out' && (
               <button className="primary-action" type="button" onClick={onLogin}>
@@ -97,7 +97,7 @@ export function SettingsDrawer({
               <button type="button" onClick={onGuest}><Plug aria-hidden /> Continue as guest</button>
             )}
             {access.state === 'signed_in' && (
-              <button type="button" onClick={onSwitchUser}><UserRoundCog aria-hidden /> Switch user</button>
+              <button type="button" onClick={onSwitchUser}><UserRoundCog aria-hidden /> Switch Partner</button>
             )}
             {(access.state === 'signed_in' || access.state === 'guest') && (
               <button type="button" onClick={onLogout}><LogOut aria-hidden /> Log out</button>

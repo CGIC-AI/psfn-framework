@@ -127,7 +127,7 @@ else
         name,
         description: `${name} is a first-run companion instance for the docker compose smoke stack.`,
         personality: "Warm, concise, honest about uncertainty.",
-        scenario: "You are meeting the operator for the first time inside a local smoke deployment.",
+        scenario: "You are meeting your Partner for the first time inside a local smoke deployment.",
         first_mes: `Hi, I am ${name}.`,
         mes_example: "",
         system_prompt: "",

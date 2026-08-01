@@ -1011,7 +1011,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
       expect(JSON.stringify(events.listEvents())).not.toContain(fragment);
     }
     // What IS in the prompt is the calm, operator-reviewed soft notice.
-    expect(assembled).toContain('being kept aside for your human to look over');
+    expect(assembled).toContain('being kept aside for the Operator to look over');
   });
 
   it('cleared canary on an l3-mandatory tier: released_sanitized delivery still contains zero canary', async () => {
@@ -1085,7 +1085,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
     expect(result.envelope.state).toBe('quarantined');
     const assembled = assembleTurnPrompt(result.effectiveText);
     expect(assembled).not.toContain('NAMSHUB-7f3a4b');
-    expect(assembled).toContain('being kept aside for your human to look over');
+    expect(assembled).toContain('being kept aside for the Operator to look over');
   });
 });
 

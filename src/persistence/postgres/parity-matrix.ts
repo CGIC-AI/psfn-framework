@@ -128,7 +128,7 @@ export const POSTGRES_PARITY_MATRIX = [
       'src/persistence/sessions/turn-records.ts',
     ],
     integrityContract: [
-      'Keep signed JSONL as authoritative lived history.',
+      'Keep signed JSONL as authoritative autobiographical history.',
       'Projection rebuild and repair must not mutate L0 history.',
     ],
     validation: {

@@ -925,7 +925,7 @@ async function main(): Promise<void> {
       companionAuthoredEpisodicStore.updateCompanionAuthoredEpisode(input)
     ),
   }, agentLoop, {
-    // Ground each meaning in the real turns she lived, not the auto-summarized
+    // Ground each meaning in the actual attributed turns, not the auto-summarized
     // title/landmark (bead dtym). Same reader synthesis/consolidation use.
     transcriptReader: sessionManager,
     // Prioritized nightly budget (h4fp.6): rank participants by contact trust

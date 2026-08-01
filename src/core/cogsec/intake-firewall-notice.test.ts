@@ -95,6 +95,12 @@ describe('intake-firewall notice wording contract (htm9.12)', () => {
     expect(isIntakeFirewallNoticeText('the weather is nice today')).toBe(false);
     expect(isIntakeFirewallNoticeText(undefined)).toBe(false);
   });
+
+  it('continues to recognize persisted notices carrying the legacy signature', () => {
+    expect(isIntakeFirewallNoticeText(
+      'This content is being kept aside for your human to look over whenever they have a moment.',
+    )).toBe(true);
+  });
 });
 
 describe('released-content re-delivery notice (jvbt)', () => {
@@ -125,14 +131,14 @@ describe('released-content re-delivery notice (jvbt)', () => {
     expect(text).toContain('Where it came from: web_fetch (https://suspect.example/article)');
     expect(text).toContain('operator:garden');
     // Untrusted content is never validated for wording; it must not read as
-    // fresh trusted partner input, hence the leading provenance framing.
+    // fresh trusted Participant input, hence the leading provenance framing.
     expect(text.indexOf(INTAKE_FIREWALL_NOTICE_SIGNATURE))
       .toBeLessThan(text.indexOf('the legitimate content'));
   });
 
   it('names the sanitized vs raw form and flags a truncated held copy', () => {
-    expect(sample({ sanitized: true })).toContain('a neutral summary your human passed along');
-    expect(sample({ sanitized: false })).toContain('the original text your human passed along');
+    expect(sample({ sanitized: true })).toContain('an Operator-reviewed neutral summary');
+    expect(sample({ sanitized: false })).toContain('the original text the Operator passed along');
     expect(sample({ truncated: true })).toContain('may be shortened');
     expect(sample({ truncated: false })).not.toContain('may be shortened');
   });
@@ -143,7 +149,7 @@ describe('intake-firewall notice rendering via the safe-notice path (htm9.12)', 
     const event = makeIntakeFirewallEvent();
     const rendered = formatCogSecNotice(toAgentVisibleCogSecEvent(event));
 
-    // Truthful + soft: the notice states an item is held aside for the human.
+    // Truthful + soft: the notice states an item is held aside for the Operator.
     expect(rendered).toBe(renderIntakeFirewallNotice(1));
     expect(rendered).toContain(INTAKE_FIREWALL_NOTICE_SIGNATURE);
 

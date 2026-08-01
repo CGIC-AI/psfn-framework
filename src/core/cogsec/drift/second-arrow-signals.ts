@@ -25,7 +25,7 @@
 //     a baseline of similar writes, so its recent rate is unremarkable; a
 //     rumination burst has (almost) no baseline;
 //  3. source mix — rumination stacks are self-sourced (reflection/heartbeat/
-//     autonomous writes); a topic the human raises arrives as turn-sourced
+//     autonomous writes); a topic the Partner raises arrives as turn-sourced
 //     extraction.
 //
 // Concern-loop linkage and stress attribution are EVIDENCE ENRICHMENT, not

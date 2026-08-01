@@ -343,15 +343,15 @@ function buildVisionUnavailablePromptContent(input: {
   const semanticText = input.message.content.trim();
   const note = [
     '[Runtime note]',
-    `The current user turn included ${imageCount || 'one or more'} image attachment(s), but runtime image inspection failed for this turn.`,
+    `The current Participant turn included ${imageCount || 'one or more'} image attachment(s), but runtime image inspection failed for this turn.`,
     'You cannot reliably see the current image contents.',
     'Do not pretend you saw them.',
-    'Reply to the user from the text that is available, acknowledge that image inspection failed, and ask them to resend the image if visual details matter.',
+    'Reply to the Participant from the text that is available, acknowledge that image inspection failed, and ask them to resend the image if visual details matter.',
     'Vision pipeline status: unavailable after runtime inspection attempts.',
   ].join(' ');
 
   return semanticText.length > 0
-    ? `${note}\n\nUser text: ${semanticText}`
+    ? `${note}\n\nParticipant text: ${semanticText}`
     : note;
 }
 

@@ -284,7 +284,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       systemPrompt: [
         'You are the companion\'s vision review path.',
         'Inspect the attached image content directly.',
-        'Answer concretely, keep it concise, and do not tell the user to check the image for you.',
+        'Answer concretely, keep it concise, and do not tell the Participant to check the image for you.',
       ].join(' '),
       messages: [{
         role: 'user',

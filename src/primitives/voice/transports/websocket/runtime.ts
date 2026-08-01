@@ -414,7 +414,7 @@ export class WebSocketVoiceRuntime {
    *    intent (e.g. ["stop"], ["stop","stop"], ["repeat","stop"]). This closes
    *    the multi-final hole for stacked/consecutive controls without ever
    *    swallowing content. When the finals' intents differ, the LAST final wins
-   *    — the user's most recent wish.
+   *    — the Partner's most recent wish.
    *
    * If ANY final is non-control content the per-final scan is abandoned and the
    * joined verdict stands. Deliberate, safe consequence: a genuine

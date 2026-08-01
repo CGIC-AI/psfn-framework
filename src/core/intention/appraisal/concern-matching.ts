@@ -65,7 +65,7 @@ export function toRecentlyResolvedConcernSnapshot(
       ? { summary: concern.resolutionOutcome }
       : { summary: 'Resolved recently.' }),
     // vw3w.2: carry the emotional arc into the prompt so resolution reads as
-    // lived experience instead of evaporating. Each half is included only when
+    // a modelled autobiographical arc instead of evaporating. Each half is included only when
     // it was captured (no fabrication, charter 8.4).
     ...(concern.formationVAD ? { formationVAD: concern.formationVAD } : {}),
     ...(concern.resolutionVAD ? { resolutionVAD: concern.resolutionVAD } : {}),

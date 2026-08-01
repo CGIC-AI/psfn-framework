@@ -11,7 +11,7 @@ import type { ShardDirectoryEntry } from '../../../src/shared/contracts/shard-di
 
 /**
  * Companion selector page (psfn-framework-hbxz). A visual grid of the signed-in
- * human's companions with their avatar faces; the active companion is the one
+ * Partner's companions with their avatar faces; the active companion is the one
  * the app is talking to. Approval badges surface fleet-wide requests (e.g.
  * "companion X needs web access") regardless of which companion is active, and
  * deciding one routes through the existing fleet approval path.

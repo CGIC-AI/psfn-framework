@@ -111,7 +111,7 @@ const SHARD_DENIAL_MASK_SET: ReadonlySet<CapabilityToken> = new Set(SHARD_CAPABI
  * Explicit per-token temporary-grant eligibility for every masked token.
  *
  * - `requestScoped: 'human-approval-required'` — eligible only through the
- *   exceptional-action path after explicit human approval, bound to one
+ *   exceptional-action path after explicit Operator approval, bound to one
  *   parent, shard instance, request, normalized action, and effector scope.
  * - `ttl: 'policy-gated-disabled'` — TTL authority is disabled by default and
  *   may be offered only once a separately approved canonical JSON-owned server

@@ -446,7 +446,7 @@ export interface CapsuleCustodyService {
    * Enqueue a proposed share onto the existing approval queue. The operator's
    * approval runs the terminal callback that mints the capsule server-side and
    * persists it — there is no separate approval store. Rejects an operator
-   * attempt to edit the proposed content (the human raises concerns; the
+   * attempt to edit the proposed content (the Operator raises concerns; the
    * companion re-submits — bible §10.10 edit-loop).
    */
   proposeShareCandidate(input: ProposeShareCandidateInput): ConfirmationQueueEntry;

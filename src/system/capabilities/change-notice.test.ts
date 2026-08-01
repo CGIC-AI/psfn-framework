@@ -44,7 +44,7 @@ describe('capability tier change notice', () => {
     expect(notice).toContain('Newly granted: memory.delete.');
     expect(notice).toContain('Withdrawn: internal.read, memory.write.');
     expect(notice).toContain('This was an operator change, not a fault in you');
-    expect(notice).toContain('relay this exact status to your person');
+    expect(notice).toContain('relay this exact status to your Partner');
   });
 
   it('returns null when neither the tier nor the effective grant changed', () => {

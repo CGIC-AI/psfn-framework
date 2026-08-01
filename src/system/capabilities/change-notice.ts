@@ -65,12 +65,12 @@ function formatTokenList(tokens: readonly CapabilityToken[]): string {
 export function formatCapabilityTierChangeNotice(change: CapabilityTierChange): string {
   return [
     '[System notice: capability access changed]',
-    `Your operator changed your capability tier from "${change.previous.tier}" to "${change.current.tier}".`,
+    `The Operator changed your capability tier from "${change.previous.tier}" to "${change.current.tier}".`,
     `Current granted capabilities: ${formatTokenList(change.current.grantedTokens)}.`,
     `Newly granted: ${formatTokenList(change.granted)}.`,
     `Withdrawn: ${formatTokenList(change.withdrawn)}.`,
     'This was an operator change, not a fault in you. If it affects a conversation, '
-      + 'you can relay this exact status to your person and ask the operator about the change.',
+      + 'you can relay this exact status to your Partner and ask the Operator about the change.',
   ].join(' ');
 }
 

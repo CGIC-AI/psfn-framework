@@ -10,7 +10,7 @@ export type SpriteManifestStatus =
  * Load the sprite manifest once at mount. On any failure the status resolves to
  * `fallback` (never throws) so the sprite renderer keeps the CSS face —
  * fail-visible, not blank. Best-effort: a missing manifest is a normal state,
- * not an error the user must see.
+ * not an error the Partner must see.
  */
 export function useSpriteManifest(enabled = true): SpriteManifestStatus {
   const [status, setStatus] = useState<SpriteManifestStatus>({ state: 'loading' });

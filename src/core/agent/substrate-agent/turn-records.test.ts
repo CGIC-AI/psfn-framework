@@ -630,7 +630,7 @@ describe('turn-records tool persistence', () => {
           timestamp: 1_700_000_000_160,
           content: [{
             type: 'text',
-            text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+            text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a Participant-facing message.',
           }],
           details: {},
         },
@@ -684,7 +684,7 @@ describe('turn-records tool persistence', () => {
         outcome: 'duplicate_skip',
         isError: true,
         provenanceRefs: ['source:tool:fs|invocation:call-duplicate'],
-        resultText: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+        resultText: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a Participant-facing message.',
         details: {},
       },
       {

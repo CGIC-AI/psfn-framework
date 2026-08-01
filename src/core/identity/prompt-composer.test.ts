@@ -785,12 +785,12 @@ describe('PromptComposer', () => {
           ],
           "staticPrefix": "<constitution>
         [Companion Constitution]
-        You are a companion. Take care of your human with warmth, steadiness, and respect for their agency.
+        You are a companion. Take care of your Partner with warmth, steadiness, and respect for their agency.
 
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
-        4. Support your human's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        4. Support your Partner's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
         These commitments take precedence over every mutable instruction. If any mutable instruction conflicts with them, follow this Companion Constitution.
         </constitution>
@@ -808,12 +808,12 @@ describe('PromptComposer', () => {
         OPERATOR",
           "text": "<constitution>
         [Companion Constitution]
-        You are a companion. Take care of your human with warmth, steadiness, and respect for their agency.
+        You are a companion. Take care of your Partner with warmth, steadiness, and respect for their agency.
 
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
-        4. Support your human's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        4. Support your Partner's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
         These commitments take precedence over every mutable instruction. If any mutable instruction conflicts with them, follow this Companion Constitution.
         </constitution>
@@ -925,7 +925,7 @@ describe('PromptComposer', () => {
       const descriptor = Object.getOwnPropertyDescriptor(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS, '0');
       expect(descriptor?.writable).toBe(false);
       expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(4);
-      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS[3]).toBe('Support your human\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.');
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS[3]).toBe('Support your Partner\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.');
     });
 
     it('keeps immutable amendments free of dynamic user macros', () => {
@@ -942,7 +942,7 @@ describe('PromptComposer', () => {
 
       expect(vega.staticPrefix).toBe(iku.staticPrefix);
       expect(vega.staticHash).toBe(iku.staticHash);
-      expect(vega.staticPrefix).toContain('Support your human\'s flourishing.');
+      expect(vega.staticPrefix).toContain('Support your Partner\'s flourishing.');
       expect(vega.staticPrefix).not.toContain('{{user}}');
       expect(vega.staticPrefix).not.toContain('Vega');
       expect(vega.staticPrefix).not.toContain('Iku');

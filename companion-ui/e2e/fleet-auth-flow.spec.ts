@@ -213,12 +213,12 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
 
   try {
     await page.goto(`${origin}/companion-ui/`);
-    await expect(page.getByLabel('Human authority')).toContainText('Signed out');
+    await expect(page.getByLabel('Partner authority')).toContainText('Signed out');
     await openSettings(page);
     await expect(page.getByLabel('Account and device authority').getByText('Not attached')).toBeVisible();
     await page.getByRole('button', { name: 'Sign in with Discord' }).click();
 
-    await expect(page.getByLabel('Human authority')).toContainText('Discord user 1');
+    await expect(page.getByLabel('Partner authority')).toContainText('Discord user 1');
     await expect(page.getByLabel('Device authority', { exact: true })).toContainText('Office display');
     await expect(page.getByLabel('Place authority', { exact: true })).toContainText('Office');
     await expect.poll(() => sockets.length).toBe(1);
@@ -253,21 +253,21 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
     await page.getByLabel('Close Settings').click();
 
     await openSettings(page);
-    await page.getByRole('button', { name: 'Switch user' }).click();
-    await expect(page.getByLabel('Human authority')).toContainText('Discord user 2');
+    await page.getByRole('button', { name: 'Switch Partner' }).click();
+    await expect(page.getByLabel('Partner authority')).toContainText('Discord user 2');
     await expect.poll(() => sockets.length).toBe(3);
     await expect(page.getByText('<script>window.__pwned=true</script>')).toHaveCount(0);
     await expect(page.getByText('private-injection.txt')).toHaveCount(0);
 
     await openSettings(page);
     await page.getByRole('button', { name: 'Log out' }).click();
-    await expect(page.getByLabel('Human authority')).toContainText('Signed out');
+    await expect(page.getByLabel('Partner authority')).toContainText('Signed out');
     await expect(page.getByLabel('Device authority', { exact: true })).toContainText('not attached');
     await expect(page.getByText(adversarial)).toHaveCount(0);
 
     await openSettings(page);
     await page.getByRole('button', { name: 'Continue as guest' }).click();
-    await expect(page.getByLabel('Human authority')).toContainText('Guest');
+    await expect(page.getByLabel('Partner authority')).toContainText('Guest');
     await expect.poll(() => sockets.length).toBe(4);
 
     await page.getByLabel('Message your companion').fill('guest request');
@@ -286,7 +286,7 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
         outputTokens: 1,
       },
     }));
-    await expect(page.getByLabel('Human authority')).toContainText('Signed out', { timeout: 10_000 });
+    await expect(page.getByLabel('Partner authority')).toContainText('Signed out', { timeout: 10_000 });
     await expect(page.getByText('replayed response')).toHaveCount(0);
 
     const crossCompanionDenied = await page.evaluate(async (path) => await new Promise<boolean>((resolveDenied) => {
@@ -299,16 +299,16 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
 
     await openSettings(page);
     await page.getByRole('button', { name: 'Sign in with Discord' }).click();
-    await expect(page.getByLabel('Human authority')).toContainText('Discord user 3');
+    await expect(page.getByLabel('Partner authority')).toContainText('Discord user 3');
     await expect.poll(() => sockets.length).toBe(5);
 
     process.revoke();
     sockets.at(-1)!.close({ code: 4401, reason: 'authority changed' });
-    await expect(page.getByLabel('Human authority')).toContainText('Signed out', { timeout: 10_000 });
+    await expect(page.getByLabel('Partner authority')).toContainText('Signed out', { timeout: 10_000 });
     await expect(page.getByLabel('Device authority', { exact: true })).toContainText('not attached');
 
     await context.setOffline(true);
-    await expect(page.getByLabel('Human authority')).toContainText('Unavailable offline');
+    await expect(page.getByLabel('Partner authority')).toContainText('Unavailable offline');
     await expect(page.getByLabel('Device authority', { exact: true })).toContainText('not attached');
 
     const storage = await page.evaluate(async () => {

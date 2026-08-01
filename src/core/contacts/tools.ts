@@ -328,7 +328,7 @@ async function executeContactSetTrust(
       );
     }
     return textResultWithError(
-      `Contact ${contactId} not found or is the primary user (cannot change primary trust level)`,
+      `Contact ${contactId} not found or has primary trust (cannot change the primary trust level)`,
       true,
     );
   }
@@ -792,7 +792,7 @@ async function executeUnifiedContactAction(
 }
 
 // ── Companion-initiated blocking (agency, htm9.16) ──
-// A block is the companion's own escalation against an abusive user, up to
+// A block is the companion's own escalation against an abusive participant, up to
 // "I never want to see this person's messages again." The block list is a
 // system-owned, reversible store the gateway reads to drop inbound before it
 // reaches the agent. Blocking resolves every known channel identity for a
@@ -1056,7 +1056,7 @@ export function createContactTool(
       })),
       contactId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Canonical contact ID, Discord user ID, or channel identity (channel:userId) for lookup.',
+        description: 'Canonical contact ID, Discord account ID, or channel identity (channel:userId) for lookup.',
       })),
       query: Type.Optional(Type.String({
         minLength: 1,
@@ -1103,7 +1103,7 @@ export function createContactTool(
       })),
       channelUserId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Channel-local user ID for action=link_identity|set_channel_privacy.',
+        description: 'Channel-local participant ID for action=link_identity|set_channel_privacy.',
       })),
       privacyLevel: Type.Optional(Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
@@ -1263,7 +1263,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
     parameters: Type.Object({
       contactId: Type.String({ description: 'Canonical contact ID' }),
       channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
-      channelUserId: Type.String({ minLength: 1, description: 'User ID within that channel' }),
+      channelUserId: Type.String({ minLength: 1, description: 'Participant ID within that channel' }),
       privacyLevel: Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
         enum: [...CHANNEL_PRIVACY_LEVELS],
@@ -1293,11 +1293,11 @@ export function createContactLookupTool(contactStore: ContactStorePort): Substra
   return {
     name: 'contact_lookup',
     description:
-      'Look up a contact by canonical ID, Discord user ID, or channel identity (channel:userId). '
+      'Look up a contact by canonical ID, Discord account ID, or channel identity (channel:userId). '
       + 'Returns trust level, relationship type, and notes.',
     label: 'contact_lookup',
     parameters: Type.Object({
-      contactId: Type.String({ description: 'Canonical contact ID, Discord user ID, or channel identity (channel:userId)' }),
+      contactId: Type.String({ description: 'Canonical contact ID, Discord account ID, or channel identity (channel:userId)' }),
     }),
     execute: async (
       _toolCallId: string,
@@ -1317,12 +1317,12 @@ export function createContactLinkIdentityTool(contactStore: ContactStorePort): S
   return {
     name: 'contact_link_identity',
     description:
-      'Link a channel-specific user ID to an existing contact so trust and continuity can be shared cross-channel.',
+      'Link a channel-specific participant ID to an existing contact so trust and continuity can be shared cross-channel.',
     label: 'contact_link_identity',
     parameters: Type.Object({
       contactId: Type.String({ description: 'Canonical contact ID to extend' }),
       channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
-      channelUserId: Type.String({ minLength: 1, description: 'User ID within that channel' }),
+      channelUserId: Type.String({ minLength: 1, description: 'Participant ID within that channel' }),
       privacyLevel: Type.Optional(Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
         enum: [...CHANNEL_PRIVACY_LEVELS],

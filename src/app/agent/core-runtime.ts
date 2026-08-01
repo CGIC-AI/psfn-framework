@@ -694,7 +694,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   // vw3w.2: record the emotional arc of every resolved concern (formation VAD →
   // resolution VAD, duration, final salience) into a dedicated reflection
-  // journal as lived experience. Subscribes to the vw3w.1 resolution-appraisal
+  // journal as a modelled first-person account. Subscribes to the vw3w.1 resolution-appraisal
   // event; fire-and-forget registration, matching the other runtime subscribers.
   const concernResolutionArcJournal = new ReflectionJournalStore(
     resolveConcernResolutionArcJournalPath(pathSnapshot.companionDataDir),

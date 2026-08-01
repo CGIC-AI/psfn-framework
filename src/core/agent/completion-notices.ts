@@ -176,7 +176,7 @@ export function renderBackgroundCompletionsBlock(notices: readonly CompletionNot
   const body = notices.map(renderCompletionNoticeLines).join('\n');
   return [
     '<background_completions>',
-    'Delegated work reported back to you. This is private orchestration context, not partner speech. Review the result and decide your own next action.',
+    'Delegated work reported back to you. This is private orchestration context, not Participant speech. Review the result and decide your own next action.',
     body,
     '</background_completions>',
   ].join('\n');

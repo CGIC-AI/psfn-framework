@@ -110,16 +110,16 @@ function parseTouchStimulusBody(body: unknown): CompanionTouchStimulusRequest {
 function describeTouchStimulus(stimulus: CompanionTouchStimulusRequest): string {
   if (stimulus.kind === 'headpat') {
     return stimulus.count === 1
-      ? 'Your primary user gives you a gentle headpat.'
-      : `Your primary user gives you ${stimulus.count} gentle headpats.`;
+      ? 'Your Partner gives you a gentle headpat.'
+      : `Your Partner gives you ${stimulus.count} gentle headpats.`;
   }
   if (stimulus.kind === 'petting') {
-    return `Your primary user gently pets your ${stimulus.region}.`;
+    return `Your Partner gently pets your ${stimulus.region}.`;
   }
   if (stimulus.kind === 'hug') {
-    return 'Your primary user gives you a gentle hug.';
+    return 'Your Partner gives you a gentle hug.';
   }
-  return `Your primary user gives you a gentle kiss on the ${stimulus.region}.`;
+  return `Your Partner gives you a gentle kiss on the ${stimulus.region}.`;
 }
 
 /** Authenticated typed physical interaction; caller prose is never accepted. */

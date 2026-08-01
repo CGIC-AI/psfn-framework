@@ -1,7 +1,7 @@
 // ── Temporal wake-up lane (E7.1) ──
 // Morning wake + idle time-of-day refresher, extracted from agent/main.ts
 // (charter 12.1 god-file split, emh3p.1). Both lanes inject explicit system
-// notes (never partner speech). The catch-up summary reuses the SHARED session
+// notes (never Participant speech). The catch-up summary reuses the SHARED session
 // summarization service (summarizeRecentSessionEntries, purpose 'wake_session');
 // outward messages ride the existing proactive-outbound dispatcher and
 // quiet-hours time gate.

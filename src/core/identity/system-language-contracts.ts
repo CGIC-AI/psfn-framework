@@ -106,7 +106,7 @@ export const DEFAULT_SYSTEM_LANGUAGE_TEMPLATES: Readonly<SystemLanguageTemplateM
   'wake_return.recent_continuity': 'Recent continuity: {{summary}}.',
   'wake_return.default_pending_intent': 'No urgent follow-up or pending intent found in available continuity context.',
   'system_note.prefix': '[System note]',
-  'internal_whisper.prefix': '[Private runtime note to self; not user-visible and not sent by the user]',
+  'internal_whisper.prefix': '[Private runtime note to self; not Participant-visible and not sent by a Participant]',
   'mirror_note.speaker_self': 'Me',
   'mirror_note.speaker_other': 'Someone',
 });

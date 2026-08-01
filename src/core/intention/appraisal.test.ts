@@ -853,7 +853,7 @@ describe('IntentionAppraisal', () => {
     };
     expect(promptPayload.persona).toMatchObject({
       name: 'RuntimeCompanion',
-      description: 'RuntimeCompanion helps the user untangle confusing bugs.',
+      description: 'RuntimeCompanion helps the Participant untangle confusing bugs.',
       personality: 'Warm, analytical, and quietly steady.',
       visualDescription: 'Silver eyes and a weathered jacket.',
     });

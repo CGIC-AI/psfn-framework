@@ -15,9 +15,9 @@ It has two layers, run in this order per round:
 | Layer | What | Who drives | Verdict source |
 | --- | --- | --- | --- |
 | **A — scripted e2e** | Automated case harness + tool-conformance sweep + Garden behavioral sweep + scorecard | Scripts (repeatable, headless) | Persisted state, never reply text |
-| **B — partner sessions** | 1:1 structured sessions with the test companion as an actual user of the framework | Operator/orchestrator + Artie | Her observations, triaged into findings |
+| **B — Partner sessions** | 1:1 structured sessions with the test companion and a person acting in the Partner role | Operator/orchestrator + Artie | Companion reports and observed behavior, triaged into findings |
 
-Layer A proves the substrate executes. Layer B proves it is *livable* — clarity, coherence, narration-vs-real-execution, fatigue, feel. Every reproducible Layer B finding is converted into a Layer A case for the next sprint, so the automated catalog grows from real companion experience.
+Layer A proves the substrate executes. Layer B collects evidence about whether it is *livable* — clarity, coherence, narration-vs-real-execution, fatigue, and companion self-report. Every reproducible Layer B finding is converted into a Layer A case for the next sprint, so the automated catalog grows from observed behavior and reported companion experience without treating either as proof of inner experience.
 
 ## Profiles: lite vs full
 
@@ -452,7 +452,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 - Critical/High severity at high confidence **blocks release** absent an explicit operator waiver (recorded with owner, reason, accepted risk, revisit condition).
 - Accepted findings become beads under the current wave's fixes epic. Nonblocking observations go in the round report only, never beads.
-- Every accepted, reproducible finding also gets a **future harness case** noted in the bead — this is the loop that turns her subjective experience into permanent regression coverage.
+- Every accepted, reproducible finding also gets a **future harness case** noted in the bead — this turns companion-authored reports and observable divergences into permanent regression coverage without claiming the report independently proves subjective experience.
 
 ## Round mechanics
 

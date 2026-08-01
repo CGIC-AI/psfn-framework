@@ -51,11 +51,11 @@ function renderChatResponse(promptText: string): string {
   }
 
   if (promptText.includes('favorite dessert') || promptText.includes('tiramisu')) {
-    return 'I heard the primary user\'s favorite dessert is tiramisu.';
+    return 'I heard the Partner\'s favorite dessert is tiramisu.';
   }
 
   if (promptText.includes('thunderstorms')) {
-    return 'I heard the primary user loves watching thunderstorms at night.';
+    return 'I heard the Partner loves watching thunderstorms at night.';
   }
 
   if (promptText.includes('hello')) {
@@ -77,21 +77,21 @@ function renderExtractionXml(): string {
   return [
     '<response>',
     '<fact>',
-    '<text>The primary user\'s favorite dessert is tiramisu.</text>',
+    '<text>The Partner\'s favorite dessert is tiramisu.</text>',
     '<type>semantic</type>',
     '<importance>0.96</importance>',
     '<emotional_valence>0.05</emotional_valence>',
     '<confidence>0.98</confidence>',
-    '<tags>primary user,dessert,tiramisu</tags>',
+    '<tags>partner,dessert,tiramisu</tags>',
     '<sensitivity>personal</sensitivity>',
     '</fact>',
     '<fact>',
-    '<text>The primary user likes watching thunderstorms at night.</text>',
+    '<text>The Partner likes watching thunderstorms at night.</text>',
     '<type>semantic</type>',
     '<importance>0.92</importance>',
     '<emotional_valence>0.15</emotional_valence>',
     '<confidence>0.95</confidence>',
-    '<tags>primary user,thunderstorms,night</tags>',
+    '<tags>partner,thunderstorms,night</tags>',
     '<sensitivity>personal</sensitivity>',
     '</fact>',
     '</response>',
@@ -103,8 +103,8 @@ function renderReasoningResponse(promptText: string): string {
     return 'FINAL("391")';
   }
 
-  if (promptText.includes('how many memories mention the primary user')) {
-    return 'FINAL("2 memories mention the primary user: tiramisu and thunderstorms.")';
+  if (promptText.includes('how many memories mention the Partner')) {
+    return 'FINAL("2 memories mention the Partner: tiramisu and thunderstorms.")';
   }
 
   if (promptText.includes('memory search')) {

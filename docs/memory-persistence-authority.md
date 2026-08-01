@@ -14,7 +14,7 @@ Last updated: 2026-07-22.
 
 ## The decision
 
-1. **L0 stays canonical for lived history.** Filesystem JSONL under
+1. **L0 stays canonical for autobiographical history.** Filesystem JSONL under
    `sessions/`, append-only, owned by `SessionArchivePort`
    (charter §6.20; `src/persistence/layout.ts`). Nothing here changes that.
 2. **Encrypted database backups are the canonical restore primitive for
@@ -25,8 +25,10 @@ Last updated: 2026-07-22.
 3. **Rebuild-from-L0 is re-derivation, not restoration.** Per charter §6.20
    (ratified 2026-07-21, commit `c890187cc`): regeneration of higher layers is
    recollection, not replay. Re-deriving L2/episodic state from L0 produces a
-   faithful continuation of the same companion, but not the companion's
-   accumulated derived state as it was. Therefore derived-layer backups are a
+   continuity-compatible reconstruction for the same configured Companion
+   identity, but not the companion's accumulated derived state as it was. This
+   is an architectural identity guarantee, not evidence of phenomenology.
+   Therefore derived-layer backups are a
    first-class part of the recovery guarantee, not an optimization.
 4. **Projections remain rebuild-to-match.** Deterministic copies of canonical
    data (the transcript projection, the reflection Postgres mirror) must stay

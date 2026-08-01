@@ -806,8 +806,8 @@ describe('contact tools', () => {
       expect(result.details?.isError).toBe(true);
     });
 
-    it('returns error when trying to change primary user trust level', async () => {
-      // Create a primary user contact
+    it('returns error when trying to change the primary trust level', async () => {
+      // Create a contact with primary trust.
       await store.upsert({ displayName: 'V', discordUserId: 'primary-user-123' });
       const primary = (await store.getByDiscordUserId('primary-user-123'))!;
       const tool = createContactSetTrustTool(store);
@@ -817,8 +817,8 @@ describe('contact tools', () => {
         trustLevel: 'regular',
       });
 
-      // setTrustLevel returns false for primary user
-      expect(resultText(result)).toContain('not found or is the primary user');
+      // setTrustLevel returns false for a contact with primary trust.
+      expect(resultText(result)).toContain('not found or has primary trust');
       // Trust level should remain 'primary'
       expect((await store.getById(primary.id))!.trustLevel).toBe('primary');
       expect(result.details?.isError).toBe(true);

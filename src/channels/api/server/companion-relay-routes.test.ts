@@ -767,7 +767,7 @@ describe('companion relay routes', () => {
       responseMode: 'respond',
     });
 
-    it('delivers one authenticated headpat as a server-authored primary-user message', async () => {
+    it('delivers one authenticated headpat as a server-authored Partner message', async () => {
       const res = await request(port, 'POST', '/v1/companion/stimuli', headpatBody(), AUTH);
 
       expect(res.status).toBe(200);
@@ -783,7 +783,7 @@ describe('companion relay routes', () => {
         channelType: 'api',
         authorId: 'test-user',
         authorName: 'Test User',
-        content: 'Your primary user gives you a gentle headpat.',
+        content: 'Your Partner gives you a gentle headpat.',
         isDirectMessage: true,
         routing: {
           source: 'satellite',

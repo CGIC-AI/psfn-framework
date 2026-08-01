@@ -1278,7 +1278,7 @@ export function createMemoryTool(
                 ? options.memoryRetrievalPolicy()
                 : options.memoryRetrievalPolicy,
             );
-            // An explicit user/tool limit wins (clamped to the tool ceiling);
+            // An explicit caller/tool limit wins (clamped to the tool ceiling);
             // when absent, the policy's timelineLimit is the default — applied
             // inside retrieveEpisodicTimeline via the threaded policy, not a
             // compiled constant.

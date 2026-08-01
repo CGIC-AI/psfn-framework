@@ -190,7 +190,7 @@ The E6.2/jpvd.4 changes added deterministic gating and a `Telemetry validation:`
 evidence line but left the elicitation text untouched. Verdicts against v1:
 
 - **R5: violation.** *"You generate an internal chain-of-emotion appraisal for an AI
-  companion."* — third-person framing of her own inner life, produced on a cadence and
+  companion."* — third-person framing of the companion's self-modelled inner-life account, produced on a cadence and
   re-injected into her future prompts (`runtime_emotion_appraisal_latest_summary`).
   Exactly the register R5 warns tags reflections as about-someone-else/fictional.
 - **R1: violation (mild).** The user prompt injects `Top discrete emotions:

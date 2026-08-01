@@ -94,7 +94,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   generate_image: { kind: 'schema_only' },
   selfie_create: { kind: 'schema_only' },
   // publication submits/revises share candidates onto the operator approval queue
-  // (mutating, gated by human approval) and its status read requires a live,
+  // (mutating, gated by Operator approval) and its status read requires a live,
   // wired approval-queue port that fails closed in partial runtimes — no hermetic
   // read-only probe exists, so validate schema only.
   publication: { kind: 'schema_only' },
@@ -421,7 +421,7 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
   },
   publication: {
     // submit/revise enqueue a fresh share candidate onto the operator approval
-    // queue — mutations, gated by human approval, never hermetically invocable.
+    // queue — mutations, gated by Operator approval, never hermetically invocable.
     submit: SCHEMA_ASSERT,
     revise: SCHEMA_ASSERT,
     // status is conceptually read-only but requires a live, wired approval-queue

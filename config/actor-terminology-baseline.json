@@ -1,0 +1,53 @@
+{
+  "$comment": "Narrow exceptions to the Companion/Partner/Operator/Participant/primary vocabulary gate. Every entry must identify an actual technical or persisted-contract use and carry a review note; stale entries fail the gate.",
+  "entries": [
+    {
+      "path": "docs/self-eval-prompt-audit.md",
+      "pattern": "generic-user",
+      "contains": "The user prompt injects",
+      "note": "This audit names the provider-protocol user prompt, not the human relationship role."
+    },
+    {
+      "path": "docs/orchestration-process.md",
+      "pattern": "generic-user",
+      "contains": "Intent: <the user/problem outcome in one sentence>",
+      "note": "This review template names the software requester, not a relationship role in the companion product."
+    },
+    {
+      "path": "src/core/cogsec/intake-firewall-notice-templates.ts",
+      "pattern": "relational-human",
+      "contains": "'being kept aside for your human to look over',",
+      "note": "Persisted pre-vocabulary notices retain this detection signature so they remain excluded from emotion and memory candidacy."
+    },
+    {
+      "path": "src/faculties/memory/extraction/naming.ts",
+      "pattern": "primary-as-partner",
+      "contains": "  'primary user',",
+      "note": "Legacy extracted-memory placeholder accepted as input so it can be rewritten to a real participant name."
+    },
+    {
+      "path": "src/faculties/memory/extraction/naming.ts",
+      "pattern": "primary-as-partner",
+      "contains": "  'the primary user',",
+      "note": "Legacy extracted-memory placeholder accepted as input so it can be rewritten to a real participant name."
+    },
+    {
+      "path": "src/faculties/memory/extraction/naming.ts",
+      "pattern": "primary-as-partner",
+      "contains": "{ pattern: /\\bthe primary user's\\b/gi",
+      "note": "Compatibility normalizer recognizes possessive legacy memory text; it does not generate this wording."
+    },
+    {
+      "path": "src/faculties/memory/extraction/naming.ts",
+      "pattern": "primary-as-partner",
+      "contains": "{ pattern: /\\bthe primary user\\b(?!-)/gi",
+      "note": "Compatibility normalizer recognizes legacy memory text; it does not generate this wording."
+    },
+    {
+      "path": "src/persistence/repair/memory-participant-name-repair.ts",
+      "pattern": "primary-as-partner",
+      "contains": "OR lower(text) LIKE '%primary user%'",
+      "note": "Operator repair query locates persisted legacy placeholder text for content-preserving participant-name repair."
+    }
+  ]
+}

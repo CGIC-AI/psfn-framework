@@ -26,7 +26,7 @@ sequenceDiagram
     participant P as Agent Discord pump<br/>src/app/agent/gateway-message-handlers.ts
     participant T as Turn execution<br/>substrate-agent
 
-    D->>GA: user message
+    D->>GA: Participant message
     GA->>RPC: onMessage(substrateMsg)
     RPC->>P: enqueue (dedupe, bundle coalesced messages)
     P-->>GA: handler returns (empty)
@@ -53,24 +53,24 @@ Notes:
   on every queued dispatch and is noise in split mode; do not read it as a
   dropped reply.
 
-## 2. Turn execution and the user-facing boundary
+## 2. Turn execution and the Participant-facing boundary
 
-One `agent.prompt()` call can span more than the user exchange: after the
+One `agent.prompt()` call can span more than the Participant exchange: after the
 assistant finishes, the loop drains queued follow-up messages (intention
 whispers, system notes) into the same run as continuation steps.
 
 ```mermaid
 flowchart TD
-    MSG[User message] --> PA[Prompt assembly<br/>turn-execution/prompt-assembly.ts<br/>retrieval, emotion, manifest, tools]
+    MSG[Participant message] --> PA[Prompt assembly<br/>turn-execution/prompt-assembly.ts<br/>retrieval, emotion, manifest, tools]
     PA --> LOOP[Agent loop step<br/>scheduled-agent-loop.ts runLoop]
     LOOP -->|tool calls| TOOLS[Tool scheduler<br/>results appended] --> LOOP
-    LOOP -->|steering messages<br/>user sent more mid-turn| LOOP
+    LOOP -->|steering messages<br/>Participant sent more mid-turn| LOOP
     LOOP -->|stop, no pending| FUD{Queued follow-ups?}
     FUD -->|none| END[Run ends]
     FUD -->|internal batch<br/>whispers / system notes| BOUNDARY[user_facing_boundary emitted ONCE<br/>index captured in agent state<br/>psfn-framework-ay73]
     BOUNDARY --> CONT[Continuation steps<br/>internal processing<br/>same turnId]
     CONT --> END
-    FUD -->|batch contains a real<br/>user message| LOOP
+    FUD -->|batch contains a real<br/>Participant message| LOOP
 
     style BOUNDARY fill:#f9e0e0
 ```
@@ -79,7 +79,7 @@ Invariants enforced since psfn-framework-ay73 (2026-07-05):
 
 - `extractResponseText` / `getLatestAssistantMessage` are bounded by the
   boundary index (`substrate-agent/agent-state-runtime.ts`): the outward
-  reply is always taken from the user-facing segment. Continuation text can
+  reply is always taken from the Participant-facing segment. Continuation text can
   neither replace it nor leak outward.
 - A `response_control no_reply` issued during continuation cannot suppress a
   reply authored before the boundary (see §3).
@@ -93,7 +93,7 @@ The drain point should move before step 1 or into its own internal turn.
 
 ```mermaid
 flowchart TD
-    RT[responseText<br/>bounded to user-facing segment] --> NR{no_reply recorded<br/>this turn?}
+    RT[responseText<br/>bounded to Participant-facing segment] --> NR{no_reply recorded<br/>this turn?}
     NR -->|no| BC
     NR -->|yes, responseText empty| HONOR[Honored: intentional silence<br/>metadata.noReply set<br/>no persistence, no attachments]
     NR -->|yes, responseText non-empty| DEMOTE[DEMOTED: reply delivered<br/>WARN + agent.no_reply.demoted telemetry<br/>turn-execution-runtime.ts]
@@ -132,7 +132,7 @@ flowchart LR
     APPR --> CONC[Concerns / reminders<br/>active_concerns, cap enforced]
     APPR --> PFU[Pending follow-ups a.k.a. whispers<br/>intention_pending_follow_ups<br/>wake: next_user_turn / scheduled]
     PFU -->|activation post_turn_action| FQ[Agent followUp queue<br/>internalWhisper, never persisted<br/>to the session journal]
-    FQ -.->|drained into NEXT user turn<br/>behind the user-facing boundary| TURN
+    FQ -.->|drained into NEXT Participant turn<br/>behind the Participant-facing boundary| TURN
 
     HPT --> OUT[Proactive outbound<br/>intention.outbound_message]
     OUT --> GATES{Outreach gates<br/>provenance freshness,<br/>time gate, outbox dedupe}
@@ -151,7 +151,7 @@ Notes:
   exchange twice, generating false "repetition glitch" beliefs and
   self-silencing whispers.
 - Outreach gates apply only to self-initiated messages. Replies to the
-  user never pass through them.
+  Participant never pass through them.
 - Heavy memory passes (sleep consolidation, arc weaving, dream meaning,
   orientation rewrite) are rest-window only — see `docs/architecture.md`.
 

@@ -83,7 +83,7 @@ export function buildMoaPrompt(
     .map(message => `${message.role}:\n${message.content}`)
     .join('\n\n');
   return [
-    'Produce the best final assistant reply for the latest user turn.',
+    'Produce the best final assistant reply for the latest Participant turn.',
     sessionContext.length > 0 ? `Session context:\n${sessionContext}` : '',
     transcript.length > 0 ? `Conversation transcript:\n${transcript}` : '',
     `Current turn:\n${currentTurn.role}:\n${currentTurn.content}`,

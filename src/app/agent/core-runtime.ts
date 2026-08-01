@@ -410,10 +410,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.intakeSinkGate = intakeSinkGate;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
-  agentLoop.registerTool(createMcpTool({
-    gateway,
-    getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
-  }), 'core');
+  agentLoop.registerTool(createMcpTool({ gateway }), 'core');
   wireDiagnosticsRuntime(eventBus);
   // E5.5: persistent active-memory refresh failure raises an operator alert
   // through the system-derived gateway notification path. The threshold is

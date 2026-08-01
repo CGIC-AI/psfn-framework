@@ -204,6 +204,7 @@ import type {
   MemoryDeletionResolveResult,
   McpExecuteParams,
   McpExecuteResult,
+  McpReleaseResult,
 } from './protocol.js';
 import type {
   AuthenticatedShardWorkloadHandle,
@@ -547,6 +548,8 @@ export class GatewayClient implements
   private readonly modelPurposeSelection?: ModelPurposeSelection;
   private readonly shardWorkloadRegistrationIds =
     new WeakMap<AuthenticatedShardWorkloadHandle, string>();
+  /** Opaque gateway permits stay outside model-visible tool-call objects. */
+  private readonly mcpPermitByToolCallId = new Map<string, string>();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -870,11 +873,21 @@ export class GatewayClient implements
         );
       }
 
+      const resultToolCalls = result.toolCalls;
+      for (const toolCall of resultToolCalls) {
+        if (toolCall.name !== 'mcp') continue;
+        const permit = toolCall.gatewayMcpPermit?.trim();
+        if (permit) this.mcpPermitByToolCallId.set(toolCall.id, permit);
+      }
       const response: LLMResponse = {
         content: result.content,
         ...(result.reasoning ? { reasoning: result.reasoning } : {}),
         ...(result.providerObservability ? { providerObservability: result.providerObservability } : {}),
-        toolCalls: result.toolCalls,
+        toolCalls: resultToolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          name: toolCall.name,
+          input: toolCall.input,
+        })),
         model: result.model,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
@@ -1269,26 +1282,25 @@ export class GatewayClient implements
     }) as WebSearchResult;
   }
 
-  /**
-   * Invoke the single progressive MCP gateway surface. Sensitivity and channel
-   * lineage are supplied by the trusted tool wrapper, not by its model schema.
-   */
+  /** Invoke the exact model-emitted MCP action authorized by the gateway. */
   async mcpExecute(
-    params: Omit<McpExecuteParams, 'effectiveSensitivity' | 'cancellationId' | 'channelId'>,
+    params: Omit<McpExecuteParams, 'permit' | 'cancellationId'>,
     options: {
-      effectiveSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
-      channelId?: string;
+      toolCallId: string;
       signal?: AbortSignal;
     },
   ): Promise<McpExecuteResult> {
+    const toolCallId = options.toolCallId.trim();
+    const permit = this.mcpPermitByToolCallId.get(toolCallId);
+    this.mcpPermitByToolCallId.delete(toolCallId);
+    if (!permit) {
+      throw new Error('Gateway did not authorize this MCP tool call');
+    }
     const result = await this.requestWithAbortSignal<McpExecuteResult>(
       'mcp.execute',
       {
         ...params,
-        ...(params.action === 'call'
-          ? { effectiveSensitivity: options.effectiveSensitivity }
-          : {}),
-        ...(options.channelId?.trim() ? { channelId: options.channelId.trim() } : {}),
+        permit,
       },
       options.signal,
       'mcp',
@@ -1297,6 +1309,22 @@ export class GatewayClient implements
       throw new Error('Gateway returned an invalid MCP result');
     }
     return result;
+  }
+
+  /** Reversible operator lifecycle path; never connects to or invokes MCP. */
+  async mcpRelease(serverId?: string): Promise<McpReleaseResult> {
+    const result = await this.rpcInstance.request('mcp.release', {
+      ...(serverId?.trim() ? { serverId: serverId.trim() } : {}),
+    });
+    if (!isRecord(result)
+      || result.released !== true
+      || (result.serverId !== undefined && typeof result.serverId !== 'string')) {
+      throw new Error('Gateway returned an invalid MCP release result');
+    }
+    return {
+      released: true,
+      ...(result.serverId ? { serverId: result.serverId } : {}),
+    };
   }
 
   async webFetchBinary(

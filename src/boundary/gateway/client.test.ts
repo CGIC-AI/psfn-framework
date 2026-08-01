@@ -181,17 +181,18 @@ describe('GatewayClient system-data writer', () => {
 });
 
 describe('GatewayClient MCP transport', () => {
-  it('stamps hidden sensitivity and trusted channel lineage on an MCP call', async () => {
+  it('sends only the single-use permit captured for the exact model tool call', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const permits = Reflect.get(client, 'mcpPermitByToolCallId') as Map<string, string>;
+    permits.set('mcp-call-1', 'de305d54-75b4-431b-adb2-eb6b9e546015');
     const pending = client.mcpExecute({
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'Ada' },
     }, {
-      effectiveSensitivity: 'personal',
-      channelId: 'discord:dm:operator',
+      toolCallId: 'mcp-call-1',
     });
     const request = conn.sent[0] as {
       id: number;
@@ -206,13 +207,14 @@ describe('GatewayClient MCP transport', () => {
         serverId: 'notes',
         toolName: 'search_notes',
         arguments: { query: 'Ada' },
-        effectiveSensitivity: 'personal',
-        channelId: 'discord:dm:operator',
+        permit: 'de305d54-75b4-431b-adb2-eb6b9e546015',
       },
     });
     expect(request.params.cancellationId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
     );
+    expect(request.params).not.toHaveProperty('effectiveSensitivity');
+    expect(request.params).not.toHaveProperty('channelId');
     expect(request.params).not.toHaveProperty('companionId');
     conn._emit({
       jsonrpc: '2.0',
@@ -232,9 +234,11 @@ describe('GatewayClient MCP transport', () => {
   it('cancels MCP work remotely and rejects late results locally', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024);
+    const permits = Reflect.get(client, 'mcpPermitByToolCallId') as Map<string, string>;
+    permits.set('mcp-search-1', 'de305d54-75b4-431b-adb2-eb6b9e546016');
     const controller = new AbortController();
     const pending = client.mcpExecute({ action: 'search', query: 'notes' }, {
-      effectiveSensitivity: 'confidential',
+      toolCallId: 'mcp-search-1',
       signal: controller.signal,
     });
     const request = conn.sent[0] as { id: number; params: { cancellationId: string } };
@@ -421,6 +425,7 @@ describe('GatewayClient streaming', () => {
       id: ordinaryRequest.id,
       result: {
         content: 'done',
+        toolCalls: [],
         model: 'model',
         inputTokens: 1,
         outputTokens: 1,
@@ -446,6 +451,7 @@ describe('GatewayClient streaming', () => {
       id: request.id,
       result: {
         content: 'streamed',
+        toolCalls: [],
         model: 'model',
         inputTokens: 1,
         outputTokens: 1,

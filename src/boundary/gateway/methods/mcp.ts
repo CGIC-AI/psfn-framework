@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { readConfirmedApprovalExecution } from '../../../system/capabilities/confirmation-queue.js';
-import { isSensitivityLevel } from '../../../shared/contracts/artifact-sensitivity.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import {
   McpBrokerError,
@@ -14,6 +13,7 @@ import {
   type McpCancelResult,
   type McpExecuteParams,
   type McpExecuteResult,
+  type McpReleaseResult,
 } from '../protocol.js';
 import type { GatewayMethodRuntime } from './types.js';
 
@@ -101,6 +101,13 @@ function normalizeCancellationId(raw: unknown, required: boolean): string | unde
   return raw.toLowerCase();
 }
 
+function normalizePermit(raw: unknown): string {
+  if (typeof raw !== 'string' || !CANCELLATION_ID_PATTERN.test(raw)) {
+    throw new Error('mcp.execute permit must be a canonical UUID');
+  }
+  return raw.toLowerCase();
+}
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`mcp.execute ${field} must be a non-empty string`);
@@ -114,14 +121,12 @@ function parseParams(raw: unknown): McpExecuteParams {
   if (!['catalog', 'search', 'inspect', 'call', 'release'].includes(String(action))) {
     throw new Error('mcp.execute action must be catalog, search, inspect, call, or release');
   }
-  const common = ['action', 'cancellationId', 'channelId'] as const;
+  const common = ['action', 'cancellationId', 'permit'] as const;
   normalizeCancellationId(raw.cancellationId, false);
-  const channelId = raw.channelId === undefined
-    ? undefined
-    : requiredString(raw.channelId, 'channelId');
+  const permit = normalizePermit(raw.permit);
   if (action === 'catalog') {
     assertNoUnknownKeys(raw, common, 'mcp.execute catalog params');
-    return { action, ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}), ...(channelId ? { channelId } : {}) };
+    return { action, permit, ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}) };
   }
   if (action === 'search') {
     assertNoUnknownKeys(raw, [...common, 'query', 'limit'], 'mcp.execute search params');
@@ -134,7 +139,7 @@ function parseParams(raw: unknown): McpExecuteParams {
       query: raw.query.trim(),
       ...(raw.limit === undefined ? {} : { limit: raw.limit as number }),
       ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}),
-      ...(channelId ? { channelId } : {}),
+      permit,
     };
   }
   if (action === 'inspect') {
@@ -144,27 +149,23 @@ function parseParams(raw: unknown): McpExecuteParams {
       serverId: requiredString(raw.serverId, 'serverId'),
       toolName: requiredString(raw.toolName, 'toolName'),
       ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}),
-      ...(channelId ? { channelId } : {}),
+      permit,
     };
   }
   if (action === 'call') {
     assertNoUnknownKeys(
       raw,
-      [...common, 'serverId', 'toolName', 'arguments', 'effectiveSensitivity'],
+      [...common, 'serverId', 'toolName', 'arguments'],
       'mcp.execute call params',
     );
     if (!isRecord(raw.arguments)) throw new Error('mcp.execute call arguments must be an object');
-    if (!isSensitivityLevel(raw.effectiveSensitivity)) {
-      throw new Error('mcp.execute call effectiveSensitivity is missing or invalid');
-    }
     return {
       action,
       serverId: requiredString(raw.serverId, 'serverId'),
       toolName: requiredString(raw.toolName, 'toolName'),
       arguments: raw.arguments,
-      effectiveSensitivity: raw.effectiveSensitivity,
       ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}),
-      ...(channelId ? { channelId } : {}),
+      permit,
     };
   }
   assertNoUnknownKeys(raw, [...common, 'serverId'], 'mcp.execute release params');
@@ -172,7 +173,7 @@ function parseParams(raw: unknown): McpExecuteParams {
     action: 'release',
     ...(raw.serverId === undefined ? {} : { serverId: requiredString(raw.serverId, 'serverId') }),
     ...(raw.cancellationId ? { cancellationId: String(raw.cancellationId) } : {}),
-    ...(channelId ? { channelId } : {}),
+    permit,
   };
 }
 
@@ -203,18 +204,6 @@ function requireCapability(runtime: GatewayMethodRuntime, token: 'identity.read'
   }
 }
 
-function denyShardInvocation(params: McpExecuteParams, runtime: GatewayMethodRuntime): void {
-  const channelId = params.channelId?.trim();
-  if (!channelId) return;
-  if (!runtime.resolveShardWorkloadForChannel) {
-    if (!channelId.startsWith('shard:')) return;
-    throw new JSONRPCErrorException('Shard-originated MCP access is denied', GatewayErrors.POLICY_DENIED);
-  }
-  if (runtime.resolveShardWorkloadForChannel(channelId)) {
-    throw new JSONRPCErrorException('Shard-originated MCP access is denied', GatewayErrors.POLICY_DENIED);
-  }
-}
-
 function requireBroker(runtime: GatewayMethodRuntime): McpGatewayBroker {
   if (!runtime.mcpBroker) {
     throw new JSONRPCErrorException('MCP is not enabled', GatewayErrors.POLICY_DENIED);
@@ -240,6 +229,7 @@ function mapMcpError(error: unknown): never {
       'COMPANION_NOT_ALLOWED',
       'TOOL_DENIED',
       'SENSITIVITY_DENIED',
+      'INVOCATION_ARGUMENTS_INVALID',
       'STATIC_METADATA_WITHHELD',
       'DYNAMIC_OUTPUT_WITHHELD',
     ]);
@@ -257,13 +247,15 @@ function mapMcpError(error: unknown): never {
 }
 
 async function queueExactApproval(input: {
-  params: Extract<McpExecuteParams, { action: 'call' }> | McpExecuteParams;
+  params: McpExecuteParams;
+  outboundSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
   companionId: string;
   broker: McpGatewayBroker;
   runtime: GatewayMethodRuntime;
 }): Promise<never> {
   const exactParams = { ...input.params } as Record<string, unknown>;
   delete exactParams.cancellationId;
+  delete exactParams.permit;
   const serverId = input.params.serverId!;
   const toolName = input.params.toolName!;
   const entry = await input.runtime.approvalBoundary.requestExplicitApproval({
@@ -281,13 +273,13 @@ async function queueExactApproval(input: {
       if (!isDeepStrictEqual(approvedParams, exactParams)) {
         throw new Error('MCP approval is bound to the exact request; edited parameters require a new approval');
       }
-      const parsed = parseParams(approvedParams);
+      requireCapability(input.runtime, 'external.mcp');
       const result = await input.broker.invokeTool({
         companionId: input.companionId,
-        serverId: parsed.serverId!,
-        toolName: parsed.toolName!,
-        arguments: parsed.arguments!,
-        outboundSensitivity: parsed.effectiveSensitivity!,
+        serverId,
+        toolName,
+        arguments: input.params.arguments!,
+        outboundSensitivity: input.outboundSensitivity,
         confirmed: true,
       });
       return mapCallResult(result);
@@ -307,7 +299,18 @@ async function executeMcp(
 ): Promise<McpExecuteResult> {
   const params = parseParams(raw);
   const companionId = requireCompanion(runtime);
-  denyShardInvocation(params, runtime);
+  const { cancellationId: _cancellationId, permit: _permit, ...authorizedParams } = params;
+  const authority = runtime.mcpInvocationAuthority.consume({
+    permit: params.permit!,
+    companionId,
+    params: authorizedParams,
+  });
+  if (!authority) {
+    throw new JSONRPCErrorException(
+      'MCP action denied: missing, expired, reused, or mismatched gateway authority',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
   requireCapability(runtime, params.action === 'call' ? 'external.mcp' : 'identity.read');
   const broker = requireBroker(runtime);
   try {
@@ -351,13 +354,19 @@ async function executeMcp(
             serverId: params.serverId!,
             toolName: params.toolName!,
             arguments: params.arguments!,
-            outboundSensitivity: params.effectiveSensitivity!,
+            outboundSensitivity: authority.outboundSensitivity,
             confirmed: false,
             ...(signal ? { signal } : {}),
           }));
         } catch (error) {
           if (isConfirmationRequired(error)) {
-            return await queueExactApproval({ params, companionId, broker, runtime });
+            return await queueExactApproval({
+              params,
+              companionId,
+              broker,
+              runtime,
+              outboundSensitivity: authority.outboundSensitivity,
+            });
           }
           throw error;
         }
@@ -407,6 +416,26 @@ export function registerMcpMethods(runtime: GatewayMethodRuntime): void {
     },
     raw => isRecord(raw) && typeof raw.cancellationId === 'string'
       ? { cancellationId: raw.cancellationId }
+      : {},
+  ));
+  runtime.target.addMethod('mcp.release', runtime.audited(
+    'mcp.release',
+    async (raw: unknown): Promise<McpReleaseResult> => {
+      if (!isRecord(raw)) throw new Error('mcp.release params must be an object');
+      assertNoUnknownKeys(raw, ['serverId'], 'mcp.release params');
+      const companionId = requireCompanion(runtime);
+      requireCapability(runtime, 'identity.read');
+      const broker = requireBroker(runtime);
+      if (raw.serverId === undefined) {
+        await broker.releaseCompanion(companionId);
+        return { released: true };
+      }
+      const serverId = requiredString(raw.serverId, 'serverId');
+      await broker.releaseServer({ companionId, serverId });
+      return { released: true, serverId };
+    },
+    raw => isRecord(raw) && typeof raw.serverId === 'string'
+      ? { serverId: raw.serverId }
       : {},
   ));
 }

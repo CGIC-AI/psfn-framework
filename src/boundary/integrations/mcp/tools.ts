@@ -1,10 +1,7 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { Type } from '@sinclair/typebox';
 import type { AgentToolResult, SubstrateAgentTool } from '../../pi-agent/index.js';
-import type { DisclosureLineage } from '../../../core/cogsec/disclosure/contracts.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
-import { getRequestContext } from '../../../primitives/llm/request-context.js';
-import type { SensitivityLevel } from '../../../system/trust/types.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import {
   GatewayErrors,
@@ -26,10 +23,9 @@ export interface McpToolParams {
 
 export interface McpToolGatewayPort {
   mcpExecute(
-    params: Omit<McpExecuteParams, 'effectiveSensitivity' | 'cancellationId' | 'channelId'>,
+    params: Omit<McpExecuteParams, 'permit' | 'cancellationId'>,
     options: {
-      effectiveSensitivity: SensitivityLevel;
-      channelId?: string;
+      toolCallId: string;
       signal?: AbortSignal;
     },
   ): Promise<McpExecuteResult>;
@@ -37,7 +33,6 @@ export interface McpToolGatewayPort {
 
 export interface McpToolRuntime {
   gateway: McpToolGatewayPort;
-  getDisclosureLineage(): DisclosureLineage | undefined;
 }
 
 function result(
@@ -107,7 +102,7 @@ function normalizeParams(raw: unknown): McpToolParams {
 
 function toGatewayParams(params: McpToolParams): Omit<
   McpExecuteParams,
-  'effectiveSensitivity' | 'cancellationId' | 'channelId'
+  'permit' | 'cancellationId'
 > {
   switch (params.action) {
     case 'catalog':
@@ -233,19 +228,15 @@ export function createMcpTool(runtime: McpToolRuntime): SubstrateAgentTool {
       })),
     }, { additionalProperties: false }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       raw: McpToolParams,
       signal?: AbortSignal,
     ): Promise<AgentToolResult<Record<string, unknown>>> => {
       let params: McpToolParams | undefined;
       try {
         params = normalizeParams(raw);
-        const effectiveSensitivity = runtime.getDisclosureLineage()?.effectiveSensitivity
-          ?? 'confidential';
-        const channelId = getRequestContext()?.channelId?.trim();
         const response = await runtime.gateway.mcpExecute(toGatewayParams(params), {
-          effectiveSensitivity,
-          ...(channelId ? { channelId } : {}),
+          toolCallId,
           ...(signal ? { signal } : {}),
         });
         return formatSuccess(response);

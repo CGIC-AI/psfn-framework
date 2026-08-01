@@ -315,11 +315,39 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         captured.result,
         captured.finalAttemptProviderCostEvidence,
       );
+      let shardOrigin = Boolean(shardRouting);
+      if (!shardOrigin && params.channelId && runtime.resolveShardWorkloadForChannel) {
+        try {
+          shardOrigin = Boolean(runtime.resolveShardWorkloadForChannel(params.channelId));
+        } catch (error) {
+          shardOrigin = true;
+          log.warn('Refusing MCP permits because turn origin could not be authenticated', {
+            requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      const canMintMcpPermit = Boolean(
+        eligibilityCompanionId
+        && params.channelId?.trim()
+        && params.tools?.some(tool => tool.name === 'mcp')
+        && !shardOrigin,
+      );
+      const toolCalls = response.toolCalls.map((toolCall) => {
+        if (toolCall.name !== 'mcp' || !canMintMcpPermit || !eligibilityCompanionId) {
+          return toolCall;
+        }
+        const permit = runtime.mcpInvocationAuthority.mint({
+          companionId: eligibilityCompanionId,
+          modelInput: toolCall.input,
+        });
+        return permit ? { ...toolCall, gatewayMcpPermit: permit } : toolCall;
+      });
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
         ...(response.providerObservability ? { providerObservability: response.providerObservability } : {}),
-        toolCalls: response.toolCalls,
+        toolCalls,
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,

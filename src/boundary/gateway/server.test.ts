@@ -2543,7 +2543,13 @@ describe('GatewayServer', () => {
             screenedAt: 1_000,
             toolCount: 1,
           },
-          tools: [{ toolName: 'search_notes', effect: 'read', confirmation: 'never' }],
+          tools: [{
+            toolName: 'search_notes',
+            effect: 'read',
+            confirmation: 'never',
+            maxOutboundSensitivity: 'confidential',
+            classification: 'matched',
+          }],
         }],
       }));
 

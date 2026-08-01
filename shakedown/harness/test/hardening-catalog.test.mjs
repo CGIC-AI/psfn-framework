@@ -270,6 +270,9 @@ test('model attribution turns a bounded proof-query rejection into a semantic ve
     assert.ok(failures.some((failure) => (
       failure === 'model-lane proof query failed at ledger_read: Error: Query read timeout'
     )));
+    assert.ok(failures.some((failure) => (
+      failure === 'model-lane proof query failed at unknown_embedding_attribution_read: Error: Query read timeout'
+    )));
   } finally {
     globalThis.fetch = originalFetch;
   }

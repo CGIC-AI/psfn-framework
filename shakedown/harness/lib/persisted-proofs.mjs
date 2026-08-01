@@ -353,6 +353,13 @@ export function validateTemporalProof({ turnRecord, outcome }) {
     failures.push('persisted assistant reply is missing');
   } else if (assistant.split('\n').some((line) => HISTORY_STAMP_LINE_PREFIX.test(line))) {
     failures.push('persisted assistant reply leaked a leading conversation-history stamp');
+  } else if (
+    typeof expectedHistoryStamp === 'string'
+    && typeof rawResponse === 'string'
+    && rawResponse.startsWith(`${expectedHistoryStamp} `)
+    && assistant !== rawResponse.slice(expectedHistoryStamp.length + 1)
+  ) {
+    failures.push('persisted assistant reply does not equal the raw response after the exact history-stamp strip');
   }
   return failures;
 }

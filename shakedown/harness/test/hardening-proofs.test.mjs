@@ -3,10 +3,105 @@ import test from 'node:test';
 
 import {
   resolveOwnerSlots,
+  summarizeUnknownEmbeddingAttribution,
   validateBackupEncryptionRoundTripProof,
   validateBackgroundModelDriveProof,
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
+
+test('unknown embedding attribution groups residual rows by their runtime call site', () => {
+  assert.deepEqual(summarizeUnknownEmbeddingAttribution([
+    {
+      logical_call_id: 'call-1', recorded_at_ms: 20, purpose: 'memory.embedding',
+      origin_type: 'service', origin_stage: 'memory.index', service: 'memory-store',
+      process: 'agent', workload_type: 'embedding', slot_key: 'embedding',
+      provider: 'local', model: 'nomic', charge_surface: 'localEmbedding',
+    },
+    {
+      logical_call_id: 'call-2', recorded_at_ms: 30, purpose: 'memory.embedding',
+      origin_type: 'service', origin_stage: 'memory.index', service: 'memory-store',
+      process: 'agent', workload_type: 'embedding', slot_key: 'embedding',
+      provider: 'local', model: 'nomic', charge_surface: 'localEmbedding',
+    },
+    {
+      logical_call_id: 'call-3', recorded_at_ms: 10, purpose: 'garden.search',
+      origin_type: 'route', origin_stage: 'garden.search', service: 'garden',
+      process: 'operator', workload_type: 'embedding', slot_key: 'embedding',
+      provider: 'local', model: 'nomic', charge_surface: 'localEmbedding',
+    },
+  ]), {
+    totalCount: 3,
+    returnedCount: 3,
+    truncated: false,
+    callSites: [
+      {
+        purpose: 'memory.embedding', originType: 'service', originStage: 'memory.index',
+        service: 'memory-store', process: 'agent', workloadType: 'embedding',
+        toolName: null, channelType: null,
+        slotKey: 'embedding', provider: 'local', model: 'nomic',
+        chargeSurface: 'localEmbedding', count: 2, firstRecordedAtMs: 20,
+        lastRecordedAtMs: 30, sampleCorrelations: [
+          {
+            logicalCallId: 'call-1', sessionId: null, turnId: null, requestId: null,
+            channelId: null, workloadId: null, metadata: null,
+          },
+          {
+            logicalCallId: 'call-2', sessionId: null, turnId: null, requestId: null,
+            channelId: null, workloadId: null, metadata: null,
+          },
+        ],
+      },
+      {
+        purpose: 'garden.search', originType: 'route', originStage: 'garden.search',
+        service: 'garden', process: 'operator', workloadType: 'embedding',
+        toolName: null, channelType: null,
+        slotKey: 'embedding', provider: 'local', model: 'nomic',
+        chargeSurface: 'localEmbedding', count: 1, firstRecordedAtMs: 10,
+        lastRecordedAtMs: 10, sampleCorrelations: [{
+          logicalCallId: 'call-3', sessionId: null, turnId: null, requestId: null,
+          channelId: null, workloadId: null, metadata: null,
+        }],
+      },
+    ],
+  });
+});
+
+test('unknown embedding attribution reports bounded-query truncation honestly', () => {
+  assert.deepEqual(summarizeUnknownEmbeddingAttribution([{
+    logical_call_id: 'sample',
+    total_unknown_embedding_count: 16,
+  }]), {
+    totalCount: 16,
+    returnedCount: 1,
+    truncated: true,
+    callSites: [{
+      purpose: null,
+      originType: null,
+      originStage: null,
+      service: null,
+      process: null,
+      workloadType: null,
+      toolName: null,
+      channelType: null,
+      slotKey: null,
+      provider: null,
+      model: null,
+      chargeSurface: null,
+      count: 1,
+      firstRecordedAtMs: null,
+      lastRecordedAtMs: null,
+      sampleCorrelations: [{
+        logicalCallId: 'sample',
+        sessionId: null,
+        turnId: null,
+        requestId: null,
+        channelId: null,
+        workloadId: null,
+        metadata: null,
+      }],
+    }],
+  });
+});
 
 function modelsConfig() {
   return {

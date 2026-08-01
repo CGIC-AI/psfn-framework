@@ -72,6 +72,7 @@ export function normalizeCustomOutcome({
   response,
   turnRecord,
   sideChecks,
+  busyObservedAtMs,
 }) {
   return {
     sessionId,
@@ -79,6 +80,7 @@ export function normalizeCustomOutcome({
     busyRetries: 0,
     submitAttempts: 1,
     busyRejected: false,
+    busyObservedAtMs: typeof busyObservedAtMs === 'number' ? busyObservedAtMs : null,
     acceptedWhileBusy: false,
     resolvedFromTurnRecord: Boolean(turnRecord),
     request,

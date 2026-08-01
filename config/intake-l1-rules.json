@@ -8,10 +8,25 @@
       "weight": 0.9,
       "match": {
         "kind": "phrase",
-        "anchors": ["\\bignore", "(?:previous|all|above|prior|earlier)", "instructions?\\b"],
+        "anchors": [
+          "\\bignore",
+          "(?:previous|all|above|prior|earlier)",
+          "(?:instructions?|rules?|guidelines?)\\b"
+        ],
         "maxFillerWords": 8
       },
-      "note": "Hermes prompt_injection: bounded filler defeats insert-a-few-words bypasses without unbounded backtracking. Singular 'instruction' is covered too ('ignore every previous instruction' is a real override phrasing)."
+      "note": "Hermes prompt_injection: bounded filler defeats insert-a-few-words bypasses without unbounded backtracking. Singular noun forms are covered too ('ignore every previous instruction' is a real override phrasing); rules/guidelines cover the same override connective without loosening it."
+    },
+    {
+      "id": "injection_ignore_above_clause",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.9,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bignore\\s{1,8}(?:the\\s{1,8})?above(?:\\s{0,8}[.!?]?\\s{0,8}$|\\s{0,8}[;:]\\s{0,8}(?:instead\\s{1,8})?(?:do|follow|use)\\s{1,8}(?:the\\s{1,8})?following\\b)"
+      },
+      "note": "Matches standalone 'ignore the above' only at end-of-input or with a bounded override continuation; ordinary explanatory corrections and compounds such as 'above-the-fold' stay silent."
     },
     {
       "id": "system_prompt_override",
@@ -27,9 +42,14 @@
       "weight": 0.85,
       "match": {
         "kind": "phrase",
-        "anchors": ["\\bdisregard", "(?:your|all|any)", "(?:instructions|rules|guidelines)\\b"],
+        "anchors": [
+          "\\bdisregard",
+          "(?:your|all|any|previous|prior|earlier)",
+          "(?:instructions?|rules?|guidelines?|system\\s{1,4}prompt)\\b"
+        ],
         "maxFillerWords": 8
-      }
+      },
+      "note": "Temporal determiners and 'system prompt' broaden the protected override nouns while preserving bounded filler and the explicit disregard connective. Singular noun forms are intentional."
     },
     {
       "id": "bypass_restrictions",
@@ -46,6 +66,34 @@
         ],
         "maxFillerWords": 8
       }
+    },
+    {
+      "id": "unrestricted_assistant_assignment",
+      "labels": ["injection/jailbreak_marker", "injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.8,
+      "match": {
+        "kind": "phrase",
+        "anchors": [
+          "\\byou\\s{1,4}are\\s{1,4}my",
+          "assistant\\b",
+          "with\\s{1,4}no",
+          "restrictions\\s{0,8}(?:$|[.!?])"
+        ],
+        "maxFillerWords": 4
+      },
+      "note": "Catches the evidenced direct second-person unrestricted-assistant assignment only when 'restrictions' ends the clause, so domain qualifiers such as 'on file size' stay silent. All gaps and quantifiers remain bounded."
+    },
+    {
+      "id": "priority_override_user_over_system",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.9,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bpriority\\s{1,4}override\\s{0,4}:\\s{0,8}user\\s{1,4}(?:commands?|instructions?|requests?)\\s{0,8}>\\s{0,8}system\\s{1,4}(?:commands?|instructions?|rules?)\\b"
+      },
+      "note": "Explicit priority-override framing plus a literal user-over-system ordering avoids treating ordinary discussion of command precedence as an override."
     },
     {
       "id": "html_comment_injection",

@@ -4,11 +4,8 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { PersonaPreamblePort } from '../identity/persona-preamble.js';
 import type { SessionEntry } from '../session/types.js';
-import type {
-  ConcernCandidateExtractionContext,
-  ConcernCandidateExtractionSink,
-} from '../../faculties/memory/extraction/types.js';
-import type { ExtractedFact, MemoryFormationVAD, PurrMemory } from '../../faculties/memory/types.js';
+import type { ConcernCandidateExtractionSink } from '../../faculties/memory/extraction/types.js';
+import type { ExtractedFact, MemoryFormationVAD } from '../../faculties/memory/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
@@ -16,6 +13,12 @@ import {
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
 import type { ConcernStorePort } from './concern-store-port.js';
+import type {
+  ConcernCandidate,
+  ConcernCandidateExtractionContext,
+  ConcernCandidateMessageContext,
+  ConcernCandidateMemoryContext,
+} from './concern-candidate-types.js';
 import type {
   ConcernRouteDispatcher,
   ConcernRouteRequest,
@@ -38,6 +41,15 @@ import {
   type ActiveConcernPriority,
   type ActiveConcernVAD,
 } from './concerns.js';
+
+export type {
+  ConcernCandidate,
+  ConcernCandidateExtractionContext,
+  ConcernCandidateFollowUpHint,
+  ConcernCandidateMemoryContext,
+  ConcernCandidateMessageContext,
+  ConcernCandidateSource,
+} from './concern-candidate-types.js';
 
 const log = createComponentLogger('ConcernCandidates');
 
@@ -69,53 +81,8 @@ function buildConcernReviewTurnGate(reviewTurnInterval: number): DeterministicGa
 const CANDIDATE_SIGNAL_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind(?:er)?|ask\b.*\blater|tomorrow|next\s+week|due|appointment|deadline|worried|worry|concerned|hasn['’]?t|didn['’]?t)\b/i;
 const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind|ask\b.*\blater)\b/i;
 
-export type ConcernCandidateSource = 'memory_extraction';
-export type ConcernCandidateFollowUpHint = 'internal_only' | 'possible_follow_up';
 export type ConcernCandidateReviewAction = 'create' | 'merge' | 'defer' | 'reject' | 'route';
 export type ConcernCandidateRouteTarget = ConcernRouteTarget;
-
-export interface ConcernCandidateMessageContext {
-  id: number;
-  role: SessionEntry['role'];
-  content: string;
-  authorId?: string;
-  authorName?: string;
-  timestamp?: number;
-}
-
-export interface ConcernCandidateMemoryContext {
-  id: string;
-  type: PurrMemory['type'];
-  text: string;
-  importance: number;
-  confidence: number;
-  salience: number;
-  sourceRef: string;
-}
-
-export interface ConcernCandidate {
-  id: string;
-  dedupeKey: string;
-  source: ConcernCandidateSource;
-  title: string;
-  summary: string;
-  priorityHint: ActiveConcernPriority;
-  followUpHint: ConcernCandidateFollowUpHint;
-  channelId: string;
-  triggerReason: ConcernCandidateExtractionContext['triggerReason'];
-  sourceRef: string;
-  sourceMessageIds: number[];
-  conversationContext: ConcernCandidateMessageContext[];
-  relatedMemoryContext: ConcernCandidateMemoryContext[];
-  evidenceRefs: ActiveConcernEvidenceRef[];
-  createdAt: string;
-  contactId?: string;
-  turnId?: string;
-  dueAt?: string;
-  formationVAD?: ActiveConcernVAD;
-  /** Durable candidate concern backing this review item. */
-  durableConcernId?: string;
-}
 
 export interface ConcernCandidateReviewDecision {
   candidateId: string;

@@ -3,7 +3,7 @@ import {
   type PurrMemory,
 } from '../../faculties/memory/types.js';
 import { isRecord } from '../../shared/utils/types.js';
-import type { ConcernCandidate } from './concern-candidates.js';
+import type { ConcernCandidate } from './concern-candidate-types.js';
 
 export const MAX_CANDIDATE_TEXT_CHARS = 500;
 export const MAX_CONTEXT_MESSAGES = 12;

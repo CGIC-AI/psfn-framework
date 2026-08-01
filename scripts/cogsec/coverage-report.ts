@@ -69,7 +69,7 @@ function render(coverage: CorpusCoverage, generatedAt: string): string {
     }
   }
   lines.push('');
-  return `${lines.join('\n')}\n`;
+  return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 
 const corpus = loadCorpus(CORPUS_DIR);

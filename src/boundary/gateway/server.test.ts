@@ -2523,6 +2523,29 @@ describe('GatewayServer', () => {
           statusText: 'Internal Server Error',
         }),
       );
+      const mcpHealth = vi.fn(() => ({
+        activeSessions: 1,
+        cachedStaticMetadataEntries: 1,
+        sessions: [{
+          companionId: '11111111-1111-4111-8111-111111111111',
+          serverId: 'notes',
+          hasLoadedTools: true,
+        }],
+        servers: [{
+          serverId: 'notes',
+          displayName: 'Private notes',
+          trustLevel: 'primary',
+          activeSession: true,
+          hasLoadedTools: true,
+          metadata: {
+            disposition: 'passed',
+            sha256: 'a'.repeat(64),
+            screenedAt: 1_000,
+            toolCount: 1,
+          },
+          tools: [{ toolName: 'search_notes', effect: 'read', confirmation: 'never' }],
+        }],
+      }));
 
       const { conn } = await setupServerConnection({
         ...createMinimalOptions(),
@@ -2540,6 +2563,11 @@ describe('GatewayServer', () => {
             ops: vaultOps as any,
           },
         },
+        mcpBroker: {
+          health: mcpHealth,
+          releaseCompanion: vi.fn(async () => {}),
+          close: vi.fn(async () => {}),
+        } as any,
       });
 
       const initial = await invokeRpc(conn, 600, 'runtime.health', {});
@@ -2547,11 +2575,25 @@ describe('GatewayServer', () => {
         expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
         expect.objectContaining({ serviceId: 'ntfy', status: 'healthy' }),
         expect.objectContaining({
+          serviceId: 'mcp',
+          status: 'healthy',
+          mcp: expect.objectContaining({
+            activeSessions: 1,
+            servers: [expect.objectContaining({
+              serverId: 'notes',
+              metadata: expect.objectContaining({ disposition: 'passed' }),
+            })],
+          }),
+        }),
+        expect.objectContaining({
           serviceId: 'vault',
           status: 'healthy',
           availableActions: ['write', 'read'],
         }),
       ]));
+      expect(mcpHealth).toHaveBeenCalledWith({
+        companionId: '11111111-1111-4111-8111-111111111111',
+      });
 
       const notifyFailure = await invokeRpc(conn, 601, 'notify.ntfy', {
         message: 'operator alert',

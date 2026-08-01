@@ -138,6 +138,51 @@ describe('MCP gateway broker', () => {
     expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(1);
   });
 
+  it('projects companion-scoped content-free health with policy and screened hash state', async () => {
+    const fake = fakeProtocolClient();
+    const broker = createMcpGatewayBroker({
+      config: config(),
+      clientFactory: fake.factory,
+      screening: screening(),
+    });
+
+    expect(broker.health({ companionId: 'ada' })).toMatchObject({
+      activeSessions: 0,
+      servers: [{
+        serverId: 'notes',
+        displayName: 'Private notes',
+        trustLevel: 'primary',
+        activeSession: false,
+        hasLoadedTools: false,
+        metadata: { disposition: 'not_scanned' },
+        tools: [
+          { toolName: 'search_notes', effect: 'read', confirmation: 'never' },
+          { toolName: 'write_note', effect: 'write', confirmation: 'sensitive' },
+        ],
+      }],
+    });
+
+    await broker.searchTools({ companionId: 'ada', query: 'notes' });
+    const health = broker.health({ companionId: 'ada' });
+    expect(health).toMatchObject({
+      activeSessions: 1,
+      cachedStaticMetadataEntries: 1,
+      servers: [{
+        serverId: 'notes',
+        activeSession: true,
+        hasLoadedTools: true,
+        metadata: { disposition: 'passed', toolCount: 2 },
+      }],
+    });
+    expect(health.servers[0]?.metadata.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(health)).not.toMatch(/endpoint|tokenRef|description|inputSchema|private result/iu);
+    expect(broker.health({ companionId: 'eve' })).toMatchObject({
+      activeSessions: 0,
+      cachedStaticMetadataEntries: 0,
+      servers: [],
+    });
+  });
+
   it('returns a selected schema only on inspect and unloads its session and definitions explicitly', async () => {
     const fake = fakeProtocolClient();
     const broker = createMcpGatewayBroker({

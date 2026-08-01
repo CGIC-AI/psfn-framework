@@ -7,13 +7,15 @@ import type {
   RuntimeServiceHealthSnapshot,
 } from '../../operator/tool-health/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { McpGatewayBroker } from './mcp/broker.js';
 
 type GatewayTrackedMethod =
   | 'notify.ntfy'
   | 'vault.write'
   | 'vault.read'
   | 'vault.search'
-  | 'vault.daily';
+  | 'vault.daily'
+  | 'mcp.execute';
 
 export interface GatewayConnectionSummary {
   total: number;
@@ -28,6 +30,7 @@ export interface GatewayRuntimeHealthOptions {
   vaultEnabled: boolean;
   vaultAllowActions: readonly VaultPolicyAction[];
   vaultOpsConfigured: boolean;
+  mcpBroker?: McpGatewayBroker;
 }
 
 interface MethodHealthState {
@@ -41,6 +44,7 @@ const TRACKED_METHODS = new Set<GatewayTrackedMethod>([
   'vault.read',
   'vault.search',
   'vault.daily',
+  'mcp.execute',
 ]);
 
 export class GatewayRuntimeHealthTracker {
@@ -48,6 +52,7 @@ export class GatewayRuntimeHealthTracker {
   private readonly vaultEnabled: boolean;
   private readonly vaultAllowActions: readonly VaultPolicyAction[];
   private readonly vaultOpsConfigured: boolean;
+  private readonly mcpBroker: McpGatewayBroker | undefined;
   private readonly methodState = new Map<GatewayTrackedMethod, MethodHealthState>();
 
   constructor(options: GatewayRuntimeHealthOptions) {
@@ -55,6 +60,7 @@ export class GatewayRuntimeHealthTracker {
     this.vaultEnabled = options.vaultEnabled;
     this.vaultAllowActions = [...options.vaultAllowActions];
     this.vaultOpsConfigured = options.vaultOpsConfigured;
+    this.mcpBroker = options.mcpBroker;
   }
 
   recordMethodSuccess(method: string): void {
@@ -83,7 +89,10 @@ export class GatewayRuntimeHealthTracker {
     });
   }
 
-  getSnapshot(connectionSummary: GatewayConnectionSummary): RuntimeServiceHealthSnapshot {
+  getSnapshot(
+    connectionSummary: GatewayConnectionSummary,
+    companionId?: string,
+  ): RuntimeServiceHealthSnapshot {
     const checkedAt = Date.now();
     return {
       checkedAt,
@@ -91,6 +100,7 @@ export class GatewayRuntimeHealthTracker {
         this.buildGatewayServiceHealth(connectionSummary, checkedAt),
         this.buildNtfyServiceHealth(checkedAt),
         this.buildVaultServiceHealth(checkedAt),
+        this.buildMcpServiceHealth(checkedAt, companionId),
       ],
     };
   }
@@ -199,6 +209,39 @@ export class GatewayRuntimeHealthTracker {
       detail: `Gateway vault RPC is enabled for ${formatVaultActions(this.vaultAllowActions)}.`,
       checkedAt,
       availableActions: [...this.vaultAllowActions],
+    };
+  }
+
+  private buildMcpServiceHealth(
+    checkedAt: number,
+    companionId: string | undefined,
+  ): RuntimeServiceHealth {
+    if (!this.mcpBroker) {
+      return {
+        serviceId: 'mcp',
+        status: 'not_applicable',
+        detail: 'External MCP tooling is disabled.',
+        checkedAt,
+      };
+    }
+    const snapshot = this.mcpBroker.health({ ...(companionId ? { companionId } : {}) });
+    const lastFailure = hasUnresolvedFailure(this.methodState.get('mcp.execute'))
+      ? this.methodState.get('mcp.execute')?.lastFailure
+      : undefined;
+    return {
+      serviceId: 'mcp',
+      status: lastFailure ? 'degraded' : 'healthy',
+      detail: lastFailure
+        ? `External MCP tooling is configured, but the last operation failed: ${lastFailure.message}`
+        : `External MCP tooling has ${snapshot.servers.length} configured server${snapshot.servers.length === 1 ? '' : 's'}, ${snapshot.activeSessions} active session${snapshot.activeSessions === 1 ? '' : 's'}, and ${snapshot.cachedStaticMetadataEntries} screened metadata cache entr${snapshot.cachedStaticMetadataEntries === 1 ? 'y' : 'ies'}.`,
+      checkedAt,
+      availableActions: ['catalog', 'search', 'inspect', 'call', 'release'],
+      ...(lastFailure ? { lastFailure } : {}),
+      mcp: {
+        activeSessions: snapshot.activeSessions,
+        cachedStaticMetadataEntries: snapshot.cachedStaticMetadataEntries,
+        servers: snapshot.servers,
+      },
     };
   }
 }

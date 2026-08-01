@@ -35,7 +35,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createToolSearchTool(inert), createToolsetTool(inert),
     createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
-    createMcpTool({ gateway: inert, getDisclosureLineage: () => undefined }),
+    createMcpTool({ gateway: inert }),
     createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),

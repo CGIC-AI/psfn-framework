@@ -188,6 +188,13 @@ not conversational context and may remain until broker shutdown. This gives
 multiple configured servers a cheap catalog without dumping every schema into
 the context window.
 
+The gateway authorizes each action with a connection-scoped, single-use opaque
+permit minted only for the exact MCP tool call returned by the model provider.
+The permit binds the normalized server/tool/arguments payload, expires quickly,
+and is consumed once. Agent RPC fields cannot choose sensitivity or channel
+lineage; the gateway applies the confidential fail-closed ceiling and never
+mints a permit for a shard-originated generation.
+
 All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized
 and hashed with SHA-256. An exact `(companion, hash)` hit reuses the prior
 screening decision; any byte-level semantic change produces a new hash and is
@@ -195,6 +202,13 @@ screened again. The hash means "screened at this content version," not trusted.
 Tool-call results are dynamic and are screened on every invocation regardless
 of server trust or prior hashes. Raw remote metadata/output never crosses the
 broker's returned port.
+
+An allowlist entry is effective only when its operator-recorded per-tool hash
+matches the current screened definition. `list_changed`, TTL refresh, or a
+reconnect that changes a same-name tool therefore removes its authorization.
+Before dispatch, arguments are validated locally against that exact screened
+JSON Schema using the SDK validator. Server trust and per-tool sensitivity
+ceilings both apply; the tool ceiling may narrow but never widen server trust.
 
 ### Channels and voice
 

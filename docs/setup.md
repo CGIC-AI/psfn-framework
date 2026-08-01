@@ -325,8 +325,18 @@ operator owns the server, its data, and every input path:
       "toolPolicy": {
         "default": "deny",
         "tools": {
-          "search_notes": { "effect": "read", "confirmation": "never" },
-          "write_note": { "effect": "write", "confirmation": "sensitive" }
+          "search_notes": {
+            "effect": "read",
+            "confirmation": "never",
+            "maxOutboundSensitivity": "confidential",
+            "metadataSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "write_note": {
+            "effect": "write",
+            "confirmation": "sensitive",
+            "maxOutboundSensitivity": "confidential",
+            "metadataSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
         }
       }
     }
@@ -354,9 +364,19 @@ configured level cannot exceed the least-trusted factor in this matrix:
 The level's default outbound ceiling is `public` for public servers,
 `public|personal` for regular/trusted servers, and every sensitivity for
 primary servers. `allowedOutboundSensitivity` may narrow that ceiling but
-cannot widen it. This is why an operator-owned closed journal can be primary,
+cannot widen it. Every tool must narrow it again with
+`maxOutboundSensitivity`. This is why an operator-owned closed journal can be primary,
 while email with multi-party input cannot be—even when the mailbox and MCP
 process are local.
+
+Tool authorization is also bound to the exact CogSec-screened definition.
+Start a new tool entry without `metadataSha256`, run a lazy MCP search, and copy
+the tool's `observedMetadataSha256` from Tools health into the owner file only
+after reviewing its screened description and input schema. (The repeated
+`a`/`b` digests above are placeholders.) An absent or mismatched digest keeps
+the tool out of search and denies inspect/call. A same-name tool whose schema or
+description changes therefore becomes unclassified until the operator reviews
+and updates the digest.
 
 Typical profiles:
 

@@ -3,6 +3,7 @@ import {
   createActiveMemoryRefreshFailureAlertHandler,
   createBackupFailureAlertHandler,
   createPromptGenerationFailureAlertHandler,
+  createQuarantineExpiryAlertHandler,
   createRepeatedScreeningFailureAlertHandler,
   createScheduledTaskFailureAlertHandler,
   createSleepConsolidationFailureAlertHandler,
@@ -180,6 +181,7 @@ describe('scheduled operator alerts', () => {
     const handler = createRepeatedScreeningFailureAlertHandler({
       notifier,
       companionName: 'PSFN',
+      failureThreshold: 3,
     });
     const event = {
       stage: 'l3' as const,
@@ -191,6 +193,8 @@ describe('scheduled operator alerts', () => {
     await handler(event);
     expect(notify).not.toHaveBeenCalled();
     await handler(event);
+    expect(notify).not.toHaveBeenCalled();
+    await handler(event);
     await handler(event);
 
     expect(notify).toHaveBeenCalledOnce();
@@ -199,7 +203,71 @@ describe('scheduled operator alerts', () => {
         kind: 'system',
         provenance: 'system.operator_alert.repeated_screening_failure',
       },
-      message: expect.stringMatching(/Stage: l3.*Observed runtime failures: 2/s),
+      message: expect.stringMatching(
+        /Stage: l3.*Observed runtime failures: 3.*Configured alert threshold: 3/s,
+      ),
+    }));
+  });
+
+  it('counts repeated screening failures independently per source class', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createRepeatedScreeningFailureAlertHandler({
+      notifier,
+      companionName: 'PSFN',
+      failureThreshold: 2,
+    });
+    const event = {
+      stage: 'l3' as const,
+      sourceClass: 'image_ocr',
+      error: 'invalid JSON',
+      timestamp: 4,
+    };
+
+    await handler(event);
+    await handler({ ...event, sourceClass: 'web_fetch' });
+    expect(notify).not.toHaveBeenCalled();
+    await handler(event);
+    await handler(event);
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Source class: image_ocr'),
+    }));
+  });
+
+  it('fails closed when the screening repetition threshold is missing or invalid', () => {
+    const { notifier } = makeFakeNotifier();
+    for (const failureThreshold of [undefined, 0, -1, 1.5, Number.NaN]) {
+      expect(() => createRepeatedScreeningFailureAlertHandler({
+        notifier,
+        companionName: 'PSFN',
+        failureThreshold: failureThreshold as number | undefined,
+      })).toThrow(/intakeScreeningFailureAlertThreshold/);
+    }
+  });
+
+  it('makes a quarantine TTL expiry operator-visible through the notification path', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createQuarantineExpiryAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      envelopeId: 'env-expired-001',
+      sourceChannelId: 'discord:operator-room',
+      heldAtMs: Date.parse('2026-07-19T12:00:00.000Z'),
+      expiredAtMs: Date.parse('2026-07-26T12:00:00.000Z'),
+      reason: 'quarantine TTL elapsed',
+    });
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: {
+        kind: 'system',
+        provenance: 'system.operator_alert.quarantine_expiry',
+      },
+      priority: 5,
+      message: expect.stringMatching(
+        /expired before operator review.*Envelope: env-expired-001.*quarantine TTL elapsed/s,
+      ),
     }));
   });
 });

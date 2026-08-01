@@ -115,7 +115,34 @@ describe('resolveIntakeScreenerModels', () => {
       visionEnabled: false,
     })).toEqual({
       l2: 'vendor/background-primary',
-      l3: ['vendor/reasoning-primary'],
+      l3: [
+        'vendor/reasoning-primary',
+        'vendor/reasoning-selected',
+        'vendor/background-primary',
+        'vendor/background-selected',
+      ],
+    });
+  });
+
+  it('preserves canonical reasoning then background candidates as single-mode failover', () => {
+    const runtime = config([
+      entry({ id: 'background-primary', model: 'vendor/background-primary', purpose: 'background' }),
+      entry({ id: 'background-fallback', model: 'vendor/background-fallback', purpose: 'background', primary: false }),
+      entry({ id: 'reasoning-primary', model: 'vendor/reasoning-primary', purpose: 'reasoning' }),
+      entry({ id: 'reasoning-fallback', model: 'vendor/reasoning-fallback', purpose: 'reasoning', primary: false }),
+    ]);
+
+    expect(resolveIntakeScreenerModels(runtime, {
+      l3DualModel: false,
+      visionEnabled: false,
+    })).toEqual({
+      l2: 'vendor/background-primary',
+      l3: [
+        'vendor/reasoning-primary',
+        'vendor/reasoning-fallback',
+        'vendor/background-primary',
+        'vendor/background-fallback',
+      ],
     });
   });
 
@@ -164,5 +191,17 @@ describe('resolveIntakeScreenerModels', () => {
       l3DualModel: true,
       visionEnabled: false,
     })).toThrow(/dual.*reasoning.*background.*different/is);
+  });
+
+  it('fails closed when single L3 mode has no distinct fallback model', () => {
+    const runtime = config([
+      entry({ id: 'background', model: 'vendor/shared', purpose: 'background' }),
+      entry({ id: 'reasoning', model: 'vendor/shared', purpose: 'reasoning' }),
+    ]);
+
+    expect(() => resolveIntakeScreenerModels(runtime, {
+      l3DualModel: false,
+      visionEnabled: false,
+    })).toThrow(/single-verdict.*at least two distinct.*single point of failure/is);
   });
 });

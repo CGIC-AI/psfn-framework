@@ -252,15 +252,28 @@ export function createQuarantineExpiryAlertHandler(
 export function createRepeatedScreeningFailureAlertHandler(options: {
   notifier: NotificationPort;
   companionName: string;
+  /** settings.json-owned threshold, counted independently per stage/source class. */
+  failureThreshold: number | undefined;
 }): (event: FailClosedScreeningEvent) => Promise<void> {
   const name = requireOperatorAlertCompanionName(options.companionName);
+  const failureThreshold = options.failureThreshold;
+  if (
+    typeof failureThreshold !== 'number'
+    || !Number.isInteger(failureThreshold)
+    || failureThreshold < 1
+  ) {
+    throw new Error(
+      'Invalid intakeScreeningFailureAlertThreshold: expected a positive integer, '
+      + `got ${String(failureThreshold)}`,
+    );
+  }
   const counts = new Map<string, number>();
   const alerted = new Set<string>();
   return async (event) => {
     const key = `${event.stage}:${event.sourceClass}`;
     const count = (counts.get(key) ?? 0) + 1;
     counts.set(key, count);
-    if (count === 1 || alerted.has(key)) return;
+    if (count < failureThreshold || alerted.has(key)) return;
 
     const delivered = await deliverOperatorAlert(options.notifier, {
       sender: REPEATED_SCREENING_FAILURE_SENDER,
@@ -271,6 +284,7 @@ export function createRepeatedScreeningFailureAlertHandler(options: {
         `Stage: ${event.stage}`,
         `Source class: ${event.sourceClass}`,
         `Observed runtime failures: ${count}`,
+        `Configured alert threshold: ${failureThreshold}`,
         `Last error: ${event.error}`,
       ].join('\n'),
     }, { alertKind: 'repeated_screening_failure', stage: event.stage });

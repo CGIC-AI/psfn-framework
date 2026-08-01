@@ -9,10 +9,11 @@
 // anything unparseable), and its raw output is NEVER echoed verbatim into
 // anything companion-visible.
 //
-// Model choice follows the canonical reasoning purpose. Optional dual-verdict
-// mode (`l3Screener.dualModel`, default single) adds the canonical background
-// purpose for an independent second perspective; startup requires the two
-// purposes to resolve to different models.
+// Model choice follows the canonical reasoning purpose, with distinct
+// background-purpose candidates as serial failover in single-verdict mode.
+// Optional dual-verdict mode (`l3Screener.dualModel`, default single) uses the
+// canonical background purpose for an independent second perspective; startup
+// requires the two purposes to resolve to different models.
 //
 // HARD RULE (operator-locked): anything that reaches L3 generates a CogSec
 // event AND a quarantine entry. `applyL3ScreeningOutcome` is that guarantee:
@@ -534,8 +535,8 @@ export interface EvaluateL3Input {
   l2?: { labels: readonly IntakeRiskLabel[]; injectionConfidence: number };
   config: IntakePolicyConfig;
   /**
-   * Startup-resolved canonical purpose models: reasoning first and, in dual
-   * mode, background second.
+   * Startup-resolved models. Single mode treats these as an ordered failover
+   * chain; dual mode requires exactly two independent models.
    */
   models: readonly string[];
   backend: L3ScreenerBackend;
@@ -582,9 +583,11 @@ function aggregateL3Verdicts(verdicts: L3Verdict[], dual: boolean): L3AggregateV
  * Skips when neither the L2 verdict nor the tier's policy triggers deep
  * screening; otherwise runs one verdict (single mode) or two independent
  * verdicts from two DIFFERENT models (dual mode) and aggregates fail-closed
- * (flag if either flags; both verdicts recorded). Any model failure —
- * transport, timeout, schema, verbatim echo — yields `failed_closed`: an
- * incomplete deep screen can never clear an item.
+ * (flag if either flags; both verdicts recorded). Single mode tries its
+ * startup-resolved purpose candidates in order, accepting only the first
+ * schema-valid verdict. Exhausted single-mode candidates, or ANY dual-model
+ * failure (transport, timeout, schema, verbatim echo), yields `failed_closed`:
+ * an incomplete deep screen can never clear an item.
  */
 export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOutcome> {
   const { config, context } = input;
@@ -594,17 +597,22 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
   }
 
   const l3 = config.l3Screener;
-  const expectedModels = l3.dualModel ? 2 : 1;
-  if (input.models.length !== expectedModels) {
+  const minimumModels = l3.dualModel ? 2 : 1;
+  if (
+    input.models.length < minimumModels
+    || (l3.dualModel && input.models.length !== minimumModels)
+  ) {
     throw new L3ScreenerError(
       `L3 ${l3.dualModel ? 'dual' : 'single'}-model mode requires `
-      + `${String(expectedModels)} startup-resolved purpose model(s), got `
+      + `${l3.dualModel ? 'exactly 2' : 'at least 1'} startup-resolved purpose model(s), got `
       + String(input.models.length),
     );
   }
   const models = [...input.models];
+  const verdicts: L3Verdict[] = [];
+  const errors: string[] = [];
 
-  const settled = await Promise.allSettled(models.map((model) => screenL3(
+  const callModel = (model: string): Promise<L3Verdict> => screenL3(
     input.text,
     context,
     {
@@ -615,28 +623,50 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
       maxOutputTokens: l3.maxOutputTokens,
       ...(input.fetch ? { fetch: input.fetch } : {}),
     },
-  )));
+  );
 
-  const verdicts: L3Verdict[] = [];
-  const errors: string[] = [];
-  for (const [index, result] of settled.entries()) {
-    if (result.status === 'fulfilled') {
-      verdicts.push(result.value);
-    } else {
-      const message = result.reason instanceof Error
-        ? result.reason.message
-        : String(result.reason);
-      errors.push(`${models[index]}: ${message}`);
+  if (l3.dualModel) {
+    const settled = await Promise.allSettled(models.map(callModel));
+    for (const [index, result] of settled.entries()) {
+      if (result.status === 'fulfilled') {
+        verdicts.push(result.value);
+      } else {
+        const message = result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+        errors.push(`${models[index]}: ${message}`);
+      }
+    }
+  } else {
+    // A model slug can be registry-valid yet provider-rejected, and a healthy
+    // model can still violate this screener's strict JSON/anti-echo contract.
+    // Try the canonical purpose fallbacks serially and accept only the first
+    // fully validated verdict. If none conform, the aggregate still fails
+    // closed with every named candidate failure preserved for diagnosis.
+    for (const model of models) {
+      try {
+        verdicts.push(await callModel(model));
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${model}: ${message}`);
+      }
     }
   }
 
-  if (errors.length > 0) {
+  if (verdicts.length === 0 || (l3.dualModel && errors.length > 0)) {
     const error = errors.join('; ');
     log.warn(
       `L3 screen failed for ${context.sourceClass}/${context.sourceRiskTier}; `
       + `failing closed to quarantine: ${error}`,
     );
     return { kind: 'failed_closed', error, verdicts, escalationReason: trigger.reason };
+  }
+  if (errors.length > 0) {
+    log.warn(
+      `L3 screen used fallback model for ${context.sourceClass}/${context.sourceRiskTier}; `
+      + `${String(errors.length)} earlier candidate(s) failed the output/transport contract`,
+    );
   }
   return {
     kind: 'screened',

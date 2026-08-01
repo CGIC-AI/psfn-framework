@@ -119,6 +119,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'memoryRefreshFailureAlertThreshold',
+  'intakeScreeningFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
   'profileSynthesisEnabled',
@@ -346,6 +347,13 @@ function getFilesystemSettingsSnapshot(config: SubstrateConfig) {
   return {
     fsReadMaxBytes: config.fsReadMaxBytes ?? null,
   } satisfies SnapshotSection<'fsReadMaxBytes'>;
+}
+
+function getCogSecSettingsSnapshot(config: SubstrateConfig) {
+  return {
+    intakeScreeningFailureAlertThreshold:
+      config.intakeScreeningFailureAlertThreshold ?? null,
+  } satisfies SnapshotSection<'intakeScreeningFailureAlertThreshold'>;
 }
 
 function getProviderSettingsSnapshot(config: SubstrateConfig) {
@@ -663,6 +671,7 @@ export function getRuntimeSettingsSnapshot(
     ...getModelSettingsSnapshot(config),
     ...getContextSettingsSnapshot(config),
     ...getMemorySettingsSnapshot(config),
+    ...getCogSecSettingsSnapshot(config),
     ...getFilesystemSettingsSnapshot(config),
     ...getProviderSettingsSnapshot(config),
     ...getWebAndGardenSettingsSnapshot(config),

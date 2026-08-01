@@ -212,6 +212,7 @@
     }
   },
   "memoryRefreshFailureAlertThreshold": 3,
+  "intakeScreeningFailureAlertThreshold": 3,
   "groupMemory": {
     "enabled": true,
     "memoryMode": "auto",

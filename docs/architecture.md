@@ -201,6 +201,14 @@ usable; remote call results and all other admitted tool outputs immediately
 tighten the next model step to confidential. Autonomous work-spec or
 shard-originated generations receive no MCP permit.
 
+The label-integrity boundary is the trusted companion turn runtime versus
+model-, tool-, and server-authored content. Arbitrary code execution inside the
+authenticated agent process is not claimed as contained: that process already
+authors the complete provider-bound prompt. Even under that boundary, the
+gateway independently retains MCP credentials, server/tool allowlists,
+capability checks, approvals, exact-payload permit consumption, CogSec output
+screening, and network transport policy.
+
 All MCP ingress crosses CogSec. Tool descriptions and schemas are canonicalized
 and hashed with SHA-256. An exact `(companion, hash)` hit reuses the prior
 screening decision; any byte-level semantic change produces a new hash and is

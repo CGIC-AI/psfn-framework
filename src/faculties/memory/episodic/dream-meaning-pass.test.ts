@@ -48,7 +48,7 @@ describe('DreamMeaningPass', () => {
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.6 },
-      affect: { labels: ['positive'] },
+      affect: { labels: [] },
       themes: ['evening'],
       spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
       artifactRefs: [],
@@ -80,6 +80,11 @@ describe('DreamMeaningPass', () => {
     const crying = await store.getEpisode('crying');
     expect(crying?.meaning?.text).toContain('cracked me open');
     expect(crying?.meaning?.source).toBe('companion_dream_pass');
+    await expect(store.getEpisodeFirstPersonAuthorship('crying')).resolves.toEqual({
+      episodeId: 'crying',
+      affect: 'none',
+      meaning: 'companion',
+    });
     const quiet = await store.getEpisode('quiet');
     expect(quiet?.meaning).toBeUndefined();
 

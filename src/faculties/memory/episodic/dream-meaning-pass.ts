@@ -7,6 +7,7 @@ import {
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import type {
+  CompanionAuthoredEpisodicStorePort,
   EpisodicStorePort,
 } from './store-port.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
@@ -19,6 +20,11 @@ import { toIsoInstant } from '../../../shared/utils/timing.js';
 const log = createComponentLogger('DreamMeaningPass');
 
 const DREAM_MEANING_GATE_LANE = 'dream_meaning';
+
+type DreamMeaningStore = Pick<
+  EpisodicStorePort,
+  'getProcessingWatermark' | 'searchByTime' | 'upsertProcessingWatermark'
+> & Pick<CompanionAuthoredEpisodicStorePort, 'updateCompanionAuthoredEpisode'>;
 
 /**
  * The dream pass runs as HER — through the agent loop with her persona and
@@ -388,7 +394,7 @@ export function parseMeaningContribution(content: string, knownEpisodeIds: Reado
  * enough, and records a short "what this meant to me" note per episode.
  */
 export class DreamMeaningPass {
-  private readonly store: EpisodicStorePort;
+  private readonly store: DreamMeaningStore;
   private readonly agent: DreamPassAgent;
   private readonly now: () => Date;
   private readonly passIntervalMs: number;
@@ -402,7 +408,7 @@ export class DreamMeaningPass {
   private readonly cadenceGate: DeterministicGateDefinition;
   private readonly episodesGate: DeterministicGateDefinition;
 
-  constructor(store: EpisodicStorePort, agent: DreamPassAgent, options: DreamMeaningPassOptions = {}) {
+  constructor(store: DreamMeaningStore, agent: DreamPassAgent, options: DreamMeaningPassOptions = {}) {
     this.store = store;
     this.agent = agent;
     this.now = options.now ?? (() => new Date());
@@ -663,24 +669,8 @@ export class DreamMeaningPass {
     for (const episode of reviewable) {
       const text = collected.get(episode.id);
       if (!text) continue;
-      await this.store.updateEpisode({
+      await this.store.updateCompanionAuthoredEpisode({
         id: episode.id,
-        title: episode.title,
-        landmark: episode.landmark,
-        startedAt: episode.startedAt,
-        endedAt: episode.endedAt,
-        threadId: episode.threadId,
-        channelId: episode.channelId,
-        participantContactIds: episode.participantContactIds,
-        salience: episode.salience,
-        // The dream pass authors felt meaning in prose (the `meaning` field);
-        // it preserves affect and the machine-signals sidecar untouched.
-        affect: episode.affect,
-        ...(episode.machineSignals ? { machineSignals: episode.machineSignals } : {}),
-        themes: episode.themes,
-        spanRefs: episode.spanRefs,
-        artifactRefs: episode.artifactRefs,
-        provenanceRefs: episode.provenanceRefs,
         meaning: {
           text,
           recordedAt,

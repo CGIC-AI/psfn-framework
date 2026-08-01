@@ -10,7 +10,11 @@ interface StoredEpisodeRow {
   started_at: string;
   ended_at: string;
   episode_json: unknown;
+  affect_authorship: PersistedFirstPersonAuthorship;
+  meaning_authorship: PersistedFirstPersonAuthorship;
 }
+
+type PersistedFirstPersonAuthorship = 'none' | 'companion' | 'companion_preserved' | null;
 
 interface StoredArcRow {
   id: string;
@@ -207,6 +211,12 @@ export class FakeEpisodicPool {
         started_at: String(values[10] ?? ''),
         ended_at: String(values[11] ?? ''),
         episode_json: values[21],
+        affect_authorship: values[24] === null
+          ? null
+          : String(values[24]) as Exclude<PersistedFirstPersonAuthorship, null>,
+        meaning_authorship: values[25] === null
+          ? null
+          : String(values[25]) as Exclude<PersistedFirstPersonAuthorship, null>,
       };
       this.episodes.set(row.id, row);
       return queryResult([], 'INSERT');
@@ -262,13 +272,24 @@ export class FakeEpisodicPool {
       // Content update: lifecycle columns (status, canonical/merged/
       // superseded links) are intentionally preserved.
       const row = this.episodes.get(String(values[0] ?? ''));
-      if (row) {
-        row.thread_id = values[4] === null ? null : String(values[4] ?? '');
-        row.started_at = String(values[6] ?? '');
-        row.ended_at = String(values[7] ?? '');
-        row.episode_json = values[17];
-      }
-      return queryResult([], 'UPDATE');
+      if (!row) return queryResult([], 'UPDATE');
+      const expectedSnapshotMatches = values.length < 24 || (
+        JSON.stringify(row.episode_json) === JSON.stringify(values[21])
+        && row.affect_authorship === values[22]
+        && row.meaning_authorship === values[23]
+      );
+      if (!expectedSnapshotMatches) return queryResult([], 'UPDATE');
+      row.thread_id = values[4] === null ? null : String(values[4] ?? '');
+      row.started_at = String(values[6] ?? '');
+      row.ended_at = String(values[7] ?? '');
+      row.episode_json = values[17];
+      row.affect_authorship = values[19] === null
+        ? null
+        : String(values[19]) as Exclude<PersistedFirstPersonAuthorship, null>;
+      row.meaning_authorship = values[20] === null
+        ? null
+        : String(values[20]) as Exclude<PersistedFirstPersonAuthorship, null>;
+      return queryResult([{}], 'UPDATE');
     }
 
     if (normalized.startsWith('insert into l01_episode_arcs')) {
@@ -354,6 +375,25 @@ export class FakeEpisodicPool {
       };
       this.lineages.set(row.id, row);
       return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('select id, episode_json, affect_authorship, meaning_authorship from l01_episodes')) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      return queryResult(row ? [{
+        id: row.id,
+        episode_json: row.episode_json,
+        affect_authorship: row.affect_authorship,
+        meaning_authorship: row.meaning_authorship,
+      }] : []);
+    }
+
+    if (normalized.startsWith('select id, affect_authorship, meaning_authorship from l01_episodes')) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      return queryResult(row ? [{
+        id: row.id,
+        affect_authorship: row.affect_authorship,
+        meaning_authorship: row.meaning_authorship,
+      }] : []);
     }
 
     if (normalized.startsWith('select id, episode_json from l01_episodes where id = any')) {

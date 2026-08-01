@@ -146,6 +146,19 @@ describe('Postgres live schema migrations', () => {
     );
   });
 
+  it('records episode first-person authorship without guessing legacy rows', () => {
+    const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
+
+    expectAddColumn(sql, 'l01_episodes', 'affect_authorship');
+    expectAddColumn(sql, 'l01_episodes', 'meaning_authorship');
+    expect(sql).toContain('l01_episodes_affect_authorship_check');
+    expect(sql).toContain('l01_episodes_meaning_authorship_check');
+    expect(sql).toContain("affect_authorship IN ('none', 'companion', 'companion_preserved')");
+    expect(sql).toContain("meaning_authorship IN ('none', 'companion', 'companion_preserved')");
+    expect(sql).not.toContain('UPDATE l01_episodes SET affect_authorship');
+    expect(sql).not.toContain('UPDATE l01_episodes SET meaning_authorship');
+  });
+
   it('upgrades existing contact tables and creates social graph tables for companion DBs', () => {
     const sql = migrationSql(POSTGRES_CONTACT_MIGRATIONS);
 

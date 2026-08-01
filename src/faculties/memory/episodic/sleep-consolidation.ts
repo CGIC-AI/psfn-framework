@@ -21,9 +21,10 @@ import {
 import { toIsoInstant } from '../../../shared/utils/timing.js';
 import { runEpisodicJudgment } from './judgment-runner.js';
 import type {
-  EpisodeCreateInput,
-  EpisodeUpdateInput,
   EpisodicStorePort,
+  FirstPersonPreservingEpisodeCreateInput,
+  FirstPersonPreservingEpisodeUpdateInput,
+  FirstPersonPreservingEpisodicStorePort,
 } from './store-port.js';
 
 const log = createComponentLogger('SleepConsolidation');
@@ -282,9 +283,10 @@ export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: n
   ));
 }
 
-function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
+function mergeChainIntoHead(chain: readonly Episode[]): FirstPersonPreservingEpisodeUpdateInput {
   const head = chain[0];
-  return chain.slice(1).reduce<EpisodeUpdateInput>((merged, episode) => ({
+  const meaningSource = chain.find(episode => episode.meaning !== undefined);
+  return chain.slice(1).reduce<FirstPersonPreservingEpisodeUpdateInput>((merged, episode) => ({
     ...merged,
     startedAt: merged.startedAt <= episode.startedAt ? merged.startedAt : episode.startedAt,
     endedAt: merged.endedAt >= episode.endedAt ? merged.endedAt : episode.endedAt,
@@ -297,9 +299,8 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
         episode.salience.emotionalIntensity ?? 0,
       ),
     },
-    // Affect is never fabricated on merge (bead h4fp.6): only carry forward an
-    // arousal the companion actually authored. An affect-empty candidate must
-    // not gain a machine-derived arousal:0 claim.
+    // Every preserved component must come from one of the persisted chain
+    // members; the store validates that before recording carried authorship.
     affect: {
       ...merged.affect,
       ...(episode.affect.arousal !== undefined
@@ -315,13 +316,6 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
     ...(head.schemaVersion >= 2 && (merged.machineSignals || episode.machineSignals)
       ? { machineSignals: mergeMachineSignals(merged.machineSignals, episode.machineSignals) }
       : {}),
-    // Carry the companion's authored felt-meaning forward (bead h4fp.6):
-    // head-wins on a tie (the head is the surviving episode), and a chain
-    // member's meaning is adopted only when the head has none — so a dream-pass
-    // note is never silently erased when claim-free canonicals are repaired.
-    ...(merged.meaning === undefined && episode.meaning
-      ? { meaning: episode.meaning }
-      : {}),
     themes: [...new Set([...merged.themes, ...episode.themes])],
     spanRefs: mergeUnique(merged.spanRefs, episode.spanRefs, ref => ref.spanId),
     artifactRefs: mergeUnique(merged.artifactRefs, episode.artifactRefs, ref => ref.artifactId),
@@ -336,9 +330,15 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
     channelId: head.channelId,
     participantContactIds: head.participantContactIds,
     salience: head.salience,
+    // The preservation port proves every aggregate component came from one of
+    // these persisted source rows; no learned value can enter here.
     affect: head.affect,
     ...(head.machineSignals ? { machineSignals: head.machineSignals } : {}),
-    ...(head.meaning ? { meaning: head.meaning } : {}),
+    ...(meaningSource?.meaning ? { meaning: meaningSource.meaning } : {}),
+    firstPersonFieldSources: {
+      affectEpisodeIds: chain.map(episode => episode.id),
+      ...(meaningSource ? { meaningEpisodeId: meaningSource.id } : {}),
+    },
     themes: head.themes,
     spanRefs: head.spanRefs,
     artifactRefs: head.artifactRefs,
@@ -387,7 +387,7 @@ function mergeAffect(sources: readonly Episode[]): EpisodeAffect {
 export function buildConsolidatedEpisodeInput(
   sources: readonly Episode[],
   group: Pick<ThematicGroup, 'title' | 'landmark' | 'themes' | 'salienceScore'>,
-): EpisodeCreateInput {
+): FirstPersonPreservingEpisodeCreateInput {
   if (sources.length < 2) {
     throw new Error('a consolidated episode requires at least two source candidates');
   }
@@ -443,6 +443,7 @@ export function buildConsolidatedEpisodeInput(
     participantContactIds: [...new Set(ordered.flatMap(episode => episode.participantContactIds))].sort(),
     salience: mergeSalience(ordered, group.salienceScore),
     affect: mergeAffect(ordered),
+    firstPersonFieldSources: { affectEpisodeIds: ordered.map(episode => episode.id) },
     ...(machineSignals ? { machineSignals } : {}),
     themes: group.themes,
     spanRefs,
@@ -642,7 +643,7 @@ function transcriptExcerptForEpisode(
  *    and intentionally does not happen here.
  */
 export class SleepCycleEpisodeConsolidator {
-  private readonly store: EpisodicStorePort;
+  private readonly store: EpisodicStorePort & FirstPersonPreservingEpisodicStorePort;
   private readonly sessionReader: SleepConsolidationSessionReader;
   private readonly llmProvider: Pick<LLMProviderPort, 'complete'>;
   private readonly now: () => Date;
@@ -658,7 +659,7 @@ export class SleepCycleEpisodeConsolidator {
   private readonly onRefinementGate: ((event: DeterministicGateEvent) => void) | null;
 
   constructor(
-    store: EpisodicStorePort,
+    store: EpisodicStorePort & FirstPersonPreservingEpisodicStorePort,
     sessionReader: SleepConsolidationSessionReader,
     llmProvider: Pick<LLMProviderPort, 'complete'>,
     options: SleepCycleConsolidationOptions = {},
@@ -766,7 +767,9 @@ export class SleepCycleEpisodeConsolidator {
         continue;
       }
       const head = chain[0];
-      const merged = await this.store.updateEpisode(mergeChainIntoHead(chain));
+      const merged = await this.store.updateEpisodePreservingFirstPersonFields(
+        mergeChainIntoHead(chain),
+      );
       result.mergeChains += 1;
       // A merged-into episode changes content, so it deserves re-refinement.
       refinedEpisodeIds.delete(head.id);
@@ -1015,7 +1018,7 @@ export class SleepCycleEpisodeConsolidator {
     // Stable id: a crash between creation and claim transfer converges here
     // instead of leaving an orphan duplicate.
     const consolidated = (episodeInput.id ? await this.store.getEpisode(episodeInput.id) : undefined)
-      ?? await this.store.createEpisode(episodeInput);
+      ?? await this.store.createEpisodePreservingFirstPersonFields(episodeInput);
 
     const transfer = await this.store.transferEpisodeMessageClaims({
       sourceEpisodeIds: sources.map(episode => episode.id),

@@ -328,12 +328,33 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding VECTOR,
     episode_json JSONB NOT NULL,
+    affect_authorship TEXT,
+    meaning_authorship TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     CHECK (started_at <= ended_at),
-    CHECK (status IN ('candidate', 'canonical', 'merged', 'superseded'))
+    CHECK (status IN ('candidate', 'canonical', 'merged', 'superseded')),
+    CHECK (affect_authorship IS NULL OR affect_authorship IN ('none', 'companion', 'companion_preserved')),
+    CHECK (meaning_authorship IS NULL OR meaning_authorship IN ('none', 'companion', 'companion_preserved'))
   );
   `,
+  // Authorship is deliberately nullable for rows that predate structural
+  // first-person authority. NULL means legacy/unknown; it is never guessed or
+  // backfilled. Every new store write supplies an explicit value.
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS affect_authorship TEXT;`,
+  `ALTER TABLE l01_episodes ADD COLUMN IF NOT EXISTS meaning_authorship TEXT;`,
+  `ALTER TABLE l01_episodes DROP CONSTRAINT IF EXISTS l01_episodes_affect_authorship_check;`,
+  `ALTER TABLE l01_episodes ADD CONSTRAINT l01_episodes_affect_authorship_check CHECK (
+    affect_authorship IS NULL
+    OR affect_authorship IN ('companion', 'companion_preserved')
+    OR (affect_authorship = 'none' AND affect_json = '{"labels": []}'::jsonb)
+  );`,
+  `ALTER TABLE l01_episodes DROP CONSTRAINT IF EXISTS l01_episodes_meaning_authorship_check;`,
+  `ALTER TABLE l01_episodes ADD CONSTRAINT l01_episodes_meaning_authorship_check CHECK (
+    meaning_authorship IS NULL
+    OR (meaning_authorship IN ('companion', 'companion_preserved') AND episode_json ? 'meaning')
+    OR (meaning_authorship = 'none' AND NOT (episode_json ? 'meaning'))
+  );`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_scope_time ON l01_episodes(channel_id, thread_id, started_at, ended_at);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_thread_time ON l01_episodes(thread_id, started_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_channel_time ON l01_episodes(channel_id, started_at, id);`,

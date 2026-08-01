@@ -1,8 +1,10 @@
 import type {
   Episode,
+  EpisodeAffect,
   EpisodeArc,
   EpisodeArcKind,
   EpisodeArtifactRef,
+  EpisodeMeaning,
   EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
 
@@ -20,6 +22,13 @@ import type {
  */
 export type EpisodeLifecycleStatus = 'candidate' | 'canonical';
 
+export interface EpisodeFirstPersonFieldSources {
+  /** Persisted rows whose authored affect components are preserved/combined. */
+  affectEpisodeIds: readonly string[];
+  /** Persisted row whose meaning is copied byte-for-byte, when present. */
+  meaningEpisodeId?: string;
+}
+
 export type EpisodeCreateInput = Omit<
   Episode,
   'schemaVersion' | 'id' | 'createdAt' | 'updatedAt'
@@ -36,15 +45,57 @@ export type EpisodeUpdateInput = Omit<
   'schemaVersion' | 'createdAt' | 'updatedAt'
 > & {
   updatedAt?: string;
-  /**
-   * Explicit opt-in to erase a previously companion-authored `meaning` (bead
-   * h4fp.6). `updateEpisode` is a full-row replace, so it fails closed when an
-   * input omits `meaning` on an episode that already carries one — the caller
-   * must either carry the meaning forward or set this sentinel to drop it on
-   * purpose. Not persisted; consumed by the store's drop-guard only.
-   */
-  clearMeaning?: boolean;
 };
+
+export type FirstPersonPreservingEpisodeCreateInput = EpisodeCreateInput & {
+  /**
+   * Existing rows whose first-person field components are preserved. This
+   * control is available only on the preservation port used by consolidation;
+   * the store rejects every component absent from these persisted sources.
+   */
+  firstPersonFieldSources: EpisodeFirstPersonFieldSources;
+};
+
+export type FirstPersonPreservingEpisodeUpdateInput = EpisodeUpdateInput & {
+  firstPersonFieldSources: EpisodeFirstPersonFieldSources;
+};
+
+/**
+ * Authorship recorded beside each first-person field at the SQL boundary.
+ * `companion_preserved` identifies machine lifecycle output assembled solely
+ * from persisted companion-authored components; it is not a new assertion by
+ * the companion.
+ */
+export type EpisodeFieldAuthorship =
+  | 'none'
+  | 'companion'
+  | 'companion_preserved'
+  | 'legacy_unknown';
+
+export interface EpisodeFirstPersonAuthorship {
+  episodeId: string;
+  affect: EpisodeFieldAuthorship;
+  meaning: EpisodeFieldAuthorship;
+}
+
+/**
+ * Full-row create available only through the companion-authored port. Machine
+ * create callers use `EpisodeCreateInput`, which is checked as preservation-
+ * only by the store.
+ */
+export type CompanionAuthoredEpisodeCreateInput = EpisodeCreateInput;
+
+/**
+ * Narrow first-person patch. Omitted fields are preserved. Meaning deletion
+ * remains explicit and cannot be combined with a replacement meaning.
+ */
+export interface CompanionAuthoredEpisodeUpdateInput {
+  id: string;
+  affect?: EpisodeAffect;
+  meaning?: EpisodeMeaning;
+  clearMeaning?: boolean;
+  updatedAt?: string;
+}
 
 export type EpisodeArcWriteInput = Omit<
   EpisodeArc,
@@ -395,6 +446,9 @@ export interface EpisodicStorePort {
    */
   confirmEpisodeCanonical(episodeId: string): EpisodicStoreResult<void>;
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
+  getEpisodeFirstPersonAuthorship(
+    id: string,
+  ): EpisodicStoreResult<EpisodeFirstPersonAuthorship | undefined>;
   getEpisodesByIds(ids: readonly string[]): EpisodicStoreResult<Episode[]>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
@@ -464,6 +518,35 @@ export interface EpisodicStorePort {
    */
   transferEpisodeMessageClaims(input: EpisodeClaimTransferInput): EpisodicStoreResult<EpisodeClaimTransferResult>;
   getMaintenanceDiagnostics(options?: EpisodicMaintenanceDiagnosticsOptions): EpisodicStoreResult<EpisodicMaintenanceDiagnostics>;
+}
+
+/**
+ * Capability surface held by companion-authored lanes. General synthesis,
+ * consolidation, classifiers, and admin callers receive only
+ * `EpisodicStorePort`, which has no method capable of creating first-person
+ * affect/meaning.
+ */
+export interface CompanionAuthoredEpisodicStorePort {
+  createCompanionAuthoredEpisode(
+    input: CompanionAuthoredEpisodeCreateInput,
+  ): EpisodicStoreResult<Episode>;
+  updateCompanionAuthoredEpisode(
+    input: CompanionAuthoredEpisodeUpdateInput,
+  ): EpisodicStoreResult<Episode>;
+}
+
+/**
+ * Machine lifecycle capability that can preserve first-person components from
+ * persisted source rows but cannot originate a value absent from those rows.
+ * Keep this port out of classifier and generic store dependencies.
+ */
+export interface FirstPersonPreservingEpisodicStorePort {
+  createEpisodePreservingFirstPersonFields(
+    input: FirstPersonPreservingEpisodeCreateInput,
+  ): EpisodicStoreResult<Episode>;
+  updateEpisodePreservingFirstPersonFields(
+    input: FirstPersonPreservingEpisodeUpdateInput,
+  ): EpisodicStoreResult<Episode>;
 }
 
 export const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;

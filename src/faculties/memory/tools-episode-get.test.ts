@@ -43,7 +43,7 @@ describe('memory action=get', () => {
       new FakeEpisodicPool() as unknown as Pool,
       { now: () => new Date('2026-07-18T12:00:00.000Z') },
     );
-    await store.createEpisode({
+    await store.createCompanionAuthoredEpisode({
       id: 'episode-tool-id',
       title: 'A precise remembered exchange',
       landmark: 'The exchange that should be drilled into by id.',
@@ -106,7 +106,7 @@ describe('memory action=get', () => {
     );
     const PRIVATE_CHANNEL = 'api:private-room';
     const PRIVATE_TURN = '00000000-0000-7000-a000-000000000099' as TurnID;
-    await store.createEpisode({
+    await store.createCompanionAuthoredEpisode({
       id: 'private-episode-id',
       title: 'A confidential exchange in another channel',
       landmark: 'The private exchange that must not leak cross-channel.',

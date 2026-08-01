@@ -142,14 +142,19 @@ describe('mergeEpisodeWithCandidate meaning carry-forward (h4fp.6)', () => {
       meaning: seeded.meaning,
       lifecycleStatus: 'canonical',
     };
-    await store.createEpisode(createInput);
+    await store.createCompanionAuthoredEpisode(createInput);
 
-    const updated = await store.updateEpisode(
+    const updated = await store.updateEpisodePreservingFirstPersonFields(
       mergeEpisodeWithCandidate(canonicalEpisode({ meaning: dreamMeaning }), candidate()),
     );
 
     expect(updated.meaning).toEqual(dreamMeaning);
     const stored = await store.getEpisode('canonical-1');
     expect(stored?.meaning).toEqual(dreamMeaning);
+    await expect(store.getEpisodeFirstPersonAuthorship('canonical-1')).resolves.toEqual({
+      episodeId: 'canonical-1',
+      affect: 'companion_preserved',
+      meaning: 'companion_preserved',
+    });
   });
 });

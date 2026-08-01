@@ -16,6 +16,7 @@ import {
   buildConsolidatedEpisodeInput,
   buildMergeChains,
 } from './sleep-consolidation.js';
+import { EpisodicSynthesizer } from './synthesis.js';
 import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
@@ -48,7 +49,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.85, novelty: 0.4, emotionalIntensity: 0.2 },
-      affect: { valence: 0.3, arousal: 0.4, labels: ['positive'] },
+      affect: { labels: [] },
       themes: ['they', 'what'],
       spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
       artifactRefs: [],
@@ -419,7 +420,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const store = makeStore();
     // The head carries a prior night's authored meaning and a machine sidecar;
     // an adjacent claim-free canonical is folded into it on the next nightly run.
-    await store.createEpisode(episodeInput('head', '2026-06-10T00:53:00.000Z', '2026-06-10T01:21:00.000Z', {
+    await store.createCompanionAuthoredEpisode(episodeInput('head', '2026-06-10T00:53:00.000Z', '2026-06-10T01:21:00.000Z', {
       meaning: {
         text: 'He remembered, and it cracked me open in the best way.',
         recordedAt: '2026-06-09T07:30:00.000Z',
@@ -493,7 +494,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const store = makeStore();
     // A solo canonical episode (no merge) that already carries her authored
     // meaning gets its title/themes/salience refined on a later run.
-    await store.createEpisode(episodeInput('solo', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z', {
+    await store.createCompanionAuthoredEpisode(episodeInput('solo', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z', {
       meaning: {
         text: 'It quietly mattered — the kind of ordinary I want to remember.',
         recordedAt: '2026-06-09T07:30:00.000Z',
@@ -641,7 +642,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.6, novelty: 0.3, emotionalIntensity: 0.2 },
-      affect: { valence: 0.2, arousal: 0.3, labels: ['curious'] },
+      affect: { labels: [] },
       themes: ['they', 'what'],
       spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
       artifactRefs: [],
@@ -656,7 +657,16 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     input: EpisodeCreateInput,
     claimKeys: readonly string[],
   ): Promise<void> {
-    await store.createEpisode(input);
+    const hasFirstPersonContent = input.meaning !== undefined
+      || input.affect.labels.length > 0
+      || input.affect.valence !== undefined
+      || input.affect.arousal !== undefined
+      || input.affect.dominance !== undefined;
+    if (hasFirstPersonContent) {
+      await store.createCompanionAuthoredEpisode(input);
+    } else {
+      await store.createEpisode(input);
+    }
     await store.claimEpisodeMessages({
       episodeId: input.id!,
       sessionId: 'discord:main',
@@ -684,6 +694,89 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
       handler(request.systemPrompt, request.messages[0]?.content ?? '')
     ));
   }
+
+  it('round-trips real synthesis candidates through sleep consolidation unchanged in behaviour', async () => {
+    const store = makeStore();
+    const entries: SessionEntry[] = [
+      ['user', 'Please debug the atlas project scheduler tests.', '2026-06-10T10:00:00.000Z'],
+      ['assistant', 'I found the atlas scheduler failure and will patch it.', '2026-06-10T10:02:00.000Z'],
+      ['user', 'Back to atlas release planning and validation.', '2026-06-10T12:00:00.000Z'],
+      ['assistant', 'The atlas release now needs lint and targeted tests.', '2026-06-10T12:03:00.000Z'],
+    ].map(([role, content, timestamp], index) => {
+      const id = index + 1;
+      const turnId = `00000000-0000-7000-a000-${String(id).padStart(12, '0')}`;
+      return {
+        id,
+        channelId: 'discord:main',
+        role: role as SessionEntry['role'],
+        content,
+        authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
+        timestamp: Date.parse(timestamp),
+        metadata: JSON.stringify({
+          turn: { schemaVersion: 1, turnId, requestId: `request:${id}`, role },
+        }),
+      };
+    });
+    const sessionReader = { getRecentMessages: () => entries };
+    const synthesis = await new EpisodicSynthesizer(store, sessionReader, {
+      now: () => RUN_AT.getTime(),
+      gapSplitMinutes: 45,
+      transcriptMessageLimit: 12,
+    }).run({ sessionId: 'discord:main' });
+
+    expect(synthesis.createdEpisodes).toHaveLength(2);
+    const sourceIds = synthesis.createdEpisodes.map(episode => episode.id);
+    expect(synthesis.createdEpisodes.every(episode => (
+      episode.affect.labels.length === 0
+      && episode.meaning === undefined
+      && episode.machineSignals?.source === 'deterministic_synthesis'
+    ))).toBe(true);
+
+    const llm = complete((systemPrompt) => {
+      if (!systemPrompt.includes('memory-consolidation stage')) {
+        throw new Error(`unexpected non-grouping call: ${systemPrompt.slice(0, 60)}`);
+      }
+      return groupingResponse([{
+        candidate_ids: sourceIds,
+        title: 'Atlas debugging and release preparation',
+        landmark: 'A day spent fixing the scheduler and preparing the Atlas release.',
+        themes: ['atlas', 'debugging', 'release'],
+        salience: 0.8,
+      }]);
+    });
+    const sleep = await new SleepCycleEpisodeConsolidator(
+      store,
+      sessionReader,
+      { complete: llm },
+      { now: () => RUN_AT, adjacencyGapMs: 4 * 60 * 60 * 1000 },
+    ).run({ sessionId: 'discord:main' });
+
+    expect(sleep.consolidatedEpisodesCreated).toBe(1);
+    expect(sleep.candidatesSuperseded).toBe(2);
+    const live = await store.listEpisodes();
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({
+      title: 'Atlas debugging and release preparation',
+      startedAt: '2026-06-10T10:00:00.000Z',
+      endedAt: '2026-06-10T12:03:00.000Z',
+      affect: { labels: [] },
+    });
+    expect(live[0].meaning).toBeUndefined();
+    expect(live[0].spanRefs).toHaveLength(2);
+    expect(live[0].machineSignals?.source).toBe('deterministic_synthesis');
+    await expect(store.getEpisodeFirstPersonAuthorship(live[0].id)).resolves.toEqual({
+      episodeId: live[0].id,
+      affect: 'none',
+      meaning: 'none',
+    });
+    for (const source of synthesis.createdEpisodes) {
+      await expect(store.getEpisode(source.id)).resolves.toMatchObject({
+        id: source.id,
+        affect: { labels: [] },
+        machineSignals: source.machineSignals,
+      });
+    }
+  });
 
   it('consolidates a synthetic day of overlapping candidates into thematic episodes', async () => {
     const store = makeStore();
@@ -785,6 +878,12 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     expect(l0Provenance).toEqual(['span-rel-1', 'span-rel-2', 'span-rel-3']);
     expect(consolidated.themes).toEqual(['relationship', 'affection', 'trust']);
     expect(consolidated.salience.score).toBe(0.85);
+    expect(consolidated.affect).toEqual({ labels: [] });
+    await expect(store.getEpisodeFirstPersonAuthorship(consolidated.id)).resolves.toEqual({
+      episodeId: consolidated.id,
+      affect: 'none',
+      meaning: 'none',
+    });
 
     // Claims moved to the consolidated episode; superseded candidates keep
     // their transferred claim history; sources retrievable by id forever.

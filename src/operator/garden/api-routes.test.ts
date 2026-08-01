@@ -2060,8 +2060,8 @@ describe('AdminServer JSON API routes', () => {
       ...overrides,
     });
 
-    await episodicStore.createEpisode(baseEpisode({ id: 'episode-alpha-1' }));
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({ id: 'episode-alpha-1' }));
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-alpha-2',
       title: 'Operator followed a related arc',
       startedAt: '2026-03-11T11:00:00.000Z',
@@ -2075,7 +2075,7 @@ describe('AdminServer JSON API routes', () => {
       }],
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-alpha-2' }],
     }));
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-beta-1',
       title: 'Unrelated thread remains filterable',
       threadId: 'thread-beta',
@@ -2240,7 +2240,7 @@ describe('AdminServer JSON API routes', () => {
       ...overrides,
     });
 
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-wedding-venue',
       title: 'Wedding venue walkthrough',
       landmark: 'The venue walkthrough stayed separate from later cake and music decisions.',
@@ -2250,7 +2250,7 @@ describe('AdminServer JSON API routes', () => {
       spanRefs: [{ spanId: 'span-wedding-venue', threadId: 'thread-wedding', channelId: 'api:test' }],
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-wedding-venue' }],
     }));
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-wedding-cake',
       title: 'Wedding cake tasting shortlist',
       landmark: 'The cake tasting narrowed flavors and preserved the bakery shortlist.',
@@ -2264,7 +2264,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
       ],
     }));
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-wedding-bakery',
       title: 'Bakery deposit follow-up',
       landmark: 'The bakery follow-up captured deposit timing without replacing the cake tasting episode.',
@@ -2278,7 +2278,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
       ],
     }));
-    await episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createCompanionAuthoredEpisode(baseEpisode({
       id: 'episode-wedding-song',
       title: 'Our song first-dance idea',
       landmark: 'A music subtopic about using their anniversary song for the first dance.',

@@ -5,6 +5,10 @@ import {
   createPostgresEpisodicStore,
   type EpisodicStorePort,
 } from '../faculties/memory/episodic/index.js';
+import type {
+  CompanionAuthoredEpisodicStorePort,
+  FirstPersonPreservingEpisodicStorePort,
+} from '../faculties/memory/episodic/store-port.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
 import { createPostgresHubIdentityEnrollmentStore } from '../core/enrollment/store.js';
@@ -65,6 +69,10 @@ export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
+  /** Consolidation-only capability for source-proven first-person preservation. */
+  firstPersonPreservingEpisodicStore: EpisodicStorePort & FirstPersonPreservingEpisodicStorePort;
+  /** Narrow capability for the companion's own first-person affect/meaning writes. */
+  companionAuthoredEpisodicStore: CompanionAuthoredEpisodicStorePort;
   reflectionStore: ReflectionMetacognitionJournalStore;
   contactStore?: ContactStorePort;
   /**
@@ -240,6 +248,7 @@ export async function createAgentPersistenceRuntime(
       ? { contactLifecycleGateway: options.contactLifecycleGateway }
       : {}),
   });
+  const episodicStore = createPostgresEpisodicStore(databaseUrl, { schema, role: tenantRole });
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
@@ -249,7 +258,9 @@ export async function createAgentPersistenceRuntime(
       schema,
       role: tenantRole,
     }),
-    episodicStore: createPostgresEpisodicStore(databaseUrl, { schema, role: tenantRole }),
+    episodicStore,
+    firstPersonPreservingEpisodicStore: episodicStore,
+    companionAuthoredEpisodicStore: episodicStore,
     reflectionStore: new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
       {

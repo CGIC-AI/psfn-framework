@@ -331,6 +331,153 @@ describe('AgentApiBackend Hub device principal boundary', () => {
 });
 
 describe('AgentApiBackend chat completion deadlines', () => {
+  it('cancels a queued turn before it can enter the agent loop', async () => {
+    let resolveFirstTurn!: (response: any) => void;
+    const firstTurn = new Promise<any>((resolve) => {
+      resolveFirstTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const handleMessage = vi.fn()
+      .mockImplementationOnce(() => firstTurn)
+      .mockResolvedValue({
+        content: 'live follow-up',
+        channelId: 'api:principal-1:queued-cancel-session',
+        metadata: { inputTokens: 1, outputTokens: 1 },
+      });
+    const abort = vi.fn(() => ({ status: 'signaled' as const }));
+    const sessionManager = createSessionManagerStub();
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort } as any,
+      eventBus,
+      sessionManager,
+    });
+    const request = (
+      requestId: string,
+      content: string,
+      priorMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [],
+    ) => backend.handleChatCompletion({
+      requestId,
+      request: {
+        model: 'test-model',
+        messages: [...priorMessages, { role: 'user' as const, content }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' as const },
+      headers: { 'x-session-id': 'queued-cancel-session' },
+    });
+
+    const firstResult = request('req-queue-owner', 'Keep the channel busy');
+    await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(1));
+    const abandonedResult = request('req-queue-abandoned', 'This client left', [
+      { role: 'user', content: 'Abandoned client-supplied history' },
+      { role: 'assistant', content: 'Abandoned synthetic reply' },
+    ]);
+    await Promise.resolve();
+
+    await expect(backend.cancelChatCompletion({ requestId: 'req-queue-abandoned' }))
+      .resolves.toEqual({ cancelled: true });
+    await expect(abandonedResult).resolves.toEqual({
+      ok: false,
+      error: {
+        status: 499,
+        type: 'request_cancelled',
+        message: 'Request cancelled before turn started',
+      },
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(abort).not.toHaveBeenCalled();
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+    expect(cancellationOutcomes).toEqual(['acknowledged']);
+
+    resolveFirstTurn({
+      content: 'owner complete',
+      channelId: 'api:principal-1:queued-cancel-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(firstResult).resolves.toMatchObject({ ok: true });
+
+    await expect(request('req-queue-live', 'Run after the abandoned request'))
+      .resolves.toMatchObject({ ok: true, response: { content: 'live follow-up' } });
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(handleMessage.mock.calls.map(call => call[0].id)).toEqual([
+      'req-queue-owner',
+      'req-queue-live',
+    ]);
+  });
+
+  it('applies the existing RPC deadline while a turn is still queued', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirstTurn!: (response: any) => void;
+      const firstTurn = new Promise<any>((resolve) => {
+        resolveFirstTurn = resolve;
+      });
+      const eventBus = new EventBus();
+      const handleMessage = vi.fn()
+        .mockImplementationOnce(() => firstTurn)
+        .mockResolvedValue({
+          content: 'live after deadline',
+          channelId: 'api:principal-1:queued-deadline-session',
+          metadata: { inputTokens: 1, outputTokens: 1 },
+        });
+      const abort = vi.fn(() => ({ status: 'signaled' as const }));
+      const backend = new AgentApiBackend({
+        agentLoop: { handleMessage, abort } as any,
+        eventBus,
+        sessionManager: createSessionManagerStub(),
+      });
+      const request = (requestId: string, content: string, timeoutMs?: number) => (
+        backend.handleChatCompletion({
+          requestId,
+          request: {
+            model: 'test-model',
+            messages: [{ role: 'user' as const, content }],
+          },
+          principal: { id: 'principal-1', mode: 'api_key' as const },
+          headers: { 'x-session-id': 'queued-deadline-session' },
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        })
+      );
+
+      const firstResult = request('req-deadline-owner', 'Keep the channel busy');
+      await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(1));
+      const expiredResult = request('req-deadline-queued', 'Expire in the queue', 1_000);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(expiredResult).resolves.toEqual({
+        ok: false,
+        error: {
+          status: 504,
+          type: 'request_timeout',
+          message: 'Request timed out before turn started',
+        },
+      });
+      expect(handleMessage).toHaveBeenCalledTimes(1);
+      expect(abort).not.toHaveBeenCalled();
+
+      resolveFirstTurn({
+        content: 'owner complete',
+        channelId: 'api:principal-1:queued-deadline-session',
+        metadata: { inputTokens: 1, outputTokens: 1 },
+      });
+      await expect(firstResult).resolves.toMatchObject({ ok: true });
+      await expect(request('req-deadline-live', 'Run after the expired request'))
+        .resolves.toMatchObject({ ok: true, response: { content: 'live after deadline' } });
+      expect(handleMessage.mock.calls.map(call => call[0].id)).toEqual([
+        'req-deadline-owner',
+        'req-deadline-live',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns at visible turn completion instead of waiting for post-turn cleanup', async () => {
     vi.useFakeTimers();
     try {

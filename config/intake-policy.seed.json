@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
@@ -23,6 +23,14 @@
     "deniedSites": [],
     "trustedPeople": [],
     "deniedPeople": []
+  },
+  "urlScanner": {
+    "schemeActions": {
+      "javascript": "deny",
+      "data": "deny_except_inline_image",
+      "mailto": "allow",
+      "tel": "allow"
+    }
   },
   "quarantine": {
     "itemTtlHours": 168,

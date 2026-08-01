@@ -62,6 +62,32 @@ describe('intake policy owner file', () => {
     expect(policy.quarantine.maxHeldItems).toBeGreaterThanOrEqual(1);
   });
 
+  it('validates fail-closed URL scheme actions from the owner file', () => {
+    const policy = seedPolicy();
+    expect(policy.urlScanner.schemeActions).toEqual({
+      javascript: 'deny',
+      data: 'deny_except_inline_image',
+      mailto: 'allow',
+      tel: 'allow',
+    });
+
+    const { urlScanner: _dropped, ...withoutUrlScanner } = policy;
+    expect(() => validateIntakePolicy(withoutUrlScanner, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/urlScanner must be an object/);
+    expect(() => validateIntakePolicy(
+      { ...policy, urlScanner: { schemeActions: { javascript: 'ignore' } } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/urlScanner\.schemeActions\.javascript must be one of/);
+    expect(() => validateIntakePolicy(
+      { ...policy, urlScanner: { schemeActions: { JavaScript: 'deny' } } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/urlScanner\.schemeActions has invalid scheme/);
+    expect(() => validateIntakePolicy(
+      { ...policy, urlScanner: { schemeActions: { mailto: 'allow' } } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/must deny at least one scheme/);
+  });
+
   it('validates injection classifier thresholds in the seed and covers every tier', () => {
     const policy = seedPolicy();
     expect(policy.injectionClassifier.labelThreshold).toBeGreaterThan(0);
@@ -174,7 +200,7 @@ describe('intake policy owner file', () => {
   it('rejects invalid config on save (never writes a broken owner file)', () => {
     const dataDir = makeDataDir();
     expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
-      .toThrow(/schemaVersion must be 3/);
+      .toThrow(/schemaVersion must be 4/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 

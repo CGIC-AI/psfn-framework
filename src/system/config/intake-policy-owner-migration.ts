@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   writeFileDurableAtomicSync,
@@ -20,12 +21,18 @@ import {
 import {
   createSkillWriteSinkRule,
   INTAKE_POLICY_FILE_NAME,
+  INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_POLICY_SCHEMA_VERSION,
   validateIntakePolicy,
 } from './intake-policy-config.js';
+import {
+  validateIntakeUrlScannerPolicy,
+  type IntakeUrlScannerPolicyConfig,
+} from './intake-url-scanner-policy.js';
 
 export interface IntakePolicyOwnerMigrationOptions {
   dataDir: string;
+  seedDir?: string;
   apply?: boolean;
   faultInjection?: DurableWriteOptions['faultInjection'];
 }
@@ -47,6 +54,22 @@ const RETIRED_SCREENER_MODEL_PATHS = [
   ['l3Screener', 'secondaryModel'],
   ['visionScreener', 'model'],
 ] as const;
+
+function loadSeedUrlScannerPolicy(seedDir: string): IntakeUrlScannerPolicyConfig {
+  const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(seedPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot load intake URL scanner migration policy from ${seedPath}: ${String(error)}`,
+    );
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
+  }
+  return validateIntakeUrlScannerPolicy(raw.urlScanner, seedPath);
+}
 
 function removeRetiredScreenerModelKeys(
   raw: Record<string, unknown>,
@@ -118,13 +141,14 @@ function repairSelfAuthoredMutationPolicy(
 }
 
 /**
- * Explicitly upgrades intake-policy schema v1/v2 owners to v3. V1 gains the
- * canonical skill_write sink rule; both legacy versions gain the explicit
+ * Explicitly upgrades intake-policy schema v1/v2/v3 owners to v4. V1 gains the
+ * canonical skill_write sink rule; legacy owners gain the explicit
  * trusted companion_self source class used only for screened self-authored
- * mutations. Retired screener model selectors are removed at every supported
- * version. Runtime loading never calls this function: an operator must dry-run
- * and apply it against the exact system owner root before startup will accept
- * the migrated owner.
+ * mutations. Every legacy version gains the URL scanner scheme policy from the
+ * distributed seed. Retired screener model selectors are removed at every
+ * supported version. Runtime loading never calls this function: an operator
+ * must dry-run and apply it against the exact system owner root before startup
+ * will accept the migrated owner.
  */
 export function migrateIntakePolicyOwner(
   options: IntakePolicyOwnerMigrationOptions,
@@ -220,9 +244,9 @@ export function migrateIntakePolicyOwner(
         toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       };
     }
-    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) {
+    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3) {
       throw new Error(
-        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, or `
+        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, 3, or `
         + `the current schemaVersion ${String(INTAKE_POLICY_SCHEMA_VERSION)}`,
       );
     }
@@ -241,6 +265,14 @@ export function migrateIntakePolicyOwner(
     const upgraded: Record<string, unknown> = structuredClone(raw);
     upgraded.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
     const addedPaths: string[] = [];
+    if (Object.hasOwn(upgraded, 'urlScanner')) {
+      upgraded.urlScanner = validateIntakeUrlScannerPolicy(upgraded.urlScanner, filePath);
+    } else {
+      upgraded.urlScanner = loadSeedUrlScannerPolicy(
+        options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+      );
+      addedPaths.push('urlScanner');
+    }
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();
@@ -251,7 +283,7 @@ export function migrateIntakePolicyOwner(
       sinks: upgradedSinks,
     };
     const repaired = repairSelfAuthoredMutationPolicy(upgraded, filePath, {
-      rejectExistingCompanionSelf: true,
+      rejectExistingCompanionSelf: raw.schemaVersion !== 3,
     });
     addedPaths.push(...repaired.addedPaths);
     const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);

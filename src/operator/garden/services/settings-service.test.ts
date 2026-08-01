@@ -131,6 +131,14 @@ describe('AdminSettingsDataService', () => {
 
     expect(service.getIntakePolicyOverview()).toMatchObject({
       schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      urlScanner: {
+        schemeActions: {
+          javascript: 'deny',
+          data: 'deny_except_inline_image',
+          mailto: 'allow',
+          tel: 'allow',
+        },
+      },
       sinkGates: {
         sinks: {
           skill_write: {

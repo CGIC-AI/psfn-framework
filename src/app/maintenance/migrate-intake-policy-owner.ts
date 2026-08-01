@@ -18,7 +18,7 @@ interface CliOptions {
 function printUsage(): void {
   console.log('Usage: npm run migrate:intake-policy-owner -- --data-dir <system-data-dir> [OPTIONS]');
   console.log('');
-  console.log('Upgrades schema-v1 intake-policy.json owners to v2 and removes');
+  console.log('Upgrades schema-v1/v2/v3 intake-policy.json owners to v4 and removes');
   console.log('retired screener model selector keys from current owners.');
   console.log('Dry-run is the default.');
   console.log('');

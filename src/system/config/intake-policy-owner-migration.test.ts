@@ -38,6 +38,7 @@ describe('intake policy owner migration', () => {
     ) as Record<string, unknown>;
     const legacy = structuredClone(current);
     legacy.schemaVersion = 1;
+    delete legacy.urlScanner;
     delete (legacy.sourceRiskTiers as Record<string, unknown>).companion_self;
     Object.assign(legacy.l2Screener as Record<string, unknown>, {
       model: 'legacy/l2',
@@ -61,7 +62,7 @@ describe('intake policy owner migration', () => {
     return { dataDir, filePath, legacy };
   }
 
-  it('dry-runs without changing the v1 owner, then atomically applies v3', () => {
+  it('dry-runs without changing the v1 owner, then atomically applies v4', () => {
     const { dataDir, filePath } = makeOwner();
     const before = readFileSync(filePath, 'utf8');
 
@@ -71,6 +72,7 @@ describe('intake policy owner migration', () => {
       fromSchemaVersion: 1,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       addedPaths: [
+        'urlScanner',
         'sinkGates.sinks.skill_write',
         'sourceRiskTiers.companion_self',
       ],
@@ -110,6 +112,7 @@ describe('intake policy owner migration', () => {
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
     ) as Record<string, unknown>;
     legacy.schemaVersion = 2;
+    delete legacy.urlScanner;
     delete (legacy.sourceRiskTiers as Record<string, unknown>).companion_self;
     const sinks = (legacy.sinkGates as { sinks: Record<string, Record<string, unknown>> }).sinks;
     sinks.persona_mutation.maxSourceRiskTier = 'standard';
@@ -120,7 +123,7 @@ describe('intake policy owner migration', () => {
       status: 'planned',
       fromSchemaVersion: 2,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-      addedPaths: ['sourceRiskTiers.companion_self'],
+      addedPaths: ['urlScanner', 'sourceRiskTiers.companion_self'],
     });
     expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
@@ -171,7 +174,34 @@ describe('intake policy owner migration', () => {
       .toThrow(/schemaVersion 2 owners require the explicit migrate:intake-policy-owner command/);
   });
 
-  it('repairs a v3 owner created before the companion-self security remediation', () => {
+  it('upgrades a v3 owner with URL scheme policy from the distributed seed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const legacy = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    legacy.schemaVersion = 3;
+    delete legacy.urlScanner;
+    writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      fromSchemaVersion: 3,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      addedPaths: ['urlScanner'],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      fromSchemaVersion: 3,
+    });
+    expect(loadIntakePolicyConfig(dataDir).urlScanner.schemeActions).toMatchObject({
+      javascript: 'deny',
+      mailto: 'allow',
+    });
+  });
+
+  it('repairs a v4 owner created before the companion-self security remediation', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
     tempDirs.push(dataDir);
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
@@ -207,7 +237,7 @@ describe('intake policy owner migration', () => {
     expect(loaded.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
   });
 
-  it('dry-runs and atomically removes retired screener model keys from a v3 owner', () => {
+  it('dry-runs and atomically removes retired screener model keys from a v4 owner', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
     tempDirs.push(dataDir);
     const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);

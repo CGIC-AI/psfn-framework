@@ -46,6 +46,7 @@ const SEED_COPIED_OWNER_FILES: readonly string[] = [
   'trust-policy.json',
   'intake-policy.json',
   'backup.json',
+  'mcp-servers.json',
   'partner-affect-shadow.json',
   'places.json',
   'runtime-prompt-layers.json',

@@ -95,6 +95,7 @@ describe('runOnboarding — local dev happy path', () => {
     expect(existsSync(join(dataDir, 'providers.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'models.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'companions.json'))).toBe(true);
+    expect(existsSync(join(dataDir, 'mcp-servers.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'companions', 'main', 'scheduler.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'companions', 'main', 'companion.json'))).toBe(true);
 
@@ -198,6 +199,7 @@ describe('runOnboarding — kubernetes mode', () => {
     expect(outcome.envWritten).toBe(false);
     expect(existsSync(envPath)).toBe(false);
     expect(existsSync(join(systemDataDir, 'providers.json'))).toBe(true);
+    expect(existsSync(join(systemDataDir, 'mcp-servers.json'))).toBe(true);
     expect(existsSync(join(companionDataDir, 'main', 'scheduler.json'))).toBe(true);
   });
 });

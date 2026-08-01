@@ -116,7 +116,37 @@ interface McpSessionState {
 
 interface StaticScreenCacheEntry {
   tools: McpProtocolTool[];
+  companionId: string;
+  serverId: string;
+  sha256: string;
+  screenedAt: number;
   lastUsedAt: number;
+}
+
+export interface McpBrokerServerHealth {
+  serverId: string;
+  displayName: string;
+  trustLevel: McpServerConfig['trust']['level'];
+  activeSession: boolean;
+  hasLoadedTools: boolean;
+  metadata: {
+    disposition: 'not_scanned' | 'passed';
+    sha256?: string;
+    screenedAt?: number;
+    toolCount?: number;
+  };
+  tools: Array<{
+    toolName: string;
+    effect: McpToolPolicyEntry['effect'];
+    confirmation: McpToolPolicyEntry['confirmation'];
+  }>;
+}
+
+export interface McpBrokerHealth {
+  activeSessions: number;
+  cachedStaticMetadataEntries: number;
+  sessions: Array<{ companionId: string; serverId: string; hasLoadedTools: boolean }>;
+  servers: McpBrokerServerHealth[];
 }
 
 export interface McpGatewayBroker {
@@ -144,11 +174,7 @@ export interface McpGatewayBroker {
   }): Promise<McpScreenedToolResult>;
   releaseServer(input: { companionId: string; serverId: string }): Promise<void>;
   releaseCompanion(companionId: string): Promise<void>;
-  health(): {
-    activeSessions: number;
-    cachedStaticMetadataEntries: number;
-    sessions: Array<{ companionId: string; serverId: string; hasLoadedTools: boolean }>;
-  };
+  health(input?: { companionId?: string }): McpBrokerHealth;
   close(): Promise<void>;
 }
 
@@ -326,9 +352,23 @@ export function createMcpGatewayBroker(options: {
     return created;
   }
 
-  function cacheStaticScreen(hash: string, tools: McpProtocolTool[]): void {
-    staticScreenCache.delete(hash);
-    staticScreenCache.set(hash, { tools, lastUsedAt: now() });
+  function cacheStaticScreen(input: {
+    cacheKey: string;
+    companionId: string;
+    serverId: string;
+    sha256: string;
+    tools: McpProtocolTool[];
+  }): void {
+    staticScreenCache.delete(input.cacheKey);
+    const screenedAt = now();
+    staticScreenCache.set(input.cacheKey, {
+      tools: input.tools,
+      companionId: input.companionId,
+      serverId: input.serverId,
+      sha256: input.sha256,
+      screenedAt,
+      lastUsedAt: screenedAt,
+    });
     while (staticScreenCache.size > options.config.limits.maxCatalogToolsPerServer) {
       const oldest = staticScreenCache.keys().next().value as string | undefined;
       if (!oldest) break;
@@ -376,7 +416,7 @@ export function createMcpGatewayBroker(options: {
       );
     }
     const tools = parseScreenedTools(result.effectiveText);
-    cacheStaticScreen(cacheKey, tools);
+    cacheStaticScreen({ cacheKey, companionId, serverId: server.id, sha256: hash, tools });
     return tools;
   }
 
@@ -555,16 +595,59 @@ export function createMcpGatewayBroker(options: {
       await Promise.all(keys.map(closeSession));
     },
 
-    health() {
-      const snapshot = [...readySessions.values()].map(state => ({
+    health(input = {}) {
+      const companionId = input.companionId?.trim();
+      const visibleSessions = [...readySessions.values()].filter(
+        state => !companionId || state.companionId === companionId,
+      );
+      const snapshot = visibleSessions.map(state => ({
         companionId: state.companionId,
         serverId: state.server.id,
         hasLoadedTools: state.tools !== undefined,
       }));
+      const visibleCache = [...staticScreenCache.values()].filter(
+        entry => !companionId || entry.companionId === companionId,
+      );
+      const latestMetadataByServer = new Map<string, StaticScreenCacheEntry>();
+      for (const entry of visibleCache) {
+        const current = latestMetadataByServer.get(entry.serverId);
+        if (!current || entry.lastUsedAt > current.lastUsedAt) {
+          latestMetadataByServer.set(entry.serverId, entry);
+        }
+      }
+      const visibleServers = options.config.servers.filter(server => (
+        server.enabled && (!companionId || server.allowedCompanionIds.includes(companionId))
+      ));
       return {
-        activeSessions: sessions.size,
-        cachedStaticMetadataEntries: staticScreenCache.size,
+        activeSessions: snapshot.length,
+        cachedStaticMetadataEntries: visibleCache.length,
         sessions: snapshot,
+        servers: visibleServers.map((server) => {
+          const session = visibleSessions.find(state => state.server.id === server.id);
+          const metadata = latestMetadataByServer.get(server.id);
+          return {
+            serverId: server.id,
+            displayName: server.displayName,
+            trustLevel: server.trust.level,
+            activeSession: session !== undefined,
+            hasLoadedTools: session?.tools !== undefined,
+            metadata: metadata
+              ? {
+                  disposition: 'passed' as const,
+                  sha256: metadata.sha256,
+                  screenedAt: metadata.screenedAt,
+                  toolCount: metadata.tools.length,
+                }
+              : { disposition: 'not_scanned' as const },
+            tools: Object.entries(server.toolPolicy.tools)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([toolName, policy]) => ({
+                toolName,
+                effect: policy.effect,
+                confirmation: policy.confirmation,
+              })),
+          };
+        }),
       };
     },
 

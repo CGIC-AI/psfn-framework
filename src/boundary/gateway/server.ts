@@ -635,6 +635,7 @@ export class GatewayServer {
       vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],
       vaultOpsConfigured: Boolean(options.policyConfig.vault?.ops),
+      ...(options.mcpBroker ? { mcpBroker: options.mcpBroker } : {}),
     });
     const notifyConfirmationQueueChanged = ({ companionId }: { companionId: string }): void => {
       this.notifyCompanionGardenQueueChanged(companionId, 'confirmations');
@@ -841,7 +842,7 @@ export class GatewayServer {
       }),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       sendOperatorAlert: (params) => this.operatorAlertDispatcher.dispatch(params),
-      getRuntimeHealth: () => this.getRuntimeHealth(),
+      getRuntimeHealth: () => this.getRuntimeHealth(this.authenticatedCompanionId(conn)),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
       authorizeIcpConversationCorrelation: async (correlation) => {
@@ -3319,8 +3320,8 @@ export class GatewayServer {
     return summary;
   }
 
-  private getRuntimeHealth(): RuntimeHealthResult {
-    return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
+  private getRuntimeHealth(companionId?: string): RuntimeHealthResult {
+    return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary(), companionId);
   }
 
   private recordConnectionPosture(

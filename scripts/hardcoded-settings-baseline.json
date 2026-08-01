@@ -152,12 +152,6 @@
       "value": "30_000"
     },
     {
-      "file": "src/boundary/gateway/inbound-channel-replay.ts",
-      "name": "MAX_INBOUND_CHANNEL_REPLAY_MESSAGES_PER_COMPANION",
-      "value": "100",
-      "note": "Code-owned denial-of-service ceiling that bounds deploy-window inbound message retention per companion; operator expansion would weaken gateway memory isolation."
-    },
-    {
       "file": "src/boundary/gateway/client.ts",
       "name": "DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS",
       "value": "3_000"
@@ -199,6 +193,12 @@
       "name": "MAX_PROXY_BODY_BYTES",
       "value": "1_048_576",
       "note": "Code-owned fleet proxy request-body allocation ceiling at the browser trust boundary."
+    },
+    {
+      "file": "src/boundary/gateway/inbound-channel-replay.ts",
+      "name": "MAX_INBOUND_CHANNEL_REPLAY_MESSAGES_PER_COMPANION",
+      "value": "100",
+      "note": "Code-owned denial-of-service ceiling that bounds deploy-window inbound message retention per companion; operator expansion would weaken gateway memory isolation."
     },
     {
       "file": "src/boundary/gateway/inline-image-reference-hints.ts",
@@ -2012,6 +2012,24 @@
       "value": "160"
     },
     {
+      "file": "src/core/intention/concern-candidate-review-snapshot.ts",
+      "name": "MAX_CANDIDATE_TEXT_CHARS",
+      "value": "500",
+      "note": "Snapshot-shape bound carried unchanged from concern-candidates.ts when the review-snapshot parser moved to its own module (hrmrq.134); it caps a persisted record the parser must also validate, so it is coupled to the stored shape rather than operator tuning."
+    },
+    {
+      "file": "src/core/intention/concern-candidate-review-snapshot.ts",
+      "name": "MAX_CONTEXT_MESSAGES",
+      "value": "12",
+      "note": "Snapshot-shape bound carried unchanged from concern-candidates.ts when the review-snapshot parser moved to its own module (hrmrq.134); it caps a persisted record the parser must also validate, so it is coupled to the stored shape rather than operator tuning."
+    },
+    {
+      "file": "src/core/intention/concern-candidate-review-snapshot.ts",
+      "name": "MAX_RELATED_MEMORIES",
+      "value": "8",
+      "note": "Snapshot-shape bound carried unchanged from concern-candidates.ts when the review-snapshot parser moved to its own module (hrmrq.134); it caps a persisted record the parser must also validate, so it is coupled to the stored shape rather than operator tuning."
+    },
+    {
       "file": "src/core/intention/concern-candidates.ts",
       "name": "DEFAULT_MAX_REVIEW_BATCH",
       "value": "7"
@@ -2020,21 +2038,6 @@
       "file": "src/core/intention/concern-candidates.ts",
       "name": "DEFAULT_REVIEW_TURN_INTERVAL",
       "value": "3"
-    },
-    {
-      "file": "src/core/intention/concern-candidates.ts",
-      "name": "MAX_CANDIDATE_TEXT_CHARS",
-      "value": "500"
-    },
-    {
-      "file": "src/core/intention/concern-candidates.ts",
-      "name": "MAX_CONTEXT_MESSAGES",
-      "value": "12"
-    },
-    {
-      "file": "src/core/intention/concern-candidates.ts",
-      "name": "MAX_RELATED_MEMORIES",
-      "value": "8"
     },
     {
       "file": "src/core/intention/concern-resolution-arc.ts",

@@ -2814,6 +2814,18 @@
       "note": "Code-owned safety bound for the CogSec store's cross-process persistence lock; failure must surface instead of allowing an unbounded synchronous wait."
     },
     {
+      "file": "src/core/cogsec/intake/corpus/corpus.ts",
+      "name": "MAX_FIXTURE_NOTE_CHARS",
+      "value": "512",
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+    },
+    {
+      "file": "src/core/cogsec/intake/corpus/corpus.ts",
+      "name": "MAX_FIXTURE_PAYLOAD_CHARS",
+      "value": "8192",
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+    },
+    {
       "file": "src/core/cogsec/intake/marking.ts",
       "name": "ELEVATED_SCORE_THRESHOLD",
       "value": "0.5"

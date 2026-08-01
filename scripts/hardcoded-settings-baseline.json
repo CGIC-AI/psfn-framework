@@ -824,6 +824,20 @@
       "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
     },
     {
+      "file": "src/boundary/gateway/mcp/sdk-client.ts",
+      "name": "createMcpSdkClientFactory.create.client.versionNegotiation.probe.maxRetries",
+      "value": "0",
+      "form": "object-member",
+      "note": "Code-owned protocol safety posture: MCP era negotiation is attempted once so an unavailable peer cannot amplify connection work."
+    },
+    {
+      "file": "src/boundary/gateway/mcp/sdk-client.ts",
+      "name": "createMcpSdkClientFactory.create.transport.maxStepUpRetries",
+      "value": "0",
+      "form": "object-member",
+      "note": "Code-owned authorization boundary: PSFN never performs implicit OAuth scope escalation; policy changes require an operator owner-file update."
+    },
+    {
       "file": "src/boundary/gateway/mcp/secure-fetch.ts",
       "name": "createMcpSecureFetchController.secureFetch.connect.minVersion",
       "value": "'TLSv1.2'",

@@ -666,7 +666,10 @@ export async function computePreTurnState(input: {
   temporalRetrievalMode: RetrievalModeInput | undefined;
   viewerRequestContext: Partial<CorrelationMetadata>;
   turnCorrelationBase: CorrelationMetadata;
-  observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage' | 'emitTurnSnapshotInBackground'>;
+  observability: Pick<
+    TurnExecutionObservability,
+    'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground'
+  >;
 }): Promise<PreTurnComputationResult> {
   const {
     runtime,

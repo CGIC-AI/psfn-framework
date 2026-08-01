@@ -180,6 +180,77 @@ describe('GatewayClient system-data writer', () => {
   });
 });
 
+describe('GatewayClient MCP transport', () => {
+  it('stamps hidden sensitivity and trusted channel lineage on an MCP call', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const pending = client.mcpExecute({
+      action: 'call',
+      serverId: 'notes',
+      toolName: 'search_notes',
+      arguments: { query: 'Ada' },
+    }, {
+      effectiveSensitivity: 'personal',
+      channelId: 'discord:dm:operator',
+    });
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+
+    expect(request).toMatchObject({
+      method: 'mcp.execute',
+      params: {
+        action: 'call',
+        serverId: 'notes',
+        toolName: 'search_notes',
+        arguments: { query: 'Ada' },
+        effectiveSensitivity: 'personal',
+        channelId: 'discord:dm:operator',
+      },
+    });
+    expect(request.params.cancellationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+    );
+    expect(request.params).not.toHaveProperty('companionId');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        action: 'call',
+        serverId: 'notes',
+        toolName: 'search_notes',
+        isError: false,
+        effectiveText: 'screened',
+        withheld: false,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({ action: 'call', effectiveText: 'screened' });
+  });
+
+  it('cancels MCP work remotely and rejects late results locally', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024);
+    const controller = new AbortController();
+    const pending = client.mcpExecute({ action: 'search', query: 'notes' }, {
+      effectiveSensitivity: 'confidential',
+      signal: controller.signal,
+    });
+    const request = conn.sent[0] as { id: number; params: { cancellationId: string } };
+
+    controller.abort(new Error('turn ended'));
+    await expect(pending).rejects.toThrow('turn ended');
+    expect(conn.sent[1]).toEqual({
+      jsonrpc: '2.0',
+      method: 'mcp.cancel',
+      params: { cancellationId: request.params.cancellationId },
+    });
+
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { action: 'search', query: 'notes', tools: [] } });
+  });
+});
+
 describe('GatewayClient shard workload lifecycle', () => {
   it('registers and ends one opaque workload lease without sending parent authority', async () => {
     const conn = createMockConnection();

@@ -14,6 +14,7 @@ describe('egress method set', () => {
     expect(isEgressCanaryMethod('notify.ntfy')).toBe(true);
     expect(isEgressCanaryMethod('web.fetch')).toBe(true);
     expect(isEgressCanaryMethod('web.search')).toBe(true);
+    expect(isEgressCanaryMethod('mcp.execute')).toBe(true);
     // Provider calls carry the canary in the prompt legitimately.
     expect(isEgressCanaryMethod('llm.chat')).toBe(false);
     expect(isEgressCanaryMethod('fs.read')).toBe(false);

@@ -65,11 +65,11 @@ export function canonicalizeCapabilityTokens(
 }
 
 /**
- * The complete standing shard denial mask (canonical order). These ten tokens
+ * The complete standing shard denial mask (canonical order). These eleven tokens
  * are removed from every derived shard grant regardless of parent authority.
  * Rationale per token lives in docs/shard-capability-tier-derivation.md.
  *
- * The four `external.*` egress tokens are masked so a shard never holds
+ * Every `external.*` egress token is masked so a shard never holds
  * standing outbound-communication authority: `notify` (the operator emergency
  * button) and every other external-send surface are operator-only, not a
  * companion surface a shard may drive. Name-blocking the tool is the first
@@ -86,6 +86,7 @@ export const SHARD_CAPABILITY_DENIAL_MASK: readonly CapabilityToken[] = canonica
     'external.email',
     'external.web',
     'external.companion',
+    'external.mcp',
     'lifecycle.restart',
     'lifecycle.rebuild',
     'world.control',
@@ -101,6 +102,7 @@ export type ShardDenialMaskToken =
   | 'external.email'
   | 'external.web'
   | 'external.companion'
+  | 'external.mcp'
   | 'lifecycle.restart'
   | 'lifecycle.rebuild'
   | 'world.control';
@@ -136,6 +138,7 @@ export const SHARD_MASK_TEMPORARY_GRANT_DISPOSITIONS: Readonly<
   'external.email': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'external.web': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'external.companion': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
+  'external.mcp': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'lifecycle.restart': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'lifecycle.rebuild': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'world.control': Object.freeze({

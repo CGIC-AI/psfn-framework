@@ -10,6 +10,7 @@ export const CAPABILITY_TOKENS = [
   'external.email',
   'external.web',
   'external.companion',
+  'external.mcp',
   'git.read',
   'git.write',
   'issue.read',

@@ -85,6 +85,7 @@ import {
   wireReflectionRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
   resolveChargeLedgerPath,
@@ -1598,6 +1599,13 @@ async function main(): Promise<void> {
   // Start only after every restored post-turn action kind has a handler and
   // the target-channel command is registered. Otherwise the first scheduler
   // tick can terminally discard a due durable action as `missing_handler`.
+  const postgresReadiness = await sealPostgresStoreReadinessBeforeReady();
+  if (postgresReadiness.degraded.length > 0) {
+    log.warn('Optional PostgreSQL stores degraded at startup', {
+      stores: postgresReadiness.degraded.map(entry => entry.store).join(','),
+      mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
+    });
+  }
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});

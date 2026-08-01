@@ -271,6 +271,17 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
       max: 1,
     });
     try {
+      // Validate the fleet cost ledger independently from the shared-schema
+      // projection. LIMIT 0 proves the selected schema, role, table, and column
+      // version without reading content or performing DDL.
+      await queryRows(costPool, `
+        SELECT decision_id, conversation_id, root_initiation_id,
+          recorded_at_ms, actual_cost_usd, pending_projected_cost_usd,
+          projected_total_cost_usd, warning_threshold_usd, hard_limit_usd,
+          unknown_cost_attempt_count, allowed, reason
+        FROM icp_conversation_cost_decisions
+        LIMIT 0
+      `);
       const shared = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: options.knownCompanionIds,
       });

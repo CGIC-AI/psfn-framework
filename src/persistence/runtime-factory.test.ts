@@ -180,6 +180,34 @@ beforeEach(() => {
 });
 
 describe('createAgentPersistenceRuntime', () => {
+  it('names a required store and its schema mismatch when startup readiness fails', async () => {
+    runtimeFactoryMocks.createPostgresMemoryStore.mockRejectedValueOnce(
+      new Error('schema version 12 is missing'),
+    );
+
+    await expect(createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+    })).rejects.toMatchObject({
+      name: 'PostgresStoreReadinessError',
+      store: 'memory',
+      requirement: 'required',
+      mismatch: 'schema version 12 is missing',
+    });
+  });
+
   it('runs authenticated contact recovery before returning and exposes a stoppable worker', async () => {
     const gateway = { executeContactLifecycle: vi.fn() };
     const runtime = await createAgentPersistenceRuntime({

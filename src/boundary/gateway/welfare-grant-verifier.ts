@@ -41,6 +41,7 @@ const log = createComponentLogger('GatewayWelfareGrant');
  * (fail closed) and logs it; the accessor never swallows.
  */
 export interface WelfareGrantVerifier {
+  assertReady(): Promise<void>;
   verify(jobId: string, companionId: string): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -64,6 +65,23 @@ class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
     private readonly pool: Pool,
     private readonly scope: WelfareGrantVerifierScope,
   ) {}
+
+  /** Read-only proof of every tenant relation/column the verifier consumes. */
+  async assertReady(): Promise<void> {
+    const schemas = this.scope.mode === 'fleet'
+      ? [...new Set(this.scope.schemaByCompanionId.values())]
+      : [this.scope.schema];
+    for (const schema of schemas) {
+      const qualifier = schema
+        ? `"${assertValidPostgresSchemaName(schema)}".`
+        : '';
+      await this.pool.query(`
+        SELECT job_id, welfare_claimed, state
+        FROM ${qualifier}agent_background_work_jobs
+        LIMIT 0
+      `);
+    }
+  }
 
   async verify(jobId: string, companionId: string): Promise<boolean> {
     if (typeof jobId !== 'string' || jobId.trim().length === 0) return false;

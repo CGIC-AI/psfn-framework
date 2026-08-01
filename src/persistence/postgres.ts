@@ -1,5 +1,9 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from 'pg';
 import { isRecord } from '../shared/utils/types.js';
+import {
+  assertPostgresRuntimeDdlAllowed,
+  type PostgresRuntimeDdlAuthority,
+} from './postgres/runtime-readiness.js';
 
 // Postgres identifiers are bounded to 63 bytes (NAMEDATALEN - 1). We deliberately
 // stay inside that limit and only admit a strict, lowercase-first identifier so a
@@ -225,7 +229,12 @@ export async function withPostgresClient<T>(
   }
 }
 
-export async function ensurePostgresSchema(pool: Pool, statements: readonly string[]): Promise<void> {
+export async function ensurePostgresSchema(
+  pool: Pool,
+  statements: readonly string[],
+  options: { ddlAuthority?: PostgresRuntimeDdlAuthority } = {},
+): Promise<void> {
+  assertPostgresRuntimeDdlAllowed('ensure schema', options.ddlAuthority);
   await withPostgresClient(pool, async (client) => {
     for (const statement of statements) {
       await client.query(statement);
@@ -243,7 +252,9 @@ export async function ensurePostgresSchemaWithAdvisoryLock(
   pool: Pool,
   statements: readonly string[],
   lockKey: readonly [number, number],
+  options: { ddlAuthority?: PostgresRuntimeDdlAuthority } = {},
 ): Promise<void> {
+  assertPostgresRuntimeDdlAllowed('ensure schema with advisory lock', options.ddlAuthority);
   const [namespaceKey, migrationKey] = lockKey;
   if (
     !Number.isInteger(namespaceKey)
@@ -274,7 +285,12 @@ export async function ensurePostgresSchemaWithAdvisoryLock(
  * database. This is a no-op-safe `CREATE SCHEMA IF NOT EXISTS`; it does not
  * touch search_path (that is pinned at the pool level).
  */
-export async function ensurePostgresSchemaExists(pool: Pool, schema: string): Promise<void> {
+export async function ensurePostgresSchemaExists(
+  pool: Pool,
+  schema: string,
+  options: { ddlAuthority?: PostgresRuntimeDdlAuthority } = {},
+): Promise<void> {
+  assertPostgresRuntimeDdlAllowed('ensure schema exists', options.ddlAuthority);
   const validated = assertValidPostgresSchemaName(schema);
   const existing = await pool.query<{ exists: boolean }>(
     'SELECT to_regnamespace($1) IS NOT NULL AS exists',
@@ -298,12 +314,24 @@ export async function ensurePostgresSchemaExists(pool: Pool, schema: string): Pr
 export async function runPostgresMigrations(
   pool: Pool,
   statements: readonly string[],
-  options: { schema?: string } = {},
+  options: { schema?: string; ddlAuthority?: PostgresRuntimeDdlAuthority } = {},
 ): Promise<void> {
   if (options.schema !== undefined) {
-    await ensurePostgresSchemaExists(pool, options.schema);
+    if (options.ddlAuthority) {
+      await ensurePostgresSchemaExists(pool, options.schema, {
+        ddlAuthority: options.ddlAuthority,
+      });
+    } else {
+      await ensurePostgresSchemaExists(pool, options.schema);
+    }
   }
-  await ensurePostgresSchema(pool, statements);
+  if (options.ddlAuthority) {
+    await ensurePostgresSchema(pool, statements, {
+      ddlAuthority: options.ddlAuthority,
+    });
+  } else {
+    await ensurePostgresSchema(pool, statements);
+  }
 }
 
 /**

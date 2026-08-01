@@ -12,6 +12,7 @@ import {
   SHARED_SCHEMA_NAME,
 } from './migrations.js';
 import { assertPostgresRolesAreLeastPrivilege } from './role-posture.js';
+import { assertPostgresRuntimeDdlAllowed } from './runtime-readiness.js';
 
 /**
  * Cluster-wide advisory lock key serializing shared-schema provisioning.
@@ -69,6 +70,7 @@ async function provisionSharedSchema(
   pool: Pool,
   chains: ReadonlyArray<readonly string[]>,
 ): Promise<void> {
+  assertPostgresRuntimeDdlAllowed('ensure shared schema');
   const schema = assertValidPostgresSchemaName(SHARED_SCHEMA_NAME);
   await withPostgresClient(pool, async (client) => {
     await client.query(

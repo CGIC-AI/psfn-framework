@@ -624,4 +624,65 @@ describe('GardenOperatorSurface fleet transport routing', () => {
     expect(body).not.toContain(COMPANION_A);
     expect(body).not.toContain('/run/private-admin-a.sock');
   });
+
+  it('reports optional PostgreSQL degradation without exposing its mismatch publicly', async () => {
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+    }]);
+    registry.reportHealth(COMPANION_A, {
+      status: 'ready',
+      probedAt: '2030-01-01T00:00:00.000Z',
+    });
+    const controlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(verifierConfig),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: config(),
+      fleetControlPlane: controlPlane,
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => { throw new Error('not used'); },
+        handleTelemetryUpgrade: () => { throw new Error('not used'); },
+      },
+      postgresReadiness: () => ({
+        phase: 'ready',
+        pending: [],
+        readyStores: ['model_usage_diagnostics'],
+        degraded: [{
+          store: 'observer_eval_sidecar',
+          label: 'observer eval sidecar',
+          requirement: 'optional',
+          mismatch: 'private database endpoint refused the connection',
+        }],
+      }),
+    });
+    let status = 0;
+    let body = '';
+    const res = {
+      writableEnded: false,
+      destroyed: false,
+      writeHead(nextStatus: number) { status = nextStatus; return this; },
+      end(nextBody: string) { body = nextBody; this.writableEnded = true; return this; },
+    } as unknown as ServerResponse;
+
+    await (
+      surface as unknown as { handleHealth(response: ServerResponse): Promise<void> }
+    ).handleHealth(res);
+
+    expect(status).toBe(200);
+    expect(JSON.parse(body)).toMatchObject({
+      status: 'ok',
+      dependencies: {
+        adminTransports: { status: 'ready' },
+        postgresStores: { status: 'degraded', degradedCount: 1 },
+      },
+    });
+    expect(body).not.toContain('private database endpoint');
+  });
 });

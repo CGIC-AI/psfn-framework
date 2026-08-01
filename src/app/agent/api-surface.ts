@@ -12,6 +12,10 @@ import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/wor
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { RUNTIME_MODE, type RuntimeMode, type RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 import type { ApiServerConfig } from '../../channels/api/server.js';
+import {
+  getPostgresStoreReadinessSnapshot,
+  type PostgresRuntimeReadinessSnapshot,
+} from '../../persistence/postgres/runtime-readiness.js';
 
 // Runtime topologies where the Discord transport is owned by the gateway/host
 // process rather than this agent container. Health reporting treats Discord as
@@ -34,6 +38,7 @@ export function buildApiHealthChecks(
     gateway: GatewayClient;
     scheduler: Scheduler;
     runtimeStatusMeta: RuntimeStatusMetadata;
+    postgresReadiness?: () => PostgresRuntimeReadinessSnapshot;
   },
   activeProbeConfig: ReturnType<typeof resolveActiveHealthProbeConfig>,
 ): NonNullable<ApiServerConfig['healthChecks']> {
@@ -43,11 +48,36 @@ export function buildApiHealthChecks(
   return {
     memory: async () => {
       const stats = await options.memoryStore.getStats();
+      const postgresReadiness = (
+        options.postgresReadiness ?? getPostgresStoreReadinessSnapshot
+      )();
+      const optionalDegradation = postgresReadiness.degraded.filter(
+        entry => entry.requirement === 'optional',
+      );
+      const requiredDegradation = postgresReadiness.degraded.some(
+        entry => entry.requirement === 'required',
+      );
+      const postgresUnavailable = postgresReadiness.phase !== 'ready' || requiredDegradation;
       return {
-        status: 'healthy',
+        status: postgresUnavailable ? 'degraded' : 'healthy',
+        ...(postgresUnavailable
+          ? {
+              detail: postgresReadiness.phase !== 'ready'
+                ? `PostgreSQL startup readiness is ${postgresReadiness.phase}`
+                : 'A required PostgreSQL store became unavailable after startup',
+            }
+          : {}),
         meta: {
           total: stats.total,
           avgSalience: Number(stats.avgSalience.toFixed(4)),
+          postgresReadiness: {
+            phase: postgresReadiness.phase,
+            status: optionalDegradation.length > 0 ? 'degraded' : 'ok',
+            degradedStores: optionalDegradation.map(entry => ({
+              store: entry.store,
+              label: entry.label,
+            })),
+          },
           ...options.runtimeStatusMeta,
         },
       };

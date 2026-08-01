@@ -905,38 +905,6 @@ export function createObserverEvalSidecarAdminService(input: {
     ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, input.tenant)
     : null;
 
-  if (persistence) {
-    // psfn-framework-qicb.3: observe the sidecar store's startup schema-ensure
-    // ONCE, synchronously, at the Garden construction site. The store kicks off
-    // its `ready` (schema migration) promise in its constructor but — unlike the
-    // model-usage store — does not attach a rejection handler to it, so a
-    // kube-router netpol-programming race at pod start (a ~1s ECONNREFUSED
-    // window before the Postgres NetworkPolicy is programmed) would otherwise
-    // escape as a process-wide unhandled rejection. queryRuns awaits that same
-    // `ready` promise, which attaches a rejection handler to it in the same tick
-    // as construction; the netpol-race connection error is then handled here
-    // (logged once, content-free) instead of leaking to the process handler.
-    // The result is discarded. Normal operation is unchanged: one cheap read
-    // fires at startup and, on success, its rows are ignored.
-    //
-    // NOTE (psfn-framework-qicb.4): this does NOT retry. The store assigns its
-    // `ready` (schema-ensure) promise once in its constructor, and a rejected
-    // promise stays rejected; every later query re-awaits that same settled
-    // rejection, and the store is memoized on databaseUrl+tenant so subsequent
-    // Garden traffic reuses the SAME poisoned `ready`. So if startup
-    // connectivity genuinely fails, the sidecar telemetry stays down until the
-    // process restarts — this handler only prevents the leak, it cannot heal
-    // the pool. That is acceptable because the sidecar is disabled by default
-    // and non-authoritative (docs/observer-eval-sidecar.md): eval telemetry,
-    // never runtime behaviour.
-    void persistence.queryRuns({ limit: 1 }).catch((error: unknown) => {
-      log.warn(
-        'Observer eval sidecar startup connectivity failed; sidecar telemetry stays down until process restart',
-        { error: toErrorMessage(error) },
-      );
-    });
-  }
-
   return new AdminObserverEvalSidecarDataService({
     persistence,
     // The Postgres store implements both the observation and lever ports;

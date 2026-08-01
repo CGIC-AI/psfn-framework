@@ -86,7 +86,6 @@ import {
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
@@ -94,6 +93,10 @@ import {
   resolveModelUsageRange,
   resolvePreviousModelUsagePeriod,
 } from '../../shared/telemetry/model-usage-range.js';
+import {
+  startPostgresStoreReadiness,
+  type PostgresStoreReadinessHandle,
+} from './runtime-readiness.js';
 
 const log = createComponentLogger('ModelUsageStore');
 
@@ -1209,7 +1212,7 @@ function appendEventCursor(
 }
 
 export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, FleetModelUsageSummaryQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort, IcpConversationCostAccountingPort {
-  private readonly ready: Promise<void>;
+  private readonly readiness: PostgresStoreReadinessHandle;
   private readonly companionId?: string;
 
   constructor(
@@ -1217,20 +1220,16 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     options: ModelUsageStoreScope,
   ) {
     this.companionId = resolveStoreCompanionId(options);
-    this.ready = ensurePostgresSchemaWithAdvisoryLock(
-      pool,
-      POSTGRES_MODEL_USAGE_MIGRATIONS,
-      POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+    this.readiness = startPostgresStoreReadiness(
+      options.fleetAggregation === true
+        ? 'model_usage_accounting'
+        : 'model_usage_diagnostics',
+      () => ensurePostgresSchemaWithAdvisoryLock(
+        pool,
+        POSTGRES_MODEL_USAGE_MIGRATIONS,
+        POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+      ),
     );
-    // Nothing awaits this promise until the first recorded event or query, so a
-    // startup migration failure would otherwise escape as a process-level
-    // unhandled rejection — how psfn-framework-stmof surfaced on a named tenant
-    // whose credential cannot reach the shared usage schema. Observing it
-    // reports the failure once at the point it happens; `ready` still rejects
-    // for every recorder/query caller below, so nothing is swallowed.
-    this.ready.catch((error) => {
-      log.error('Model usage schema migration failed', { error: toErrorMessage(error) });
-    });
   }
 
   static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {
@@ -1239,6 +1238,10 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       allowExitOnIdle: true,
     });
     return new PostgresModelUsageStore(pool, options);
+  }
+
+  async waitUntilReady(): Promise<void> {
+    await this.readiness.waitUntilReady();
   }
 
   private requireFleetIcpCostAccounting(): void {
@@ -1437,7 +1440,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     query: IcpConversationCostProjectionQuery,
   ): Promise<IcpConversationCostProjection> {
     this.requireFleetIcpCostAccounting();
-    await this.ready;
+    await this.waitUntilReady();
     const conversationId = normalizeText(query.conversationId, '');
     const rootInitiationId = normalizeText(query.rootInitiationId, '');
     if (!conversationId || !rootInitiationId) {
@@ -1458,7 +1461,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     input: IcpConversationCostReservationInput,
   ): Promise<IcpConversationCostReservationResult> {
     this.requireFleetIcpCostAccounting();
-    await this.ready;
+    await this.waitUntilReady();
     const policy = validateEnabledIcpCostPolicy(input.policy);
     const correlation = parseIcpConversationCorrelation(input.correlation);
     if (!policy.includedCostPurposes[correlation.costPurpose]) {
@@ -1611,7 +1614,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
 
   async recordUsageEvent(input: ModelUsageEventInput): Promise<void> {
     const event = normalizeEvent(input, this.companionId);
-    await this.ready;
+    await this.waitUntilReady();
     await withPostgresClient(this.pool, async (client) => {
       const initialReservation = (await client.query<IcpConversationCostReservationRow>(`
         SELECT *
@@ -1795,7 +1798,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   }
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
-    await this.ready;
+    await this.waitUntilReady();
     const prepared = await this.prepareQuery(query);
     const { query: normalizedQuery, resolvedRange, where } = prepared;
     const groupedByDimensions = normalizedQuery.groupBy ?? [];
@@ -1876,7 +1879,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   async getUsageEventsForReconciliation(
     query: ModelUsageReconciliationQuery = {},
   ): Promise<ModelUsageEvent[]> {
-    await this.ready;
+    await this.waitUntilReady();
     const normalizedQuery = normalizeQuery(query, this.companionId);
     return await this.queryAllEvents(buildWhere(normalizedQuery));
   }
@@ -1885,7 +1888,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     query: ModelUsageQuery = {},
     dimensions: readonly ModelUsageGroupDimension[],
   ): Promise<ModelUsageCostHydrationData> {
-    await this.ready;
+    await this.waitUntilReady();
     const { where } = await this.prepareQuery(query);
     const uniqueDimensions = [...new Set(dimensions.map((dimension) => {
       if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
@@ -1901,7 +1904,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   }
 
   async exportUsageEvents(query: ModelUsageQuery = {}): Promise<ModelUsageExportData> {
-    await this.ready;
+    await this.waitUntilReady();
     const prepared = await this.prepareQuery({ ...query, cursor: undefined });
     const rows = await queryRows<ModelUsageEventRow>(this.pool, `
       SELECT *
@@ -1970,7 +1973,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     companionIds: readonly string[],
     nowMs = Date.now(),
   ): Promise<FleetModelUsageSummary> {
-    await this.ready;
+    await this.waitUntilReady();
     if (this.companionId !== undefined) {
       throw new Error('Fleet model-usage summary requires the fleet-scoped model usage store');
     }
@@ -2074,7 +2077,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     nowMs = Date.now(),
     scope?: { companionId: string },
   ): Promise<ModelUsageBudgetSpendSnapshot> {
-    await this.ready;
+    await this.waitUntilReady();
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
     const requestedCompanionId = normalizeQueryText(scope?.companionId, 'companionId');
     if (this.companionId && requestedCompanionId && requestedCompanionId !== this.companionId) {

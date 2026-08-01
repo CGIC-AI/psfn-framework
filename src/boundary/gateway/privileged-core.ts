@@ -39,6 +39,7 @@ import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-a
 import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { GatewaySystemDataWriter } from './system-data-writer.js';
+import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -168,7 +169,10 @@ export async function buildGatewayPrivilegedCore(
   if (!databaseUrl) {
     throw new Error('Gateway postgres audit persistence requires config.postgresDatabaseUrl');
   }
-  const auditStore = await createPostgresGatewayAuditStore(databaseUrl);
+  const auditStore = await awaitPostgresStoreReadiness(
+    'gateway_audit',
+    () => createPostgresGatewayAuditStore(databaseUrl),
+  );
   const kubeSelfManagement = resolveKubeSelfManagementController({
     env: input.env,
     lifecycleKubernetes: input.config.lifecycleKubernetes,

@@ -12,6 +12,11 @@ import {
 } from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { createPostgresPool, queryRows } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { assertSharedSchemaReady } from './shared-schema.js';
+import {
+  startPostgresStoreReadiness,
+  type PostgresStoreReadinessHandle,
+} from './runtime-readiness.js';
 
 /**
  * Read-only, admin-owned projection over the gateway-owned speaking-arbiter
@@ -284,7 +289,14 @@ function mapParticipation(row: ParticipationAggregateRow): AdminParticipationPro
 }
 
 export class PostgresSpeakingArbiterAdminStore implements SpeakingArbiterAdminStore {
-  private constructor(private readonly pool: Pool) {}
+  private readonly readiness: PostgresStoreReadinessHandle;
+
+  private constructor(private readonly pool: Pool) {
+    this.readiness = startPostgresStoreReadiness(
+      'speaking_arbiter_admin_projection',
+      () => assertSharedSchemaReady(pool),
+    );
+  }
 
   static async connect(databaseUrl: string): Promise<PostgresSpeakingArbiterAdminStore> {
     const pool = createPostgresPool(databaseUrl, {
@@ -297,6 +309,7 @@ export class PostgresSpeakingArbiterAdminStore implements SpeakingArbiterAdminSt
   }
 
   async readProjection(limit = DEFAULT_ADMIN_ROWS): Promise<SpeakingArbiterAdminProjection> {
+    await this.readiness.waitUntilReady();
     const boundedLimit = Math.min(MAX_ADMIN_ROWS, Math.max(1, Math.floor(limit)));
     const episodeRows = await queryRows<EpisodeRow>(this.pool, `
       SELECT episode_id, channel_id, status, pressure, consecutive_autonomous_turns,

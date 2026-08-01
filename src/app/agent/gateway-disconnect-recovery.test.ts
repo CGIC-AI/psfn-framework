@@ -179,4 +179,21 @@ describe('agent gateway-disconnect wiring', () => {
     expect(readyIndex).toBeGreaterThanOrEqual(0);
     expect(handlerRegistrationIndex).toBeLessThan(readyIndex);
   });
+
+  it('keeps the recovery control listener reachable while PostgreSQL readiness settles before Ready', () => {
+    const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+    const adminListenerIndex = mainSource.indexOf(
+      'await startOptionalAdminTransportServer({',
+    );
+    const postgresReadyIndex = mainSource.indexOf(
+      'await sealPostgresStoreReadinessBeforeReady()',
+    );
+    const readyIndex = mainSource.indexOf('await gateway.declareRuntimeReady()');
+
+    expect(adminListenerIndex).toBeGreaterThanOrEqual(0);
+    expect(postgresReadyIndex).toBeGreaterThanOrEqual(0);
+    expect(readyIndex).toBeGreaterThanOrEqual(0);
+    expect(adminListenerIndex).toBeLessThan(postgresReadyIndex);
+    expect(postgresReadyIndex).toBeLessThan(readyIndex);
+  });
 });

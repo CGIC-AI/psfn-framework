@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn(),
-  queryRows: vi.fn(async () => [] as never[]),
+  queryRows: vi.fn(async (
+    _pool: unknown,
+    _sql: string,
+    _values?: readonly unknown[],
+  ) => [] as never[]),
   connectShared: vi.fn(),
 }));
 
@@ -53,17 +57,40 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     });
 
     expect(store.localCompanionId).toBe(LOCAL);
-    expect(mocks.queryRows).toHaveBeenCalledTimes(5);
-    for (const call of mocks.queryRows.mock.calls) {
+    expect(mocks.queryRows).toHaveBeenCalledTimes(6);
+    const projectionCalls = mocks.queryRows.mock.calls.filter(call => call[2] !== undefined);
+    expect(projectionCalls).toHaveLength(5);
+    for (const call of projectionCalls) {
       expect(call[2]).toEqual([LOCAL, 7]);
     }
-    const sql = mocks.queryRows.mock.calls.map(call => String(call[1]));
+    expect(String(mocks.queryRows.mock.calls[0]?.[1])).toMatch(
+      /FROM icp_conversation_cost_decisions\s+LIMIT 0/u,
+    );
+    const sql = projectionCalls.map(call => String(call[1]));
     expect(sql[0]).toMatch(/WHERE companion_id = \$1/u);
     expect(sql[1]).toMatch(/WHERE \$1::uuid = ANY\(participant_companion_ids\)/u);
     expect(sql[2]).toMatch(/sender_companion_id = \$1 OR recipient_companion_id = \$1/u);
     expect(sql[3]).toMatch(/local_companion_id = \$1 OR peer_companion_id = \$1/u);
     expect(sql[4]).toMatch(/INNER JOIN shared\.icp_conversation_episodes/u);
     expect(sql[4]).toMatch(/WHERE \$1::uuid = ANY\(episode\.participant_companion_ids\)/u);
+  });
+
+  it('fails readiness on an unavailable cost ledger before opening the shared store', async () => {
+    const sharedPool = { end: vi.fn(async () => {}) };
+    const costPool = { end: vi.fn(async () => {}) };
+    mocks.createPostgresPool
+      .mockReturnValueOnce(sharedPool)
+      .mockReturnValueOnce(costPool);
+    mocks.queryRows.mockRejectedValueOnce(new Error('cost ledger schema version is missing'));
+
+    await expect(PostgresIcpAdminProjectionStore.connect('postgres://test', {
+      localCompanionId: LOCAL,
+      knownCompanionIds: [LOCAL, PEER],
+      config: { multiCompanion: true },
+    })).rejects.toThrow('cost ledger schema version is missing');
+    expect(mocks.connectShared).not.toHaveBeenCalled();
+    expect(sharedPool.end).toHaveBeenCalledOnce();
+    expect(costPool.end).toHaveBeenCalledOnce();
   });
 
   it('pins the cost pool to the explicit fleet ledger schema instead of the default search_path', async () => {

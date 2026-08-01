@@ -141,6 +141,37 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     this.ownsPool = options.pool === undefined;
   }
 
+  /**
+   * Prove every tenant relation and selected column this gateway authority
+   * consumes. LIMIT 0 performs no content read or row lock, but the matching
+   * locking clauses still prove the role privileges required by authorization.
+   */
+  async assertReady(): Promise<void> {
+    for (const owner of this.fleet.values()) {
+      const schema = quoteSchema(owner.postgresSchema);
+      await this.pool.query(`
+        SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
+          peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
+          expires_at_ms, status, reason_code, revision
+        FROM ${schema}.icp_initiation_candidates
+        LIMIT 0
+        FOR SHARE
+      `);
+      await this.pool.query(`
+        SELECT id, trust_level, relationship_type, is_machine_intelligence
+        FROM ${schema}.contacts
+        LIMIT 0
+        FOR UPDATE
+      `);
+      await this.pool.query(`
+        SELECT contact_id, channel, channel_user_id
+        FROM ${schema}.contact_channel_ids
+        LIMIT 0
+        FOR SHARE
+      `);
+    }
+  }
+
   async resolve(input: IcpInitiationPolicyAuthorityInput): Promise<IcpInitiationPolicySnapshot> {
     const sender = this.requireOwner(input.senderCompanionId);
     const peer = this.requireOwner(input.candidate.peerCompanionId);

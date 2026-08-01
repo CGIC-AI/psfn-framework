@@ -38,6 +38,7 @@ import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/sp
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
+import { awaitOptionalPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -107,26 +108,30 @@ export async function startOptionalAdminTransportServer(
     .map(companion => companion.companionId)
     ?? (options.config.companionId ? [options.config.companionId] : []);
   const localCompanionId = options.config.companionId;
+  const postgresDatabaseUrl = options.config.postgresDatabaseUrl;
   const icpAdminProjectionStore = options.config.multiCompanion === true
-    && options.config.postgresDatabaseUrl
+    && postgresDatabaseUrl
     && localCompanionId
     && fleetCompanionIds.length > 0
-    ? await PostgresIcpAdminProjectionStore.connect(
-      options.config.postgresDatabaseUrl,
-      {
-        localCompanionId,
-        knownCompanionIds: fleetCompanionIds,
-        config: options.config,
-      },
-    )
+    ? (await awaitOptionalPostgresStoreReadiness(
+        'icp_admin_projection',
+        () => PostgresIcpAdminProjectionStore.connect(
+          postgresDatabaseUrl,
+          {
+            localCompanionId,
+            knownCompanionIds: fleetCompanionIds,
+            config: options.config,
+          },
+        ),
+      ) ?? null)
     : null;
   // Fleet Command room-state and arbitration telemetry (jp36.8.1): the arbiter
   // is gateway-owned and only exists in multi-companion mode, so this read-only
   // projection is connected under the same gate. Absent → the service reports an
   // explicit `available: false` empty state, never an error page.
   const speakingArbiterAdminStore = options.config.multiCompanion === true
-    && options.config.postgresDatabaseUrl
-    ? await PostgresSpeakingArbiterAdminStore.connect(options.config.postgresDatabaseUrl)
+    && postgresDatabaseUrl
+    ? await PostgresSpeakingArbiterAdminStore.connect(postgresDatabaseUrl)
     : null;
   const services = createInProcessGardenAdminContract({
     env,

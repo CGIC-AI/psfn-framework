@@ -119,6 +119,7 @@ import {
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
 import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
+import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
 import {
   createToolConformanceRunner,
@@ -284,7 +285,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
   const fatigueRegulationReservations = config.multiCompanion === true
-    ? await PostgresIcpFatigueRegulationReservationStore.connect(postgresDatabaseUrl)
+    ? await awaitPostgresStoreReadiness(
+        'icp_fatigue_reservations',
+        () => PostgresIcpFatigueRegulationReservationStore.connect(postgresDatabaseUrl),
+      )
     : null;
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
@@ -433,23 +437,21 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       companionName: card.data.name,
     }),
   );
-  // Lazily construct a read-only model-usage query port on first `diagnose`
-  // call. Deferring avoids an idle pool and a startup migration race with the
-  // gateway-side recorder; it fails closed to null on non-postgres backends.
-  let cachedModelUsageStore: PostgresModelUsageStore | null | undefined;
+  // Build the optional diagnostic reader during startup so its migration is
+  // observed and settled before the process advertises Ready. It remains a
+  // shared handle for self-diagnosis and the tool-usage evaluator.
+  const cachedModelUsageStore: PostgresModelUsageStore | null =
+    createPostgresModelUsageStoreFromConfig({
+      persistenceBackend: config.persistenceBackend,
+      postgresDatabaseUrl,
+      companionId: config.companionId,
+    });
   const getModelUsageQuery = (): ModelUsageQueryPort | null => {
-    if (cachedModelUsageStore === undefined) {
-      // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide
-      // ledger written by the gateway and aggregated across companions by the
-      // fleet Garden (psfn-framework-stmof). Pinning this reader to the
-      // companion schema would fork it away from the writer and silently read
-      // an empty per-tenant table.
-      cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
-        persistenceBackend: config.persistenceBackend,
-        postgresDatabaseUrl,
-        companionId: config.companionId,
-      });
-    }
+    // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide
+    // ledger written by the gateway and aggregated across companions by the
+    // fleet Garden (psfn-framework-stmof). Pinning this reader to the companion
+    // schema would fork it away from the writer and silently read an empty
+    // per-tenant table.
     return cachedModelUsageStore;
   };
   const runtimePathLayout = pathSnapshot.runtimePathLayout;

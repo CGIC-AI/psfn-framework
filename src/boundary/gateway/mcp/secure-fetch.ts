@@ -39,13 +39,13 @@ function targetKey(target: McpSecureFetchTarget, address: string): string {
   return JSON.stringify([new URL(target.url).origin, address, caHash]);
 }
 
-function pinnedLookup(address: string, family: number) {
+function pinnedLookup(address: string) {
   return (
     _hostname: string,
     lookupOptions: { all?: boolean },
     callback: (...args: unknown[]) => void,
   ): void => {
-    const normalizedFamily = family === 6 || isIP(address) === 6 ? 6 : 4;
+    const normalizedFamily = isIP(address) === 6 ? 6 : 4;
     if (lookupOptions.all) {
       callback(null, [{ address, family: normalizedFamily }]);
       return;
@@ -108,7 +108,7 @@ export function createMcpSecureFetchController(options: {
         maxResponseSize: options.maxResponseBytes,
         maxOrigins: options.targets.length,
         connect: {
-          lookup: pinnedLookup(dns.address, dns.family) as never,
+          lookup: pinnedLookup(dns.address) as never,
           rejectUnauthorized: true,
           minVersion: 'TLSv1.2',
           ...(target.tlsCa ? { ca: target.tlsCa } : {}),

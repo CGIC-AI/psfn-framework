@@ -210,6 +210,13 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
     };
   }
 
+  async releaseMcp(serverId?: string): Promise<{ released: true; serverId?: string }> {
+    if (!this.deps.toolHealthProvider?.releaseMcp) {
+      throw new Error('Gateway MCP lifecycle control is unavailable');
+    }
+    return await this.deps.toolHealthProvider.releaseMcp(serverId);
+  }
+
   private pushTelemetry(entry: AdminAdaptiveToolTelemetryEvent): void {
     this.recentTelemetry.push(entry);
     if (this.recentTelemetry.length > this.telemetryLimit) {

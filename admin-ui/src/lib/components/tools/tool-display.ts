@@ -11,6 +11,7 @@ export const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> =
   gateway: 'Gateway RPC',
   vault: 'External Vault',
   ntfy: 'ntfy',
+  mcp: 'External MCP',
 };
 
 export const HEALTH_LABELS: Record<RuntimeServiceHealthStatus, string> = {

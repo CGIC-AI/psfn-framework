@@ -242,6 +242,8 @@ the first missing one — the required set is verified in
 - `companions.json` — the mandatory fleet manifest; required for every
   deployment, including a cluster of one (see [Cluster topology](#cluster-topology)).
 - `intake-policy.json`
+- `mcp-servers.json` — external MCP client catalog, trust factors, per-tool
+  policy, and credential references. The shipped seed enables no servers.
 - `partner-affect-shadow.json`
 - `fleet-auth.json` — conditional: required only when cluster human-auth is
   enabled, and must be **absent** otherwise (`PSFN_FLEET_AUTH`; see
@@ -271,6 +273,119 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 `channels.json` has no seed file. Channel config loads safe defaults when it is absent and is created or updated when channel settings are saved through Garden or the admin API.
 
+### Configure external MCP servers
+
+PSFN is an MCP host/client. It does not expose companion internals as an MCP
+server. The native client accepts remote Streamable HTTP only over verified
+HTTPS/TLS; local subprocess (`stdio`), plain HTTP, and legacy SSE endpoints are
+not supported. Public-CA endpoints need no `tls` field. Private-CA endpoints
+name a gateway-held PEM secret through `tls.caCertificateRef`.
+
+Start from `config/mcp-servers.seed.json`, then add one explicit server entry.
+This loopback knowledge-base example is deliberately high-trust because the
+operator owns the server, its data, and every input path:
+
+```json
+{
+  "schemaVersion": 1,
+  "limits": {
+    "connectTimeoutMs": 10000,
+    "requestTimeoutMs": 30000,
+    "idleConnectionTtlMs": 300000,
+    "metadataCacheTtlMs": 300000,
+    "maxCatalogToolsPerServer": 256,
+    "maxPaginationPages": 32,
+    "maxStaticMetadataBytes": 1048576,
+    "maxDynamicOutputBytes": 4194304
+  },
+  "servers": [
+    {
+      "id": "private-notes",
+      "displayName": "Private notes",
+      "enabled": true,
+      "description": "Search and update the operator-owned knowledge base.",
+      "endpoint": "https://127.0.0.1:9443/mcp",
+      "tls": {
+        "caCertificateRef": { "kind": "env", "envName": "MCP_NOTES_CA_PEM" }
+      },
+      "allowedCompanionIds": ["11111111-1111-4111-8111-111111111111"],
+      "authentication": {
+        "kind": "bearer",
+        "tokenRef": { "kind": "env", "envName": "MCP_NOTES_TOKEN" }
+      },
+      "trust": {
+        "level": "primary",
+        "factors": {
+          "hosting": "loopback",
+          "dataOwnership": "operator_private",
+          "inputExposure": "closed"
+        },
+        "allowedOutboundSensitivity": ["public", "personal", "intimate", "confidential"]
+      },
+      "toolPolicy": {
+        "default": "deny",
+        "tools": {
+          "search_notes": { "effect": "read", "confirmation": "never" },
+          "write_note": { "effect": "write", "confirmation": "sensitive" }
+        }
+      }
+    }
+  ]
+}
+```
+
+Put `MCP_NOTES_TOKEN` and the complete PEM value for `MCP_NOTES_CA_PEM` in the
+gateway secret environment or its configured credential vault. Never put the
+secret value, URL userinfo, or an authorization header in `mcp-servers.json`.
+Supported authentication modes are bearer, a named API-key header, and OAuth
+client credentials with an exact expected issuer. Every URL is HTTPS, OAuth
+token and issuer origins must match, redirects are rejected, and resolved
+addresses are checked against the server's hosting declaration.
+
+Trust is constrained by facts rather than being a free-form bypass. The
+configured level cannot exceed the least-trusted factor in this matrix:
+
+| Factor | `primary` ceiling | `trusted` ceiling | `regular` ceiling | `public` ceiling |
+| --- | --- | --- | --- | --- |
+| Hosting | `loopback` | `private_network`, `remote_dedicated` | `remote_shared` | — |
+| Data ownership | `operator_private` | `operator_work` | `mixed` | `third_party` |
+| Input exposure | `closed` | `operator_authenticated` | `multi_party` | `public_untrusted` |
+
+The level's default outbound ceiling is `public` for public servers,
+`public|personal` for regular/trusted servers, and every sensitivity for
+primary servers. `allowedOutboundSensitivity` may narrow that ceiling but
+cannot widen it. This is why an operator-owned closed journal can be primary,
+while email with multi-party input cannot be—even when the mailbox and MCP
+process are local.
+
+Typical profiles:
+
+- A loopback personal journal or closed operator-owned knowledge base can be
+  `primary`; allow its known read/write tools and gate only the effects or
+  sensitivities the operator wants to review.
+- An operator calendar with authenticated inputs can be at most `trusted`;
+  allow ordinary reads/writes, deny send/invite tools unless explicitly needed,
+  and narrow outbound sensitivity to `public|personal`.
+- Email is `public` when arbitrary senders can supply content, even if the
+  mailbox connector runs locally. Allowlist reads and leave send/reply absent
+  from `toolPolicy.tools`.
+- A third-party game with public inputs is `public`; expose only the minimum
+  play-state tools, send public data only, and keep control effects always
+  confirmed. It gets no path to companion-private context.
+
+Tool policy is separately allowlisted. Unknown tools always deny; destructive
+and control tools must use `confirmation: "always"`; `confirmation:
+"sensitive"` asks only when intimate/confidential content is leaving PSFN.
+The companion needs the `external.mcp` capability to call a tool (included in
+the apprentice and autonomous tiers); catalog/search/inspect/release use the
+ordinary `identity.read` capability.
+
+Garden exposes the canonical file at **Settings → Owner files** and validates
+the whole candidate before saving. A restart is required after editing it.
+The **Tools → Health** panel then shows content-free connection state, policy,
+and the last screened metadata hash; it never displays credentials, endpoint
+details, descriptions, schemas, or outputs.
+
 ## First Local Bring-Up
 
 1. Set the minimum bootstrap values in `.env`:
@@ -299,6 +414,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/capability-tier.seed.json ./data/capability-tier.json
    cp config/trust-policy.seed.json ./data/trust-policy.json
    cp config/intake-policy.seed.json ./data/intake-policy.json
+   cp config/mcp-servers.seed.json ./data/mcp-servers.json
    cp config/charge-policy.seed.json ./data/charge-policy.json
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json

@@ -1447,6 +1447,66 @@ covered in "Dependency Update Policy (pin-then-plan)" below — the same
 `npm run verify:supply-chain` gate applies to firewall dependencies like the
 ONNX runtime.
 
+## External MCP Client Operations
+
+External MCP configuration is system-owned in `mcp-servers.json`; credentials
+remain gateway-owned secret references. Editing the file through Garden
+**Settings → Owner files** validates the complete replacement and reports that
+a restart is required. Startup rejects missing/malformed config, non-HTTPS
+endpoints, embedded credentials, invalid trust claims, permissive default tool
+policy, and destructive/control tools without `confirmation: "always"`.
+
+Use Garden **Tools → Health** for the companion-scoped operational view. Each
+server card intentionally contains only its id/display name, configured trust
+level, active/loaded state, policy effects/confirmation, and the latest static
+metadata screening disposition/hash/time/tool count. Endpoint URLs,
+credential references, descriptions, schemas, and tool results are never health
+data.
+
+The normal lifecycle is:
+
+- `unloaded` before first selection: catalog access has caused no network I/O.
+- `schema loaded` after search/inspect/call: one companion/server client is
+  active and its screened definitions are resident.
+- `screened` plus `sha256:<digest>`: that exact canonical metadata version has
+  passed CogSec. This means screened, not trusted or permanently approved.
+- automatic unload after `limits.idleConnectionTtlMs`, companion disconnect, or
+  gateway shutdown. `limits.metadataCacheTtlMs` independently controls when an
+  active session relists tools.
+
+Use **Unload server** to close one connection and discard its loaded schemas, or
+**Unload all** for every server belonging to the authenticated companion. These
+controls call the reversible authenticated endpoint
+`POST /api/admin/tools/mcp/release`; `{ "serverId": "private-notes" }` selects
+one server and `{}` selects all. The gateway derives the companion from the
+authenticated Garden lane and never accepts a companion id in the body. The
+next selected MCP action reconnects lazily. The static hash cache may remain
+outside conversational context so byte-identical metadata does not need another
+CogSec pass; broker shutdown clears it.
+
+Dynamic results never use the static cache. Every `tools/call` response is
+bounded, canonicalized, and screened through CogSec before any text returns to
+the agent. A trusted or primary server does not bypass this rule. Trust only
+sets an upper bound on what PSFN may send and combines with the configured tool
+effect and confirmation mode.
+
+Failure triage:
+
+| Symptom | Check |
+| --- | --- |
+| Server absent from the catalog | `enabled`, `allowedCompanionIds`, and the authenticated companion identity |
+| TLS/certificate failure | Endpoint hostname/SAN, private CA PEM secret, certificate chain, and TLS 1.2+ support |
+| URL blocked before connection | HTTPS scheme, hosting factor, DNS result, target allowlist, and absence of redirects |
+| 401/403 | Bearer/API-key reference or OAuth client, issuer, token endpoint, and scopes; secrets are never logged |
+| Tool absent/denied | Exact `toolPolicy.tools` name and `default: "deny"`; a remote list change never grants policy |
+| Metadata withheld/invalid | CogSec event and server schema bytes; changed metadata must pass a fresh scan |
+| Call needs approval | Tool `confirmation` plus outbound sensitivity; approval is bound to the exact arguments |
+| Repeated connection failures | Tools health last-failure summary and gateway logs; unload once after correcting the cause |
+
+Do not work around failures by enabling plain HTTP, disabling certificate
+verification, widening the trust factors beyond reality, or copying secrets into
+the owner file. PSFN intentionally has no stdio or legacy SSE fallback.
+
 ## Shared-World Wiki And Places Maintenance
 
 The shared-world wiki is operator-owned. Companions read shared world knowledge

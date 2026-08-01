@@ -223,6 +223,26 @@ describe('MCP gateway broker', () => {
     expect(JSON.stringify(first)).not.toContain('a private result');
   });
 
+  it('rejects oversized invocation arguments before external dispatch', async () => {
+    const fake = fakeProtocolClient();
+    const bounded = config();
+    bounded.limits.maxDynamicOutputBytes = 64;
+    const broker = createMcpGatewayBroker({
+      config: bounded,
+      clientFactory: fake.factory,
+      screening: screening(),
+    });
+
+    await expect(broker.invokeTool({
+      companionId: 'ada',
+      serverId: 'notes',
+      toolName: 'search_notes',
+      arguments: { query: 'x'.repeat(256) },
+      outboundSensitivity: 'personal',
+    })).rejects.toMatchObject({ code: 'INVOCATION_ARGUMENTS_TOO_LARGE' });
+    expect(fake.client.callTool).not.toHaveBeenCalled();
+  });
+
   it('fails closed for unauthorized companions, unknown tools, excessive sensitivity, and missing confirmation', async () => {
     const fake = fakeProtocolClient();
     const restricted = config();

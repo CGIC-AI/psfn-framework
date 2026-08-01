@@ -202,6 +202,8 @@ import type {
   MemoryDeletionProposalSnapshotResult,
   MemoryDeletionResolveParams,
   MemoryDeletionResolveResult,
+  McpExecuteParams,
+  McpExecuteResult,
 } from './protocol.js';
 import type {
   AuthenticatedShardWorkloadHandle,
@@ -1267,6 +1269,36 @@ export class GatewayClient implements
     }) as WebSearchResult;
   }
 
+  /**
+   * Invoke the single progressive MCP gateway surface. Sensitivity and channel
+   * lineage are supplied by the trusted tool wrapper, not by its model schema.
+   */
+  async mcpExecute(
+    params: Omit<McpExecuteParams, 'effectiveSensitivity' | 'cancellationId' | 'channelId'>,
+    options: {
+      effectiveSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
+      channelId?: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<McpExecuteResult> {
+    const result = await this.requestWithAbortSignal<McpExecuteResult>(
+      'mcp.execute',
+      {
+        ...params,
+        ...(params.action === 'call'
+          ? { effectiveSensitivity: options.effectiveSensitivity }
+          : {}),
+        ...(options.channelId?.trim() ? { channelId: options.channelId.trim() } : {}),
+      },
+      options.signal,
+      'mcp',
+    );
+    if (!isRecord(result) || result.action !== params.action) {
+      throw new Error('Gateway returned an invalid MCP result');
+    }
+    return result;
+  }
+
   async webFetchBinary(
     url: string,
     options: {
@@ -1829,9 +1861,9 @@ export class GatewayClient implements
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
-    remoteCancellation?: 'llm',
+    remoteCancellation?: 'llm' | 'mcp',
   ): Promise<T> {
-    const cancellationId = remoteCancellation === 'llm' ? randomUUID() : undefined;
+    const cancellationId = remoteCancellation ? randomUUID() : undefined;
     const requestParams = cancellationId ? { ...params, cancellationId } : params;
 
     if (!signal) {
@@ -1857,10 +1889,12 @@ export class GatewayClient implements
       };
 
       const onAbort = () => {
-        if (cancellationId) {
-          this.rpcInstance.notify('llm.cancel', {
+        if (cancellationId && remoteCancellation) {
+          this.rpcInstance.notify(`${remoteCancellation}.cancel`, {
             cancellationId,
-            ...(this.companionId ? { companionId: this.companionId } : {}),
+            ...(remoteCancellation === 'llm' && this.companionId
+              ? { companionId: this.companionId }
+              : {}),
           });
         }
         finalize('reject', abortError(signal.reason));

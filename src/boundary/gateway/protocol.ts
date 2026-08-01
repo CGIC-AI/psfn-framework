@@ -317,6 +317,82 @@ export interface WebSearchParams {
   maxResults?: number;
 }
 
+export type McpExecuteAction = 'catalog' | 'search' | 'inspect' | 'call' | 'release';
+
+/**
+ * Agent-to-gateway MCP request. `effectiveSensitivity` is populated by the
+ * trusted agent tool wrapper from the current turn's disclosure lineage; it is
+ * deliberately absent from the model-facing schema.
+ */
+export interface McpExecuteParams extends GatewayCorrelationParams {
+  action: McpExecuteAction;
+  serverId?: string;
+  toolName?: string;
+  query?: string;
+  limit?: number;
+  arguments?: Record<string, unknown>;
+  effectiveSensitivity?: 'public' | 'personal' | 'intimate' | 'confidential';
+  cancellationId?: string;
+}
+
+export interface McpCancelParams {
+  cancellationId: string;
+}
+
+export interface McpCancelResult {
+  cancelled: boolean;
+}
+
+export type McpExecuteResult =
+  | {
+      action: 'catalog';
+      servers: Array<{
+        serverId: string;
+        displayName: string;
+        description: string;
+        trustLevel: 'primary' | 'trusted' | 'regular' | 'public';
+      }>;
+    }
+  | {
+      action: 'search';
+      query: string;
+      tools: Array<{
+        serverId: string;
+        serverDisplayName: string;
+        toolName: string;
+        description: string;
+        effect: 'read' | 'write' | 'read_write' | 'destructive' | 'control';
+        confirmation: 'never' | 'sensitive' | 'always';
+      }>;
+    }
+  | {
+      action: 'inspect';
+      serverId: string;
+      serverDisplayName: string;
+      tool: {
+        name: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+      };
+      policy: {
+        effect: 'read' | 'write' | 'read_write' | 'destructive' | 'control';
+        confirmation: 'never' | 'sensitive' | 'always';
+      };
+    }
+  | {
+      action: 'call';
+      serverId: string;
+      toolName: string;
+      isError: boolean;
+      effectiveText: string;
+      withheld: boolean;
+    }
+  | {
+      action: 'release';
+      serverId?: string;
+      released: true;
+    };
+
 
 export interface FsReadParams {
   path: string;
@@ -1101,6 +1177,8 @@ export interface GatewayMethods {
   'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
   'web.search': [WebSearchParams, WebSearchResult];
+  'mcp.execute': [McpExecuteParams, McpExecuteResult];
+  'mcp.cancel': [McpCancelParams, McpCancelResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];

@@ -32,6 +32,7 @@ export type McpBrokerErrorCode =
   | 'STATIC_METADATA_INVALID'
   | 'STATIC_METADATA_TOO_LARGE'
   | 'TOOL_CATALOG_TOO_LARGE'
+  | 'INVOCATION_ARGUMENTS_TOO_LARGE'
   | 'DYNAMIC_OUTPUT_TOO_LARGE'
   | 'DYNAMIC_OUTPUT_WITHHELD'
   | 'BROKER_CLOSED';
@@ -483,6 +484,12 @@ export function createMcpGatewayBroker(options: {
     async invokeTool(input) {
       const inspected = await inspectedTool(input);
       const server = serverFor(input.companionId, input.serverId);
+      if (utf8Bytes(canonicalJson(input.arguments)) > options.config.limits.maxDynamicOutputBytes) {
+        throw new McpBrokerError(
+          'INVOCATION_ARGUMENTS_TOO_LARGE',
+          `MCP tool '${input.toolName}' arguments exceeded the configured byte limit`,
+        );
+      }
       const allowedSensitivity = server.trust.allowedOutboundSensitivity
         ?? TRUST_CEILING[server.trust.level];
       if (!allowedSensitivity.includes(input.outboundSensitivity)) {

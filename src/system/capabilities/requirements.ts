@@ -268,6 +268,15 @@ function resolveWorldRequirement(action: string | null): CapabilityRequirement {
   return WORLD_REQUIREMENTS;
 }
 
+const MCP_DISCOVERY_ACTIONS = new Set(['catalog', 'search', 'inspect', 'release']);
+const MCP_REQUIREMENTS = ['identity.read', 'external.mcp'] as const;
+
+function resolveMcpRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, MCP_DISCOVERY_ACTIONS)) return 'identity.read';
+  if (action === 'call') return 'external.mcp';
+  return MCP_REQUIREMENTS;
+}
+
 function resolveNotifyRequirement(
   action: string | null,
   params: Record<string, unknown>,
@@ -327,6 +336,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   repo: (action) => resolveRepoRequirement(action),
   beads: (action) => resolveBeadsRequirement(action),
   world: (action) => resolveWorldRequirement(action),
+  mcp: (action) => resolveMcpRequirement(action),
   notify: resolveNotifyRequirement,
   self_status: (action) => resolveSelfStatusRequirement(action),
   journal: (action) => resolveJournalRequirement(action),

@@ -293,7 +293,7 @@ describe('first-party tool surface registry', () => {
       'selfie_create', 'generate_image',
       'memory', 'scratchpad', 'journal',
       'orient', 'contact', 'session', 'self_status', 'system', 'identity',
-      'fs', 'web',
+      'fs', 'web', 'mcp',
       'skill', 'wiki', 'schedule', 'subagent', 'analysis_workbench',
     ];
     for (const name of expectedCore) {

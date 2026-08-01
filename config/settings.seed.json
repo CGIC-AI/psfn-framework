@@ -29,6 +29,9 @@
     "postRolloutValidationHistoryLimit": 20,
     "rollbackHistoryLimit": 50
   },
+  "cogSecPersonaConformance": {
+    "enabled": false
+  },
   "sessionMirrorEnabled": true,
   "sessionMirrorMaxChars": 220,
   "sessionMirrorActiveWindowMs": 1800000,

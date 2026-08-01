@@ -354,6 +354,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'sessionMirrorChannelOverrides',
   'wikiStartupHydration',
   'lifecycleKubernetes',
+  'cogSecPersonaConformance',
   'voiceReplySegmenter',
   'wyomingShardRouting',
   'shardToolsets',

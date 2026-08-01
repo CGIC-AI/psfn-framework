@@ -111,6 +111,25 @@ describe('settings contract guard', () => {
     expect(contractData.fields.sessionHistoryBudgetPct.scope).toBe('global');
   });
 
+  it('exposes the companion-specific CogSec baseline through the Garden settings owner', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.cogSecPersonaConformance).toEqual({
+      key: 'cogSecPersonaConformance',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'perCompanion',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.cogSecPersonaConformance).toEqual({
+      sectionId: 'sessions',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions)
+      .toContain('cogSecPersonaConformance');
+    expect(readSettingsSeed().cogSecPersonaConformance).toEqual({ enabled: false });
+  });
+
   it('publishes per-companion image defaults with catalog-backed enum metadata', () => {
     const contractData = buildSettingsContractData();
 

@@ -14,6 +14,27 @@ vi.mock('../../shared/logger.js', () => ({
 }));
 
 import { loadSettings, saveSettings } from './io.js';
+import { applySettings, getRuntimeSettingsSnapshot } from './runtime.js';
+import type { SubstrateConfig } from '../config/runtime-config-contracts.js';
+
+function enabledCogSecSettings() {
+  return {
+    enabled: true,
+    baseline: {
+      stableIdentityText: 'Ariadne keeps a warm voice, values consent, refuses unsafe requests, and remembers Rowan.',
+      expectedVoiceAnchors: ['warm voice'],
+      expectedValueAnchors: ['consent'],
+      expectedRefusalAnchors: ['refuses unsafe requests'],
+      expectedRelationshipAnchors: ['Rowan'],
+      anomalyPatterns: {
+        assistantGenericness: ['\\bariadne\\s+is\\s+now\\b'],
+        personaMutation: ['\\bfrom\\s+now\\s+on\\b'],
+        attackMechanics: ['\\bignore\\s+previous\\s+instructions\\b'],
+        invisibleText: ['[\\u200B-\\u200F]'],
+      },
+    },
+  } as const;
+}
 
 describe('settings owner-file load logging', () => {
   const roots: string[] = [];
@@ -141,5 +162,38 @@ describe('settings owner-file load logging', () => {
     expect(() => loadSettings(incoherentRoot)).toThrow(
       'must not exceed lifecycleKubernetes.rollbackWaitTimeoutMs',
     );
+  });
+
+  it('round-trips and strictly validates the JSON-owned CogSec persona baseline', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-settings-cogsec-persona-'));
+    roots.push(root);
+    const settings = enabledCogSecSettings();
+    saveSettings(root, { cogSecPersonaConformance: settings });
+    const loaded = loadSettings(root);
+    expect(loaded.cogSecPersonaConformance).toEqual(settings);
+
+    const config = {} as SubstrateConfig;
+    applySettings(config, loaded);
+    expect(config.cogSecPersonaConformance).toEqual(settings);
+    expect(config.cogSecPersonaConformance).not.toBe(loaded.cogSecPersonaConformance);
+    expect(getRuntimeSettingsSnapshot(config).cogSecPersonaConformance).toEqual(settings);
+
+    const invalidRoot = mkdtempSync(join(tmpdir(), 'psfn-settings-cogsec-persona-invalid-'));
+    roots.push(invalidRoot);
+    writeFileSync(join(invalidRoot, 'settings.json'), JSON.stringify({
+      cogSecPersonaConformance: {
+        ...settings,
+        baseline: {
+          ...settings.baseline,
+          anomalyPatterns: {
+            ...settings.baseline.anomalyPatterns,
+            personaMutation: ['('],
+          },
+          silentFallback: true,
+        },
+      },
+    }), 'utf-8');
+
+    expect(() => loadSettings(invalidRoot)).toThrow(/unknown keys: silentFallback/u);
   });
 });

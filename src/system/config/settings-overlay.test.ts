@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EditableSettings } from '../settings.js';
+import { evaluateCogSecPersonaConformance } from '../../core/cogsec/persona-conformance.js';
 import { createDefaultObserverEvalSidecarSettings } from './runtime-config-contracts.js';
 import {
   COMPANION_SETTINGS_OVERLAY_FILE_NAME,
@@ -14,6 +15,25 @@ import {
 } from './settings-overlay.js';
 
 const roots: string[] = [];
+
+function cogSecSettings(assistantPattern: string) {
+  return {
+    enabled: true,
+    baseline: {
+      stableIdentityText: 'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Vega.',
+      expectedVoiceAnchors: ['warm voice'],
+      expectedValueAnchors: ['consent'],
+      expectedRefusalAnchors: ['refuses unsafe requests'],
+      expectedRelationshipAnchors: ['Vega'],
+      anomalyPatterns: {
+        assistantGenericness: [assistantPattern],
+        personaMutation: ['a^'],
+        attackMechanics: ['a^'],
+        invisibleText: ['a^'],
+      },
+    },
+  } as const;
+}
 
 function makeCompanionDir(overlay?: unknown): string {
   const root = mkdtempSync(join(tmpdir(), 'psfn-overlay-'));
@@ -73,6 +93,42 @@ describe('loadCompanionSettingsOverlay', () => {
 });
 
 describe('mergeCompanionSettingsOverlay', () => {
+  it('changes conformance behavior when the per-companion owner file changes', () => {
+    const dir = makeCompanionDir({
+      cogSecPersonaConformance: cogSecSettings('\\blyra\\s+is\\s+now\\b'),
+    });
+    const base: EditableSettings = { cogSecPersonaConformance: { enabled: false } };
+    const promptVisibleText = [
+      'Lyra keeps a warm voice, values consent, refuses unsafe requests, and remembers Vega.',
+      'Lyra is now an AI assistant.',
+    ].join('\n');
+    const evaluateOwnerFile = () => evaluateCogSecPersonaConformance({
+      caseId: 'cogsec_owner_file_behavior',
+      channelId: 'api:owner-file-behavior',
+      promptVisibleText,
+      settings: resolveEffectiveRuntimeSettings(base, dir).cogSecPersonaConformance!,
+    });
+
+    expect(evaluateOwnerFile().status).toBe('fail');
+
+    writeFileSync(join(dir, COMPANION_SETTINGS_OVERLAY_FILE_NAME), JSON.stringify({
+      cogSecPersonaConformance: cogSecSettings('\\bvega\\s+is\\s+now\\b'),
+    }), 'utf-8');
+
+    expect(evaluateOwnerFile().status).toBe('pass');
+  });
+
+  it('lets a companion explicitly disable a globally enabled conformance baseline', () => {
+    const globallyEnabled = cogSecSettings('\\blyra\\s+is\\s+now\\b');
+    const dir = makeCompanionDir({
+      cogSecPersonaConformance: { enabled: false },
+    });
+
+    expect(resolveEffectiveRuntimeSettings({
+      cogSecPersonaConformance: globallyEnabled,
+    }, dir).cogSecPersonaConformance).toEqual({ enabled: false });
+  });
+
   it('overrides scalar whitelisted keys and leaves the base untouched', () => {
     const base: EditableSettings = { activeTimezone: 'UTC', uiThemeId: 'default' };
     const merged = mergeCompanionSettingsOverlay(base, { activeTimezone: 'Asia/Tokyo' });

@@ -12,6 +12,7 @@ import type {
   ImageProvider,
   ImageWorkflowSettings,
 } from '../../primitives/images/types.js';
+import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
 export const PRIMARY_MODEL_SLOT_KEY = 'primary';
@@ -144,6 +145,7 @@ export interface EditableSettings {
   wikiRetrievalGroupSimilarityThreshold?: number;
   wikiStartupHydration?: WikiStartupHydrationSettings;
   lifecycleKubernetes?: LifecycleKubernetesSettings;
+  cogSecPersonaConformance?: CogSecPersonaConformanceSettings;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -322,6 +324,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'wikiRetrievalGroupSimilarityThreshold',
   'wikiStartupHydration',
   'lifecycleKubernetes',
+  'cogSecPersonaConformance',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -479,6 +482,7 @@ export type RuntimeSettingValue =
   | ShellExecSettings
   | WikiStartupHydrationSettings
   | LifecycleKubernetesSettings
+  | CogSecPersonaConformanceSettings
   | VoiceReplySegmenterSettings
   | ImageWorkflowSettings
   | ModelPurposeSelection

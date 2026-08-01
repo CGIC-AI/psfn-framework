@@ -371,6 +371,16 @@ export class AdminSessionDataService implements AdminSessionService {
     return this.cogSecForensicArchive;
   }
 
+  private requireCogSecPersonaConformanceSettings(): NonNullable<SubstrateConfig['cogSecPersonaConformance']> {
+    const settings = this.deps.config?.cogSecPersonaConformance;
+    if (!settings) {
+      throw new Error(
+        'CogSec persona conformance is not configured; set settings.json cogSecPersonaConformance explicitly',
+      );
+    }
+    return settings;
+  }
+
   private resolveActiveLogicalSessionId(sourceChannelId: string): string {
     const route = this.deps.sessionManager
       .listSessionRoutes()
@@ -762,6 +772,7 @@ export class AdminSessionDataService implements AdminSessionService {
     context?: GardenRequestContext,
   ): Promise<AdminCogSecRemediationApplyData> {
     this.denyUnpartitionedFleetAccess(context);
+    const personaConformanceSettings = this.requireCogSecPersonaConformanceSettings();
     const eventStore = this.requireCogSecEventStore();
     const forensicArchive = this.requireCogSecForensicArchive();
     const draft = this.buildCogSecDraft(input);
@@ -820,6 +831,9 @@ export class AdminSessionDataService implements AdminSessionService {
       preview,
       eventStore,
       sessionStore: this.deps.sessionStore,
+      personaConformance: {
+        settings: personaConformanceSettings,
+      },
     });
 
     let routeReset: AdminCogSecRemediationApplyData['routeReset'];
@@ -850,7 +864,9 @@ export class AdminSessionDataService implements AdminSessionService {
       throw new Error(`CogSec event missing after remediation: ${draft.caseId}`);
     }
 
-    const failureCount = revocation.failures.length + regeneration.failures.length;
+    const failureCount = revocation.failures.length
+      + regeneration.failures.length
+      + regeneration.personaConformance.failureCount;
     return {
       ok: failureCount === 0,
       message: failureCount === 0

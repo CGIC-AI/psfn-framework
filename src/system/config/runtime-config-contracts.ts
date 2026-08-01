@@ -42,6 +42,7 @@ import type {
   RuntimeConfigHooks,
   TextEmotionDType,
 } from '../../shared/contracts/runtime.js';
+import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export type { CapabilityTier } from '../capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
@@ -231,6 +232,8 @@ export interface SubstrateConfig {
   wikiStartupHydration?: WikiStartupHydrationSettings;
   /** settings.json-owned lifecycle and Kubernetes operational policy. */
   lifecycleKubernetes?: LifecycleKubernetesSettings;
+  /** Per-companion JSON-owned baseline for CogSec persona drift detection. */
+  cogSecPersonaConformance?: CogSecPersonaConformanceSettings;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;

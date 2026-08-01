@@ -13,8 +13,8 @@ import type {
 import {
   evaluateCogSecPersonaConformance,
   type CogSecPersonaConformanceEventRecord,
-  type CogSecPersonaConformanceInput,
 } from './persona-conformance.js';
+import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 import { isCogSecTombstoneSessionEntry } from './tombstones.js';
 import type { CompactionSummary, SessionEntry } from '../session/types.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
@@ -133,13 +133,12 @@ export interface CogSecRegenerationResult {
   personaConformance: CogSecPersonaConformanceEventRecord;
 }
 
-export type CogSecRegenerationPersonaConformanceOptions = Partial<Omit<
-  CogSecPersonaConformanceInput,
-  'caseId' | 'channelId' | 'promptVisibleText' | 'sealedForensicPayloadRefs' | 'sealedForensicPayloadHashes'
->> & {
+export interface CogSecRegenerationPersonaConformanceOptions {
+  settings: CogSecPersonaConformanceSettings;
   channelId?: string;
   promptVisibleText?: string;
-};
+  checkedAt?: Date;
+}
 
 export interface ApplyCogSecRegenerationInput {
   caseId?: string;
@@ -150,7 +149,7 @@ export interface ApplyCogSecRegenerationInput {
   memoryRegenerator?: CogSecMemoryRegenerator;
   activeMemoryRebuilder?: CogSecActiveMemoryRebuilder;
   externalArtifactRegenerator?: CogSecExternalArtifactRegenerator;
-  personaConformance?: CogSecRegenerationPersonaConformanceOptions;
+  personaConformance: CogSecRegenerationPersonaConformanceOptions;
   now?: () => Date;
 }
 
@@ -258,9 +257,25 @@ function isRegenerableExternalArtifact(artifact: CogSecLineageExternalArtifactRe
   return artifact.actions.includes('regenerate') && artifact.classification === 'tainted';
 }
 
+function requirePersonaConformanceSettings(
+  input: ApplyCogSecRegenerationInput,
+): CogSecPersonaConformanceSettings {
+  const runtimeInput = input as Omit<ApplyCogSecRegenerationInput, 'personaConformance'> & {
+    personaConformance?: Partial<CogSecRegenerationPersonaConformanceOptions>;
+  };
+  const settings = runtimeInput.personaConformance?.settings;
+  if (!settings) {
+    throw new Error(
+      'CogSec persona conformance is not configured; provide explicit enabled or disabled settings before regeneration',
+    );
+  }
+  return settings;
+}
+
 export async function applyCogSecRegeneration(
   input: ApplyCogSecRegenerationInput,
 ): Promise<CogSecRegenerationResult> {
+  const personaConformanceSettings = requirePersonaConformanceSettings(input);
   const caseId = input.caseId ?? input.preview.caseId;
   const event = input.eventStore.getEvent(caseId);
   if (!event) {
@@ -453,17 +468,13 @@ export async function applyCogSecRegeneration(
     + regeneratedExternalArtifactIds.length
     + queuedExternalArtifactIds.length;
 
-  const conformanceNow = input.personaConformance?.checkedAt ?? input.now?.() ?? new Date();
+  const conformanceNow = input.personaConformance.checkedAt ?? input.now?.() ?? new Date();
   const personaConformance = evaluateCogSecPersonaConformance({
     caseId,
-    channelId: input.personaConformance?.channelId ?? event.sourceChannelId,
-    promptVisibleText: input.personaConformance?.promptVisibleText
+    channelId: input.personaConformance.channelId ?? event.sourceChannelId,
+    promptVisibleText: input.personaConformance.promptVisibleText
       ?? contextTextFromCleanEntriesByChannel(cleanEntriesByChannel),
-    stableIdentityText: input.personaConformance?.stableIdentityText,
-    expectedVoiceAnchors: input.personaConformance?.expectedVoiceAnchors,
-    expectedValueAnchors: input.personaConformance?.expectedValueAnchors,
-    expectedRefusalAnchors: input.personaConformance?.expectedRefusalAnchors,
-    expectedRelationshipAnchors: input.personaConformance?.expectedRelationshipAnchors,
+    settings: personaConformanceSettings,
     sealedForensicPayloadRefs: event.sealedForensicPayloadRefs,
     sealedForensicPayloadHashes: event.sealedForensicPayloadHashes,
     checkedAt: conformanceNow,

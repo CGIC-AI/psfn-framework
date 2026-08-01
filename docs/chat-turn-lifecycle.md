@@ -126,7 +126,7 @@ future turns.
 
 ```mermaid
 flowchart LR
-    TURN[Turn completed] --> HPT[Heartbeat post-turn runtime<br/>src/core/scheduler/heartbeat-post-turn-runtime.ts]
+    TURN[Turn completed] --> HPT[Scheduler post-turn runtime<br/>src/core/scheduler/post-turn-runtime.ts]
 
     HPT --> APPR[Intention appraisal<br/>transcript = last 12 session entries<br/>deduped vs current exchange gexb]
     APPR --> CONC[Concerns / reminders<br/>active_concerns, cap enforced]

@@ -8,50 +8,24 @@ version: 1
 ---
 # Web Fetch Skill
 
-Prefer the top-level `web_fetch` tool for routine page reads.
+Prefer the canonical `web` tool with `action="fetch"` for routine page reads.
 
-Use `lane: "default"` for normal web pages.
-Use `lane: "local_crawler"` only when you explicitly need the local crawler path.
+Use `action="browse"` only when you explicitly need the configured local-crawler
+path. The action selects that lane; the canonical tool does not accept a `lane`
+parameter.
 
-The raw crawl4ai endpoint is deployment-specific backend detail. Never guess or
-hard-code an internal hostname; the operator must supply it through the
-gateway's private deployment configuration.
+Use `action="search"` for a research query rather than a known page URL.
 
-## Methods
-
-### Method 1: Get Markdown (Simple)
-```
-GET /md/{url_encoded}?f=fit
-```
-- URL must be URL-encoded
-- `f=fit` extracts main content, removes headers/footers/nav/ads
-- Returns clean markdown
-
-Example:
-- To fetch `https://example.com/article`
-- Request: `GET /md/https%3A%2F%2Fexample.com%2Farticle?f=fit`
-
-### Method 2: Batch Crawl (Advanced)
-```
-POST /crawl
-Content-Type: application/json
-
-{
-  "urls": ["https://example.com"],
-  "crawler_config": { "stream": false }
-}
-```
-- Max 100 URLs per request
-- Returns results after all processed
+The raw crawler endpoint is deployment-specific backend detail. Never guess or
+call an internal hostname directly; the gateway owns that configuration.
 
 ## Usage
 When asked to read a URL or fetch web content:
-1. Prefer the top-level `web_fetch` tool
-2. Only fall back to a raw crawl4ai endpoint when the operator has explicitly
-   supplied one for this deployment
-3. Return the fetched content to the active conversation
+1. Prefer `web` with `action="fetch"`
+2. Use `web` with `action="browse"` only for the configured local crawler
+3. Use `web` with `action="search"` when the input is a research query
+4. Return the result to the active conversation
 
 ## Notes
-- This service runs on the local network
 - Use for reading articles, documentation, etc.
-- The fit filter provides clean, readable content
+- Leave the optional extraction prompt unset unless a focused read is needed.

@@ -3,6 +3,26 @@ import { EventBus } from '../../../shared/event-bus.js';
 import { AdminAdaptiveToolsDataService } from './adaptive-tools-service.js';
 
 describe('AdminAdaptiveToolsDataService invocation audit', () => {
+  it('delegates explicit MCP unload without accepting content-bearing fields', async () => {
+    const releaseMcp = vi.fn(async (serverId?: string) => ({
+      released: true as const,
+      ...(serverId ? { serverId } : {}),
+    }));
+    const service = new AdminAdaptiveToolsDataService({
+      eventBus: new EventBus(),
+      toolHealthProvider: {
+        getRuntimeServiceHealth: async () => ({ checkedAt: 0, services: [] }),
+        releaseMcp,
+      },
+    });
+
+    await expect(service.releaseMcp('notes')).resolves.toEqual({
+      released: true,
+      serverId: 'notes',
+    });
+    expect(releaseMcp).toHaveBeenCalledWith('notes');
+  });
+
   it('shows successful contact use while retaining only the action name from arguments', async () => {
     const eventBus = new EventBus();
     const service = new AdminAdaptiveToolsDataService({ eventBus });

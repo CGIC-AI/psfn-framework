@@ -182,6 +182,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/shared-workspace/reviews/:reviewId/cogsec',
   'POST /api/admin/shared-workspace/reviews/:reviewId/decision',
   'POST /api/admin/wiki/shared-world-proposals/cleanup',
+  'POST /api/admin/tools/mcp/release',
 ]);
 
 const noBodyMutationPatterns = new Set([
@@ -251,6 +252,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/partner-affect/shadow'], ['GET', '/api/admin/partner-affect/observations'],
   ['GET', '/api/admin/tool-conformance/latest'],
   ['POST', '/api/admin/tool-conformance/run'], ['GET', '/api/admin/tools/adaptive'],
+  ['POST', '/api/admin/tools/mcp/release'],
   ['GET', '/api/admin/values'], ['GET', '/api/admin/values/reflections/daily'],
   ['GET', '/api/admin/values/reflections/journal'], ['GET', '/api/admin/values/reflections/metacognition'],
   ['GET', '/api/admin/wiki'], ['GET', '/api/admin/wiki/scopes'], ['GET', '/api/admin/wiki/search'],

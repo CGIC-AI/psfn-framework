@@ -88,6 +88,16 @@ export function cloneServiceHealth(
     ...service,
     ...(service.availableActions ? { availableActions: [...service.availableActions] } : {}),
     ...(service.lastFailure ? { lastFailure: { ...service.lastFailure } } : {}),
+    ...(service.mcp ? {
+      mcp: {
+        ...service.mcp,
+        servers: service.mcp.servers.map(server => ({
+          ...server,
+          metadata: { ...server.metadata },
+          tools: server.tools.map(tool => ({ ...tool })),
+        })),
+      },
+    } : {}),
   }));
 }
 

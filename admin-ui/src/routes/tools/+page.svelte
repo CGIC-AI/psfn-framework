@@ -263,7 +263,7 @@
       {:else if data?.serviceHealth.length}
         <CardGrid>
           {#each data.serviceHealth as service}
-            <ServiceHealthPanel {service} />
+            <ServiceHealthPanel {service} onMcpChanged={refreshData} />
           {/each}
         </CardGrid>
       {:else}

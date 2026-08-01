@@ -1,5 +1,9 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { RuntimeHealthResult } from '../../boundary/gateway/protocol.js';
+import type {
+  McpExecuteParams,
+  McpExecuteResult,
+  RuntimeHealthResult,
+} from '../../boundary/gateway/protocol.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
@@ -10,10 +14,15 @@ const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
 
 export interface AdminToolHealthProvider {
   getRuntimeServiceHealth(): Promise<RuntimeServiceHealthSnapshot>;
+  releaseMcp?(serverId?: string): Promise<{ released: true; serverId?: string }>;
 }
 
 export interface GatewayRuntimeHealthClient {
   runtimeHealth(): Promise<RuntimeHealthResult>;
+  mcpExecute(
+    params: Pick<McpExecuteParams, 'action' | 'serverId'>,
+    options: { effectiveSensitivity: 'public' },
+  ): Promise<McpExecuteResult>;
 }
 
 export function createLocalAdminToolHealthProvider(
@@ -97,6 +106,19 @@ export function createGatewayAdminToolHealthProvider(
           ],
         };
       }
+    },
+    async releaseMcp(serverId) {
+      const response = await gateway.mcpExecute({
+        action: 'release',
+        ...(serverId ? { serverId } : {}),
+      }, { effectiveSensitivity: 'public' });
+      if (response.action !== 'release') {
+        throw new Error('Gateway returned an invalid MCP release result');
+      }
+      return {
+        released: true,
+        ...(response.serverId ? { serverId: response.serverId } : {}),
+      };
     },
   };
 }

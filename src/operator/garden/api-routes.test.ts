@@ -741,6 +741,10 @@ describe('AdminServer JSON API routes', () => {
           },
         ],
       }),
+      releaseMcp: async (serverId?: string) => ({
+        released: true as const,
+        ...(serverId ? { serverId } : {}),
+      }),
     };
 
     port = await allocatePort();
@@ -1755,6 +1759,16 @@ describe('AdminServer JSON API routes', () => {
         }),
       }),
     ]));
+
+    const releaseRes = await request(
+      port,
+      'POST',
+      '/api/admin/tools/mcp/release',
+      JSON.stringify({ serverId: 'notes' }),
+      authHeaders,
+    );
+    expect(releaseRes.status).toBe(200);
+    expect(JSON.parse(releaseRes.body)).toEqual({ released: true, serverId: 'notes' });
   });
 
   it('supports memory list filters and detail fetch path for modal', async () => {

@@ -704,7 +704,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/tools/adaptive'),
       handle: (_req, res) => {
-        if (!adaptiveToolsService) {
+        if (!adaptiveToolsService?.releaseMcp) {
           sendJson(res, 200, {
             state: null,
             catalog: null,
@@ -727,6 +727,49 @@ export function buildAdminApiRoutes(options: {
             });
           },
         );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/tools/mcp/release'),
+      handle: (req, res, _params, context) => {
+        if (!adaptiveToolsService) {
+          sendJson(res, 503, { error: 'MCP lifecycle control unavailable' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok || !isRecord(parsed.value)) {
+            sendJson(res, 400, { error: parsed.ok ? 'Request body must be an object' : parsed.error });
+            return;
+          }
+          const keys = Object.keys(parsed.value);
+          const serverId = parsed.value.serverId;
+          if (keys.some(key => key !== 'serverId')
+            || (serverId !== undefined && (typeof serverId !== 'string' || !serverId.trim()))) {
+            sendJson(res, 400, { error: 'Only an optional non-empty serverId is accepted' });
+            return;
+          }
+          const normalizedServerId = typeof serverId === 'string' ? serverId.trim() : undefined;
+          adaptiveToolsService.releaseMcp(normalizedServerId).then(
+            (result) => {
+              appendAuditTimelineEntry?.(
+                'external_action',
+                'allowed',
+                normalizedServerId
+                  ? 'Operator unloaded one MCP connection and its loaded definitions.'
+                  : 'Operator unloaded all MCP connections and loaded definitions for this companion.',
+                normalizedServerId ? [`serverId=${normalizedServerId}`] : [],
+                'operator',
+                context,
+              );
+              sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            error => sendJson(res, 503, {
+              error: toSanitizedMessage(error, 'MCP lifecycle control failed'),
+            }),
+          );
+        });
       },
     },
     {

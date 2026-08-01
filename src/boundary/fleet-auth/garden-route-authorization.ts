@@ -135,6 +135,12 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]), confirmation: 'explicit',
   },
   {
+    // Unload is reversible; the next selected MCP operation reconnects lazily.
+    action: 'action_pipe.manage', area: 'action_pipe', routeIds: ids('POST', [
+      '/api/admin/tools/mcp/release',
+    ]),
+  },
+  {
     action: 'audit.read', area: 'audit', routeIds: [
       ...ids('GET', [
         '/api/admin/audit/history', '/api/admin/audit/history/:entryId',

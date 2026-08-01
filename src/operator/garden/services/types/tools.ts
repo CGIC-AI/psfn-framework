@@ -86,4 +86,5 @@ export interface AdminAdaptiveToolsData {
 
 export interface AdminAdaptiveToolsService {
   getAdaptiveToolsData(): Promise<AdminAdaptiveToolsData>;
+  releaseMcp?(serverId?: string): Promise<{ released: true; serverId?: string }>;
 }

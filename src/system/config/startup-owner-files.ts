@@ -74,6 +74,12 @@ import {
 } from './fleet-auth-config.js';
 import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
 import { backfillMissingRuntimeSettingsDefaults } from './settings-owner-backfill.js';
+import {
+  loadMcpServersConfig,
+  MCP_SERVERS_FILE_NAME,
+  MCP_SERVERS_SEED_FILE_NAME,
+  type McpServersConfig,
+} from './mcp-servers-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -265,6 +271,13 @@ export function loadStartupIntakePolicyOwnerFile(
   return loadIntakePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
 }
 
+export function loadStartupMcpServersOwnerFile(
+  dataDir: string,
+  seedDir?: string,
+): McpServersConfig {
+  return loadMcpServersConfig(dataDir, seedDir ? { seedDir } : undefined);
+}
+
 function systemOwnerFileChecks(
   options: Omit<StartupOwnerFileLoadOptions, 'companionDataDir'>,
   seedDir: string,
@@ -325,6 +338,12 @@ function systemOwnerFileChecks(
       dataPath: join(options.dataDir, INTAKE_POLICY_FILE_NAME),
       seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
       run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'mcp-servers',
+      dataPath: join(options.dataDir, MCP_SERVERS_FILE_NAME),
+      seedPath: join(seedDir, MCP_SERVERS_SEED_FILE_NAME),
+      run: () => loadStartupMcpServersOwnerFile(options.dataDir, options.seedDir),
     },
     {
       label: 'partner-affect-shadow',

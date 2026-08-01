@@ -41,10 +41,10 @@ npm install        # the onboarding script runs from the repo's dev install
 npm run onboard
 ```
 
-## Deployment done: the public on-ramp definition
+## Public on-ramp acceptance contract
 
 This is the ratified bar for "a newcomer can deploy PSFN" (bead
-`psfn-framework-65rk.14`). Deployment is **done** when, from a fresh clone, **one
+`psfn-framework-65rk.14`). The on-ramp passes when, from a fresh clone, **one
 documented command** brings up the split runtime (gateway + agent + Postgres)
 and drives **one chat turn** end to end through the OpenAI-compatible `/v1` edge,
 with the assistant reply persisted to Postgres — and the fail-closed laws hold in
@@ -52,9 +52,11 @@ that reference install (Postgres-only, no SQLite; distinct non-overlapping
 system-data/companion-data roots; the agent on an internal-only network with no
 egress; the gateway as the sole secret holder).
 
-The command that meets this bar today is `npm run smoke:docker`
-(`scripts/smoke-docker.mjs`) over `docker/docker-compose.smoke.yml`. Pass
-criteria:
+The implemented candidate is `npm run smoke:docker`
+(`scripts/smoke-docker.mjs`) over `docker/docker-compose.smoke.yml`. This is the
+executable acceptance harness, not a claim that an independent clean machine
+has certified the current checkout. Record a keyed exit-0 run on the target
+platform before calling that platform validated. Pass criteria:
 
 - **Command:** `export OPENROUTER_API_KEY=sk-or-...` then `npm run smoke:docker`.
 - **Expected exit `0` — done:** the harness brought the stack up healthy,
@@ -64,7 +66,7 @@ criteria:
 - **Proof artifact:** the log lines
   `[smoke:docker] PASS  full turn: assistant reply persisted and returned: …`
   followed by `[smoke:docker] PASS  Postgres persistence corroborated (public tables: N)`.
-- **Exit `2` — provider boundary (not fully done, but everything up to the model
+- **Exit `2` — provider boundary (not a full pass, but everything up to the model
   call proven):** stack healthy, RPC connected, request accepted, the turn
   failed only at the external provider egress. This is the expected result when
   no `OPENROUTER_API_KEY` is set. A keyed exit-`0` run is the live-validation
@@ -716,7 +718,8 @@ cause, and the fix:
   the gateway itself failed to start — scroll up to its own fail-closed error,
   fix that first, and relaunch.
 - **`Unsupported PSFN_RUNTIME_LAYOUT_MODE "<x>"`.** Typo in the layout mode.
-  Accepted values: `continuous`, `dev`, `production`, `prod`.
+  Canonical values are `continuous` and `production`; accepted aliases are
+  `dev`, `development`, `prod`, and `live`.
 - **`DATA_DIR shared-root mode is forbidden when PSFN runtime layout mode is
   production`.** Production requires the isolated split roots. Set
   `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` and drop `DATA_DIR`.

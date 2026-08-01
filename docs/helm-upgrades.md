@@ -45,10 +45,10 @@ ignored `working_docs/private-live-ops.md` note — see
 
 | Bead | Defect | Operational consequence |
 |---|---|---|
-| `q8xy1` | `ship:kube` hardcoded `deploy/psfn-agent`; a fleet renders `psfn-agent-<companionId>` | Ship dies at the rollout wait **after** `helm upgrade` already succeeded, so the validation gate never runs. Also silently dropped `previousGitCommit` (see below). |
+| `q8xy1` — **FIXED** | `ship:kube` hardcoded `deploy/psfn-agent` and could lose `previousGitCommit` | The script now discovers all live agent Deployments, waits for each, and fails closed when live provenance cannot be read. |
 | `6187t` — **FIXED** | `_helpers.tpl` baked `.Release.Revision` into gateway/agent pod env as `PSFN_HELM_REVISION` | Every helm operation changed the pod template hash and restarted the companion — including `--components emosim`, which ships only the sidecar image. The variable is gone from every pod template; see "Helm revision is never in a pod" below. |
-| `zu0g5` | Gate aborts at `gateway models` on a U+FFFD decode of the testing-harness key | The key gates every later check, so provider routing, pgvector, Redis, zero-bookkeeping-rows and the two-turn continuity smoke are **skipped silently**. "4/5, known issue" hides real coverage loss. |
-| `vcyxv` | Gateway logs fleet-auth consistent backups "enabled" but has no `/runtime/backups` mount and runs as uid 999 | Every cycle dies on EACCES; the 6h in-memory scheduler with `skipFirstRun` never fires in a pod that lives under 6h. No artifact and no error. (The host NAS `pg_dump` lane is separately healthy.) |
+| `zu0g5` — **FIXED** | The rollout gate could abort while decoding the testing-harness key and silently skip later checks | Key loading is now an isolated scoped check; the fixed plan reports every `PASS`, `FAIL`, `SKIP`, and `NOT RUN`, and incomplete coverage exits non-zero. |
+| `vcyxv` — **FIXED** | The gateway backup lane lacked its runtime backup mount and restart-safe cadence | The chart mounts `runtime.backupsDir`; startup proves it writable, and a durable watermark carries cadence across pod restarts. |
 | `3u2en` | Chart does not own four live hand-patches | They survive a helm v4 SSA upgrade only because helm never owned those fields; they vanish on `--force`, `rollback`, or delete/recreate. |
 
 Provenance vars (`PSFN_IMAGE_TAG`, `PSFN_GIT_COMMIT`, `PSFN_PREVIOUS_GIT_COMMIT`)
@@ -293,8 +293,9 @@ k3d image import "localhost/psfn-framework:${TARGET_TAG}" \
   -c <k3d-cluster>
 ```
 
-The bundled-skill assertion is explicit because this branch's
-`ship-kube-update.sh` does not yet contain that check.
+The assertion is an additional exact-file check. The ship script also verifies
+that the image contains at least one global `SKILL.md` plus its contract and
+recovery assets.
 
 #### Remote k3s
 
@@ -310,8 +311,8 @@ PSFN_REMOTE_DIR="$REMOTE_DIR" npm run ship:kube -- \
   --dry-run
 ```
 
-Until the bundled-skill assertion is incorporated into that script, run it
-against the built image before shipping. This check intentionally uses the bare
+Run the exact bundled-skill check against the built image before shipping. This
+check intentionally uses the bare
 `psfn-framework:${TARGET_TAG}` tag produced by the immediately preceding
 `ship:kube -- --dry-run`; it is not the `localhost/` tag from the local k3d
 path. If changing paths, rerun the ship dry run or explicitly retag the
@@ -324,12 +325,11 @@ docker run --rm --pull=never --entrypoint test \
   -f /app/skills/conversation/SKILL.md
 ```
 
-Do not run the ship script without `--dry-run` on this branch. Its selective
-probes and rollout waits still address a fixed `deploy/psfn-agent`, while the
-chart renders a UUID-suffixed agent Deployment. A full invocation can
-mutate Helm successfully and then fail on that nonexistent rollout target.
-Use the same tag-oriented import sequence manually, then use the label-aware
-gateway/final Helm procedure below:
+For the explicit owner-maintenance and gateway-first procedure in this guide,
+keep the ship invocation in dry-run mode, then use the same tag-oriented import
+sequence manually. The full ship script is label-aware and supported for an
+ordinary no-migration rollout; do not combine a full invocation with the manual
+Helm mutation steps below.
 
 ```bash
 docker save "psfn-framework:${TARGET_TAG}" \
@@ -760,9 +760,10 @@ An upgrade is not complete until every check below is green, in order.
    maintenance Pod one final time (the npm-script form needs dev tooling the
    production image does not carry; see step 7).
 
-The checked-in `scripts/ops/validate-kube-rollout.sh` still probes a fixed
-`psfn-agent` Deployment and is therefore supplemental on this branch, not a
-replacement for the label-selected agent gate above.
+The checked-in `scripts/ops/validate-kube-rollout.sh` discovers registered agent
+Deployments by `psfn.io/fleet-target=registered`. Run it after the manual checks
+above; it provides machine-readable coverage accounting but does not replace
+the browser SSO and per-companion portal checks.
 
 **Read the gate's coverage accounting, not just its pass count.** The script
 prints its full planned check set before it runs anything, and every planned
@@ -828,10 +829,10 @@ optimization is temporarily inactive. New-agent/old-gateway is not the planned
 rollout direction.
 
 Use the controlled gateway image stage and final Helm reconciliation in step 8.
-Do not use the ship script's component-selective lane on this branch: its fixed
-agent Deployment target predates the UUID-suffixed cluster agent. The gateway
-must prove readiness before the final Helm revision moves the agent and Garden
-to the same exact target.
+The gateway must prove readiness before the final Helm revision moves the agent
+and Garden to the same exact target. Use the controlled image stage in step 8
+for this compatibility boundary; an ordinary component-selective rollout does
+not prove the required skew window.
 
 ### Migrate legacy charge and skills owners before app startup
 
@@ -1129,10 +1130,10 @@ below_):
 
 - Test cluster Garden: `https://<test-garden-origin>` (a tailnet origin served
   with `tailscale serve`).
-- Live fleet Garden: `https://<live-fleet-garden-origin>`.
+- Live cluster Garden: `https://<live-cluster-garden-origin>`.
 - The satellite hub stays on its own `https://<satellite-hub-origin>`. Its
-  browser surface does not participate in Discord Fleet SSO. Its server-to-server
-  `/v1/companion/*` bridge still reaches the gateway API when Fleet auth is
+  browser surface does not participate in Discord Cluster SSO. Its server-to-server
+  `/v1/companion/*` bridge still reaches the gateway API when Cluster Auth is
   enabled and authenticates with its configured satellite-scoped API key; those
   relay routes are not browser SSO routes.
 

@@ -294,7 +294,7 @@ describe('registerBeadsMethods', () => {
   });
 
   it('attributes shard-created issues to the authenticated shard', async () => {
-    queueSpawnResult({ stdout: JSON.stringify({ id: 'PSFN-shard-1' }) });
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'wl-issue-1' }) });
     const harness = createHarness(makePolicy(['create']));
 
     await harness.invoke('beads.create', {

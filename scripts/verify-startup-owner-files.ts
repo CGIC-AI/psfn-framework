@@ -33,6 +33,7 @@ export const OWNER_FILE_SEEDS = [
   ['intake-policy.seed.json', 'intake-policy.json'],
   ['companions.seed.json', 'companions.json'],
   ['partner-affect-shadow.seed.json', 'partner-affect-shadow.json'],
+  ['mcp-servers.seed.json', 'mcp-servers.json'],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
 const REPOSITORY_CONFIG_DIR = fileURLToPath(new URL('../config/', import.meta.url));

@@ -40,6 +40,18 @@ describe('verify-startup-owner-files parity', () => {
     expect(OWNER_FILE_SEEDS.map(([, owner]) => owner)).toContain('partner-affect-shadow.json');
   });
 
+  it('requires the MCP server catalog as a system owner file', () => {
+    const mcpServers = describeStartupOwnerFileChecks().find(
+      check => check.ownerFileName === 'mcp-servers.json',
+    );
+    expect(mcpServers).toMatchObject({
+      seedFileName: 'mcp-servers.seed.json',
+      scope: 'system',
+      optionalWhenMissing: false,
+    });
+    expect(OWNER_FILE_SEEDS.map(([, owner]) => owner)).toContain('mcp-servers.json');
+  });
+
   it('fails with a specific drift error when any required owner seed is dropped', () => {
     for (const dropped of OWNER_FILE_SEEDS) {
       const [, droppedOwner] = dropped;

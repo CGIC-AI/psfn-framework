@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "limits": {
+    "connectTimeoutMs": 10000,
+    "requestTimeoutMs": 30000,
+    "idleConnectionTtlMs": 300000,
+    "metadataCacheTtlMs": 300000,
+    "maxCatalogToolsPerServer": 256,
+    "maxPaginationPages": 32,
+    "maxStaticMetadataBytes": 1048576,
+    "maxDynamicOutputBytes": 4194304
+  },
+  "servers": []
+}

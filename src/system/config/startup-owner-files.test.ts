@@ -60,6 +60,7 @@ describe('startup owner-file loaders', () => {
     // The companions.json fleet manifest is a mandatory system owner file.
     'companions.json',
     'partner-affect-shadow.json',
+    'mcp-servers.json',
   ] as const;
 
   afterEach(() => {

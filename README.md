@@ -2,9 +2,11 @@
 
 Last updated: 2026-07-31
 Package version: `0.1.0`
-Current status: early alpha. See [`CHANGELOG.md`](./CHANGELOG.md) for shipped
-capability history; active engineering work is tracked in Beads rather than a
-manually maintained status document.
+Current status: early alpha. Current runtime behavior is defined by the
+[specifications](./docs/specifications.md) and
+[architecture](./docs/architecture.md); active engineering work is tracked in
+Beads rather than a manually maintained status document. `CHANGELOG.md` is a
+historical branch-delta record, not the current project status.
 
 A purpose-built Companion framework and substrate with persistent memory,
 reviewable self-improvement, and trust-aware privacy. Not a chatbot framework —
@@ -135,7 +137,7 @@ those documents; they do not replace their authority.
 
 - [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md),
   [`docs/helm-upgrades.md`](./docs/helm-upgrades.md), [`docs/shakedown.md`](./docs/shakedown.md)
-- [`CHANGELOG.md`](./CHANGELOG.md) — shipped capability history
+- [`CHANGELOG.md`](./CHANGELOG.md) — historical foundation-branch capability record
 - [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents (process, beads, gates)
 - [`CLAUDE.md`](./CLAUDE.md) — Claude-specific orientation; AGENTS.md wins on process
 

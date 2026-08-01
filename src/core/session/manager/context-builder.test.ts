@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { __test as tokenTestUtils } from '../../../primitives/llm/tokens.js';
+import {
+  __test as tokenTestUtils,
+  countMessageTokens,
+} from '../../../primitives/llm/tokens.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { CogSecEvent } from '../../cogsec/events.js';
@@ -10,8 +13,11 @@ import {
   buildSessionContext,
   captureTurnSessionContext,
 } from './context-builder.js';
-import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
-import { HISTORY_STAMP_PREFIX_RE } from './context-support.js';
+import {
+  collectRecentEntriesWithinHistorySpan,
+  repairLeadingMultimodalReviewBoundary,
+} from '../manager-primitives.js';
+import { entriesToMessages, HISTORY_STAMP_PREFIX_RE } from './context-support.js';
 import type { SessionEntry } from '../types.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps; strip
@@ -720,6 +726,117 @@ describe('orientation context surface wiring', () => {
       // A linear split scan re-tokenizes progressively shorter tails and
       // encodes millions of message fields at this live-sized history depth.
       expect(encodedTextCount).toBeLessThan(25_000);
+    } finally {
+      tokenTestUtils.resetTokenizerState();
+    }
+  });
+
+  it('matches the linear earliest-boundary result across repaired and projected tails', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+    try {
+      const entries: SessionEntry[] = Array.from({ length: 24 }, (_, index) => ({
+        id: index + 1,
+        channelId: 'api:main',
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        content: `History ${index + 1} ${'detail '.repeat(6)}`,
+        ...(index % 2 === 0
+          ? { authorId: 'u1', authorName: 'User' }
+          : { authorName: 'Companion' }),
+        timestamp: 1_700_000_000_000 + (index * 60_000),
+      }));
+      const requiredEntry = (index: number): SessionEntry => {
+        const entry = entries.at(index);
+        if (!entry) throw new Error(`Missing generated history entry at index ${index}`);
+        return entry;
+      };
+      entries[5] = { ...requiredEntry(5), role: 'user', authorId: 'u1', authorName: 'User' };
+      const mirrorEntry = requiredEntry(8);
+      entries[8] = {
+        ...mirrorEntry,
+        role: 'system',
+        content: 'Mirrored context from another channel.',
+        metadata: JSON.stringify({
+          type: 'mirror',
+          sourceChannelId: 'api:side',
+          sourceRole: 'user',
+          sourceVisibility: 'private',
+          trustLevel: 'regular',
+          mirroredAt: mirrorEntry.timestamp,
+          truncated: false,
+        }),
+      };
+      entries[10] = {
+        ...requiredEntry(10),
+        role: 'system',
+        content: 'Internal bookkeeping excluded from prompt projection.',
+        metadata: JSON.stringify({ type: 'completion_handoff' }),
+      };
+      entries[12] = {
+        ...requiredEntry(12),
+        role: 'user',
+        content: 'Please inspect this image carefully.',
+      };
+      entries[13] = {
+        ...requiredEntry(13),
+        role: 'assistant',
+        content: 'Current image review: A quiet shoreline at dusk.',
+      };
+
+      const candidateBudgetAt = (splitIndex: number): number => {
+        const initialTail = entries.slice(splitIndex);
+        const repairedTail = repairLeadingMultimodalReviewBoundary(entries, initialTail);
+        return countMessageTokens(entriesToMessages(repairedTail, 'private', true, true, false)) + 32;
+      };
+      const budgets = [
+        candidateBudgetAt(6),
+        candidateBudgetAt(13),
+        candidateBudgetAt(18),
+      ];
+      const linearEarliestSplit = (tokenBudget: number): number => {
+        for (let splitIndex = 1; splitIndex <= entries.length - 5; splitIndex += 1) {
+          const initialTail = entries.slice(splitIndex);
+          const repairedTail = repairLeadingMultimodalReviewBoundary(entries, initialTail);
+          const prependedCount = Math.max(0, repairedTail.length - initialTail.length);
+          const safeSplitIndex = Math.max(0, splitIndex - prependedCount);
+          if (safeSplitIndex === 0) continue;
+          const verbatimEntries = prependedCount > 0
+            ? entries.slice(safeSplitIndex)
+            : repairedTail;
+          const tailTokens = countMessageTokens(
+            entriesToMessages(verbatimEntries, 'private', true, true, false),
+          );
+          if (tokenBudget - tailTokens >= 32) return safeSplitIndex;
+        }
+        return 0;
+      };
+      const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+        content: 'x',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      });
+
+      const actualSplits: number[] = [];
+      for (const tokenBudget of budgets) {
+        const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+          entries,
+          channelVisibility: 'private',
+          renderGroupUserAttribution: false,
+          tokenBudget,
+          channelId: 'api:main',
+          llmProvider: makeSummaryProvider(complete),
+          promptRegistry: null,
+        });
+        const expectedSplit = linearEarliestSplit(tokenBudget);
+        expect(expectedSplit).toBeGreaterThan(0);
+        expect(assembled.summarizedEntryCount).toBe(expectedSplit);
+        actualSplits.push(assembled.summarizedEntryCount);
+      }
+      expect(actualSplits).toContain(12);
     } finally {
       tokenTestUtils.resetTokenizerState();
     }

@@ -89,65 +89,96 @@ export interface FifoChannelLease {
   release: () => void;
 }
 
+export interface FifoChannelAcquisition {
+  lease: Promise<FifoChannelLease>;
+  contended: boolean;
+  queueDepth: number;
+  /** Removes this waiter when it has not acquired the channel yet. */
+  cancel: () => boolean;
+}
+
+interface FifoChannelWaiter {
+  queuedAhead: number;
+  enqueuedAt: number;
+  state: 'queued' | 'active' | 'released' | 'cancelled';
+  resolve: (lease: FifoChannelLease) => void;
+}
+
 export class FifoChannelLock {
-  private readonly tails = new Map<string, Promise<void>>();
-  private readonly depthByChannel = new Map<string, number>();
+  private readonly queues = new Map<string, FifoChannelWaiter[]>();
   private readonly now: () => number;
 
   constructor(options: { now?: () => number } = {}) {
     this.now = options.now ?? Date.now;
   }
 
-  acquire(channelId: string): {
-    lease: Promise<FifoChannelLease>;
-    contended: boolean;
-    queueDepth: number;
-  } {
-    const queuedAhead = this.depthByChannel.get(channelId) ?? 0;
-    this.depthByChannel.set(channelId, queuedAhead + 1);
-
-    const previousTail = this.tails.get(channelId) ?? Promise.resolve();
-    let releaseTail: (() => void) | null = null;
-    const tailSignal = new Promise<void>((resolve) => {
-      releaseTail = resolve;
+  acquire(channelId: string): FifoChannelAcquisition {
+    const queue = this.queues.get(channelId) ?? [];
+    const queuedAhead = queue.length;
+    let resolveLease: (lease: FifoChannelLease) => void = () => {};
+    const lease = new Promise<FifoChannelLease>((resolve) => {
+      resolveLease = resolve;
     });
-    const chainedTail = previousTail.then(() => tailSignal);
-    this.tails.set(channelId, chainedTail);
-
-    const enqueuedAt = this.now();
-    const lease = previousTail.then(() => {
-      const waitMs = Math.max(0, this.now() - enqueuedAt);
-      let released = false;
-      return {
-        queuedAhead,
-        waitMs,
-        release: () => {
-          if (released) return;
-          released = true;
-          releaseTail?.();
-
-          const nextDepth = (this.depthByChannel.get(channelId) ?? 1) - 1;
-          if (nextDepth <= 0) {
-            this.depthByChannel.delete(channelId);
-          } else {
-            this.depthByChannel.set(channelId, nextDepth);
-          }
-
-          if (this.tails.get(channelId) === chainedTail) {
-            this.tails.delete(channelId);
-          }
-        },
-      };
-    });
+    const waiter: FifoChannelWaiter = {
+      queuedAhead,
+      enqueuedAt: this.now(),
+      state: 'queued',
+      resolve: resolveLease,
+    };
+    queue.push(waiter);
+    this.queues.set(channelId, queue);
+    if (queue.length === 1) {
+      this.grant(channelId, waiter);
+    }
 
     return {
       lease,
       contended: queuedAhead > 0,
       queueDepth: queuedAhead,
+      cancel: () => this.cancel(channelId, waiter),
     };
   }
 
   pending(channelId: string): number {
-    return this.depthByChannel.get(channelId) ?? 0;
+    return this.queues.get(channelId)?.length ?? 0;
+  }
+
+  private grant(channelId: string, waiter: FifoChannelWaiter): void {
+    if (waiter.state !== 'queued') return;
+    waiter.state = 'active';
+    waiter.resolve({
+      queuedAhead: waiter.queuedAhead,
+      waitMs: Math.max(0, this.now() - waiter.enqueuedAt),
+      release: () => this.release(channelId, waiter),
+    });
+  }
+
+  private cancel(channelId: string, waiter: FifoChannelWaiter): boolean {
+    if (waiter.state !== 'queued') return false;
+    const queue = this.queues.get(channelId);
+    if (!queue) return false;
+    const index = queue.indexOf(waiter);
+    if (index < 0) return false;
+    waiter.state = 'cancelled';
+    queue.splice(index, 1);
+    if (queue.length === 0) {
+      this.queues.delete(channelId);
+    }
+    return true;
+  }
+
+  private release(channelId: string, waiter: FifoChannelWaiter): void {
+    if (waiter.state !== 'active') return;
+    waiter.state = 'released';
+    const queue = this.queues.get(channelId);
+    if (!queue) return;
+    const index = queue.indexOf(waiter);
+    if (index >= 0) queue.splice(index, 1);
+    const next = queue.at(0);
+    if (next === undefined) {
+      this.queues.delete(channelId);
+      return;
+    }
+    this.grant(channelId, next);
   }
 }

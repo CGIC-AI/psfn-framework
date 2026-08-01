@@ -50,8 +50,10 @@ percentiles at
 `stats.transientSessionTelemetry.latencyPercentiles.series`. Relevant metrics
 include `channel_queue_wait`, `session_context_assembly`,
 `emotion_observation`, `context_assembly`, `prompt_assembly`, `llm_ttft`, and
-`turn_complete`. The aggregate is process-local and resets when the operator
-process restarts.
+`visible_turn_complete`. The last metric is the API receipt-to-visible-response
+budget named above; `turn_complete` instead measures the agent's full pipeline,
+including post-turn scheduling. The aggregate is process-local and resets when
+the operator process restarts.
 
 ## Companion Cluster Operations
 

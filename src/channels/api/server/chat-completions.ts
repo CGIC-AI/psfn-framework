@@ -353,9 +353,11 @@ export class ApiChatCompletionsHandler {
     try {
       lease = await this.waitForQueueLeaseOrInterrupt(req, res, queued.lease);
     } catch (err) {
-      queued.lease.then((lateLease) => {
-        lateLease.release();
-      }).catch((leaseErr) => { this.logger.debug('Late lease release failed', { error: String(leaseErr) }); });
+      if (!queued.cancel()) {
+        queued.lease.then((lateLease) => {
+          lateLease.release();
+        }).catch((leaseErr) => { this.logger.debug('Late lease release failed', { error: String(leaseErr) }); });
+      }
 
       if (err instanceof RequestLifecycleError && err.reason === 'timeout' && canWriteResponse(res)) {
         sendApiError(res, 504, 'request_timeout', 'Request timed out before turn started');

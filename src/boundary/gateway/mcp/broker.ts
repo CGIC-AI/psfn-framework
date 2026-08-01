@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { Tool } from '@modelcontextprotocol/client';
 import type {
   McpServerConfig,
   McpServersConfig,
@@ -14,6 +13,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type {
   McpProtocolClientFactory,
   McpProtocolClientPort,
+  McpProtocolTool,
 } from './protocol-client.js';
 
 export type {
@@ -88,7 +88,7 @@ export interface McpToolSummary {
 export interface McpInspectedTool {
   serverId: string;
   serverDisplayName: string;
-  tool: Tool;
+  tool: McpProtocolTool;
   policy: McpToolPolicyEntry;
 }
 
@@ -105,16 +105,16 @@ interface McpSessionState {
   companionId: string;
   server: McpServerConfig;
   client: McpProtocolClientPort;
-  tools?: Tool[];
+  tools?: McpProtocolTool[];
   toolsExpiresAt?: number;
-  listPromise?: Promise<Tool[]>;
+  listPromise?: Promise<McpProtocolTool[]>;
   idleTimer?: ReturnType<typeof setTimeout>;
   lastUsedAt: number;
   closing?: Promise<void>;
 }
 
 interface StaticScreenCacheEntry {
-  tools: Tool[];
+  tools: McpProtocolTool[];
   lastUsedAt: number;
 }
 
@@ -174,14 +174,14 @@ function utf8Bytes(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
-function isTool(value: unknown): value is Tool {
+function isTool(value: unknown): value is McpProtocolTool {
   return isRecord(value)
     && typeof value.name === 'string'
     && value.name.length > 0
     && isRecord(value.inputSchema);
 }
 
-function parseScreenedTools(text: string): Tool[] {
+function parseScreenedTools(text: string): McpProtocolTool[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -321,7 +321,7 @@ export function createMcpGatewayBroker(options: {
     return created;
   }
 
-  function cacheStaticScreen(hash: string, tools: Tool[]): void {
+  function cacheStaticScreen(hash: string, tools: McpProtocolTool[]): void {
     staticScreenCache.delete(hash);
     staticScreenCache.set(hash, { tools, lastUsedAt: now() });
     while (staticScreenCache.size > options.config.limits.maxCatalogToolsPerServer) {
@@ -334,8 +334,8 @@ export function createMcpGatewayBroker(options: {
   async function screenTools(
     companionId: string,
     server: McpServerConfig,
-    rawTools: Tool[],
-  ): Promise<Tool[]> {
+    rawTools: McpProtocolTool[],
+  ): Promise<McpProtocolTool[]> {
     if (rawTools.length > options.config.limits.maxCatalogToolsPerServer) {
       throw new McpBrokerError(
         'TOOL_CATALOG_TOO_LARGE',
@@ -379,7 +379,7 @@ export function createMcpGatewayBroker(options: {
     companionId: string,
     server: McpServerConfig,
     signal?: AbortSignal,
-  ): Promise<Tool[]> {
+  ): Promise<McpProtocolTool[]> {
     const state = await getSession(companionId, server);
     if (state.tools && (state.toolsExpiresAt ?? 0) > now()) return state.tools;
     if (state.listPromise) return state.listPromise;

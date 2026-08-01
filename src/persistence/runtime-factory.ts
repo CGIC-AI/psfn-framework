@@ -1,5 +1,6 @@
 import { MemoryJournal } from '../faculties/memory/journal.js';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
+import type { MemoryDeletionProposalStorePort } from '../faculties/memory/deletion-proposals.js';
 import { createPostgresMemoryStore } from '../faculties/memory/postgres-store.js';
 import {
   createPostgresEpisodicStore,
@@ -68,6 +69,8 @@ import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecy
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
   memoryStore: MemoryStorePort;
+  /** Postgres-only durable deletion proposal and linked audit authority. */
+  memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
   episodicStore: EpisodicStorePort;
   /** Consolidation-only capability for source-proven first-person preservation. */
   firstPersonPreservingEpisodicStore: EpisodicStorePort & FirstPersonPreservingEpisodicStorePort;
@@ -136,6 +139,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'postgresRole'
     | 'multiCompanion'
     | 'companionFleet'
+    | 'memoryDeletionPolicy'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -249,15 +253,18 @@ export async function createAgentPersistenceRuntime(
       : {}),
   });
   const episodicStore = createPostgresEpisodicStore(databaseUrl, { schema, role: tenantRole });
+  const memoryStore = await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
+    notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
+    journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
+    schema,
+    role: tenantRole,
+    memoryDeletionPolicy: () => options.config.memoryDeletionPolicy,
+  });
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
-    memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
-      notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
-      journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
-      schema,
-      role: tenantRole,
-    }),
+    memoryStore,
+    memoryDeletionProposalStore: memoryStore.memoryDeletionProposalStore,
     episodicStore,
     firstPersonPreservingEpisodicStore: episodicStore,
     companionAuthoredEpisodicStore: episodicStore,

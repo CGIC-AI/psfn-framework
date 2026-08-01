@@ -22,6 +22,12 @@ import type {
   VoiceStreamAckResult,
   VoiceStreamEndResult,
   VoiceStreamCancelResult,
+  MemoryDeletionPartnerAlertedParams,
+  MemoryDeletionPartnerAlertedResult,
+  MemoryDeletionProposalSnapshotParams,
+  MemoryDeletionProposalSnapshotResult,
+  MemoryDeletionResolveParams,
+  MemoryDeletionResolveResult,
 } from './protocol.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type {
@@ -51,6 +57,15 @@ export interface ReverseGatewayMethodRuntime {
   handleContactAuthoritySnapshot(
     params: ContactAuthoritySnapshotRequest,
   ): Promise<VerifiedDiscordContactAuthoritySnapshot | null>;
+  handleMemoryDeletionPartnerAlerted(
+    params: MemoryDeletionPartnerAlertedParams,
+  ): Promise<MemoryDeletionPartnerAlertedResult>;
+  handleMemoryDeletionProposalSnapshot(
+    params: MemoryDeletionProposalSnapshotParams,
+  ): Promise<MemoryDeletionProposalSnapshotResult>;
+  handleMemoryDeletionResolve(
+    params: MemoryDeletionResolveParams,
+  ): Promise<MemoryDeletionResolveResult>;
 }
 
 interface ReverseGatewayMethodDescriptor<P, R> {
@@ -59,6 +74,24 @@ interface ReverseGatewayMethodDescriptor<P, R> {
 }
 
 const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
+  {
+    names: ['memory.deletion.snapshot'],
+    handler: (params: MemoryDeletionProposalSnapshotParams, runtime) => (
+      runtime.handleMemoryDeletionProposalSnapshot(params)
+    ),
+  },
+  {
+    names: ['memory.deletion.partner_alerted'],
+    handler: (params: MemoryDeletionPartnerAlertedParams, runtime) => (
+      runtime.handleMemoryDeletionPartnerAlerted(params)
+    ),
+  },
+  {
+    names: ['memory.deletion.resolve'],
+    handler: (params: MemoryDeletionResolveParams, runtime) => (
+      runtime.handleMemoryDeletionResolve(params)
+    ),
+  },
   {
     names: ['contact.authority.snapshot'],
     handler: (params: ContactAuthoritySnapshotRequest, runtime) => (

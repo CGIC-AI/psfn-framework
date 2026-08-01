@@ -628,6 +628,25 @@ export interface ConfirmationResolveParams {
   modifiedParams?: Record<string, unknown>;
 }
 
+export interface MemoryDeletionProposeParams {
+  proposalId: string;
+  memoryId: string;
+  justificationCategory: string;
+  explanation: string;
+}
+
+export type MemoryDeletionProposeResult = {
+  status: 'approval_required';
+  proposalId: string;
+  approvalId: string;
+  expiresAt: number;
+} | {
+  status: 'already_approved' | 'already_denied';
+  proposalId: string;
+  approvalId?: string;
+  deleteId?: string;
+};
+
 // ── Result types (gateway → agent) ──
 
 export interface LLMChatResult {
@@ -1116,6 +1135,7 @@ export interface GatewayMethods {
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
+  'memory.deletion.propose': [MemoryDeletionProposeParams, MemoryDeletionProposeResult];
   'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
   'runtime.credential_presence': [GatewayCredentialPresenceParams, GatewayCredentialPresenceResult];
   'kube.self_management': [KubeSelfManagementRequest, KubeSelfManagementResponse];
@@ -1202,6 +1222,40 @@ export interface VoiceStreamAckResult {
   droppedChunks?: number;
 }
 
+export interface MemoryDeletionPartnerAlertedParams {
+  proposalId: string;
+}
+
+export interface MemoryDeletionProposalSnapshotParams {
+  proposalId: string;
+}
+
+export interface MemoryDeletionProposalSnapshotResult {
+  proposalId: string;
+  memoryId: string;
+  justificationCategory: string;
+  explanation: string;
+  status: 'pending_partner_alert' | 'pending_operator_validation' | 'approved' | 'denied' | 'restored';
+  deleteId?: string;
+}
+
+export interface MemoryDeletionPartnerAlertedResult {
+  proposalId: string;
+  status: 'pending_operator_validation';
+}
+
+export interface MemoryDeletionResolveParams {
+  proposalId: string;
+  decision: 'approve' | 'deny';
+  operatorId: string;
+}
+
+export interface MemoryDeletionResolveResult {
+  proposalId: string;
+  status: 'approved' | 'denied';
+  deleteId?: string;
+}
+
 export interface VoiceStreamCancelResult {
   correlationId: string;
   streamId: string;
@@ -1215,6 +1269,15 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
 }
 
 export interface AgentMethods {
+  'memory.deletion.snapshot': [
+    MemoryDeletionProposalSnapshotParams,
+    MemoryDeletionProposalSnapshotResult,
+  ];
+  'memory.deletion.partner_alerted': [
+    MemoryDeletionPartnerAlertedParams,
+    MemoryDeletionPartnerAlertedResult,
+  ];
+  'memory.deletion.resolve': [MemoryDeletionResolveParams, MemoryDeletionResolveResult];
   'contact.authority.snapshot': [
     ContactAuthoritySnapshotRequest,
     VerifiedDiscordContactAuthoritySnapshot | null,

@@ -2,6 +2,11 @@ import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { MemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from './memory-store-port.js';
+import type {
+  MemoryDeletionApprovalPort,
+  MemoryDeletionProposalStorePort,
+} from './deletion-proposals.js';
+import type { MemoryDeletionPolicy } from '../../system/config/memory-deletion-policy.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import type {
   EpisodeDrilldownSessionReader,
@@ -23,6 +28,9 @@ export function registerMemoryTools(
   options: {
     writer: MemoryWriter;
     memoryStore: MemoryStorePort;
+    memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
+    memoryDeletionApprovalPort: MemoryDeletionApprovalPort;
+    memoryDeletionPolicy: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
     episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
     sessionReader?: EpisodeDrilldownSessionReader | null;
     contactStore?: ContactStorePort | null;
@@ -47,6 +55,9 @@ export function registerMemoryTools(
     ...(options.memoryRetrievalPolicy !== undefined
       ? { memoryRetrievalPolicy: options.memoryRetrievalPolicy }
       : {}),
+    memoryDeletionProposalStore: options.memoryDeletionProposalStore,
+    memoryDeletionApprovalPort: options.memoryDeletionApprovalPort,
+    memoryDeletionPolicy: options.memoryDeletionPolicy,
   }), 'core');
   target.registerTool(createScratchpadTool(options.memoryStore), 'core');
 }

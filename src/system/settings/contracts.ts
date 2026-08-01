@@ -3,6 +3,7 @@ import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from '../config/memory-presentation-profile.js';
+import type { MemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ShellExecSettings } from '../config/shell-exec-config.js';
 import type {
@@ -169,6 +170,7 @@ export interface EditableSettings {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  memoryDeletionPolicy?: MemoryDeletionPolicy;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   memoryPresentationProfile?: MemoryPresentationProfile;
   memoryRefreshFailureAlertThreshold?: number;
@@ -338,6 +340,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryDeletionPolicy',
   'memoryRetrievalPolicy',
   'memoryPresentationProfile',
   'memoryRefreshFailureAlertThreshold',
@@ -470,6 +473,7 @@ export type RuntimeSettingValue =
   | EmotionScopingSettings
   | MemoryRetrievalPolicy
   | MemoryPresentationProfile
+  | MemoryDeletionPolicy
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
   | ShellExecSettings

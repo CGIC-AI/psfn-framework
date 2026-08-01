@@ -10,6 +10,7 @@ import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
+import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
 import {
   normalizeFalCreateModelSetting,
@@ -1258,6 +1259,12 @@ export function normalizeContextControlSettings(
     normalized.memoryRetrievalPolicy = normalizeMemoryRetrievalPolicy(
       settings.memoryRetrievalPolicy,
       'memoryRetrievalPolicy',
+    );
+  }
+  if ('memoryDeletionPolicy' in settings) {
+    normalized.memoryDeletionPolicy = normalizeMemoryDeletionPolicy(
+      settings.memoryDeletionPolicy,
+      'memoryDeletionPolicy',
     );
   }
   if ('memoryPresentationProfile' in settings) {

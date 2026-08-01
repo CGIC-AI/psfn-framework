@@ -21,6 +21,7 @@ import {
   cloneMemoryPresentationProfile,
   createDefaultMemoryPresentationProfile,
 } from '../config/memory-presentation-profile.js';
+import { cloneMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { createDefaultShellExecSettings } from '../config/shell-exec-config.js';
 import {
   cloneImageWorkflowSettings,
@@ -258,6 +259,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled:
       config.memoryRetrievalTelemetryEnabled ?? true,
+    memoryDeletionPolicy: config.memoryDeletionPolicy
+      ? cloneMemoryDeletionPolicy(config.memoryDeletionPolicy)
+      : null,
     memoryRetrievalPolicy: cloneMemoryRetrievalPolicy(
       config.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
     ),
@@ -306,6 +310,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionMaxWrites'
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
+    | 'memoryDeletionPolicy'
     | 'memoryRetrievalPolicy'
     | 'memoryPresentationProfile'
     | 'memoryRefreshFailureAlertThreshold'
@@ -702,6 +707,11 @@ function applyCoreSettings(
     config.memoryRetrievalPolicy = cloneMemoryRetrievalPolicy(
       settings.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
     );
+  }
+  if ('memoryDeletionPolicy' in settings) {
+    config.memoryDeletionPolicy = settings.memoryDeletionPolicy
+      ? cloneMemoryDeletionPolicy(settings.memoryDeletionPolicy)
+      : undefined;
   }
   if ('memoryPresentationProfile' in settings) {
     config.memoryPresentationProfile = cloneMemoryPresentationProfile(

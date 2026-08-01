@@ -62,6 +62,7 @@ export interface MemoryEmbeddingSearchRow extends MemoryRow {
 
 export interface MemoryDeleteVersionRow {
   delete_id: string;
+  proposal_id: string | null;
   memory_id: string;
   snapshot_json: unknown;
   deleted_at: PgNumeric;

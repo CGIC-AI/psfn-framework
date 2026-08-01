@@ -39,6 +39,8 @@ export interface ContactProfileArtifact {
 
 export interface MemoryDeleteVersion {
   deleteId: string;
+  /** Present when this checkpoint was created by an Operator-approved deletion proposal. */
+  proposalId?: string;
   memoryId: string;
   snapshot: PurrMemory;
   deletedAt: number;
@@ -415,11 +417,15 @@ export interface MemorySoftDeleteOptions {
   reason?: string;
   deletedAt?: number;
   deleteId?: string;
+  /** Internal audit linkage. Agent-facing callers must use the proposal workflow. */
+  proposalId?: string;
 }
 
 export interface MemoryUndoSoftDeleteOptions {
   restoredBy?: string;
   restoredAt?: number;
+  /** Required for proposal-linked restores so the audit actor uses canonical vocabulary. */
+  actorRole?: 'Companion' | 'Operator';
 }
 
 export interface MemoryAbstractionLinkInput {

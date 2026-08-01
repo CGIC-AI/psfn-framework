@@ -59,6 +59,9 @@ import type {
   MemorySubjectClassificationCoverage,
   EmbeddingSearchAuthorization,
 } from './memory-store-port.js';
+import type {
+  MemoryDeletionProposalStorePort,
+} from './deletion-proposals.js';
 import { InactiveMemoryUpdateError, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
   applyRetentionClassTags,
@@ -146,6 +149,11 @@ import {
   queryAuthorizedMemorySubjects as runAuthorizedMemorySubjectQuery,
 } from './postgres-store/subject-queries.js';
 import { queryAuthorizedMemorySubjectAdmin as runAuthorizedMemorySubjectAdmin } from './postgres-store/subject-admin-queries.js';
+import { PostgresMemoryDeletionProposalStore } from './postgres-store/deletion-proposals.js';
+import {
+  resolveMemoryDeletionJustification,
+  type MemoryDeletionPolicy,
+} from '../../system/config/memory-deletion-policy.js';
 import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import {
@@ -215,13 +223,19 @@ export interface PostgresMemoryStoreOptions {
    * throws — a failure is reported as a degraded outcome, not a boot crash.
    */
   awaitAnnIndexBuild?: boolean;
+  /** Live settings.json-owned deletion justification authority. */
+  memoryDeletionPolicy?: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
+}
+
+export interface PostgresMemoryStorePort extends MemoryStorePort {
+  readonly memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
 }
 
 export async function createPostgresMemoryStore(
   databaseUrl: string,
   embeddingDims: number,
   options: PostgresMemoryStoreOptions = {},
-): Promise<MemoryStorePort> {
+): Promise<PostgresMemoryStorePort> {
   const pool = createPostgresPool(databaseUrl, {
     applicationName: 'psfn-memory',
     allowExitOnIdle: true,
@@ -235,7 +249,7 @@ export async function createPostgresMemoryStoreFromPool(
   pool: Pool,
   embeddingDims: number,
   options: PostgresMemoryStoreOptions = {},
-): Promise<MemoryStorePort> {
+): Promise<PostgresMemoryStorePort> {
   // A pre-existing l2_memories without its embedding column is a broken
   // schema, not a fresh database; surface the fail-closed guidance before
   // the idempotent migrations trip over the missing column with a raw
@@ -283,7 +297,7 @@ interface MemoryStoreTransactionState {
   operations: Array<Promise<unknown>>;
 }
 
-class PostgresMemoryStore implements MemoryStorePort {
+class PostgresMemoryStore implements PostgresMemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
   private readonly annIterativeScanAvailable: boolean;
@@ -299,6 +313,8 @@ class PostgresMemoryStore implements MemoryStorePort {
   private retrievalCorpusVersion = 0;
   /** Active transaction scope: writes issued inside a runInTransaction handler join its client. */
   private readonly transactionContext = new AsyncLocalStorage<MemoryStoreTransactionState>();
+  readonly memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
+  private readonly deletionProposalPersistence: PostgresMemoryDeletionProposalStore;
 
   private memories = new Map<string, PurrMemory>();
   // Embeddings are NOT hydrated into memory (a27w.1). Similarity search runs in
@@ -327,6 +343,38 @@ class PostgresMemoryStore implements MemoryStorePort {
     this.startupSubjectClassificationCoverage = options.startupSubjectClassificationCoverage;
     this.journal = options.journal ?? null;
     this.scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
+    this.deletionProposalPersistence = new PostgresMemoryDeletionProposalStore({
+      runInTransaction: async <T>(handler: () => Promise<T>): Promise<T> => (
+        await this.runInTransaction(handler)
+      ),
+      queryWrite: <T extends QueryResultRow>(text: string, values: readonly unknown[]) => (
+        this.queryWrite<T>(text, values)
+      ),
+      queryRead: async <T extends QueryResultRow>(text: string, values: readonly unknown[]) => {
+        await this.persistChain;
+        return await queryRows<T>(this.pool, text, values);
+      },
+      hasActiveTransaction: () => this.transactionContext.getStore() !== undefined,
+      upsertDeleteVersion: version => this.upsertDeleteVersion(version),
+      persistClassifiedMemoryRow: (memory, embedding) => this.persistClassifiedMemoryRow(memory, embedding),
+      validateEmbedding: (embedding, operation) => (
+        validateEmbeddingDimensions(embedding, this.embeddingDims, operation)
+      ),
+      assertJustification: (categoryId, explanation) => {
+        const policy = typeof options.memoryDeletionPolicy === 'function'
+          ? options.memoryDeletionPolicy()
+          : options.memoryDeletionPolicy;
+        resolveMemoryDeletionJustification(policy, categoryId, explanation);
+      },
+      onApproved: (version, deletedMemory) => {
+        this.memories.set(deletedMemory.id, deletedMemory);
+        this.deleteVersions.set(version.deleteId, version);
+        this.markSalienceMaintenanceChanged();
+        this.markRetrievalCorpusChanged();
+        this.journal?.onSoftDelete(version);
+      },
+    });
+    this.memoryDeletionProposalStore = this.deletionProposalPersistence;
     this.initialization = this.initialize();
   }
 
@@ -413,12 +461,13 @@ class PostgresMemoryStore implements MemoryStorePort {
     }
 
     const deleteRows = await queryRows<MemoryDeleteVersionRow>(this.pool, `
-      SELECT delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
+      SELECT delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
       FROM l2_memory_delete_versions
     `);
     for (const row of deleteRows) {
       this.deleteVersions.set(row.delete_id, {
         deleteId: row.delete_id,
+        ...(row.proposal_id ? { proposalId: row.proposal_id } : {}),
         memoryId: row.memory_id,
         snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
           ? (row.snapshot_json as PurrMemory)
@@ -699,9 +748,10 @@ class PostgresMemoryStore implements MemoryStorePort {
   private async upsertDeleteVersion(deleteVersion: MemoryDeleteVersion): Promise<void> {
     await this.executeWrite(`
       INSERT INTO l2_memory_delete_versions (
-        delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       ON CONFLICT (delete_id) DO UPDATE SET
+        proposal_id = EXCLUDED.proposal_id,
         snapshot_json = EXCLUDED.snapshot_json,
         deleted_at = EXCLUDED.deleted_at,
         deleted_by = EXCLUDED.deleted_by,
@@ -710,6 +760,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         restored_by = EXCLUDED.restored_by
     `, [
       deleteVersion.deleteId,
+      deleteVersion.proposalId ?? null,
       deleteVersion.memoryId,
       serializeJsonValue(deleteVersion.snapshot),
       deleteVersion.deletedAt,
@@ -834,6 +885,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       const client = await this.pool.connect();
       const state: MemoryStoreTransactionState = { client, operations: [] };
       const memoriesSnapshot = new Map(this.memories);
+      const deleteVersionsSnapshot = new Map(this.deleteVersions);
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
         await client.query('BEGIN');
@@ -855,6 +907,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         // Embeddings are not held in memory (a27w.1); the database ROLLBACK
         // above is the sole authority for their transactional state.
         this.memories = memoriesSnapshot;
+        this.deleteVersions = deleteVersionsSnapshot;
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
         // Generations are monotonic. A rollback is itself a corpus transition:
         // any refresh that observed staged in-memory data must become stale.
@@ -1413,6 +1466,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       const deleteReason = input.options?.reason?.trim();
       const nextVersion: MemoryDeleteVersion = {
         deleteId,
+        ...(input.options?.proposalId ? { proposalId: input.options.proposalId } : {}),
         memoryId,
         snapshot: memory,
         deletedAt,
@@ -1472,6 +1526,15 @@ class PostgresMemoryStore implements MemoryStorePort {
       const restoredVersion = { ...version, restoredAt, restoredBy };
       await this.upsertDeleteVersion(restoredVersion);
       await this.persistClassifiedMemoryRow(restored, embedding);
+      if (version.proposalId) {
+        await this.deletionProposalPersistence.markRestored({
+          proposalId: version.proposalId,
+          deleteId,
+          restoredAt,
+          restoredBy,
+          actorRole: input.options?.actorRole,
+        });
+      }
       this.memories.set(version.memoryId, restored);
       return restoredVersion;
     });
@@ -1502,6 +1565,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const deleteReason = options.reason?.trim();
     const version: MemoryDeleteVersion = {
       deleteId,
+      ...(options.proposalId ? { proposalId: options.proposalId } : {}),
       memoryId: id,
       snapshot: memory,
       deletedAt,
@@ -1541,6 +1605,15 @@ class PostgresMemoryStore implements MemoryStorePort {
       const embedding = await this.fetchStoredEmbedding(version.memoryId, 'undo soft delete');
       await this.upsertDeleteVersion(nextVersion);
       await this.persistClassifiedMemoryRow(restored, embedding);
+      if (version.proposalId) {
+        await this.deletionProposalPersistence.markRestored({
+          proposalId: version.proposalId,
+          deleteId,
+          restoredAt,
+          restoredBy,
+          actorRole: options.actorRole,
+        });
+      }
     });
     this.memories.set(version.memoryId, restored);
     this.markSalienceMaintenanceChanged();

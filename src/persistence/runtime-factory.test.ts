@@ -5,7 +5,10 @@ import type { IntentionRuntimeProviders, IntentionRuntimeWiring } from '../core/
 import { createAgentPersistenceRuntime } from './runtime-factory.js';
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
-  postgresMemoryStore: { kind: 'postgres-memory-store' },
+  postgresMemoryStore: {
+    kind: 'postgres-memory-store',
+    memoryDeletionProposalStore: { kind: 'postgres-memory-deletion-proposal-store' },
+  },
   postgresEpisodicStore: { kind: 'postgres-episodic-store' },
   postgresReflectionMirror: { kind: 'postgres-reflection-mirror' },
   postgresContactStore: {
@@ -254,6 +257,7 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtime).toEqual({
       backend: 'postgres',
       memoryStore: runtimeFactoryMocks.postgresMemoryStore as MemoryStorePort,
+      memoryDeletionProposalStore: runtimeFactoryMocks.postgresMemoryStore.memoryDeletionProposalStore,
       episodicStore: runtimeFactoryMocks.postgresEpisodicStore,
       firstPersonPreservingEpisodicStore: runtimeFactoryMocks.postgresEpisodicStore,
       companionAuthoredEpisodicStore: runtimeFactoryMocks.postgresEpisodicStore,
@@ -277,6 +281,7 @@ describe('createAgentPersistenceRuntime', () => {
       partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
       introspectionLandmarkStore: expect.any(Object),
       weightedThoughtStore: undefined,
+      socialDesireStore: undefined,
     });
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',

@@ -230,6 +230,45 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   );`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memory_delete_versions_memory ON l2_memory_delete_versions(memory_id, deleted_at DESC);`,
   `
+  CREATE TABLE IF NOT EXISTS memory_deletion_proposals (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE RESTRICT,
+    memory_authorization_revision BIGINT NOT NULL,
+    justification_category TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+      'pending_partner_alert', 'pending_operator_validation', 'approved', 'denied', 'restored'
+    )),
+    proposed_at BIGINT NOT NULL,
+    proposed_by TEXT NOT NULL CHECK (proposed_by = 'Companion'),
+    partner_alerted_at BIGINT,
+    operator_decided_at BIGINT,
+    operator_id TEXT,
+    delete_id TEXT REFERENCES l2_memory_delete_versions(delete_id) ON DELETE RESTRICT,
+    restored_at BIGINT,
+    restored_by TEXT
+  );
+  `,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_deletion_proposals_pending_memory ON memory_deletion_proposals(memory_id) WHERE status IN ('pending_partner_alert', 'pending_operator_validation');`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_deletion_proposals_status ON memory_deletion_proposals(status, proposed_at);`,
+  `ALTER TABLE l2_memory_delete_versions ADD COLUMN IF NOT EXISTS proposal_id TEXT REFERENCES memory_deletion_proposals(id) ON DELETE RESTRICT;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_l2_memory_delete_versions_proposal ON l2_memory_delete_versions(proposal_id) WHERE proposal_id IS NOT NULL;`,
+  `
+  CREATE TABLE IF NOT EXISTS memory_deletion_audit_events (
+    sequence BIGSERIAL PRIMARY KEY,
+    id TEXT NOT NULL UNIQUE,
+    proposal_id TEXT NOT NULL REFERENCES memory_deletion_proposals(id) ON DELETE RESTRICT,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'proposed', 'partner_alerted', 'approved', 'denied', 'deleted', 'restored'
+    )),
+    actor_role TEXT NOT NULL CHECK (actor_role IN ('Companion', 'Partner', 'Operator')),
+    actor_id TEXT,
+    occurred_at BIGINT NOT NULL,
+    delete_id TEXT REFERENCES l2_memory_delete_versions(delete_id) ON DELETE RESTRICT
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_memory_deletion_audit_proposal ON memory_deletion_audit_events(proposal_id, sequence);`,
+  `
   CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (
     id TEXT PRIMARY KEY,
     source_memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE,

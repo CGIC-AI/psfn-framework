@@ -50,6 +50,14 @@ import {
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
 import type { SharedBackgroundProvider } from './retrieval/shared-background.js';
+import type {
+  MemoryDeletionApprovalPort,
+  MemoryDeletionProposalStorePort,
+} from './deletion-proposals.js';
+import {
+  resolveMemoryDeletionJustification,
+  type MemoryDeletionPolicy,
+} from '../../system/config/memory-deletion-policy.js';
 import {
   filterTopicMatches,
   formatMemoryCensusResult,
@@ -379,6 +387,9 @@ export interface MemoryToolOptions extends MemoryWriteToolOptions {
    * Accepts a resolver so late-bound runtime config is honored per call.
    */
   memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
+  memoryDeletionProposalStore?: MemoryDeletionProposalStorePort | null;
+  memoryDeletionApprovalPort?: MemoryDeletionApprovalPort | null;
+  memoryDeletionPolicy?: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
 }
 
 interface MemoryToolParams {
@@ -417,6 +428,8 @@ interface MemoryToolParams {
   memory_id?: string;
   operation?: MemoryRedactionOperation;
   reason?: string;
+  justification_category?: string;
+  explanation?: string;
   delete_id?: string;
   date?: string;
   after?: string;
@@ -750,13 +763,10 @@ export function createMemoryPatchTool(writer: MemoryWriter): SubstrateAgentTool 
   };
 }
 
-export function createMemoryRedactTool(writer: MemoryWriter): SubstrateAgentTool {
+export function createMemoryRedactTool(_writer: MemoryWriter): SubstrateAgentTool {
   return {
     name: 'memory_redact',
-    description:
-      'Redact a memory using consent-aware behavior. ' +
-      'operation=auto uses consent flags to choose delete vs abstraction. ' +
-      'operation=delete always soft-deletes. operation=abstract keeps a generalized lesson and deletes the original.',
+    description: 'Retired alias. Memory removal must use the justified deletion proposal workflow.',
     label: 'memory_redact',
     parameters: Type.Object({
       memory_id: Type.String({ description: 'Memory ID to redact.' }),
@@ -772,63 +782,27 @@ export function createMemoryRedactTool(writer: MemoryWriter): SubstrateAgentTool
       ),
     }),
     execute: async (
-      toolCallId: string,
-      params: {
+      _toolCallId: string,
+      _params: {
         memory_id: string;
         operation?: MemoryRedactionOperation;
         reason?: string;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
-        const memoryId = params.memory_id.trim();
-        if (!memoryId) {
-          return textResultWithError('Error: memory_id is required', true);
-        }
-
-        const operation = params.operation ?? 'auto';
-        if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
-          return textResultWithError(`Error: invalid operation "${operation}"`, true);
-        }
-
-        const sourceRef = buildToolSourceRef('memory_redact', toolCallId, internalSource);
-
-        const redacted = await writer.redact({
-          memoryId,
-          operation,
-          reason: params.reason?.trim(),
-          requestedBy: sourceRef,
-          sourceRef,
-        });
-
-        if (!redacted) {
-          return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
-        }
-
-        if (redacted.operation === 'deleted') {
-          return textResult(
-            `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
-          );
-        }
-
-        return textResult(
-          `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, ` +
-          `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
-        );
-      } catch (error) {
-        return textResultWithError(`Error redacting memory: ${errorMessage(error)}`, true);
-      }
+      return textResultWithError(
+        'Error: memory_redact is retired because redaction removes an active memory. Use memory with action=delete, justification_category, and explanation.',
+        true,
+      );
     },
   };
 }
 
-export function createMemoryDeleteTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
+export function createMemoryDeleteTool(_memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'memory_delete',
     description:
-      'Soft-delete a memory with a version snapshot checkpoint. ' +
-      'Returns a delete_id that can be used with undo_memory_delete.',
+      'Retired alias. Memory deletion must be proposed through memory action=delete.',
     label: 'memory_delete',
     parameters: Type.Object({
       memory_id: Type.String({ description: 'Memory ID to soft-delete.' }),
@@ -838,33 +812,16 @@ export function createMemoryDeleteTool(memoryStore: MemoryStorePort): SubstrateA
     }),
     execute: async (
       _toolCallId: string,
-      params: {
+      _params: {
         memory_id: string;
         reason?: string;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const memoryId = params.memory_id.trim();
-        if (!memoryId) {
-          return textResultWithError('Error: memory_id is required', true);
-        }
-
-        const deleted = await memoryStore.softDeleteMemory(memoryId, {
-          deletedBy: 'tool:memory_delete',
-          reason: params.reason?.trim(),
-        });
-        if (!deleted) {
-          return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
-        }
-
-        return textResult(
-          `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). ` +
-          'Use undo_memory_delete with delete_id to restore.',
-        );
-      } catch (error) {
-        return textResultWithError(`Error deleting memory: ${errorMessage(error)}`, true);
-      }
+      return textResultWithError(
+        'Error: memory_delete is retired. Use memory with action=delete, justification_category, and explanation to create a Partner-alerted proposal for Operator validation.',
+        true,
+      );
     },
   };
 }
@@ -1049,7 +1006,13 @@ export function createMemoryTool(
         }),
       ),
       reason: Type.Optional(
-        Type.String({ description: 'Optional reason logged for patch/redact/delete operations.' }),
+        Type.String({ description: 'Optional reason logged for patch operations.' }),
+      ),
+      justification_category: Type.Optional(
+        Type.String({ description: 'Required for action=delete. Category id from settings.json memoryDeletionPolicy.' }),
+      ),
+      explanation: Type.Optional(
+        Type.String({ description: 'Required for action=delete. Written explanation for Partner alert and Operator validation.' }),
       ),
       delete_id: Type.Optional(
         Type.String({ description: 'Required for action=restore. Delete checkpoint ID to restore.' }),
@@ -1433,38 +1396,9 @@ export function createMemoryTool(
           }
 
           case 'redact': {
-            const memoryId = normalizedParams.memory_id?.trim();
-            if (!memoryId) {
-              return textResultWithError('Error: memory_id is required for action=redact', true);
-            }
-
-            const operation = normalizedParams.operation ?? 'auto';
-            if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
-              return textResultWithError(`Error: invalid operation "${operation}"`, true);
-            }
-
-            const sourceContext = buildUnifiedMemorySourceContext('redact', toolCallId, internalSource);
-            const redacted = await writer.redact({
-              memoryId,
-              operation,
-              reason: normalizedParams.reason?.trim(),
-              requestedBy: sourceContext.sourceRef,
-              sourceRef: sourceContext.sourceRef,
-            });
-
-            if (!redacted) {
-              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
-            }
-
-            if (redacted.operation === 'deleted') {
-              return textResult(
-                `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
-              );
-            }
-
-            return textResult(
-              `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, `
-              + `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
+            return textResultWithError(
+              'Error: action=redact is retired because redaction removes an active memory. Use action=delete with justification_category and explanation.',
+              true,
             );
           }
 
@@ -1473,18 +1407,45 @@ export function createMemoryTool(
             if (!memoryId) {
               return textResultWithError('Error: memory_id is required for action=delete', true);
             }
-
-            const deleted = await memoryStore.softDeleteMemory(memoryId, {
-              deletedBy: 'tool:memory|action:delete',
-              reason: normalizedParams.reason?.trim(),
-            });
-            if (!deleted) {
-              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            const justificationCategory = normalizedParams.justification_category?.trim();
+            if (!justificationCategory) {
+              return textResultWithError('Error: justification_category is required for action=delete', true);
             }
-
+            const explanation = normalizedParams.explanation?.trim();
+            if (!explanation) {
+              return textResultWithError('Error: explanation is required for action=delete', true);
+            }
+            const policy = typeof options.memoryDeletionPolicy === 'function'
+              ? options.memoryDeletionPolicy()
+              : options.memoryDeletionPolicy;
+            resolveMemoryDeletionJustification(policy, justificationCategory, explanation);
+            const proposalStore = options.memoryDeletionProposalStore;
+            const approvalPort = options.memoryDeletionApprovalPort;
+            if (!proposalStore || !approvalPort) {
+              return textResultWithError(
+                'Error: memory deletion proposal persistence and confirmation are not configured',
+                true,
+              );
+            }
+            const targetMemory = await memoryStore.getById(memoryId);
+            if (!targetMemory || targetMemory.deletedAt || targetMemory.supersededBy) {
+              return textResultWithError(`Memory not found or no longer active: ${memoryId}`, true);
+            }
+            const proposal = await proposalStore.createMemoryDeletionProposal({
+              memoryId,
+              justificationCategory,
+              explanation,
+              proposedBy: 'Companion',
+            });
+            await approvalPort.requestMemoryDeletionApproval({
+              proposalId: proposal.id,
+              memoryId,
+              justificationCategory,
+              explanation,
+            });
             return textResult(
-              `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). `
-              + 'Use action=restore with delete_id to restore.',
+              `Memory deletion proposal ${proposal.id} is pending Operator validation. `
+              + 'The Partner was alerted through the existing confirmation surface; the memory remains active.',
             );
           }
 
@@ -1496,6 +1457,7 @@ export function createMemoryTool(
 
             const restored = await memoryStore.undoSoftDelete(deleteId, {
               restoredBy: 'tool:memory|action:restore',
+              actorRole: 'Companion',
             });
             if (!restored) {
               return textResultWithError(`Delete checkpoint not found or already restored: ${deleteId}`, true);

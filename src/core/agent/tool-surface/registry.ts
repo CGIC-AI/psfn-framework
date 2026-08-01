@@ -200,6 +200,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'mcp',
+    domain: 'boundary',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.mcp,
+    actions: ['catalog', 'search', 'inspect', 'call', 'release'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'world',
     domain: 'boundary',
     exposure: 'extended',

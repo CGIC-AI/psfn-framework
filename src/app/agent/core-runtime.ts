@@ -10,6 +10,7 @@ import {
 } from '../../faculties/memory/memory-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
+import { createMcpTool } from '../../boundary/integrations/mcp/tools.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
@@ -409,6 +410,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.intakeSinkGate = intakeSinkGate;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  agentLoop.registerTool(createMcpTool({
+    gateway,
+    getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
+  }), 'core');
   wireDiagnosticsRuntime(eventBus);
   // E5.5: persistent active-memory refresh failure raises an operator alert
   // through the system-derived gateway notification path. The threshold is

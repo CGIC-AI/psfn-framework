@@ -88,6 +88,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   repo: { kind: 'schema_only' },
   shell: { kind: 'schema_only' },
   web: { kind: 'schema_only' },
+  mcp: { kind: 'schema_only' },
   analysis_workbench: { kind: 'schema_only' },
   response_control: { kind: 'schema_only' },
   notify: { kind: 'schema_only' },
@@ -246,6 +247,13 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     fetch: SCHEMA_ASSERT,
     browse: SCHEMA_ASSERT,
     search: SCHEMA_ASSERT,
+  },
+  mcp: {
+    catalog: SCHEMA_ASSERT,
+    search: SCHEMA_ASSERT,
+    inspect: SCHEMA_ASSERT,
+    call: SCHEMA_ASSERT,
+    release: SCHEMA_ASSERT,
   },
   world: {
     perceive: SCHEMA_ASSERT,

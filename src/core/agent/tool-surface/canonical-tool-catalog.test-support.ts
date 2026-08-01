@@ -3,6 +3,7 @@ import { createBeadsTool } from '../../../boundary/integrations/beads/tools.js';
 import { createFsTool } from '../../../boundary/integrations/filesystem/tools.js';
 import { createRepoTool } from '../../../boundary/integrations/git/tools.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
+import { createMcpTool } from '../../../boundary/integrations/mcp/tools.js';
 import { createShellTool } from '../../../boundary/integrations/shell/tools.js';
 import { createVaultTool } from '../../../boundary/integrations/vault/tools.js';
 import { createWebTool } from '../../../boundary/integrations/web/tools.js';
@@ -34,6 +35,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createToolSearchTool(inert), createToolsetTool(inert),
     createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
+    createMcpTool({ gateway: inert, getDisclosureLineage: () => undefined }),
     createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),

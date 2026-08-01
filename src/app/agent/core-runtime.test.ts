@@ -39,6 +39,14 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
+  it('registers the canonical lazy MCP client with runtime-derived disclosure lineage', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain('agentLoop.registerTool(createMcpTool({');
+    expect(coreRuntimeSource).toContain(
+      'getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage()',
+    );
+  });
+
   it('wires concern resolution through isolated startup reconciliation and scoped emotion state', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('createConcernResolutionArcRecorder({');

@@ -66,8 +66,9 @@ const log = createComponentLogger('IntakeSinkGates');
 export interface IntakeSinkGateDecision {
   sink: IntakeSink;
   /**
-   * Mode-aware final answer. Shadow mode always allows (the verdict is still
-   * audited); enforce mode allows only on an 'allow' verdict.
+   * Mode-aware final answer for ordinary sink access. Shadow mode allows (the
+   * verdict is still audited); enforce mode allows only on an 'allow' verdict.
+   * Lethal-trifecta assessments use the stricter contract below.
    */
   allowed: boolean;
   /** Mode-independent policy evaluation. */
@@ -99,6 +100,19 @@ export interface IntakeEgressTrifectaAssessment {
   reason: string;
   /** Envelope ids whose content participates in the trifecta path. */
   envelopeIds: readonly string[];
+}
+
+export interface BlockedEgressTrifectaContext {
+  /** Canonical route identity used to place the incident in the operator work surface. */
+  sourceChannelId: string;
+  logicalSessionId: string;
+  /** Structural tool identity only; arguments and content must never cross this seam. */
+  toolName: string;
+}
+
+export interface BlockedEgressTrifectaIncident {
+  assessment: IntakeEgressTrifectaAssessment;
+  context: BlockedEgressTrifectaContext;
 }
 
 /**
@@ -361,6 +375,8 @@ export interface IntakeSinkGate {
       envelopes: readonly IntakeEnvelopeSnapshot[];
       privateDataInPath: boolean;
       egressDescription: string;
+      /** Required runtime identity when a hard block must become a durable case. */
+      blockedIncidentContext?: BlockedEgressTrifectaContext;
     },
     context?: Readonly<Record<string, unknown>>,
   ): IntakeEgressTrifectaAssessment;
@@ -372,10 +388,21 @@ export interface IntakeSinkGateOptions {
   actor: string;
   /** Optional additional audit sink (Garden/event-store wiring); logging always happens. */
   onAudit?: (event: IntakeSinkGateAuditEvent) => void;
+  /**
+   * Dedicated side effect for a blocked hard lethal-trifecta decision. Unlike
+   * the best-effort telemetry hook above, callback failures propagate so a
+   * security block cannot silently lose its durable operator trace.
+   */
+  onBlockedEgressTrifecta?: (incident: BlockedEgressTrifectaIncident) => void;
 }
 
+export type RuntimeIntakeSinkGateOptions = IntakeSinkGateOptions & Required<Pick<
+  IntakeSinkGateOptions,
+  'onBlockedEgressTrifecta'
+>>;
+
 export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSinkGate {
-  const { policy, actor, onAudit } = options;
+  const { policy, actor, onAudit, onBlockedEgressTrifecta } = options;
   const mode = assertGateMode(policy);
 
   function audit(event: IntakeSinkGateAuditEvent): void {
@@ -434,7 +461,7 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
     },
     assessEgressTrifecta(input, context = {}) {
       const assessment = evaluateEgressTrifecta(policy, input);
-      audit({
+      const event: IntakeSinkGateAuditEvent = {
         kind: 'egress_trifecta',
         sink: 'tool_egress',
         mode: assessment.mode,
@@ -447,7 +474,22 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
           ...(assessment.enforcement ? { enforcement: assessment.enforcement } : {}),
           ...(assessment.envelopeIds.length > 0 ? { envelopeIds: assessment.envelopeIds } : {}),
         },
-      });
+      };
+      audit(event);
+      if (
+        !assessment.allowed
+        && assessment.verdict === 'deny'
+        && assessment.enforcement === 'hard'
+        && onBlockedEgressTrifecta
+      ) {
+        if (!input.blockedIncidentContext) {
+          throw new Error('Hard egress-trifecta block is missing durable incident context');
+        }
+        onBlockedEgressTrifecta({
+          assessment,
+          context: input.blockedIncidentContext,
+        });
+      }
       return assessment;
     },
   };
@@ -459,11 +501,14 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
  * maybeCreateIntakeScreeningService (screening.ts).
  */
 export function maybeCreateIntakeSinkGate(
-  options: IntakeSinkGateOptions,
+  options: RuntimeIntakeSinkGateOptions,
 ): IntakeSinkGate | null {
   if (options.policy.mode === 'off') {
     log.warn("Intake firewall mode is 'off': no sink gates are wired at any consequential sink");
     return null;
+  }
+  if (typeof options.onBlockedEgressTrifecta !== 'function') {
+    throw new Error('Intake sink-gate runtime requires a durable hard-block incident recorder');
   }
   return createIntakeSinkGate(options);
 }

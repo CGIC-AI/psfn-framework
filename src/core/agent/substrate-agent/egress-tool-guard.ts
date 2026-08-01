@@ -23,6 +23,7 @@ import {
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const log = createComponentLogger('EgressToolGuard');
 
@@ -30,6 +31,7 @@ export interface EgressToolGuardDeps {
   intakeSinkGate: IntakeSinkGate | null;
   getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
   getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
+  getActiveTurnSessionIdentity: () => TurnSessionIdentity | null;
 }
 
 export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard | null {
@@ -43,11 +45,50 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       let sinkAllowed = access.allowed;
       let sinkReason = access.reason;
       if (sinkAllowed) {
-        const trifecta = gate.assessEgressTrifecta({
-          envelopes,
-          privateDataInPath: true,
-          egressDescription: `tool:${toolName}`,
-        });
+        const turnIdentity = deps.getActiveTurnSessionIdentity();
+        let trifecta;
+        try {
+          trifecta = gate.assessEgressTrifecta({
+            envelopes,
+            privateDataInPath: true,
+            egressDescription: `tool:${toolName}`,
+            ...(turnIdentity
+              ? {
+                blockedIncidentContext: {
+                  sourceChannelId: turnIdentity.sourceChannelId,
+                  logicalSessionId: turnIdentity.logicalSessionId,
+                  toolName,
+                },
+              }
+              : {}),
+          }, {
+            toolName,
+            ...(turnIdentity
+              ? {
+                sourceChannelId: turnIdentity.sourceChannelId,
+                logicalSessionId: turnIdentity.logicalSessionId,
+              }
+              : {}),
+          });
+        } catch (error) {
+          // Preserve the security outcome even when its operator-visible
+          // incident cannot be written. The raw failure is logged locally;
+          // callers receive a fixed, non-sensitive diagnostic alongside the
+          // normal calm denial notice, so the failure is not swallowed and
+          // the tool is still never invoked.
+          log.error('Intake egress sink gate failed closed', {
+            toolName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            allowed: false,
+            noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld,
+            diagnostic: {
+              code: 'intake_sink_gate_evaluation_failed',
+              message: 'The outbound action was blocked, but its operator security incident could not be recorded.',
+            },
+          };
+        }
         if (!trifecta.allowed) {
           sinkAllowed = false;
           sinkReason = trifecta.reason;

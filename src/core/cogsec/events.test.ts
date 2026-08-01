@@ -24,6 +24,37 @@ afterEach(() => {
 });
 
 describe('CogSecEventStore', () => {
+  it('preserves events written by another store after this instance was constructed', () => {
+    const root = makeTempRoot();
+    const path = resolveCogSecEventsPath(root);
+    const firstWriter = new CogSecEventStore(path, {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    const staleWriter = new CogSecEventStore(path, {
+      now: () => new Date('2026-07-01T00:00:01.000Z'),
+    });
+
+    firstWriter.createEvent({
+      caseId: 'cogsec_20260701T000000Z_first',
+      type: 'intake_firewall',
+      severity: 'critical',
+      sourceChannelId: 'discord-channel-1',
+      safeAgentSummary: SAFE_SUMMARY,
+    });
+    staleWriter.createEvent({
+      caseId: 'cogsec_20260701T000001Z_second',
+      type: 'intake_firewall',
+      severity: 'critical',
+      sourceChannelId: 'discord-channel-2',
+      safeAgentSummary: SAFE_SUMMARY,
+    });
+
+    expect(new CogSecEventStore(path).listEvents().map(event => event.caseId)).toEqual([
+      'cogsec_20260701T000001Z_second',
+      'cogsec_20260701T000000Z_first',
+    ]);
+  });
+
   it('creates, persists, and reloads safe CogSec event metadata', () => {
     const root = makeTempRoot();
     const path = resolveCogSecEventsPath(root);

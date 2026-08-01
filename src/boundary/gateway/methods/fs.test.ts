@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
@@ -138,7 +145,13 @@ describe('registerFilesystemMethods', () => {
       personalWorkspaceIsolation: true,
       quarantinedArtifactGuard: {
         check,
+        checkMany: (paths, context) => ({
+          verdicts: paths.map(path => check(path, context)),
+          revisionToken: 'stable-test-revision',
+        }),
+        readRevisionToken: () => 'stable-test-revision',
         listEnforcedArtifactPaths: () => [artifactPath],
+        listEnforcedArtifactIdentities: () => [],
       },
       approvalBoundary: {
         gate: (options: { handler: (params: unknown) => Promise<unknown> }) =>
@@ -188,6 +201,90 @@ describe('registerFilesystemMethods', () => {
         [artifactPath, { via: 'gateway:fs.edit' }],
         [artifactPath, { via: 'gateway:fs.edit' }],
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses write/edit when a screened pathname is swapped to another inode', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gateway-fs-mutation-swap-'));
+    const workspaceRoot = join(root, 'workspaces', 'personal', 'companion-a');
+    mkdirSync(workspaceRoot, { recursive: true });
+    const methods = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
+    const swaps = new Map([
+      ['gateway:fs.write', {
+        target: join(workspaceRoot, 'write-target.txt'),
+        backup: join(workspaceRoot, 'write-safe-backup.txt'),
+        held: join(workspaceRoot, 'write-held.txt'),
+      }],
+      ['gateway:fs.edit', {
+        target: join(workspaceRoot, 'edit-target.txt'),
+        backup: join(workspaceRoot, 'edit-safe-backup.txt'),
+        held: join(workspaceRoot, 'edit-held.txt'),
+      }],
+    ]);
+    for (const paths of swaps.values()) {
+      writeFileSync(paths.target, 'ordinary safe text');
+      writeFileSync(paths.held, 'MARKER-held-evidence');
+    }
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      policyConfig: { workspacePath: workspaceRoot },
+      workspacePath: workspaceRoot,
+      personalWorkspaceIsolation: true,
+      quarantinedArtifactGuard: {
+        check: () => ({ withheld: false }),
+        checkMany: (paths: readonly string[], context: { via: string }) => {
+          const swap = swaps.get(context.via);
+          if (swap && paths[0] === swap.target) {
+            swaps.delete(context.via);
+            renameSync(swap.target, swap.backup);
+            renameSync(swap.held, swap.target);
+          }
+          return {
+            verdicts: paths.map(() => ({ withheld: false })),
+            revisionToken: 'stable-swap-revision',
+          };
+        },
+        readRevisionToken: () => 'stable-swap-revision',
+        listEnforcedArtifactPaths: () => [],
+        listEnforcedArtifactIdentities: () => [],
+      },
+      approvalBoundary: {
+        gate: (options: { handler: (params: unknown) => Promise<unknown> }) =>
+          async (params: unknown) => options.handler(params),
+      },
+      authenticatedCompanionId: () => 'companion-a',
+      notifyRequester: vi.fn(),
+      listPendingConfirmations: () => [],
+      listConfirmationHistory: () => [],
+      resolveConfirmation: vi.fn(),
+      sendNtfy: vi.fn(),
+      getRuntimeHealth: vi.fn(),
+      nextStreamRequestId: () => 'stream-1',
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+    } as unknown as GatewayMethodRuntime;
+
+    try {
+      registerFilesystemMethods(runtime);
+      await expect(methods.get('fs.write')!({
+        path: 'write-target.txt',
+        content: 'destroyed',
+      })).rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
+      await expect(methods.get('fs.edit')!({
+        path: 'edit-target.txt',
+        oldText: 'MARKER-held-evidence',
+        newText: 'oracle-success',
+      })).rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
+
+      expect(readFileSync(join(workspaceRoot, 'write-target.txt'), 'utf8'))
+        .toBe('MARKER-held-evidence');
+      expect(readFileSync(join(workspaceRoot, 'edit-target.txt'), 'utf8'))
+        .toBe('MARKER-held-evidence');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

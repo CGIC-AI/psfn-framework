@@ -2869,6 +2869,13 @@
       "value": "200"
     },
     {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "QUARANTINE_WRITE_LOCK_OPTIONS.timeoutMs",
+      "value": "10_000",
+      "form": "object-member",
+      "note": "Code-owned safety bound: quarantine mutations fail loudly after a wedged cross-process lock instead of hanging a security-sensitive read-audit or operator decision indefinitely."
+    },
+    {
       "file": "src/core/cogsec/intake/scanners/encoding-smuggling.ts",
       "name": "MAX_BLOBS_EXAMINED",
       "value": "8"

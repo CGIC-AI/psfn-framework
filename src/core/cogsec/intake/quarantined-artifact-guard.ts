@@ -17,14 +17,15 @@
 //   in the Garden Cognitive Security queue — a bypass attempt is never
 //   invisible) and, in enforce mode, withholds the read: the caller must
 //   return the fixed quarantine notice instead of content.
-// - Shadow mode observes only: the attempt is recorded and logged, the read
-//   proceeds (the content was delivered at intake anyway) — same observe-only
-//   contract as the rest of the firewall.
+// - Shadow mode observes only after the attempt is durably recorded: the read
+//   then proceeds (the content was delivered at intake anyway). Audit failure
+//   aborts in either mode so the queue never silently loses an access attempt.
 //
-// A failed audit write is logged and the verdict still fails closed —
-// an audit failure must never turn into a content release.
+// A failed audit write is logged and thrown. The caller therefore fails the
+// tool path closed instead of returning content without the required queue
+// evidence.
 
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { isIntakeSinkConsumableState } from '../../../shared/contracts/intake-envelope.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
@@ -40,8 +41,26 @@ const log = createComponentLogger('QuarantinedArtifactGuard');
 export interface QuarantinedArtifactPathPort {
   findByArtifactPath(path: string): IntakeQuarantineEntry | undefined;
   recordAccessAttempt(input: IntakeQuarantineAccessAttemptInput): IntakeQuarantineEntry;
+  findByArtifactPaths(paths: readonly string[]): Map<string, IntakeQuarantineEntry>;
+  recordAccessAttempts(
+    inputs: readonly IntakeQuarantineAccessAttemptInput[],
+  ): IntakeQuarantineEntry[];
+  checkArtifactAccesses(input: {
+    requests: readonly {
+      requestedPath: string;
+      lookupPaths: readonly string[];
+      lookupIdentities?: readonly string[];
+    }[];
+    via: string;
+    atMs?: number;
+  }): {
+    entries: Array<IntakeQuarantineEntry | undefined>;
+    revisionToken: string;
+  };
+  readRevisionToken(): string;
   /** Registered artifact paths of entries not in a sink-consumable state. */
   listActiveArtifactPaths(): string[];
+  listActiveArtifactIdentities(): string[];
 }
 
 export type QuarantinedArtifactCheckResult =
@@ -54,13 +73,35 @@ export type QuarantinedArtifactCheckResult =
     noticeText: string;
   };
 
+export interface QuarantinedArtifactBatchCheckResult {
+  verdicts: QuarantinedArtifactCheckResult[];
+  /** Exact gating-state revision captured with the batch verdicts. */
+  revisionToken: string;
+}
+
+export interface QuarantinedArtifactPhysicalCheckOptions {
+  /** Device/inode identity bound to each already-statted/opened path. */
+  physicalIdentities: readonly (string | undefined)[];
+}
+
 export interface QuarantinedArtifactAccessGuard {
   /**
    * Check one access to `path`. `via` is the auditable access seam
-   * (e.g. 'gateway:fs.read' or 'gateway:fs.write'). Never throws: audit
-   * failures are logged and the verdict still fails closed.
+   * (e.g. 'gateway:fs.read' or 'gateway:fs.write'). Throws when the queue
+   * attempt cannot be persisted, so an unaudited access never proceeds.
    */
   check(path: string, context: { via: string }): QuarantinedArtifactCheckResult;
+  /**
+   * Batch check for bounded scans. All lookups share one store snapshot and
+   * all matched access attempts share one durable audit transaction.
+   */
+  checkMany(
+    paths: readonly string[],
+    context: { via: string },
+    options?: QuarantinedArtifactPhysicalCheckOptions,
+  ): QuarantinedArtifactBatchCheckResult;
+  /** Token for revalidating a bounded scan before its bytes are returned. */
+  readRevisionToken(): string;
   /**
    * The physical deny set for sandbox launches (hrmrq.54 shell seam): every
    * registered artifact path of a not-operator-released entry. Enforce mode
@@ -69,6 +110,8 @@ export interface QuarantinedArtifactAccessGuard {
    * (observe-only: nothing is physically denied).
    */
   listEnforcedArtifactPaths(): string[];
+  /** Physical identities whose aliases must also be masked in the sandbox. */
+  listEnforcedArtifactIdentities(): string[];
 }
 
 export interface QuarantinedArtifactAccessGuardOptions {
@@ -86,24 +129,63 @@ export interface UnionQuarantinedArtifactAccessGuardOptions {
   now?: () => number;
 }
 
-function lookupEntry(
-  store: QuarantinedArtifactPathPort,
-  path: string,
-): IntakeQuarantineEntry | undefined {
-  const direct = store.findByArtifactPath(path);
-  if (direct) return direct;
-  // Symlink robustness: registration stores resolve()-normalized paths; a
-  // read that reaches the same file through a symlinked prefix must not slip
-  // past the gate.
-  try {
-    const canonical = realpathSync(path);
-    if (canonical !== normalizeQuarantineArtifactPath(path)) {
-      return store.findByArtifactPath(canonical);
-    }
-  } catch {
-    // Missing file or unresolvable path: nothing further to match against.
+function lookupEntries(
+  paths: readonly string[],
+  physicalIdentities?: readonly (string | undefined)[],
+): {
+  requests: Array<{
+    requestedPath: string;
+    lookupPaths: string[];
+    lookupIdentities: string[];
+  }>;
+  requestIndexes: number[];
+  errors: Map<number, unknown>;
+} {
+  if (physicalIdentities && physicalIdentities.length !== paths.length) {
+    throw new Error('Quarantined-artifact physical identity count must match path count');
   }
-  return undefined;
+  const requests: Array<{
+    requestedPath: string;
+    lookupPaths: string[];
+    lookupIdentities: string[];
+  }> = [];
+  const requestIndexes: number[] = [];
+  const errors = new Map<number, unknown>();
+  const aliases = paths.map((path, index) => {
+    const normalized = normalizeQuarantineArtifactPath(path);
+    const boundIdentity = physicalIdentities?.[index];
+    if (boundIdentity !== undefined) {
+      return { paths: [normalized], identities: [boundIdentity] };
+    }
+    try {
+      const canonical = realpathSync(path);
+      const stats = statSync(path, { bigint: true });
+      return {
+        paths: canonical === normalized ? [normalized] : [normalized, canonical],
+        identities: [
+          `${stats.dev.toString()}:${stats.ino.toString()}:${stats.birthtimeNs.toString()}`,
+        ],
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === 'ENOENT' || code === 'ENOTDIR'
+        ? { paths: [normalized], identities: [] }
+        : { paths: [], identities: [], error };
+    }
+  });
+  aliases.forEach((pathAliases, index) => {
+    if (pathAliases.error) {
+      errors.set(index, pathAliases.error);
+      return;
+    }
+    requests.push({
+      requestedPath: paths[index]!,
+      lookupPaths: pathAliases.paths,
+      lookupIdentities: pathAliases.identities,
+    });
+    requestIndexes.push(index);
+  });
+  return { requests, requestIndexes, errors };
 }
 
 export function createQuarantinedArtifactAccessGuard(
@@ -112,19 +194,28 @@ export function createQuarantinedArtifactAccessGuard(
   const { store, mode } = options;
   const now = options.now ?? Date.now;
 
-  return {
-    listEnforcedArtifactPaths(): string[] {
-      if (mode !== 'enforce') return [];
-      // Throws propagate deliberately: an unenumerable deny set must fail the
-      // sandbox launch, never silently launch with the artifacts readable.
-      return store.listActiveArtifactPaths();
-    },
-
-    check(path: string, context: { via: string }): QuarantinedArtifactCheckResult {
-      let entry: IntakeQuarantineEntry | undefined;
-      try {
-        entry = lookupEntry(store, path);
-      } catch (error) {
+  const checkMany = (
+    paths: readonly string[],
+    context: { via: string },
+    checkOptions?: QuarantinedArtifactPhysicalCheckOptions,
+  ): QuarantinedArtifactBatchCheckResult => {
+    const prepared = lookupEntries(paths, checkOptions?.physicalIdentities);
+    const lookups = paths.map<{ entry?: IntakeQuarantineEntry; error?: unknown }>(() => ({}));
+    for (const [index, error] of prepared.errors) lookups[index] = { error };
+    let revisionToken = 'unavailable';
+    try {
+      const checked = store.checkArtifactAccesses({
+        requests: prepared.requests,
+        via: context.via,
+        atMs: now(),
+      });
+      revisionToken = checked.revisionToken;
+      checked.entries.forEach((entry, resultIndex) => {
+        const pathIndex = prepared.requestIndexes[resultIndex]!;
+        lookups[pathIndex] = entry ? { entry } : {};
+      });
+    } catch (error) {
+      for (const path of paths) {
         // A broken quarantine store cannot prove the path is safe: fail
         // closed in enforce mode rather than serving possibly-held content.
         log.error('Quarantined-artifact lookup failed; failing closed in enforce mode', {
@@ -132,39 +223,33 @@ export function createQuarantinedArtifactAccessGuard(
           via: context.via,
           error: error instanceof Error ? error.message : String(error),
         });
-        if (mode === 'enforce') {
-          return {
-            withheld: true,
-            envelopeId: 'unknown',
-            noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
-          };
-        }
-        return { withheld: false };
       }
-      if (!entry) return { withheld: false };
-      if (isIntakeSinkConsumableState(entry.envelope.state)) {
-        // Operator-released: the artifact is cleared for reads.
-        return { withheld: false };
-      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to resolve or audit quarantined-artifact access batch: ${detail}`,
+        { cause: error },
+      );
+    }
 
-      // Attempted access to a not-released quarantined artifact: always
-      // audit (operator-visible on the queue entry), regardless of mode.
-      try {
-        store.recordAccessAttempt({
-          id: entry.id,
-          path,
-          via: context.via,
-          atMs: now(),
-        });
-      } catch (error) {
-        log.error('Failed to record quarantined-artifact access attempt; verdict still applies', {
-          entryId: entry.id,
+    const verdicts: QuarantinedArtifactCheckResult[] = lookups.map(({ entry, error }, index) => {
+      const path = paths[index]!;
+      if (error) {
+        log.error('Quarantined-artifact path canonicalization failed; failing this path closed', {
           path,
           via: context.via,
           error: error instanceof Error ? error.message : String(error),
         });
+        return mode === 'enforce'
+          ? {
+            withheld: true,
+            envelopeId: 'unknown',
+            noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+          }
+          : { withheld: false };
       }
-
+      if (!entry || isIntakeSinkConsumableState(entry.envelope.state)) {
+        return { withheld: false };
+      }
       if (mode !== 'enforce') {
         log.warn('Shadow mode: quarantined-artifact access observed (not withheld)', {
           entryId: entry.id,
@@ -186,7 +271,30 @@ export function createQuarantinedArtifactAccessGuard(
         envelopeId: entry.id,
         noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
       };
+    });
+    return { verdicts, revisionToken };
+  };
+
+  return {
+    listEnforcedArtifactPaths(): string[] {
+      if (mode !== 'enforce') return [];
+      // Throws propagate deliberately: an unenumerable deny set must fail the
+      // sandbox launch, never silently launch with the artifacts readable.
+      return store.listActiveArtifactPaths();
     },
+
+    listEnforcedArtifactIdentities(): string[] {
+      if (mode !== 'enforce') return [];
+      return store.listActiveArtifactIdentities();
+    },
+
+    check(path: string, context: { via: string }): QuarantinedArtifactCheckResult {
+      return checkMany([path], context).verdicts[0]!;
+    },
+
+    checkMany,
+
+    readRevisionToken: () => store.readRevisionToken(),
   };
 }
 
@@ -209,15 +317,34 @@ export function createUnionQuarantinedArtifactAccessGuard(
     mode: options.mode,
     ...(options.now ? { now: options.now } : {}),
   }));
+  const checkMany = (
+    paths: readonly string[],
+    context: { via: string },
+    checkOptions?: QuarantinedArtifactPhysicalCheckOptions,
+  ): QuarantinedArtifactBatchCheckResult => {
+    const aggregate = paths.map<QuarantinedArtifactCheckResult>(() => ({ withheld: false }));
+    const revisions: string[] = [];
+    for (const guard of guards) {
+      const checked = guard.checkMany(paths, context, checkOptions);
+      revisions.push(checked.revisionToken);
+      checked.verdicts.forEach((verdict, index) => {
+        if (verdict.withheld && !aggregate[index]!.withheld) aggregate[index] = verdict;
+      });
+    }
+    return { verdicts: aggregate, revisionToken: revisions.join('|') };
+  };
+  const readRevisionToken = (): string => guards
+    .map(guard => guard.readRevisionToken())
+    .join('|');
 
   return {
     check(path, context) {
-      for (const guard of guards) {
-        const verdict = guard.check(path, context);
-        if (verdict.withheld) return verdict;
-      }
-      return { withheld: false };
+      return checkMany([path], context).verdicts[0]!;
     },
+
+    checkMany,
+
+    readRevisionToken,
 
     listEnforcedArtifactPaths() {
       if (options.mode !== 'enforce') return [];
@@ -230,6 +357,17 @@ export function createUnionQuarantinedArtifactAccessGuard(
         }
       }
       return [...paths];
+    },
+
+    listEnforcedArtifactIdentities() {
+      if (options.mode !== 'enforce') return [];
+      const identities = new Set<string>();
+      for (const guard of guards) {
+        for (const identity of guard.listEnforcedArtifactIdentities()) {
+          identities.add(identity);
+        }
+      }
+      return [...identities];
     },
   };
 }

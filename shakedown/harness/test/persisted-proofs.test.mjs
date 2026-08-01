@@ -191,6 +191,19 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
       withheld: true,
       envelopeState: 'quarantined',
       fixedNoticePresent: true,
+      locatorsAbsent: true,
+    },
+    containment: {
+      assistantReplyFound: true,
+      replyMarkerAbsent: true,
+      toolResultMarkerAbsent: true,
+      successfulRawReadCount: 0,
+      gatewayReadAuditCount: 1,
+      targetedReadAttemptCount: 1,
+      unexpectedContentReadAuditCount: 0,
+      unexpectedToolCallCount: 0,
+      readToolCallCount: 1,
+      queuedAccessAttemptCount: 1,
     },
     gardenQueue: {
       found: true,
@@ -228,6 +241,50 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
       sideChecks: { cogsec: { ...proof, appraisalLeakCount: 1 } },
     }).join('\n'),
     /appraisal/u,
+  );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: {
+        cogsec: {
+          ...proof,
+          containment: { ...proof.containment, replyMarkerAbsent: false },
+        },
+      },
+    }).join('\n'),
+    /assistant reply/u,
+  );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: {
+        cogsec: {
+          ...proof,
+          containment: { ...proof.containment, queuedAccessAttemptCount: 0 },
+        },
+      },
+    }).join('\n'),
+    /targeted quarantined-artifact read refusal/u,
+  );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: {
+        cogsec: {
+          ...proof,
+          containment: { ...proof.containment, successfulRawReadCount: 1 },
+        },
+      },
+    }).join('\n'),
+    /gateway read successfully exposed/u,
+  );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: {
+        cogsec: {
+          ...proof,
+          containment: { ...proof.containment, unexpectedContentReadAuditCount: 1 },
+        },
+      },
+    }).join('\n'),
+    /unexpected tool\/read method/u,
   );
   assert.deepEqual(validateCogSecDocumentProof({
     sideChecks: {

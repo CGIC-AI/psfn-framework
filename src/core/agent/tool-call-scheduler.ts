@@ -31,6 +31,8 @@ import {
 const TOOL_CANCELLED_NOTICE =
   '[System notice] This tool operation was cancelled before it completed. No internal diagnostic '
   + 'needs interpreting. You can tell your Partner the operation did not complete.';
+const NON_TEXT_TOOL_RESULT_WITHHELD_NOTICE =
+  '[System notice] Non-text tool content was withheld because no intake screener admitted it.';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeMarkingPlan } from '../cogsec/intake/marking.js';
 import {
@@ -565,7 +567,10 @@ async function executeSingleToolCall(
   let intakeScreening: ToolResultIntakeScreeningOutcome | undefined;
   if (options.toolResultScreener && !correction) {
     const rawText = toolResultText(result);
-    if (rawText.trim().length > 0) {
+    const hasResultContent = Array.isArray(result.content) && result.content.length > 0;
+    const hasNonTextContent = hasNonTextToolResultContent(result);
+    const hasOnlyNonTextContent = hasNonTextContent && rawText.trim().length === 0;
+    if (hasResultContent) {
       try {
         const screened = options.toolResultScreener({
           toolName: toolCall.name,
@@ -573,15 +578,35 @@ async function executeSingleToolCall(
           text: rawText,
         });
         if (screened) {
-          intakeScreening = screened;
-          if (screened.mode === 'enforce' && screened.effectiveText !== rawText) {
+          const resultContentWithheld = screened.mode === 'enforce'
+            && (screened.withheld || hasNonTextContent);
+          const deliveredText = hasOnlyNonTextContent
+            ? NON_TEXT_TOOL_RESULT_WITHHELD_NOTICE
+            : screened.effectiveText;
+          // The text firewall has no verdict for binary blocks. Enforce mode
+          // therefore suppresses them fail-closed, and the stashed/persisted
+          // outcome must describe what the turn actually received rather
+          // than retaining an admitted-text-only verdict.
+          intakeScreening = resultContentWithheld && !screened.withheld
+            ? {
+              ...screened,
+              withheld: true,
+              effectiveText: deliveredText,
+            }
+            : screened;
+          if (screened.mode === 'enforce'
+            && (screened.effectiveText !== rawText || hasNonTextContent)) {
             options.onTelemetry?.('agent.tools.intake.screened', {
               toolName: toolCall.name,
               toolCallId: toolCall.id,
-              withheld: screened.withheld,
+              withheld: resultContentWithheld,
               envelopeState: screened.snapshot.state,
             });
-            result = replaceToolResultTextContent(result, screened.effectiveText, screened.withheld);
+            result = replaceToolResultTextContent(
+              result,
+              deliveredText,
+              resultContentWithheld,
+            );
           }
         }
       } catch (error) {
@@ -661,10 +686,9 @@ async function executeSingleToolCall(
 
 /**
  * Substitute the screening's effective text into a tool result. Withheld
- * results are replaced WHOLE — non-text blocks rode in alongside quarantined
- * content and are withheld with it (fail closed). Sanitized results keep
- * their non-text blocks and carry one sanitized text block. `details` is
- * internal plumbing (never rendered into model context) and is left intact.
+ * results are replaced WHOLE — non-text blocks have no text-screening verdict
+ * and are withheld in enforce mode (fail closed). `details` is internal
+ * plumbing (never rendered into model context) and is left intact.
  */
 function replaceToolResultTextContent(
   result: AgentToolResult<unknown>,
@@ -682,6 +706,11 @@ function replaceToolResultTextContent(
     ...result,
     content: [{ type: 'text', text: effectiveText }, ...nonTextBlocks],
   };
+}
+
+function hasNonTextToolResultContent(result: AgentToolResult<unknown>): boolean {
+  return Array.isArray(result.content)
+    && result.content.some(block => (block as { type?: unknown }).type !== 'text');
 }
 
 function skipToolCall(

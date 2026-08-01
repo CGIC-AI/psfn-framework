@@ -1428,7 +1428,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     expect(getToolResultIntakeScreening(message)?.mode).toBe('shadow');
   });
 
-  it('sanitize keeps non-text blocks and substitutes one sanitized text block', async () => {
+  it('sanitize substitutes text but withholds unscreened non-text blocks', async () => {
     const imageBlock = { type: 'image', data: 'aGk=', mimeType: 'image/png' };
     const result = await executeToolCallsWithScheduler(
       [makeReaderTool([
@@ -1450,10 +1450,13 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
       },
     );
     const message = result.toolResults[0] as ToolResultMessage;
-    expect(message.content).toEqual([
-      { type: 'text', text: 'sanitized text' },
-      imageBlock,
-    ]);
+    expect(message.content).toEqual([{ type: 'text', text: 'sanitized text' }]);
+    expect(JSON.stringify(message.content)).not.toContain(imageBlock.data);
+    expect(getToolResultIntakeScreening(message)).toMatchObject({
+      mode: 'enforce',
+      withheld: true,
+      effectiveText: 'sanitized text',
+    });
   });
 
   it('withheld results drop non-text blocks too (fail closed)', async () => {
@@ -1479,6 +1482,72 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
       .toEqual([{ type: 'text', text: NOTICE_TEXT }]);
   });
 
+  it('enforce mode never hands an image-only result to the turn unscreened', async () => {
+    const imageBlock = { type: 'image', data: 'aGk=', mimeType: 'image/png' };
+    const screener = vi.fn(() => ({
+      mode: 'enforce' as const,
+      withheld: false,
+      effectiveText: '',
+      snapshot: makeSnapshot('released'),
+    }));
+    const result = await executeToolCallsWithScheduler(
+      [makeReaderTool([imageBlock])],
+      makeAssistantMessage(['fs']),
+      undefined,
+      { stream: { push: () => {} } },
+      { maxParallelToolCalls: 1, toolResultScreener: screener },
+    );
+
+    expect(screener).toHaveBeenCalledWith({
+      toolName: 'fs',
+      toolCallId: 'call-1',
+      text: '',
+    });
+    expect(JSON.stringify((result.toolResults[0] as ToolResultMessage).content))
+      .not.toContain('aGk=');
+    expect((result.toolResults[0] as ToolResultMessage).content)
+      .toEqual([{ type: 'text', text: expect.stringMatching(/non-text tool content was withheld/iu) }]);
+    expect(getToolResultIntakeScreening(result.toolResults[0] as ToolResultMessage))
+      .toMatchObject({
+        mode: 'enforce',
+        withheld: true,
+        effectiveText: expect.stringMatching(/non-text tool content was withheld/iu),
+        snapshot: { state: 'released' },
+      });
+  });
+
+  it('does not let whitespace text disguise an otherwise image-only result', async () => {
+    const result = await executeToolCallsWithScheduler(
+      [makeReaderTool([
+        { type: 'text', text: '   \n' },
+        { type: 'image', data: 'aGk=', mimeType: 'image/png' },
+      ])],
+      makeAssistantMessage(['fs']),
+      undefined,
+      { stream: { push: () => {} } },
+      {
+        maxParallelToolCalls: 1,
+        toolResultScreener: () => ({
+          mode: 'enforce',
+          withheld: false,
+          effectiveText: '   \n',
+          snapshot: makeSnapshot('released'),
+        }),
+      },
+    );
+
+    const message = result.toolResults[0] as ToolResultMessage;
+    expect(JSON.stringify(message.content)).not.toContain('aGk=');
+    expect(message.content).toEqual([
+      { type: 'text', text: expect.stringMatching(/non-text tool content was withheld/iu) },
+    ]);
+    expect(getToolResultIntakeScreening(message)).toMatchObject({
+      mode: 'enforce',
+      withheld: true,
+      snapshot: { state: 'released' },
+    });
+  });
+
   it('a screener failure fails the result closed — unscreened content never enters the turn', async () => {
     const telemetry = vi.fn();
     const result = await executeToolCallsWithScheduler(
@@ -1490,7 +1559,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
         maxParallelToolCalls: 1,
         onTelemetry: telemetry,
         toolResultScreener: () => {
-          throw new Error('scanner rules unavailable');
+          throw new Error('scanner rules unavailable: ERROR_MARKER');
         },
       },
     );
@@ -1498,6 +1567,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     expect(message.isError).toBe(true);
     expect(message.outcome).toBe('execution_failure');
     expect(JSON.stringify(message.content)).not.toContain('MARKER');
+    expect(JSON.stringify(message.content)).not.toContain('ERROR_MARKER');
     expect(JSON.stringify(message.content)).toContain('intake screening failed');
     expect(getToolResultIntakeScreening(message)).toBeUndefined();
     expect(telemetry).toHaveBeenCalledWith('agent.tools.intake.screen_failed', expect.objectContaining({

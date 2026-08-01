@@ -195,6 +195,38 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
       .toBe(schedulerScreened.snapshot.envelopeId);
   });
 
+  it('persists scheduler fail-closed suppression of admitted non-text content', () => {
+    const mgr = new SessionManager(store, makeConfig(dir));
+    const screening = makeScreening('enforce');
+    mgr.intakeScreening = screening;
+    const admittedTextScreening = screening.screenSync('', {
+      sourceClass: 'tool_output',
+      origin: { ref: 'tool:image:call-1', detail: 'seam:tool-scheduler' },
+      scope: 'context',
+    });
+    expect(admittedTextScreening.snapshot.state).toBe('released');
+
+    mgr.recordToolObservation('ch1', {
+      toolName: 'image',
+      content: 'Internal tool status: non-text tool content was withheld by intake screening.',
+      toolCallId: 'call-1',
+    }, undefined, {
+      precomputedToolIntakeScreening: {
+        mode: 'enforce',
+        withheld: true,
+        snapshot: admittedTextScreening.snapshot,
+      },
+    });
+
+    const entry = mgr.getRecentMessages('ch1', 10)[0]!;
+    const screeningMetadata = parseIntakeScreeningMetadata(entry.metadata);
+    expect(screeningMetadata).toMatchObject({
+      mode: 'enforce',
+      withheld: true,
+      envelopes: [{ state: 'released' }],
+    });
+  });
+
   it('no screening wired: recording behavior is byte-identical', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
 

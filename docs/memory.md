@@ -4,7 +4,13 @@ PSFN memory is not a single store. The runtime combines an append-only lived
 session archive, typed long-term memories, continuity artifacts, contact state,
 and a few small high-priority ledgers.
 
-Last updated: 2026-07-22.
+Last updated: 2026-07-31.
+
+Role vocabulary in this document follows the repository contract: the
+**Companion** is the subject, **Partner** is the relational human,
+**Operator** is authenticated administration/security/deployment, and
+**Participant** is used when a relationship is unresolved. `primary` remains
+only a technical trust/authority modifier in code and owner files.
 
 ## Layers That Exist Today
 
@@ -44,6 +50,12 @@ Last updated: 2026-07-22.
 - The storage contract stays async-safe at the port level so tests and repair utilities can exercise active adapters without leaking storage details into callers.
 - The supported memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
 - SQLite and sqlite-vec implementations, dependencies, and migration readers are removed. Tests use Postgres fixtures or focused port-backed fakes.
+
+The model-facing `memory` surface currently performs reversible Postgres soft
+deletion through `action=delete` and restoration through `action=restore`.
+`memory_delete` and `undo_memory_delete` are retired aliases, not separate
+callable surfaces. A pending deletion-proposal or validation workflow is not
+shipped and must not be assumed by callers or Operator documentation.
 
 ### Parallel memory/state artifacts
 

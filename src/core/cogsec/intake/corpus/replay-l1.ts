@@ -7,8 +7,10 @@
 // raised, 'pass' otherwise. L1 emits no decisions by design (triage, not a
 // boundary); the corpus verdict is about label coverage only.
 
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { IntakeRiskLabel } from '../../../../shared/contracts/intake-envelope.js';
+import { validateIntakePolicy } from '../../../../system/config/intake-policy-config.ts';
 import { createIntakeL1Scanner } from '../scanners/index.ts';
 import type { CorpusFixture, CorpusVerdict } from './corpus.ts';
 
@@ -19,6 +21,7 @@ export interface L1ReplayResult {
 
 const REPO_ROOT = process.cwd();
 const RULES_PATH = join(REPO_ROOT, 'config', 'intake-l1-rules.json');
+const POLICY_PATH = join(REPO_ROOT, 'config', 'intake-policy.seed.json');
 
 /**
  * Builds a replay function sharing one scanner instance (the rule file is
@@ -27,7 +30,14 @@ const RULES_PATH = join(REPO_ROOT, 'config', 'intake-l1-rules.json');
  * by definition.
  */
 export function createL1Replayer(): (fixture: CorpusFixture) => L1ReplayResult {
-  const scanner = createIntakeL1Scanner({ rulesPath: RULES_PATH });
+  const policy = validateIntakePolicy(
+    JSON.parse(readFileSync(POLICY_PATH, 'utf8')) as unknown,
+    POLICY_PATH,
+  );
+  const scanner = createIntakeL1Scanner({
+    rulesPath: RULES_PATH,
+    schemeActions: policy.urlScanner.schemeActions,
+  });
   return (fixture) => {
     const report = scanner.scan(fixture.payload, { scope: 'all' });
     const labels = [...report.riskLabels].sort();

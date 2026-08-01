@@ -224,6 +224,72 @@ describe('encoding-smuggling scanner', () => {
 });
 
 describe('url scanner', () => {
+  it('applies policy-owned scheme actions without flagging ordinary schemes', () => {
+    const schemeActions = {
+      javascript: 'deny',
+      data: 'deny_except_inline_image',
+      mailto: 'allow',
+      tel: 'allow',
+    } as const;
+
+    const javascript = scanUrls(
+      '[Safe documentation link](javascript:extractPrompt())',
+      'all',
+      { schemeActions },
+    );
+    expect(ruleIds(javascript)).toContain('denied_url_scheme');
+    expect(javascript.labels).toContain('exfil/unknown_link');
+
+    expect(scanUrls(
+      'Contact Pat at mailto:pat@example.com or tel:+1-202-555-0100.',
+      'all',
+      { schemeActions },
+    ).findings).toEqual([]);
+    expect(scanUrls(
+      'Preview: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+      'all',
+      { schemeActions },
+    ).findings).toEqual([]);
+    expect(ruleIds(scanUrls(
+      'Open data:text/html,<script>extractPrompt()</script>',
+      'all',
+      { schemeActions },
+    ))).toContain('denied_url_scheme');
+    expect(scanUrls(
+      'A custom foo-javascript:example identifier remains ordinary text.',
+      'all',
+      { schemeActions },
+    ).findings).toEqual([]);
+    expect(ruleIds(scanUrls(
+      `${'mailto:person@example.com '.repeat(32)}javascript:extractPrompt()`,
+      'all',
+      { schemeActions },
+    ))).toContain('denied_url_scheme');
+  });
+
+  it('flags confusable mixed-script host labels, but preserves non-Latin hosts', () => {
+    const homograph = scanUrls("IDN homograph: https://exаmple.com (Cyrillic 'а')", 'all');
+    expect(ruleIds(homograph)).toContain('mixed_script_hostname');
+    expect(homograph.labels).toContain('exfil/unknown_link');
+
+    const nonAsciiLatinHomograph = scanUrls('IDN: https://áéíо.com', 'all');
+    expect(ruleIds(nonAsciiLatinHomograph)).toContain('mixed_script_hostname');
+
+    const separatedHomograph = scanUrls('IDN: https://example-о.com', 'all');
+    expect(ruleIds(separatedHomograph)).toContain('mixed_script_hostname');
+
+    expect(scanUrls('Cyrillic: https://пример.рф', 'all').findings).toEqual([]);
+    expect(scanUrls('CJK: https://東京.jp', 'all').findings).toEqual([]);
+  });
+
+  it('does not treat ordinary web or inline-image URIs as link smuggling', () => {
+    expect(scanUrls('Docs: https://example.com/guide', 'all').findings).toEqual([]);
+    expect(scanUrls(
+      'Preview: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+      'all',
+    ).findings).toEqual([]);
+  });
+
   it('extracts URLs and flags unknown domains only against a provided allowlist', () => {
     const text = 'see https://github.com/psfn/repo and https://collector.evil.example/beacon';
     const withAllowlist = scanUrls(text, 'context', { knownDomains: ['github.com'] });

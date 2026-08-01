@@ -896,7 +896,10 @@ export function maybeCreateIntakeScreeningService(
   }
   return createIntakeScreeningService({
     policy: options.policy,
-    l1: createIntakeL1Scanner(options.l1Config ?? {}),
+    l1: createIntakeL1Scanner({
+      ...options.l1Config,
+      schemeActions: options.policy.urlScanner.schemeActions,
+    }),
     ...(options.injectionScorer ? { injectionScorer: options.injectionScorer } : {}),
     ...(options.quarantine ? { quarantine: options.quarantine } : {}),
     actor: options.actor,

@@ -728,6 +728,7 @@ async function main(): Promise<void> {
     createRepeatedScreeningFailureAlertHandler({
       notifier: gatewayOperatorNotifier,
       companionName: operatorAlertCompanionName,
+      failureThreshold: config.intakeScreeningFailureAlertThreshold,
     }),
   );
   const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({

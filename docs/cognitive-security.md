@@ -325,8 +325,13 @@ tier in `l3Screener.mandatoryTiers` — returns an `escalate_l3` outcome.
 The deep second/third pass for items L2 flags, or for tiers mandating deep
 screening. Same tool-less transport; its primary model is resolved through
 the canonical `reasoning` purpose (seed caps: 30 s timeout, 48 000 input
-chars, 1 200 output tokens). Optional dual-verdict mode (`dualModel`, default
-off) adds the canonical `background` purpose as a second independent verdict.
+chars, 1 200 output tokens). In the default single-verdict mode, the canonical
+reasoning candidates are followed by distinct background-purpose candidates:
+provider rejection, timeout, malformed JSON, or an anti-echo violation advances
+to the next model, and the item fails closed if every candidate fails. Startup
+rejects a single-candidate chain as an availability single point of failure.
+Optional dual-verdict mode (`dualModel`, default off) uses the canonical
+`background` purpose as a second independent verdict.
 Startup rejects dual mode when both purposes resolve to the same model. The
 aggregate flags if either flags (fail-closed aggregation), and both verdicts
 land on the envelope.
@@ -344,7 +349,8 @@ There is no per-tier fail-closed action for L3: an L3 failure always holds
 the item in quarantine in enforce mode. Each L3 failed-closed result also
 emits structural `intake.screening.fail_closed` telemetry with stage `l3` and
 the source class. The standard operator-alert handler raises a priority-5
-alert on the second runtime failure for the same stage/source-class pair.
+alert once that pair reaches the settings.json-owned
+`intakeScreeningFailureAlertThreshold` (seed 3), rather than once per item.
 
 ### Vision screening (L2.5/L3, wired — htm9.8)
 
@@ -940,8 +946,9 @@ contradictory source lists (same pattern trusted and denied) refuse to load.
 Defaults below are the seed values.
 
 Screener model identity is deliberately absent from this owner file. L2 uses
-the standard `background` purpose, L3 uses `reasoning` (plus `background` in
-dual mode), and vision uses `vision`. Existing owners carrying the retired
+the standard `background` purpose; single-verdict L3 uses the `reasoning`
+chain followed by distinct `background` fallbacks; dual L3 uses one model from
+each purpose; and vision uses `vision`. Existing owners carrying the retired
 `l2Screener.model`, `l3Screener.model`,
 `l3Screener.secondaryModel`, or `visionScreener.model` keys fail startup with
 an actionable remedy. Dry-run and apply the atomic cleanup with

@@ -268,6 +268,11 @@ export interface SubstrateConfig {
    * path (E5.5). Owned by settings.json.
    */
   memoryRefreshFailureAlertThreshold?: number;
+  /**
+   * Fail-closed intake screening events per stage/source class before one
+   * deduplicated operator alert is raised. Owned by settings.json.
+   */
+  intakeScreeningFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;

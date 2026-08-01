@@ -176,6 +176,7 @@ export interface EditableSettings {
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   memoryPresentationProfile?: MemoryPresentationProfile;
   memoryRefreshFailureAlertThreshold?: number;
+  intakeScreeningFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
@@ -347,6 +348,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalPolicy',
   'memoryPresentationProfile',
   'memoryRefreshFailureAlertThreshold',
+  'intakeScreeningFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
   'profileSynthesisEnabled',

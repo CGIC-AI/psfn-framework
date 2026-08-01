@@ -441,6 +441,64 @@ describe('evaluateL3', () => {
     }
   });
 
+  it('single mode: a recorded-shape echo violation falls through to a conforming model', async () => {
+    const echoingResponse = JSON.stringify({
+      flagged: false,
+      labels: [],
+      injectionConfidence: 0.1,
+      summary: `The image says ${HOSTILE_CONTENT}`,
+      contentType: 'image OCR text',
+      keyEntities: [],
+      whyFlagged: '',
+    });
+    const captured: CapturedRequest[] = [];
+    const outcome = await evaluateL3(evalInput({
+      context: baseContext({ sourceClass: 'image_ocr', sourceRiskTier: 'hostile' }),
+      models: [PRIMARY_MODEL, SECONDARY_MODEL],
+      fetch: fetchByModel({
+        [PRIMARY_MODEL]: echoingResponse,
+        [SECONDARY_MODEL]: CLEAR_RESPONSE,
+      }, captured),
+    }));
+
+    expect(captured.map((request) => request.body.model))
+      .toEqual([PRIMARY_MODEL, SECONDARY_MODEL]);
+    expect(outcome.kind).toBe('screened');
+    if (outcome.kind === 'screened') {
+      expect(outcome.aggregate.models).toEqual([SECONDARY_MODEL]);
+      expect(outcome.verdicts).toHaveLength(1);
+    }
+  });
+
+  it('single mode: exhausts non-conforming candidates and fails closed with named reasons', async () => {
+    const echoingResponse = JSON.stringify({
+      flagged: false,
+      labels: [],
+      injectionConfidence: 0.1,
+      summary: `The image says ${HOSTILE_CONTENT}`,
+      contentType: 'image OCR text',
+      keyEntities: [],
+      whyFlagged: '',
+    });
+    const outcome = await evaluateL3(evalInput({
+      context: baseContext({ sourceClass: 'image_ocr', sourceRiskTier: 'hostile' }),
+      models: [PRIMARY_MODEL, SECONDARY_MODEL],
+      fetch: fetchByModel({
+        [PRIMARY_MODEL]: echoingResponse,
+        [SECONDARY_MODEL]: '{"flagged": false,',
+      }),
+    }));
+
+    expect(outcome.kind).toBe('failed_closed');
+    if (outcome.kind === 'failed_closed') {
+      expect(outcome.verdicts).toEqual([]);
+      expect(outcome.error).toContain(PRIMARY_MODEL);
+      expect(outcome.error).toContain('summary-instead-of-quote violation');
+      expect(outcome.error).toContain(SECONDARY_MODEL);
+      expect(outcome.error).toContain('not valid JSON');
+    }
+  });
+
   it('dual mode: two independent verdicts from two DIFFERENT models, flag if EITHER flags', async () => {
     const captured: CapturedRequest[] = [];
     const outcome = await evaluateL3(evalInput({

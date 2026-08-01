@@ -9614,6 +9614,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.intakeScreeningFailureAlertThreshold",
+      "value": "{ sectionId: 'trust', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for the settings.json-owned intake screening failure threshold; this literal exposes the owned field in Garden and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.memoryDeletionPolicy",
       "value": "{ sectionId: 'memory', surface: 'advanced' }",
       "form": "object-member",
@@ -10534,6 +10541,12 @@
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_IMAGE_FAL_TIMEOUT_MS",
       "value": "300_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD",
+      "value": "3",
+      "note": "Bootstrap compatibility default matching config/settings.seed.json; hydrated settings.json remains runtime authority for the intake screening failure alert threshold."
     },
     {
       "file": "src/system/config/load-config.ts",
@@ -11784,6 +11797,13 @@
       "value": "{ min: 10_000, max: 3_600_000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.imageFalTimeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.intakeScreeningFailureAlertThreshold",
+      "value": "{ min: 1, max: 100 }",
+      "form": "object-member",
+      "note": "Canonical validation bounds for the settings.json-owned intake screening failure alert threshold; this metadata constrains Garden edits and is not runtime policy."
     },
     {
       "file": "src/system/settings/form.ts",

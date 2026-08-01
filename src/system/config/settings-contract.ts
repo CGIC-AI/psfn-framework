@@ -286,6 +286,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'compactionEmotionalSalienceThresholdPct',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
+  'intakeScreeningFailureAlertThreshold',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
   'profileSynthesisMinWrites',

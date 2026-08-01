@@ -6,16 +6,20 @@ import type { RoutingCandidate } from '../../../primitives/llm/routing.js';
 export interface IntakeScreenerModelSelection {
   /** L2 fast classifier: canonical background lane. */
   l2: string;
-  /** L3 primary reasoning lane, optionally followed by background in dual mode. */
+  /**
+   * L3 models. In single-verdict mode this is an ordered failover chain
+   * (reasoning first, then background). In dual-verdict mode it contains the
+   * two distinct models that must both return a conforming verdict.
+   */
   l3: string[];
   /** Vision lane; absent only when vision screening is explicitly disabled. */
   vision?: string;
 }
 
-function resolvePurposeCandidate(
+function resolvePurposeCandidates(
   config: SubstrateConfig,
   purpose: CanonicalModelPurpose,
-): RoutingCandidate {
+): RoutingCandidate[] {
   // Let the canonical resolver apply its own single- versus multi-companion
   // selection semantics. In particular, a fleet gateway must not reinterpret
   // one hydrated companion overlay as a global slot hint.
@@ -27,15 +31,22 @@ function resolvePurposeCandidate(
       + `modelPurposeSelection.${purpose} to an enabled models.json slot.`,
     );
   }
-  const candidate = candidates[0]!;
-  if (candidate.provider !== 'openrouter') {
+  const selectedCandidate = candidates[0]!;
+  if (selectedCandidate.provider !== 'openrouter') {
     throw new Error(
-      `Intake screener purpose "${purpose}" resolved to ${candidate.provider}/${candidate.model}, `
+      `Intake screener purpose "${purpose}" resolved to `
+      + `${selectedCandidate.provider}/${selectedCandidate.model}, `
       + 'but the isolated tool-less screener transport requires an OpenRouter-routed model. '
       + `Select an OpenRouter models.json slot for ${purpose}.`,
     );
   }
-  return candidate;
+  // A later non-OpenRouter candidate cannot be used by this transport, but it
+  // must not erase usable OpenRouter fallbacks declared for the same purpose.
+  return candidates.filter((candidate) => candidate.provider === 'openrouter');
+}
+
+function distinctModels(candidates: readonly RoutingCandidate[]): string[] {
+  return [...new Set(candidates.map((candidate) => candidate.model))];
 }
 
 /**
@@ -52,23 +63,42 @@ export function resolveIntakeScreenerModels(
     visionEnabled: boolean;
   },
 ): IntakeScreenerModelSelection {
-  const background = resolvePurposeCandidate(config, 'background');
-  const reasoning = resolvePurposeCandidate(config, 'reasoning');
-  const l3 = options.l3DualModel
-    ? [reasoning.model, background.model]
-    : [reasoning.model];
-  if (options.l3DualModel && l3[0] === l3[1]) {
-    throw new Error(
-      'Intake L3 dual-model mode requires the reasoning and background purposes '
-      + `to resolve to different models; both resolved to "${l3[0]}". `
-      + 'Choose different models.json slots or disable l3Screener.dualModel.',
-    );
+  const background = resolvePurposeCandidates(config, 'background');
+  const reasoning = resolvePurposeCandidates(config, 'reasoning');
+  const reasoningModels = distinctModels(reasoning);
+  const backgroundModels = distinctModels(background);
+  let l3: string[];
+  if (options.l3DualModel) {
+    const primary = reasoningModels[0]!;
+    const secondary = backgroundModels.find((model) => model !== primary);
+    if (!secondary) {
+      throw new Error(
+        'Intake L3 dual-model mode requires the reasoning and background purposes '
+        + `to resolve to different models; both resolved only to "${primary}". `
+        + 'Choose different models.json slots or disable l3Screener.dualModel.',
+      );
+    }
+    l3 = [primary, secondary];
+  } else {
+    // A schema-valid registry declaration is not proof that a provider will
+    // accept the slug or that the model will satisfy the strict L3 contract.
+    // Preserve the canonical routing chains so one provider/model failure does
+    // not quarantine every mandatory-L3 item. evaluateL3 tries these in order.
+    l3 = [...new Set([...reasoningModels, ...backgroundModels])];
+    if (l3.length < 2) {
+      throw new Error(
+        'Intake L3 single-verdict mode requires at least two distinct '
+        + 'OpenRouter models across the reasoning and background purpose chains; '
+        + `resolved only to "${l3[0] ?? '(none)'}". A single screener model is a `
+        + 'fail-closed availability single point of failure.',
+      );
+    }
   }
 
   if (!options.visionEnabled) {
-    return { l2: background.model, l3 };
+    return { l2: background[0]!.model, l3 };
   }
-  const vision = resolvePurposeCandidate(config, 'vision');
+  const vision = resolvePurposeCandidates(config, 'vision')[0]!;
   if (vision.supportsVision !== true) {
     throw new Error(
       `Intake vision purpose resolved to "${vision.model}" without explicit `
@@ -76,5 +106,5 @@ export function resolveIntakeScreenerModels(
       + 'models.json slot for the vision purpose.',
     );
   }
-  return { l2: background.model, l3, vision: vision.model };
+  return { l2: background[0]!.model, l3, vision: vision.model };
 }

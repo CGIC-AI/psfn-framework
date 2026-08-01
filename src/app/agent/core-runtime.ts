@@ -443,6 +443,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     createRepeatedScreeningFailureAlertHandler({
       notifier: operatorNotifier,
       companionName: card.data.name,
+      failureThreshold: config.intakeScreeningFailureAlertThreshold,
     }),
   );
   // Build the optional diagnostic reader during startup so its migration is

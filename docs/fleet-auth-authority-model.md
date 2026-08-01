@@ -92,9 +92,9 @@ quarantine.
 Hand-seeding therefore creates fragile, unsupported state and is a dead end for
 operations. It must not be documented or automated as a bootstrap procedure.
 
-## Sanctioned administrator path
+## Sanctioned Operator path
 
-The sanctioned single-operator bootstrap and recovery path is the
+The sanctioned Operator bootstrap and recovery path is the
 `accountRoster` in `fleet-auth.json` (tracked by bead `kf7e`). A roster entry
 binds an exact provider subject and companion UUID to an allowed role, for
 example:
@@ -108,7 +108,7 @@ example:
 }
 ```
 
-An exact roster match is configuration-owned administrator authority. It
+An exact roster match is configuration-owned Operator authority. It
 bypasses database principal activation and the nested child-authority
 generation/version chain. Non-roster subjects remain fail-closed. The roster must be validated
 strictly and must never use display names or partial identifiers as fallback
@@ -140,17 +140,17 @@ across surfaces — it never gates the operator from their own information.
 Deployment access mode is derived from the roster, per companion
 (`resolveFleetAccessMode`):
 
-- **Sole admin** (exactly one rostered human): nothing is subject-gated. The
-  admin sees all settings, sessions, contacts, and memories, including
+- **Sole Operator** (exactly one rostered human): nothing is subject-gated. The
+  Operator sees all settings, sessions, contacts, and memories, including
   companion-private and multi-contact classes. The only barriers that remain
   are the audited high-intimacy body escalation and the companion-privacy
   break-glass consent boundary.
-- **Multi admin** (zero or two-plus rostered humans): every admin sees
+- **Multiple Operators** (zero or two-plus rostered humans): every Operator sees
   everything EXCEPT sensitive/intimate memories derived from OTHER humans'
-  chats with the companion. Group-chat memories stay visible to admins.
-  Other-humans' sensitive memories open only through an audited escalation.
+  chats with the companion. Group-chat memories stay visible to Operators.
+  Other humans' sensitive memories open only through an audited escalation.
 
-Escalation is an audited SSO action, not a ceremony: the authenticated admin
+Escalation is an audited SSO action, not a ceremony: the authenticated Operator
 states a reason (`POST /v1/fleet-auth/escalation/grant`), a single-use grant
 with a bounded TTL (`ttls.escalationGrantMs`) is recorded in
 `fleet_auth.escalation_grants` together with an `escalation.grant.issue` audit

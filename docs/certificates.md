@@ -119,7 +119,7 @@ Keys written this way get mode 0600; everything is written atomically.
    STATE=./data/cert-manager        # your resolved state dir
    curl -sS -H "Authorization: Bearer $CERT_MANAGER_TOKEN" \
      -X POST http://127.0.0.1:10070/v1/certs/server \
-     -d '{"identityId":"gateway","sans":["gateway.internal","10.0.0.5"],"manage":true}' \
+     -d '{"identityId":"gateway","sans":["gateway.example.test","192.0.2.5"],"manage":true}' \
      | jq '{serialNumber, notAfter, outputs}'
    ```
 
@@ -159,7 +159,7 @@ Keys written this way get mode 0600; everything is written atomically.
    # mTLS handshake + satellite bearer key:
    curl --cacert psfn-ca.crt --cert satellite.crt --key satellite.key \
      -H "Authorization: Bearer <that-satellites-API_SATELLITE_KEYS-entry>" \
-     https://gateway.internal:10053/v1/satellites/config
+     https://gateway.example.test:10053/v1/satellites/config
 
    # Negative check: without --cert/--key the satellite endpoints must refuse
    # the request (the TLS handshake succeeds — the listener requests but does
@@ -224,8 +224,13 @@ There is **no CRL/OCSP in v1**. Plan around it:
 
 ### systemd
 
+This is a generic standalone-host example, not the live k3s authority for this
+repository. Keep the rendered unit and env file in the deployed repository and
+use `/etc/systemd/system` only for the required symlink; do not create a second
+authoritative configuration tree.
+
 ```ini
-# /etc/systemd/system/psfn-cert-manager.service
+# /opt/psfn/deployment/systemd/psfn-cert-manager.service
 [Unit]
 Description=PSFN cert-manager sidecar (private CA)
 After=network-online.target
@@ -234,7 +239,7 @@ Before=psfn-gateway.service
 [Service]
 WorkingDirectory=/opt/psfn
 Environment=CERT_MANAGER_STATE_DIR=/opt/psfn/data/cert-manager
-EnvironmentFile=/etc/psfn/cert-manager.env   # CERT_MANAGER_TOKEN=..., mode 0600
+EnvironmentFile=/opt/psfn/deployment/systemd/cert-manager.env
 ExecStart=/usr/bin/node /opt/psfn/dist/cert-manager-main.js serve
 Restart=on-failure
 User=psfn

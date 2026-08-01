@@ -223,7 +223,7 @@ helm upgrade psfn deploy/helm/psfn \
   -f <live-base-values>.yaml \
   -f deploy/helm/psfn/overlays/pi-satellite-hub.local.values.yaml \
   --set satelliteHub.image.tag=0.1.0-kube-<sha12> \
-  --set-string satelliteHub.image.digest=<sha256:... from ctr images ls> \
+  --set-string satelliteHub.image.digest= \
   --set-string secrets.values.satelliteHubApiKey="$HUB_KEY"
 
 kubectl -n psfn rollout status deploy/psfn-satellite-hub

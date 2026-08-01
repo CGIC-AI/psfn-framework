@@ -81,7 +81,7 @@ src/
 ### Affect, self-model, and background work
 
 - emotion state, active concerns, self-model snapshots, metacognitive flags, background continuation, and shard lifecycle management are first-class runtime surfaces
-- key files: `src/core/emotion/`, `src/core/intention/`, `src/core/self-model/`, `src/core/agent/post-turn-action-runtime.ts`, `src/core/scheduler/heartbeat-post-turn-runtime.ts`, `src/faculties/shards/manager.ts`
+- key files: `src/core/emotion/`, `src/core/intention/`, `src/core/self-model/`, `src/core/agent/post-turn-action-runtime.ts`, `src/core/scheduler/post-turn-runtime.ts`, `src/core/scheduler/post-turn-runtime/`, `src/faculties/shards/manager.ts`
 - the disabled-by-default, non-authoritative observer-eval sidecar (`src/core/eval/observer-sidecar/`) shadows live emotion state against the `emo_sim` engine for eval telemetry only — see [`docs/observer-eval-sidecar.md`](./docs/observer-eval-sidecar.md)
 
 ### Cognitive security (intake firewall)
@@ -106,7 +106,7 @@ Do not rely on hardcoded tool counts in docs. The live set is wired across runti
 
 Tool surface split:
 
-- direct agent tools are registered as `core` or `extended` and participate in activation, promotion, and adaptive-tool telemetry (`src/core/agent/tool-surface/registry.ts`)
+- direct agent tools are registered as `core` or `extended` in the canonical callable catalog; `tool_search` hydrates long-tail documentation, `toolset` manages ordering preferences, and adaptive-tool telemetry records use (`src/core/agent/tool-surface/registry.ts`)
 - REPL-only helpers exist only inside `analysis_workbench` sandbox execution and are not direct tool-catalog entries
 - shared names can appear in both places, so docs and Garden should call out whether a tool is direct, REPL-only, or both
 

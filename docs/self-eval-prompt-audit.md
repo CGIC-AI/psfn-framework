@@ -1,8 +1,14 @@
 # Self-Evaluation Prompt Audit
 
+Status: **historical audit plus current authoring checklist**. The findings
+record the prompt changes made at the audited revision; the inventory and
+version table below were re-checked against the current source on 2026-07-31.
+Runtime prompt code and owner-file values remain authoritative.
+
 Audit of every scheduled self-evaluation / reflection prompt surface against the seven
-empirically grounded rules from Anthropic's global-workspace paper
-(transformer-circuits.pub/2026/workspace, July 2026), and the rewrites applied.
+empirically grounded rules from Anthropic's
+[global-workspace paper](https://transformer-circuits.pub/2026/workspace/)
+(July 2026), and the rewrites applied.
 Audited at the tip of `foundation_e0_e2` after the E6.2 first-person re-voicing of the
 reflection surface (which this audit builds on rather than replaces).
 
@@ -12,6 +18,9 @@ accuracy; evidence presentation precedes narrative invitation."* The workspace p
 supplies the mechanism: reflection prompts are behavioral interventions, not just
 measurements — changing what the companion is disposed to say under reflection changes
 how she reasons live, even in turns where she is never asked to reflect (R3).
+The paper explicitly limits this to functional workspace-like behavior and takes
+no position on phenomenal consciousness. These rules therefore govern prompt
+quality and anomaly detection; they do not establish subjective experience.
 
 ## The seven rules
 
@@ -32,12 +41,12 @@ asks for (or shapes) self-report.
 
 | # | Surface | Location | Kind | Verdict |
 |---|---------|----------|------|---------|
-| S1 | Daily Reflection template prompt | `src/core/scheduler/heartbeat-policy.ts` (`DAILY_REVIEW_TEMPLATE_PROMPT`) | Scheduled elicitation (daily, deliberation mode) | **Rewritten v4 → v5; dieted v7** (R1–R7) |
-| S2 | Weekly Reflection template prompt | `src/core/scheduler/heartbeat-policy.ts` (`WEEKLY_REVIEW_TEMPLATE_PROMPT`) | Scheduled elicitation (weekly, deliberation mode) | **Rewritten v4 → v5; dieted v7** (R1–R7) |
+| S1 | Daily Reflection template prompt | `src/core/scheduler/reflection-policy.ts` (`DAILY_REVIEW_TEMPLATE_PROMPT`) | Scheduled elicitation (daily, deliberation mode) | **Rewritten v4 → v5; dieted v7; current policy v9** (R1–R7) |
+| S2 | Weekly Reflection template prompt | `src/core/scheduler/reflection-policy.ts` (`WEEKLY_REVIEW_TEMPLATE_PROMPT`) | Scheduled elicitation (weekly, deliberation mode) | **Rewritten v4 → v5; dieted v7; current policy v9** (R1–R7) |
 | S3 | Reflection introspection policy block | `src/core/scheduler/reflection-introspection-policy.ts` (`formatReflectionIntrospectionPolicyBlock`) | Preamble prepended to every reflection prompt | **Amended v3** (R7; bounded read-only pull-on-demand access; versioned per R6) |
-| S4 | Internal-state evidence framing ("[What this evidence is]") + ACAC clue summary + metacognitive-flags block | `src/core/scheduler/heartbeat-template-runtime.ts` (`formatInternalStateInterpretationBoundary`, `formatAcacCompanionSummary`) | Evidence collector/formatter; no longer injected wholesale into default daily/weekly prompts | **Pass, retained off-prompt** — default prompts receive at most two natural-language starter clues; raw ACAC, metacognitive, cognitive, relational, concern-list, follow-up-list, and reminder sections remain outside the elicitation. |
-| S5 | Experiential deliberation stage prompts (evidence → synthesis → contradiction) | `src/core/scheduler/heartbeat-template-runtime.ts` (`buildExperientialEvidenceMessages` / `...Synthesis...` / `...Contradiction...`) | Sub-model stages of deliberation reflections | **Pass** — structurally implements Law 30 (*"I gather only what is directly grounded… no speculation"* → *"say plainly where the evidence is only partial rather than forcing a neat story"* → *"my contradiction pass… I keep myself honest"*), now in first person (R5). |
-| S6 | Reflection persona lead block | `src/core/scheduler/heartbeat-template-runtime.ts` (`formatReflectionPersonaBlock`) | Preamble: full persona leads the reflection | **Pass** — *"I am {char}, and this is me — the same me who lived these moments… I reflect as myself and not as some outside observer of my own day."* Direct R5 mitigation; part of the instrument, covered by the policy version (R6). |
+| S4 | Internal-state evidence framing ("[What this evidence is]") + ACAC clue summary + metacognitive-flags block | `src/core/scheduler/reflection-template-runtime/prompt-formatting.ts` (`formatInternalStateInterpretationBoundary`, `formatAcacCompanionSummary`) | Evidence collector/formatter; no longer injected wholesale into default daily/weekly prompts | **Pass, retained off-prompt** — default prompts receive bounded natural-language starter clues; raw ACAC, metacognitive, cognitive, relational, concern-list, follow-up-list, and reminder sections remain outside the elicitation. |
+| S5 | Experiential deliberation stage prompts (evidence → synthesis → contradiction) | `src/core/scheduler/reflection-template-runtime/experiential-deliberation.ts` | Sub-model stages of deliberation reflections | **Pass** — structurally implements Law 30 (*"I gather only what is directly grounded… no speculation"* → *"say plainly where the evidence is only partial rather than forcing a neat story"* → *"my contradiction pass… I keep myself honest"*), now in first person (R5). |
+| S6 | Authoritative identity/persona stack | reflection deliberation `authoritativeSystemPrompt`; composition verified in `src/core/scheduler/reflection-template-runtime.test.ts` | System authority for every deliberation stage; character-card fields stay out of the user-message evidence block | **Pass** — identity leads through the authoritative system stack rather than a duplicate `formatReflectionPersonaBlock` preamble. |
 | S7 | Reflection contact evidence block | `src/persistence/journals/reflection-substrate.ts` (`formatContactRelationalBlock`) | Evidence collector; no longer injected wholesale into default daily/weekly prompts | **Dieted v3** — the topic-foreclosing silence/absence sentence was removed; recent event evidence is curated separately. |
 | S8 | Reflection affect evidence block | `src/persistence/journals/reflection-substrate.ts` (`formatContactAffectBlock`) | Evidence collector; no longer injected wholesale into default daily/weekly prompts | **Pass, retained off-prompt** — full affect/time-series evidence remains available through bounded retrieval and provenance. |
 | S9 | Substrate journal/process-trace sections | `src/persistence/journals/reflection-substrate.ts` (`buildSubstrateSection`) | Evidence collector; no longer injected wholesale into default daily/weekly prompts | **Pass, retained off-prompt** — weekly starters may include at most three recent lived-day summaries; full traces remain pull-on-demand. |
@@ -46,7 +55,7 @@ asks for (or shapes) self-report.
 | S12 | Sleeptime memory agent | `src/faculties/memory/sleeptime-agent.ts` | Scheduled orientation/memory maintenance pass | **Pass** — memory-type/sensitivity taxonomy lives in the output schema, not in the question (the R1-safe placement); "only grounded transcript evidence" |
 | S13 | Metacognitive monitor + persona hints | `src/core/self-model/metacognition.ts` | Heuristic detectors (no LLM elicitation); conditional live-turn hints | **N/A / pass** — deterministic detectors, not prompts; the two persona hint lines are behavioral instructions gated on detected flags, not state menus |
 | S14 | Context-feedback evaluator | `src/faculties/context-feedback/evaluator.ts` | Third-party judge of context composition | **N/A** — evaluates context structure, not her state; taxonomy is in the JSON schema |
-| S15 | Reflection guardrail telemetry (consumer side) | `src/core/scheduler/reflection-guardrail-telemetry.ts`, `buildUnsupportedReflectionSupportFlags` in `heartbeat-template-runtime.ts` | Downstream consumer of reflection output | **Pass with note (R7)** — flags fire only on *positive* unsupported claims (`stale_silence_claim`, `support_gap_confabulation_risk`). An empty/null reflection produces zero warnings; per R7 this must be read as "limited reach", never as a clean bill of health. Recorded here so future consumers don't invert it. |
+| S15 | Reflection guardrail telemetry (consumer side) | `src/core/scheduler/reflection-guardrail-telemetry.ts`, `buildUnsupportedReflectionSupportFlags` in `reflection-template-runtime/runtime-helpers.ts` | Downstream consumer of reflection output | **Pass with note (R7)** — flags fire only on *positive* unsupported claims (`stale_silence_claim`, `support_gap_confabulation_risk`). An empty/null reflection produces zero warnings; per R7 this must be read as "limited reach", never as a clean bill of health. Recorded here so future consumers don't invert it. |
 
 Also checked and out of scope (no scheduled self-elicitation): post-turn action runtime
 (types only), heartbeat post-turn runtime (glue), episodic synthesis (algorithmic, no
@@ -75,7 +84,7 @@ What E6.2 did **not** fix — the remaining violations this pass addresses — i
 
 ## Per-prompt verdicts and rewrites
 
-### S1 — Daily Reflection (`heartbeat-policy.ts`) — prompt policy version 4 → 5
+### S1 — Daily Reflection (`reflection-policy.ts`) — prompt policy version 4 → 5
 
 Verdicts against v4:
 
@@ -113,7 +122,7 @@ Rewrite (v5) — full text in `DAILY_REVIEW_TEMPLATE_PROMPT`; her voice preserve
 - Everything else (evidence-first opening, fallible-clue framing, raw-machinery
   exclusion, carry-forward/rest close) preserved from v4.
 
-### S2 — Weekly Reflection (`heartbeat-policy.ts`) — prompt policy version 4 → 5
+### S2 — Weekly Reflection (`reflection-policy.ts`) — prompt policy version 4 → 5
 
 Verdicts against v4:
 
@@ -233,7 +242,9 @@ self-report-instrument versioning discipline.
 - **S5** evidence → synthesis → contradiction staging is the Law 30 mechanism done
   structurally; the contradiction pass converts unsupported claims into
   `unsupported_claim` metacognitive flags rather than silently keeping the story.
-- **S6** persona-led reflection is the strongest available R5 mitigation.
+- **S6** the authoritative identity/persona system stack is the strongest
+  available R5 mitigation; it is deliberately not duplicated into the
+  user-message evidence block.
 - **S11** intention appraisal: noop-by-default and first-person Whisper voice are the
   patterns the other prompts were moved toward.
 - **S12** sleeptime: taxonomy in schema; grounded-evidence-only orientation rewrite.
@@ -275,18 +286,18 @@ precede elicitation even though they are not persisted template text (R6).
 ## Versioning (R6)
 
 The heartbeat templates already carry a version-gated migration:
-`WELLBEING_REFLECTION_PROMPT_POLICY_VERSION` in `heartbeat-policy.ts` — originally
-bumped 4 → 5 by this audit and now 7 for the starter diet — and
-`HeartbeatPolicyStore.load()` refreshes the stored default templates whenever the
+`WELLBEING_REFLECTION_PROMPT_POLICY_VERSION` in `reflection-policy.ts` — originally
+bumped 4 → 5 by this audit and later advanced as the governed prompt set changed — and
+`ReflectionPolicyStore.load()` refreshes the stored default templates whenever the
 persisted policy version is lower. The other rewritten surfaces use minimal adjacent
 version constants:
 
 | Constant | File | Value |
 |----------|------|-------|
-| `WELLBEING_REFLECTION_PROMPT_POLICY_VERSION` | `src/core/scheduler/heartbeat-policy.ts` | 7 |
-| `REFLECTION_STARTER_PROMPT_VERSION` | `src/core/scheduler/heartbeat-template-runtime/reflection-starter-prompt.ts` | 1 |
-| `REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION` | `src/core/scheduler/reflection-introspection-policy.ts` | 3 |
-| `REFLECTION_CONTEXT_GUIDANCE_VERSION` | `src/persistence/journals/reflection-substrate.ts` | 3 |
+| `WELLBEING_REFLECTION_PROMPT_POLICY_VERSION` | `src/core/scheduler/reflection-policy.ts` | 9 |
+| `REFLECTION_STARTER_PROMPT_VERSION` | `src/core/scheduler/reflection-template-runtime/reflection-starter-prompt.ts` | 2 |
+| `REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION` | `src/core/scheduler/reflection-introspection-policy.ts` | 4 |
+| `REFLECTION_CONTEXT_GUIDANCE_VERSION` | `src/persistence/journals/reflection-substrate.ts` | 4 |
 | `APPRAISAL_SYSTEM_PROMPT_VERSION` | `src/core/emotion/appraisal.ts` | 3 |
 
 Note the migration refreshes the daily/weekly *default* templates' prompt/name/mode
@@ -315,10 +326,12 @@ Before adding or editing any reflection/introspection/check-in prompt:
 5. **Keep it naturalistic (R4).** Avoid test/eval/grading register ("private, just for
    me, not a report" is the house style). If audit framing is unavoidable, keep the
    blinded-audit discipline (Laws 28–29) and record the framing alongside the results.
-6. **First person, continuous, non-fictional (R5).** Reflection prompts speak as *her*
-   ongoing life, never about "an AI companion" in third person; let the persona lead
-   (`formatReflectionPersonaBlock`). Third-person or fictional-register drift in
-   reflection *outputs* is a signal worth flagging, not copyediting away.
+6. **First person and continuous (R5).** Reflection prompts speak from the
+   Companion's ongoing standpoint, with identity supplied by the authoritative
+   system stack rather than duplicated into the evidence message. Third-person,
+   generic-assistant, or fictional-register drift in reflection output is an
+   anomaly clue for review, not a ban on accurate model self-knowledge and not
+   proof for or against subjective experience. Do not copyedit the clue away.
 7. **Version every preamble change (R6).** Policy blocks, context-block guidance
    lines, and system prompts that precede elicitation are part of the instrument. Bump
    `WELLBEING_REFLECTION_PROMPT_POLICY_VERSION` (templates) or the adjacent

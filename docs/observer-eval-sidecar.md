@@ -7,6 +7,9 @@ into an `emo_sim` appraisal stimulus, runs it against a long-lived `emo_sim`
 server, crosswalks the two emotion representations, computes divergence metrics,
 and writes the result to eval-owned Postgres tables that only the Garden admin
 surface reads. Nothing it produces feeds back into the live companion loop.
+Its disagreements and trajectories are evaluation clues about two modelled
+representations, not ground truth about the Companion's felt state and not
+proof of subjective experience.
 
 This page is the map: what it is, the `authoritative: false` boundary, the
 config knobs, the export API, where to find it in Garden, and the experiment

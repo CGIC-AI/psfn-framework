@@ -1,6 +1,6 @@
 # Cognitive Security: The Cognition Intake Firewall
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-31.
 
 This document covers the cognition intake firewall (the htm9 epic): the
 threat model, the envelope/taint contract, the screening layers, the sink
@@ -17,8 +17,10 @@ firewall is the pre-hoc half of that same system.
 Design brief and prior-art survey:
 `working_docs/COGSEC_INTAKE_FIREWALL_RESEARCH_20260709.md`.
 
-> **Wiring status note (2026-07-09).** Everything described here is wired to
-> runtime entrypoints. L2/L3 escalation runs **gateway-side only**, through the
+> **Wiring status note (verified against the repository 2026-07-31).** The
+> current-behavior sections are wired to runtime entrypoints; future work and
+> residual seams are called out explicitly below. L2/L3 escalation runs
+> **gateway-side only**, through the
 > `IntakeEscalationPort` composed in
 > `src/boundary/gateway/intake/compose-screening.ts`; the agent process holds no
 > escalation port and stays L1-only by construction. When no OpenRouter backend
@@ -137,6 +139,12 @@ Fifteen closed source classes (`INTAKE_SOURCE_CLASSES`): `operator`,
 of four ordered risk tiers (`trusted < standard < untrusted < hostile`).
 The mapping is required for every class with no implicit defaults, so a new
 surface that is not mapped fails startup instead of silently trusting.
+
+These are technical source-class identifiers, not product-role vocabulary.
+`primary_user` means a contact carrying the `primary` trust modifier; it does
+not rename the relational **Partner** or the authenticated administrative
+**Operator**. When the relationship is unresolved, use **Participant**. The
+**Companion** remains the subject of the system.
 
 ### Risk labels
 
@@ -545,7 +553,7 @@ attached — `src/core/identity/prompt-tools.ts`, `src/faculties/wiki/tools.ts`,
 `src/core/contacts/tools.ts`). Consequently, under `deny` an **enforce-mode**
 self-authored persona/wiki/trust write is **held** (soft htm9.12 notice), not
 screen-then-allowed the way `skill_write` is. This is fail-closed and inert
-while the firewall runs in `shadow` (the current live mode), but before
+while the firewall runs in `shadow` (the repository seed default), but before
 enabling `enforce` an operator/dev must either (a) wire those call sites to
 attach the active-turn envelopes + screen the proposed content (mirror
 `screenSkillWrite`) so legitimate self-authored writes carry an envelope and
@@ -563,7 +571,8 @@ not visible from the repo).** On the live system:
    `trust_mutation` at `allow`, flip them to `deny` (the schema now rejects
    `allow` for the first three at load, so an un-migrated owner will fail
    startup — a fail-closed prompt to fix it, not a silent pass).
-3. Confirm `mode`. While `shadow`, none of this changes behavior. Before
+3. Confirm the deployed `mode`; repository seed configuration is not evidence
+   of live posture. While `shadow`, none of this changes behavior. Before
    flipping to `enforce`, resolve the wiring caveat above.
 4. Enforce-mode behavior check (once wired): drive an unscreened write at each
    `deny` sink (a persona/identity mutation, a wiki write, a `set_trust`) and
@@ -747,7 +756,7 @@ and enable switch) clusters recent memory writes by embedding proximity and
 gates on rumination-vs-healthy-recurrence discriminators: very high mutual
 similarity (near-duplicates carry no new information per write), write
 velocity above the topic's own baseline, a minimum self-sourced share
-(rumination is self-generated; a topic the human raises daily arrives as
+(rumination is self-generated; a topic the Partner raises daily arrives as
 turn-sourced writes), lexical tie to one active concern, and deterministic
 stress-attribution evidence over the cluster's creation window. The card
 **proposes** consolidation of the stack.
@@ -869,8 +878,8 @@ rules in `src/core/cogsec/intake-firewall-notice-templates.ts`:
   not part of our conversation, and there is nothing you need to do about
   it."
 - **Non-coercive and anti-social-engineering.** Templates never contain an
-  imperative directed at the human ("ask", "tell", "release", "button") and
-  never tell the companion to make the human do anything — a quarantined
+  imperative directed at the Partner/Operator ("ask", "tell", "release",
+  "button") and never tell the Companion to make either person do anything — a quarantined
   payload must not be able to lobby for its own release through the
   companion.
 - **Enforced at module load, fail closed.** `assertIntakeFirewallNoticeWording`
@@ -1180,7 +1189,8 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   empty envelope list, so — unlike `skill_write`, which screens its proposed
   content and attaches active-turn envelopes — a *legitimate* self-authored
   persona/wiki/trust write is also held rather than screened-and-passed. Inert
-  in `shadow` (current live mode); before enabling `enforce`, wire those call
+  in `shadow` (the seed default; verify the deployed owner file before making
+  any live-mode claim); before enabling `enforce`, wire those call
   sites (mirror `screenSkillWrite`) or accept the held-for-review posture. See
   [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13).
   `prompt_assembly`, `memory_write`, and `tool_egress` remain `allow` with

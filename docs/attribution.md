@@ -12,9 +12,9 @@ reimplement the pattern anywhere else.
 
 ## Where it applies
 
-- **Group history only.** Attribution is rendered when a channel's visibility is
-  anything other than `private`. Private (DM) channels have a single human
-  speaker and receive **no** prefix — DM behavior is unchanged.
+- **Group history only.** Attribution is rendered when a channel's privacy is
+  anything other than `private`. Private (DM) channels have a single
+  Participant speaker and receive **no** prefix — DM behavior is unchanged.
 - Session history: `entriesToMessages`
   (`src/core/session/manager/context-support.ts`), gated by
   `shouldRenderGroupUserAttribution(visibility)`.

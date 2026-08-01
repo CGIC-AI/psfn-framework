@@ -92,7 +92,7 @@ npm run smoke:docker                  # exit 0 = deployment done; exit 2 = no ke
 ```
 
 This is the ratified "deployment done" bar for newcomers; the definition and
-pass criteria are in [`docs/setup.md`](./docs/setup.md#deployment-done-the-public-on-ramp-definition).
+pass criteria are in [`docs/setup.md`](./docs/setup.md).
 
 For the manual local split runtime instead (you provision Postgres and lay the
 owner files yourself):

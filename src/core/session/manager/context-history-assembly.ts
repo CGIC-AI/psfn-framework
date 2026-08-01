@@ -169,45 +169,68 @@ function selectHistorySummaryCandidate(params: {
   tokenBudget: number;
 }): HistorySummaryCandidate | null {
   const maxSplitIndex = params.entries.length - SESSION_HISTORY_MIN_MESSAGES;
-  for (let splitIndex = 1; splitIndex <= maxSplitIndex; splitIndex += 1) {
-    const initialVerbatimEntries = params.entries.slice(splitIndex);
-    const boundaryRepairedVerbatimEntries = repairLeadingMultimodalReviewBoundary(
-      params.entries,
-      initialVerbatimEntries,
-    );
-    const boundaryPrependedCount = Math.max(
-      0,
-      boundaryRepairedVerbatimEntries.length - initialVerbatimEntries.length,
-    );
-    const safeSplitIndex = Math.max(0, splitIndex - boundaryPrependedCount);
-    if (safeSplitIndex === 0) {
-      continue;
-    }
-    const summaryEntries = params.entries.slice(0, safeSplitIndex);
-    const verbatimEntries = boundaryPrependedCount > 0
-      ? params.entries.slice(safeSplitIndex)
-      : boundaryRepairedVerbatimEntries;
-    const tailMessages = entriesToMessages(
-      verbatimEntries,
-      params.channelVisibility,
-      true,
-      true,
-      params.renderGroupUserAttribution,
-    );
-    const tailTokenCount = countMessageTokens(tailMessages);
-    const remainingBudget = params.tokenBudget - tailTokenCount;
-    if (remainingBudget < MIN_HISTORY_SUMMARY_TOKEN_BUDGET) {
-      continue;
-    }
+  let lowerSplitIndex = 1;
+  let upperSplitIndex = maxSplitIndex;
+  let earliestCandidate: HistorySummaryCandidate | null = null;
 
-    return {
-      summaryEntries,
-      verbatimEntries,
-      remainingBudget,
-    };
+  // A later split only removes older entries from the verbatim tail. Boundary
+  // repair can retain the preceding user entry for an image review, producing
+  // a plateau, but it cannot add newer history. That makes summary headroom a
+  // monotonic predicate and lets us retain the earliest fitting boundary
+  // without re-rendering every progressively shorter tail (O(n²) at live
+  // history depths).
+  while (lowerSplitIndex <= upperSplitIndex) {
+    const splitIndex = Math.floor((lowerSplitIndex + upperSplitIndex) / 2);
+    const candidate = buildHistorySummaryCandidateAtSplit(params, splitIndex);
+    if (candidate) {
+      earliestCandidate = candidate;
+      upperSplitIndex = splitIndex - 1;
+    } else {
+      lowerSplitIndex = splitIndex + 1;
+    }
   }
 
-  return null;
+  return earliestCandidate;
+}
+
+function buildHistorySummaryCandidateAtSplit(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}, splitIndex: number): HistorySummaryCandidate | null {
+  const initialVerbatimEntries = params.entries.slice(splitIndex);
+  const boundaryRepairedVerbatimEntries = repairLeadingMultimodalReviewBoundary(
+    params.entries,
+    initialVerbatimEntries,
+  );
+  const boundaryPrependedCount = Math.max(
+    0,
+    boundaryRepairedVerbatimEntries.length - initialVerbatimEntries.length,
+  );
+  const safeSplitIndex = Math.max(0, splitIndex - boundaryPrependedCount);
+  if (safeSplitIndex === 0) return null;
+
+  const summaryEntries = params.entries.slice(0, safeSplitIndex);
+  const verbatimEntries = boundaryPrependedCount > 0
+    ? params.entries.slice(safeSplitIndex)
+    : boundaryRepairedVerbatimEntries;
+  const tailMessages = entriesToMessages(
+    verbatimEntries,
+    params.channelVisibility,
+    true,
+    true,
+    params.renderGroupUserAttribution,
+  );
+  const tailTokenCount = countMessageTokens(tailMessages);
+  const remainingBudget = params.tokenBudget - tailTokenCount;
+  if (remainingBudget < MIN_HISTORY_SUMMARY_TOKEN_BUDGET) return null;
+
+  return {
+    summaryEntries,
+    verbatimEntries,
+    remainingBudget,
+  };
 }
 
 function stripHistorySummaryHeader(summaryText: string): string {

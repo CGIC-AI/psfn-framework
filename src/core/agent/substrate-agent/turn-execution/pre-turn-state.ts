@@ -712,6 +712,7 @@ export async function computePreTurnState(input: {
         : {}),
     })
   );
+  const sessionContextAssemblyStartedAt = performance.now();
   const sessionContextSnapshot = await healStaleCapturedSessionWindow({
     snapshot: await captureSessionContext(),
     currentSessionEntryId,
@@ -725,6 +726,9 @@ export async function computePreTurnState(input: {
     },
     recapture: captureSessionContext,
     emitTelemetry: (event, payload) => runtime.emitTelemetry(event, payload),
+  });
+  observability.emitPerformanceStage('session_context_assembly', {
+    durationMs: Math.max(0, performance.now() - sessionContextAssemblyStartedAt),
   });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const sessionChannelId = turnSessionIdentity.logicalSessionId;
@@ -853,6 +857,7 @@ export async function computePreTurnState(input: {
       });
     });
   }
+  const emotionObservationStartedAt = performance.now();
   const emotionSnapshot = await runtime.emotionSelfModelRuntime.observeEmotionState(
     message.content,
     emotionSessionId,
@@ -867,6 +872,9 @@ export async function computePreTurnState(input: {
     // through the captured facade during the admitted turn.
     sessionReads,
   );
+  observability.emitPerformanceStage('emotion_observation', {
+    durationMs: Math.max(0, performance.now() - emotionObservationStartedAt),
+  });
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
   const coherenceEntries = sessionReads.getRecentMessages(24);

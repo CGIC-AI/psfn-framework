@@ -46,6 +46,7 @@ export type {
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { hydrateToolForCaller } from '../../core/agent/tool-surface/hydration.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   createArtifactReturnPort,
@@ -1628,7 +1629,8 @@ export class ShardManager implements ShardExecutionPort {
     return [
       createShardParentIcpTool(shardId, this.shardParentIcp),
       ...selected.map(tool => {
-        const wrapped = this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext);
+        const hydrated = hydrateToolForCaller(tool, { kind: 'shard', shardId });
+        const wrapped = this.toolSyncHelper.wrapShardTool(hydrated, shardId, memoryReviewContext);
         // gjkh: canonical multiplexed surfaces (orient) reach a shard loop only
         // behind a read-pass / mutation-deny wrapper, reusing p0le's orient
         // classification. identity/north_star/contact never get this far — they

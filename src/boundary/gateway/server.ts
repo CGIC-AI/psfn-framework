@@ -1690,7 +1690,10 @@ export class GatewayServer {
   private resolveShardWorkloadForGatedDispatch(
     conn: GatewayRpcConnection,
     channelId: string | undefined,
-  ): { workload: AuthenticatedShardWorkloadHandle } | undefined {
+  ): {
+    workload: AuthenticatedShardWorkloadHandle;
+    identity: import('../../system/capabilities/shard-approval-grant-contracts.js').AuthenticatedShardWorkloadIdentity;
+  } | undefined {
     const normalized = channelId?.trim();
     if (!normalized) {
       return undefined;
@@ -1701,7 +1704,16 @@ export class GatewayServer {
       // May throw on ambiguous channel lineage — ambiguity is a denial.
       const workload = registry.resolveWorkloadForChannel(companionId, normalized);
       if (workload) {
-        return { workload };
+        if (!this.shardApprovalGrants) {
+          throw new JSONRPCErrorException(
+            'Shard-originated request denied: authenticated shard authority is unavailable',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return {
+          workload,
+          identity: this.shardApprovalGrants.resolveAuthenticatedWorkload(workload),
+        };
       }
     }
     const shardRecognizable = normalized.startsWith('shard:')

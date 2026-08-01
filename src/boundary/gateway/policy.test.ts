@@ -346,6 +346,16 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
+  it('grants close only to a trusted shard caller class', () => {
+    const configWithBeads: PolicyConfig = {
+      ...policyConfig,
+      beads: { enabled: true, allowActions: ['ready', 'show', 'create', 'update', 'sync'] },
+    };
+    const request = { method: 'beads.close', params: { id: 'PSFN-1', reason: 'done' } };
+    expect(evaluatePolicy({ ...request, callerClass: 'companion' }, configWithBeads)).toBe('DENY');
+    expect(evaluatePolicy({ ...request, callerClass: 'shard' }, configWithBeads)).toBe('ALLOW');
+  });
+
   // ── Home Assistant: fail closed when unconfigured ──
 
   it('denies home_assistant.call_service when Home Assistant is not configured', () => {

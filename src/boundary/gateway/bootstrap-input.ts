@@ -16,8 +16,7 @@ import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { HOOKS_DIRECTORY_NAME } from './hook-loader.js';
 import { resolveGitRepoRoot } from '../integrations/git/repo-root.js';
 import {
-  ALL_BEADS_ACTIONS,
-  parseBeadsActionsEnv,
+  resolveBeadsActionsForCaller,
   resolveBeadsToolsEnabled,
 } from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
@@ -296,8 +295,9 @@ function buildGatewayPolicyConfig(
     workspaceRoot,
     codebaseRoot,
   });
-  const beadsAllowActions = parseBeadsActionsEnv(env.BEADS_ALLOW_ACTIONS)
-    ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
+  const beadsAllowActions = beadsToolsEnabled
+    ? resolveBeadsActionsForCaller(env.BEADS_ALLOW_ACTIONS, 'companion')
+    : undefined;
   const vaultToolsEnabled = resolveVaultToolsEnabled(env.VAULT_TOOLS_ENABLED);
   const vaultAllowActions = parseVaultActionsEnv(env.VAULT_ALLOW_ACTIONS)
     ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);

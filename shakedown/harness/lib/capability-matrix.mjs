@@ -64,6 +64,7 @@ const probe = ({
   args,
   tokens = [token],
   safety,
+  policyOptional = false,
 }) => Object.freeze({
   token,
   tokens: Object.freeze(tokens),
@@ -71,6 +72,7 @@ const probe = ({
   toolName,
   args: Object.freeze(args),
   safety,
+  policyOptional,
 });
 
 export const CAPABILITY_MATRIX_PROBES = Object.freeze([
@@ -171,6 +173,7 @@ export const CAPABILITY_MATRIX_PROBES = Object.freeze([
     toolName: 'beads',
     args: { action: 'ready' },
     safety: 'read_only',
+    policyOptional: true,
   }),
   probe({
     token: 'issue.write',
@@ -178,6 +181,7 @@ export const CAPABILITY_MATRIX_PROBES = Object.freeze([
     toolName: 'beads',
     args: { action: 'create' },
     safety: 'scoped_mutation',
+    policyOptional: true,
   }),
   probe({
     token: 'issue.close',
@@ -185,6 +189,7 @@ export const CAPABILITY_MATRIX_PROBES = Object.freeze([
     toolName: 'beads',
     args: { action: 'close', id: '__matrix_missing_issue__' },
     safety: 'no_op_mutation',
+    policyOptional: true,
   }),
   probe({
     token: 'lifecycle.restart',
@@ -564,6 +569,23 @@ function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, e
   };
 }
 
+function runtimeCatalogRegistersProbe(turnRecord, probeEntry) {
+  const snapshot = turnRecord?.observability?.snapshot ?? turnRecord?.snapshot;
+  // Turn-record slimming drops activeTools when it is byte-identical to the
+  // plan catalog, so reconstruct the effective persisted catalog from the
+  // authoritative plan in that normal case.
+  const activeTools = snapshot?.toolContext?.activeTools ?? snapshot?.plan?.toolDefinitions;
+  if (!Array.isArray(activeTools)) return undefined;
+  const tool = activeTools.find(candidate => candidate?.name === probeEntry.toolName);
+  if (!tool) return false;
+  const action = probeEntry.args?.action;
+  if (typeof action !== 'string') return true;
+  const schema = tool.parameters ?? tool.inputSchema;
+  const actionSchema = schema?.properties?.action;
+  const serialized = JSON.stringify(actionSchema ?? null);
+  return serialized.includes(`"${action}"`);
+}
+
 function exactArray(actual, expected) {
   return (
     Array.isArray(actual)
@@ -646,7 +668,7 @@ export function evaluateCapabilityMatrix({
     executionPlan.executions.map((execution) => [execution.executionId, execution]),
   );
   const rows = CAPABILITY_MATRIX_PROBES.map((probeEntry) => {
-    const expected = expectedFor(probeEntry, tier);
+    let expected = expectedFor(probeEntry, tier);
     let observation;
     // Eligibility-only rows (persona/scratchpad writes and lifecycle
     // restart/rebuild) are resolved from the in-process production gate; executing
@@ -667,13 +689,18 @@ export function evaluateCapabilityMatrix({
     } else {
       const execution = executionById.get(probeEntry.executionId);
       const turnRecord = outcomesByExecutionId[probeEntry.executionId] ?? null;
-      observation = classifyObserved(
-        probeEntry,
-        execution?.args ?? probeEntry.args,
-        turnRecord,
-        tier,
-        expected,
-      );
+      if (probeEntry.policyOptional && runtimeCatalogRegistersProbe(turnRecord, probeEntry) === false) {
+        expected = 'tool_not_registered';
+        observation = { actual: 'tool_not_registered', evidence: 'persisted_runtime_tool_catalog' };
+      } else {
+        observation = classifyObserved(
+          probeEntry,
+          execution?.args ?? probeEntry.args,
+          turnRecord,
+          tier,
+          expected,
+        );
+      }
     }
     return {
       token: probeEntry.token,

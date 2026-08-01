@@ -360,6 +360,9 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'DENY';
       }
       const action = BEADS_ACTION_BY_METHOD[method];
+      if (action === 'close') {
+        return ctx.callerClass === 'shard' ? 'ALLOW' : 'DENY';
+      }
       const allowedActions = new Set(beadsPolicy.allowActions ?? []);
       if (!allowedActions.has(action)) {
         return 'DENY';

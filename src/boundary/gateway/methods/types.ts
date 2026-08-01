@@ -35,7 +35,10 @@ import type { GatewayContactLifecycleAuthorityPort } from '../contact-lifecycle-
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import type { ShardCapabilityAccess } from '../../../system/capabilities/shard-derivation.js';
-import type { AuthenticatedShardWorkloadHandle } from '../../../system/capabilities/shard-approval-grant-contracts.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  AuthenticatedShardWorkloadIdentity,
+} from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import type {
   ShardBackendRequestBackend,
   ShardBackendRequestResult,
@@ -144,7 +147,10 @@ export interface GatewayMethodRuntime {
    */
   resolveShardWorkloadForChannel?: (
     channelId: string | undefined,
-  ) => { workload: AuthenticatedShardWorkloadHandle } | undefined;
+  ) => {
+    workload: AuthenticatedShardWorkloadHandle;
+    identity: AuthenticatedShardWorkloadIdentity;
+  } | undefined;
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**

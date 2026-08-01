@@ -139,6 +139,20 @@ export function getCanonicalToolSurfaceDescription(
   });
 }
 
+export function getCanonicalToolSurfaceDescriptionForActions(
+  name: string,
+  actionIds: readonly string[],
+): string | undefined {
+  if (!Object.hasOwn(CANONICAL_TOOL_SURFACE_CONTRACTS, name)) return undefined;
+  const contract = CANONICAL_TOOL_SURFACE_CONTRACTS[name as CanonicalToolSurfaceDescriptionName];
+  const requested = new Set(actionIds);
+  const actions = contract.actions.filter(action => requested.has(action.id));
+  if (actions.length !== requested.size) {
+    throw new Error(`Unknown canonical ${name} action in policy hydration: ${actionIds.join(', ')}`);
+  }
+  return renderToolSurfaceDescription(contract, { actions });
+}
+
 export function isCanonicalToolSurfaceDescription(name: string, description: string): boolean {
   if (getCanonicalToolSurfaceDescription(name) === description) return true;
   return Object.keys(CANONICAL_TOOL_SURFACE_VARIANTS).some((variantName) => (

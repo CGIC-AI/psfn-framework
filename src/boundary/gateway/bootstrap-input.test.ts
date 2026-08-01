@@ -141,7 +141,7 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.policyConfig.protectedWritePaths).toContain('/workspace/hooks');
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: true,
-      allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
+      allowActions: ['ready', 'show', 'create', 'update', 'sync'],
     });
     expect(bootstrap.policyConfig.vault).toEqual({
       enabled: false,

@@ -1139,6 +1139,8 @@ export type PolicyDecision = 'ALLOW' | 'DENY' | 'NEEDS_APPROVAL';
 export interface PolicyContext {
   method: string;
   params: Record<string, unknown>;
+  /** Trusted server-derived caller class; never populated from RPC params. */
+  callerClass?: 'companion' | 'shard';
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──

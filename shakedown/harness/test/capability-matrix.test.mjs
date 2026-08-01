@@ -726,6 +726,41 @@ const missingCall = missingCallGrid.rows.find((row) => row.token === 'git.write'
 assert.equal(missingCall.actual, 'not_observed');
 assert.equal(missingCall.matches, false);
 
+// Policy-optional issue actions use the persisted runtime catalog to
+// distinguish an honestly absent surface from a missing observation.
+const catalogAbsentGrid = evaluateCapabilityMatrix({
+  expectedTier: 'apprentice',
+  observedTier: 'apprentice',
+  executionPlan: apprenticePlan,
+  outcomesByExecutionId: {
+    ...apprenticeOutcomes,
+    issue_close: {
+      status: 'completed',
+      toolCalls: [],
+      observability: {
+        snapshot: {
+          plan: {
+            toolDefinitions: [{
+              name: 'beads',
+              parameters: {
+                properties: {
+                  action: { enum: ['ready', 'show', 'create', 'update', 'sync'] },
+                },
+              },
+            }],
+          },
+        },
+      },
+    },
+  },
+  gateObservationsByExecutionId: apprenticeGates,
+});
+const unregisteredClose = catalogAbsentGrid.rows.find((row) => row.token === 'issue.close');
+assert.equal(unregisteredClose.expected, 'tool_not_registered');
+assert.equal(unregisteredClose.actual, 'tool_not_registered');
+assert.equal(unregisteredClose.evidence, 'persisted_runtime_tool_catalog');
+assert.equal(unregisteredClose.matches, true);
+
 const wrongTier = evaluateCapabilityMatrix({
   expectedTier: 'apprentice',
   observedTier: 'nursery',

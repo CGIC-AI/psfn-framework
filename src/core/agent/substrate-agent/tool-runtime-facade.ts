@@ -63,7 +63,11 @@ import {
   getCanonicalToolSurface,
   getRetiredToolAlias,
 } from '../tool-surface/registry.js';
-import { isCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
+import {
+  getCanonicalToolSurfaceDescriptionForActions,
+  isCanonicalToolSurfaceDescription,
+} from '../tool-surface/descriptions.js';
+import { assertPolicyToolHydration } from '../tool-surface/hydration.js';
 import type { ToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
@@ -357,7 +361,19 @@ export class ToolRuntimeFacade {
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
     assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
     const canonicalSurface = getCanonicalToolSurface(tool.name);
-    const describedTool = canonicalSurface
+    const policyHydration = (tool as WirableTool).wiringMeta?.policyHydration;
+    if (policyHydration) {
+      assertPolicyToolHydration(
+        { core: category === 'core' ? [tool] : [], extended: category === 'extended' ? [tool] : [] },
+        [{ toolName: tool.name, enabled: true, ...policyHydration }],
+      );
+    }
+    const scopedDescription = policyHydration
+      ? getCanonicalToolSurfaceDescriptionForActions(tool.name, policyHydration.allowedActions)
+      : undefined;
+    const describedTool = scopedDescription
+      ? { ...tool, description: scopedDescription }
+      : canonicalSurface
       && !isCanonicalToolSurfaceDescription(tool.name, tool.description)
       ? { ...tool, description: canonicalSurface.description }
       : tool;

@@ -47,22 +47,19 @@ function queueSpawnResult(options: { stdout?: string; stderr?: string; exitCode?
   child.stderr = new PassThrough();
   child.kill = vi.fn();
 
-  mockedSpawn.mockReturnValueOnce(child as any);
-
-  process.nextTick(() => {
-    if (options.emitError) {
-      child.emit('error', options.emitError);
-      return;
-    }
-    if (options.stdout) {
-      child.stdout.write(options.stdout);
-    }
-    if (options.stderr) {
-      child.stderr.write(options.stderr);
-    }
-    child.stdout.end();
-    child.stderr.end();
-    child.emit('close', options.exitCode ?? 0);
+  mockedSpawn.mockImplementationOnce(() => {
+    process.nextTick(() => {
+      if (options.emitError) {
+        child.emit('error', options.emitError);
+        return;
+      }
+      if (options.stdout) child.stdout.write(options.stdout);
+      if (options.stderr) child.stderr.write(options.stderr);
+      child.stdout.end();
+      child.stderr.end();
+      child.emit('close', options.exitCode ?? 0);
+    });
+    return child as any;
   });
 }
 
@@ -101,11 +98,30 @@ function createHarness(policyConfig: PolicyConfig): {
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     recordAuditEvent,
+    resolveShardWorkloadForChannel: (channelId) => channelId === 'shard:shard-1'
+      ? {
+          workload: { workloadId: 'workload-1', workloadGeneration: 'generation-1' } as any,
+          identity: {
+            parentCompanionId: 'companion-1',
+            shardId: 'shard-1',
+            workloadGeneration: 'generation-1',
+            ownerVersion: 'owner-v1',
+            grantDigest: 'digest-1',
+          },
+        }
+      : undefined,
     audited: (_method, handler) => handler,
     approvalBoundary: {
       gate: ({ method, handler }) => async (params) => {
+        const shard = runtime.resolveShardWorkloadForChannel?.(
+          (params as Record<string, unknown>).channelId as string | undefined,
+        );
         const decision = evaluatePolicy(
-          { method, params: params as Record<string, unknown> },
+          {
+            method,
+            params: params as Record<string, unknown>,
+            callerClass: shard ? 'shard' : 'companion',
+          },
           policyConfig,
         );
         if (decision === 'DENY') {
@@ -275,6 +291,53 @@ describe('registerBeadsMethods', () => {
       ],
       expect.objectContaining({ cwd: process.cwd(), shell: false }),
     );
+  });
+
+  it('attributes shard-created issues to the authenticated shard', async () => {
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'PSFN-shard-1' }) });
+    const harness = createHarness(makePolicy(['create']));
+
+    await harness.invoke('beads.create', {
+      channelId: 'shard:shard-1',
+      actor: 'spoofed-actor',
+      title: 'Shard-owned work',
+    });
+
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      'bd',
+      ['create', 'Shard-owned work', '--assignee', 'shard-1', '--json'],
+      expect.any(Object),
+    );
+  });
+
+  it('allows an authenticated shard to close its own issue', async () => {
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'PSFN-1', assignee: 'shard-1' }) });
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'PSFN-1', status: 'closed' }) });
+    const harness = createHarness(makePolicy(['ready']));
+
+    await harness.invoke('beads.close', {
+      channelId: 'shard:shard-1',
+      id: 'PSFN-1',
+      reason: 'completed',
+    });
+
+    expect(mockedSpawn).toHaveBeenNthCalledWith(1, 'bd', ['show', 'PSFN-1', '--json'], expect.any(Object));
+    expect(mockedSpawn).toHaveBeenNthCalledWith(2, 'bd', ['close', 'PSFN-1', '--reason', 'completed', '--json'], expect.any(Object));
+  });
+
+  it('denies shard close for a foreign issue before mutation', async () => {
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'PSFN-2', assignee: 'shard-2' }) });
+    const harness = createHarness(makePolicy(['ready']));
+
+    await expect(harness.invoke('beads.close', {
+      channelId: 'shard:shard-1',
+      id: 'PSFN-2',
+      reason: 'not mine',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('ownership denied'),
+    });
+    expect(mockedSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('records error audit telemetry when bd command fails', async () => {

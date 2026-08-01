@@ -56,8 +56,15 @@ import { registerShellTools } from '../../boundary/integrations/shell/runtime-wi
 import { GatewayShellOps } from '../../boundary/integrations/shell/gateway-ops.js';
 import type { SandboxExecutionPort } from '../../boundary/sandbox/capabilities/contracts.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
-import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
-import { resolveBeadsToolsEnabled } from '../../boundary/integrations/beads/enablement.js';
+import {
+  BEADS_POLICY_HYDRATION_SOURCE,
+  registerBeadsTools,
+} from '../../boundary/integrations/beads/runtime-wiring.js';
+import {
+  resolveBeadsActionsForCaller,
+  resolveBeadsToolsEnabled,
+} from '../../boundary/integrations/beads/enablement.js';
+import { assertPolicyToolHydration } from '../../core/agent/tool-surface/hydration.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
@@ -964,8 +971,16 @@ async function main(): Promise<void> {
     workspaceRoot: pathSnapshot.workspaceRoot,
     codebaseRoot: resolve('.'),
   });
-  if (beadsToolsEnabled) {
-    registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
+  const beadsAllowedActions = resolveBeadsActionsForCaller(
+    process.env.BEADS_ALLOW_ACTIONS,
+    'companion',
+  );
+  const beadsToolRegistered = beadsToolsEnabled && beadsAllowedActions.length > 0;
+  if (beadsToolRegistered) {
+    registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), {
+      gatewayMode: true,
+      allowedActions: beadsAllowedActions,
+    });
     log.info('Beads issue-management tools enabled');
   } else {
     log.info('Beads issue-management tools disabled by policy (gateway denies beads.*)');
@@ -1020,6 +1035,12 @@ async function main(): Promise<void> {
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);
 
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
+  assertPolicyToolHydration(agentLoop.getToolCatalog(), [{
+    toolName: 'beads',
+    enabled: beadsToolRegistered,
+    allowedActions: beadsAllowedActions,
+    source: BEADS_POLICY_HYDRATION_SOURCE,
+  }]);
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   const moduleSummary = await moduleLoader.loadEnabledModules();

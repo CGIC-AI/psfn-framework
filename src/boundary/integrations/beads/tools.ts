@@ -6,8 +6,7 @@ import type { BeadsActionResult } from '../../gateway/protocol.js';
 import type { BeadsOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-
-const BEADS_ACTION_HELP = 'ready, show, create, update, close, sync';
+import { ALL_BEADS_ACTIONS, type BeadsAction } from './enablement.js';
 
 type BeadsActionName =
   | 'ready'
@@ -23,7 +22,18 @@ type BeadsActionName =
   | 'sync'
   | 'issue_sync';
 
-type BeadsAction = 'ready' | 'show' | 'create' | 'update' | 'close' | 'sync';
+const BEADS_ACTION_NAMES: Readonly<Record<BeadsAction, readonly BeadsActionName[]>> = {
+  ready: ['ready', 'issue_ready'],
+  show: ['show', 'issue_show'],
+  create: ['create', 'issue_create'],
+  update: ['update', 'issue_update'],
+  close: ['close', 'issue_close'],
+  sync: ['sync', 'issue_sync'],
+};
+
+export interface CreateBeadsToolOptions {
+  allowedActions?: readonly BeadsAction[];
+}
 
 export interface BeadsToolParams {
   action?: BeadsActionName;
@@ -50,7 +60,7 @@ function formatActionResult(result: BeadsActionResult): string {
   }, null, 2);
 }
 
-function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
+function normalizeBeadsAction(params: BeadsToolParams, actionHelp: string): BeadsAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (rawAction) {
     switch (rawAction) {
@@ -73,7 +83,7 @@ function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
       case 'issue_sync':
         return 'sync';
       default:
-        throw new Error(`action must be one of: ${BEADS_ACTION_HELP}`);
+        throw new Error(`action must be one of: ${actionHelp}`);
     }
   }
 
@@ -102,7 +112,7 @@ function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
     return 'show';
   }
 
-  throw new Error(`action is required. Supported actions: ${BEADS_ACTION_HELP}`);
+  throw new Error(`action is required. Supported actions: ${actionHelp}`);
 }
 
 function requirePlainStringParam(
@@ -121,27 +131,24 @@ function requirePlainStringParam(
   return value.trim();
 }
 
-export function createBeadsTool(ops: BeadsOperations): SubstrateAgentTool {
+export function createBeadsTool(
+  ops: BeadsOperations,
+  options: CreateBeadsToolOptions = {},
+): SubstrateAgentTool {
+  const allowedActions = options.allowedActions ?? ALL_BEADS_ACTIONS;
+  const allowedActionSet = new Set<BeadsAction>(allowedActions);
+  const actionHelp = allowedActions.join(', ');
+  const actionSchemas = allowedActions
+    .flatMap(action => BEADS_ACTION_NAMES[action])
+    .map(action => Type.Literal(action));
+
   return {
     name: 'beads',
     label: 'beads',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.beads,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
-        Type.Literal('ready'),
-        Type.Literal('issue_ready'),
-        Type.Literal('show'),
-        Type.Literal('issue_show'),
-        Type.Literal('create'),
-        Type.Literal('issue_create'),
-        Type.Literal('update'),
-        Type.Literal('issue_update'),
-        Type.Literal('close'),
-        Type.Literal('issue_close'),
-        Type.Literal('sync'),
-        Type.Literal('issue_sync'),
-      ], {
-        description: 'Beads action. Preferred actions: ready, show, create, update, close, sync.',
+      action: Type.Optional(Type.Union(actionSchemas, {
+        description: `Beads action. Preferred actions: ${actionHelp}.`,
       })),
       id: Type.Optional(Type.String({
         description: 'Used with action=show|update|close. Issue ID (for example PSFN-123 or PSFN-123.1).',
@@ -193,7 +200,12 @@ export function createBeadsTool(ops: BeadsOperations): SubstrateAgentTool {
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
-        actionForError = normalizeBeadsAction(params);
+        actionForError = normalizeBeadsAction(params, actionHelp);
+        if (!allowedActionSet.has(actionForError)) {
+          throw new Error(
+            `action=${actionForError} is not registered for this caller. Available actions: ${actionHelp || 'none'}.`,
+          );
+        }
         const result = await (async (): Promise<BeadsActionResult> => {
           switch (actionForError) {
             case 'ready':

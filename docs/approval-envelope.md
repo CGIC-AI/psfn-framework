@@ -1,15 +1,13 @@
-# Unified Approval Envelope
+# Unified Human-in-the-Loop Approval Envelope
 
-Status: normative contract + gateway projection shipped (beads `psfn-framework-ct0v`,
+Status: contract + first projection shipped (beads `psfn-framework-ct0v`,
 `psfn-framework-13sk`). Design direction from the Shard Approval contract
 (`companion-ui/SHARD_APPROVALS.md`, operator directive 2026-07-17).
 
 ## Why
 
-Several PSFN subsystems need to route the same shape of question to an
-authenticated decision-maker's device: *"an authenticated part of me wants to
-do X — decide."* Depending on the action and policy, that person may be the
-**Partner** or an administrative **Operator**. Historically each
+Several PSFN subsystems need to route the same shape of question to the human's
+device: *"an authenticated part of me wants to do X — decide."* Historically each
 grew its own payload. This document defines ONE envelope so every such request
 projects into the same relay path (`companion.approval.requested` /
 `companion.approval.resolved`) and renders through one request-card contract on
@@ -74,7 +72,7 @@ companion.approval.requested  { companionId, payload, timestamp }
 companion.approval.resolved   { companionId, payload, timestamp }
 ```
 
-`companionId` is the authenticated parent-Companion owner and stays the routing /
+`companionId` is the authenticated **parent** owner and stays the routing /
 ownership key (never replaced by a shard-derived id). Shard provenance rides
 inside `payload.attribution.shardId` as optional provenance, not a peer identity.
 The envelope is built once at the confirmation-queue choke point and fanned out;
@@ -128,25 +126,20 @@ the event capability receive the explicit six-field v1 projection. The
 gateway-owned WebSocket path uses the same explicit negotiation and requires
 complete v2 data before emitting an approval event.
 
-## Current projection scope
+## Scope of the first projection
 
 Projecting now:
 
 - **gateway confirmation gate** → `sourceSystem: 'tool-access'`, parent
   attribution from the authenticated owner, `grantMode: { kind: 'once' }`.
-- Eligible shard-originated exceptional actions traverse that same gateway
-  projection. The gateway binds authenticated shard workload lineage, prepares
-  and consumes an exact-once request grant, and includes optional `shardId` /
-  `shardLabel` provenance. This does not create a separate source-system tag.
-- Companion UI clients that negotiate `approvals.v2` render the known v2
-  attribution, action, scope, reason, source, and grant-mode fields.
 
 Deliberately **not** in this change (future beads):
 
-- shard fold-review-specific projection beyond the gateway exceptional-action
-  path;
+- shard fold review (shard directory, `shardId` provenance, derived grant
+  evaluator — `SHARD_APPROVALS.md`, `docs/shard-capability-tier-derivation.md`);
 - cogsec intake-quarantine and broadcast approvals migrating onto this envelope;
-- TTL grant policy and emission (the current shard request grant is exact-once);
+- browser card rendering of the v2 fields (`mus2.9`);
+- the grant evaluator and TTL policy (`mus2.7`);
 - direct shard chat.
 
 The confirmation queue and contract already carry the optional shard provenance

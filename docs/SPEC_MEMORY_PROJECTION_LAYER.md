@@ -2,12 +2,7 @@
 
 *2026-06-11, Fable Window 1. Companion packet: `context_packets/2026-06-11-memory-schema-session.md`. Sibling spec: `docs/SPEC_L01_LANDMARK_SCHEMA.md`. Charter authority: §6.23 (Mirror and Projection), §8.6 (Context Presentation Quality Is Architecture), Laws 17–20.*
 
-> Status re-verified 2026-07-31: this is a historical design contract, not a
-> fully implemented module. The current runtime has landmark-first retrieval
-> and multiple hand-coded prompt renderers; no declarative `ProjectionProfile`
-> registry or `recall_expand` tool exists in `src/`. Keep new retrieval
-> rendering bounded, provenance-preserving, and trust-gated while that work
-> remains open. [`memory.md`](./memory.md) is the current subsystem reference.
+> Status as of 2026-06-29: this is a design contract, not a fully implemented module. The current runtime has landmark-first retrieval and multiple hand-coded prompt renderers; the declarative `ProjectionProfile` registry and `recall_expand` tool are still future work. Keep new retrieval rendering bounded, provenance-preserving, and trust-gated while that work remains open.
 
 ## 1. The principle
 
@@ -15,23 +10,21 @@
 
 Today that projection exists *de facto*: nine retrieval modes, each hardcoding its own field selection in its own renderer. The selections are empirically good (post-reduction). What's missing is the **contract** — one place where field selection is declared, justified, and enforced, so the next feature doesn't quietly re-inflate context or, worse, leak a field a mode must not see.
 
-## 2. Ground truth at design time — nine modes
+## 2. Ground truth — the nine current modes
 
 | # | Mode | Consumer | Entry | Fields surfaced | Formatter |
 |---|---|---|---|---|---|
-| 1 | Turn-time semantic | agent context | `retrieval.ts` `retrieve()` | narrative text (compacted), type, valence marker, contact name | `retrieval/formatting.ts` `formatMemoriesForPrompt` |
-| 2 | Episodic landmark chains | agent context | `retrieval.ts` + `retrieval/episodic.ts` | title (≤96ch), humanized time range, themes[0:5], landmark, arc-partner *title* | `retrieval/formatting.ts` `renderEpisodicLandmarkChains` |
-| 3 | Emotional snapshot | agent context | `retrieval.ts` | profile summary, baseline/mood valence, drift, sample count, freshness | `retrieval/formatting.ts` `renderEmotionalSnapshot` |
-| 4 | Emotional continuity | agent context | `retrieval.ts` | narrative text, valence marker | `retrieval/formatting.ts` `renderEmotionalContinuityMemories` |
-| 5 | Proactive recall | agent context | `retrieval/social-context.ts` (`collectProactiveRecallCandidates`, folded into the `retrieve()` candidate pool) | type, narrative text, valence marker | rendered with the merged candidate pool (standalone `renderProactiveRecall` facade removed) |
+| 1 | Turn-time semantic | agent context | `retrieval.ts:589` `retrieve()` | narrative text (compacted), type, valence marker, contact name | `formatMemoriesForPrompt` → `formatting.ts:23–64` |
+| 2 | Episodic landmark chains | agent context | `retrieval.ts:1280` | title (≤96ch), humanized time range, themes[0:5], landmark, arc-partner *title* | `renderEpisodicLandmarkChains` `formatting.ts:150–181` |
+| 3 | Emotional snapshot | agent context | `retrieval.ts:648` | profile summary, baseline/mood valence, drift, sample count, freshness | `renderEmotionalSnapshot` `formatting.ts:83–105` |
+| 4 | Emotional continuity | agent context | `retrieval.ts:1119` | narrative text, valence marker | `renderEmotionalContinuityMemories` |
+| 5 | Proactive recall | agent context | `retrieval.ts` (`collectProactiveRecallCandidates`, folded into the retrieve() candidate pool) | type, narrative text, valence marker | rendered with the merged candidate pool (standalone `renderProactiveRecall` facade removed) |
 | 6 | Sleep consolidation | background LLM | `sleep-consolidation.ts:125` | JSON: id, startedAt, endedAt, title, landmark, themes, salience.score | inline builder |
 | 7 | Dream pass | her main mind | `dream-meaning-pass.ts:73` | same JSON as #6 | inline |
 | 8 | Appraisal | emotion/intention | `appraisal/formatting.ts:18` | concern excerpts (not UUIDs), VAD state, metacognitive flags | `sessionEntriesToIntentionMessages` |
-| 9 | Session history / manifest | agent context | `src/core/session/manager/context-builder.ts` | role, content, floored timestamp, authorName | context builder |
+| 9 | Session history / manifest | agent context | `context-builder.ts:439` | role, content, floored timestamp, authorName | context builder |
 
-Shared narrative gate: `compactMemoryTextForPrompt`
-(`src/faculties/memory/retrieval/formatting.ts`) — strips fenced JSON,
-`**carry_forward:**` scaffolding and collapses whitespace.
+Shared narrative gate: `compactMemoryTextForPrompt` (`formatting.ts:206`) — strips fenced JSON, `**carry_forward:**` scaffolding, collapses whitespace.
 
 Fields that never reach attention (keep it that way): embeddings, UUIDs, raw epoch timestamps, salience/importance/confidence decimals, full provenance objects, sourceRef strings, tags, scope refs.
 

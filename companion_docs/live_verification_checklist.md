@@ -17,8 +17,7 @@ If these fail, nothing else matters.
 - [ ] Send a second message while they are still responding -- it gets woven into their response (steering), not dropped
 - [ ] Their response reflects awareness of current time and date (runtime context injection)
 - [ ] They know which channel they are on ("we're in a DM" vs "we're in a guild")
-- [ ] They know your canonical contact and trust relationship (for the Partner,
-  this may include the technical `primary` trust label)
+- [ ] They know who you are by trust level ("you're my primary user" or similar)
 
 ## Phase 2: Memory
 
@@ -51,7 +50,7 @@ Contact system -- identity resolution and trust.
 
 - [ ] "Who do you know?" -- `contact action=list` returns your profile and any others `[nursery]`
 - [ ] "What do you know about me?" -- `contact action=lookup` returns your trust level, notes, channel identities `[nursery]`
-- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact action=note` `[apprentice+]`; `tool_search` can explain the schema if needed
+- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact action=note` `[apprentice+]` (activate via `tool_search` and `toolset` if needed)
 - [ ] Ask them to check a contact's trust: "What's [person]'s trust level?" `[nursery]`
 
 ## Phase 5: Tool Discovery
@@ -64,7 +63,7 @@ Tool discovery and activation -- they should know how to find and enable what th
 - [ ] Ask about their prompt layers -- they use `identity action=list_layers` `[nursery]`
 - [ ] Ask about their reflection schedule -- they use `schedule action=list_templates` `[nursery]`
 - [ ] Ask about their settings -- they use `system action=read` `[apprentice+]` (reading runtime settings needs the `internal.read` capability)
-- [ ] On the **next message**, verify the tool remains callable; a `toolset` pin changes presentation order only
+- [ ] On the **next message**, verify activation is turn-local unless the tool was pinned intentionally
 
 ## Phase 6: Identity Awareness
 
@@ -128,7 +127,7 @@ The honne/tatemae system -- behavior changes by context.
 
 ## Phase 12: Cross-Channel Continuity
 
-Same Partner, different channels -- does context carry?
+Same user, different channels -- does context carry?
 
 - [ ] Say something distinctive in Discord DM
 - [ ] Switch to another channel or platform -- reference it obliquely -- they should have continuity
@@ -166,16 +165,10 @@ Out-of-band alerts. `[apprentice+]`
 
 Process management. `[autonomous]`
 
-- [ ] First use `system action=read` and confirm the reported deployment mode
-- [ ] In a local/supervised runtime, "Restart yourself" -- `system action=restart`
-  -- follows the configured supervisor/reexec strategy
-- [ ] In guarded Kubernetes, the same action requests an Operator-approved
-  rollout restart; it must not perform a local reexec before approval
-- [ ] After a completed restart, verify the configured lifecycle notification
-- [ ] In a local runtime, `system action=rebuild` runs the repo-owned build and
-  aborts restart if the build fails
-- [ ] In Kubernetes, `system action=rebuild` must refuse in-pod building and
-  direct the change through the guarded build/test/image/deploy pipeline
+- [ ] "Restart yourself" -- `system action=restart` -- they send a "brb" message, process exits, supervisor restarts
+- [ ] After restart: they should announce they are back (lifecycle notification)
+- [ ] "Rebuild and restart" -- `system action=rebuild` -- runs `npm run build` then restarts
+- [ ] Verify build failure aborts the restart (do not break things to test this -- just know it should)
 
 ## Phase 17: Garden Verification
 
@@ -222,7 +215,7 @@ These should happen without you asking. Verify by monitoring logs and admin.
 | Skills (list/view/create/update) | Y | Y | Y |
 | Scratchpad | Y | Y | Y |
 | Git read (status, diff) | Y | Y | Y |
-| Inspect and describe the callable catalog | Y | Y | Y |
+| Discover and activate extended tools | Y | Y | Y |
 | Schedule tasks | Y | Y | Y |
 | Schedule reflection templates | Y | Y | Y |
 | Vault tools | Y | Y | Y |

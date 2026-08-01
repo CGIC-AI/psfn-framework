@@ -1,7 +1,7 @@
 # PSFN Helm Chart
 
 Before upgrading an existing release, read the canonical
-[Helm Cluster Upgrade Guide](../../../docs/helm-upgrades.md). It records required
+[Helm Fleet Upgrade Guide](../../../docs/helm-upgrades.md). It records required
 component ordering and operator-visible exposure changes; this README remains
 the chart value and topology reference.
 
@@ -48,9 +48,8 @@ docker build \
 ```
 
 For Pi/k3s testing, build/import an ARM64 image and set
-`psfnAppImage.repository` and an exact commit-derived `psfnAppImage.tag`.
-Set `psfnAppImage.digest` only when the image is served by a real registry;
-leave it empty for a tar-imported containerd image.
+`psfnAppImage.repository`, `psfnAppImage.tag`, and preferably
+`psfnAppImage.digest`.
 
 ## Required Values
 
@@ -61,6 +60,8 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - `secrets.values.satelliteHubApiKey` -> `SATELLITE_HUB_API_KEY` (hub
   `PSFN_API_KEY`) and the gateway `API_SATELLITE_KEYS` list; required when
   `satelliteHub.enabled=true` and never the same value as `apiKey`/`adminToken`
+- `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by the internal
+  legacy Garden path only when fleet auth is disabled
 - `secrets.values.gatewaySessionHmacKey` -> `GATEWAY_SESSION_HMAC_KEY`, consumed by gateway
 - `secrets.values.gatewaySessionIntegrityAuthToken` ->
   `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, the role-bound worker proof consumed
@@ -95,7 +96,7 @@ remains available under `secrets.existingSecret`,
 Secrets are rendered only as Kubernetes Secrets. The chart does not copy secret
 material into ConfigMaps, annotations, labels, or NOTES.
 
-## Unified Companion-Cluster HTTPS Origin
+## Unified Fleet HTTPS Origin
 
 Every install uses Cluster Auth and the unified gateway origin, including a cluster
 of one. Provision the canonical `fleet-auth.json` owner file and its referenced
@@ -128,7 +129,7 @@ from gateway pods and the chart suppresses the separate Garden Ingress.
 Authorized Gardens are exposed only at
 `/companions/<companion-uuid>/garden/` after live authorization and exact
 request-capability issuance. See
-[`../../../docs/operations.md`](../../../docs/operations.md#unified-cluster-human-origin)
+[`../../../docs/operations.md`](../../../docs/operations.md#unified-fleet-human-origin)
 for validation and rollback requirements.
 The retired raw fleet-status listener is not present in the chart or exposed by
 Ingress.
@@ -235,9 +236,9 @@ owners and never overwrites Garden-edited owner files. A starter
 `companion.json` ConfigMap is copied once into `companion-data` only if no
 companion card exists.
 
-The chart renders one agent per `fleet.companions` entry. Every entry needs a
-distinct companion-data PVC; never share a companion-data claim between
-companions or releases.
+This chart renders one companion per release. Each release's `companion-data`
+PVC is that companion's isolated owner root; do not share a companion-data
+claim across releases.
 
 Every PSFN deployment is a fleet of one or more companions enumerated by the
 mandatory system-owned `companions.json` manifest at `SYSTEM_DATA_DIR/companions.json`;
@@ -261,12 +262,6 @@ owner file.
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
 
 ### Upgrading releases created before per-companion owner routing
-
-This subsection explains the chart's migration mechanics. The executable,
-label-selected procedure and rollback boundary live in the canonical
-[`docs/helm-upgrades.md`](../../../docs/helm-upgrades.md) guide. Do not copy the
-older fixed Deployment-name probes below into a current cluster; resolve every
-agent from `psfn.io/fleet-target=registered` as that guide requires.
 
 First inspect the fleet-wide owners. If `charge-policy.json` or `skills.json`
 still exists under the shared `SYSTEM_DATA_DIR`, stop every companion release
@@ -320,7 +315,7 @@ relative `backupsSubPath`; the chart mounts that PVC subdirectory exactly at
 Keep `bootstrap.seedOwnerFiles=false`: seeding is not migration. After a
 successful one-time rollout, disable and remove the owner-migration values. The
 full operator and rollback procedure is in
-[`docs/operations.md`](../../../docs/operations.md#existing-split-clusters-with-shared-per-companion-owners).
+[`docs/operations.md`](../../../docs/operations.md#existing-split-fleets-with-shared-per-companion-owners).
 
 The chart's guarded automatic legacy cutover covers `scheduler.json` and
 `capability-tier.json`, which used to live under `system-data`. Every app
@@ -492,14 +487,36 @@ beads:
 
 ## Host Port Exposure
 
-Services render as ClusterIP. The current chart fixes Cluster Auth on, which
-requires `hostPorts.gatewayApi.enabled=false`; Garden has no direct hostPort.
-Expose the browser surface only through the canonical HTTPS Gateway Ingress,
-including Garden at `/companions/<companion-uuid>/garden/`.
+Services render as ClusterIP by default. On a single-node k3s host, set:
 
-The Satellite Hub has a separate optional hostPort for LAN device traffic. Its
-source CIDRs must be narrowed in values. Do not infer from that exception that
-the Gateway or Garden may bypass the unified browser origin.
+```yaml
+hostPorts:
+  gatewayApi:
+    enabled: true
+    port: 10053
+    sourceCIDRs:
+      - 192.0.2.10/32
+  garden:
+    enabled: true
+    port: 10054
+    sourceCIDRs:
+      - 192.0.2.10/32
+```
+
+This binds the Gateway API and Garden/admin UI directly on the node while
+keeping Gateway RPC, agent admin transport, Postgres, Redis, and LiteLLM
+cluster-internal. Use it only when those node ports are reserved for PSFN; the
+old systemd app services must remain stopped to avoid port and Discord login
+conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
+workstation or trusted subnet that should reach the node-facing port.
+
+Garden has no direct hostPort in the cluster topology. Use the canonical gateway
+Garden route; Helm rejects a Garden hostPort.
+
+The Gateway and Garden Deployments use a Recreate strategy so single-node k3s
+rollouts do not deadlock when both the old and new pods need the same hostPort.
+The agent Deployment keeps the default rolling strategy because it does not bind
+a hostPort.
 
 ## Database
 
@@ -822,8 +839,8 @@ Hub configuration surface:
   The private Hub control port is admitted only from the in-cluster Gateway
   pod selector; it is not added to hostPort or Ingress exposure.
 - `hostPorts.satelliteHub` exposes `ws://<node>:8787` for LAN satellite
-  devices as a narrow device-traffic exception; set `sourceCIDRs` to the
-  trusted subnet. The Gateway API hostPort remains forbidden by Cluster Auth.
+  devices, following the same single-node hostPort mechanism as the gateway
+  API; set `sourceCIDRs` to the trusted subnet.
 - A cert-manager client Certificate
   (`spiffe://<trustDomain>/psfn/satellite-hub/<companionId>`) is issued from
   the chart CA/issuer and mounted at
@@ -914,8 +931,8 @@ kubectl -n psfn rollout status deploy/psfn-companion-ui-test
 
 Pinning is enforced: the chart rejects a missing repository, a missing
 tag/digest, floating tags (`latest`/`main`/`main-latest`), and a digest that
-does not start with `sha256:` when the workload is enabled. Use a digest for a
-registry-served image; use the exact commit-derived tag alone for a tar import.
+does not start with `sha256:` when the workload is enabled. Prefer setting
+`companionUiTest.image.digest` for a fully pinned deploy.
 
 Reach it at `/companion-ui/` on the canonical gateway HTTPS host. The
 `fleetAuth.companionUiCompanionId` value is optional only when the canonical
@@ -941,10 +958,10 @@ rejects NodePort and never renders a direct Companion UI Ingress.
 
 ## Shakedown Runbook
 
-Use an isolated namespace and test values before any live Pi cutover. Treat the
-operator-selected `<fixture-root>` as read-only until you intentionally copy
-data into test PVCs. Never point test values at live companion runtime roots or
-live database credentials.
+Use an isolated namespace and test values before any live Pi cutover. For the
+Artie fixture, treat `/mnt/c/Temp/PSFN-TEST/psfn-shakedown` as read-only until
+you intentionally copy data into test PVCs. Never point test values at live
+Purrsephone runtime roots or live database credentials.
 
 Install cert-manager first, with a pinned chart/version selected by the
 operator:
@@ -969,8 +986,7 @@ Core readiness and smoke commands:
 kubectl -n psfn-test get pods,deploy,sts,pvc,certificates,issuers,services,networkpolicies
 
 kubectl -n psfn-test rollout status deploy/psfn-gateway
-kubectl -n psfn-test rollout status deployment \
-  --selector 'psfn.io/fleet-target=registered'
+kubectl -n psfn-test rollout status deploy/psfn-agent
 kubectl -n psfn-test rollout status deploy/psfn-garden
 
 PG_PASS="$(kubectl -n psfn-test get secret psfn-postgres -o jsonpath='{.data.postgres-password}' | base64 -d)"
@@ -985,12 +1001,22 @@ kubectl -n psfn-test port-forward svc/psfn-gateway 10053:10053
 API_KEY="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.API_KEY}' | base64 -d)"
 curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:10053/v1/models
 
-bash scripts/ops/validate-kube-rollout.sh --namespace psfn-test
+kubectl -n psfn-test port-forward svc/psfn-garden 10054:10054
+curl http://127.0.0.1:10054/health
 ```
 
-The manual port-forward occupies the foreground and is only a disposable API
-probe. It is not the Cluster Auth browser origin. Validate `/fleet` and every
-Garden through the configured canonical HTTPS Gateway Ingress.
+Those manual commands occupy the foreground. The repository's persistent local
+Artemis setup starts resilient loopback forwards instead:
+
+```text
+Gateway: http://127.0.0.1:10153
+Garden:  http://127.0.0.1:10154
+```
+
+The `10053` and `10054` ports are Kubernetes Service ports; a k3d cluster does
+not expose them on the physical host unless it was created with matching Docker
+port publications. `scripts/ops/setup-local-artemis-shakedown.sh` owns the
+`10153`/`10154` local forwards and reconnects them when a selected pod rolls.
 
 If the satellite hub is enabled, also verify:
 
@@ -1017,9 +1043,8 @@ kubectl -n psfn-test exec "$AGENT_POD" -- \
 Agent logs should confirm the production Postgres path:
 
 ```bash
-kubectl -n psfn-test logs \
-  --selector 'psfn.io/fleet-target=registered' --since=10m --prefix | \
-  rg 'PostgreSQL persistence backend selected|Ready'
+kubectl -n psfn-test logs deploy/psfn-agent --since=10m | \
+  grep -E 'PostgreSQL persistence backend selected|Ready'
 ```
 
 ## Backup And Pi Cutover

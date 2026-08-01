@@ -2,15 +2,9 @@
 
 *2026-06-11, Fable Window 1. Companion packet: `context_packets/2026-06-11-memory-schema-session.md`. Discharges the design scope of PSFN-h5r3 and PSFN-a2na; supersedes-in-part PSFN-qxdx/z80i/cyzi (see §6). Charter authority: `docs/PSFN_PROJECT_CHARTER.md` §6.20–6.23, Laws 2, 17–20, 27.*
 
-> Status re-verified 2026-07-31: this is a historical schema/design spec. The
-> core Postgres L0.1 episode/span/arc/watermark/candidate/review/lineage
-> substrate exists. The motif, occasion, callback, typed-VAD migration, and
-> contact emotional sample work remains planned; none of the proposed motif,
-> occasion, or callback schema appears in the current migrations. Do not build
-> a second landmark table; extend the existing `l01_episodes` substrate. See
-> [`memory.md`](./memory.md) for current behavior.
+> Status as of 2026-06-29: the core Postgres L0.1 episode/span/arc/watermark/candidate/review/lineage substrate exists. The motif, occasion, callback, typed-VAD migration, and contact emotional sample work in this spec remains planned implementation work, tracked under the current `bd` graph. Do not build a second landmark table; extend the existing `l01_episodes` substrate.
 
-Schema mistakes here are the most expensive in the system: they mean migrations against the provenance-bearing episodic store and the Postgres-only L2 derived store. The memory mutation JSONL is an audit/export aid, not a replay authority. Every decision below states its rationale and its migration cost.
+Schema mistakes here are the most expensive in the system: they mean migrations against the provenance-bearing episodic store and the journal-replayed L2 store. Every decision below states its rationale and its migration cost.
 
 ## 1. What already exists (do not rebuild)
 

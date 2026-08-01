@@ -353,8 +353,8 @@ does not give every companion the partner's telemetry.
 
 ### 11.2 Affect Advisory
 
-A source-rich Companion, such as a designated Productivity Companion, may
-notice a pattern that the designated Response Authority has not observed.
+A source-rich companion, such as a designated Productivity Companion, may
+notice a pattern that the primary relational companion has not observed.
 
 Target ICP adds a typed, bounded Affect Advisory with:
 
@@ -384,7 +384,7 @@ deferred handoff. It must not broadcast intimate state to another companion.
 
 An affect advisory is not permission to interrupt companion rest.
 
-Urgent direct Partner communication follows existing safety and channel policy.
+Urgent direct human communication follows existing safety and channel policy.
 A background estimate uses ICP availability, fatigue, and quiet-hour gates.
 
 ## 12. Environmental Support

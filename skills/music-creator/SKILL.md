@@ -1,28 +1,23 @@
 ---
 name: music-creator
-description: Design guidance for future music workflows; the current runtime has no canonical music-generation tool.
+description: Creator-skill guidance for music workflows on top of the unified media surface.
 category: creator
 always: false
 ---
 # Music Creator
 
-Use this skill for music prompt craft or workflow design only when the runtime
-explicitly advertises a music-capable tool. The current default runtime does
-not expose one.
+Use this skill when a music workflow needs domain-specific guidance beyond the generic `media` surface.
 
 Creator skills sit above execution tools:
-- Never call the retired `media` alias or repurpose the image-only
-  `generate_image` tool for audio.
+- Keep execution on `media`.
 - Load this skill with `skill action="view"` when you need composition guidance, arrangement constraints, lyric structure guidance, or backend-specific notes.
 - Follow the same pattern for future creator domains. Add or load a creator skill instead of inventing a new top-level tool.
 
 ## Action Selection
-- Use only the exact music tool and actions present in the current structured
-  tool catalog.
-- If no music-capable tool is present, help design the brief or explain that
-  execution is unavailable; do not invent a call.
-- Keep future generation, edit/remix, and analysis actions on one declared
-  music surface unless the runtime contract deliberately separates them.
+- Use `media action="generate"` for a new music piece, stem set, loop, or song draft when the runtime exposes that backend.
+- Use `media action="edit"` for transformations of an existing media artifact when the backend supports iterative remixing, continuation, or restyling.
+- Use `media action="analyze"` when you need to inspect the contents or structure of a produced artifact through the shared media surface.
+- If the current runtime is image-backed only, treat this skill as the pattern contract for upcoming media backends rather than forcing a fake tool call.
 
 ## Prompt Craft
 - Specify genre, instrumentation, tempo or energy, structure, mood, era, and production texture as one coherent brief.
@@ -31,10 +26,9 @@ Creator skills sit above execution tools:
 - Prefer a short decisive brief over a pile of genre tags.
 
 ## Provider And Model Notes
-- Stay on provider/model auto unless the Partner or Participant asks for a specific backend or the workflow clearly needs one.
+- Stay on provider/model auto unless the user asks for a specific backend or the workflow clearly needs one.
 - Backend-specific knobs, model IDs, duration constraints, or stem-layout quirks belong here rather than in the top-level tool description.
-- When music support lands, update this skill against the exact registered
-  surface before describing it as callable.
+- If music support lands through the shared media surface, update this skill rather than adding a parallel top-level music tool.
 
 ## Review Loop
 - Inspect the returned artifact or analysis before asking broad quality questions.

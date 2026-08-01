@@ -45,7 +45,7 @@ exact server-issued `/companion-ui/companions/<uuid>/ws` path on that origin.
 There is no build-time Hub URL and no editable Hub, device, session, channel,
 or credential field.
 
-The browser emits no `hello` and no device/session/channel authority. Partner
+The browser emits no `hello` and no device/session/channel authority. Human
 identity comes from the fleet session, while a strict `session.ready` frame
 provides server-owned device/place presentation and the physical capability
 ceiling. Those identities are displayed separately and neither authentication
@@ -91,12 +91,12 @@ the current hashed asset list, and versions its cache with
 source commit; local builds fall back to a deterministic bundle hash.
 Updates activate without navigating an open client. The current page keeps its
 draft, selected attachments, and live session state, and
-shows an update-ready notice so the Partner can reload at a safe point.
+shows an update-ready notice so the operator can reload at a safe point.
 The client checks for a new worker at startup, once per minute, and when the app
 returns online or to the foreground, so a deployed build is ready before that
-Partner-chosen reload.
+operator-chosen reload.
 Clients still controlled by the original cache-first worker recover during the
-first Partner navigation to `/companion-ui/`: the client retires only the
+first operator navigation to `/companion-ui/`: the client retires only the
 known legacy root registration, and the replacement worker removes its legacy
 cache and redirects only a foreground client already at the canonical shell.
 Generated-worker updates remain passive and never navigate an open client.
@@ -183,7 +183,7 @@ npm audit --omit=dev
 
 The browser gate runs the legacy-root-worker-to-scoped-worker migration and a
 deterministic fake OAuth/Hub lifecycle in real Chromium. It proves fresh
-connections across login and Partner switch, authority clearing on logout,
+connections across login and user switch, authority clearing on logout,
 revocation and offline transitions, fleet/Garden/callback pages remain
 uncontrolled, and cache keys, bodies, browser stores, URLs, and protocol frames
 contain no authority secrets. It also verifies install, update, rollback, and
@@ -201,24 +201,13 @@ npm run lint
 ## Wire Protocol
 
 Browser action frames have the exact top-level shape
-`{schemaVersion, requestId, action, resource, body}`. The gateway-owned action
-contract accepts these exact resources:
+`{schemaVersion, requestId, action, resource, body}`. The UI currently emits:
 
-- `conversation.status`
 - `conversation.interact`
 - `conversation.interrupt`
 - `conversation.touch`
-- `conversation.audio`
-- `shards.list`
-- `shards.history`
-- `shards.interact`
-- `shards.interrupt`
-- `confirmations.list`
 - `confirmations.resolve`
 - `artifact.preview`
-- `tool_activity.subscribe`
-- `embodiment.status`
-- `embodiment.handoff`
 
 The authenticated gateway sends only:
 
@@ -227,8 +216,8 @@ The authenticated gateway sends only:
 
 Unknown, replayed, uncorrelated, discriminator-only, or structurally malformed
 frames fail closed and close the socket. Action bodies reject browser-supplied
-Partner, Companion, device, place, session, channel, credential, and
-`primary`-embodiment authority. The retained legacy Hub mirror also validates every
+human, companion, device, place, session, channel, credential, and primary-
+embodiment authority. The retained legacy Hub mirror also validates every
 known inbound and outbound family as an exact structure.
 
 ## Current UI Surfaces
@@ -241,8 +230,8 @@ conversation lists, sidebars, top banners, or always-visible debug panels.
   and advanced settings.
 - Tiny connection indicator: shows the current hub connection state without
   becoming a header.
-- Message thread: renders Partner and Companion text messages, including
-  live Companion draft streaming.
+- Message thread: renders user and assistant text messages, including live
+  assistant draft streaming.
 - Composer: one rounded surface with a plus button, multiline text input, mic
   control, and send button.
 - Floating sprite: reflects high-level local state such as attentive, speaking,

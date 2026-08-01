@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-31.
+Last updated: 2026-07-20.
 
 Before touching a Helm release, follow the canonical
 [Helm Cluster Upgrade Guide](./helm-upgrades.md). It is the detailed, mandatory
@@ -33,10 +33,8 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 
 Every deployment is a cluster described by the mandatory `companions.json`
 manifest: N agent processes behind one gateway and one authenticated cluster
-Garden. A one-entry manifest is a cluster of one and uses the same control plane
-and operator procedure as a larger roster. Cluster SSO is enabled by the
-system-owned `fleet-auth.json`; the Helm chart requires it, while local
-development may intentionally leave it absent. The full model is in
+Garden. A one-entry manifest is a cluster of one and uses the same control plane,
+SSO, and operator procedure as a larger roster. The full model is in
 [`docs/multi-companion.md`](./multi-companion.md); this section is the operator
 quick reference. The manifest is always required (seed
 `config/companions.seed.json`) and fails closed at startup if missing or invalid;
@@ -101,14 +99,12 @@ rollback.
 
 ### Per-companion Postgres schema
 
-Each agent process pins its runtime persistence to the schema and database role
-named by its manifest entry via `COMPANION_PG_SCHEMA` and the resolved tenant
-credential (see [`docs/setup.md`](./setup.md)). Provision the tenant role,
-schema, grants, and `pgvector` extension before startup. The runtime verifies
-that boundary and refuses to create or repair it. Its pools then pin
-`search_path` to the verified tenant schema. The separately provisioned
-`shared` schema holds cross-companion world data such as companion presence and
-shared-world wiki chunks.
+Each agent process pins its runtime persistence to the schema named by its
+manifest entry via `COMPANION_PG_SCHEMA` (see
+[`docs/setup.md`](./setup.md)). The schema is created up front on startup and the pool's
+`search_path` is pinned to it. One additional `shared` schema holds
+cross-companion world data (`companion_presence`, shared-world wiki chunks) and
+is provisioned advisory-lock-serialized so concurrently-starting agents are safe.
 
 ### Per-companion Discord accounts
 
@@ -140,21 +136,21 @@ The same compiled Garden bundle renders the `/fleet` overview; its
 authorized projection. The retired raw cluster-status listener and
 `/fleet/status.json` route are absent.
 
-`fleet-auth.json` accepts an optional Operator-unconditional `accountRoster`
+`fleet-auth.json` accepts an optional admin-unconditional `accountRoster`
 (`[{ "providerSubjectId": "<discord snowflake>", "companionId": "<companion uuid>",
 "contactId": "<canonical companion contact id>", "role": "owner" }]`). A
 Discord-authenticated session whose token-verified subject matches an entry is
 granted that entry's role for that companion directly from config — bypassing
 the first-owner ceremony, principal activation, and the nested authority
 version/generation gauntlet that can otherwise lock the operator out. The
-optional `contactId` binds the rostered Operator to their canonical contact when
+optional `contactId` binds the rostered admin to their canonical contact when
 no live principal contact binding exists (see the authority-model doc). The session itself must still be real,
 unexpired, and unrevoked, and subjects not in the roster keep the full
 gauntlet unchanged. A malformed roster entry, an unknown role, or a roster
 companion outside the companions registry refuses startup. The roster is also
 the deployment access-mode seam (operator ruling D1, 2026-07-30): exactly one
-rostered human for a companion selects sole-Operator mode (nothing subject-gated
-for that Operator); zero or two-plus selects multiple-Operator mode (everything visible
+rostered human for a companion selects sole-admin mode (nothing subject-gated
+for that admin); zero or two-plus selects multi-admin mode (everything visible
 except other-humans' sensitive memories, which open through an audited
 escalation grant — `POST /v1/fleet-auth/escalation/grant`, TTL
 `ttls.escalationGrantMs`).
@@ -539,15 +535,7 @@ deployment/systemd/user/purrsephone-watchdog.environment.example
 
 The watchdog checks the configured `systemd --user` service, optional process pattern, and API `/health` continuity contract. It pages through ntfy when the service is down, the health endpoint is unreachable, or continuity checks such as `schedulerHealthcheck` report stale liveness. It persists a small replay guard under the repo-local `data/ops/` default so repeated timer runs do not send duplicate pages for the same unresolved incident until `CONTINUITY_WATCHDOG_REPEAT_PAGE_AFTER_MS` elapses.
 
-Configuration is fail-closed. The service template targets the checkout path
-encoded in the repo-owned template, requires
-`deployment/systemd/user/purrsephone-watchdog.env` in that deployed checkout,
-and refuses to run without explicit ntfy base URL, topic, and token by default.
-If a deployment uses a different checkout path, edit the repo-owned template
-before installation. Copy the example to that ignored env path and fill in
-deployment-specific values there. Do not create shadow watchdog env files in
-user-level or system-level supervisor directories, temporary directories, or
-other off-repo locations.
+Configuration is fail-closed. The service template targets the live checkout at `%h/psfn-framework-source`, requires `deployment/systemd/user/purrsephone-watchdog.env` in that deployed repo checkout, and the script refuses to run without explicit ntfy base URL, topic, and token by default. If a deployment uses a different checkout path, edit the repo-owned template before installation. Copy the example file to that ignored env path and fill in deployment-specific values there. Do not create shadow watchdog env files in `~/.config/systemd`, `/etc/systemd`, `/tmp`, or other off-repo locations.
 
 Dry-run and config validation:
 
@@ -1075,10 +1063,10 @@ unpinned path. The verified SHA is baked into the image at
 
 The pin tracks `emo_sim` `main`, which carries the directed social-need work
 (upstream PRs #1 and #4). The `emo_sim` checkout used for a build —
-`$PSFN_EMOSIM_SRC`, per
+`$PSFN_EMOSIM_SRC`, default `~/emo_sim`, per
 `scripts/ops/ship-kube-update.sh --components emosim` — must be at the pinned
-commit or the verify stage refuses the build. Update the checkout selected by
-`PSFN_EMOSIM_SRC` intentionally before shipping. Always pin a commit reachable from `main`: the
+commit or the verify stage refuses the build; `git -C ~/emo_sim checkout main &&
+git pull` is normally enough. Always pin a commit reachable from `main`: the
 verify stage resolves the SHA from the build context's own git metadata, so a
 commit reachable only from a feature or integration branch can vanish from a
 fresh clone while the pin still demands it. Both merged

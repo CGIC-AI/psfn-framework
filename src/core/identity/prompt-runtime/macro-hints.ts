@@ -251,11 +251,7 @@ export const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] 
 ];
 
 export const TRUST_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
-  trustTurnHint(
-    '{{runtime_trust_is_primary}}',
-    'Whether the current Participant carries the technical primary trust label.',
-    'false',
-  ),
+  trustTurnHint('{{runtime_trust_is_primary}}', 'Whether the current turn is with the primary person.', 'false'),
   trustTurnHint('{{runtime_trust_is_trusted}}', 'Whether the current turn is with a trusted contact.', 'true'),
   trustTurnHint('{{runtime_trust_is_regular}}', 'Whether the current turn is with a regular acquaintance.', 'false'),
   trustTurnHint('{{runtime_trust_is_public}}', 'Whether the current turn is a public interaction.', 'false'),

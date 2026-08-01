@@ -215,8 +215,16 @@ npm run e2e:voice
 9. Pin dependencies, images, and fetched artifacts exactly. Do not use `latest`,
    branch refs, unpinned `npx`, or floating remote installers.
 
-For code-owned tuning constants, comply with
+For code-owned tuning and policy values, comply with
 `npm run verify:hardcoded-settings`; settings-like values belong in owner files.
+The AST-based gate covers literal numeric/string/regex declarations at any
+scope (including `let`/`var`), literal string/number arrays and readonly tuples,
+tuning-bearing object members, enum/class fields, and statically embedded
+`CHILD_SOURCE`/`WORKER_SOURCE` templates. It deliberately keys on policy-shaped
+identifier segments and ignores derived values, calls, spreads, and identifiers
+as direct values, except for policy-shaped `RegExp` constructors; mixed objects
+are traversed so their literal policy members remain visible. Extended-form
+baseline entries require a non-empty review note.
 
 ## Validation and publication
 

@@ -128,7 +128,7 @@ export function createVirtualRoomFollower(options: VirtualRoomFollowerOptions): 
       return;
     }
 
-    // Trust gate: only the Partner's own activity pulls presence —
+    // Trust gate: only the human partner's own activity pulls presence —
     // primary/trusted, user-role, not a machine intelligence.
     if (author.speakerRole !== 'user') return;
     if (author.speakingWithIsMachineIntelligence === true) {

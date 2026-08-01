@@ -12,7 +12,6 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `repo`
 - `shell`
 - `web`
-- `world`
 - `analysis_workbench`
 - `tool_search`
 - `toolset`
@@ -29,6 +28,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `north_star`
 - `identity`
 - `subagent`
+- `shard`
 - `wiki`
 - `journal`
 - `vault`
@@ -39,7 +39,6 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `notify`
 - `generate_image`
 - `selfie_create`
-- `publication`
 
 ## Current Stabilized Branch
 
@@ -57,7 +56,6 @@ Unified top-level direct tools in the current runtime:
 - `repo`
 - `shell`
 - `web`
-- `world`
 - `skill`
 - `wiki`
 - `journal`
@@ -77,7 +75,6 @@ Unified top-level direct tools in the current runtime:
 - `notify`
 - `generate_image`
 - `selfie_create`
-- `publication`
 
 Important current-state notes:
 
@@ -88,9 +85,7 @@ Important current-state notes:
 - `response_control action="no_reply"` is the explicit no-response disposition surface. It is for intentional non-replies, not hidden failure.
 - Generic image generation, editing, and analysis stay on `generate_image` (registered core, presented before admin/dev tooling); `selfie_create` stays separate as the first-class core self-expression image tool. The old `media` name is retired: documentation and pin attempts name `generate_image` as the replacement.
 - `journal` is a core durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
-- `shard` is not a canonical registry entry. Shard execution internals,
-  fold-review lineage, and satellite delegation exist, but bounded model-facing
-  worker control is `subagent`.
+- `shard` is currently a reserved extended registry entry for future long-horizon shard lifecycle control. Shard execution internals, fold-review lineage, and satellite delegation exist, but bounded model-facing worker control is currently `subagent`.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
 
 ## Canonical Catalog Surface
@@ -321,19 +316,6 @@ The canonical model-facing `generate_image` surface (formerly `media`) collapses
 - `analyze` inspects visible contents or consistency questions on explicit inputs (consumption-side behavior; a future `analyze_media` split may move it off this tool)
 - Detailed prompt craft for image creation, music creation, and future creator workflows stays modeled as creator skills loaded with `skill action="view"`
 
-## Canonical Publication Surface
-
-The canonical `publication` surface owns the Companion-authored publication
-review loop:
-
-- `submit` creates an exact-content candidate;
-- `revise` creates a new candidate superseding an earlier one; and
-- `status` reads candidate approval state.
-
-The runtime derives sensitivity, provenance, subject contacts, audience, and
-destination. The tool never approves or sends a candidate, and a Partner's
-review does not edit the Companion's prose.
-
 ## Canonical Web Surface
 
 The canonical model-facing `web` surface collapses outward web work while keeping gateway fetch lanes and allowlists explicit underneath.
@@ -366,22 +348,6 @@ The `web` tool's fetch/search backend is selected by explicit config in the
 In both modes, backend output still passes `sanitizeWebContent` before reaching
 the model; the htm9.2 cogsec intake envelope will wrap that same screened output
 once it lands (seam marked in `src/boundary/gateway/methods/web.ts`).
-
-## Canonical World Surface
-
-The canonical `world` surface preserves the established action names:
-
-- `perceive` queries bounded current state for registered affordances through
-  the authenticated gateway;
-- `list` reads place and affordance registry metadata;
-- `control` acts only on a registered effector and remains capability-,
-  trust/provenance-, confirmation-, and gateway-policy-gated; and
-- `move` changes deliberate virtual situated state only. It never changes or
-  claims sensed physical presence.
-
-Do not rename or split `world.perceive`. Registry metadata, authenticated
-device/place claims, raw observations, derived last-known state, and prompt
-rendering remain distinct layers.
 
 ## Canonical Wiki Surface
 
@@ -460,9 +426,9 @@ The `system` surface is deployment-mode aware and fails closed when the mode can
 
 ## Reserved Shard Surface
 
-The name `shard` is reserved for possible long-horizon shard work and fold-back
-lifecycle control. It is not registered as a canonical model-facing surface.
+The `shard` registry entry is reserved for long-horizon shard work and fold-back lifecycle control. It is not yet the ordinary direct model-facing control surface.
 
+- Current registry action: `spawn`
 - Bounded short-horizon worker control belongs to `subagent action="spawn"`; `spawn_subagent` and the old `spawn_shard` name must not be used in active prompts or checklists.
 - Shard internals already include `ShardManager`, fold-review records, lineage tagging, artifact review policy, active/degraded/offline lifecycle state, charge accounting, and satellite delegation hooks.
 - Future direct shard control should converge on this one surface rather than reintroducing `spawn_shard` or shard-specific micro-tools.
@@ -576,7 +542,7 @@ The table below maps current or retired first-party tool names to the canonical 
 | `web_research` | `web` | always-on | Collapsed into `web action="search"` for small-scope URL discovery + fetch; do not confuse with `session search` or transcript recall. |
 | `subagent` | `subagent` | always-on | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_subagent` | `subagent` | retired | Use `subagent action="spawn"` for bounded short-horizon work. |
-| `spawn_shard` | reserved `shard` name | hidden | Historical pre-consolidation name. It is not canonical or callable; use `subagent action="spawn"` for bounded workers. |
+| `spawn_shard` | `shard` | hidden | Historical name from the pre-consolidation surface. Do not use it in active prompts or checklists; future long-horizon shard work should converge on `shard action="spawn"`. |
 | `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|stats|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault` | `vault` | extended | Legacy external Obsidian bridge for bounded source read/search/write compatibility; canonical durable reference knowledge belongs in `wiki`. |

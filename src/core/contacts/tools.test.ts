@@ -818,7 +818,7 @@ describe('contact tools', () => {
       });
 
       // setTrustLevel returns false for primary user
-      expect(resultText(result)).toContain('not found or carries primary trust');
+      expect(resultText(result)).toContain('not found or is the primary user');
       // Trust level should remain 'primary'
       expect((await store.getById(primary.id))!.trustLevel).toBe('primary');
       expect(result.details?.isError).toBe(true);

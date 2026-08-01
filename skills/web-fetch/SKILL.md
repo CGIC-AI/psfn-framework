@@ -49,7 +49,7 @@ When asked to read a URL or fetch web content:
 1. Prefer the top-level `web_fetch` tool
 2. Only fall back to a raw crawl4ai endpoint when the operator has explicitly
    supplied one for this deployment
-3. Return the fetched content to the user
+3. Return the fetched content to the active conversation
 
 ## Notes
 - This service runs on the local network

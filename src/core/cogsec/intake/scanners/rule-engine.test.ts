@@ -9,16 +9,18 @@ import {
   IntakeRulePatternError,
 } from './proximity.js';
 import {
+  compileIntakeEncodingPolicyFile,
   compileIntakeL1RuleFile,
   createIntakeRuleEngine,
   INTAKE_RULE_ENGINE_SCANNER_ID,
 } from './rule-engine.js';
 import { MAX_SCAN_CHARS } from './types.js';
+import { isRecord } from '../../../../shared/utils/types.js';
 
-function writeTempRules(json: unknown): string {
+function writeTempRules(json: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), 'intake-l1-rules-'));
   const path = join(dir, 'intake-l1-rules.json');
-  writeFileSync(path, JSON.stringify(json), 'utf8');
+  writeFileSync(path, JSON.stringify(withEncodingPolicy(json)), 'utf8');
   return path;
 }
 
@@ -33,6 +35,21 @@ const BASE_RULE = {
     maxFillerWords: 8,
   },
 };
+
+const defaultOwnerFile = JSON.parse(
+  readFileSync(join(process.cwd(), 'config', 'intake-l1-rules.json'), 'utf8'),
+) as unknown;
+if (!isRecord(defaultOwnerFile) || !isRecord(defaultOwnerFile.encodingPolicy)) {
+  throw new Error('Default intake L1 owner file must contain encodingPolicy');
+}
+const DEFAULT_ENCODING_POLICY = defaultOwnerFile.encodingPolicy;
+
+function withEncodingPolicy(json: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...json,
+    encodingPolicy: DEFAULT_ENCODING_POLICY,
+  };
+}
 
 describe('bounded-pattern lint (assertBoundedRulePattern)', () => {
   it('rejects unbounded star quantifiers between anchors', () => {
@@ -95,35 +112,41 @@ describe('bounded proximity primitives', () => {
 
 describe('compileIntakeL1RuleFile', () => {
   it('rejects labels outside the envelope taxonomy', () => {
-    const json = JSON.stringify({
+    const json = JSON.stringify(withEncodingPolicy({
       schemaVersion: 1,
       rules: [{ ...BASE_RULE, labels: ['made_up/label'] }],
-    });
+    }));
     expect(() => compileIntakeL1RuleFile(json, 'test.json')).toThrow(/not in the envelope taxonomy/);
   });
 
   it('rejects rules with unbounded regex patterns', () => {
-    const json = JSON.stringify({
+    const json = JSON.stringify(withEncodingPolicy({
       schemaVersion: 1,
       rules: [{
         ...BASE_RULE,
         match: { kind: 'regex', pattern: 'ignore(?:\\w+\\s+)*instructions' },
       }],
-    });
+    }));
     expect(() => compileIntakeL1RuleFile(json, 'test.json')).toThrow(/unbounded quantifier/);
   });
 
   it('rejects duplicate rule ids, bad scopes, and bad weights', () => {
     expect(() => compileIntakeL1RuleFile(
-      JSON.stringify({ schemaVersion: 1, rules: [BASE_RULE, BASE_RULE] }),
+      JSON.stringify(withEncodingPolicy({ schemaVersion: 1, rules: [BASE_RULE, BASE_RULE] })),
       'test.json',
     )).toThrow(/duplicate rule id/);
     expect(() => compileIntakeL1RuleFile(
-      JSON.stringify({ schemaVersion: 1, rules: [{ ...BASE_RULE, scope: 'everything' }] }),
+      JSON.stringify(withEncodingPolicy({
+        schemaVersion: 1,
+        rules: [{ ...BASE_RULE, scope: 'everything' }],
+      })),
       'test.json',
     )).toThrow(/scope must be one of/);
     expect(() => compileIntakeL1RuleFile(
-      JSON.stringify({ schemaVersion: 1, rules: [{ ...BASE_RULE, weight: 0 }] }),
+      JSON.stringify(withEncodingPolicy({
+        schemaVersion: 1,
+        rules: [{ ...BASE_RULE, weight: 0 }],
+      })),
       'test.json',
     )).toThrow(/weight/);
   });
@@ -134,6 +157,32 @@ describe('compileIntakeL1RuleFile', () => {
       'config/intake-l1-rules.json',
     );
     expect(rules.length).toBeGreaterThanOrEqual(20);
+  });
+});
+
+describe('compileIntakeEncodingPolicyFile', () => {
+  it('rejects missing, unknown, out-of-range, and unsafe encoding policy', () => {
+    expect(() => compileIntakeEncodingPolicyFile(
+      JSON.stringify({ schemaVersion: 1, rules: [BASE_RULE] }),
+      'missing-policy.json',
+    )).toThrow(/encodingPolicy must be an object/);
+
+    const base = structuredClone(DEFAULT_ENCODING_POLICY);
+    expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
+      schemaVersion: 1,
+      encodingPolicy: { ...base, surprise: true },
+      rules: [BASE_RULE],
+    }), 'unknown-policy.json')).toThrow(/unknown keys: surprise/);
+    expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
+      schemaVersion: 1,
+      encodingPolicy: { ...base, maxCandidatesPerEncoding: 999 },
+      rules: [BASE_RULE],
+    }), 'oversized-policy.json')).toThrow(/maxCandidatesPerEncoding/);
+    expect(() => compileIntakeEncodingPolicyFile(JSON.stringify({
+      schemaVersion: 1,
+      encodingPolicy: { ...base, decodingCuePattern: 'decode.*payload' },
+      rules: [BASE_RULE],
+    }), 'unsafe-policy.json')).toThrow(/unbounded quantifier/);
   });
 });
 
@@ -197,7 +246,7 @@ describe('rule engine hot reload', () => {
     const engine = createIntakeRuleEngine({ rulesPath, reloadCheckIntervalMs: -1 });
     expect(engine.scan('open the pod bay doors', 'strict').findings).toEqual([]);
 
-    writeFileSync(rulesPath, JSON.stringify({
+    writeFileSync(rulesPath, JSON.stringify(withEncodingPolicy({
       schemaVersion: 1,
       rules: [
         BASE_RULE,
@@ -209,7 +258,7 @@ describe('rule engine hot reload', () => {
           match: { kind: 'regex', pattern: 'pod\\s{1,4}bay\\s{1,4}doors' },
         },
       ],
-    }), 'utf8');
+    })), 'utf8');
     engine.reload();
     const result = engine.scan('open the pod bay doors', 'strict');
     expect(result.findings.map((f) => f.ruleId)).toEqual(['pod_bay_doors']);
@@ -221,7 +270,7 @@ describe('rule engine hot reload', () => {
     const engine = createIntakeRuleEngine({ rulesPath, reloadCheckIntervalMs: 0 });
     expect(engine.scan('hello there', 'all').findings).toEqual([]);
 
-    writeFileSync(rulesPath, JSON.stringify({
+    writeFileSync(rulesPath, JSON.stringify(withEncodingPolicy({
       schemaVersion: 1,
       rules: [{
         id: 'hello_rule',
@@ -230,7 +279,7 @@ describe('rule engine hot reload', () => {
         weight: 0.1,
         match: { kind: 'regex', pattern: '\\bhello\\b' },
       }],
-    }), 'utf8');
+    })), 'utf8');
     const result = engine.scan('hello there', 'all');
     expect(result.findings.map((f) => f.ruleId)).toEqual(['hello_rule']);
   });

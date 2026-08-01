@@ -1,12 +1,18 @@
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import { isIntakeRiskLabel } from '../../../../shared/contracts/intake-envelope.js';
+import { isRecord } from '../../../../shared/utils/types.js';
 import { createIntakeL1Scanner, MAX_SCAN_CHARS, type IntakeL1Scanner } from './index.js';
 
 const DEFAULT_RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
+const defaultOwnerFile = JSON.parse(readFileSync(DEFAULT_RULES_PATH, 'utf8')) as unknown;
+if (!isRecord(defaultOwnerFile) || !isRecord(defaultOwnerFile.encodingPolicy)) {
+  throw new Error('Default intake L1 owner file must contain encodingPolicy');
+}
+const DEFAULT_ENCODING_POLICY = defaultOwnerFile.encodingPolicy;
 
 function scannerWithDefaultRules(): IntakeL1Scanner {
   return createIntakeL1Scanner({ rulesPath: DEFAULT_RULES_PATH, reloadCheckIntervalMs: -1 });
@@ -260,6 +266,7 @@ describe('intake L1 pipeline', () => {
     // Add a rule, no restart:
     writeFileSync(rulesPath, JSON.stringify({
       schemaVersion: 1,
+      encodingPolicy: DEFAULT_ENCODING_POLICY,
       rules: [{
         id: 'wombat_protocol',
         labels: ['execution/executable_instruction'],

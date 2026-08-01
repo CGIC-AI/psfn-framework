@@ -42,6 +42,10 @@ import {
   type IntakeScannerResult,
   type IntakeScanScope,
 } from './types.js';
+import {
+  compileIntakeEncodingPolicy,
+  type IntakeEncodingPolicy,
+} from './encoding-policy.js';
 
 export const INTAKE_L1_RULES_FILE_NAME = 'intake-l1-rules.json';
 export const INTAKE_RULE_ENGINE_SCANNER_ID = 'l1.rules';
@@ -95,6 +99,7 @@ export interface IntakeL1Rule {
 
 export interface IntakeL1RuleFile {
   schemaVersion: 1;
+  encodingPolicy: unknown;
   rules: readonly IntakeL1Rule[];
 }
 
@@ -158,11 +163,12 @@ function compileMatch(match: unknown, ruleId: string, sourcePath: string): RegEx
   );
 }
 
-/** Fail-closed parse + compile of a rule file's JSON text. */
-export function compileIntakeL1RuleFile(
-  jsonText: string,
-  sourcePath: string,
-): CompiledIntakeRule[] {
+interface CompiledIntakeL1File {
+  rules: CompiledIntakeRule[];
+  encodingPolicy: IntakeEncodingPolicy;
+}
+
+function parseIntakeL1File(jsonText: string, sourcePath: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
@@ -175,23 +181,31 @@ export function compileIntakeL1RuleFile(
   if (parsed.schemaVersion !== 1) {
     throw invalid(sourcePath, 'schemaVersion must be 1');
   }
-  const unknownKeys = Object.keys(parsed).filter((key) => !['schemaVersion', 'rules'].includes(key));
+  const unknownKeys = Object.keys(parsed)
+    .filter((key) => !['schemaVersion', 'encodingPolicy', 'rules'].includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
   }
-  if (!Array.isArray(parsed.rules)) {
+  return parsed;
+}
+
+function compileIntakeL1Rules(
+  rawRules: unknown,
+  sourcePath: string,
+): CompiledIntakeRule[] {
+  if (!Array.isArray(rawRules)) {
     throw invalid(sourcePath, 'rules must be an array');
   }
-  if (parsed.rules.length === 0) {
+  if (rawRules.length === 0) {
     throw invalid(sourcePath, 'rules must not be empty');
   }
-  if (parsed.rules.length > MAX_RULES) {
+  if (rawRules.length > MAX_RULES) {
     throw invalid(sourcePath, `rules exceed the ${String(MAX_RULES)}-rule cap`);
   }
 
   const seenIds = new Set<string>();
   const compiled: CompiledIntakeRule[] = [];
-  for (const [index, ruleValue] of parsed.rules.entries()) {
+  for (const [index, ruleValue] of rawRules.entries()) {
     const at = `rules[${String(index)}]`;
     if (!isRecord(ruleValue)) {
       throw invalid(sourcePath, `${at} must be an object`);
@@ -244,6 +258,33 @@ export function compileIntakeL1RuleFile(
   return compiled;
 }
 
+/** Fail-closed parse + compile of the complete L1 owner-file snapshot. */
+export function compileIntakeL1ConfigFile(
+  jsonText: string,
+  sourcePath: string,
+): CompiledIntakeL1File {
+  const parsed = parseIntakeL1File(jsonText, sourcePath);
+  const rules = compileIntakeL1Rules(parsed.rules, sourcePath);
+  const encodingPolicy = compileIntakeEncodingPolicy(parsed.encodingPolicy, sourcePath);
+  return { rules, encodingPolicy };
+}
+
+/** Compile rules only after validating the complete owner-file snapshot. */
+export function compileIntakeL1RuleFile(
+  jsonText: string,
+  sourcePath: string,
+): CompiledIntakeRule[] {
+  return compileIntakeL1ConfigFile(jsonText, sourcePath).rules;
+}
+
+/** Compile the scanner policy co-owned by the L1 rule owner file. */
+export function compileIntakeEncodingPolicyFile(
+  jsonText: string,
+  sourcePath: string,
+): IntakeEncodingPolicy {
+  return compileIntakeL1ConfigFile(jsonText, sourcePath).encodingPolicy;
+}
+
 // ── Engine ──
 
 export interface IntakeRuleEngineStatus {
@@ -275,6 +316,8 @@ export interface IntakeRuleEngine {
   /** Explicit reload; throws on an invalid file (fail closed for the caller). */
   reload(): void;
   status(): IntakeRuleEngineStatus;
+  /** Current encoding policy from the same last-good owner-file snapshot. */
+  encodingPolicy(): IntakeEncodingPolicy;
 }
 
 function readFingerprint(rulesPath: string): string {
@@ -288,6 +331,7 @@ export function createIntakeRuleEngine(options: IntakeRuleEngineOptions): Intake
   const now = options.now ?? Date.now;
 
   let rules: CompiledIntakeRule[];
+  let encodingPolicy: IntakeEncodingPolicy;
   let fingerprint: string;
   let loadedAtMs: number;
   let lastReloadError: string | undefined;
@@ -296,7 +340,9 @@ export function createIntakeRuleEngine(options: IntakeRuleEngineOptions): Intake
   function load(): void {
     const nextFingerprint = readFingerprint(rulesPath);
     const jsonText = fs.readFileSync(rulesPath, 'utf8');
-    rules = compileIntakeL1RuleFile(jsonText, rulesPath);
+    const compiled = compileIntakeL1ConfigFile(jsonText, rulesPath);
+    rules = compiled.rules;
+    encodingPolicy = compiled.encodingPolicy;
     fingerprint = nextFingerprint;
     loadedAtMs = now();
     lastReloadError = undefined;
@@ -356,6 +402,9 @@ export function createIntakeRuleEngine(options: IntakeRuleEngineOptions): Intake
       };
       if (lastReloadError !== undefined) status.lastReloadError = lastReloadError;
       return status;
+    },
+    encodingPolicy(): IntakeEncodingPolicy {
+      return encodingPolicy;
     },
   };
 }

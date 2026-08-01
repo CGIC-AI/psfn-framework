@@ -2888,16 +2888,6 @@
       "note": "Code-owned safety bound: quarantine mutations fail loudly after a wedged cross-process lock instead of hanging a security-sensitive read-audit or operator decision indefinitely."
     },
     {
-      "file": "src/core/cogsec/intake/scanners/encoding-smuggling.ts",
-      "name": "MAX_BLOBS_EXAMINED",
-      "value": "8"
-    },
-    {
-      "file": "src/core/cogsec/intake/scanners/encoding-smuggling.ts",
-      "name": "TEXTLIKE_MIN_BYTES",
-      "value": "24"
-    },
-    {
       "file": "src/core/cogsec/intake/scanners/index.ts",
       "name": "MAX_EXTRACTED_FIELDS",
       "value": "64"

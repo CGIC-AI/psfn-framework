@@ -824,6 +824,20 @@
       "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
     },
     {
+      "file": "src/boundary/gateway/mcp/secure-fetch.ts",
+      "name": "createMcpSecureFetchController.secureFetch.connect.minVersion",
+      "value": "'TLSv1.2'",
+      "form": "object-member",
+      "note": "Code-owned transport safety floor: external MCP connections reject obsolete TLS protocol versions."
+    },
+    {
+      "file": "src/boundary/gateway/mcp/secure-fetch.ts",
+      "name": "createMcpSecureFetchController.secureFetch.policy.maxRedirectHops",
+      "value": "0",
+      "form": "object-member",
+      "note": "Code-owned SSRF and credential-custody boundary: MCP endpoints and OAuth token URLs are exact and never redirect."
+    },
+    {
       "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
       "name": "DEFAULT_COMMAND_TIMEOUT_MS",
       "value": "12_000"

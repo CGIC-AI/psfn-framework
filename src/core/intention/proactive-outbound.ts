@@ -15,9 +15,15 @@ export interface ProactiveOutboundDispatchInput {
   reason?: string;
 }
 
+export type ProactiveOutboundBlockReason =
+  | 'empty_content'
+  | 'unsupported_channel_type'
+  | 'channel_not_approved_for_primary'
+  | 'rate_limited';
+
 export type ProactiveOutboundDispatchResult =
   | { outcome: 'sent' }
-  | { outcome: 'blocked'; reason: string; retryAfterMs?: number };
+  | { outcome: 'blocked'; reason: ProactiveOutboundBlockReason; retryAfterMs?: number };
 
 export interface ProactiveOutboundDispatcherOptions {
   sender: MessageSender;
@@ -28,6 +34,13 @@ export interface ProactiveOutboundDispatcherOptions {
    */
   isApprovedPrimaryChannel: (channelId: string) => boolean | Promise<boolean>;
   eventBus?: EventBus | null;
+}
+
+/** Exact-match allowlist for the configured primary-contact private channel. */
+export function createApprovedPrimaryChannelPolicy(
+  approvedPrimaryChannelId: string,
+): ProactiveOutboundDispatcherOptions['isApprovedPrimaryChannel'] {
+  return channelId => channelId === approvedPrimaryChannelId;
 }
 
 /** Canonical content that policy evaluates, consent binds, and the sender sees. */
@@ -61,7 +74,7 @@ export class ProactiveOutboundDispatcher {
     // here before any external send.
     const content = normalizeProactiveOutboundContent(input.content);
     const blocked = async (
-      reason: string,
+      reason: ProactiveOutboundBlockReason,
       retryAfterMs?: number,
     ): Promise<ProactiveOutboundDispatchResult> => {
       log.warn('Proactive outbound message blocked', {
@@ -114,7 +127,7 @@ export class ProactiveOutboundDispatcher {
   private async emit(
     eventName: 'intention.outbound.dispatched' | 'intention.outbound.blocked',
     input: ProactiveOutboundDispatchInput,
-    blockReason?: string,
+    blockReason?: ProactiveOutboundBlockReason,
     contentLength?: number,
   ): Promise<void> {
     if (!this.eventBus) return;

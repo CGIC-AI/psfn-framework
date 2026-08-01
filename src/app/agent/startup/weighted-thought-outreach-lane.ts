@@ -7,7 +7,6 @@
 // resolution — primary heartbeat DM only until a group-continuation policy
 // approver is wired.
 
-import type { Logger } from 'winston';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
@@ -24,9 +23,8 @@ import type { wireIcpInitiationSources } from '../icp-initiation-source-wiring.j
 
 export interface WeightedThoughtOutreachLaneDeps {
   scheduler: Scheduler;
-  schedulerConfig: SchedulerConfig;
+  schedulerConfig: Pick<SchedulerConfig, 'weightedThoughtOutreach' | 'episodicProcessing'>;
   eventBus: EventBus;
-  log: Logger;
   weightedThoughtStore: WeightedThoughtStorePort | null | undefined;
   llmProvider: LLMProviderPort;
   companionName: string;
@@ -41,7 +39,6 @@ export function registerWeightedThoughtOutreachLane(deps: WeightedThoughtOutreac
     scheduler,
     schedulerConfig,
     eventBus,
-    log,
     weightedThoughtStore,
     llmProvider,
     companionName,
@@ -90,6 +87,9 @@ export function registerWeightedThoughtOutreachLane(deps: WeightedThoughtOutreac
       }),
     );
   } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
-    log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');
+    throw new Error(
+      'scheduler.json weightedThoughtOutreach.enabled is true but no weighted-thought store is composed; '
+      + 'refusing to boot an outreach lane whose durable source state is unavailable',
+    );
   }
 }

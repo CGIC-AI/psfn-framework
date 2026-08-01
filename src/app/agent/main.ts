@@ -19,7 +19,10 @@ import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import { WikiStore } from '../../faculties/wiki/store.js';
-import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
+import {
+  createApprovedPrimaryChannelPolicy,
+  ProactiveOutboundDispatcher,
+} from '../../core/intention/proactive-outbound.js';
 import {
   registerTemporalWakeupLane,
 } from './startup/temporal-wakeup-lane.js';
@@ -1348,7 +1351,7 @@ async function main(): Promise<void> {
     ? new ProactiveOutboundDispatcher({
       sender: gatewaySender,
       rateLimiter: externalRateLimiter,
-      isApprovedPrimaryChannel: (channelId) => channelId === heartbeatChannelId,
+      isApprovedPrimaryChannel: createApprovedPrimaryChannelPolicy(heartbeatChannelId),
       eventBus,
     })
     : null;
@@ -1390,7 +1393,6 @@ async function main(): Promise<void> {
     scheduler,
     schedulerConfig,
     eventBus,
-    log,
     weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
     llmProvider,
     companionName: card.data.name,

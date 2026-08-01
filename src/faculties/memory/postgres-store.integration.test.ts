@@ -345,6 +345,92 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('persists approval, denial, deletion, and restoration in proposal-linked audit chains', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, {
+        memoryDeletionPolicy: {
+          justificationCategories: [
+            {
+              id: 'privacy_or_consent',
+              label: 'Privacy or consent',
+              eligible: true,
+              explanationPatterns: ['consent'],
+            },
+            {
+              id: 'duplicate_or_superseded',
+              label: 'Duplicate or superseded',
+              eligible: true,
+              explanationPatterns: ['canonical replacement'],
+            },
+          ],
+        },
+      });
+      const proposalStore = store.memoryDeletionProposalStore;
+      await store.insertMemory(makeMemory({ id: 'proposal-approved' }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({ id: 'proposal-denied' }), DEFAULT_EMBEDDING);
+
+      const proposed = await proposalStore.createMemoryDeletionProposal({
+        proposalId: 'proposal-chain-approved',
+        memoryId: 'proposal-approved',
+        justificationCategory: 'privacy_or_consent',
+        explanation: 'The retained fact no longer has consent to remain active.',
+        proposedBy: 'Companion',
+        proposedAt: 1_700_000_000_100,
+      });
+      expect(proposed.status).toBe('pending_partner_alert');
+      expect((await store.getById('proposal-approved'))?.deletedAt).toBeUndefined();
+
+      await expect(proposalStore.markMemoryDeletionPartnerAlerted(proposed.id, 1_700_000_000_200))
+        .resolves.toMatchObject({ status: 'pending_operator_validation' });
+      const approved = await proposalStore.approveMemoryDeletionProposal(
+        proposed.id,
+        'operator:test',
+        1_700_000_000_300,
+      );
+      expect(approved).toMatchObject({ status: 'approved', operatorId: 'operator:test' });
+      expect(approved.deleteId).toBeTruthy();
+      expect(await store.getDeleteVersion(approved.deleteId!)).toMatchObject({
+        proposalId: proposed.id,
+        memoryId: 'proposal-approved',
+      });
+      expect((await store.getById('proposal-approved'))?.deletedAt).toBe(1_700_000_000_300);
+      expect(await proposalStore.listMemoryDeletionAuditEvents(proposed.id)).toEqual([
+        expect.objectContaining({ proposalId: proposed.id, eventType: 'proposed', actorRole: 'Companion' }),
+        expect.objectContaining({ proposalId: proposed.id, eventType: 'partner_alerted', actorRole: 'Partner' }),
+        expect.objectContaining({ proposalId: proposed.id, eventType: 'approved', actorRole: 'Operator' }),
+        expect.objectContaining({ proposalId: proposed.id, eventType: 'deleted', actorRole: 'Operator', deleteId: approved.deleteId }),
+      ]);
+
+      await expect(store.undoSoftDelete(approved.deleteId!, {
+        restoredAt: 1_700_000_000_400,
+        restoredBy: 'tool:memory|action:restore',
+        actorRole: 'Companion',
+      })).resolves.toMatchObject({ proposalId: proposed.id, restoredAt: 1_700_000_000_400 });
+      await expect(proposalStore.getMemoryDeletionProposal(proposed.id))
+        .resolves.toMatchObject({ status: 'restored', deleteId: approved.deleteId });
+      expect((await proposalStore.listMemoryDeletionAuditEvents(proposed.id)).at(-1)).toMatchObject({
+        proposalId: proposed.id,
+        eventType: 'restored',
+        actorRole: 'Companion',
+        deleteId: approved.deleteId,
+      });
+
+      const denied = await proposalStore.createMemoryDeletionProposal({
+        proposalId: 'proposal-chain-denied',
+        memoryId: 'proposal-denied',
+        justificationCategory: 'duplicate_or_superseded',
+        explanation: 'A verified canonical replacement exists.',
+        proposedBy: 'Companion',
+      });
+      await proposalStore.markMemoryDeletionPartnerAlerted(denied.id);
+      await expect(proposalStore.denyMemoryDeletionProposal(denied.id, 'operator:test'))
+        .resolves.toMatchObject({ status: 'denied' });
+      expect((await store.getById('proposal-denied'))?.deletedAt).toBeUndefined();
+      expect((await proposalStore.listMemoryDeletionAuditEvents(denied.id)).map(event => event.eventType))
+        .toEqual(['proposed', 'partner_alerted', 'denied']);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('keeps the forward schema insert-compatible with the pre-anchor rollback writer', async () => {
     await withMemoryDatabase(async (pool) => {
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);

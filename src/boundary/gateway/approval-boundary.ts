@@ -9,6 +9,8 @@ import type {
   ConfirmationExecutionContext,
   ConfirmationApprovalOwner,
   ConfirmationResolverIdentity,
+  ConfirmationResolveResult,
+  ConfirmationQueueTerminalOutcome,
 } from '../../system/capabilities/confirmation-queue.js';
 import type {
   AuthenticatedShardWorkloadHandle,
@@ -170,7 +172,33 @@ export interface ApprovalBoundaryService {
       entry: ConfirmationQueueEntry,
       context: ConfirmationExecutionContext,
     ) => Promise<unknown>;
+    /** Called after the existing confirmation surface has accepted and emitted the alert. */
+    afterEnqueued?: (entry: ConfirmationQueueEntry) => Promise<void>;
+    /** Security-sensitive requests may require every Partner-alert consumer to acknowledge delivery. */
+    requirePartnerAlertDelivery?: boolean;
+    /** Durable denial hook; failure leaves the confirmation pending and retryable. */
+    onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+    retainOnExecutionFailure?: boolean;
+    renewOnExpiry?: boolean;
   }): Promise<ConfirmationQueueEntry>;
+  refreshExplicitApproval(input: {
+    authenticatedCompanionId: string | undefined;
+    id: string;
+    execute: (
+      params: Record<string, unknown>,
+      entry: ConfirmationQueueEntry,
+      context: ConfirmationExecutionContext,
+    ) => Promise<unknown>;
+    afterRefreshed?: (entry: ConfirmationQueueEntry) => Promise<void>;
+    onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+    retainOnExecutionFailure?: boolean;
+    renewOnExpiry?: boolean;
+  }): Promise<ConfirmationQueueEntry>;
+  reconcileExplicitApproval(input: {
+    authenticatedCompanionId: string | undefined;
+    id: string;
+    status: 'approved' | 'denied';
+  }): ConfirmationResolveResult;
   gate<P, R>(options: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R>;
 }
 
@@ -179,6 +207,43 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
+  const emitApprovalRequested = async (
+    entry: ConfirmationQueueEntry,
+    required: boolean,
+  ): Promise<void> => {
+    const owner = entry.approvalOwner;
+    if (!owner) {
+      throw new Error(`Refusing to emit ownerless companion.approval.requested for ${entry.id}`);
+    }
+    const attribution = entry.attribution;
+    if (!attribution) {
+      throw new Error(`Refusing to emit companion.approval.requested without canonical attribution for ${entry.id}`);
+    }
+    if (attribution.parentId !== owner.companionId
+      || attribution.shardId !== owner.shardId) {
+      throw new Error(`Refusing to emit companion.approval.requested with mismatched attribution for ${entry.id}`);
+    }
+    const event = {
+      companionId: owner.companionId,
+      ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+      payload: redactApprovalRequested(entry, {
+        sourceSystem: entry.sourceSystem ?? 'tool-access',
+        attribution,
+        grantMode: { kind: 'once' },
+      }),
+      timestamp: Date.now(),
+    };
+    if (required) {
+      await options.eventBus.emitRequired('companion.approval.requested', event);
+      return;
+    }
+    options.eventBus.emit('companion.approval.requested', event).catch((error) => {
+      approvalLog.error('Failed to emit companion.approval.requested', {
+        id: entry.id,
+        error: toErrorMessage(error),
+      });
+    });
+  };
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
     observer: {
@@ -190,48 +255,6 @@ export function createGatewayApprovalBoundaryService(
           approvalId: outcome.id,
           status: outcome.status,
           ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
-        });
-      },
-      onEnqueued: (entry) => {
-        const owner = entry.approvalOwner;
-        if (!owner) {
-          approvalLog.error('Refusing to emit ownerless companion.approval.requested', {
-            id: entry.id,
-          });
-          return;
-        }
-        // Attribution is canonicalized before enqueue (see
-        // resolveEnqueueAttribution) and stamped onto the entry. Grant-bearing
-        // shard identity comes from the opaque workload registry; the parent id
-        // is ALWAYS the authenticated enqueue owner. Re-verify that binding here.
-        const attribution = entry.attribution;
-        if (!attribution) {
-          approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
-            id: entry.id,
-          });
-          return;
-        }
-        if (attribution.parentId !== owner.companionId
-          || attribution.shardId !== owner.shardId) {
-          approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
-            id: entry.id,
-          });
-          return;
-        }
-        options.eventBus.emit('companion.approval.requested', {
-          companionId: owner.companionId,
-          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
-          payload: redactApprovalRequested(entry, {
-            sourceSystem: entry.sourceSystem ?? 'tool-access',
-            attribution,
-            grantMode: { kind: 'once' },
-          }),
-          timestamp: Date.now(),
-        }).catch((error) => {
-          approvalLog.error('Failed to emit companion.approval.requested', {
-            id: entry.id,
-            error: toErrorMessage(error),
-          });
         });
       },
       onResolved: (outcome) => {
@@ -315,6 +338,11 @@ export function createGatewayApprovalBoundaryService(
       entry: ConfirmationQueueEntry,
       context: ConfirmationExecutionContext,
     ) => Promise<unknown>;
+    afterEnqueued?: (entry: ConfirmationQueueEntry) => Promise<void>;
+    requirePartnerAlertDelivery?: boolean;
+    onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+    retainOnExecutionFailure?: boolean;
+    renewOnExpiry?: boolean;
   }): Promise<ConfirmationQueueEntry> => {
     if (!input.authenticatedCompanionId) {
       throw new Error(
@@ -384,18 +412,19 @@ export function createGatewayApprovalBoundaryService(
             params: input.request.params,
           })
         : undefined;
+    const approvalOwner: ConfirmationApprovalOwner = {
+      companionId: input.authenticatedCompanionId,
+      ...(shard ? { shardId: shard.shardId } : {}),
+    };
     const request: ConfirmationQueueRequest = {
       ...input.request,
       attribution,
-      approvalOwner: {
-        companionId: input.authenticatedCompanionId,
-        ...(shard ? { shardId: shard.shardId } : {}),
-      },
+      approvalOwner,
       ...(preparedShardGrant ? { resolutionAuthority: 'operator' as const } : {}),
     };
     if (input.request.approvalOwner
-      && (input.request.approvalOwner.companionId !== request.approvalOwner.companionId
-        || input.request.approvalOwner.shardId !== request.approvalOwner.shardId)) {
+      && (input.request.approvalOwner.companionId !== approvalOwner.companionId
+        || input.request.approvalOwner.shardId !== approvalOwner.shardId)) {
       throw new Error(
         `Cannot queue ${input.request.method}: supplied approval owner does not match authenticated lineage`,
       );
@@ -453,7 +482,18 @@ export function createGatewayApprovalBoundaryService(
           return result;
         }
       : input.execute;
-    const queueEntry = confirmationQueue.enqueue(request, execute);
+    const queueEntry = confirmationQueue.enqueue(request, execute, {
+      ...(input.onDenied ? { onDenied: input.onDenied } : {}),
+      ...(input.retainOnExecutionFailure ? { retainOnExecutionFailure: true } : {}),
+      ...(input.renewOnExpiry ? { renewOnExpiry: true } : {}),
+    });
+    try {
+      await emitApprovalRequested(queueEntry, input.requirePartnerAlertDelivery === true);
+    } catch (error) {
+      confirmationQueue.discardPending(queueEntry.id);
+      throw error;
+    }
+    await input.afterEnqueued?.(queueEntry);
     if (preparedShardGrant && shardGrantAuthority) {
       shardGrantAuthority.bindRequestGrant(preparedShardGrant, {
         approvalId: queueEntry.id,
@@ -477,7 +517,7 @@ export function createGatewayApprovalBoundaryService(
       .listPending()
       .filter(entry => entry.approvalOwner?.companionId === companionId),
     ownerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id)?.companionId,
-    approvalOwnerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id),
+    approvalOwnerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id) ?? undefined,
     resolveConfirmationForOwner: (companionId, params, resolver) => {
       const owner = confirmationQueue.getApprovalOwner(params.id);
       if (owner?.companionId !== companionId) {
@@ -492,6 +532,32 @@ export function createGatewayApprovalBoundaryService(
     },
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
+    refreshExplicitApproval: async input => {
+      if (!input.authenticatedCompanionId) {
+        throw new Error('Cannot refresh confirmation with no authenticated companion owner');
+      }
+      const owner = confirmationQueue.getApprovalOwner(input.id);
+      if (owner?.companionId !== input.authenticatedCompanionId) {
+        throw new Error(`Cannot refresh confirmation ${input.id}: authenticated owner mismatch`);
+      }
+      const entry = confirmationQueue.refreshPending(input.id, input.execute, {
+        ...(input.onDenied ? { onDenied: input.onDenied } : {}),
+        ...(input.retainOnExecutionFailure ? { retainOnExecutionFailure: true } : {}),
+        ...(input.renewOnExpiry ? { renewOnExpiry: true } : {}),
+      });
+      await input.afterRefreshed?.(entry);
+      return entry;
+    },
+    reconcileExplicitApproval: input => {
+      if (!input.authenticatedCompanionId) {
+        throw new Error('Cannot reconcile confirmation with no authenticated companion owner');
+      }
+      const owner = confirmationQueue.getApprovalOwner(input.id);
+      if (owner?.companionId !== input.authenticatedCompanionId) {
+        throw new Error(`Cannot reconcile confirmation ${input.id}: authenticated owner mismatch`);
+      }
+      return confirmationQueue.reconcileRetainedResolution(input.id, input.status);
+    },
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
       return async (rawParams: P) => {
         // htm9.18 egress tripwire: hold the action if the session canary leaked

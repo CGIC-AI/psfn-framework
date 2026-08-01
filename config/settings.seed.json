@@ -47,6 +47,41 @@
   "memoryExtractionMaxWrites": 2,
   "memoryExtractionTelemetryEnabled": true,
   "memoryRetrievalTelemetryEnabled": true,
+  "memoryDeletionPolicy": {
+    "justificationCategories": [
+      {
+        "id": "factually_incorrect",
+        "label": "Factually incorrect or source retracted",
+        "eligible": true,
+        "explanationPatterns": ["factually incorrect", "incorrect", "source retracted", "source correction", "false information"]
+      },
+      {
+        "id": "duplicate_or_superseded",
+        "label": "Duplicate or fully superseded",
+        "eligible": true,
+        "explanationPatterns": ["duplicate", "superseded", "canonical replacement", "fully replaced"]
+      },
+      {
+        "id": "privacy_or_consent",
+        "label": "Privacy or consent requires removal",
+        "eligible": true,
+        "explanationPatterns": ["privacy", "consent", "withdrawn", "personal data"]
+      },
+      {
+        "id": "retention_policy",
+        "label": "Documented retention policy requires removal",
+        "eligible": true,
+        "explanationPatterns": ["retention policy", "retention period", "retention expired"]
+      },
+      {
+        "id": "negative_valence_only",
+        "label": "Dislike, embarrassment, discomfort, or negative valence alone",
+        "eligible": false,
+        "explanationPatterns": ["dislike", "embarrassment", "embarrassed", "discomfort", "negative valence", "unpleasant", "feel bad"],
+        "refusalReason": "Dislike, embarrassment, discomfort, or negative valence alone are insufficient grounds for memory deletion. Preserve the memory and address the feeling or context directly."
+      }
+    ]
+  },
   "memoryRetrievalPolicy": {
     "typePolicies": {
       "episodic": {

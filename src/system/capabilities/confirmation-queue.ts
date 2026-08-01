@@ -196,6 +196,13 @@ type ConfirmationExecutor = (
 interface PendingEntry {
   entry: ConfirmationQueueEntry;
   execute: ConfirmationExecutor;
+  onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+  retainOnExecutionFailure?: boolean;
+  renewOnExpiry?: boolean;
+  failedResolution?: {
+    decision: ConfirmationDecision;
+    resolver?: ConfirmationResolverIdentity;
+  };
 }
 
 function cloneAttribution(input: ApprovalAttribution): ApprovalAttribution {
@@ -263,6 +270,11 @@ export class ConfirmationQueue {
   enqueue(
     request: ConfirmationQueueRequest,
     execute: ConfirmationExecutor,
+    lifecycle: {
+      onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+      retainOnExecutionFailure?: boolean;
+      renewOnExpiry?: boolean;
+    } = {},
   ): ConfirmationQueueEntry {
     this.expirePending();
     const requestedAt = this.now();
@@ -285,9 +297,92 @@ export class ConfirmationQueue {
         ? { approvalOwner: cloneApprovalOwner(request.approvalOwner) }
         : {}),
     };
-    this.pending.set(entry.id, { entry, execute });
+    this.pending.set(entry.id, {
+      entry,
+      execute,
+      ...(lifecycle.onDenied ? { onDenied: lifecycle.onDenied } : {}),
+      ...(lifecycle.retainOnExecutionFailure ? { retainOnExecutionFailure: true } : {}),
+      ...(lifecycle.renewOnExpiry ? { renewOnExpiry: true } : {}),
+    });
     this.observer?.onEnqueued?.(this.snapshot(entry));
     return this.snapshot(entry);
+  }
+
+  refreshPending(
+    id: string,
+    execute: ConfirmationExecutor,
+    lifecycle: {
+      onDenied?: (outcome: ConfirmationQueueTerminalOutcome) => Promise<void>;
+      retainOnExecutionFailure?: boolean;
+      renewOnExpiry?: boolean;
+    } = {},
+  ): ConfirmationQueueEntry {
+    this.expirePending();
+    const pending = this.pending.get(id);
+    if (!pending) throw new Error(`Confirmation request is not pending: ${id}`);
+    pending.execute = execute;
+    if (lifecycle.onDenied) pending.onDenied = lifecycle.onDenied;
+    else delete pending.onDenied;
+    if (lifecycle.retainOnExecutionFailure) pending.retainOnExecutionFailure = true;
+    else delete pending.retainOnExecutionFailure;
+    if (lifecycle.renewOnExpiry) pending.renewOnExpiry = true;
+    else delete pending.renewOnExpiry;
+    return this.snapshot(pending.entry);
+  }
+
+  reconcileRetainedResolution(
+    id: string,
+    status: 'approved' | 'denied',
+  ): ConfirmationResolveResult {
+    const pending = this.pending.get(id);
+    if (!pending?.failedResolution) {
+      throw new Error(`Confirmation request has no retained failed resolution: ${id}`);
+    }
+    const { decision, resolver } = pending.failedResolution;
+    if ((status === 'approved' && decision !== 'approve')
+      || (status === 'denied' && decision !== 'deny')) {
+      throw new Error(`Retained confirmation ${id} cannot reconcile ${decision} as ${status}`);
+    }
+    const resolvedAt = this.now();
+    if (status === 'denied') {
+      this.guardTerminalResolution({
+        id,
+        status: 'denied',
+        resolvedAt,
+        executed: false,
+        decision,
+        ...(resolver ? { resolver } : {}),
+        entry: pending.entry,
+      });
+    }
+    this.pending.delete(id);
+    const executed = status === 'approved';
+    const message = status === 'approved'
+      ? 'Action approval reconciled from durable committed state.'
+      : 'Action denial reconciled from durable committed state.';
+    this.history.push(this.snapshotHistory({
+      ...pending.entry,
+      status,
+      decision,
+      resolvedAt,
+      executed,
+      message,
+      ...(resolver ? { resolver } : {}),
+    }));
+    this.notifyResolved({
+      id,
+      status,
+      resolvedAt,
+      executed,
+      decision,
+      ...(resolver ? { resolver } : {}),
+      entry: pending.entry,
+    });
+    return { id, status, message, executed };
+  }
+
+  discardPending(id: string): boolean {
+    return this.pending.delete(id);
   }
 
   listPending(): ConfirmationQueueEntry[] {
@@ -342,34 +437,41 @@ export class ConfirmationQueue {
 
     const now = this.now();
     if (pending.entry.expiresAt <= now) {
-      const outcome: ConfirmationQueueTerminalOutcome = {
-        id: request.id,
-        status: 'expired',
-        resolvedAt: now,
-        executed: false,
-        decision: request.decision,
-        ...(resolver ? { resolver } : {}),
-        entry: pending.entry,
-      };
-      this.guardTerminalResolution(outcome);
-      this.pending.delete(request.id);
-      this.history.push(this.snapshotHistory({
-        ...pending.entry,
-        status: 'expired',
-        decision: request.decision,
-        resolvedAt: now,
-        executed: false,
-        message: 'Confirmation request expired before resolution.',
-        ...(resolver ? { resolver } : {}),
-      }));
-      this.notifyResolved(outcome);
-      this.expirePending();
-      return {
-        id: request.id,
-        status: 'expired',
-        message: 'Confirmation request expired before resolution.',
-        executed: false,
-      };
+      if (pending.renewOnExpiry) {
+        pending.entry = {
+          ...pending.entry,
+          expiresAt: now + this.defaultExpiryMs,
+        };
+      } else {
+        const outcome: ConfirmationQueueTerminalOutcome = {
+          id: request.id,
+          status: 'expired',
+          resolvedAt: now,
+          executed: false,
+          decision: request.decision,
+          ...(resolver ? { resolver } : {}),
+          entry: pending.entry,
+        };
+        this.guardTerminalResolution(outcome);
+        this.pending.delete(request.id);
+        this.history.push(this.snapshotHistory({
+          ...pending.entry,
+          status: 'expired',
+          decision: request.decision,
+          resolvedAt: now,
+          executed: false,
+          message: 'Confirmation request expired before resolution.',
+          ...(resolver ? { resolver } : {}),
+        }));
+        this.notifyResolved(outcome);
+        this.expirePending();
+        return {
+          id: request.id,
+          status: 'expired',
+          message: 'Confirmation request expired before resolution.',
+          executed: false,
+        };
+      }
     }
 
     if (pending.entry.resolutionAuthority === 'operator' && resolver?.kind !== 'operator') {
@@ -391,6 +493,22 @@ export class ConfirmationQueue {
         ...(resolver ? { resolver } : {}),
         entry: pending.entry,
       };
+      try {
+        await pending.onDenied?.(outcome);
+      } catch (error) {
+        if (pending.retainOnExecutionFailure) {
+          pending.failedResolution = {
+            decision: request.decision,
+            ...(resolver ? { resolver } : {}),
+          };
+        }
+        return {
+          id: request.id,
+          status: 'failed',
+          message: toErrorMessage(error),
+          executed: false,
+        };
+      }
       this.guardTerminalResolution(outcome);
       this.pending.delete(request.id);
       this.history.push(this.snapshotHistory({
@@ -480,6 +598,19 @@ export class ConfirmationQueue {
         executed: true,
       };
     } catch (error) {
+      if (pending.retainOnExecutionFailure) {
+        pending.failedResolution = {
+          decision: request.decision,
+          ...(resolver ? { resolver } : {}),
+        };
+        this.pending.set(request.id, pending);
+        return {
+          id: request.id,
+          status: 'failed',
+          message: toErrorMessage(error),
+          executed: false,
+        };
+      }
       const resolvedAt = this.now();
       const executed = error instanceof ConfirmationExecutionCommittedError;
       this.history.push(this.snapshotHistory({
@@ -518,6 +649,13 @@ export class ConfirmationQueue {
     let expired = 0;
     for (const [id, pending] of this.pending) {
       if (pending.entry.expiresAt <= now) {
+        if (pending.renewOnExpiry) {
+          pending.entry = {
+            ...pending.entry,
+            expiresAt: now + this.defaultExpiryMs,
+          };
+          continue;
+        }
         const outcome: ConfirmationQueueTerminalOutcome = {
           id,
           status: 'expired',

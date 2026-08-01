@@ -19,6 +19,7 @@ import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from './memory-presentation-profile.js';
+import type { MemoryDeletionPolicy } from './memory-deletion-policy.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
@@ -248,6 +249,8 @@ export interface SubstrateConfig {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  /** settings.json-owned categories and eligibility for companion-raised deletion proposals. */
+  memoryDeletionPolicy?: MemoryDeletionPolicy;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   /**
    * Versioned, schema-validated presentation profile for the retrieval

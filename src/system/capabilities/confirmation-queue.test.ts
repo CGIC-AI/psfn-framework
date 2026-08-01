@@ -230,6 +230,78 @@ describe('ConfirmationQueue', () => {
     ]);
   });
 
+  it('persists denial through the lifecycle hook before terminalizing', async () => {
+    const onDenied = vi.fn().mockResolvedValue(undefined);
+    const queue = new ConfirmationQueue({ now: () => 250, idFactory: () => 'deny-hook' });
+    const entry = queue.enqueue({
+      method: 'memory.deletion.validate',
+      action: 'validate',
+      scope: 'memory:one',
+      params: { proposalId: 'deny-hook' },
+      companionReason: 'Validate deletion proposal',
+      resolutionAuthority: 'operator',
+    }, async () => undefined, { onDenied });
+
+    await expect(queue.resolve(
+      { id: entry.id, decision: 'deny' },
+      { kind: 'operator', id: 'operator-1' },
+    )).resolves.toMatchObject({ status: 'denied', executed: false });
+    expect(onDenied).toHaveBeenCalledWith(expect.objectContaining({
+      id: entry.id,
+      status: 'denied',
+      resolver: { kind: 'operator', id: 'operator-1' },
+    }));
+  });
+
+  it('keeps a denial pending when its durable lifecycle hook fails', async () => {
+    const queue = new ConfirmationQueue({ now: () => 260, idFactory: () => 'deny-retry' });
+    const entry = queue.enqueue({
+      method: 'memory.deletion.validate',
+      action: 'validate',
+      scope: 'memory:one',
+      params: {},
+      companionReason: 'Validate deletion proposal',
+      resolutionAuthority: 'operator',
+    }, async () => undefined, {
+      onDenied: async () => { throw new Error('proposal store unavailable'); },
+    });
+
+    await expect(queue.resolve(
+      { id: entry.id, decision: 'deny' },
+      { kind: 'operator', id: 'operator-1' },
+    )).resolves.toEqual({
+      id: entry.id,
+      status: 'failed',
+      message: 'proposal store unavailable',
+      executed: false,
+    });
+    expect(queue.getPending(entry.id)?.id).toBe(entry.id);
+    expect(queue.listHistory()).toEqual([]);
+  });
+
+  it('refreshes a pending executor after an agent reconnect without changing immutable request data', async () => {
+    const queue = new ConfirmationQueue({ now: () => 270, idFactory: () => 'refresh-1' });
+    const staleExecute = vi.fn(async () => { throw new Error('stale agent connection'); });
+    const freshExecute = vi.fn(async () => undefined);
+    const entry = queue.enqueue({
+      method: 'memory.deletion.validate',
+      action: 'validate',
+      scope: 'memory:one',
+      params: { proposalId: 'proposal-1' },
+      companionReason: 'Validate deletion proposal',
+      resolutionAuthority: 'operator',
+    }, staleExecute);
+
+    const refreshed = queue.refreshPending(entry.id, freshExecute);
+    expect(refreshed).toEqual(entry);
+    await expect(queue.resolve(
+      { id: entry.id, decision: 'approve' },
+      { kind: 'operator', id: 'operator-1' },
+    )).resolves.toMatchObject({ status: 'approved', executed: true });
+    expect(staleExecute).not.toHaveBeenCalled();
+    expect(freshExecute).toHaveBeenCalledOnce();
+  });
+
   it('modifies params before execution when operator selects modify', async () => {
     const execute = vi.fn().mockResolvedValue(undefined);
     const queue = new ConfirmationQueue({

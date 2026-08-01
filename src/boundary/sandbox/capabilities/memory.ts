@@ -7,7 +7,6 @@ import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/me
 import type { SessionSearchHit } from '../../../persistence/sessions/transcript-projection-port.js';
 import {
   VALID_MEMORY_TYPES,
-  VALID_MEMORY_REDACTION_OPERATIONS,
 } from '../../../faculties/memory/types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
@@ -375,9 +374,9 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   };
 
   const memory_redact = async (
-    memoryId: string,
-    operation: MemoryRedactionOperation = 'auto',
-    reason?: string,
+    _memoryId: string,
+    _operation: MemoryRedactionOperation = 'auto',
+    _reason?: string,
   ): Promise<{
     operation: string;
     sourceId: string;
@@ -385,46 +384,9 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     abstractedId?: string;
     provenanceRef?: string;
   }> => {
-    if (!writer) {
-      return { operation: 'error', sourceId: 'no memory system' };
-    }
-
-    const normalizedId = toTrimmedString(memoryId);
-    if (!normalizedId) {
-      return { operation: 'error', sourceId: 'memory id is required' };
-    }
-
-    const normalizedOperation = VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)
-      ? operation
-      : 'auto';
-    const invocationId = nextReplInvocationId();
-
-    let result;
-    try {
-      result = await writer.redact({
-        memoryId: normalizedId,
-        operation: normalizedOperation,
-        reason: toTrimmedString(reason) || undefined,
-        requestedBy: `source:repl|operation:memory_redact|invocation:${invocationId}`,
-        sourceRef: `source:repl|operation:memory_redact|invocation:${invocationId}`,
-      });
-    } catch (error) {
-      return {
-        operation: 'error',
-        sourceId: toTrimmedString((error as Error).message) || 'memory redact failed',
-      };
-    }
-
-    if (!result) {
-      return { operation: 'error', sourceId: 'memory not found' };
-    }
-
     return {
-      operation: result.operation,
-      sourceId: result.sourceMemoryId,
-      deleteId: result.deleteId,
-      abstractedId: result.abstractedMemoryId,
-      provenanceRef: result.externalProvenanceRef,
+      operation: 'error',
+      sourceId: 'memory_redact is retired; use the Partner-alerted memory deletion proposal workflow',
     };
   };
 

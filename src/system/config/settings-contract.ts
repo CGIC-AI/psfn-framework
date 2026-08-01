@@ -340,6 +340,7 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
 const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'modelPurposeSelection',
   'memoryRetrievalPolicy',
+  'memoryDeletionPolicy',
   'memoryPresentationProfile',
   'compositionalPolicy',
   'groupMemory',

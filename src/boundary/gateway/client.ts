@@ -91,7 +91,12 @@ import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import { isGardenQueueName, type GardenQueueName } from '../../shared/event-bus.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import type {
+  MemoryDeletionApprovalPort,
+  MemoryDeletionApprovalRequest,
+  MemoryDeletionApprovalResult,
+} from '../../faculties/memory/deletion-proposals.js';
 import { stripChargeAttribution } from '../../shared/telemetry/model-usage-attribution.js';
 import type {
   GitCommitResult,
@@ -191,6 +196,12 @@ import type {
   IcpPermitInvalidateSelfParams,
   GatewayCorrelationParams,
   ContactLifecycleExecuteResult,
+  MemoryDeletionPartnerAlertedParams,
+  MemoryDeletionPartnerAlertedResult,
+  MemoryDeletionProposalSnapshotParams,
+  MemoryDeletionProposalSnapshotResult,
+  MemoryDeletionResolveParams,
+  MemoryDeletionResolveResult,
 } from './protocol.js';
 import type {
   AuthenticatedShardWorkloadHandle,
@@ -470,7 +481,8 @@ export class GatewayClient implements
   EmbeddingProviderPort,
   GatewayModelDiscoveryTransport,
   GatewaySystemDataWriterPort,
-  ShardWorkloadLifecyclePort {
+  ShardWorkloadLifecyclePort,
+  MemoryDeletionApprovalPort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
@@ -502,6 +514,15 @@ export class GatewayClient implements
   private contactAuthoritySnapshotHandler: ((
     params: ContactAuthoritySnapshotRequest,
   ) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>) | null = null;
+  private memoryDeletionPartnerAlertedHandler: ((
+    params: MemoryDeletionPartnerAlertedParams,
+  ) => Promise<MemoryDeletionPartnerAlertedResult>) | null = null;
+  private memoryDeletionProposalSnapshotHandler: ((
+    params: MemoryDeletionProposalSnapshotParams,
+  ) => Promise<MemoryDeletionProposalSnapshotResult>) | null = null;
+  private memoryDeletionResolveHandler: ((
+    params: MemoryDeletionResolveParams,
+  ) => Promise<MemoryDeletionResolveResult>) | null = null;
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
@@ -1662,6 +1683,50 @@ export class GatewayClient implements
     return await this.rpcInstance.request('confirmation.resolve', params) as ConfirmationResolveResult;
   }
 
+  async requestMemoryDeletionApproval(
+    request: MemoryDeletionApprovalRequest,
+  ): Promise<MemoryDeletionApprovalResult> {
+    const result = await this.rpcInstance.request('memory.deletion.propose', request);
+    if (!isRecord(result)) throw new Error('Gateway returned an invalid memory deletion approval result');
+    assertNoUnknownKeys(
+      result,
+      ['status', 'proposalId', 'approvalId', 'expiresAt', 'deleteId'],
+      'memory.deletion.propose result',
+    );
+    if (result.proposalId !== request.proposalId) {
+      throw new Error('Gateway returned a malformed memory deletion approval result');
+    }
+    if (result.status === 'already_approved' || result.status === 'already_denied') {
+      if ((result.approvalId !== undefined
+          && (typeof result.approvalId !== 'string' || !result.approvalId.trim()))
+        || (result.deleteId !== undefined
+          && (typeof result.deleteId !== 'string' || !result.deleteId.trim()))
+        || (result.status === 'already_approved'
+          && (typeof result.deleteId !== 'string' || !result.deleteId.trim()))
+        || (result.status === 'already_denied' && result.deleteId !== undefined)) {
+        throw new Error('Gateway returned a malformed terminal memory deletion result');
+      }
+      return {
+        status: result.status,
+        proposalId: request.proposalId,
+        ...(typeof result.approvalId === 'string' ? { approvalId: result.approvalId.trim() } : {}),
+        ...(typeof result.deleteId === 'string' ? { deleteId: result.deleteId.trim() } : {}),
+      };
+    }
+    if (result.status !== 'approval_required'
+      || typeof result.approvalId !== 'string'
+      || !result.approvalId.trim()
+      || !Number.isSafeInteger(result.expiresAt)) {
+      throw new Error('Gateway returned a malformed memory deletion approval result');
+    }
+    return {
+      status: 'approval_required',
+      proposalId: request.proposalId,
+      approvalId: result.approvalId.trim(),
+      expiresAt: result.expiresAt as number,
+    };
+  }
+
   async sessionHmacSign(entry: JournalEntry, previousHmac: string | null): Promise<JournalEntry> {
     const result = await this.rpcInstance.request('session.hmac.sign', {
       entry,
@@ -1934,6 +1999,27 @@ export class GatewayClient implements
     this.registerReverseMethods();
   }
 
+  onMemoryDeletionPartnerAlerted(handler: (
+    params: MemoryDeletionPartnerAlertedParams,
+  ) => Promise<MemoryDeletionPartnerAlertedResult>): void {
+    this.memoryDeletionPartnerAlertedHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onMemoryDeletionProposalSnapshot(handler: (
+    params: MemoryDeletionProposalSnapshotParams,
+  ) => Promise<MemoryDeletionProposalSnapshotResult>): void {
+    this.memoryDeletionProposalSnapshotHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onMemoryDeletionResolve(handler: (
+    params: MemoryDeletionResolveParams,
+  ) => Promise<MemoryDeletionResolveResult>): void {
+    this.memoryDeletionResolveHandler = handler;
+    this.registerReverseMethods();
+  }
+
   notifyApiStreamDelta(requestId: string, text: string): void {
     // d269: streamed reply frames are main-reply egress over the reverse-RPC
     // seam. Attach the live session canary (turn async context, falling back to
@@ -1989,6 +2075,62 @@ export class GatewayClient implements
       ),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
       handleContactAuthoritySnapshot: (params) => this.handleContactAuthoritySnapshot(params),
+      handleMemoryDeletionPartnerAlerted: params => this.handleMemoryDeletionPartnerAlerted(params),
+      handleMemoryDeletionProposalSnapshot: params => this.handleMemoryDeletionProposalSnapshot(params),
+      handleMemoryDeletionResolve: params => this.handleMemoryDeletionResolve(params),
+    });
+  }
+
+  private async handleMemoryDeletionPartnerAlerted(
+    params: MemoryDeletionPartnerAlertedParams,
+  ): Promise<MemoryDeletionPartnerAlertedResult> {
+    if (!this.memoryDeletionPartnerAlertedHandler) {
+      throw new Error('No memory.deletion.partner_alerted handler registered');
+    }
+    if (!isRecord(params)) throw new Error('memory.deletion.partner_alerted params must be an object');
+    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.partner_alerted params');
+    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
+      throw new Error('memory.deletion.partner_alerted proposalId must be a non-empty string');
+    }
+    return await this.memoryDeletionPartnerAlertedHandler({ proposalId: params.proposalId.trim() });
+  }
+
+  private async handleMemoryDeletionProposalSnapshot(
+    params: MemoryDeletionProposalSnapshotParams,
+  ): Promise<MemoryDeletionProposalSnapshotResult> {
+    if (!this.memoryDeletionProposalSnapshotHandler) {
+      throw new Error('No memory.deletion.snapshot handler registered');
+    }
+    if (!isRecord(params)) throw new Error('memory.deletion.snapshot params must be an object');
+    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.snapshot params');
+    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
+      throw new Error('memory.deletion.snapshot proposalId must be a non-empty string');
+    }
+    return await this.memoryDeletionProposalSnapshotHandler({ proposalId: params.proposalId.trim() });
+  }
+
+  private async handleMemoryDeletionResolve(
+    params: MemoryDeletionResolveParams,
+  ): Promise<MemoryDeletionResolveResult> {
+    if (!this.memoryDeletionResolveHandler) {
+      throw new Error('No memory.deletion.resolve handler registered');
+    }
+    if (!isRecord(params)) throw new Error('memory.deletion.resolve params must be an object');
+    assertNoUnknownKeys(params, ['proposalId', 'decision', 'operatorId'], 'memory.deletion.resolve params');
+    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
+      throw new Error('memory.deletion.resolve proposalId must be a non-empty string');
+    }
+    const decision: unknown = params.decision;
+    if (decision !== 'approve' && decision !== 'deny') {
+      throw new Error('memory.deletion.resolve decision must be approve or deny');
+    }
+    if (typeof params.operatorId !== 'string' || !params.operatorId.trim()) {
+      throw new Error('memory.deletion.resolve operatorId must be a non-empty string');
+    }
+    return await this.memoryDeletionResolveHandler({
+      proposalId: params.proposalId.trim(),
+      decision,
+      operatorId: params.operatorId.trim(),
     });
   }
 

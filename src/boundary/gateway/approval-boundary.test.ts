@@ -57,6 +57,7 @@ const noopDock: ChannelOutboundDock = {
 
 interface Harness {
   service: ApprovalBoundaryService;
+  eventBus: EventBus;
   requested: Array<{ companionId: string; shardId?: string; payload: CompanionApprovalRequestedPayload }>;
   resolved: Array<{ companionId: string; shardId?: string; payload: CompanionApprovalResolvedPayload }>;
 }
@@ -112,7 +113,7 @@ function createHarness(
     recordMethodFailure: () => {},
   });
 
-  return { service, requested, resolved };
+  return { service, eventBus, requested, resolved };
 }
 
 function baseRequest(overrides: Record<string, unknown> = {}) {
@@ -167,6 +168,50 @@ describe('approval attribution — ordinary companion approvals (non-shard)', ()
 
     await h.service.resolveConfirmation({ id: entry.id, decision: 'deny' });
     expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
+  });
+
+  it('threads durable post-enqueue and denial lifecycle hooks through the real confirmation boundary', async () => {
+    const h = createHarness();
+    const afterEnqueued = vi.fn(async () => undefined);
+    const onDenied = vi.fn(async () => undefined);
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      request: baseRequest({
+        resolutionAuthority: 'operator',
+      }),
+      execute: async () => 'not-run',
+      afterEnqueued,
+      onDenied,
+    });
+
+    expect(afterEnqueued).toHaveBeenCalledWith(expect.objectContaining({ id: entry.id }));
+    await expect(h.service.resolveConfirmation(
+      { id: entry.id, decision: 'deny' },
+      OPERATOR,
+    )).resolves.toMatchObject({ status: 'denied', executed: false });
+    expect(onDenied).toHaveBeenCalledWith(expect.objectContaining({
+      id: entry.id,
+      status: 'denied',
+      resolver: OPERATOR,
+    }));
+  });
+
+  it('does not acknowledge post-enqueue state when the Partner alert surface rejects delivery', async () => {
+    const h = createHarness();
+    const afterEnqueued = vi.fn(async () => undefined);
+    h.eventBus.on('companion.approval.requested', async () => {
+      throw new Error('Partner relay unavailable');
+    });
+
+    await expect(h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      request: baseRequest({ resolutionAuthority: 'operator' }),
+      execute: async () => 'not-run',
+      requirePartnerAlertDelivery: true,
+      afterEnqueued,
+    })).rejects.toThrow('Partner relay unavailable');
+    expect(afterEnqueued).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmations()).toEqual([]);
   });
 
   it('overwrites caller-supplied attribution with the server-derived stable-id label when no roster label resolves', async () => {

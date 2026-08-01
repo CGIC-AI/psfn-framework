@@ -50,6 +50,7 @@ import {
   resolveMemoryRetrievalPolicy,
   resolveMemorySalienceFloor,
 } from '../../../system/config/memory-retrieval-policy.js';
+import { normalizeMemoryDeletionPolicy } from '../../../system/config/memory-deletion-policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
@@ -1036,6 +1037,21 @@ export class AdminSettingsDataService implements AdminSettingsService {
         this.pushFieldError(
           errors,
           'memoryRetrievalPolicy',
+          toErrorMessage(error),
+          'invalid_object',
+        );
+      }
+    }
+    if ('memoryDeletionPolicy' in payload) {
+      try {
+        normalizeMemoryDeletionPolicy(
+          payload.memoryDeletionPolicy,
+          'memoryDeletionPolicy',
+        );
+      } catch (error) {
+        this.pushFieldError(
+          errors,
+          'memoryDeletionPolicy',
           toErrorMessage(error),
           'invalid_object',
         );

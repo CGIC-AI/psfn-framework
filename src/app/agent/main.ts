@@ -47,6 +47,7 @@ import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
+import { recoverPendingMemoryDeletionProposals } from '../../faculties/memory/deletion-proposal-recovery.js';
 import {
   createSubjectAuthorizedMemoryStore,
   memorySubjectAccessContextFromCorrelation,
@@ -302,6 +303,7 @@ async function main(): Promise<void> {
   const {
     backend: persistenceBackend,
     memoryStore: companionMemoryStore,
+    memoryDeletionProposalStore,
     episodicStore: companionEpisodicStore,
     firstPersonPreservingEpisodicStore,
     companionAuthoredEpisodicStore,
@@ -312,6 +314,39 @@ async function main(): Promise<void> {
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
+  gateway.onMemoryDeletionProposalSnapshot(async ({ proposalId }) => {
+    const proposal = await memoryDeletionProposalStore.getMemoryDeletionProposal(proposalId);
+    if (!proposal) throw new Error(`Memory deletion proposal not found: ${proposalId}`);
+    return {
+      proposalId: proposal.id,
+      memoryId: proposal.memoryId,
+      justificationCategory: proposal.justificationCategory,
+      explanation: proposal.explanation,
+      status: proposal.status,
+      ...(proposal.deleteId ? { deleteId: proposal.deleteId } : {}),
+    };
+  });
+  gateway.onMemoryDeletionPartnerAlerted(async ({ proposalId }) => {
+    const proposal = await memoryDeletionProposalStore.markMemoryDeletionPartnerAlerted(proposalId);
+    return { proposalId: proposal.id, status: 'pending_operator_validation' };
+  });
+  gateway.onMemoryDeletionResolve(async ({ proposalId, decision, operatorId }) => {
+    const proposal = decision === 'approve'
+      ? await memoryDeletionProposalStore.approveMemoryDeletionProposal(proposalId, operatorId)
+      : await memoryDeletionProposalStore.denyMemoryDeletionProposal(proposalId, operatorId);
+    if (proposal.status !== (decision === 'approve' ? 'approved' : 'denied')) {
+      throw new Error(`Memory deletion proposal ${proposalId} resolved to an invalid state`);
+    }
+    if (decision === 'approve' && !proposal.deleteId) {
+      throw new Error(`Approved memory deletion proposal ${proposalId} has no delete checkpoint`);
+    }
+    return {
+      proposalId: proposal.id,
+      status: proposal.status,
+      ...(proposal.deleteId ? { deleteId: proposal.deleteId } : {}),
+    };
+  });
+  await recoverPendingMemoryDeletionProposals(memoryDeletionProposalStore, gateway);
   log.info('PostgreSQL persistence backend selected', {
     persistenceBackend,
   });
@@ -944,6 +979,9 @@ async function main(): Promise<void> {
     episodicStore,
     sessionReader: sessionStore,
     contactStore,
+    memoryDeletionProposalStore,
+    memoryDeletionApprovalPort: gateway,
+    memoryDeletionPolicy: () => config.memoryDeletionPolicy,
     // Same config authority the MemoryWriter and retrieval faculty resolve
     // from, so the action=timeline tool path honors operator-set timeline
     // knobs instead of compiled defaults (zet.2).

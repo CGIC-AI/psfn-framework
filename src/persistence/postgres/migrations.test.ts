@@ -513,4 +513,20 @@ describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', ()
     expect(sql).toContain('idx_analysis_workbench_traces_companion_recorded');
     expect(sql).toContain('ON analysis_workbench_traces(companion_id, recorded_at_ms DESC, id DESC)');
   });
+
+  it('creates durable memory deletion proposals and one proposal-linked audit chain', () => {
+    const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS memory_deletion_proposals');
+    expect(sql).toContain("'pending_partner_alert', 'pending_operator_validation', 'approved', 'denied', 'restored'");
+    expect(sql).toContain('memory_authorization_revision BIGINT NOT NULL');
+    expect(sql).toContain('justification_category TEXT NOT NULL');
+    expect(sql).toContain('explanation TEXT NOT NULL');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS memory_deletion_audit_events');
+    expect(sql).toContain("'proposed', 'partner_alerted', 'approved', 'denied', 'deleted', 'restored'");
+    expect(sql).toContain("actor_role TEXT NOT NULL CHECK (actor_role IN ('Companion', 'Partner', 'Operator'))");
+    expect(sql).toContain('ALTER TABLE l2_memory_delete_versions ADD COLUMN IF NOT EXISTS proposal_id');
+    expect(sql).toContain('idx_l2_memory_delete_versions_proposal');
+  });
+
 });

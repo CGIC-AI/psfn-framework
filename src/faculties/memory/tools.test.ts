@@ -21,9 +21,14 @@ import type {
   MemoryWriter,
   WriteResult,
   BatchImportResult,
-  MemoryRedactionResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
+import type {
+  MemoryDeletionApprovalPort,
+  MemoryDeletionApprovalResult,
+  MemoryDeletionProposal,
+  MemoryDeletionProposalStorePort,
+} from './deletion-proposals.js';
 import {
   EPISODIC_CONTRACT_VERSION,
   type Episode,
@@ -36,6 +41,34 @@ import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surfa
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content.map(c => c.text).join('');
+}
+
+function mockMemoryDeletionProposalStore() {
+  return {
+    createMemoryDeletionProposal:
+      vi.fn<MemoryDeletionProposalStorePort['createMemoryDeletionProposal']>(),
+    markMemoryDeletionPartnerAlerted:
+      vi.fn<MemoryDeletionProposalStorePort['markMemoryDeletionPartnerAlerted']>(),
+    approveMemoryDeletionProposal:
+      vi.fn<MemoryDeletionProposalStorePort['approveMemoryDeletionProposal']>(),
+    denyMemoryDeletionProposal:
+      vi.fn<MemoryDeletionProposalStorePort['denyMemoryDeletionProposal']>(),
+    getMemoryDeletionProposal:
+      vi.fn<MemoryDeletionProposalStorePort['getMemoryDeletionProposal']>(),
+    listPendingMemoryDeletionProposals:
+      vi.fn<MemoryDeletionProposalStorePort['listPendingMemoryDeletionProposals']>(),
+    listRecoverableMemoryDeletionProposals:
+      vi.fn<MemoryDeletionProposalStorePort['listRecoverableMemoryDeletionProposals']>(),
+    listMemoryDeletionAuditEvents:
+      vi.fn<MemoryDeletionProposalStorePort['listMemoryDeletionAuditEvents']>(),
+  } satisfies MemoryDeletionProposalStorePort;
+}
+
+function mockMemoryDeletionApprovalPort() {
+  return {
+    requestMemoryDeletionApproval:
+      vi.fn<MemoryDeletionApprovalPort['requestMemoryDeletionApproval']>(),
+  } satisfies MemoryDeletionApprovalPort;
 }
 
 // ── Mock MemoryWriter ──
@@ -196,6 +229,7 @@ describe('createMemoryTool', () => {
     getAllActiveMemories: ReturnType<typeof vi.fn>;
     softDeleteMemory: ReturnType<typeof vi.fn>;
     undoSoftDelete: ReturnType<typeof vi.fn>;
+    getById: ReturnType<typeof vi.fn>;
   } {
     const cloneMemories = (items: PurrMemory[]) => items.map(memory => ({ ...memory }));
     return {
@@ -205,6 +239,7 @@ describe('createMemoryTool', () => {
       getAllActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
       softDeleteMemory: vi.fn(),
       undoSoftDelete: vi.fn(),
+      getById: vi.fn(async (id: string) => cloneMemories(memories).find(memory => memory.id === id)),
     };
   }
 
@@ -275,6 +310,119 @@ describe('createMemoryTool', () => {
     });
     const imported = writer.importBatch.mock.calls[0][0][0] as { provenance: { sourceConversationAt?: number } };
     expect(imported.provenance.sourceConversationAt).toBeUndefined();
+  });
+
+  it.each([
+    [{ explanation: 'A source correction exists.' }, 'justification_category is required'],
+    [{ justification_category: 'factually_incorrect' }, 'explanation is required'],
+  ])('refuses a deletion proposal missing mandatory justification fields', async (fields, message) => {
+    const store = mockUnifiedStore([makeMemory({ id: 'mem-1' })]);
+    const proposalStore = mockMemoryDeletionProposalStore();
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+      {
+        memoryDeletionProposalStore: proposalStore,
+        memoryDeletionApprovalPort: mockMemoryDeletionApprovalPort(),
+        memoryDeletionPolicy: {
+          justificationCategories: [{
+            id: 'factually_incorrect',
+            label: 'Factually incorrect',
+            eligible: true,
+            explanationPatterns: ['source correction'],
+          }],
+        },
+      },
+    );
+
+    const result = await tool.execute('memory-call-missing-justification', {
+      action: 'delete',
+      memory_id: 'mem-1',
+      ...fields,
+    } as any);
+
+    expect(resultText(result as any)).toContain(message);
+    expect(result.details?.isError).toBe(true);
+    expect(proposalStore.createMemoryDeletionProposal).not.toHaveBeenCalled();
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('refuses negative valence alone using the settings-owned category reason', async () => {
+    const store = mockUnifiedStore([makeMemory({ id: 'mem-1' })]);
+    const proposalStore = mockMemoryDeletionProposalStore();
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+      {
+        memoryDeletionProposalStore: proposalStore,
+        memoryDeletionApprovalPort: mockMemoryDeletionApprovalPort(),
+        memoryDeletionPolicy: {
+          justificationCategories: [{
+            id: 'negative_valence_only',
+            label: 'Negative valence alone',
+            eligible: false,
+            explanationPatterns: ['dislike', 'embarrassed', 'discomfort', 'negative valence'],
+            refusalReason: 'Dislike, embarrassment, discomfort, or negative valence alone are insufficient grounds for deletion.',
+          }],
+        },
+      },
+    );
+
+    const result = await tool.execute('memory-call-negative-valence', {
+      action: 'delete',
+      memory_id: 'mem-1',
+      justification_category: 'negative_valence_only',
+      explanation: 'I feel embarrassed and dislike remembering this.',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('discomfort');
+    expect(text).toContain('negative valence alone');
+    expect(result.details?.isError).toBe(true);
+    expect(proposalStore.createMemoryDeletionProposal).not.toHaveBeenCalled();
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('refuses a negative-valence-only explanation mislabeled with an eligible category', async () => {
+    const store = mockUnifiedStore([makeMemory({ id: 'mem-1' })]);
+    const proposalStore = mockMemoryDeletionProposalStore();
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+      {
+        memoryDeletionProposalStore: proposalStore,
+        memoryDeletionApprovalPort: mockMemoryDeletionApprovalPort(),
+        memoryDeletionPolicy: {
+          justificationCategories: [
+            {
+              id: 'factually_incorrect',
+              label: 'Factually incorrect',
+              eligible: true,
+              explanationPatterns: ['factually incorrect', 'source retracted'],
+            },
+            {
+              id: 'negative_valence_only',
+              label: 'Negative valence alone',
+              eligible: false,
+              explanationPatterns: ['dislike', 'embarrassed', 'discomfort', 'negative valence'],
+              refusalReason: 'Dislike, embarrassment, discomfort, or negative valence alone are insufficient grounds for deletion.',
+            },
+          ],
+        },
+      },
+    );
+
+    const result = await tool.execute('memory-call-mislabeled-negative-valence', {
+      action: 'delete',
+      memory_id: 'mem-1',
+      justification_category: 'factually_incorrect',
+      explanation: 'I dislike remembering this and feel embarrassed.',
+    });
+
+    expect(resultText(result)).toMatch(/dislike.*embarrassment.*discomfort.*negative valence alone/iu);
+    expect(result.details?.isError).toBe(true);
+    expect(proposalStore.createMemoryDeletionProposal).not.toHaveBeenCalled();
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
   it('stamps request-context sessionId so a testing-session write is fenced', async () => {
@@ -987,7 +1135,7 @@ describe('createMemoryTool', () => {
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
 
-  it('redacts through action=redact with unified requestedBy/sourceRef', async () => {
+  it('retires action=redact so it cannot bypass deletion proposals', async () => {
     const store = mockUnifiedStore();
     const redact = vi.fn().mockResolvedValue({
       operation: 'deleted',
@@ -1007,22 +1155,74 @@ describe('createMemoryTool', () => {
       reason: 'consent revoked',
     });
 
-    expect(redact).toHaveBeenCalledWith(expect.objectContaining({
-      memoryId: 'mem-7',
-      operation: 'delete',
-      reason: 'consent revoked',
-      requestedBy: 'source:tool:memory|action:redact|invocation:memory-call-4',
-      sourceRef: 'source:tool:memory|action:redact|invocation:memory-call-4',
-    }));
-    expect(resultText(result as any)).toContain('redacted via delete');
+    expect(redact).not.toHaveBeenCalled();
+    expect(resultText(result as any)).toContain('action=redact is retired');
+    expect(result.details?.isError).toBe(true);
   });
 
-  it('deletes and restores through unified actions', async () => {
+  it('creates a durable deletion proposal without soft-deleting through action=delete', async () => {
+    const store = mockUnifiedStore([makeMemory({ id: 'mem-1' })]);
+    const proposalStore = mockMemoryDeletionProposalStore();
+    proposalStore.createMemoryDeletionProposal.mockResolvedValue({
+      id: 'proposal-1',
+      memoryId: 'mem-1',
+      memoryAuthorizationRevision: 4,
+      justificationCategory: 'factually_incorrect',
+      explanation: 'The source was conclusively retracted.',
+      status: 'pending_partner_alert',
+      proposedAt: 123,
+      proposedBy: 'Companion',
+    } satisfies MemoryDeletionProposal);
+    const approvalPort = mockMemoryDeletionApprovalPort();
+    approvalPort.requestMemoryDeletionApproval.mockResolvedValue({
+      status: 'approval_required',
+      proposalId: 'proposal-1',
+      approvalId: 'proposal-1',
+      expiresAt: 999,
+    } satisfies MemoryDeletionApprovalResult);
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+      {
+        memoryDeletionProposalStore: proposalStore,
+        memoryDeletionApprovalPort: approvalPort,
+        memoryDeletionPolicy: {
+          justificationCategories: [{
+            id: 'factually_incorrect',
+            label: 'Factually incorrect',
+            eligible: true,
+            explanationPatterns: ['source retracted'],
+          }],
+        },
+      },
+    );
+
+    const proposed = await tool.execute('memory-call-5', {
+      action: 'delete',
+      memory_id: 'mem-1',
+      justification_category: 'factually_incorrect',
+      explanation: 'The source was conclusively retracted.',
+    });
+    expect(proposalStore.createMemoryDeletionProposal).toHaveBeenCalledWith({
+      memoryId: 'mem-1',
+      justificationCategory: 'factually_incorrect',
+      explanation: 'The source was conclusively retracted.',
+      proposedBy: 'Companion',
+    });
+    expect(approvalPort.requestMemoryDeletionApproval).toHaveBeenCalledWith({
+      proposalId: 'proposal-1',
+      memoryId: 'mem-1',
+      justificationCategory: 'factually_incorrect',
+      explanation: 'The source was conclusively retracted.',
+    });
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
+    expect(resultText(proposed as any)).toContain('proposal-1');
+    expect(resultText(proposed as any)).toContain('pending Operator validation');
+    expect(resultText(proposed as any)).toContain('memory remains active');
+  });
+
+  it('restores an approved proposal delete through action=restore', async () => {
     const store = mockUnifiedStore();
-    store.softDeleteMemory.mockResolvedValue(makeUnifiedDeleteVersion({
-      deleteId: 'del-unified',
-      deletedBy: 'tool:memory|action:delete',
-    }));
     store.undoSoftDelete.mockResolvedValue(makeUnifiedDeleteVersion({
       deleteId: 'del-unified',
       restoredBy: 'tool:memory|action:restore',
@@ -1030,47 +1230,65 @@ describe('createMemoryTool', () => {
     }));
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    const deleted = await tool.execute('memory-call-5', {
-      action: 'delete',
-      memory_id: 'mem-1',
-      reason: 'cleanup',
-    });
-    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-1', {
-      deletedBy: 'tool:memory|action:delete',
-      reason: 'cleanup',
-    });
-    expect(resultText(deleted as any)).toContain('Memory soft-deleted');
-
     const restored = await tool.execute('memory-call-6', {
       action: 'restore',
       delete_id: 'del-unified',
     });
     expect(store.undoSoftDelete).toHaveBeenCalledWith('del-unified', {
       restoredBy: 'tool:memory|action:restore',
+      actorRole: 'Companion',
     });
     expect(resultText(restored as any)).toContain('Memory restored');
   });
 
-  it('accepts id alias for unified action=delete', async () => {
-    const store = mockUnifiedStore();
-    store.softDeleteMemory.mockResolvedValue(makeUnifiedDeleteVersion({
-      deleteId: 'del-alias',
+  it('accepts id alias for unified action=delete proposal', async () => {
+    const store = mockUnifiedStore([makeMemory({ id: 'mem-alias' })]);
+    const proposalStore = mockMemoryDeletionProposalStore();
+    proposalStore.createMemoryDeletionProposal.mockResolvedValue({
+      id: 'proposal-alias',
       memoryId: 'mem-alias',
-      deletedBy: 'tool:memory|action:delete',
-    }));
-    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+      memoryAuthorizationRevision: 2,
+      justificationCategory: 'factually_incorrect',
+      explanation: 'The source was retracted.',
+      status: 'pending_partner_alert',
+      proposedAt: 123,
+      proposedBy: 'Companion',
+    } satisfies MemoryDeletionProposal);
+    const approvalPort = mockMemoryDeletionApprovalPort();
+    approvalPort.requestMemoryDeletionApproval.mockResolvedValue({
+      status: 'approval_required',
+      proposalId: 'proposal-alias',
+      approvalId: 'approval-alias',
+      expiresAt: 999,
+    } satisfies MemoryDeletionApprovalResult);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      memoryDeletionProposalStore: proposalStore,
+      memoryDeletionApprovalPort: approvalPort,
+      memoryDeletionPolicy: {
+        justificationCategories: [{
+          id: 'factually_incorrect',
+          label: 'Factually incorrect',
+          eligible: true,
+          explanationPatterns: ['source retracted'],
+        }],
+      },
+    });
 
     const deleted = await tool.execute('memory-call-delete-alias', {
       action: 'delete',
       id: 'mem-alias',
-      reason: 'cleanup',
+      justification_category: 'factually_incorrect',
+      explanation: 'The source was retracted.',
     } as any);
 
-    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-alias', {
-      deletedBy: 'tool:memory|action:delete',
-      reason: 'cleanup',
+    expect(proposalStore.createMemoryDeletionProposal).toHaveBeenCalledWith({
+      memoryId: 'mem-alias',
+      justificationCategory: 'factually_incorrect',
+      explanation: 'The source was retracted.',
+      proposedBy: 'Companion',
     });
-    expect(resultText(deleted as any)).toContain('del-alias');
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
+    expect(resultText(deleted as any)).toContain('proposal-alias');
   });
 
   it('accepts deleteId alias for unified action=restore', async () => {
@@ -1090,11 +1308,12 @@ describe('createMemoryTool', () => {
 
     expect(store.undoSoftDelete).toHaveBeenCalledWith('del-alias', {
       restoredBy: 'tool:memory|action:restore',
+      actorRole: 'Companion',
     });
     expect(resultText(restored as any)).toContain('Memory restored');
   });
 
-  it('accepts shard provenance overrides for unified write/import/redact actions', async () => {
+  it('accepts shard provenance overrides for unified write/import while redaction stays retired', async () => {
     const store = mockUnifiedStore();
     const redact = vi.fn().mockResolvedValue({
       operation: 'deleted',
@@ -1118,7 +1337,7 @@ describe('createMemoryTool', () => {
       records: [{ text: 'Shard import', type: 'semantic' }],
       __psfnShardSource: 'shard:shard-1',
     } as any);
-    await tool.execute('memory-call-9', {
+    const redaction = await tool.execute('memory-call-9', {
       action: 'redact',
       memory_id: 'mem-8',
       __psfnShardSource: 'shard:shard-1',
@@ -1141,9 +1360,8 @@ describe('createMemoryTool', () => {
         sourceType: 'shard',
       }),
     ]);
-    expect(redact).toHaveBeenCalledWith(expect.objectContaining({
-      sourceRef: 'source:shard:shard-1|tool:memory|action:redact|invocation:memory-call-9',
-    }));
+    expect(redact).not.toHaveBeenCalled();
+    expect(resultText(redaction as any)).toContain('action=redact is retired');
   });
 
   it('preserves structured subagent provenance for unified writes and imports', async () => {
@@ -1847,29 +2065,14 @@ describe('createMemoryPatchTool', () => {
 });
 
 describe('createMemoryRedactTool', () => {
-  function makeRedaction(overrides: Partial<MemoryRedactionResult> = {}): MemoryRedactionResult {
-    return {
-      operation: 'abstracted',
-      behavior: 'abstract',
-      sourceMemoryId: 'mem-1',
-      deleteId: 'del-1',
-      abstractedMemoryId: 'mem-abstract-1',
-      abstractedText: 'Partner benefits from medication reminders during high workload periods.',
-      externalProvenanceRef: 'abstraction:ext-1',
-      ...overrides,
-    };
-  }
-
   function mockRedactWriter(): { redact: ReturnType<typeof vi.fn> } {
     return {
       redact: vi.fn(),
     };
   }
 
-  it('returns abstraction success details', async () => {
+  it('is retired and never invokes the immediate redaction writer path', async () => {
     const writer = mockRedactWriter();
-    writer.redact.mockResolvedValue(makeRedaction());
-
     const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
     const result = await tool.execute('call-1', {
       memory_id: 'mem-1',
@@ -1877,61 +2080,9 @@ describe('createMemoryRedactTool', () => {
       reason: 'consent request',
     });
 
-    expect(resultText(result as any)).toContain('redacted via abstraction');
-    expect(resultText(result as any)).toContain('mem-abstract-1');
-    expect(resultText(result as any)).toContain('abstraction:ext-1');
-    expect(writer.redact).toHaveBeenCalledWith(expect.objectContaining({
-      memoryId: 'mem-1',
-      operation: 'auto',
-      reason: 'consent request',
-      sourceRef: 'source:tool:memory_redact|invocation:call-1',
-    }));
-  });
-
-  it('returns delete success details', async () => {
-    const writer = mockRedactWriter();
-    writer.redact.mockResolvedValue(makeRedaction({
-      operation: 'deleted',
-      behavior: 'delete',
-      abstractedMemoryId: undefined,
-      externalProvenanceRef: undefined,
-    }));
-
-    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute('call-2', {
-      memory_id: 'mem-1',
-      operation: 'delete',
-    });
-
-    expect(resultText(result as any)).toContain('redacted via delete');
-    expect(resultText(result as any)).toContain('delete');
-  });
-
-  it('validates memory_id and operation', async () => {
-    const writer = mockRedactWriter();
-    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
-
-    const missingId = await tool.execute('call-3', { memory_id: '   ' });
-    expect(resultText(missingId as any)).toContain('memory_id is required');
-    expect((missingId.details as any).isError).toBe(true);
-
-    const badOp = await tool.execute('call-4', {
-      memory_id: 'mem-1',
-      operation: 'purge' as any,
-    });
-    expect(resultText(badOp as any)).toContain('invalid operation');
-    expect((badOp.details as any).isError).toBe(true);
-    expect(writer.redact).not.toHaveBeenCalled();
-  });
-
-  it('returns error when memory is not found', async () => {
-    const writer = mockRedactWriter();
-    writer.redact.mockResolvedValue(null);
-
-    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute('call-5', { memory_id: 'missing' });
-    expect(resultText(result as any)).toContain('not found or already deleted');
+    expect(resultText(result as any)).toContain('memory_redact is retired');
     expect((result.details as any).isError).toBe(true);
+    expect(writer.redact).not.toHaveBeenCalled();
   });
 });
 
@@ -1957,7 +2108,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
     };
   }
 
-  it('soft-deletes memory and returns delete_id', async () => {
+  it('is retired and cannot soft-delete memory', async () => {
     const store = mockStore();
     store.softDeleteMemory.mockReturnValue(makeDeleteVersion({
       deleteId: 'del-abc',
@@ -1970,12 +2121,9 @@ describe('memory_delete and undo_memory_delete tools', () => {
       reason: 'stale',
     });
 
-    expect(resultText(result as any)).toContain('Memory soft-deleted');
-    expect(resultText(result as any)).toContain('del-abc');
-    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-abc', {
-      deletedBy: 'tool:memory_delete',
-      reason: 'stale',
-    });
+    expect(resultText(result as any)).toContain('memory_delete is retired');
+    expect(resultText(result as any)).toContain('Partner-alerted proposal');
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
   it('returns error when memory_id is missing', async () => {
@@ -1986,19 +2134,20 @@ describe('memory_delete and undo_memory_delete tools', () => {
       memory_id: '   ',
     });
 
-    expect(resultText(result as any)).toContain('memory_id is required');
+    expect(resultText(result as any)).toContain('memory_delete is retired');
     expect((result.details as any).isError).toBe(true);
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
-  it('returns error when memory is missing/already deleted', async () => {
+  it('does not probe memory existence through the retired alias', async () => {
     const store = mockStore();
     store.softDeleteMemory.mockReturnValue(null);
     const tool = createMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-3', { memory_id: 'missing' });
-    expect(resultText(result as any)).toContain('not found or already deleted');
+    expect(resultText(result as any)).toContain('memory_delete is retired');
     expect((result.details as any).isError).toBe(true);
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
   it('restores deleted memory from delete_id', async () => {

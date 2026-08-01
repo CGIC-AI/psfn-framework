@@ -22,7 +22,7 @@ export interface CreateConcernParams {
   priority?: ActiveConcernPriority;
   contactId?: string;
   source?: 'appraisal' | 'agent' | 'heartbeat';
-  status?: ActiveConcernStatus;
+  status?: Exclude<ActiveConcernStatus, 'candidate'>;
   salience?: number;
   sensitivity?: ActiveConcernSensitivity;
   owner?: ActiveConcernOwner;

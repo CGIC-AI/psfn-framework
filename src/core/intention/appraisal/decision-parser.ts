@@ -151,6 +151,9 @@ function parseConcernPayload(value: unknown): IntentionConcernDecision | undefin
   const status = value.status === undefined
     ? undefined
     : normalizeConcernStatus(value.status);
+  if (status === 'candidate') {
+    throw new Error('Intention appraisal concern status candidate is reserved for candidate review');
+  }
   const priority = normalizeConcernPriority(value.priority);
   return {
     ...(title ? { title } : {}),

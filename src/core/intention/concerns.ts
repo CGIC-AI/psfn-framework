@@ -1,6 +1,7 @@
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
+import type { DurableConcernCandidateReviewSnapshot } from './concern-candidate-review-snapshot.js';
 
 import {
   ACTIVE_CONCERN_EVIDENCE_KINDS,
@@ -44,11 +45,10 @@ export type {
   ActiveConcernVAD,
 } from '../../shared/contracts/intention-contracts.js';
 
-export interface ActiveConcernCreateInput {
+interface ActiveConcernCreateFields {
   text: string;
   priority?: ActiveConcernPriority;
   source?: ActiveConcernSource;
-  status?: ActiveConcernStatus;
   contactId?: string;
   formationVAD?: ActiveConcernVAD;
   salience?: number;
@@ -61,11 +61,21 @@ export interface ActiveConcernCreateInput {
   mergedFromIds?: readonly string[];
   splitFromId?: string;
   originIcpRootInitiationId?: string;
-  candidateReviewSnapshot?: unknown;
   reopenResolved?: boolean;
   createdAt?: string;
   expiresAt?: string;
 }
+
+export type ActiveConcernCreateInput = ActiveConcernCreateFields & (
+  | {
+    status: 'candidate';
+    candidateReviewSnapshot: DurableConcernCandidateReviewSnapshot;
+  }
+  | {
+    status?: Exclude<ActiveConcernStatus, 'candidate'>;
+    candidateReviewSnapshot?: never;
+  }
+);
 
 export interface ActiveConcernResolveOptions {
   outcome?: string;
@@ -489,12 +499,12 @@ export function chooseEarlierOptionalConcernTimestamp(
 
 const ALLOWED_CONCERN_STATUS_TRANSITIONS: Record<ActiveConcernStatus, readonly ActiveConcernStatus[]> = {
   candidate: ['active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
-  active: ['candidate', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
+  active: ['watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
   watching: ['active', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
   deferred: ['active', 'watching', 'blocked', 'resolved', 'dismissed', 'suppressed'],
   blocked: ['active', 'deferred', 'watching', 'resolved', 'dismissed', 'suppressed'],
-  resolved: ['candidate', 'active', 'watching'],
-  dismissed: ['candidate', 'active'],
+  resolved: ['active', 'watching'],
+  dismissed: ['active'],
   suppressed: [],
 };
 

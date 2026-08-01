@@ -608,7 +608,10 @@ describe('IntentionAppraisal', () => {
     expect(onEvaluationError).toHaveBeenCalledTimes(1);
   });
 
-  it('fails closed when model emits an unsupported concern lifecycle status', async () => {
+  it.each([
+    ['unsupported', 'open'],
+    ['internal-only', 'candidate'],
+  ])('fails closed when model emits an %s concern lifecycle status', async (_kind, status) => {
     const { provider } = makeProvider([
       JSON.stringify({
         decisions: [{
@@ -618,7 +621,7 @@ describe('IntentionAppraisal', () => {
           timing: 'soon',
           concern: {
             title: 'Invalid status concern',
-            status: 'open',
+            status,
           },
         }],
       }),

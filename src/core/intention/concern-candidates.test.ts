@@ -13,6 +13,18 @@ import {
   parseConcernCandidateReviewResponse,
   type ConcernCandidate,
 } from './concern-candidates.js';
+import {
+  buildDurableCandidateReviewSnapshot,
+  parseDurableCandidateReviewSnapshot,
+} from './concern-candidate-review-snapshot.js';
+
+const loggerSpies = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock('../../shared/logger.js', () => ({
+  createComponentLogger: () => loggerSpies,
+}));
 
 function makeCandidate(id: string): ConcernCandidate {
   return {
@@ -72,6 +84,125 @@ const distinctConcernTexts = [
 ];
 
 describe('automated concern candidates', () => {
+  it('distinguishes a missing review snapshot from an unsupported schema version', () => {
+    expect(() => parseDurableCandidateReviewSnapshot(null)).toThrow(
+      'Durable concern candidate review snapshot is missing',
+    );
+    expect(() => parseDurableCandidateReviewSnapshot({ schemaVersion: 7 })).toThrow(
+      'Durable concern candidate review snapshot has unsupported schemaVersion 7; expected 1',
+    );
+  });
+
+  it('rejects persistence of a candidate without a readable review snapshot', async () => {
+    const concernStore = makeConcernStore();
+
+    await expect(concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+    } as unknown as Parameters<typeof concernStore.create>[0])).rejects.toThrow(
+      'Active concern candidateReviewSnapshot is required when status is candidate',
+    );
+    await expect(concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+      candidateReviewSnapshot: { schemaVersion: 2 },
+    } as unknown as Parameters<typeof concernStore.create>[0])).rejects.toThrow(
+      'Durable concern candidate review snapshot has unsupported schemaVersion 2; expected 1',
+    );
+  });
+
+  it('backfills a missing snapshot when a valid candidate write merges into durable state', async () => {
+    const { pool, ports } = createTestPostgresIntentionPorts({
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+      idFactory: () => 'concern-merge-backfill',
+    });
+    const original = await ports.concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(makeCandidate('original')),
+    });
+    pool.corruptActiveConcern(original.id, { candidate_review_snapshot: null });
+
+    const merged = await ports.concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(makeCandidate('replacement')),
+    });
+
+    expect(merged.id).toBe(original.id);
+    expect(merged.candidateReviewSnapshot).toMatchObject({
+      schemaVersion: 1,
+      sourceRef: 'source:replacement',
+    });
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore: ports.concernStore,
+      now: () => new Date('2026-06-29T12:01:00.000Z'),
+    });
+    expect(runtime.queue.pendingCount()).toBe(1);
+    runtime.dispose();
+  });
+
+  it('skips a durable candidate with a missing review snapshot and warns with its id', async () => {
+    const { pool, ports } = createTestPostgresIntentionPorts({
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+      idFactory: () => 'concern-missing-snapshot',
+    });
+    await ports.concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+      expiresAt: '2026-06-29T12:00:30.000Z',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(
+        makeCandidate('missing-snapshot'),
+      ),
+    });
+    pool.corruptActiveConcern('concern-missing-snapshot', {
+      candidate_review_snapshot: null,
+    });
+
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore: ports.concernStore,
+      now: () => new Date('2026-06-29T12:01:00.000Z'),
+    });
+
+    expect(runtime.queue.pendingCount()).toBe(0);
+    expect(loggerSpies.warn).toHaveBeenCalledWith(
+      'Skipping durable concern candidate because its review snapshot is missing',
+      { concernId: 'concern-missing-snapshot' },
+    );
+    runtime.dispose();
+  });
+
+  it('rejects an unsupported durable candidate snapshot schema and names the version found', async () => {
+    const { pool, ports } = createTestPostgresIntentionPorts({
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+      idFactory: () => 'concern-wrong-schema',
+    });
+    await ports.concernStore.create({
+      text: 'Follow up about the appointment.',
+      status: 'candidate',
+      expiresAt: '2026-06-29T12:00:30.000Z',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(
+        makeCandidate('wrong-schema'),
+      ),
+    });
+    pool.corruptActiveConcern('concern-wrong-schema', {
+      candidate_review_snapshot: { schemaVersion: 2 },
+    });
+
+    await expect(createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore: ports.concernStore,
+      now: () => new Date('2026-06-29T12:01:00.000Z'),
+    })).rejects.toThrow(
+      'Durable concern candidate review snapshot has unsupported schemaVersion 2; expected 1',
+    );
+  });
+
   it('persists extracted candidates before returning resolvable output ids', async () => {
     const concernStore = makeConcernStore();
     const runtime = await createAutomatedConcernRuntime({
@@ -511,11 +642,13 @@ describe('automated concern candidates', () => {
       text: 'Follow up highprioritycandidatealpha',
       priority: 'high',
       status: 'candidate',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(makeCandidate('alpha')),
     });
     await concernStore.create({
       text: 'Follow up highprioritycandidatebeta',
       priority: 'high',
       status: 'candidate',
+      candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(makeCandidate('beta')),
     });
     for (const [i, text] of distinctConcernTexts.entries()) {
       await concernStore.create({

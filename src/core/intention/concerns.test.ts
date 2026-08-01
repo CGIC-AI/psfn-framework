@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ConcernStorePort } from './concern-store-port.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import type { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
+import type { DurableConcernCandidateReviewSnapshot } from './concern-candidate-review-snapshot.js';
 import {
   buildActiveConcernsPromptVariables,
   buildActiveConcernsRuntimeData,
@@ -15,6 +16,21 @@ import {
 
 function textFixture(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function durableCandidateReviewSnapshot(id: string): DurableConcernCandidateReviewSnapshot {
+  return {
+    schemaVersion: 1,
+    title: `Lifecycle ${id}`,
+    summary: `Review lifecycle candidate ${id}.`,
+    followUpHint: 'internal_only',
+    channelId: 'api:concern-store-test',
+    triggerReason: 'manual',
+    sourceRef: `test:${id}`,
+    sourceMessageIds: [],
+    conversationContext: [],
+    relatedMemoryContext: [],
+  };
 }
 
 function concernRow(overrides: Partial<ActiveConcernRow> = {}): ActiveConcernRow {
@@ -109,20 +125,26 @@ describe('ActiveConcernStore', () => {
     ] as const;
 
     for (const status of states) {
-      const created = await store.create({
+      const commonInput = {
         text: `Lifecycle ${status}`,
-        status,
         evidenceRefs: [{
-          kind: 'redacted',
+          kind: 'redacted' as const,
           ref: `audit:${status}`,
-          sensitivity: 'redacted',
+          sensitivity: 'redacted' as const,
           redacted: true,
           hash: `sha256:${status}`,
         }],
         salience: 0.7,
-        sensitivity: 'confidential',
-        owner: 'system',
-      });
+        sensitivity: 'confidential' as const,
+        owner: 'system' as const,
+      };
+      const created = status === 'candidate'
+        ? await store.create({
+          ...commonInput,
+          status,
+          candidateReviewSnapshot: durableCandidateReviewSnapshot(status),
+        })
+        : await store.create({ ...commonInput, status });
 
       expect(created.status).toBe(status);
       expect(created.evidenceRefs).toEqual([{
@@ -291,6 +313,26 @@ describe('ActiveConcernStore', () => {
       evidenceRefs: [{ kind: 'message', ref: 'msg-new' }],
     })).rejects.toThrow(/Invalid active concern transition: suppressed -> active/);
     expect((await store.getById(created.id))?.status).toBe('suppressed');
+  });
+
+  it('rejects transitions into the internal candidate state', async () => {
+    const created = await store.create({ text: 'Ordinary active concern.' });
+
+    await expect(store.transitionConcernStatus(created.id, {
+      status: 'candidate',
+    })).rejects.toThrow(/Invalid active concern transition: active -> candidate/);
+    expect((await store.getById(created.id))?.status).toBe('active');
+
+    const legacyCandidate = await store.create({
+      text: 'Legacy candidate with missing review state.',
+      status: 'candidate',
+      candidateReviewSnapshot: durableCandidateReviewSnapshot('legacy'),
+    });
+    pool.corruptActiveConcern(legacyCandidate.id, { candidate_review_snapshot: null });
+
+    await expect(store.transitionConcernStatus(legacyCandidate.id, {
+      status: 'candidate',
+    })).rejects.toThrow(/Invalid active concern transition: candidate -> candidate/);
   });
 
   it('transitions through deferred, blocked, dismissed, and suppressed lifecycle states', async () => {

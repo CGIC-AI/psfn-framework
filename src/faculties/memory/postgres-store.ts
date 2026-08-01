@@ -12,6 +12,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import {
   POSTGRES_MEMORY_MIGRATIONS,
 } from '../../persistence/postgres/migrations.js';
+import { startPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import type { MemoryJournal } from './journal.js';
 import type {
   ContactProfileArtifact,
@@ -280,12 +281,15 @@ export async function createPostgresMemoryStoreFromPool(
     startupSubjectClassificationCoverage,
   });
   await store.waitUntilReady();
-  // Kick the dimension-parameterized HNSW ANN index build OFF the boot critical
-  // path. It runs CONCURRENTLY in the background so a large existing corpus can
-  // never blow the pod readiness window and crash-loop startup; semantic search
-  // is query-correct on a sequential scan until it lands. Awaited only when a
-  // caller (tests) explicitly asks for determinism.
+  // Build the dimension-parameterized HNSW ANN index concurrently with the
+  // remainder of startup, but register it as optional readiness. Semantic
+  // search remains query-correct on a sequential scan if it fails; the process
+  // may advertise Ready only after this DDL has settled.
   const annIndexBuild = store.startAnnIndexBuild();
+  startPostgresStoreReadiness('memory_ann_index', async () => {
+    const outcome = await annIndexBuild;
+    if (outcome.status === 'degraded') throw outcome.error;
+  });
   if (options.awaitAnnIndexBuild === true) {
     await annIndexBuild;
   }
@@ -389,9 +393,9 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   /**
    * Start the background HNSW ANN index build (idempotent). Returns the settle
    * promise so callers that want determinism (tests) can await it; production
-   * fires and forgets. The underlying build never throws — a failure resolves to
-   * a `degraded` outcome and leaves semantic search query-correct on a
-   * sequential scan.
+   * registers that promise with process readiness. The underlying build never
+   * throws — a failure resolves to a `degraded` outcome and leaves semantic
+   * search query-correct on a sequential scan.
    */
   startAnnIndexBuild(): Promise<L2EmbeddingAnnIndexBuildOutcome> {
     if (this.annIndexBuild) return this.annIndexBuild;

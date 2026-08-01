@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  createPostgresPool: vi.fn(() => ({ end: vi.fn(async () => {}) })),
+  poolQuery: vi.fn(async (text: string) => ({
+    rows: text.includes('to_regclass')
+      ? [{ ledger_table: 'shared.shared_schema_migrations' }]
+      : [{ versions: [1, 2, 4, 5, 6, 7, 9, 10, 11, 12] }],
+  })),
+  poolEnd: vi.fn(async () => {}),
+  createPostgresPool: vi.fn(() => ({
+    query: mocks.poolQuery,
+    end: mocks.poolEnd,
+  })),
   queryRows: vi.fn(async () => [] as never[]),
 }));
 
@@ -86,8 +95,18 @@ function rowsFor(text: string): unknown[] {
 describe('PostgresSpeakingArbiterAdminStore', () => {
   beforeEach(() => {
     mocks.createPostgresPool.mockClear();
+    mocks.poolQuery.mockClear();
+    mocks.poolEnd.mockClear();
     mocks.queryRows.mockReset();
     mocks.queryRows.mockImplementation(async (_pool: unknown, text: string) => rowsFor(text) as never[]);
+  });
+
+  it('fails reads when the shared migration ledger is not ready', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ ledger_table: null }] });
+    const store = await PostgresSpeakingArbiterAdminStore.connect('postgres://localhost/test');
+
+    await expect(store.readProjection())
+      .rejects.toThrow('shared_schema_migrations ledger');
   });
 
   it('projects the shared arbiter tables into a content-free, typed shape', async () => {

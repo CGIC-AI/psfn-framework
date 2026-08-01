@@ -9,6 +9,10 @@ import {
 } from '../../../persistence/postgres.js';
 import { POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS } from '../../../persistence/postgres/migrations.js';
 import type { TenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
+import {
+  startPostgresStoreReadiness,
+  type PostgresStoreReadinessHandle,
+} from '../../../persistence/postgres/runtime-readiness.js';
 import type { ObserverEmotionCrosswalkOutput } from './crosswalk.js';
 import type { EmoSimAdapterRunResult } from './emosim-adapter.js';
 import type { ObserverAppraisalProjectionResult } from './projection.js';
@@ -363,16 +367,23 @@ const storeByPoolKey = new Map<string, PostgresObserverEvalSidecarStore>();
 
 export class PostgresObserverEvalSidecarStore
 implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersistencePort {
-  private readonly ready: Promise<void>;
+  private readonly readiness: PostgresStoreReadinessHandle;
   private readonly nowMs: () => number;
 
   constructor(private readonly pool: Pool, options: StoreOptions = {}) {
-    this.ready = runPostgresMigrations(
-      pool,
-      POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS,
-      options.schema !== undefined ? { schema: options.schema } : {},
+    this.readiness = startPostgresStoreReadiness(
+      'observer_eval_sidecar',
+      () => runPostgresMigrations(
+        pool,
+        POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS,
+        options.schema !== undefined ? { schema: options.schema } : {},
+      ),
     );
     this.nowMs = options.nowMs ?? Date.now;
+  }
+
+  async waitUntilReady(): Promise<void> {
+    await this.readiness.waitUntilReady();
   }
 
   static connect(
@@ -393,7 +404,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
 
   async upsertRun(input: ObserverEvalSidecarRunInput): Promise<ObserverEvalSidecarRunRecord> {
     const run = normalizeRunRecord(input, this.nowMs());
-    await this.ready;
+    await this.waitUntilReady();
     await executeQuery(this.pool, `
       INSERT INTO observer_eval_sidecar_runs (
         run_id, schema_version, eval_owner, authoritative, sidecar_id, deployment,
@@ -442,7 +453,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   }
 
   async getRun(runId: string): Promise<ObserverEvalSidecarRunRecord | null> {
-    await this.ready;
+    await this.waitUntilReady();
     const row = await queryOne<ObserverEvalRunRow>(this.pool, `
       SELECT *
       FROM observer_eval_sidecar_runs
@@ -452,7 +463,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   }
 
   async queryRuns(query: ObserverEvalSidecarRunQuery = {}): Promise<ObserverEvalSidecarRunRecord[]> {
-    await this.ready;
+    await this.waitUntilReady();
     const normalizedQuery = normalizeRunQuery(query);
     const where = buildRunWhere(normalizedQuery);
     const rows = await queryRows<ObserverEvalRunRow>(this.pool, `
@@ -469,7 +480,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
     input: ObserverEvalSidecarObservationInput,
   ): Promise<ObserverEvalSidecarObservationRecord> {
     const observation = normalizeObservationRecord(input, this.nowMs());
-    await this.ready;
+    await this.waitUntilReady();
     await executeQuery(this.pool, `
       INSERT INTO observer_eval_sidecar_observations (
         observation_id, run_id, schema_version, eval_owner, authoritative,
@@ -559,7 +570,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   }
 
   async getObservation(observationId: string): Promise<ObserverEvalSidecarObservationRecord | null> {
-    await this.ready;
+    await this.waitUntilReady();
     const row = await queryOne<ObserverEvalObservationRow>(this.pool, `
       SELECT *
       FROM observer_eval_sidecar_observations
@@ -578,7 +589,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   async queryObservations(
     query: ObserverEvalSidecarObservationQuery = {},
   ): Promise<ObserverEvalSidecarObservationRecord[]> {
-    await this.ready;
+    await this.waitUntilReady();
     const normalizedQuery = normalizeObservationQuery(query);
     const where = buildObservationWhere(normalizedQuery);
     const rows = await queryRows<ObserverEvalObservationRow>(this.pool, `
@@ -594,7 +605,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
 
   async pruneExpiredRetention(nowMs: number): Promise<ObserverEvalSidecarPruneResult> {
     const prunedAtMs = normalizeEpochMs(nowMs, 'nowMs');
-    await this.ready;
+    await this.waitUntilReady();
     const observationRows = await queryRows<ReturnedObservationIdRow>(this.pool, `
       DELETE FROM observer_eval_sidecar_observations
       WHERE retain_until_ms <= $1
@@ -626,7 +637,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
     input: ObserverEvalSidecarLeverEventInput,
   ): Promise<ObserverEvalSidecarLeverEventRecord> {
     const event = normalizeLeverEventRecord(input, this.nowMs());
-    await this.ready;
+    await this.waitUntilReady();
     await executeQuery(this.pool, `
       INSERT INTO observer_eval_sidecar_lever_events (
         event_id, run_id, schema_version, eval_owner, authoritative,
@@ -676,7 +687,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   async queryLeverEvents(
     query: ObserverEvalSidecarLeverEventQuery = {},
   ): Promise<ObserverEvalSidecarLeverEventRecord[]> {
-    await this.ready;
+    await this.waitUntilReady();
     const normalizedQuery = normalizeLeverEventQuery(query);
     const where = buildLeverEventWhere(normalizedQuery);
     const rows = await queryRows<ObserverEvalLeverEventRow>(this.pool, `
@@ -690,7 +701,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   }
 
   async loadLeverState(sidecarId: string): Promise<ObserverEvalSidecarLeverStateEntry[]> {
-    await this.ready;
+    await this.waitUntilReady();
     const rows = await queryRows<ObserverEvalLeverStateRow>(this.pool, `
       SELECT *
       FROM observer_eval_sidecar_lever_state
@@ -717,7 +728,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   }): Promise<void> {
     const sidecarId = normalizeNonEmptyText(input.sidecarId, 'sidecarId');
     const updatedAtMs = normalizeEpochMs(input.updatedAtMs, 'updatedAtMs');
-    await this.ready;
+    await this.waitUntilReady();
     for (const entry of input.entries) {
       await executeQuery(this.pool, `
         INSERT INTO observer_eval_sidecar_lever_state (
@@ -742,7 +753,7 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
 
   async pruneExpiredLeverEvents(nowMs: number): Promise<ObserverEvalSidecarLeverPruneResult> {
     const prunedAtMs = normalizeEpochMs(nowMs, 'nowMs');
-    await this.ready;
+    await this.waitUntilReady();
     const rows = await queryRows<ReturnedLeverEventIdRow>(this.pool, `
       DELETE FROM observer_eval_sidecar_lever_events
       WHERE retain_until_ms <= $1

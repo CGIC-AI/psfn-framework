@@ -121,6 +121,7 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
 import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
@@ -280,12 +281,15 @@ export async function composeSessionRuntimeAsync(
   const redactionDriftObserver = createProjectionDriftIncidentObserver({
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
   });
-  const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
-    sessionsDir,
-    redactionDriftObserver,
-    ...(postgresSchema ? { schema: postgresSchema } : {}),
-    ...(postgresRole ? { role: postgresRole } : {}),
-  });
+  const sessionAdapters = await awaitPostgresStoreReadiness(
+    'session_transcripts',
+    () => createDefaultPostgresSessionAdapters(databaseUrl, {
+      sessionsDir,
+      redactionDriftObserver,
+      ...(postgresSchema ? { schema: postgresSchema } : {}),
+      ...(postgresRole ? { role: postgresRole } : {}),
+    }),
+  );
   const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
   return createSessionComposition(options, sessionAdapters, sessionsDir, sessionTailCache);
 }
@@ -305,23 +309,26 @@ export async function composeMemoryStoreAsync(
     throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
   }
 
-  return await createPostgresMemoryStore(databaseUrl, embeddingDims, {
-    notesDir: resolveNotesDir(companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
-    ...(config.postgresSchema?.trim()
-      ? {
-          schema: config.postgresSchema.trim(),
-          ...(config.multiCompanion === true
-            ? {
-                role: config.postgresRole?.trim() || (() => {
-                  throw new Error('Multi-companion memory composition requires config.postgresRole');
-                })(),
-              }
-            : {}),
-        }
-      : {}),
-  });
+  return await awaitPostgresStoreReadiness(
+    'memory',
+    () => createPostgresMemoryStore(databaseUrl, embeddingDims, {
+      notesDir: resolveNotesDir(companionDataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+      ...(config.postgresSchema?.trim()
+        ? {
+            schema: config.postgresSchema.trim(),
+            ...(config.multiCompanion === true
+              ? {
+                  role: config.postgresRole?.trim() || (() => {
+                    throw new Error('Multi-companion memory composition requires config.postgresRole');
+                  })(),
+                }
+              : {}),
+          }
+        : {}),
+    }),
+  );
 }
 
 export interface IdentityComposition {

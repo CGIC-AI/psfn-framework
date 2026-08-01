@@ -7,12 +7,12 @@ import {
   queryRows,
 } from '../postgres.js';
 import { POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS } from './migrations.js';
+import {
+  startPostgresStoreReadiness,
+  type PostgresStoreReadinessHandle,
+} from './runtime-readiness.js';
 import type { AnalysisWorkbenchTraceView } from '../../operator/garden/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createComponentLogger } from '../../shared/logger.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
-
-const log = createComponentLogger('AnalysisWorkbenchTraceStore');
 
 /**
  * Durable ring for the redacted analysis-workbench trace projection (bead
@@ -46,7 +46,7 @@ function assertTraceView(value: unknown): AnalysisWorkbenchTraceView {
 }
 
 export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTraceStorePort {
-  private readonly ready: Promise<void>;
+  private readonly readiness: PostgresStoreReadinessHandle;
 
   constructor(
     private readonly pool: Pool,
@@ -60,17 +60,10 @@ export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTra
     if (!Number.isSafeInteger(retentionCap) || retentionCap < 1) {
       throw new Error('analysis-workbench trace store requires a positive retention cap');
     }
-    this.ready = ensurePostgresSchema(pool, POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS);
-    // The migration promise is created here but nothing awaits it until the
-    // first `record`/`listRecent` call, so a boot-time failure would otherwise
-    // escape as a process-level unhandled rejection and destabilise the agent
-    // (psfn-framework-stmof). Observing it reports the failure once; `ready`
-    // still rejects for every caller below, so nothing is swallowed.
-    this.ready.catch((error) => {
-      log.error('Analysis-workbench trace schema migration failed', {
-        error: toErrorMessage(error),
-      });
-    });
+    this.readiness = startPostgresStoreReadiness(
+      'analysis_workbench_trace',
+      () => ensurePostgresSchema(pool, POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS),
+    );
   }
 
   static connect(
@@ -95,12 +88,16 @@ export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTra
     retentionCap: number,
   ): Promise<PostgresAnalysisWorkbenchTraceStore> {
     const store = new PostgresAnalysisWorkbenchTraceStore(pool, companionId, retentionCap, false);
-    await store.ready;
+    await store.waitUntilReady();
     return store;
   }
 
+  async waitUntilReady(): Promise<void> {
+    await this.readiness.waitUntilReady();
+  }
+
   async record(trace: AnalysisWorkbenchTraceView): Promise<void> {
-    await this.ready;
+    await this.waitUntilReady();
     if (!Number.isSafeInteger(trace.timestamp) || trace.timestamp < 0) {
       throw new Error('analysis-workbench trace timestamp must be a non-negative integer');
     }
@@ -112,7 +109,7 @@ export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTra
   }
 
   async listRecent(limit: number): Promise<AnalysisWorkbenchTraceView[]> {
-    await this.ready;
+    await this.waitUntilReady();
     if (!Number.isSafeInteger(limit) || limit < 1) {
       throw new Error('analysis-workbench trace listRecent requires a positive integer limit');
     }

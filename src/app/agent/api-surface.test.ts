@@ -101,6 +101,55 @@ describe('buildApiHealthChecks', () => {
     });
   });
 
+  it('reports durable optional PostgreSQL degradation while the workload remains runtime-ready', async () => {
+    const scheduler = new Scheduler(new EventBus(), {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 500,
+    });
+    const checks = buildApiHealthChecks(
+      {
+        config: {
+          primaryModel: 'openrouter/moonshotai/kimi-k2.5',
+          primaryProvider: 'openrouter',
+          modelRoster: {},
+        } as any,
+        memoryStore: {
+          getStats: async () => ({ total: 4, avgSalience: 0.5 }),
+        } as any,
+        gateway: { dims: 384 } as any,
+        scheduler,
+        runtimeStatusMeta,
+        postgresReadiness: () => ({
+          phase: 'ready',
+          pending: [],
+          readyStores: ['memory'],
+          degraded: [{
+            store: 'analysis_workbench_trace',
+            label: 'analysis workbench trace',
+            requirement: 'optional',
+            mismatch: 'migration role cannot create relation',
+          }],
+        }),
+      },
+      { enabled: false, timeoutMs: 10_000, cacheTtlMs: 10_000 },
+    );
+
+    await expect(checks.memory?.()).resolves.toMatchObject({
+      status: 'healthy',
+      meta: {
+        total: 4,
+        postgresReadiness: {
+          phase: 'ready',
+          status: 'degraded',
+          degradedStores: [{
+            store: 'analysis_workbench_trace',
+            label: 'analysis workbench trace',
+          }],
+        },
+      },
+    });
+  });
+
   function buildDiscordCheck(activeMode: string) {
     const checks = buildApiHealthChecks(
       {

@@ -8,6 +8,7 @@ import {
   FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
 } from './reapproval-sql.js';
 import { assertPostgresRolesAreLeastPrivilege } from '../role-posture.js';
+import { assertPostgresRuntimeDdlAllowed } from '../runtime-readiness.js';
 import {
   FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL,
   FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES,
@@ -444,6 +445,7 @@ export async function migrateFleetAuthSchema(options: {
   databaseUrl: string;
   roles: FleetAuthDatabaseRoles;
 }): Promise<void> {
+  assertPostgresRuntimeDdlAllowed('migrate fleet authentication schema');
   assertDistinctRoles(options.roles);
   const pool = createPostgresPool(options.databaseUrl, {
     applicationName: 'fleet-auth-migration',

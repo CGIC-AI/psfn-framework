@@ -109,6 +109,11 @@ import {
 } from '../startup/support/operator-alerts.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import {
+  awaitOptionalPostgresStoreReadiness,
+  awaitPostgresStoreReadiness,
+  sealPostgresStoreReadinessBeforeReady,
+} from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -203,7 +208,7 @@ async function main(): Promise<void> {
     testingHarnessGardenAdmin,
     env,
   );
-  const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
+  const initializeFleetAuthPersistence = () => initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,
     knownCompanionIds: fleetAuthKnownCompanionIds,
@@ -217,8 +222,12 @@ async function main(): Promise<void> {
       ? { testingHarness: testingHarnessGardenAdmin }
       : {}),
   });
+  const fleetAuthPersistence = config.fleetAuth
+    ? await awaitPostgresStoreReadiness('fleet_auth', initializeFleetAuthPersistence)
+    : await initializeFleetAuthPersistence();
   const sharedSchemaAccessContracts = companionDatabaseTopology
-    ? await prepareFleetSharedSchemaRuntime({
+    ? await awaitPostgresStoreReadiness('shared_runtime_authority', () => (
+      prepareFleetSharedSchemaRuntime({
         sharedMigrationDatabaseUrl: companionDatabaseTopology.sharedMigration.databaseUrl,
         sharedMigrationRole: companionDatabaseTopology.sharedMigration.role,
         companionDatabases: companionDatabaseTopology.companions.map(entry => ({
@@ -236,6 +245,7 @@ async function main(): Promise<void> {
             }
           : {}),
       })
+    ))
     : undefined;
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
@@ -295,6 +305,7 @@ async function main(): Promise<void> {
   } = privilegedCore;
   let fleetAuthBackupScheduler: Scheduler | undefined;
   if (config.fleetAuth) {
+    const fleetAuthDatabaseRoles = config.fleetAuth.databaseRoles;
     if (!config.companionFleet || !fleetAuthPersistence || !config.credentialVault) {
       throw new Error('Fleet auth backup startup invariants are incomplete');
     }
@@ -359,10 +370,13 @@ async function main(): Promise<void> {
       // The scratch database remains operator-provisioned. Once its existence
       // and CREATE/CONNECT grants are proved read-only above, startup
       // idempotently provisions only its fleet_auth schema.
-      await migrateFleetAuthSchema({
-        databaseUrl: scratchMigrationUrl,
-        roles: config.fleetAuth.databaseRoles,
-      });
+      await awaitPostgresStoreReadiness(
+        'fleet_auth',
+        () => migrateFleetAuthSchema({
+          databaseUrl: scratchMigrationUrl,
+          roles: fleetAuthDatabaseRoles,
+        }),
+      );
     }
     fleetAuthBackupScheduler = new Scheduler(
       eventBus,
@@ -562,49 +576,71 @@ async function main(): Promise<void> {
     if (!resolveFleetChargePolicy) {
       throw new Error('Multi-companion inter-companion channels require fleet charge-policy owners');
     }
-    const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
+    const companionFleet = config.companionFleet;
+    const fleetCompanionIds = companionFleet.companions.map((entry) => entry.companionId);
     const fleetByCompanionId = new Map(
-      config.companionFleet.companions.map(entry => [entry.companionId, entry]),
+      companionFleet.companions.map(entry => [entry.companionId, entry]),
     );
-    companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
-    icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
-      knownCompanionIds: fleetCompanionIds,
-    });
-    icpFatigueRegulationStore =
-      await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
-    icpInitiationPolicyAuthority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
-      fleet: config.companionFleet.companions,
-      quietHours: startupHydration.schedulerConfig.episodicProcessing,
-      capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
-        icpFatigueRegulationStore,
-        {
-          read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
-        },
-        {
-          read: ({ senderCompanionId, nowMs }) => {
-            const fleetEntry = fleetByCompanionId.get(createCompanionId(
-              senderCompanionId,
-              'ICP social charge balance senderCompanionId',
-            ));
-            if (!fleetEntry) {
-              throw new Error('ICP social charge balance requires a known fleet sender');
-            }
-            return readRunChargeRollingWindowFromLedger(
-              resolveChargeLedgerPath(fleetEntry.companionDataDir),
-              nowMs,
-            );
-          },
-        },
-      ),
-      causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
-    });
+    companionPresenceStore = await awaitPostgresStoreReadiness(
+      'companion_presence',
+      () => PostgresCompanionPresenceStore.connect(databaseUrl),
+    );
+    icpAutonomyStore = await awaitPostgresStoreReadiness(
+      'icp_shared_autonomy',
+      () => PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: fleetCompanionIds,
+      }),
+    );
+    icpFatigueRegulationStore = await awaitPostgresStoreReadiness(
+      'icp_fatigue_reservations',
+      () => PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl),
+    );
+    const requiredFatigueRegulationStore = icpFatigueRegulationStore;
+    icpInitiationPolicyAuthority = await awaitPostgresStoreReadiness(
+      'icp_initiation_policy',
+      async () => {
+        const authority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
+          fleet: companionFleet.companions,
+          quietHours: startupHydration.schedulerConfig.episodicProcessing,
+          capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
+            requiredFatigueRegulationStore,
+            {
+              read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
+            },
+            {
+              read: ({ senderCompanionId, nowMs }) => {
+                const fleetEntry = fleetByCompanionId.get(createCompanionId(
+                  senderCompanionId,
+                  'ICP social charge balance senderCompanionId',
+                ));
+                if (!fleetEntry) {
+                  throw new Error('ICP social charge balance requires a known fleet sender');
+                }
+                return readRunChargeRollingWindowFromLedger(
+                  resolveChargeLedgerPath(fleetEntry.companionDataDir),
+                  nowMs,
+                );
+              },
+            },
+          ),
+          causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
+        });
+        try {
+          await authority.assertReady();
+          return authority;
+        } catch (error) {
+          await authority.close();
+          throw error;
+        }
+      },
+    );
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
       presence: companionPresenceStore,
       fleetCompanionIds: new Set(fleetCompanionIds),
     });
     log.info('Inter-companion channel lane enabled', {
-      fleetSize: config.companionFleet.companions.length,
+      fleetSize: companionFleet.companions.length,
       placeCount: placesRegistryConfig.places.length,
     });
   }
@@ -618,7 +654,7 @@ async function main(): Promise<void> {
   let welfareGrantVerifier: WelfareGrantVerifier | undefined;
   const welfareVerifierDatabaseUrl = config.postgresDatabaseUrl?.trim();
   if (welfareVerifierDatabaseUrl) {
-    welfareGrantVerifier = createWelfareGrantVerifier({
+    const verifier = createWelfareGrantVerifier({
       databaseUrl: welfareVerifierDatabaseUrl,
       ...(config.companionFleet
         ? {
@@ -631,6 +667,20 @@ async function main(): Promise<void> {
           ? { postgresSchema: config.postgresSchema.trim() }
           : {})),
     });
+    if (verifier) {
+      welfareGrantVerifier = await awaitOptionalPostgresStoreReadiness(
+        'welfare_grant_verifier',
+        async () => {
+          try {
+            await verifier.assertReady();
+            return verifier;
+          } catch (error) {
+            await verifier.close();
+            throw error;
+          }
+        },
+      );
+    }
   }
 
   const shardWorkloadRegistry = new ShardWorkloadRegistry();
@@ -738,6 +788,13 @@ async function main(): Promise<void> {
   // ── Start everything ──
 
   await initGatewayChannelSurfaces(channelSurfaces);
+  const postgresReadiness = await sealPostgresStoreReadinessBeforeReady();
+  if (postgresReadiness.degraded.length > 0) {
+    log.warn('Optional PostgreSQL stores degraded at gateway startup', {
+      stores: postgresReadiness.degraded.map(entry => entry.store).join(','),
+      mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
+    });
+  }
   gateway.start();
   fleetAuthBackupScheduler?.start();
   // Companion event relay (w9hj.1): fan-out hub for redacted operational

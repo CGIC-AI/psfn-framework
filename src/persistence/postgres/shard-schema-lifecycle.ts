@@ -121,7 +121,12 @@ export function createPostgresShardSchemaLifecycle(
       const binding = assertBinding(rawBinding);
       const pool = openPool(binding, 'shard-schema-migrate');
       try {
-        await runPostgresMigrations(pool, statements, { schema: binding.schema });
+        await runPostgresMigrations(pool, statements, {
+          schema: binding.schema,
+          // The shard is a separately bounded workload. Its schema is prepared
+          // before the shard starts, not lazily after that workload is Ready.
+          ddlAuthority: 'isolated_workload_migration',
+        });
       } finally {
         await pool.end();
       }

@@ -65,6 +65,7 @@ import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
 import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
 import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecycle-recovery-runtime.js';
+import { awaitPostgresStoreReadiness } from './postgres/runtime-readiness.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -181,9 +182,12 @@ export async function createAgentPersistenceRuntime(
       max: 1,
     });
     try {
-      await assertPostgresTenantAccessProvisioned(
-        bootstrapPool,
-        planPostgresTenantAccess({ schema, role: tenantRole }),
+      await awaitPostgresStoreReadiness(
+        'tenant_boundary',
+        () => assertPostgresTenantAccessProvisioned(
+          bootstrapPool,
+          planPostgresTenantAccess({ schema, role: tenantRole }),
+        ),
       );
     } finally {
       await bootstrapPool.end();
@@ -196,7 +200,10 @@ export async function createAgentPersistenceRuntime(
       schema,
     });
     try {
-      await ensurePostgresSchemaExists(bootstrapPool, schema);
+      await awaitPostgresStoreReadiness(
+        'tenant_boundary',
+        () => ensurePostgresSchemaExists(bootstrapPool, schema),
+      );
     } finally {
       await bootstrapPool.end();
     }
@@ -211,56 +218,84 @@ export async function createAgentPersistenceRuntime(
     if (!schema || !options.config.companionFleet) {
       throw new Error('Multi-companion shared persistence requires a complete fleet schema identity');
     }
-    await assertSharedSchemaRuntimeAuthority(databaseUrl, {
-      ownSchema: schema,
-      companionSchemas: options.config.companionFleet.companions.map(
-        companion => companion.postgresSchema,
-      ),
-    });
+    await awaitPostgresStoreReadiness(
+      'shared_runtime_authority',
+      () => assertSharedSchemaRuntimeAuthority(databaseUrl, {
+        ownSchema: schema,
+        companionSchemas: options.config.companionFleet!.companions.map(
+          companion => companion.postgresSchema,
+        ),
+      }),
+    );
   }
   const companionPresenceStore = options.config.multiCompanion === true
-    ? await PostgresCompanionPresenceStore.connect(databaseUrl)
+    ? await awaitPostgresStoreReadiness(
+        'companion_presence',
+        () => PostgresCompanionPresenceStore.connect(databaseUrl),
+      )
     : undefined;
   const icpInitiationCandidateStore = options.config.multiCompanion === true
-    ? await PostgresIcpInitiationCandidateStore.connect(databaseUrl, {
-        schema: schema ?? (() => {
-          throw new Error('Multi-companion ICP candidates require a companion-local postgresSchema');
-        })(),
-        role: tenantRole,
-      })
+    ? await awaitPostgresStoreReadiness(
+        'icp_initiation_candidates',
+        () => PostgresIcpInitiationCandidateStore.connect(databaseUrl, {
+          schema: schema ?? (() => {
+            throw new Error('Multi-companion ICP candidates require a companion-local postgresSchema');
+          })(),
+          role: tenantRole,
+        }),
+      )
     : undefined;
   // Per-companion social pot lives in the shared schema (gateway-owned budget,
   // never a companion-local store). Multi-companion only, like presence above.
   const socialPotStore = options.config.multiCompanion === true
-    ? await PostgresSocialPotStore.connect(databaseUrl)
+    ? await awaitPostgresStoreReadiness(
+        'social_pot',
+        () => PostgresSocialPotStore.connect(databaseUrl),
+      )
     : undefined;
   // Speaking arbiter state (reservations, egress leases, room-episode pressure)
   // is gateway-owned in the shared schema, exactly like the social pot above.
   const speakingArbiterStore = options.config.multiCompanion === true
-    ? await PostgresSpeakingArbiterStore.connect(databaseUrl)
+    ? await awaitPostgresStoreReadiness(
+        'speaking_arbiter',
+        () => PostgresSpeakingArbiterStore.connect(databaseUrl),
+      )
     : undefined;
 
-  const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, {
-    schema,
-    role: tenantRole,
-  });
-  const contactStore = await createPostgresContactStore(databaseUrl, options.primaryUserId, {
-    exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
-    schema,
-    role: tenantRole,
-    ...(options.contactLifecycleGateway
-      ? { contactLifecycleGateway: options.contactLifecycleGateway }
-      : {}),
-  });
+  const intentionRuntime = await awaitPostgresStoreReadiness(
+    'intention',
+    () => createPostgresIntentionPorts(databaseUrl, { schema, role: tenantRole }),
+  );
+  const contactStore = await awaitPostgresStoreReadiness(
+    'contacts',
+    () => createPostgresContactStore(databaseUrl, options.primaryUserId, {
+      exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
+      schema,
+      role: tenantRole,
+      ...(options.contactLifecycleGateway
+        ? { contactLifecycleGateway: options.contactLifecycleGateway }
+        : {}),
+    }),
+  );
   const episodicStore = createPostgresEpisodicStore(databaseUrl, { schema, role: tenantRole });
-  const memoryStore = await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
-    notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
-    schema,
-    role: tenantRole,
-    memoryDeletionPolicy: () => options.config.memoryDeletionPolicy,
-  });
+  const memoryStore = await awaitPostgresStoreReadiness(
+    'memory',
+    () => createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
+      notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
+      schema,
+      role: tenantRole,
+      memoryDeletionPolicy: () => options.config.memoryDeletionPolicy,
+    }),
+  );
+  const reflectionMirror = await awaitPostgresStoreReadiness(
+    'reflection',
+    () => PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl, {
+      schema,
+      role: tenantRole,
+    }),
+  );
   const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore,
@@ -271,27 +306,42 @@ export async function createAgentPersistenceRuntime(
     reflectionStore: new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
       {
-        mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl, {
-          schema,
-          role: tenantRole,
-        }),
+        mirror: reflectionMirror,
       },
     ),
     contactStore,
-    hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, {
-      schema,
-      role: tenantRole,
-    }),
+    hubIdentityEnrollmentStore: await awaitPostgresStoreReadiness(
+      'hub_identity_enrollment',
+      () => createPostgresHubIdentityEnrollmentStore(databaseUrl, { schema, role: tenantRole }),
+    ),
     intentionRuntime,
     intentionProviders: intentionRuntime,
     weightedThoughtStore: intentionRuntime.weightedThoughtStore,
     socialDesireStore: intentionRuntime.socialDesireStore,
-    internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema, role: tenantRole }),
-    participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema, role: tenantRole }),
-    scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
-    introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
-    backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
-    partnerAffectShadowStore: await PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+    internalStateStore: await awaitPostgresStoreReadiness(
+      'internal_state',
+      () => PostgresInternalStateStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    participantTrendStore: await awaitPostgresStoreReadiness(
+      'participant_trend',
+      () => PostgresParticipantTrendStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    scheduledPromptStore: await awaitPostgresStoreReadiness(
+      'scheduled_prompts',
+      () => PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    introspectionLandmarkStore: await awaitPostgresStoreReadiness(
+      'introspection',
+      () => IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    backgroundWorkStore: await awaitPostgresStoreReadiness(
+      'background_work',
+      () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    partnerAffectShadowStore: await awaitPostgresStoreReadiness(
+      'partner_affect_shadow',
+      () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),

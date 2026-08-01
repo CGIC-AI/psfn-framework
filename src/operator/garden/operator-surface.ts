@@ -47,6 +47,7 @@ import {
   verifyPeerCertificateSpiffeUri,
   type RequiredMtlsPeerFileConfig,
 } from '../../shared/net/mtls.js';
+import type { PostgresRuntimeReadinessSnapshot } from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -82,6 +83,8 @@ export interface GardenOperatorSurfaceConfig {
   fleetChildAssertions?: GardenFleetChildAssertionClient;
   /** Required for a non-loopback fleet-auth Garden listener. */
   fleetSsoTls?: RequiredMtlsPeerFileConfig;
+  /** Process-lifetime optional-store degradation for public aggregate health. */
+  postgresReadiness?: () => PostgresRuntimeReadinessSnapshot;
 }
 
 export type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
@@ -522,17 +525,37 @@ export class GardenOperatorSurface implements Lifecycle {
 
   private async handleHealth(res: ServerResponse): Promise<void> {
     const probe = await this.routing.probe();
+    const postgresReadiness = this.config.postgresReadiness?.();
+    const postgresDegraded = postgresReadiness?.degraded.some(
+      entry => entry.requirement === 'optional',
+    ) === true;
+    const requiredPostgresUnavailable = postgresReadiness !== undefined && (
+      postgresReadiness.phase !== 'ready'
+      || postgresReadiness.degraded.some(entry => entry.requirement === 'required')
+    );
+    const postgresDependency = postgresReadiness
+      ? {
+          postgresStores: {
+            status: postgresDegraded ? 'degraded' : 'ok',
+            degradedCount: postgresReadiness.degraded.length,
+          },
+        }
+      : {};
     if (probe.kind === 'fleet') {
       const { readiness } = probe;
       if (res.writableEnded || res.destroyed) return;
-      sendJson(res, readiness.status === 'ready' ? 200 : 503, {
-        status: readiness.status === 'ready' ? 'ok' : 'degraded',
+      const healthy = readiness.status === 'ready' && !requiredPostgresUnavailable;
+      sendJson(res, healthy ? 200 : 503, {
+        status: healthy ? 'ok' : 'degraded',
         uptime: process.uptime(),
         gardenDenialsLastHour: getGardenDenialsLastHour(),
         // /health is always-public. Probe every registered target internally,
         // but never disclose fleet membership, endpoints, or raw failure
         // reasons through this response.
-        dependencies: { adminTransports: { status: readiness.status } },
+        dependencies: {
+          adminTransports: { status: readiness.status },
+          ...postgresDependency,
+        },
       });
       return;
     }
@@ -542,11 +565,12 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     const payload = {
-      status: adminTransport.status === 'ok' ? 'ok' : 'degraded',
+      status: adminTransport.status === 'ok' && !requiredPostgresUnavailable ? 'ok' : 'degraded',
       uptime: process.uptime(),
       gardenDenialsLastHour: getGardenDenialsLastHour(),
       dependencies: {
         adminTransport,
+        ...postgresDependency,
       },
     };
 

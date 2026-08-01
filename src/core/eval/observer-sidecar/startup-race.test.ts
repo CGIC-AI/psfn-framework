@@ -7,13 +7,10 @@ import { createObserverEvalSidecarRuntimeFromConfig } from './config.js';
 
 // psfn-framework-qicb.4: the agent-process sidecar store is constructed through
 // createObserverEvalSidecarRuntimeFromConfig -> createObserverEvalSidecarPersistence
-// (config.ts). Like the Garden path guarded by qicb.3, the store starts its
-// schema-ensure `ready` promise in its constructor without attaching a rejection
-// handler, so a startup Postgres connectivity blip (the kube-router
-// netpol-programming race, a ~1s ECONNREFUSED window) would otherwise escape to
-// the agent's process-wide unhandledRejection handler. The construction-site
-// probe must handle it at the source so a refused pool produces zero
-// unhandledRejection.
+// (config.ts). The store registers its migration with the process readiness
+// coordinator, which observes the task in the construction tick. A startup
+// Postgres connectivity blip must become durable optional-store degradation,
+// never a process-wide unhandledRejection.
 
 /**
  * A loopback database URL whose port has no listener, so every connection
@@ -33,7 +30,7 @@ function persistenceEnabledConfig(): Pick<SubstrateConfig, 'observerEvalSidecar'
       ...createDefaultObserverEvalSidecarSettings(),
       // The top-level sidecar stays disabled so createObserverEvalSidecarPort
       // returns null without needing adapter fields; the persistence store is
-      // still constructed (and its `ready` promise started) on this path.
+      // still constructed (and its readiness task started) on this path.
       enabled: false,
       persistence: {
         enabled: true,
@@ -67,8 +64,8 @@ describe('observer eval sidecar agent-process startup netpol race (psfn-framewor
     // yet; the failure is handled at the source, not swallowed silently.
     expect(runtime.config).toBeDefined();
 
-    // Allow the store's schema-ensure `ready` promise and the construction-site
-    // probe query to attempt the refused connection and settle. The
+    // Allow the store's observed schema-readiness task to attempt the refused
+    // connection and settle. The
     // unhandledRejection detector fires on the microtask/macrotask boundary, so
     // wait past it before asserting.
     await new Promise((resolve) => setTimeout(resolve, 400));

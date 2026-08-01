@@ -34,6 +34,7 @@ import { PersonalProjectLibrary } from './personal-projects.js';
 import { PersonalWishlist } from './personal-wishlist.js';
 import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
 import { createGatewaySharedWorldWikiDocumentWriter } from './gateway-shared-world-writer.js';
+import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -190,12 +191,17 @@ export async function wireWikiRuntime(
 
   let projection: WikiPgvectorProjectionStore | null = null;
   if (deps.databaseUrl && deps.embedding) {
+    const databaseUrl = deps.databaseUrl;
+    const embedding = deps.embedding;
     try {
-      projection = await createWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
-        ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
-        ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
-        ...(postgresRole ? { role: postgresRole } : {}),
-      });
+      projection = await awaitPostgresStoreReadiness(
+        'wiki_projection',
+        () => createWikiPgvectorProjectionStore(databaseUrl, embedding, {
+          ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+          ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
+          ...(postgresRole ? { role: postgresRole } : {}),
+        }),
+      );
     } catch (error) {
       log.warn('Wiki pgvector projection unavailable; semantic search disabled, text search still works', {
         error: String(error),
@@ -212,10 +218,15 @@ export async function wireWikiRuntime(
   // approved shared-world caretaker's write-side projection target.
   let sharedProjection: SharedWikiPgvectorProjectionStore | null = null;
   if (deps.databaseUrl && deps.embedding && multiCompanion) {
+    const databaseUrl = deps.databaseUrl;
+    const embedding = deps.embedding;
     try {
-      sharedProjection = await createSharedWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
-        ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
-      });
+      sharedProjection = await awaitPostgresStoreReadiness(
+        'shared_wiki',
+        () => createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
+          ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+        }),
+      );
     } catch (error) {
       await closeWikiRuntimeAfterFailure(error, projection ? [projection] : []);
     }

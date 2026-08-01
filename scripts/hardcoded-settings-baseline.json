@@ -3354,13 +3354,6 @@
     },
     {
       "file": "src/core/eval/observer-sidecar/config.ts",
-      "name": "createObserverEvalSidecarPersistence.store.queryRuns.arg0.limit",
-      "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate createObserverEvalSidecarPersistence.store.queryRuns.arg0.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/eval/observer-sidecar/config.ts",
       "name": "OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS",
       "value": "90"
     },
@@ -7694,13 +7687,6 @@
       "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L199; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "createObserverEvalSidecarAdminService.persistence.queryRuns.arg0.limit",
-      "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate createObserverEvalSidecarAdminService.persistence.queryRuns.arg0.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
       "file": "src/operator/garden/multipart.ts",
       "name": "MAX_UPLOAD_SIZE",
       "value": "2 * 1024 * 1024"
@@ -8363,6 +8349,13 @@
       "name": "MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
       "value": "1_000",
       "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/persistence/postgres/runtime-readiness.ts",
+      "name": "POSTGRES_STORE_READINESS_CATALOG.icp_initiation_policy",
+      "value": "{ label: 'ICP initiation policy', requirement: 'required' }",
+      "form": "object-member",
+      "note": "Code-owned startup safety classification: ICP policy is a required production authority whose schema and row-lock privileges must be proven before Ready; operators cannot weaken this fail-closed invariant."
     },
     {
       "file": "src/persistence/postgres/scheduled-prompt-store.ts",

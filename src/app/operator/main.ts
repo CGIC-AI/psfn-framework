@@ -29,6 +29,10 @@ import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/reque
 import { FleetGardenDirectDatabase } from '../../operator/garden/fleet-garden-direct-database.js';
 import { FleetGardenAdminTransportProxy } from '../../operator/garden/fleet-transport-client.js';
 import { FleetModelUsageService } from '../../operator/garden/services/fleet-model-usage-service.js';
+import {
+  getPostgresStoreReadinessSnapshot,
+  sealPostgresStoreReadinessBeforeReady,
+} from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -110,8 +114,16 @@ async function main(): Promise<void> {
     ...(config.fleetAuthVerifier && operatorConfirmationBaseUrl
       ? { fleetChildAssertions: createGardenFleetChildAssertionClient(operatorConfirmationBaseUrl) }
       : {}),
+    postgresReadiness: getPostgresStoreReadinessSnapshot,
   });
   await surface.init();
+  const postgresReadiness = await sealPostgresStoreReadinessBeforeReady();
+  if (postgresReadiness.degraded.length > 0) {
+    log.warn('Optional PostgreSQL stores degraded at operator startup', {
+      stores: postgresReadiness.degraded.map(entry => entry.store).join(','),
+      mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
+    });
+  }
   await surface.start();
 
   const stop = async (): Promise<void> => {

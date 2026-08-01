@@ -3,6 +3,10 @@ import type { Pool, QueryResultRow } from 'pg';
 import { createPostgresPool, queryRows, withPostgresClient } from '../../persistence/postgres.js';
 import { SHARED_SCHEMA_NAME } from '../../persistence/postgres/migrations.js';
 import { assertSharedWikiSchemaReady } from '../../persistence/postgres/shared-schema.js';
+import {
+  startPostgresStoreReadiness,
+  type PostgresStoreReadinessHandle,
+} from '../../persistence/postgres/runtime-readiness.js';
 import type {
   NormalizedSharedWorldWikiProposal,
   SharedWorldWikiApplyState,
@@ -178,7 +182,7 @@ function clampListLimit(value: number | undefined): number {
 
 export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStorePort {
   private readonly pool: Pool;
-  private readonly ready: Promise<void>;
+  private readonly readiness: PostgresStoreReadinessHandle;
 
   constructor(databaseUrl: string) {
     this.pool = createPostgresPool(databaseUrl, {
@@ -190,20 +194,22 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
     // chain before agents start; an ordinary companion credential lacks CREATE
     // on the shared schema, so the caretaker proves readiness read-only and
     // fails closed rather than running DDL.
-    this.ready = assertSharedWikiSchemaReady(this.pool);
-    void this.ready.catch(() => undefined);
+    this.readiness = startPostgresStoreReadiness(
+      'shared_wiki',
+      () => assertSharedWikiSchemaReady(this.pool),
+    );
   }
 
   /** Startup probe used by required multi-companion runtime wiring. */
   async initialize(): Promise<void> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
   }
 
   async submit(
     proposal: NormalizedSharedWorldWikiProposal,
     nowMs: number,
   ): Promise<SharedWorldWikiProposalSubmissionResult> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     return withPostgresClient(this.pool, async (client) => {
       const proposalId = randomUUID();
       const inserted = await client.query<SharedWorldWikiProposalRow>(`
@@ -241,7 +247,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
   }
 
   async list(query: SharedWorldWikiProposalListQuery = {}): Promise<SharedWorldWikiProposal[]> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     const limit = clampListLimit(query.limit);
     const rows = query.state
       ? await queryRows<SharedWorldWikiProposalRow>(this.pool, `
@@ -256,7 +262,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
   }
 
   async get(proposalId: string): Promise<SharedWorldWikiProposal | null> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     const rows = await queryRows<SharedWorldWikiProposalRow>(this.pool, `
       SELECT ${SELECT_PROPOSAL_COLUMNS} FROM shared_wiki_proposals WHERE proposal_id = $1
     `, [proposalId]);
@@ -271,7 +277,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
     rejectionCode?: SharedWorldWikiRejectionCode | undefined;
     nowMs: number;
   }): Promise<SharedWorldWikiProposal> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     return withPostgresClient(this.pool, async (client) => {
       const locked = await client.query<SharedWorldWikiProposalRow>(`
         SELECT ${SELECT_PROPOSAL_COLUMNS} FROM shared_wiki_proposals
@@ -304,7 +310,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
   }
 
   async claimApproved(proposalId: string, nowMs: number): Promise<SharedWorldWikiProposal | null> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     const leaseToken = randomUUID();
     const leaseUntilMs = nowMs + STORE_BOUNDS.applyLeaseMs;
     const rows = await queryRows<SharedWorldWikiProposalRow>(this.pool, `
@@ -328,7 +334,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
     bodySha256: string;
     nowMs: number;
   }): Promise<SharedWorldWikiProposal> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     const rows = await queryRows<SharedWorldWikiProposalRow>(this.pool, `
       UPDATE shared_wiki_proposals SET
         apply_state = 'applied', apply_lease_token = NULL, apply_lease_until_ms = NULL,
@@ -344,7 +350,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
   }
 
   async markRetryable(proposalId: string, leaseToken: string, nowMs: number): Promise<void> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     await this.pool.query(`
       UPDATE shared_wiki_proposals SET
         apply_state = 'retryable', apply_lease_token = NULL, apply_lease_until_ms = NULL,
@@ -354,7 +360,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
   }
 
   async listCleanupCandidates(limit: number): Promise<SharedWorldWikiProposal[]> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     const boundedLimit = Math.max(1, Math.min(STORE_BOUNDS.maxCleanupLimit, Math.floor(limit)));
     const rows = await queryRows<SharedWorldWikiProposalRow>(this.pool, `
       SELECT ${SELECT_PROPOSAL_COLUMNS} FROM shared_wiki_proposals
@@ -369,7 +375,7 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
     projectionBodySha256?: string | undefined;
     nowMs: number;
   }): Promise<void> {
-    await this.ready;
+    await this.readiness.waitUntilReady();
     await this.pool.query(`
       UPDATE shared_wiki_proposals SET
         cleanup_checked_at_ms = $2,

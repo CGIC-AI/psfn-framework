@@ -12,6 +12,7 @@ import type {
 } from '../../system/capabilities/confirmation-queue.js';
 import type {
   AuthenticatedShardWorkloadHandle,
+  AuthenticatedShardWorkloadIdentity,
   PreparedShardRequestGrant,
 } from '../../system/capabilities/shard-approval-grants.js';
 import {
@@ -106,6 +107,7 @@ export interface ApprovalBoundaryGateOptions<P, R> {
    */
   shardApprovalGrant?: (params: P) => {
     workload: AuthenticatedShardWorkloadHandle;
+    identity: AuthenticatedShardWorkloadIdentity;
   } | undefined;
 }
 
@@ -506,11 +508,24 @@ export function createGatewayApprovalBoundaryService(
           await options.auditComplete(heldAuditId, Date.now(), toErrorMessage(err));
           throw err;
         }
+        const summary = gateOptions.paramsSummary(params);
+        let shardApprovalGrant: ReturnType<NonNullable<typeof gateOptions.shardApprovalGrant>>;
+        try {
+          shardApprovalGrant = gateOptions.shardApprovalGrant?.(params);
+        } catch (err) {
+          options.recordMethodFailure(gateOptions.method, err);
+          const deniedAuditId = await options.audit(gateOptions.method, 'DENY', summary);
+          await options.auditComplete(deniedAuditId, Date.now(), toErrorMessage(err));
+          throw err;
+        }
         const decision = evaluatePolicy(
-          { method: gateOptions.method, params: params as unknown as Record<string, unknown> },
+          {
+            method: gateOptions.method,
+            params: params as unknown as Record<string, unknown>,
+            callerClass: shardApprovalGrant ? 'shard' : 'companion',
+          },
           gateOptions.policyConfigProvider?.() ?? options.policyConfig,
         );
-        const summary = gateOptions.paramsSummary(params);
         const auditId = await options.audit(gateOptions.method, decision, summary);
         const startTime = Date.now();
 
@@ -526,9 +541,6 @@ export function createGatewayApprovalBoundaryService(
           // workload — including when no grant authority/registry is
           // configured — so shard lineage can never fall through to the
           // parent's autonomous authority.
-          const shardApprovalGrant = decision === 'DENY'
-            ? undefined
-            : gateOptions.shardApprovalGrant?.(params);
           const shardExceptionalAction = shardApprovalGrant !== undefined
             && isShardExceptionalAction(gateOptions.method, gateOptions.approvalAction);
           if (

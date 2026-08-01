@@ -16,6 +16,8 @@ import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { isRecord } from '../../../shared/utils/types.js';
+import type { AuthenticatedShardWorkloadIdentity } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import {
   syncAllBeadsToGitHubProject,
   syncMutatedBeadToGitHubProject,
@@ -39,6 +41,25 @@ const DEFAULT_ACTOR = 'runtime-agent';
 
 function deny(message: string): never {
   throw new JSONRPCErrorException(message, GatewayErrors.POLICY_DENIED);
+}
+
+function resolveShardCaller(
+  runtime: GatewayMethodRuntime,
+  channelId: string | undefined,
+): AuthenticatedShardWorkloadIdentity | undefined {
+  return runtime.resolveShardWorkloadForChannel?.(channelId)?.identity;
+}
+
+function requireOwnedIssue(payload: unknown, shardId: string, id: string): void {
+  const issue = Array.isArray(payload) && payload.length === 1 ? payload[0] : payload;
+  if (!isRecord(issue)) {
+    deny(`beads.close ownership denied for ${id}: issue ownership could not be verified`);
+  }
+  const owners = [issue.owner, issue.assignee, issue.created_by]
+    .filter((value): value is string => typeof value === 'string');
+  if (!owners.includes(shardId)) {
+    deny(`beads.close ownership denied for ${id}: authenticated shard does not own this issue`);
+  }
 }
 
 function normalizeActor(value: unknown): string {
@@ -411,7 +432,8 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'beads.create',
     handler: async (params: BeadsCreateParams, runtime) => {
-      const actor = normalizeActor(params.actor);
+      const shardCaller = resolveShardCaller(runtime, params.channelId);
+      const actor = shardCaller?.shardId ?? normalizeActor(params.actor);
       return executeBeadsAction(
         runtime,
         'create',
@@ -454,6 +476,9 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           }
           if (parent) {
             args.push('--parent', parent);
+          }
+          if (shardCaller) {
+            args.push('--assignee', shardCaller.shardId);
           }
           return args;
         },
@@ -527,8 +552,14 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'beads.close',
     handler: async (params: BeadsCloseParams, runtime) => {
-      const actor = normalizeActor(params.actor);
+      const shardCaller = resolveShardCaller(runtime, params.channelId);
+      if (!shardCaller) {
+        deny('beads.close is not granted to the main companion');
+      }
+      const actor = shardCaller.shardId;
       const id = parseIssueRef(params.id, 'id');
+      const issue = await runBdCommand('show', [id], runtime);
+      requireOwnedIssue(issue, shardCaller.shardId, id);
       return executeBeadsAction(
         runtime,
         'close',

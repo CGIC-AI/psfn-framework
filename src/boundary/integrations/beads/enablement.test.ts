@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ALL_BEADS_ACTIONS,
+  COMPANION_BEADS_ACTIONS,
   parseBeadsActionsEnv,
+  resolveBeadsActionsForCaller,
   resolveBeadsToolsEnabled,
 } from './enablement.js';
 
@@ -59,5 +61,22 @@ describe('parseBeadsActionsEnv', () => {
 
   it('accepts the full action set', () => {
     expect(parseBeadsActionsEnv(ALL_BEADS_ACTIONS.join(','))).toEqual([...ALL_BEADS_ACTIONS]);
+  });
+});
+
+describe('resolveBeadsActionsForCaller', () => {
+  it('defaults the companion to every permitted recoverable action and withholds close', () => {
+    expect(resolveBeadsActionsForCaller(undefined, 'companion')).toEqual(COMPANION_BEADS_ACTIONS);
+    expect(resolveBeadsActionsForCaller(undefined, 'companion')).not.toContain('close');
+  });
+
+  it('intersects a partial deployment allowlist with the companion surface', () => {
+    expect(resolveBeadsActionsForCaller('ready,create,close', 'companion'))
+      .toEqual(['ready', 'create']);
+  });
+
+  it('adds close only for a shard caller while preserving the deployment action subset', () => {
+    expect(resolveBeadsActionsForCaller('ready,create', 'shard'))
+      .toEqual(['ready', 'create', 'close']);
   });
 });

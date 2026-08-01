@@ -41,6 +41,16 @@ export interface ToolWiringMeta {
    * metadata are disabled (fail-closed).
    */
   concurrency?: ToolConcurrencyMeta;
+
+  /**
+   * Policy-derived model surface expected for this registered tool. Startup
+   * reconciliation compares this declaration with the real parameter schema
+   * so a gateway-gated action cannot remain advertised after policy removes it.
+   */
+  policyHydration?: {
+    source: string;
+    allowedActions: string[];
+  };
 }
 
 export type ToolConcurrencyClass =
@@ -114,6 +124,14 @@ export function cloneToolWiringMeta(meta: ToolWiringMeta | undefined): ToolWirin
   return {
     ...(meta.requiredGatewayMethods ? { requiredGatewayMethods: [...meta.requiredGatewayMethods] } : {}),
     ...(meta.requiredServices ? { requiredServices: [...meta.requiredServices] } : {}),
+    ...(meta.policyHydration
+      ? {
+          policyHydration: {
+            source: meta.policyHydration.source,
+            allowedActions: [...meta.policyHydration.allowedActions],
+          },
+        }
+      : {}),
     ...(meta.contextRestrictions
       ? {
         contextRestrictions: {

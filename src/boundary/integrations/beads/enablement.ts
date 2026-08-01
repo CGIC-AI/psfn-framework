@@ -13,6 +13,20 @@ import { parseBooleanEnv, parseEnvList } from '../../../shared/utils/env.js';
 export const ALL_BEADS_ACTIONS = ['ready', 'show', 'create', 'update', 'close', 'sync'] as const;
 
 export type BeadsAction = (typeof ALL_BEADS_ACTIONS)[number];
+export type BeadsCallerClass = 'companion' | 'shard';
+
+/**
+ * Main-companion tracked-work policy: reads and recoverable mutations are
+ * available, while consequential closure belongs only to the shard-owned
+ * predicate enforced by the gateway.
+ */
+export const COMPANION_BEADS_ACTIONS: readonly BeadsAction[] = Object.freeze([
+  'ready',
+  'show',
+  'create',
+  'update',
+  'sync',
+]);
 
 export interface BeadsEnablementRoots {
   workspaceRoot: string;
@@ -51,4 +65,31 @@ export function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] |
     }
   }
   return actions;
+}
+
+/**
+ * Resolve the caller-visible action surface from the same environment policy
+ * consumed by gateway bootstrap. `close` is never a flat deployment grant:
+ * only a shard catalog receives it, and the gateway separately proves target
+ * ownership before dispatch.
+ */
+export function resolveBeadsActionsForCaller(
+  value: string | undefined,
+  callerClass: BeadsCallerClass,
+): BeadsAction[] {
+  return resolveConfiguredBeadsActionsForCaller(
+    parseBeadsActionsEnv(value) ?? COMPANION_BEADS_ACTIONS,
+    callerClass,
+  );
+}
+
+export function resolveConfiguredBeadsActionsForCaller(
+  configured: readonly BeadsAction[],
+  callerClass: BeadsCallerClass,
+): BeadsAction[] {
+  const configuredActions = new Set(configured);
+  const companionActions = COMPANION_BEADS_ACTIONS.filter(action => configuredActions.has(action));
+  return callerClass === 'shard'
+    ? [...companionActions, 'close']
+    : companionActions;
 }

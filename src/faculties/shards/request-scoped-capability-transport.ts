@@ -9,7 +9,7 @@ import { isRecord } from '../../shared/utils/types.js';
  */
 export const allowShardRequestScopedCapabilityTransport: CapabilityDeniedTransportPolicy = (
   input,
-) => input.toolName === 'world'
+) => (input.toolName === 'world'
   && isRecord(input.params)
   && input.params.action === 'control'
   && input.requiredTokens.length === 1
@@ -17,4 +17,11 @@ export const allowShardRequestScopedCapabilityTransport: CapabilityDeniedTranspo
   && input.missingTokens.length === 1
   && input.missingTokens[0] === 'world.control'
   && SHARD_MASK_TEMPORARY_GRANT_DISPOSITIONS['world.control'].requestScoped
-    === 'human-approval-required';
+    === 'human-approval-required')
+  || (input.toolName === 'beads'
+    && isRecord(input.params)
+    && (input.params.action === 'close' || input.params.action === 'issue_close')
+    && input.requiredTokens.length === 1
+    && input.requiredTokens[0] === 'issue.close'
+    && input.missingTokens.length === 1
+    && input.missingTokens[0] === 'issue.close');

@@ -180,7 +180,7 @@ describe('runtime prompt layer schema', () => {
   it('states bounded image re-roll and filename delivery semantics', () => {
     const tooling = getRuntimePromptLayerDefinition('runtime.tooling')?.content ?? '';
 
-    expect(tooling).toContain('Generate one image unless the user asks for alternatives.');
+    expect(tooling).toContain('Generate one image unless the Participant asks for alternatives.');
     expect(tooling).toContain('one quality re-roll is reasonable');
     expect(tooling).toContain('every generated fileName you mention in the final reply is delivered');
     expect(tooling).toContain('unmentioned drafts remain in the gallery');

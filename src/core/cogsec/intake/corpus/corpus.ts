@@ -1,7 +1,7 @@
 // ── Taxonomy-derived adversarial fixture corpus (psfn-framework-hrmrq.141) ──
 //
 // A pinned, versioned corpus mapping published attack-taxonomy entries
-// (Arcanum PI Taxonomy v1.6.1, MITRE ATLAS 2026.07) onto the PSFN CogSec
+// (Arcanum PI Taxonomy v1.6.1, MITRE ATLAS 2026.07) onto the CogSec
 // surfaces that must defeat them. This module owns the fixture contract,
 // the loader (fail-closed validation — unknown framework/axis/layer/label/
 // taxonomy-id data rejects), and the coverage computation that turns

@@ -13,7 +13,7 @@ passing.
 | `manifest.json` | Versions, commit/release pins, SHA-256 hashes, regeneration URLs |
 | `arcanum-taxonomy.json` | Arcanum PI Taxonomy v1.6.1 snapshot @ commit `65b8379` (172 entries: inputs 12, techniques 70, evasions 63, intents 27) |
 | `atlas-technique-index.json` | MITRE ATLAS 2026.07 (format 6.0.0) technique id/name index (178) |
-| `atlas-relevance.json` | The curated ATLAS denominator: techniques in scope for PSFN + rationale |
+| `atlas-relevance.json` | The curated ATLAS denominator: techniques in scope for the runtime + rationale |
 
 ATLAS note: `dist/ATLAS.yaml` is **deprecated upstream**; the pin is
 `dist/v6/ATLAS-2026.07.yaml` (see `manifest.json`).
@@ -39,7 +39,7 @@ One JSON object per line. Schema is enforced fail-closed by `corpus.ts`
 ```
 
 - `layer`: `L1 | L1.5 | L2 | L3 | vision | sink-gate | origin-gating` — the
-  PSFN surface the fixture exercises (seed doc §3/§4 mapping).
+  CogSec surface the fixture exercises (seed doc §3/§4 mapping).
 - `expected.verdict`: `flag` (layer must raise a risk label) or `pass`
   (benign control — must stay silent). `expected.labels` ⊆ the closed
   `INTAKE_RISK_LABELS` vocabulary, matched as a subset.

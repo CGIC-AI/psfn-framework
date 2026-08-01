@@ -322,6 +322,7 @@ describe('system-owner fleet migration', () => {
       'providers',
       'trust-policy',
       'backup',
+      'mcp-servers',
       'intake-policy',
       'partner-affect-shadow',
     ]) {

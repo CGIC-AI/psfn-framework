@@ -86,9 +86,11 @@ export class GatewayMcpInvocationAuthority {
   mint(input: {
     companionId: string;
     modelInput: unknown;
+    outboundSensitivity?: SensitivityLevel;
   }): string | undefined {
     const expected = normalizeModelMcpInput(input.modelInput);
     if (!expected) return undefined;
+    if (expected.action === 'call' && input.outboundSensitivity === undefined) return undefined;
     this.prune();
     while (this.records.size >= MAX_PENDING_PERMITS) {
       const oldest = this.records.keys().next().value as string | undefined;
@@ -99,9 +101,10 @@ export class GatewayMcpInvocationAuthority {
     this.records.set(permit, {
       companionId: input.companionId,
       expected,
-      // The gateway cannot reclassify the agent's complete generation lineage.
-      // Confidential is therefore the only safe server-owned default.
-      outboundSensitivity: 'confidential',
+      // Calls require a runtime-derived sensitivity captured on the provider
+      // request and bound here before the agent receives the opaque permit.
+      // Read-only lifecycle/catalog actions carry no outbound tool arguments.
+      outboundSensitivity: input.outboundSensitivity ?? 'public',
       expiresAt: this.now() + PERMIT_TTL_MS,
     });
     return permit;

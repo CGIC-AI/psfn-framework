@@ -90,6 +90,7 @@ function runtime(input: {
       const permit = mcpInvocationAuthority.mint({
         companionId: input.companionId ?? COMPANION_ID,
         modelInput,
+        outboundSensitivity: 'confidential',
       });
       if (!permit) throw new Error('test MCP input did not produce a permit');
       return permit;

@@ -10,6 +10,8 @@ import type {
 } from './transport.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { runWithMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-turn-context.js';
+import type { DisclosureLineage } from '../../core/cogsec/disclosure/contracts.js';
 import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
@@ -181,6 +183,45 @@ describe('GatewayClient system-data writer', () => {
 });
 
 describe('GatewayClient MCP transport', () => {
+  it('carries runtime disclosure sensitivity on the provider request that mints the permit', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const lineage = {
+      effectiveSensitivity: 'personal',
+    } as DisclosureLineage;
+    const pending = runWithMcpTurnDisclosureContext({ getLineage: () => lineage }, async () =>
+      await client.stream({
+        systemPrompt: 'system',
+        messages: [{ role: 'user', content: 'search notes' }],
+        tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+        correlation: { channelId: 'discord:dm:operator' },
+      }));
+    const request = conn.sent[0] as { id: number; params: Record<string, unknown> };
+    expect(request.params.mcpOutboundSensitivity).toBe('personal');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: '',
+        toolCalls: [{
+          id: 'mcp-model-call',
+          name: 'mcp',
+          input: { action: 'catalog' },
+          gatewayMcpPermit: 'de305d54-75b4-431b-adb2-eb6b9e546099',
+        }],
+        model: 'model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'tool_use',
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      toolCalls: [{ id: 'mcp-model-call', name: 'mcp', input: { action: 'catalog' } }],
+    });
+    const permits = Reflect.get(client, 'mcpPermitByToolCallId') as Map<string, string>;
+    expect(permits.get('mcp-model-call')).toBe('de305d54-75b4-431b-adb2-eb6b9e546099');
+  });
+
   it('sends only the single-use permit captured for the exact model tool call', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });

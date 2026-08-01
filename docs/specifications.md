@@ -236,9 +236,12 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
   definition. Missing or changed fingerprints deny search/inspect/call until
   operator reclassification. Calls validate arguments against the screened
   discovered input schema before any external dispatch.
-- Agent RPC cannot assert MCP sensitivity or origin. The gateway mints one
-  opaque, expiring, single-use permit for the exact provider-emitted MCP tool
-  call, refuses shard-originated generations, and consumes the permit before
+- The model-facing tool and `mcp.execute` RPC cannot assert MCP sensitivity or
+  origin. The trusted turn runtime classifies the admitted generation context;
+  the provider request carries that classification and the gateway binds it to
+  one opaque, expiring, single-use permit for the exact provider-emitted MCP
+  tool call. Missing lineage, autonomous work specs, and shard-originated
+  generations receive no call permit. The gateway consumes the permit before
   capability, trust, approval, or broker execution.
 - Every dynamic tool result is size-bounded and CogSec-screened on every call,
   independent of trust and static-cache state. Only the screened projection may

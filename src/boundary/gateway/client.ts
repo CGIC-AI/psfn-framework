@@ -32,6 +32,7 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { abortError } from '../../shared/utils/errors.js';
 import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
+import { getMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-turn-context.js';
 import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import {
   captureReplyCanary,
@@ -812,6 +813,7 @@ export class GatewayClient implements
         context.messages,
         context.correlation?.turnId,
       );
+      const mcpDisclosureLineage = getMcpTurnDisclosureContext()?.getLineage();
       const requestParams = {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
@@ -836,6 +838,9 @@ export class GatewayClient implements
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
+        ...(mcpDisclosureLineage
+          ? { mcpOutboundSensitivity: mcpDisclosureLineage.effectiveSensitivity }
+          : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
         // d8vq.2: carry the declared work spec (minus its
         // correlation, which rides the flat correlation params) so the

@@ -14,8 +14,13 @@ flowchart TB
       place_2_aff_0["Living Room Lights\nlight · ha"]
       place_2_aff_1(["Living Room Presence\npresence · ha"])
     end
-    subgraph place_3["Office · physical"]
-      place_3_aff_0["Office Lights\nlight · ha"]
+    subgraph place_4["Office · physical"]
+      place_4_aff_0["Office Lights\nlight · ha"]
+    end
+  end
+  subgraph site_1["Home (Shared Mindspace) (virtual)"]
+    subgraph place_3["Living Room (Twin) · virtual"]
+      place_3_empty["(no affordances)"]
     end
   end
 
@@ -23,4 +28,5 @@ flowchart TB
   classDef effector fill:#fff3e0,stroke:#e65100,color:#bf360c;
   classDef satellite fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c;
   class place_1_aff_1,place_2_aff_1 perceiver
-  class place_0_aff_0,place_1_aff_0,place_2_aff_0,place_3_aff_0 effector
+  class place_0_aff_0,place_1_aff_0,place_2_aff_0,place_4_aff_0 effector
+  place_2 -.->|twin| place_3

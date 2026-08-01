@@ -42,9 +42,9 @@ plane.
 - `src/boundary/gateway/fleet-sso-router.ts` already parses
   `/companions/<companionId>/garden/...`, resolves live Cluster Auth context for
   that companion and action, and signs an exact request capability.
-- `src/operator/garden/garden-admission.ts` already verifies method, path,
+- `src/operator/garden/garden-admission.ts` verifies method, path,
   query, body, action, audience, companion, authority versions, and replay
-  state. It currently binds one Garden process to one companion.
+  state for the companion-bound request.
 - `src/operator/garden/operator-surface.ts` already exchanges an admitted
   operator capability for an agent-audience child capability before proxying
   an admin request.
@@ -60,7 +60,7 @@ plane.
   `src/faculties/shards/manager.ts` already expose a parent-owned shard review
   and lifecycle seam.
 
-The new module should be deep: callers provide a request, and the module hides
+The module is deep: callers provide a request, and the module hides
 companion resolution, capability verification, transport selection, child
 assertion exchange, and failure normalization behind one interface. Deleting
 that module should force this logic back into every route; otherwise the module
@@ -140,7 +140,7 @@ non-enumerating authorizer:
 - `GET /v1/fleet-auth/approvals` — the cluster-wide pending-approval view:
   redacted `{ companionId, companionDisplayName, id, title, requestedAt,
   expiresAt?, status }` entries, so an approval for companion X surfaces (with
-  attribution) even while the human talks to companion Y. Ownership is joined
+  attribution) even while the Partner talks to companion Y. Ownership is joined
   from the approval boundary's owner map; entries with no resolvable owner, or
   an owner outside the session's authorized roster, are excluded (fail closed,
   never mis-attributed, non-enumerating). Redaction reuses the companion-relay
@@ -280,14 +280,13 @@ It does not contain caller-supplied paths, mutable selected state, reusable
 browser authority, provider credentials, or copied owner data. Unknown entries
 are not synthesized.
 
-`GardenAdminTransportProxy` becomes the production adapter at this seam. An
+`FleetGardenAdminTransportProxy` is the production adapter at this seam. An
 in-memory adapter is justified for concurrency, authorization, and target
 isolation tests. Both adapters receive an immutable admitted target; neither
 chooses a companion.
 
-The current single-companion `GardenOperatorSurface` can remain the
-single-companion adapter while multi-companion mode instantiates the cluster
-module. Do not layer a cluster router over N long-lived
+`GardenOperatorSurface` uses the single-target transport in local mode and the
+cluster module when Cluster Auth is configured. Do not layer a cluster router over N long-lived
 `GardenOperatorSurface` instances: that would preserve the deployment and
 mutable-config complexity this decision removes.
 
@@ -490,7 +489,7 @@ Rollback is a whole-deployment revision pin, never a mixed topology:
 
 ## Verification
 
-Implementation is not complete until the integrated branch proves:
+Repository implementation and any live cutover must prove:
 
 - two simultaneous requests for different companions cannot cross transports,
   owner roots, response data, audit scope, or WebSocket event streams;
@@ -535,9 +534,9 @@ implementation sequence is integrated.
   or the raw full-roster cluster-status payload.
 - Keeping legacy per-companion Garden readers or topology shims after cutover.
 
-## Implementation sequence
+## Delivered implementation sequence
 
-The implementation work is filed as `psfn-framework-mus2`, with the sibling
+The implementation work was delivered under `psfn-framework-mus2`, with the sibling
 shard-tier and approval-routing contracts named as dependencies rather than
 re-designed here.
 

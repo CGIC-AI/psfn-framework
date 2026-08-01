@@ -1,12 +1,12 @@
 flowchart TB
-  %% Current PSFN runtime topology. Last updated 2026-07-19.
+  %% Current PSFN runtime topology. Last updated 2026-07-31.
 
   subgraph External["External surfaces"]
     DISCORD["Discord text/voice"]
     TELEGRAM["Telegram"]
     API["OpenAI-compatible API"]
     VOICE["API voice websocket"]
-    COMPANION_UI["Companion UI portal\nprimary-user PWA: roster, approvals,\nembodiment handoff, WS actions"]
+    COMPANION_UI["Companion UI portal\nPartner-facing PWA: roster, approvals,\nembodiment handoff, WS actions"]
     SAT_HUB["Satellite Hub (external repo)\nsatellites + PWA, HA world control\nevent-bus relay"]
     GARDEN_BROWSER["Garden browser"]
   end
@@ -34,16 +34,16 @@ flowchart TB
     EPISODIC["L0.1 episodic runtime\nepisodes, spans, arcs, lineage"]
     SCHED["Scheduler\nheartbeat, reflection, backups, rest-window work"]
     IDENTITY["Identity + prompt stack\ncharacter card, layers, north star"]
-    TOOLS["Model-facing tools\ntool_search, toolset, memory, orient, wiki, journal, subagent"]
-    WORKERS["Subagent + shard internals\ndigest-bound launch, TTL approval grants,\nbounded workers, fold-back review, ICP delivery"]
+    TOOLS["Model-facing tools\ntool_search, toolset, memory, orient, world,\nwiki, journal, publication, subagent"]
+    WORKERS["Subagent + shard internals\ndigest-bound launch, request-scoped approval,\nbounded workers, fold-back review, ICP delivery"]
     SINK_GATES["Intake firewall agent side\nL1 in-process screening + L4 sink gates\nprompt/memory/wiki/skill/persona/trust/tool egress"]
     ADMIN_PRIVATE["Private admin surface"]
   end
 
   subgraph Storage["Persistence and owner roots"]
-    PG[("PostgreSQL 16+/17 + pgvector\nruntime state, fleet-auth, model usage/cost")]
+    PG[("PostgreSQL 17 + pgvector\nruntime state, fleet-auth, model usage/cost")]
     JSONL[("Session JSONL\ncanonical L0 archive")]
-    OWNER[("JSON owner files\nsettings/models/providers/scheduler/capability/trust/charge/backup/skills/channels/intake-policy")]
+    OWNER[("JSON owner files\nsystem + per-companion config, topology,\ntrust, CogSec, backup, channels")]
     QUARANTINE[("Intake quarantine store\ncompanion-data/state/intake-quarantine.json")]
     WORKSPACE[("WORKSPACE_PATH\npersonal files, wiki, generated media, authored skills")]
     BACKUPS[("Encrypted backups\npg_dump + companion tree + workspace + system config")]

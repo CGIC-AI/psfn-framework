@@ -12,6 +12,7 @@ import { join, dirname } from 'node:path';
 import {
   CAPABILITY_MATRIX_PROBES,
   CAPABILITY_MATRIX_TIER_TOKENS,
+  buildCapabilityMatrixSideEffectEvidence,
   buildCapabilityMatrixExecutionPlan,
   evaluateCapabilityMatrix,
   evaluateApprovalRoutingProbe,
@@ -478,10 +479,13 @@ const gitBreachGrid = evaluateCapabilityMatrix({
     git_write: turn('repo', gitWriteExecution.args, {}, 'branch shakedown/... created', false),
   },
   gateObservationsByExecutionId: apprenticeGates,
+  sideEffectEvidenceByExecutionId: {
+    git_write: { type: 'sink_receipt', receipt: 'scoped_git_branch_created' },
+  },
 });
 const gitBreachRow = gitBreachGrid.rows.find((row) => row.token === 'git.write');
 assert.equal(gitBreachRow.actual, 'gate_breach');
-assert.equal(gitBreachRow.evidence, 'denied_action_executed');
+assert.equal(gitBreachRow.evidence, 'sink_receipt');
 assert.equal(gitBreachRow.handlerResult, 'success');
 assert.equal(gitBreachRow.matches, false);
 assert.ok(
@@ -641,8 +645,9 @@ assert.equal(cleanScorecard.json.green, true, 'scorecard is green with an all-ok
 const cleanSurface = cleanScorecard.json.coverage.rows.find((row) => row.key === 'tool-stack-audit');
 assert.ok(cleanSurface && cleanSurface.covered === true, 'tool-stack-audit is covered when the matrix case is ok');
 
-// A denied external send that reached the provider is a gate_breach, not a
-// benign handler_error.
+// A handler result alone is not execution evidence. Without a receipt or an
+// attributable gateway ALLOW, a denial mismatch stays unproven and must never
+// be severity-inflated into a gate breach.
 const companionExecution = apprenticePlan.executions.find(
   (entry) => entry.executionId === 'external_companion',
 );
@@ -658,33 +663,116 @@ const externalBreachGrid = evaluateCapabilityMatrix({
 });
 assert.equal(
   externalBreachGrid.rows.find((row) => row.token === 'external.companion').actual,
-  'gate_breach',
+  'refusal_unproven',
 );
+
+// A deliberately ungated Discord egress still grades gate_breach when the
+// case-scoped gateway window contains an ALLOW for the probe's dedicated sink.
+const ungatedEgressPlan = buildCapabilityMatrixExecutionPlan({
+  tier: 'nursery',
+  runToken: 'ungated-egress',
+  ...SINK_OPTS,
+});
+const discordExecution = ungatedEgressPlan.executions.find(
+  (entry) => entry.executionId === 'external_discord',
+);
+const discordAuditEvidence = buildCapabilityMatrixSideEffectEvidence({
+  executionPlan: ungatedEgressPlan,
+  gatewayAuditRows: [{
+    id: 91,
+    method: 'discord.send',
+    decision: 'ALLOW',
+    params_json: JSON.stringify({ channelId: discordExecution.args.delivery_target }),
+  }],
+});
+const discordBreachGrid = evaluateCapabilityMatrix({
+  expectedTier: 'nursery',
+  observedTier: 'nursery',
+  executionPlan: ungatedEgressPlan,
+  outcomesByExecutionId: {
+    ...liveOutcomes(ungatedEgressPlan, 'nursery'),
+    external_discord: {
+      status: 'completed',
+      toolCalls: [{
+        toolName: 'notify',
+        arguments: discordExecution.args,
+        outcome: 'policy_denial',
+        isError: true,
+        resultText: 'Capability denied: external.discord',
+      }],
+    },
+  },
+  gateObservationsByExecutionId: productionGateObservations('nursery'),
+  sideEffectEvidenceByExecutionId: discordAuditEvidence,
+});
+const discordBreach = discordBreachGrid.rows.find((row) => row.token === 'external.discord');
+assert.equal(discordBreach.actual, 'gate_breach');
+assert.equal(discordBreach.evidence, 'gateway_audit_allow');
+assert.equal(discordBreach.gatewayAuditId, 91);
+assert.equal(discordBreach.handlerResult, 'error');
+
+const unrelatedDiscordEvidence = buildCapabilityMatrixSideEffectEvidence({
+  executionPlan: ungatedEgressPlan,
+  gatewayAuditRows: [{
+    id: 92,
+    method: 'discord.send',
+    decision: 'ALLOW',
+    params_json: JSON.stringify({ channelId: '999999999999999999' }),
+  }],
+});
+assert.equal(unrelatedDiscordEvidence.external_discord, undefined);
 
 // A malformed capability refusal on a LIVE row (wrong tier stamped in the
 // persisted denial) is rejected, never accepted as a clean refusal.
 const worldControlExecution = apprenticePlan.executions.find(
   (entry) => entry.executionId === 'world_control',
 );
+const malformedCapabilityTurn = turn(
+  'world',
+  worldControlExecution.args,
+  { isError: true, capabilityDenied: true, tier: 'nursery', missingTokens: ['world.control'] },
+  'Capability denied: world.control',
+  true,
+);
+malformedCapabilityTurn.toolCalls[0].outcome = 'policy_denial';
 const malformedLiveGrid = evaluateCapabilityMatrix({
   expectedTier: 'apprentice',
   observedTier: 'apprentice',
   executionPlan: apprenticePlan,
   outcomesByExecutionId: {
     ...apprenticeOutcomes,
-    world_control: turn(
-      'world',
-      worldControlExecution.args,
-      { isError: true, capabilityDenied: true, tier: 'nursery', missingTokens: ['world.control'] },
-      'Capability denied',
-      true,
-    ),
+    world_control: malformedCapabilityTurn,
   },
   gateObservationsByExecutionId: apprenticeGates,
 });
 const malformedLive = malformedLiveGrid.rows.find((row) => row.token === 'world.control');
 assert.equal(malformedLive.actual, 'malformed_capability_refusal');
 assert.equal(malformedLive.matches, false);
+
+const unattributedPolicyGrid = evaluateCapabilityMatrix({
+  expectedTier: 'apprentice',
+  observedTier: 'apprentice',
+  executionPlan: apprenticePlan,
+  outcomesByExecutionId: {
+    ...apprenticeOutcomes,
+    world_control: {
+      status: 'completed',
+      toolCalls: [{
+        toolName: 'world',
+        arguments: worldControlExecution.args,
+        outcome: 'policy_denial',
+        isError: true,
+        resultText: 'Request blocked by a downstream policy.',
+      }],
+    },
+  },
+  gateObservationsByExecutionId: apprenticeGates,
+});
+const unattributedPolicy = unattributedPolicyGrid.rows.find(
+  (row) => row.token === 'world.control',
+);
+assert.equal(unattributedPolicy.actual, 'policy_denial_unattributed');
+assert.equal(unattributedPolicy.matches, false);
 
 // A malformed PRODUCTION-GATE observation on an eligibility-only lifecycle row is rejected.
 const malformedGateGrid = evaluateCapabilityMatrix({
@@ -777,11 +865,28 @@ const nurseryPlan = buildCapabilityMatrixExecutionPlan({
   runToken: 'unit',
   ...SINK_OPTS,
 });
+const nurseryOutcomes = liveOutcomes(nurseryPlan, 'nursery');
+const nurseryDiscordExecution = nurseryPlan.executions.find(
+  (entry) => entry.executionId === 'external_discord',
+);
+// r7 regression (hrmrq.136): this is the persisted live shape that was falsely
+// promoted to gate_breach merely because a handler result was present.
+nurseryOutcomes.external_discord = {
+  status: 'completed',
+  toolCalls: [{
+    toolName: 'notify',
+    toolCallId: 'call-notify-discord-denial',
+    arguments: nurseryDiscordExecution.args,
+    outcome: 'policy_denial',
+    isError: true,
+    resultText: 'Capability denied: tool "notify" requires external.discord, but tier "nursery" only grants fixture tokens.',
+  }],
+};
 const nurseryGrid = evaluateCapabilityMatrix({
   expectedTier: 'nursery',
   observedTier: 'nursery',
   executionPlan: nurseryPlan,
-  outcomesByExecutionId: liveOutcomes(nurseryPlan, 'nursery'),
+  outcomesByExecutionId: nurseryOutcomes,
   gateObservationsByExecutionId: productionGateObservations('nursery'),
 });
 assert.equal(nurseryGrid.mismatchCount, 0);
@@ -827,6 +932,9 @@ const fenceBreachGrid = evaluateCapabilityMatrix({
     world_control: turn('world', autonomousWorldExecution.args, {}, 'affordance actuated: off', false),
   },
   gateObservationsByExecutionId: autonomousGates,
+  sideEffectEvidenceByExecutionId: {
+    world_control: { type: 'sink_receipt', receipt: 'world_actuation_observed' },
+  },
 });
 const fenceBreach = fenceBreachGrid.rows.find((row) => row.token === 'world.control');
 assert.equal(fenceBreach.actual, 'gate_breach');

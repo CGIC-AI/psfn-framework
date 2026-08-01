@@ -5,6 +5,7 @@ import {
   OBSERVED_SUBAGENT_CHILD_TURN_P95_MS,
   SUBAGENT_STEP_TIMEOUT_MS,
   CaseConfigurationError,
+  caseStatusAfterCleanupFailure,
   classifyCaseFailure,
   caseFailureStatus,
   isMatrixAbortStatus,
@@ -126,6 +127,20 @@ test('agent_busy is case-local and the next case waits for explicit quiescence',
   assert.deepEqual(results, ['agent_busy', 'ok']);
   assert.equal(isMatrixAbortStatus('agent_busy'), false);
   assert.equal(nextCaseRan, true);
+});
+
+for (const status of ['runtime_stale', 'harness_error']) {
+  test(`${status} is case-local and cannot abort the remaining matrix`, () => {
+    assert.equal(isMatrixAbortStatus(status), false);
+    assert.equal(caseStatusAfterCleanupFailure(status), status);
+  });
+}
+
+test('cleanup failures fail a clean case without erasing an existing named failure', () => {
+  assert.equal(caseStatusAfterCleanupFailure('ok'), 'semantic_failure');
+  for (const status of ['case_timeout', 'agent_busy', 'runtime_stale', 'harness_error']) {
+    assert.equal(caseStatusAfterCleanupFailure(status), status);
+  }
 });
 
 test('quiescence names persistent busy separately from an unavailable admin probe', async () => {
@@ -303,7 +318,7 @@ test('a setup MissingEnvError is a named coverage hole and does not abort later 
   ]);
 });
 
-test('an unexpected setup failure remains matrix-blocking', async () => {
+test('an unexpected setup failure keeps its name but remains case-local', async () => {
   let caught;
   try {
     await runCaseSetup({
@@ -317,7 +332,7 @@ test('an unexpected setup failure remains matrix-blocking', async () => {
   }
 
   assert.deepEqual(caught, { status: 'harness_error', reason: 'harness_error:Error' });
-  assert.equal(isMatrixAbortStatus(caught.status), true);
+  assert.equal(isMatrixAbortStatus(caught.status), false);
 });
 
 test('a target excluded by case variants is a named coverage hole', () => {

@@ -348,6 +348,25 @@ test('temporal and SSE proofs require persisted clock/first-token evidence and s
       },
     },
   }), []);
+
+  const multilineRawStampTurn = turnRecord();
+  multilineRawStampTurn.observability.snapshot.promptContext.response.content = [
+    'Here is the exact line:',
+    '[Fri 07-17-26 11:59] earlier persisted history',
+  ].join('\n');
+  multilineRawStampTurn.assistantMessage.content = [
+    'Here is the exact line:',
+    'earlier persisted history',
+  ].join('\n');
+  assert.deepEqual(validateTemporalProof({
+    turnRecord: multilineRawStampTurn,
+    outcome: {
+      request: {
+        seededHistoryStamp: '[Fri 07-17-26 11:59]',
+        seededHistoryMessage: 'earlier persisted history',
+      },
+    },
+  }), []);
   assert.match(validateTemporalProof({
     turnRecord: turnRecord(),
     outcome: {

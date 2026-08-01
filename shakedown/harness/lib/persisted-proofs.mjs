@@ -7,6 +7,7 @@
 // detection would otherwise be inapplicable.
 
 const HISTORY_STAMP_LINE_PREFIX = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\]/mu;
+const HISTORY_STAMP_LINE_PREFIX_GLOBAL = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] */gmu;
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -49,6 +50,15 @@ function completedTurnFailures(turnRecord) {
     failures.push('persisted TurnRecord user message is missing');
   }
   return failures;
+}
+
+function stripRenderedHistoryStamps(text) {
+  let current = text;
+  for (;;) {
+    const next = current.replace(HISTORY_STAMP_LINE_PREFIX_GLOBAL, '');
+    if (next === current) return current;
+    current = next;
+  }
 }
 
 export function validateSituatedPresenceProof({ turnRecord, expected = {} }) {
@@ -344,7 +354,10 @@ export function validateTemporalProof({ turnRecord, outcome }) {
     ))) {
       failures.push('persisted PromptPlan does not contain the exact seeded history stamp');
     }
-    if (typeof rawResponse !== 'string' || !rawResponse.startsWith(expectedStampedSeed)) {
+    if (
+      typeof rawResponse !== 'string'
+      || !rawResponse.split('\n').some((line) => line.startsWith(expectedStampedSeed))
+    ) {
       failures.push('raw persisted model response did not echo the exact seeded history stamp');
     }
   }
@@ -356,8 +369,8 @@ export function validateTemporalProof({ turnRecord, outcome }) {
   } else if (
     typeof expectedHistoryStamp === 'string'
     && typeof rawResponse === 'string'
-    && rawResponse.startsWith(`${expectedHistoryStamp} `)
-    && assistant !== rawResponse.slice(expectedHistoryStamp.length + 1)
+    && rawResponse.split('\n').some((line) => line.startsWith(`${expectedHistoryStamp} `))
+    && assistant !== stripRenderedHistoryStamps(rawResponse)
   ) {
     failures.push('persisted assistant reply does not equal the raw response after the exact history-stamp strip');
   }

@@ -30,6 +30,7 @@ import {
 } from './lib/target.mjs';
 import {
   buildCapabilityMatrixExecutionPlan,
+  buildCapabilityMatrixSideEffectEvidence,
   evaluateCapabilityMatrix,
   evaluateApprovalRoutingProbe,
   evaluateTierToolConformanceEvidence,
@@ -39,6 +40,7 @@ import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 import { validatePersistedProof } from './lib/persisted-proofs.mjs';
 import {
   SUBAGENT_STEP_TIMEOUT_MS,
+  caseStatusAfterCleanupFailure,
   classifyCaseFailure,
   isMatrixAbortStatus,
   probeKnownBusySettlement,
@@ -3067,7 +3069,7 @@ function buildCapabilityMatrixCase(ctx) {
         productionProbe: runProductionCapabilityProbe(EXPECTED_CAPABILITY_TIER),
       };
     },
-    after: async ({ outcomes, beforeChecks }) => {
+    after: async ({ outcomes, beforeChecks, gatewayAuditRows }) => {
       const suggestionOffset = suggestedTools.length > 0 ? 1 : 0;
       const outcomesByExecutionId = Object.fromEntries(
         executionPlan.executions.map((execution, index) => [
@@ -3079,19 +3081,6 @@ function buildCapabilityMatrixCase(ctx) {
         adminBaseUrl: ADMIN_BASE,
         adminToken: ADMIN_TOKEN,
       });
-      const grid = evaluateCapabilityMatrix({
-        expectedTier: EXPECTED_CAPABILITY_TIER,
-        observedTier,
-        executionPlan,
-        outcomesByExecutionId,
-        gateObservationsByExecutionId: Object.fromEntries(
-          (beforeChecks?.productionProbe?.gates ?? []).map((entry) => [
-            entry.executionId,
-            entry,
-          ]),
-        ),
-      });
-
       let approvalRouting = null;
       if (approvalMessage) {
         const approvalTurn = outcomes[
@@ -3107,6 +3096,32 @@ function buildCapabilityMatrixCase(ctx) {
       }
 
       const { cleanup, cleanupErrors } = await performCleanup();
+      const sinkReceiptsByExecutionId = {
+        ...(cleanup.gitBranch?.status === 'deleted'
+          ? { git_write: 'scoped_git_branch_cleanup' }
+          : {}),
+        ...(cleanup.issues?.some((entry) => entry.status === 'closed')
+          ? { issue_write: 'scoped_issue_cleanup' }
+          : {}),
+      };
+      const sideEffectEvidenceByExecutionId = buildCapabilityMatrixSideEffectEvidence({
+        executionPlan,
+        gatewayAuditRows,
+        sinkReceiptsByExecutionId,
+      });
+      const grid = evaluateCapabilityMatrix({
+        expectedTier: EXPECTED_CAPABILITY_TIER,
+        observedTier,
+        executionPlan,
+        outcomesByExecutionId,
+        gateObservationsByExecutionId: Object.fromEntries(
+          (beforeChecks?.productionProbe?.gates ?? []).map((entry) => [
+            entry.executionId,
+            entry,
+          ]),
+        ),
+        sideEffectEvidenceByExecutionId,
+      });
       // A mutating scoped action counts either as a legitimate ALLOW (granted
       // tier) or as a gate_breach (the deployed gate wrongly let a denied action
       // execute). Both leave fixture damage that the scoped cleanup must remove,
@@ -3468,6 +3483,7 @@ async function runCase(testCase, ctx, signal) {
         api: preCaseApiHealth,
       },
       sessionEntries,
+      gatewayAuditRows: auditRows,
       signal,
     });
     throwIfAborted(signal);
@@ -3796,12 +3812,7 @@ async function main() {
             semanticFailure(error, 'capability_matrix_cleanup')
           )),
         ];
-        if (
-          !isMatrixAbortStatus(caseResult.caseStatus)
-          && caseResult.caseStatus !== 'dispatch_aborted'
-        ) {
-          caseResult.caseStatus = 'semantic_failure';
-        }
+        caseResult.caseStatus = caseStatusAfterCleanupFailure(caseResult.caseStatus);
       }
     }
     if (caseResult.caseStatus === 'agent_busy' && caseExecutionAttempted) {

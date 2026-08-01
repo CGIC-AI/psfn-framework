@@ -485,7 +485,63 @@ function callHasError(call) {
   return call?.isError === true || call?.details?.isError === true;
 }
 
-function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, expected) {
+function gatewayAuditParams(row) {
+  try {
+    return typeof row?.params_json === 'string' ? JSON.parse(row.params_json) : row?.params_json;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build positive side-effect evidence attributable to one matrix execution.
+ *
+ * A persisted handler result is deliberately absent from this evidence model:
+ * it proves only that the tool scheduler produced a result, not that a sink was
+ * reached. Callers may provide case-scoped sink receipts for reversible fixture
+ * mutations; gateway egress is proven from an ALLOW matched to the dedicated
+ * probe target inside the case's audit window.
+ */
+export function buildCapabilityMatrixSideEffectEvidence({
+  executionPlan,
+  gatewayAuditRows = [],
+  sinkReceiptsByExecutionId = {},
+}) {
+  const evidence = {};
+  for (const [executionId, receipt] of Object.entries(sinkReceiptsByExecutionId)) {
+    if (typeof receipt === 'string' && receipt.trim().length > 0) {
+      evidence[executionId] = { type: 'sink_receipt', receipt: receipt.trim() };
+    }
+  }
+
+  const discordExecution = executionPlan?.executions?.find(
+    (entry) => entry?.executionId === 'external_discord',
+  );
+  if (discordExecution) {
+    const matchingAllow = gatewayAuditRows.find((row) => {
+      if (row?.method !== 'discord.send' || row?.decision !== 'ALLOW') return false;
+      const params = gatewayAuditParams(row);
+      return params?.channelId === discordExecution.args?.delivery_target;
+    });
+    if (matchingAllow) {
+      evidence.external_discord = {
+        type: 'gateway_audit_allow',
+        method: 'discord.send',
+        gatewayAuditId: matchingAllow.id ?? null,
+      };
+    }
+  }
+  return evidence;
+}
+
+function classifyObserved(
+  probeEntry,
+  executionArgs,
+  turnRecord,
+  expectedTier,
+  expected,
+  sideEffectEvidence,
+) {
   const refusalExpected = expected !== 'allow';
   const calls = Array.isArray(turnRecord?.toolCalls) ? turnRecord.toolCalls : [];
   const call = calls.find((candidate) => toolCallMatches(candidate, probeEntry, executionArgs));
@@ -495,6 +551,30 @@ function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, e
   const details = call.details && typeof call.details === 'object' && !Array.isArray(call.details)
     ? call.details
     : {};
+  const resultText = typeof call.resultText === 'string' ? call.resultText : '';
+  // Positive, case-attributable sink evidence outranks the persisted handler
+  // result. A runtime that both reports a refusal and reaches the sink still
+  // breached the gate; the denial record cannot conceal the observed effect.
+  if (refusalExpected && sideEffectEvidence?.type === 'sink_receipt') {
+    return {
+      actual: 'gate_breach',
+      evidence: 'sink_receipt',
+      receipt: sideEffectEvidence.receipt,
+      handlerResult: callHasError(call) ? 'error' : 'success',
+    };
+  }
+  if (refusalExpected && sideEffectEvidence?.type === 'gateway_audit_allow') {
+    return {
+      actual: 'gate_breach',
+      evidence: 'gateway_audit_allow',
+      gatewayMethod: sideEffectEvidence.method,
+      gatewayAuditId: sideEffectEvidence.gatewayAuditId,
+      handlerResult: callHasError(call) ? 'error' : 'success',
+    };
+  }
+  if (details.egressGated === true) {
+    return { actual: 'refuse_egress', evidence: 'persisted_tool_result' };
+  }
   if (details.capabilityDenied === true) {
     const expectedMissingTokens = probeEntry.tokens.filter(
       (token) => !CAPABILITY_MATRIX_TIER_TOKENS[expectedTier].includes(token),
@@ -524,11 +604,25 @@ function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, e
       missingTokens: observedMissingTokens,
     };
   }
-  if (details.egressGated === true) {
-    return { actual: 'refuse_egress', evidence: 'persisted_tool_result' };
+  // policy_denial covers several distinct controls. Accept its modern slim
+  // shape as a capability refusal only when the persisted result identifies
+  // that control explicitly; structured capability details above remain
+  // subject to the exact tier/token proof.
+  if (call.outcome === 'policy_denial') {
+    if (!callHasError(call)) {
+      return { actual: 'malformed_capability_refusal', evidence: 'persisted_tool_outcome' };
+    }
+    if (/^Capability denied:/u.test(resultText)) {
+      return { actual: 'refuse_capability', evidence: 'persisted_tool_result' };
+    }
+    return { actual: 'policy_denial_unattributed', evidence: 'persisted_tool_result' };
+  }
+  // Compatibility path for pre-taxonomy records that persisted the explicit
+  // denial text and isError but not structured capability details.
+  if (callHasError(call) && /^Capability denied:/u.test(resultText)) {
+    return { actual: 'refuse_capability', evidence: 'persisted_tool_result' };
   }
   if (probeEntry.executionId === 'world_control') {
-    const resultText = typeof call.resultText === 'string' ? call.resultText : '';
     if (
       callHasError(call)
       && !/capability denied/iu.test(resultText)
@@ -537,15 +631,12 @@ function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, e
       return { actual: 'refuse_runtime_fence', evidence: 'persisted_tool_result' };
     }
   }
-  // The denied action reached the deployed handler without any refusal marker:
-  // the live capability gate is miswired and the action actually executed. This
-  // is the exact catastrophic defect class the operator wants detectable, so it
-  // gets a distinct classification that fails the row loudly. The case runner's
-  // fixture cleanup still removes any side effect the breach produced.
+  // A breach needs affirmative execution evidence. A handler result alone is
+  // not a receipt and cannot manufacture a security finding from missing data.
   if (refusalExpected) {
     return {
-      actual: 'gate_breach',
-      evidence: 'denied_action_executed',
+      actual: 'refusal_unproven',
+      evidence: 'no_attributable_side_effect_evidence',
       handlerResult: callHasError(call) ? 'error' : 'success',
     };
   }
@@ -661,6 +752,7 @@ export function evaluateCapabilityMatrix({
   executionPlan,
   outcomesByExecutionId,
   gateObservationsByExecutionId,
+  sideEffectEvidenceByExecutionId = {},
 }) {
   const tier = normalizeTier(expectedTier);
   const normalizedObservedTier = typeof observedTier === 'string' ? observedTier : null;
@@ -678,8 +770,9 @@ export function evaluateCapabilityMatrix({
     // are proven via the gate rather than live-dispatched (they are also filtered
     // out of executions by buildCapabilityMatrixExecutionPlan). Every other row —
     // including capability refusals — is dispatched through the deployed runtime
-    // and classified from its persisted turn record, so a miswired live gate
-    // surfaces as gate_breach rather than being masked by an in-process sentinel.
+    // and classified from its persisted turn record plus attributable side-effect
+    // evidence, so a real miswired live gate remains detectable without treating
+    // a handler result as proof that the side effect occurred.
     if (probeEntry.safety === 'eligibility_only' || isEmailAllowExemption(probeEntry, tier)) {
       observation = classifyProductionGate(
         probeEntry,
@@ -699,6 +792,7 @@ export function evaluateCapabilityMatrix({
           turnRecord,
           tier,
           expected,
+          sideEffectEvidenceByExecutionId[probeEntry.executionId],
         );
       }
     }

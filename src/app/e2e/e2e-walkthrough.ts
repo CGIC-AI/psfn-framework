@@ -49,7 +49,8 @@ async function talk(agentLoop: SubstrateAgent, content: string): Promise<string>
   const response = await agentLoop.handleMessage(makeMessage(content));
 
   console.log(`\n${activeCompanionName}: ${response.content}`);
-  console.log(`  [${response.metadata.model} | ${response.metadata.inputTokens}+${response.metadata.outputTokens} tokens | ${response.metadata.durationMs}ms]`);
+  const { model, inputTokens: promptUnits, outputTokens: replyUnits, durationMs } = response.metadata;
+  console.log(`  [${model} | ${promptUnits} in + ${replyUnits} out | ${durationMs}ms]`);
 
   return response.content;
 }

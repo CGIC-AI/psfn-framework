@@ -26,7 +26,7 @@ describe('createOwnerFileConfigStore', () => {
     tempDirs.push(root);
     // Owner files must pre-exist: loading fails closed instead of copying
     // seed templates implicitly, so bootstrap them the documented way.
-    for (const ownerFile of ['settings', 'models', 'providers', 'scheduler', 'capability-tier', 'trust-policy', 'charge-policy', 'backup', 'skills']) {
+    for (const ownerFile of ['settings', 'models', 'providers', 'scheduler', 'capability-tier', 'trust-policy', 'charge-policy', 'backup', 'skills', 'mcp-servers']) {
       copyFileSync(
         join(process.cwd(), 'config', `${ownerFile}.seed.json`),
         join(dataDir, `${ownerFile}.json`),
@@ -78,6 +78,11 @@ describe('createOwnerFileConfigStore', () => {
     repo.saveBackup(backup);
     expect(repo.loadBackup()).toEqual(backup);
     expect(readJson(join(dataDir, 'backup.json'))).toEqual(backup);
+
+    const mcpServers = repo.loadMcpServers();
+    repo.saveMcpServers(mcpServers);
+    expect(repo.loadMcpServers()).toEqual(mcpServers);
+    expect(readJson(join(dataDir, 'mcp-servers.json'))).toEqual(mcpServers);
 
     const skills = repo.loadSkills();
     repo.saveSkills(skills);
@@ -217,6 +222,7 @@ describe('createOwnerFileConfigStore', () => {
     expect(repo.loadStartupScheduler()).toEqual(repo.loadScheduler());
     expect(repo.loadStartupCapabilityTier()).toEqual(repo.loadCapabilityTier());
     expect(repo.loadStartupChargePolicy()).toEqual(repo.loadChargePolicy());
+    expect(repo.loadStartupMcpServers()).toEqual(repo.loadMcpServers());
   });
 
   it('keeps fleet-auth owner access read-only, optional, and canonical-parser-backed', () => {

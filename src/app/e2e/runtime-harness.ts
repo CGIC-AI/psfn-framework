@@ -141,6 +141,7 @@ export function createIsolatedE2ERuntime(
       'charge-policy.json',
       'backup.json',
       'skills.json',
+      'mcp-servers.json',
     ]) {
       // Registry-owned per-companion files are rooted at companionDataDir; the
       // rest stay cluster-global at systemDataDir.

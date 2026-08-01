@@ -149,6 +149,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
       'providers',
       'trust-policy',
       'backup',
+      'mcp-servers',
       'intake-policy',
       'partner-affect-shadow',
     ]) {

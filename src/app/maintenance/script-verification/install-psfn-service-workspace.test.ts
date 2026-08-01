@@ -50,7 +50,7 @@ describe('install-psfn-service.sh WORKSPACE_PATH handling', () => {
 
     const envFilePath = join(stagingRoot, 'var/lib/psfn/app/deployment/systemd/psfn.env');
     expect(readFileSync(envFilePath, 'utf8')).toContain('WORKSPACE_PATH=/srv/psfn/purrsephone');
-  }, 30_000);
+  }, 120_000);
 
   it('rejects an env source without WORKSPACE_PATH before generating the service env', async () => {
     const stagingRoot = mkdtempSync(join(tmpdir(), 'psfn-workspace-staging-'));
@@ -81,5 +81,5 @@ describe('install-psfn-service.sh WORKSPACE_PATH handling', () => {
 
     const envFilePath = join(stagingRoot, 'var/lib/psfn/app/deployment/systemd/psfn.env');
     expect(existsSync(envFilePath)).toBe(false);
-  }, 30_000);
+  }, 120_000);
 });

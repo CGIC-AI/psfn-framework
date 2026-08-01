@@ -2471,6 +2471,12 @@
       "contains": "x-psfn-",
       "reason": "Redaction classifier matches the product's own x-psfn-csrf / x-psfn-escalation-grant header names so capability tokens are scrubbed; the header names are already allowlisted at their definition sites.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/actor-terminology-scan.mjs",
+      "contains": "psfn-compose-smoke-seed.sh",
+      "reason": "Repository file path in the terminology scanner's exemption list; the product slug appears as part of a filename, not as a companion identity literal.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

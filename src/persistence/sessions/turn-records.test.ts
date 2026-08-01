@@ -205,6 +205,50 @@ function withRecoveryHandoff(record: TurnRecord): TurnRecord {
 }
 
 describe('turn-records', () => {
+  it('round-trips tool-call fields through the journal persistence boundary', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-call-fields-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const record = createTurnRecord({
+      toolCalls: [{
+        toolName: 'world',
+        toolCallId: 'call-world-list',
+        outcome: 'success',
+        isError: false,
+        provenanceRefs: ['source:tool:world|invocation:call-world-list'],
+        arguments: { action: 'list', place_id: 'living_room' },
+        resultText: 'The living room is quiet.',
+        details: { placeCount: 1 },
+        rationale: 'Inspect the available world state.',
+        thoughtSignature: 'sig-world-list',
+      }],
+    });
+
+    turnRecordStore.appendTurnRecord(record);
+
+    const rawRows = readFileSync(
+      activeSegmentPathFor(sessionsDir, record.channelId),
+      'utf8',
+    ).trim().split('\n');
+    const persisted = JSON.parse(rawRows[0]!) as TurnRecord;
+    expect(persisted.toolCalls).toEqual(record.toolCalls);
+    expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)[0]?.toolCalls)
+      .toEqual(record.toolCalls);
+  });
+
+  it('rejects malformed tool-call fields instead of silently dropping them', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-call-malformed-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const malformed = createTurnRecord({
+      toolCalls: [{
+        toolName: 'world',
+        arguments: ['list'],
+      }] as unknown as TurnRecord['toolCalls'],
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(malformed))
+      .toThrow('TurnRecord field "toolCalls[0].arguments" must be an object');
+  });
+
   it('projects huge tool results into bounded content-free usage signals', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-usage-projection-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);

@@ -448,12 +448,37 @@ function parseTurnRecordToolCalls(value: unknown): TurnRecordToolCall[] {
     }
 
     const toolName = parseRequiredString(entry.toolName, `toolCalls[${index}].toolName`);
-    const toolCallId = entry.toolCallId;
+    const toolCallId = entry.toolCallId === undefined
+      ? undefined
+      : parseRequiredString(entry.toolCallId, `toolCalls[${index}].toolCallId`);
     const outcome = entry.outcome;
     const isError = entry.isError;
-    const resultText = entry.resultText;
+    const provenanceRefs = entry.provenanceRefs === undefined
+      ? undefined
+      : parseOptionalStringArray(
+          entry.provenanceRefs,
+          `toolCalls[${index}].provenanceRefs`,
+        );
+    const toolArguments = entry.arguments === undefined
+      ? undefined
+      : parseRequiredJsonRecord(entry.arguments, `toolCalls[${index}].arguments`);
+    const resultText = entry.resultText === undefined
+      ? undefined
+      : parseRequiredString(entry.resultText, `toolCalls[${index}].resultText`);
+    const rationale = entry.rationale === undefined
+      ? undefined
+      : parseRequiredString(entry.rationale, `toolCalls[${index}].rationale`);
+    const thoughtSignature = entry.thoughtSignature === undefined
+      ? undefined
+      : parseRequiredString(
+          entry.thoughtSignature,
+          `toolCalls[${index}].thoughtSignature`,
+        );
     if (outcome !== undefined && !isToolCallOutcome(outcome)) {
       throw new Error(`TurnRecord field "toolCalls[${index}].outcome" is unsupported`);
+    }
+    if (isError !== undefined && typeof isError !== 'boolean') {
+      throw new Error(`TurnRecord field "toolCalls[${index}].isError" must be a boolean`);
     }
     if (
       outcome !== undefined
@@ -465,16 +490,23 @@ function parseTurnRecordToolCalls(value: unknown): TurnRecordToolCall[] {
 
     return {
       toolName,
-      ...(typeof toolCallId === 'string' && toolCallId.trim().length > 0
-        ? { toolCallId: toolCallId.trim() }
-        : {}),
+      ...(toolCallId ? { toolCallId } : {}),
       ...(outcome !== undefined ? { outcome } : {}),
       ...(outcome !== undefined
         ? { isError: isToolCallErrorOutcome(outcome) }
         : typeof isError === 'boolean'
           ? { isError }
           : {}),
-      ...(typeof resultText === 'string' && resultText.length > 0 ? { resultText } : {}),
+      ...(provenanceRefs ? { provenanceRefs } : {}),
+      ...(toolArguments !== undefined
+        ? { arguments: toolArguments }
+        : {}),
+      ...(resultText ? { resultText } : {}),
+      ...(entry.details !== undefined
+        ? { details: cloneUnknownValue(entry.details) }
+        : {}),
+      ...(rationale ? { rationale } : {}),
+      ...(thoughtSignature ? { thoughtSignature } : {}),
     };
   });
 }

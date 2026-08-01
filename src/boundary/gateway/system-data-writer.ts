@@ -34,6 +34,7 @@ export const SYSTEM_OWNER_WRITE_KEYS = [
   'intake-policy',
   'partner-affect-shadow',
   'backup',
+  'mcp',
 ] as const;
 
 export type SystemOwnerWriteKey = typeof SYSTEM_OWNER_WRITE_KEYS[number];
@@ -273,6 +274,7 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
       | 'saveIntakePolicy'
       | 'savePartnerAffectShadow'
       | 'saveBackup'
+      | 'saveMcpServers'
     >;
     systemDataDir: string;
   }) {}
@@ -318,6 +320,9 @@ export class GatewaySystemDataWriter implements GatewaySystemDataWriterPort {
         break;
       case 'backup':
         this.deps.configStore.saveBackup(request.payload);
+        break;
+      case 'mcp':
+        this.deps.configStore.saveMcpServers(request.payload);
         break;
       default:
         unsupportedSystemOwner(ownerFile);

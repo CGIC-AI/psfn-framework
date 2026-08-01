@@ -38,6 +38,7 @@ function makeTempDir(): string {
     'charge-policy.json',
     'backup.json',
     'skills.json',
+    'mcp-servers.json',
   ]) {
     const seedFile = ownerFile.replace(/\.json$/u, '.seed.json');
     writeFileSync(
@@ -125,6 +126,31 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
+  it('round-trips the MCP owner file through the raw Garden surface', async () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+    const payload = {
+      schemaVersion: 1,
+      limits: {
+        connectTimeoutMs: 10_000,
+        requestTimeoutMs: 30_000,
+        idleConnectionTtlMs: 300_000,
+        metadataCacheTtlMs: 300_000,
+        maxCatalogToolsPerServer: 256,
+        maxPaginationPages: 32,
+        maxStaticMetadataBytes: 1_048_576,
+        maxDynamicOutputBytes: 4_194_304,
+      },
+      servers: [],
+    };
+
+    expect(await service.saveSubConfigJson('mcp', JSON.stringify(payload))).toEqual({
+      ok: true,
+      message: 'mcp-servers.json saved; restart required before MCP connections change',
+    });
+    expect(JSON.parse(service.getSubConfigJson('mcp') ?? '{}')).toEqual(payload);
+  });
+
   it('exposes skill_write through the typed and raw Garden intake-policy surfaces', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));

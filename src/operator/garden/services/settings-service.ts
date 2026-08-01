@@ -1695,6 +1695,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadChannelsOwnerFile(), null, 2);
         case 'backup':
           return JSON.stringify(this.deps.configStore.loadBackup(), null, 2);
+        case 'mcp':
+          return JSON.stringify(this.deps.configStore.loadMcpServers(), null, 2);
         default:
           return null;
       }
@@ -1863,6 +1865,18 @@ export class AdminSettingsDataService implements AdminSettingsService {
             () => this.deps.configStore.savePartnerAffectShadow(parsed),
           );
           return { ok: true, message: 'partner-affect-shadow.json saved' };
+        }
+        case 'mcp': {
+          await this.persistSystemOwner(
+            'mcp',
+            parsed,
+            () => this.deps.configStore.loadMcpServers(),
+            () => this.deps.configStore.saveMcpServers(parsed),
+          );
+          return {
+            ok: true,
+            message: 'mcp-servers.json saved; restart required before MCP connections change',
+          };
         }
         default:
           return { ok: false, message: `Unknown settings subsystem: ${key}` };

@@ -1587,4 +1587,16 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     expect(screener).not.toHaveBeenCalled();
     expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('validation_rejection');
   });
+
+  it('notifies disclosure state before an external tool result enters the next model step', async () => {
+    const onToolResultAdmitted = vi.fn();
+    await executeToolCallsWithScheduler(
+      [makeReaderTool()],
+      makeAssistantMessage(['fs']),
+      undefined,
+      { stream: { push: () => {} } },
+      { maxParallelToolCalls: 1, onToolResultAdmitted },
+    );
+    expect(onToolResultAdmitted).toHaveBeenCalledOnce();
+  });
 });

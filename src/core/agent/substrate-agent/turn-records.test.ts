@@ -551,6 +551,73 @@ describe('turn-records tool persistence', () => {
     );
   });
 
+  it('carries scheduler non-text withholding into session persistence options', () => {
+    const recordToolObservation = vi.fn().mockReturnValue({
+      entryId: 4,
+      intakeSnapshot: null,
+    });
+    const toolResult = {
+      role: 'toolResult',
+      toolCallId: 'call-image',
+      toolName: 'image',
+      content: [{
+        type: 'text',
+        text: 'Internal tool status: non-text tool content was withheld by intake screening.',
+      }],
+      details: {},
+      isError: false,
+      timestamp: 1_700_000_000_000,
+      psfnIntakeScreening: {
+        mode: 'enforce',
+        withheld: true,
+        effectiveText:
+          'Internal tool status: non-text tool content was withheld by intake screening.',
+        snapshot: {
+          envelopeId: 'env-image-12345678',
+          sourceClass: 'tool_output',
+          sourceRiskTier: 'untrusted',
+          state: 'released',
+          riskLabels: [],
+          subject: { kind: 'body' },
+        },
+      },
+    } as unknown as ToolResultMessage;
+
+    recordToolObservations({
+      sessionManager: { recordToolObservation } as unknown as TurnSessionWriteManager,
+      message: {
+        id: 'source-message-image',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'Inspect the image.',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnSessionIdentity: {
+        sourceChannelId: 'api:test',
+        logicalSessionId: 'api:test',
+      },
+      turnId: AUDIT_TURN_ID,
+      requestId: AUDIT_REQUEST_ID,
+      turnMessages: [toolResult],
+      trustLevel: 'regular',
+    });
+
+    expect(recordToolObservation).toHaveBeenCalledWith(
+      'api:test',
+      expect.any(Object),
+      undefined,
+      expect.objectContaining({
+        precomputedToolIntakeScreening: expect.objectContaining({
+          mode: 'enforce',
+          withheld: true,
+          snapshot: expect.objectContaining({ state: 'released' }),
+        }),
+      }),
+    );
+  });
+
   it('preserves tool arguments, results, and rationale in the turn record', () => {
     const record = buildTurnRecord({
       message: {

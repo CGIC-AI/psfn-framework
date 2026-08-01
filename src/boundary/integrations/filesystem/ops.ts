@@ -67,6 +67,21 @@ export interface FilesystemSearchOptions {
   maxFiles?: number;
   maxBytesPerFile?: number;
   contextLines?: number;
+  /**
+   * Optional batched read-seam guard. Called once with every bounded candidate
+   * before opening/reading; false omits the corresponding file without letting its
+   * bytes or match count influence the result.
+   */
+  screenFileReads?: (candidates: readonly {
+    absolutePath: string;
+    relativePath: string;
+    /** Device/inode identity captured before screening and verified on the opened handle. */
+    physicalIdentity: string;
+  }[]) => {
+    readable: readonly boolean[];
+    /** Cheap revision check against quarantine decisions made after screening. */
+    revisionIsCurrent: () => boolean;
+  };
   /** Clock override for the cooperative search time budget (tests only). */
   now?: () => number;
 }

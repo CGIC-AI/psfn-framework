@@ -1,3 +1,4 @@
+import { renameSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,5 +79,62 @@ describe('searchWorkspaceFiles ReDoS containment (nw90)', () => {
     await expect(
       searchWorkspaceFiles(root, { query: 'quick', mode: 'literal', glob: '*.md', now }),
     ).rejects.toThrow(SearchBudgetExceededError);
+  });
+
+  it('refuses stale search results when quarantine changes after the batch verdict', async () => {
+    await writeFile(join(root, 'held-after-screen.md'), 'MARKER-newly-held\n', 'utf-8');
+    let revision = 'released';
+
+    await expect(searchWorkspaceFiles(root, {
+      query: 'MARKER-newly-held',
+      mode: 'literal',
+      glob: 'held-after-screen.md',
+      screenFileReads: (candidates) => {
+        // Deterministic sibling-process hold immediately after the batch
+        // verdict. The first async checkpoint yields to this transition
+        // before stat/read, and the revision gate invalidates the scan.
+        queueMicrotask(() => { revision = 'held'; });
+        return {
+          readable: candidates.map(() => true),
+          revisionIsCurrent: () => revision === 'released',
+        };
+      },
+    })).rejects.toThrow(/quarantine state changed.*refusing stale results/iu);
+  });
+
+  it('refuses a verdict whose atomic revision is already stale when screening returns', async () => {
+    await expect(searchWorkspaceFiles(root, {
+      query: 'MARKER-newly-held',
+      mode: 'literal',
+      glob: 'held-after-screen.md',
+      screenFileReads: (candidates) => {
+        return {
+          readable: candidates.map(() => true),
+          revisionIsCurrent: () => false,
+        };
+      },
+    })).rejects.toThrow(/quarantine state changed.*refusing stale results/iu);
+  });
+
+  it('refuses a pathname swapped to an already-held file after screening', async () => {
+    const candidatePath = join(root, 'swap-candidate.md');
+    const backupPath = join(root, 'swap-candidate.safe.md');
+    const heldPath = join(root, 'swap-held.md');
+    await writeFile(candidatePath, 'ordinary safe text\n', 'utf-8');
+    await writeFile(heldPath, 'MARKER-already-held\n', 'utf-8');
+
+    await expect(searchWorkspaceFiles(root, {
+      query: 'MARKER-already-held',
+      mode: 'literal',
+      glob: 'swap-candidate.md',
+      screenFileReads: (candidates) => {
+        renameSync(candidatePath, backupPath);
+        renameSync(heldPath, candidatePath);
+        return {
+          readable: candidates.map(() => true),
+          revisionIsCurrent: () => true,
+        };
+      },
+    })).rejects.toThrow(/candidate identity changed.*refusing read/iu);
   });
 });

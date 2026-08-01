@@ -257,6 +257,8 @@ test('API CogSec proof reads the quarantined envelope from its durable current-t
         id: envelopeId,
         status: 'held',
         rawText: `hostile fixture ${token}`,
+        artifactPaths: ['/held/fixture.txt'],
+        accessAttempts: [{ path: '/held/fixture.txt', via: 'gateway:fs.read', atMs: 1 }],
         envelope: {
           id: envelopeId,
           state: 'quarantined',
@@ -312,6 +314,12 @@ test('API CogSec proof reads the quarantined envelope from its durable current-t
       turnId,
       location: null,
       userMessage: { content: 'snapshot deliberately lacks the current session envelope' },
+      assistantMessage: { content: 'I could not inspect the quarantined attachment.' },
+      toolCalls: [{
+        toolName: 'fs',
+        outcome: 'error',
+        resultText: 'This content is being kept aside for your human to look over.',
+      }],
       snapshot: {
         sessionContext: {
           recentEntries: [{
@@ -324,12 +332,34 @@ test('API CogSec proof reads the quarantined envelope from its durable current-t
     },
   };
 
-  const sideChecks = await apiCase.after({ outcome, sessionEntries });
+  const sideChecks = await apiCase.after({
+    outcome,
+    sessionEntries,
+    gatewayAuditRows: [{
+      method: 'fs.read',
+      decision: 'ALLOW',
+      params_json: JSON.stringify({ path: '/held/fixture.txt' }),
+      error: 'This content is being kept aside for your human to look over.',
+    }],
+  });
   assert.deepEqual(apiCase.validatePersistedProof({ sideChecks }), []);
   assert.deepEqual(sideChecks.cogsec.session, {
     found: true,
     withheld: true,
     envelopeState: 'quarantined',
     fixedNoticePresent: true,
+    locatorsAbsent: true,
+  });
+  assert.deepEqual(sideChecks.cogsec.containment, {
+    assistantReplyFound: true,
+    replyMarkerAbsent: true,
+    toolResultMarkerAbsent: true,
+    successfulRawReadCount: 0,
+    gatewayReadAuditCount: 1,
+    targetedReadAttemptCount: 1,
+    unexpectedContentReadAuditCount: 0,
+    unexpectedToolCallCount: 0,
+    readToolCallCount: 1,
+    queuedAccessAttemptCount: 1,
   });
 });

@@ -1,4 +1,4 @@
-import { glob as fsGlob, readFile, stat, writeFile } from 'node:fs/promises';
+import { glob as fsGlob, open, readFile, stat, writeFile } from 'node:fs/promises';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { join, relative } from 'node:path';
 import {
@@ -20,7 +20,10 @@ import type {
   FilesystemWriteOptions,
   FilesystemWriteResult,
 } from './ops.js';
-import { readUtf8TextFilePage } from './text-file-paging.js';
+import {
+  readUtf8TextFilePage,
+  readUtf8TextFilePageFromHandle,
+} from './text-file-paging.js';
 
 const DEFAULT_LIST_GLOB = '**/*';
 const DEFAULT_DIRECTORY_LIST_GLOB = '*';
@@ -528,19 +531,67 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
   );
   const listResult = await listWorkspaceFiles(root, normalizedGlob, maxFiles);
   const paths = listResult.paths;
+  // Capture file identity before the quarantine verdict. The subsequent read
+  // stays on one descriptor and verifies dev+ino+birthtime, closing pathname/symlink
+  // swaps to an already-held artifact that would not advance gate revision.
+  const candidates = await Promise.all(paths.map(async (path) => {
+    const absolutePath = resolveWorkspaceFsPathFromRoot(path, root);
+    const identity = await stat(absolutePath, { bigint: true });
+    return {
+      absolutePath,
+      relativePath: path,
+      identity: { dev: identity.dev, ino: identity.ino, birthtimeNs: identity.birthtimeNs },
+      physicalIdentity:
+        `${identity.dev.toString()}:${identity.ino.toString()}:${identity.birthtimeNs.toString()}`,
+    };
+  }));
+  const readScreening = options.screenFileReads?.(candidates);
+  if (readScreening
+    && (readScreening.readable.length !== candidates.length
+      || readScreening.readable.some(verdict => typeof verdict !== 'boolean')
+      || typeof readScreening.revisionIsCurrent !== 'function')) {
+    throw new Error('fs search read-seam guard returned malformed batched verdicts');
+  }
+  const assertReadScreeningCurrent = (): void => {
+    if (readScreening && !readScreening.revisionIsCurrent()) {
+      throw new Error('fs search quarantine state changed during the scan; refusing stale results');
+    }
+  };
   const matches: FilesystemSearchMatch[] = [];
   const truncatedFiles: string[] = [];
   let scannedFiles = 0;
   const budget = createSearchBudget(options.now);
 
-  for (const path of paths) {
+  for (const [index, candidate] of candidates.entries()) {
     await checkpointSearchBudget(budget);
-    const absolutePath = resolveWorkspaceFsPathFromRoot(path, root);
-    const fileStat = await stat(absolutePath);
-    if (!fileStat.isFile()) {
+    const { absolutePath, relativePath: path } = candidate;
+    // Security-sensitive callers must decide before stat/read. Filtering
+    // matches afterwards leaks quarantined content through maxMatches and
+    // result-shape side channels even when the preview itself is removed.
+    if (readScreening?.readable[index] === false) {
       continue;
     }
-    const readResult = await readTextFile(absolutePath, maxBytesPerFile);
+    assertReadScreeningCurrent();
+    const handle = await open(absolutePath, 'r');
+    let readResult: FilesystemReadResult;
+    try {
+      const openedIdentity = await handle.stat({ bigint: true });
+      if (openedIdentity.dev !== candidate.identity.dev
+        || openedIdentity.ino !== candidate.identity.ino
+        || openedIdentity.birthtimeNs !== candidate.identity.birthtimeNs) {
+        throw new Error('fs search candidate identity changed after quarantine screening; refusing read');
+      }
+      if (!openedIdentity.isFile()) {
+        continue;
+      }
+      readResult = await readUtf8TextFilePageFromHandle(handle, maxBytesPerFile);
+    } finally {
+      await handle.close();
+    }
+    // A sibling process may hold/quarantine this artifact while the async read
+    // is in flight. Never inspect or return bytes screened against an older
+    // store revision.
+    assertReadScreeningCurrent();
     scannedFiles += 1;
     if (readResult.truncated) {
       truncatedFiles.push(path);
@@ -569,6 +620,9 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
     }
   }
 
+  // Linearization point for the returned result: a quarantine transition at
+  // any point after the batch verdict invalidates the whole scan fail-closed.
+  assertReadScreeningCurrent();
   return {
     query,
     glob: normalizedGlob,

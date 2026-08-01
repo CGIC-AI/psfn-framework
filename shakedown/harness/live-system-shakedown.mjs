@@ -3414,7 +3414,7 @@ async function runCase(testCase, ctx, signal) {
     throw new Error(`case ${testCase.id} produced no dispatch outcome`);
   }
   const auditRows = await pgAll(
-    `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc limit 60;`,
+    `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc;`,
   );
   throwIfAborted(signal);
   const outcomeApiUserId = outcome.apiUserId ?? ctx.primaryApiUserId;
@@ -3479,6 +3479,7 @@ async function runCase(testCase, ctx, signal) {
       outcome,
       outcomes: stepOutcomes,
       beforeChecks,
+      gatewayAuditRows: auditRows,
       preCaseHealth: {
         api: preCaseApiHealth,
       },

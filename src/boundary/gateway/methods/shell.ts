@@ -1,5 +1,6 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { isAbsolute, resolve } from 'node:path';
+import { opendir, stat } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { ShellExecParams, ShellExecResult } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import type { GatedMethodDescriptor, GatewayMethodRuntime } from './types.js';
@@ -12,6 +13,8 @@ import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
 } from '../../../shared/resilience/circuit-breaker.js';
+import { MAX_LIST_MAX_SCANNED_ENTRIES } from '../../integrations/filesystem/workspace-ops.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 
 const shellCircuitBreaker = new SlidingWindowCircuitBreaker({
   failureThreshold: 3,
@@ -82,6 +85,7 @@ export function resetShellCircuitBreakersForTests(): void {
 
 /** Cap on quarantine-guard lookups per shell.exec call (each loads the store file). */
 const MAX_GUARD_PATH_CANDIDATES = 128;
+const MAX_SHELL_QUARANTINE_SCANNED_ENTRIES = MAX_LIST_MAX_SCANNED_ENTRIES * 10;
 
 /**
  * Best-effort path candidates named by a shell.exec request: the resolved
@@ -152,6 +156,60 @@ function checkShellQuarantinedArtifacts(
   return null;
 }
 
+/**
+ * Find every path inside a sandbox-visible root that currently names a held
+ * inode. Registered names alone are insufficient: a hardlink can be reached
+ * through variable expansion or a recursive shell program without ever
+ * appearing in argv. Enumeration is deliberately bounded and fail-closed.
+ */
+async function findQuarantinedArtifactAliases(
+  roots: readonly string[],
+  identities: readonly string[],
+): Promise<Array<{ path: string; identity: string }>> {
+  if (identities.length === 0) return [];
+  const held = new Set(identities);
+  const aliases = new Map<string, string>();
+  const uniqueRoots = [...new Set(roots.map(root => resolve(root)))];
+  let scanned = 0;
+  for (const root of uniqueRoots) {
+    const pendingDirectories = [root];
+    while (pendingDirectories.length > 0) {
+      const directoryPath = pendingDirectories.pop()!;
+      let directory;
+      try {
+        directory = await opendir(directoryPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+        throw error;
+      }
+      for await (const entry of directory) {
+        scanned += 1;
+        if (scanned > MAX_SHELL_QUARANTINE_SCANNED_ENTRIES) {
+          throw new Error(
+            'Quarantined-artifact sandbox scan exceeded '
+            + `${String(MAX_SHELL_QUARANTINE_SCANNED_ENTRIES)} entries`,
+          );
+        }
+        const path = join(directoryPath, entry.name);
+        try {
+          // Follow directory symlinks too: the sandbox can traverse their
+          // logical spelling, so every such alias must be considered. Cycles
+          // exhaust the bounded scan and fail the launch closed.
+          const stats = await stat(path, { bigint: true });
+          if (stats.isDirectory()) pendingDirectories.push(path);
+          const identity = `${stats.dev.toString()}:${stats.ino.toString()}:${stats.birthtimeNs.toString()}`;
+          if (held.has(identity)) aliases.set(path, identity);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
+      }
+    }
+  }
+  return [...aliases].map(([path, identity]) => ({ path, identity }));
+}
+
 const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'shell.exec',
@@ -166,9 +224,34 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         // is /dev/null-shadowed inside the sandbox (enforce mode), covering
         // argv shapes the descriptor cannot parse. An unenumerable deny set
         // throws here and fails the exec closed.
-        const quarantinedArtifactPaths =
-          runtime.quarantinedArtifactGuard?.listEnforcedArtifactPaths() ?? [];
-        return await shellCircuitBreaker.execute({
+        const guard = runtime.quarantinedArtifactGuard;
+        const launchRevision = guard?.readRevisionToken();
+        const registeredArtifactPaths = guard?.listEnforcedArtifactPaths() ?? [];
+        const artifactIdentities = guard?.listEnforcedArtifactIdentities() ?? [];
+        const repositoryRoot = policy.mountRepositoryReadOnly === true
+          ? policy.repositoryMountSource?.trim()
+          : undefined;
+        const aliases = await findQuarantinedArtifactAliases(
+          [runtime.workspacePath, ...(repositoryRoot ? [repositoryRoot] : [])],
+          artifactIdentities,
+        );
+        const quarantinedArtifactPaths = [...new Set([
+          ...registeredArtifactPaths,
+          ...aliases.map(alias => alias.path),
+        ])];
+        if (quarantinedArtifactPaths.length > 0) {
+          // Arbitrary shell programs can discover files without spelling a
+          // path in argv (`grep -R`, globs, find -exec, variable expansion).
+          // The sandbox masks every active path physically; conservatively
+          // audit that masked exposure set as part of this exec so such a
+          // residual attempt is never invisible to the operator. The seam
+          // label distinguishes this preflight evidence from an exact-path
+          // descriptor denial.
+          guard!.checkMany(quarantinedArtifactPaths, {
+            via: 'gateway:shell.exec:masked-backstop',
+          });
+        }
+        const result = await shellCircuitBreaker.execute({
           key: shellCircuitKey(params, runtime),
           method: 'shell.exec',
           operation: async () => executeShellCommandWithPolicy(params, {
@@ -179,6 +262,30 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           shouldRecordFailure: shouldRecordShellFailure,
           onTransition: logShellCircuitTransition,
         });
+        if (guard && launchRevision !== guard.readRevisionToken()) {
+          // A hold can land while a long-running shell is active. The initial
+          // mask cannot cover a newly registered path, so discard every output
+          // bit (including exit-code oracles) and conservatively audit the
+          // current deny set before the result reaches the turn.
+          const currentPaths = guard.listEnforcedArtifactPaths();
+          if (currentPaths.length > 0) {
+            guard.checkMany(currentPaths, { via: 'gateway:shell.exec:revision-race' });
+          }
+          return {
+            command: params.command,
+            args: Array.isArray(params.args) ? params.args : [],
+            cwd: typeof params.cwd === 'string' && params.cwd.trim()
+              ? params.cwd.trim()
+              : runtime.workspacePath,
+            exitCode: 1,
+            stdout: '',
+            stderr: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+            timedOut: false,
+            truncated: false,
+            durationMs: result.durationMs,
+          };
+        }
+        return result;
       } catch (error) {
         if (error instanceof CircuitOpenError) {
           throw toCircuitOpenJsonRpcError(error);

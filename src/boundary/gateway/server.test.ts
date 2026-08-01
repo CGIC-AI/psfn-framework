@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -570,7 +570,10 @@ describe('GatewayServer', () => {
       'MARKER-s10-cogsec-a6932606e2a7 unique-secret repeated-secret repeated-secret';
     mkdirSync(join(workspace, 'downloads/api/2026-07-30'), { recursive: true });
     writeFileSync(artifactPath, heldContent);
-    writeFileSync(join(workspace, 'innocent.txt'), 'MARKER-s10-cogsec-a6932606e2a7 in a clean file');
+    writeFileSync(
+      join(workspace, 'innocent.txt'),
+      'MARKER-s10-cogsec-a6932606e2a7 clean-sentinel in a clean file',
+    );
 
     const quarantineStore = createIntakeQuarantineStore(join(workspace, 'intake-quarantine.json'), {
       itemTtlHours: 168,
@@ -611,6 +614,11 @@ describe('GatewayServer', () => {
       rawText: heldContent,
       artifactPaths: [artifactPath],
     });
+    // If fs.search opens this candidate before its quarantine verdict, the
+    // request fails instead of reaching the clean sentinel. This proves the
+    // guard runs at the read seam rather than filtering previews afterwards.
+    chmodSync(artifactPath, 0o000);
+    const batchedCheck = vi.spyOn(quarantineStore, 'checkArtifactAccesses');
 
     try {
       const { conn } = await setupServerConnection({
@@ -625,27 +633,47 @@ describe('GatewayServer', () => {
       });
 
       const readResponse = await invokeRpc(conn, 985, 'fs.read', { path: artifactRelativePath });
-      expect(readResponse.error).toBeUndefined();
-      expect(readResponse.result.content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
-      expect(readResponse.result.content).not.toContain('MARKER');
-      expect(readResponse.result.eof).toBe(true);
+      expect(readResponse.result).toBeUndefined();
+      expect(readResponse.error).toMatchObject({
+        code: GatewayErrors.POLICY_DENIED,
+        message: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+      });
 
       // The bypass attempt is operator-visible on the queue entry.
       const attempts = quarantineStore.getById(envelope.id)?.accessAttempts ?? [];
       expect(attempts.length).toBeGreaterThanOrEqual(1);
       expect(attempts[0]).toMatchObject({ via: 'gateway:fs.read' });
+      batchedCheck.mockClear();
 
-      // Search previews are a read seam too: the quarantined file drops out,
-      // clean files still match.
-      const searchResponse = await invokeRpc(conn, 986, 'fs.search', {
-        query: 'MARKER-s10-cogsec-a6932606e2a7',
+      // Search guards every candidate before stat/read. A positive guess for
+      // held content and a negative guess have the same clean-only result
+      // shape even at maxMatches=1, closing the prior boolean oracle.
+      const positiveSearchResponse = await invokeRpc(conn, 986, 'fs.search', {
+        query: 'unique-secret|clean-sentinel',
         glob: '**/*',
+        mode: 'regex',
+        maxMatches: 1,
       });
-      expect(searchResponse.error).toBeUndefined();
-      const matchedPaths = (searchResponse.result.matches as Array<{ path: string }>)
-        .map((match) => match.path);
-      expect(matchedPaths).toContain('innocent.txt');
-      expect(matchedPaths).not.toContain(artifactRelativePath);
+      const negativeSearchResponse = await invokeRpc(conn, 992, 'fs.search', {
+        query: 'missing-secret|clean-sentinel',
+        glob: '**/*',
+        mode: 'regex',
+        maxMatches: 1,
+      });
+      expect(positiveSearchResponse.error).toBeUndefined();
+      expect(negativeSearchResponse.error).toBeUndefined();
+      const withoutEchoedQuery = (response: { result: Record<string, unknown> }) => {
+        const { query: _query, ...shape } = response.result;
+        return shape;
+      };
+      expect(withoutEchoedQuery(positiveSearchResponse))
+        .toEqual(withoutEchoedQuery(negativeSearchResponse));
+      expect(positiveSearchResponse.result.matches).toEqual([
+        expect.objectContaining({ path: 'innocent.txt' }),
+      ]);
+      // One snapshot lookup and one audit transaction per whole search, not
+      // one synchronous quarantine-file parse/write per candidate.
+      expect(batchedCheck).toHaveBeenCalledTimes(2);
 
       const writeResponse = await invokeRpc(conn, 987, 'fs.write', {
         path: artifactRelativePath,
@@ -674,6 +702,7 @@ describe('GatewayServer', () => {
         INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
         INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
       ]);
+      chmodSync(artifactPath, 0o600);
       expect(readFileSync(artifactPath, 'utf8')).toBe(heldContent);
 
       const mutationAttempts =
@@ -682,6 +711,8 @@ describe('GatewayServer', () => {
         .toHaveLength(1);
       expect(mutationAttempts.filter(attempt => attempt.via === 'gateway:fs.edit'))
         .toHaveLength(3);
+      expect(mutationAttempts.filter(attempt => attempt.via === 'gateway:fs.search'))
+        .toHaveLength(2);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { writeFile, realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative } from 'node:path';
 import type {
   FsEditParams,
@@ -23,13 +23,12 @@ import { registerGatedDescriptors } from './register.js';
 import {
   buildWorkingFolderSearchGlob,
   collectBoundedGlobFiles,
-  editWorkspaceFile,
   isBroadSearchGlob,
   normalizeListLimits,
-  readTextFile,
   searchWorkspaceFiles,
 } from '../../integrations/filesystem/workspace-ops.js';
 import { normalizeFilesystemReadOptions } from '../../integrations/filesystem/ops.js';
+import { readUtf8TextFilePageFromHandle } from '../../integrations/filesystem/text-file-paging.js';
 
 const log = createComponentLogger('GatewayFilesystem');
 
@@ -254,14 +253,141 @@ function resolveGuardedMutationPath(
   requestedPath: string,
   runtime: GatewayMethodRuntime,
   missingPathBehavior: 'returnNormalized' | 'resolveParent',
-  via: 'gateway:fs.write' | 'gateway:fs.edit',
 ): { workspaceRoot: string; normalizedPath: string; resolvedPath: string } {
   const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
   const normalizedPath = normalizeRequestedWorkspacePath(requestedPath, workspaceRoot);
   const resolvedPath = resolveWorkspaceFsPathFromRoot(normalizedPath, workspaceRoot);
   assertPersonalWorkspacePath(resolvedPath, runtime, missingPathBehavior);
-  assertQuarantinedArtifactMutationAllowed(resolvedPath, runtime, via);
   return { workspaceRoot, normalizedPath, resolvedPath };
+}
+
+interface GuardedMutationHandle {
+  handle: FileHandle;
+  revisionIsCurrent: () => boolean;
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+async function openExistingGuardedMutationHandle(
+  resolvedPath: string,
+  runtime: GatewayMethodRuntime,
+  via: 'gateway:fs.write' | 'gateway:fs.edit',
+): Promise<GuardedMutationHandle> {
+  const screenedStats = await stat(resolvedPath, { bigint: true });
+  const guard = runtime.quarantinedArtifactGuard;
+  const checked = guard?.checkMany(
+    [resolvedPath],
+    { via },
+    {
+      physicalIdentities: [
+        `${screenedStats.dev.toString()}:${screenedStats.ino.toString()}`
+        + `:${screenedStats.birthtimeNs.toString()}`,
+      ],
+    },
+  );
+  const verdict = checked?.verdicts[0];
+  if (verdict?.withheld) {
+    throw new JSONRPCErrorException(verdict.noticeText, GatewayErrors.POLICY_DENIED);
+  }
+
+  const handle = await open(resolvedPath, 'r+');
+  try {
+    const openedStats = await handle.stat({ bigint: true });
+    if (openedStats.dev !== screenedStats.dev
+      || openedStats.ino !== screenedStats.ino
+      || openedStats.birthtimeNs !== screenedStats.birthtimeNs) {
+      throw new JSONRPCErrorException(
+        `${via} candidate identity changed after quarantine screening; refusing mutation`,
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    const revisionIsCurrent = (): boolean => !guard
+      || !checked
+      || guard.readRevisionToken() === checked.revisionToken;
+    if (!revisionIsCurrent()) {
+      throw new JSONRPCErrorException(
+        `${via} quarantine state changed before mutation; refusing stale verdict`,
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    return { handle, revisionIsCurrent };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function openGuardedWriteHandle(
+  resolvedPath: string,
+  runtime: GatewayMethodRuntime,
+): Promise<GuardedMutationHandle> {
+  try {
+    return await openExistingGuardedMutationHandle(
+      resolvedPath,
+      runtime,
+      'gateway:fs.write',
+    );
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
+  }
+
+  // Missing-target writes still consult path registration. Create with `wx`
+  // so a held inode raced into place is never truncated; EEXIST is then
+  // screened through the descriptor-identity path.
+  assertQuarantinedArtifactMutationAllowed(resolvedPath, runtime, 'gateway:fs.write');
+  try {
+    const handle = await open(resolvedPath, 'wx+');
+    try {
+      const stats = await handle.stat({ bigint: true });
+      const guard = runtime.quarantinedArtifactGuard;
+      const checked = guard?.checkMany(
+        [resolvedPath],
+        { via: 'gateway:fs.write' },
+        {
+          physicalIdentities: [
+            `${stats.dev.toString()}:${stats.ino.toString()}:${stats.birthtimeNs.toString()}`,
+          ],
+        },
+      );
+      const verdict = checked?.verdicts[0];
+      if (verdict?.withheld) {
+        throw new JSONRPCErrorException(verdict.noticeText, GatewayErrors.POLICY_DENIED);
+      }
+      return {
+        handle,
+        revisionIsCurrent: () => !guard
+          || !checked
+          || guard.readRevisionToken() === checked.revisionToken,
+      };
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  } catch (error) {
+    if (errnoCode(error) !== 'EEXIST') throw error;
+    return await openExistingGuardedMutationHandle(
+      resolvedPath,
+      runtime,
+      'gateway:fs.write',
+    );
+  }
+}
+
+async function replaceHandleContent(handle: FileHandle, content: string): Promise<void> {
+  const bytes = Buffer.from(content, 'utf8');
+  await handle.truncate(0);
+  let written = 0;
+  while (written < bytes.length) {
+    const result = await handle.write(bytes, written, bytes.length - written, written);
+    if (result.bytesWritten <= 0) {
+      throw new Error('filesystem mutation made no write progress');
+    }
+    written += result.bytesWritten;
+  }
 }
 
 const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
@@ -279,25 +405,59 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       assertPersonalWorkspacePath(resolved.path, runtime, 'returnNormalized');
       // hrmrq.54: a quarantined item's on-disk artifact must never be served
       // back into the turn while the item awaits operator review — the read
-      // returns the fixed quarantine notice and the attempt is recorded on
-      // the Garden queue entry.
-      const guardVerdict = runtime.quarantinedArtifactGuard?.check(resolved.path, {
-        via: 'gateway:fs.read',
-      });
-      if (guardVerdict?.withheld) {
-        return {
-          content: guardVerdict.noticeText,
-          offsetBytes: 0,
-          nextOffsetBytes: null,
-          eof: true,
-          truncated: false,
-        };
-      }
+      // fails with the fixed quarantine notice and records the attempt on the
+      // Garden queue entry. A successful placeholder response would make the
+      // gateway audit indistinguishable from a raw read later masked by the
+      // scheduler, weakening the live containment proof.
       const options = normalizeFilesystemReadOptions({
         ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
         ...(params.offsetBytes !== undefined ? { offsetBytes: params.offsetBytes } : {}),
       });
-      return await readTextFile(resolved.path, options.maxBytes, options.offsetBytes);
+      const screenedStats = await stat(resolved.path, { bigint: true });
+      const guard = runtime.quarantinedArtifactGuard;
+      const checked = guard?.checkMany(
+        [resolved.path],
+        { via: 'gateway:fs.read' },
+        {
+          physicalIdentities: [
+            `${screenedStats.dev.toString()}:${screenedStats.ino.toString()}`
+            + `:${screenedStats.birthtimeNs.toString()}`,
+          ],
+        },
+      );
+      const guardVerdict = checked?.verdicts[0];
+      if (guardVerdict?.withheld) {
+        throw new JSONRPCErrorException(
+          guardVerdict.noticeText,
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
+      const handle = await open(resolved.path, 'r');
+      try {
+        const stats = await handle.stat({ bigint: true });
+        if (stats.dev !== screenedStats.dev
+          || stats.ino !== screenedStats.ino
+          || stats.birthtimeNs !== screenedStats.birthtimeNs) {
+          throw new JSONRPCErrorException(
+            'fs.read candidate identity changed after quarantine screening; refusing read',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        const result = await readUtf8TextFilePageFromHandle(
+          handle,
+          options.maxBytes,
+          options.offsetBytes,
+        );
+        if (guard && checked && guard.readRevisionToken() !== checked.revisionToken) {
+          throw new JSONRPCErrorException(
+            'fs.read quarantine state changed during the read; refusing stale content',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return result;
+      } finally {
+        await handle.close();
+      }
     },
     summary: (p: FsReadParams) => ({
       path: p.path,
@@ -314,15 +474,31 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         params.path,
         runtime,
         'resolveParent',
-        'gateway:fs.write',
       );
+      let guarded: GuardedMutationHandle | undefined;
       try {
-        await writeFile(resolvedPath, params.content, 'utf-8');
+        guarded = await openGuardedWriteHandle(resolvedPath, runtime);
+        if (!guarded.revisionIsCurrent()) {
+          throw new JSONRPCErrorException(
+            'fs.write quarantine state changed before mutation; refusing stale verdict',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        await replaceHandleContent(guarded.handle, params.content);
+        if (!guarded.revisionIsCurrent()) {
+          throw new JSONRPCErrorException(
+            'fs.write quarantine state changed during mutation; refusing a stale success result',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
       } catch (error) {
+        if (error instanceof JSONRPCErrorException) throw error;
         throw new JSONRPCErrorException(
           await buildWriteFailureMessage(params.path, workspaceRoot, resolvedPath, error),
           GatewayErrors.PROVIDER_ERROR,
         );
+      } finally {
+        await guarded?.handle.close();
       }
       return { success: true };
     },
@@ -357,7 +533,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'fs.search',
     handler: async (params: FsSearchParams, runtime) => {
       const searchRoot = resolveReadRoot(runtime);
-      const result = await searchWorkspaceFiles(searchRoot, {
+      return await searchWorkspaceFiles(searchRoot, {
         query: params.query,
         ...(typeof params.glob === 'string' && !isBroadSearchGlob(params.glob)
           ? { glob: params.glob }
@@ -367,27 +543,29 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         ...(typeof params.maxFiles === 'number' ? { maxFiles: params.maxFiles } : {}),
         ...(typeof params.maxBytesPerFile === 'number' ? { maxBytesPerFile: params.maxBytesPerFile } : {}),
         ...(typeof params.contextLines === 'number' ? { contextLines: params.contextLines } : {}),
+        // hrmrq.54: guard before the integration opens or reads a candidate.
+        // Post-search filtering still lets quarantined matches consume limits,
+        // turning result shape into a boolean content oracle.
+        ...(runtime.quarantinedArtifactGuard
+          ? {
+            screenFileReads: (candidates: readonly {
+              absolutePath: string;
+              physicalIdentity: string;
+            }[]) => {
+              const guard = runtime.quarantinedArtifactGuard!;
+              const checked = guard.checkMany(
+                candidates.map(candidate => candidate.absolutePath),
+                { via: 'gateway:fs.search' },
+                { physicalIdentities: candidates.map(candidate => candidate.physicalIdentity) },
+              );
+              return {
+                readable: checked.verdicts.map(verdict => !verdict.withheld),
+                revisionIsCurrent: () => guard.readRevisionToken() === checked.revisionToken,
+              };
+            },
+          }
+          : {}),
       });
-      // hrmrq.54: search previews are a read seam too — a quarantined
-      // artifact's lines must not leak through match previews. One guard
-      // verdict per distinct matched file; withheld files drop out of the
-      // result and the attempt lands on the Garden queue entry.
-      const guard = runtime.quarantinedArtifactGuard;
-      if (!guard) return result;
-      const verdictByRelativePath = new Map<string, boolean>();
-      const isWithheld = (relativePath: string): boolean => {
-        const cached = verdictByRelativePath.get(relativePath);
-        if (cached !== undefined) return cached;
-        const absolutePath = resolveWorkspaceFsPathFromRoot(relativePath, searchRoot);
-        const withheld = guard.check(absolutePath, { via: 'gateway:fs.search' }).withheld;
-        verdictByRelativePath.set(relativePath, withheld);
-        return withheld;
-      };
-      return {
-        ...result,
-        matches: result.matches.filter((match) => !isWithheld(match.path)),
-        truncatedFiles: result.truncatedFiles.filter((path) => !isWithheld(path)),
-      };
     },
     summary: (p: FsSearchParams) => ({
       query: p.query,
@@ -401,22 +579,62 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.edit',
     handler: async (params: FsEditParams, runtime) => {
-      const { workspaceRoot, normalizedPath } = resolveGuardedMutationPath(
+      const { resolvedPath } = resolveGuardedMutationPath(
         params.path,
         runtime,
         'returnNormalized',
+      );
+      if (typeof params.oldText !== 'string' || params.oldText.length === 0) {
+        throw new Error('fs edit requires a non-empty oldText');
+      }
+      const guarded = await openExistingGuardedMutationHandle(
+        resolvedPath,
+        runtime,
         'gateway:fs.edit',
       );
-      const result = await editWorkspaceFile(workspaceRoot, {
-        path: normalizedPath,
-        oldText: params.oldText,
-        newText: params.newText,
-        replaceAll: params.replaceAll,
-      });
-      return {
-        success: true,
-        replacements: result.replacements,
-      };
+      try {
+        const content = await guarded.handle.readFile({ encoding: 'utf8' });
+        if (!guarded.revisionIsCurrent()) {
+          throw new JSONRPCErrorException(
+            'fs.edit quarantine state changed during the read; refusing stale content verdict',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        const parts = content.split(params.oldText);
+        const occurrences = parts.length - 1;
+        if (occurrences <= 0) {
+          throw new Error('fs edit could not find oldText in the target file');
+        }
+        if (params.replaceAll !== true && occurrences !== 1) {
+          throw new Error(
+            'fs edit found multiple matches; retry with replaceAll=true or use a more specific oldText',
+          );
+        }
+        const nextContent = params.replaceAll === true
+          ? parts.join(params.newText)
+          : content.replace(params.oldText, params.newText);
+        if (nextContent !== content) {
+          if (!guarded.revisionIsCurrent()) {
+            throw new JSONRPCErrorException(
+              'fs.edit quarantine state changed before mutation; refusing stale verdict',
+              GatewayErrors.POLICY_DENIED,
+            );
+          }
+          await replaceHandleContent(guarded.handle, nextContent);
+        }
+        if (!guarded.revisionIsCurrent()) {
+          throw new JSONRPCErrorException(
+            'fs.edit quarantine state changed during mutation; refusing a content-derived result',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return {
+          success: true,
+          replacements: params.replaceAll === true ? occurrences : 1,
+        };
+      } finally {
+        await guarded.handle.close();
+      }
     },
     summary: (p: FsEditParams) => ({ path: p.path, replaceAll: p.replaceAll === true }),
     approvalAction: 'write',

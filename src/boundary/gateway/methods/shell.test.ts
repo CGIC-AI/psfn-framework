@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -285,10 +285,10 @@ describe('registerShellMethods', () => {
       expect(shellRunnerMock.execute).not.toHaveBeenCalled();
     });
 
-    it('threads the enforce-mode physical deny set into the sandbox execution for commands that name no artifact', async () => {
+    it('threads and audits the physical deny set for recursive commands that name no artifact', async () => {
       const fixture = quarantineFixture('enforce');
       shellRunnerMock.execute.mockResolvedValue({
-        command: 'bash', args: ['-lc', 'true'], cwd: fixture.workspace, exitCode: 0,
+        command: 'bash', args: ['-lc', 'grep -R needle .'], cwd: fixture.workspace, exitCode: 1,
         stdout: '', stderr: '', timedOut: false, truncated: false, durationMs: 1,
       });
       const harness = createHarness(
@@ -299,15 +299,104 @@ describe('registerShellMethods', () => {
         { quarantinedArtifactGuard: fixture.guard, workspacePath: fixture.workspace },
       );
 
-      await harness.invoke({ command: 'bash', args: ['-lc', 'true'] });
+      const result = await harness.invoke({
+        command: 'bash',
+        args: ['-lc', 'grep -R needle .'],
+      });
 
       expect(shellRunnerMock.execute).toHaveBeenCalledTimes(1);
+      expect(result.stdout).not.toContain(MARKER);
       const options = shellRunnerMock.execute.mock.calls[0][1] as {
         quarantinedArtifactPaths?: readonly string[];
       };
       expect(options.quarantinedArtifactPaths).toEqual(expect.arrayContaining([
         fixture.artifactPath,
       ]));
+      expect(fixture.store.getById(fixture.envelopeId)?.accessAttempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ via: 'gateway:shell.exec:masked-backstop' }),
+        ]),
+      );
+    });
+
+    it('masks a hardlink alias reached only through shell variable expansion', async () => {
+      const fixture = quarantineFixture('enforce');
+      const aliasPath = join(fixture.workspace, 'files', '.renamed-copy.md');
+      linkSync(fixture.artifactPath, aliasPath);
+      shellRunnerMock.execute.mockResolvedValue({
+        command: 'bash', args: ['-lc', 'cat "$TARGET"'], cwd: fixture.workspace, exitCode: 1,
+        stdout: '', stderr: '', timedOut: false, truncated: false, durationMs: 1,
+      });
+      const harness = createHarness(
+        {
+          workspacePath: fixture.workspace,
+          shellExec: { enabled: true, allowlist: ['bash'], allowedCwd: [fixture.workspace] },
+        },
+        { quarantinedArtifactGuard: fixture.guard, workspacePath: fixture.workspace },
+      );
+
+      const result = await harness.invoke({
+        command: 'bash',
+        args: ['-lc', 'cat "$TARGET"'],
+      });
+
+      expect(result.stdout).not.toContain(MARKER);
+      const options = shellRunnerMock.execute.mock.calls[0][1] as {
+        quarantinedArtifactPaths?: readonly string[];
+      };
+      expect(options.quarantinedArtifactPaths).toContain(aliasPath);
+      expect(fixture.store.getById(fixture.envelopeId)?.accessAttempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: aliasPath,
+            via: 'gateway:shell.exec:masked-backstop',
+          }),
+        ]),
+      );
+    });
+
+    it('discards shell output and audits when quarantine state changes during execution', async () => {
+      const fixture = quarantineFixture('enforce');
+      let revision = 'before-launch';
+      const audit = vi.fn((paths: readonly string[], _context: { via: string }) => ({
+        verdicts: paths.map(() => ({ withheld: true as const, envelopeId: fixture.envelopeId,
+          noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent })),
+        revisionToken: revision,
+      }));
+      const guard: QuarantinedArtifactAccessGuard = {
+        check: () => ({ withheld: false }),
+        checkMany: (paths, context) => audit(paths, context),
+        readRevisionToken: () => revision,
+        listEnforcedArtifactPaths: () => [fixture.artifactPath],
+        listEnforcedArtifactIdentities: () => [],
+      };
+      shellRunnerMock.execute.mockImplementation(async () => {
+        revision = 'hold-landed';
+        return {
+          command: 'bash', args: ['-lc', 'cat "$TARGET"'], cwd: fixture.workspace, exitCode: 0,
+          stdout: MARKER, stderr: '', timedOut: false, truncated: false, durationMs: 9,
+        };
+      });
+      const harness = createHarness(
+        {
+          workspacePath: fixture.workspace,
+          shellExec: { enabled: true, allowlist: ['bash'], allowedCwd: [fixture.workspace] },
+        },
+        { quarantinedArtifactGuard: guard, workspacePath: fixture.workspace },
+      );
+
+      const result = await harness.invoke({ command: 'bash', args: ['-lc', 'cat "$TARGET"'] });
+
+      expect(result).toMatchObject({
+        exitCode: 1,
+        stdout: '',
+        stderr: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+      });
+      expect(audit).toHaveBeenCalledWith(
+        [fixture.artifactPath],
+        { via: 'gateway:shell.exec:revision-race' },
+      );
+      expect(audit.mock.calls).toHaveLength(2);
     });
 
     it('shadow mode records the attempt but executes with no physical deny set (observe-only)', async () => {
@@ -341,7 +430,15 @@ describe('registerShellMethods', () => {
       const fixture = quarantineFixture('enforce');
       const brokenGuard: QuarantinedArtifactAccessGuard = {
         check: () => ({ withheld: false }),
+        checkMany: paths => ({
+          verdicts: paths.map(() => ({ withheld: false })),
+          revisionToken: 'broken',
+        }),
+        readRevisionToken: () => 'broken',
         listEnforcedArtifactPaths: () => {
+          throw new Error('corrupt quarantine file');
+        },
+        listEnforcedArtifactIdentities: () => {
           throw new Error('corrupt quarantine file');
         },
       };

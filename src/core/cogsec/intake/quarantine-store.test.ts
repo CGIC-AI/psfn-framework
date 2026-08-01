@@ -1,6 +1,20 @@
 // htm9.11 — durable intake quarantine store tests.
 
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +24,7 @@ import {
   type IntakeEnvelope,
 } from '../../../shared/contracts/intake-envelope.js';
 import {
+  captureOpenArtifactRegistration,
   createIntakeQuarantineStore,
   INTAKE_QUARANTINE_MAX_RAW_CHARS,
   type IntakeQuarantineStore,
@@ -67,6 +82,26 @@ describe('intake quarantine store (htm9.11)', () => {
     maxHeldItems: overrides.maxHeldItems ?? 500,
     now: () => clock,
     ...(overrides.onExpired ? { onExpired: overrides.onExpired } : {}),
+  });
+
+  it('retains the opened inode identity when the source is unlinked during registration', () => {
+    const source = join(dir, 'registration-source.md');
+    const survivingAlias = join(dir, 'registration-alias.md');
+    writeFileSync(source, 'held bytes');
+    linkSync(source, survivingAlias);
+    const descriptor = openSync(source, 'r');
+    try {
+      const expected = statSync(survivingAlias, { bigint: true });
+      unlinkSync(source);
+      const captured = captureOpenArtifactRegistration(descriptor, source);
+
+      expect(captured.path).toBe(source);
+      expect(captured.identity).toBe(
+        `${expected.dev.toString()}:${expected.ino.toString()}:${expected.birthtimeNs.toString()}`,
+      );
+    } finally {
+      closeSync(descriptor);
+    }
   });
 
   beforeEach(() => {
@@ -367,9 +402,86 @@ describe('intake quarantine store (htm9.11)', () => {
       expect(store.findByArtifactPath(canonicalArtifact)?.id).toBe(envelope.id);
     });
 
-    it('never prunes a terminal entry whose registered artifact still exists (read-gate anchor), and prunes it once the artifact is gone', () => {
-      const artifact = join(dir, 'anchored.md');
+    it('fails closed when artifact canonicalization fails for a reason other than a missing path', () => {
+      const loopPath = join(dir, 'symlink-loop');
+      symlinkSync(loopPath, loopPath);
+
+      expect(() => store.hold({
+        envelope: makeQuarantinedEnvelope(),
+        mode: 'enforce',
+        rawText: 'MARKER-content',
+        artifactPaths: [loopPath],
+      })).toThrow(/ELOOP|symbolic links/iu);
+    });
+
+    it('never lets an older released entry mask a later discarded hold for the same artifact', () => {
+      const artifact = join(dir, 'reused-artifact.md');
       writeFileSync(artifact, 'MARKER-content');
+      const released = makeQuarantinedEnvelope({
+        id: 'released-envelope-00000001',
+        atMs: clock,
+      });
+      store.hold({ envelope: released, mode: 'enforce', rawText: 'safe', artifactPaths: [artifact] });
+      store.applyDecision({
+        id: released.id,
+        action: 'release_raw',
+        actor: 'operator:garden',
+        reason: 'reviewed safe',
+        atMs: clock,
+      });
+
+      clock += 1;
+      const discarded = makeQuarantinedEnvelope({
+        id: 'discarded-envelope-0000001',
+        atMs: clock,
+      });
+      store.hold({ envelope: discarded, mode: 'enforce', rawText: 'hostile', artifactPaths: [artifact] });
+      store.applyDecision({
+        id: discarded.id,
+        action: 'discard',
+        actor: 'operator:garden',
+        reason: 'hostile',
+        atMs: clock,
+      });
+
+      expect(store.findByArtifactPath(artifact)?.id).toBe(discarded.id);
+    });
+
+    it('never lets an older released entry mask a later expired hold for the same artifact', () => {
+      const artifact = join(dir, 'expired-reused-artifact.md');
+      writeFileSync(artifact, 'MARKER-content');
+      const released = makeQuarantinedEnvelope({
+        id: 'released-before-expiry-00001',
+        atMs: clock,
+      });
+      store.hold({ envelope: released, mode: 'enforce', rawText: 'safe', artifactPaths: [artifact] });
+      store.applyDecision({
+        id: released.id,
+        action: 'release_raw',
+        actor: 'operator:garden',
+        reason: 'reviewed safe',
+        atMs: clock,
+      });
+
+      clock += 1;
+      const expired = makeQuarantinedEnvelope({
+        id: 'expired-envelope-000000001',
+        atMs: clock,
+      });
+      store.hold({ envelope: expired, mode: 'enforce', rawText: 'hostile', artifactPaths: [artifact] });
+      clock += TTL_MS + 1;
+
+      expect(store.findByArtifactPath(artifact)).toMatchObject({
+        id: expired.id,
+        status: 'expired',
+      });
+    });
+
+    it('never prunes a terminal artifact identity after its registered path is removed', () => {
+      const artifact = join(dir, 'anchored.md');
+      const alias = join(dir, 'anchored-hardlink.md');
+      writeFileSync(artifact, 'MARKER-content');
+      linkSync(artifact, alias);
       const canonicalArtifact = realpathSync(artifact);
       const anchored = makeQuarantinedEnvelope();
       store.hold({ envelope: anchored, mode: 'enforce', rawText: 'x', artifactPaths: [artifact] });
@@ -400,12 +512,26 @@ describe('intake quarantine store (htm9.11)', () => {
       expect(store.getById(anchored.id)).toBeDefined();
       expect(store.findByArtifactPath(canonicalArtifact)?.id).toBe(anchored.id);
 
-      // Once the artifact itself is gone the exemption ends.
+      // Removing the registered pathname cannot prove the inode is gone: an
+      // unregistered hardlink/rename alias may still expose it. The identity
+      // gate therefore survives another prune trigger.
       rmSync(artifact);
       clock += 1;
       const trigger = makeQuarantinedEnvelope({ atMs: clock });
       store.hold({ envelope: trigger, mode: 'enforce', rawText: 'x', atMs: clock });
-      expect(store.getById(anchored.id)).toBeUndefined();
+      expect(store.getById(anchored.id)).toBeDefined();
+      const aliasStats = statSync(alias, { bigint: true });
+      expect(store.checkArtifactAccesses({
+        requests: [{
+          requestedPath: alias,
+          lookupPaths: [alias],
+          lookupIdentities: [
+            `${aliasStats.dev.toString()}:${aliasStats.ino.toString()}`
+            + `:${aliasStats.birthtimeNs.toString()}`,
+          ],
+        }],
+        via: 'gateway:fs.read',
+      }).entries[0]?.id).toBe(anchored.id);
     });
 
     it('rejects empty and over-limit artifact path registrations (fail closed)', () => {
@@ -455,6 +581,98 @@ describe('intake quarantine store (htm9.11)', () => {
       const bounded = store.getById(envelope.id);
       expect(bounded?.accessAttempts).toHaveLength(50);
       expect(bounded?.accessAttempts?.at(-1)?.via).toBe('gateway:fs.read#59');
+    });
+
+    it('records a bounded scan as one batched audit mutation', () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'held content',
+        artifactPaths: ['/data/files/doc.pdf', '/data/files/doc.pdf.parsed.txt'],
+      });
+
+      const updated = store.recordAccessAttempts([
+        {
+          id: envelope.id,
+          path: '/data/files/doc.pdf',
+          via: 'gateway:fs.search',
+          atMs: NOW,
+        },
+        {
+          id: envelope.id,
+          path: '/data/files/doc.pdf.parsed.txt',
+          via: 'gateway:fs.search',
+          atMs: NOW + 1,
+        },
+      ]);
+
+      expect(updated).toHaveLength(2);
+      expect(makeStore().getById(envelope.id)?.accessAttempts).toEqual([
+        { path: '/data/files/doc.pdf', via: 'gateway:fs.search', atMs: NOW },
+        { path: '/data/files/doc.pdf.parsed.txt', via: 'gateway:fs.search', atMs: NOW + 1 },
+      ]);
+    });
+
+    it('changes the gate revision only for readability decisions, not audit writes', () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'held content',
+        artifactPaths: ['/data/files/doc.pdf'],
+      });
+      const heldRevision = store.readRevisionToken();
+
+      store.recordAccessAttempt({
+        id: envelope.id,
+        path: '/data/files/doc.pdf',
+        via: 'gateway:fs.read',
+      });
+      expect(store.readRevisionToken()).toBe(heldRevision);
+
+      store.applyDecision({
+        id: envelope.id,
+        action: 'release_raw',
+        actor: 'operator:garden',
+        reason: 'reviewed safe',
+      });
+      expect(store.readRevisionToken()).not.toBe(heldRevision);
+    });
+
+    it('serializes an access-attempt mutation behind the cross-process store lock', async () => {
+      const envelope = makeQuarantinedEnvelope();
+      store.hold({
+        envelope,
+        mode: 'enforce',
+        rawText: 'held content',
+        artifactPaths: ['/data/files/doc.pdf'],
+      });
+      const lockPath = `${filePath}.write-lock`;
+      mkdirSync(lockPath);
+      writeFileSync(join(lockPath, '.owner-token'), 'external-test-owner', 'utf8');
+      const releaser = spawn(process.execPath, [
+        '-e',
+        'setTimeout(() => require("node:fs").rmSync(process.argv[1], { recursive: true, force: true }), 150)',
+        lockPath,
+      ], { stdio: 'ignore' });
+
+      const startedAt = Date.now();
+      const updated = store.recordAccessAttempt({
+        id: envelope.id,
+        path: '/data/files/doc.pdf',
+        via: 'gateway:fs.read',
+      });
+      const elapsedMs = Date.now() - startedAt;
+      await new Promise<void>((resolve, reject) => {
+        releaser.once('error', reject);
+        releaser.once('close', code => code === 0
+          ? resolve()
+          : reject(new Error(`lock releaser exited ${String(code)}`)));
+      });
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(100);
+      expect(updated.accessAttempts).toHaveLength(1);
     });
 
     it('throws on access attempts against unknown entries (audit must never silently miss)', () => {

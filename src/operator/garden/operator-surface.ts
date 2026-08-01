@@ -42,8 +42,8 @@ import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
 import { GardenOperatorRouting } from './garden-operator-routing.js';
 import type {
   FleetGardenDirectDatabasePort,
-  FleetGardenIntakeQuarantineReadPort,
 } from './fleet-garden-operator-router.js';
+import type { GardenIntakeQuarantineReadPort } from './garden-intake-quarantine-reads.js';
 import type { FleetModelUsageRouteService } from './routes/fleet-model-usage-routes.js';
 import {
   requireMtlsPeerFileConfig,
@@ -73,7 +73,7 @@ export interface GardenOperatorSurfaceConfig {
   /** Approved invariant-11 routes served from companion-bound Garden DB services. */
   fleetDirectDatabase?: FleetGardenDirectDatabasePort;
   /** Quarantine queue/detail GETs served from companion-bound mounted snapshots. */
-  fleetIntakeQuarantineReads?: FleetGardenIntakeQuarantineReadPort;
+  intakeQuarantineReads?: GardenIntakeQuarantineReadPort;
   /** Fleet-wide read model assembled through companion admin transports. */
   fleetModelUsage?: FleetModelUsageRouteService;
   /**
@@ -130,8 +130,8 @@ export class GardenOperatorSurface implements Lifecycle {
       ...(config.fleetDirectDatabase
         ? { fleetDirectDatabase: config.fleetDirectDatabase }
         : {}),
-      ...(config.fleetIntakeQuarantineReads
-        ? { fleetIntakeQuarantineReads: config.fleetIntakeQuarantineReads }
+      ...(config.intakeQuarantineReads
+        ? { fleetIntakeQuarantineReads: config.intakeQuarantineReads }
         : {}),
       ...(config.fleetModelUsage
         ? { fleetModelUsage: config.fleetModelUsage }
@@ -431,6 +431,15 @@ export class GardenOperatorSurface implements Lifecycle {
 
     if (method === 'POST' && path === CONFIRMATION_RESOLVE_PATH) {
       this.handleConfirmationResolve(req, res);
+      return true;
+    }
+
+    if (!this.routing.isFleetPrincipal() && this.config.intakeQuarantineReads?.handleLocalHttp({
+      method,
+      path,
+      req,
+      res,
+    })) {
       return true;
     }
 

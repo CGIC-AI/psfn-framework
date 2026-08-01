@@ -1,7 +1,6 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
-  McpExecuteParams,
-  McpExecuteResult,
+  McpReleaseResult,
   RuntimeHealthResult,
 } from '../../boundary/gateway/protocol.js';
 import type {
@@ -19,10 +18,7 @@ export interface AdminToolHealthProvider {
 
 export interface GatewayRuntimeHealthClient {
   runtimeHealth(): Promise<RuntimeHealthResult>;
-  mcpExecute(
-    params: Pick<McpExecuteParams, 'action' | 'serverId'>,
-    options: { effectiveSensitivity: 'public' },
-  ): Promise<McpExecuteResult>;
+  mcpRelease(serverId?: string): Promise<McpReleaseResult>;
 }
 
 export function createLocalAdminToolHealthProvider(
@@ -108,13 +104,7 @@ export function createGatewayAdminToolHealthProvider(
       }
     },
     async releaseMcp(serverId) {
-      const response = await gateway.mcpExecute({
-        action: 'release',
-        ...(serverId ? { serverId } : {}),
-      }, { effectiveSensitivity: 'public' });
-      if (response.action !== 'release') {
-        throw new Error('Gateway returned an invalid MCP release result');
-      }
+      const response = await gateway.mcpRelease(serverId);
       return {
         released: true,
         ...(response.serverId ? { serverId: response.serverId } : {}),

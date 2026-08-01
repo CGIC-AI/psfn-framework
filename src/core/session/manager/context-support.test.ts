@@ -332,6 +332,28 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(0);
   });
 
+  it('does not retain an MCP inspected schema in next-turn prompt history', () => {
+    const observation = normalizeToolObservation({
+      toolName: 'mcp',
+      content: JSON.stringify({
+        action: 'inspect',
+        serverId: 'notes',
+        tool: {
+          name: 'search_notes',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+        },
+      }),
+    });
+
+    const messages = entriesToMessages([makeEntry({
+      role: 'tool',
+      content: observation.content,
+      metadata: buildToolObservationMetadata(undefined, observation.metadata),
+    })], 'private');
+
+    expect(messages).toEqual([]);
+  });
+
   it('marks direct user, companion, and system context with distinct authenticity provenance', () => {
     const observation = normalizeToolObservation({
       toolName: 'search',

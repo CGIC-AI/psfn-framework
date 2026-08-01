@@ -255,9 +255,9 @@ const { readFileSync } = require('node:fs');
 const output = process.argv[2];
 const payload = JSON.parse(readFileSync(output, 'utf8'));
 const blocker = Array.isArray(payload.results)
-  ? payload.results.find((result) => ['harness_error', 'runtime_stale', 'matrix_aborted'].includes(result?.caseStatus))
+  ? payload.results.find((result) => result?.caseStatus === 'matrix_aborted')
   : null;
-if (payload.harnessStatus === 'matrix_aborted' || blocker) {
+if (payload.harnessStatus === 'matrix_aborted') {
   console.log(JSON.stringify({
     caseId: blocker?.caseId ?? blocker?.id ?? null,
     status: blocker?.caseStatus ?? payload.harnessStatus ?? 'matrix_aborted',

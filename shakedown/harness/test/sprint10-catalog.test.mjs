@@ -122,15 +122,16 @@ test('temporal case uses a run-unique witness and proves the exact strip transfo
             ] } } },
           };
         }
+        const rawResponse = `Here is the exact line:\n${stamp} ${messages[0]}`;
         return {
           turnId: 'main',
           status: 'completed',
           userMessage: { content: message },
-          assistantMessage: { content: messages[0] },
+          assistantMessage: { content: `Here is the exact line:\n${messages[0]}` },
           observability: { snapshot: {
             plan: { messages: [{ role: 'user', content: `${stamp} ${messages[0]}` }] },
             promptContext: {
-              response: { content: `${stamp} ${messages[0]}` },
+              response: { content: rawResponse },
               finalSystemSections: [{
                 id: 'runtime.current_datetime',
                 content: '<runtime.current_datetime>now</runtime.current_datetime>',

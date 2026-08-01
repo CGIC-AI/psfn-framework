@@ -23,6 +23,8 @@ const failureReason = 'missing_env:PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY';
 for (const scenario of [
   { status: 'coverage_hole', reason: failureReason },
   { status: 'agent_busy', reason: 'agent_busy:busy_retry_window_exhausted' },
+  { status: 'runtime_stale', reason: 'runtime_stale:turn_record_mismatch' },
+  { status: 'harness_error', reason: 'harness_error:CaseFixtureError' },
 ]) {
   const root = mkdtempSync(join(tmpdir(), `${scenario.status}-continuation-`));
   const matrixDir = join(root, 'matrix');

@@ -13,7 +13,10 @@ export const OBSERVED_SUBAGENT_CHILD_TURN_P95_MS = 174_000;
 // archive-settlement headroom without treating normal child work as a hang.
 export const SUBAGENT_STEP_TIMEOUT_MS = 240_000;
 
-const MATRIX_ABORT_STATUSES = new Set(['harness_error', 'runtime_stale']);
+// Case results are evidence rows, not process-control signals. Infrastructure
+// failures outside the case loop still reject the run, but no named case status
+// may manufacture matrix_aborted results for otherwise independent cases.
+const MATRIX_ABORT_STATUSES = new Set();
 const TIMEOUT_ERROR_PATTERN = / timed out after \d+ms$/u;
 
 export class CaseIsolationError extends Error {
@@ -419,6 +422,10 @@ export function classifyCaseFailure(error) {
 
 export function isMatrixAbortStatus(status) {
   return MATRIX_ABORT_STATUSES.has(status);
+}
+
+export function caseStatusAfterCleanupFailure(status) {
+  return status === 'ok' ? 'semantic_failure' : status;
 }
 
 export function resolveCaseCoverageHoleReason(testCase, { target, catalogToolNames }) {

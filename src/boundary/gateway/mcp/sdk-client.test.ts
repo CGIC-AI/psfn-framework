@@ -55,7 +55,16 @@ function server(): McpServerConfig {
         inputExposure: 'closed',
       },
     },
-    toolPolicy: { default: 'deny', tools: { search: { effect: 'read', confirmation: 'never' } } },
+    toolPolicy: {
+      default: 'deny',
+      tools: {
+        search: {
+          effect: 'read',
+          confirmation: 'never',
+          maxOutboundSensitivity: 'confidential',
+        },
+      },
+    },
   };
 }
 

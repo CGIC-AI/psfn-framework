@@ -45,8 +45,18 @@ function validConfig(): Record<string, unknown> {
       toolPolicy: {
         default: 'deny',
         tools: {
-          search_notes: { effect: 'read', confirmation: 'never' },
-          write_note: { effect: 'write', confirmation: 'sensitive' },
+          search_notes: {
+            effect: 'read',
+            confirmation: 'never',
+            maxOutboundSensitivity: 'confidential',
+            metadataSha256: 'a'.repeat(64),
+          },
+          write_note: {
+            effect: 'write',
+            confirmation: 'sensitive',
+            maxOutboundSensitivity: 'confidential',
+            metadataSha256: 'b'.repeat(64),
+          },
         },
       },
     }],
@@ -161,6 +171,12 @@ describe('MCP servers owner config', () => {
       },
       allowedOutboundSensitivity: ['public', 'personal'],
     };
+    const narrowedPolicy = narrowedServer.toolPolicy as {
+      tools: Record<string, { maxOutboundSensitivity: string }>;
+    };
+    for (const policy of Object.values(narrowedPolicy.tools)) {
+      policy.maxOutboundSensitivity = 'personal';
+    }
     expect(validateMcpServersConfig(narrowed, 'mcp-servers.json').servers[0].trust)
       .toMatchObject({ allowedOutboundSensitivity: ['public', 'personal'] });
 
@@ -180,13 +196,35 @@ describe('MCP servers owner config', () => {
       .toThrow(/cannot widen the regular trust ceiling/);
   });
 
+  it('requires each tool to narrow sensitivity and accepts an optional exact metadata fingerprint', () => {
+    const config = validConfig();
+    const server = (config.servers as Array<Record<string, unknown>>)[0]!;
+    const policy = server.toolPolicy as {
+      tools: Record<string, Record<string, unknown>>;
+    };
+    policy.tools.search_notes!.maxOutboundSensitivity = 'personal';
+    expect(validateMcpServersConfig(config, 'mcp-servers.json').servers[0]
+      .toolPolicy.tools.search_notes).toMatchObject({
+      maxOutboundSensitivity: 'personal',
+      metadataSha256: 'a'.repeat(64),
+    });
+
+    policy.tools.search_notes!.metadataSha256 = 'changed';
+    expect(() => validateMcpServersConfig(config, 'mcp-servers.json'))
+      .toThrow(/metadataSha256.*lowercase SHA-256/);
+  });
+
   it('requires destructive and control tools to remain explicitly confirmed', () => {
     const config = validConfig();
     const server = (config.servers as Array<Record<string, unknown>>)[0];
     server.toolPolicy = {
       default: 'deny',
       tools: {
-        delete_note: { effect: 'destructive', confirmation: 'never' },
+        delete_note: {
+          effect: 'destructive',
+          confirmation: 'never',
+          maxOutboundSensitivity: 'personal',
+        },
       },
     };
 

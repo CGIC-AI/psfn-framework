@@ -6,6 +6,7 @@ import {
   type CompanionId,
 } from '../../shared/routing/companion-id.js';
 import type { SensitivityLevel, TrustLevel } from '../trust/types.js';
+import { sensitivityOrd } from '../trust/types.js';
 import { envCredential } from '../../boundary/custody/credential-vault.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
@@ -21,6 +22,7 @@ export const MCP_SERVERS_SEED_FILE_NAME = 'mcp-servers.seed.json';
 const ERROR_PREFIX = 'Invalid MCP servers config';
 const SERVER_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+const TOOL_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/u;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
 const RESERVED_AUTH_HEADER_NAMES = new Set([
   'connection',
@@ -86,6 +88,10 @@ export interface McpSystemTrustConfig {
 export interface McpToolPolicyEntry {
   effect: McpToolEffect;
   confirmation: McpConfirmationMode;
+  /** Per-tool narrowing ceiling; server trust remains an independent outer bound. */
+  maxOutboundSensitivity: SensitivityLevel;
+  /** Fingerprint of the exact CogSec-screened tool definition the operator classified. */
+  metadataSha256?: string;
 }
 
 export interface McpToolPolicyConfig {
@@ -341,7 +347,11 @@ function normalizeTrust(value: unknown, field: string): McpSystemTrustConfig {
   };
 }
 
-function normalizeToolPolicy(value: unknown, field: string): McpToolPolicyConfig {
+function normalizeToolPolicy(
+  value: unknown,
+  field: string,
+  trust: McpSystemTrustConfig,
+): McpToolPolicyConfig {
   if (!isRecord(value)) fail(field, 'must be an object');
   assertNoUnknownKeys(value, ['default', 'tools'], field, { errorPrefix: ERROR_PREFIX });
   if (value.default !== 'deny') fail(`${field}.default`, 'must be "deny"');
@@ -350,9 +360,14 @@ function normalizeToolPolicy(value: unknown, field: string): McpToolPolicyConfig
   for (const [toolName, rawPolicy] of Object.entries(value.tools)) {
     if (!TOOL_NAME_PATTERN.test(toolName)) fail(`${field}.tools`, `contains invalid tool name "${toolName}"`);
     if (!isRecord(rawPolicy)) fail(`${field}.tools.${toolName}`, 'must be an object');
-    assertNoUnknownKeys(rawPolicy, ['effect', 'confirmation'], `${field}.tools.${toolName}`, {
+    assertNoUnknownKeys(
+      rawPolicy,
+      ['effect', 'confirmation', 'maxOutboundSensitivity', 'metadataSha256'],
+      `${field}.tools.${toolName}`,
+      {
       errorPrefix: ERROR_PREFIX,
-    });
+      },
+    );
     const effect = enumValue(
       rawPolicy.effect,
       MCP_TOOL_EFFECT_VALUES,
@@ -369,7 +384,31 @@ function normalizeToolPolicy(value: unknown, field: string): McpToolPolicyConfig
         `${effect} tools must use confirmation "always"`,
       );
     }
-    tools[toolName] = { effect, confirmation };
+    const maxOutboundSensitivity = enumValue(
+      rawPolicy.maxOutboundSensitivity,
+      ['public', 'personal', 'intimate', 'confidential'] as const,
+      `${field}.tools.${toolName}.maxOutboundSensitivity`,
+    );
+    const serverSensitivity = trust.allowedOutboundSensitivity
+      ?? DEFAULT_SENSITIVITY_BY_TRUST[trust.level];
+    if (!serverSensitivity.some(level => sensitivityOrd(level) >= sensitivityOrd(maxOutboundSensitivity))) {
+      fail(
+        `${field}.tools.${toolName}.maxOutboundSensitivity`,
+        'cannot widen the server trust sensitivity ceiling',
+      );
+    }
+    const metadataSha256 = rawPolicy.metadataSha256 === undefined
+      ? undefined
+      : requiredString(rawPolicy.metadataSha256, `${field}.tools.${toolName}.metadataSha256`, 64);
+    if (metadataSha256 && !TOOL_FINGERPRINT_PATTERN.test(metadataSha256)) {
+      fail(`${field}.tools.${toolName}.metadataSha256`, 'must be a lowercase SHA-256 hex digest');
+    }
+    tools[toolName] = {
+      effect,
+      confirmation,
+      maxOutboundSensitivity,
+      ...(metadataSha256 ? { metadataSha256 } : {}),
+    };
   }
   return { default: 'deny', tools };
 }
@@ -463,7 +502,7 @@ function normalizeServer(value: unknown, field: string): McpServerConfig {
     allowedCompanionIds,
     authentication: normalizeAuthentication(value.authentication, `${field}.authentication`),
     trust,
-    toolPolicy: normalizeToolPolicy(value.toolPolicy, `${field}.toolPolicy`),
+    toolPolicy: normalizeToolPolicy(value.toolPolicy, `${field}.toolPolicy`, trust),
   };
 }
 

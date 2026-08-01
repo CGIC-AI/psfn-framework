@@ -1378,42 +1378,42 @@
       "name": "createMcpTool.tool.parameters.query.maxLength",
       "value": "512",
       "form": "object-member",
-      "note": "Code-owned MCP tool-schema safety ceiling that bounds model-authored search input before gateway dispatch."
+      "note": "Code-owned MCP model-tool wire-schema bound that caps catalog-search prompt input; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/mcp/tools.ts",
       "name": "createMcpTool.tool.parameters.query.minLength",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable MCP tool-schema lexical contract requiring a non-empty search query."
+      "note": "Code-owned MCP model-tool wire-schema bound rejecting empty catalog searches; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/mcp/tools.ts",
       "name": "createMcpTool.tool.parameters.server_id.maxLength",
       "value": "64",
       "form": "object-member",
-      "note": "Code-owned MCP tool-schema safety ceiling matching the bounded server identifier contract."
+      "note": "Code-owned MCP model-tool wire-schema bound limiting server identifiers; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/mcp/tools.ts",
       "name": "createMcpTool.tool.parameters.server_id.minLength",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable MCP tool-schema lexical contract requiring a non-empty server identifier."
+      "note": "Code-owned MCP model-tool wire-schema bound rejecting empty server identifiers; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/mcp/tools.ts",
       "name": "createMcpTool.tool.parameters.tool_name.maxLength",
       "value": "128",
       "form": "object-member",
-      "note": "Code-owned MCP tool-schema safety ceiling that bounds model-authored remote tool names."
+      "note": "Code-owned MCP model-tool wire-schema bound limiting remote tool names; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/mcp/tools.ts",
       "name": "createMcpTool.tool.parameters.tool_name.minLength",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable MCP tool-schema lexical contract requiring a non-empty remote tool name."
+      "note": "Code-owned MCP model-tool wire-schema bound rejecting empty remote tool names; changing the protocol surface requires a reviewed code release."
     },
     {
       "file": "src/boundary/integrations/vault/ops.ts",
@@ -2632,7 +2632,7 @@
       "name": "CATALOG_BOUNDARY_TOOL_CONTRACTS.mcp.example.limit",
       "value": "5",
       "form": "object-member",
-      "note": "Deterministic documentation example value only; it does not configure the MCP runtime search limit."
+      "note": "Code-owned MCP catalog example fixture aligned with the bounded lazy-search protocol; it is documentation/conformance data rather than runtime tuning."
     },
     {
       "file": "src/core/agent/tool-surface/descriptions/continuity-contracts.ts",

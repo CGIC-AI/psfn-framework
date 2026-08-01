@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import type {
   McpServerConfig,
   McpServersConfig,
@@ -7,6 +8,7 @@ import type {
 import {
   HIGH_INTIMACY_SENSITIVITY_LEVELS,
   TRUST_CEILING,
+  sensitivityOrd,
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -33,6 +35,7 @@ export type McpBrokerErrorCode =
   | 'STATIC_METADATA_TOO_LARGE'
   | 'TOOL_CATALOG_TOO_LARGE'
   | 'INVOCATION_ARGUMENTS_TOO_LARGE'
+  | 'INVOCATION_ARGUMENTS_INVALID'
   | 'DYNAMIC_OUTPUT_TOO_LARGE'
   | 'DYNAMIC_OUTPUT_WITHHELD'
   | 'BROKER_CLOSED';
@@ -84,6 +87,7 @@ export interface McpToolSummary {
   description: string;
   effect: McpToolPolicyEntry['effect'];
   confirmation: McpToolPolicyEntry['confirmation'];
+  maxOutboundSensitivity: McpToolPolicyEntry['maxOutboundSensitivity'];
 }
 
 export interface McpInspectedTool {
@@ -139,6 +143,10 @@ export interface McpBrokerServerHealth {
     toolName: string;
     effect: McpToolPolicyEntry['effect'];
     confirmation: McpToolPolicyEntry['confirmation'];
+    maxOutboundSensitivity: McpToolPolicyEntry['maxOutboundSensitivity'];
+    configuredMetadataSha256?: string;
+    observedMetadataSha256?: string;
+    classification: 'unclassified' | 'matched' | 'changed';
   }>;
 }
 
@@ -197,6 +205,10 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+export function fingerprintMcpToolDefinition(tool: McpProtocolTool): string {
+  return sha256(canonicalJson(tool));
+}
+
 function utf8Bytes(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
@@ -253,6 +265,14 @@ function allowsCompanion(server: McpServerConfig, companionId: string): boolean 
   return server.allowedCompanionIds.some(allowedCompanionId => allowedCompanionId === companionId);
 }
 
+function classifiedToolPolicy(
+  server: McpServerConfig,
+  tool: McpProtocolTool,
+): McpToolPolicyEntry | undefined {
+  const policy = configuredToolPolicy(server, tool.name);
+  return policy?.metadataSha256 === fingerprintMcpToolDefinition(tool) ? policy : undefined;
+}
+
 export function createMcpGatewayBroker(options: {
   config: McpServersConfig;
   clientFactory: McpProtocolClientFactory;
@@ -264,6 +284,7 @@ export function createMcpGatewayBroker(options: {
   const sessions = new Map<string, Promise<McpSessionState>>();
   const readySessions = new Map<string, McpSessionState>();
   const staticScreenCache = new Map<string, StaticScreenCacheEntry>();
+  const schemaValidator = new AjvJsonSchemaValidator();
   let closed = false;
 
   function assertOpen(): void {
@@ -452,19 +473,19 @@ export function createMcpGatewayBroker(options: {
     signal?: AbortSignal;
   }): Promise<McpInspectedTool> {
     const server = serverFor(input.companionId, input.serverId);
-    const policy = configuredToolPolicy(server, input.toolName);
-    if (!policy) {
-      throw new McpBrokerError(
-        'TOOL_DENIED',
-        `Tool '${input.toolName}' is not allowlisted for MCP server '${input.serverId}'`,
-      );
-    }
     const tools = await loadTools(input.companionId, server, input.signal);
     const tool = tools.find(candidate => candidate.name === input.toolName);
     if (!tool) {
       throw new McpBrokerError(
         'TOOL_DENIED',
         `Tool '${input.toolName}' is not available from MCP server '${input.serverId}'`,
+      );
+    }
+    const policy = classifiedToolPolicy(server, tool);
+    if (!policy) {
+      throw new McpBrokerError(
+        'TOOL_DENIED',
+        `Tool '${input.toolName}' is unclassified or changed for MCP server '${input.serverId}'`,
       );
     }
     return {
@@ -500,7 +521,7 @@ export function createMcpGatewayBroker(options: {
         if (!server.enabled || !allowsCompanion(server, input.companionId)) continue;
         const tools = await loadTools(input.companionId, server, input.signal);
         for (const tool of tools) {
-          const policy = configuredToolPolicy(server, tool.name);
+          const policy = classifiedToolPolicy(server, tool);
           if (!policy) continue;
           const haystack = `${server.displayName}\n${server.description}\n${tool.name}\n${tool.description ?? ''}`
             .toLowerCase();
@@ -512,6 +533,7 @@ export function createMcpGatewayBroker(options: {
             description: tool.description ?? '',
             effect: policy.effect,
             confirmation: policy.confirmation,
+            maxOutboundSensitivity: policy.maxOutboundSensitivity,
           });
           if (matches.length >= limit) return matches;
         }
@@ -536,6 +558,31 @@ export function createMcpGatewayBroker(options: {
         throw new McpBrokerError(
           'SENSITIVITY_DENIED',
           `MCP server '${server.id}' is not permitted to receive ${input.outboundSensitivity} content`,
+        );
+      }
+      if (sensitivityOrd(input.outboundSensitivity)
+        > sensitivityOrd(inspected.policy.maxOutboundSensitivity)) {
+        throw new McpBrokerError(
+          'SENSITIVITY_DENIED',
+          `MCP tool '${input.toolName}' is not permitted to receive ${input.outboundSensitivity} content`,
+        );
+      }
+      let validator;
+      try {
+        validator = schemaValidator.getValidator<Record<string, unknown>>(
+          inspected.tool.inputSchema,
+        );
+      } catch {
+        throw new McpBrokerError(
+          'STATIC_METADATA_INVALID',
+          `MCP tool '${input.toolName}' has an unsupported input schema`,
+        );
+      }
+      const validation = validator(input.arguments);
+      if (!validation.valid) {
+        throw new McpBrokerError(
+          'INVOCATION_ARGUMENTS_INVALID',
+          `MCP tool '${input.toolName}' arguments do not match its screened input schema`,
         );
       }
       if (requiresConfirmation(inspected.policy, input.outboundSensitivity) && input.confirmed !== true) {
@@ -645,6 +692,21 @@ export function createMcpGatewayBroker(options: {
                 toolName,
                 effect: policy.effect,
                 confirmation: policy.confirmation,
+                maxOutboundSensitivity: policy.maxOutboundSensitivity,
+                ...(policy.metadataSha256
+                  ? { configuredMetadataSha256: policy.metadataSha256 }
+                  : {}),
+                ...(() => {
+                  const observed = session?.tools?.find(tool => tool.name === toolName);
+                  if (!observed) return { classification: 'unclassified' as const };
+                  const observedMetadataSha256 = fingerprintMcpToolDefinition(observed);
+                  return {
+                    observedMetadataSha256,
+                    classification: policy.metadataSha256 === observedMetadataSha256
+                      ? 'matched' as const
+                      : 'changed' as const,
+                  };
+                })(),
               })),
           };
         }),

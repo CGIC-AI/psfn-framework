@@ -5,6 +5,7 @@ import {
 } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Tool } from '@modelcontextprotocol/client';
 import {
   generateCaMaterial,
   issueCertificate,
@@ -16,6 +17,7 @@ import { createStaticCredentialVault } from '../../custody/credential-vault.js';
 import type { McpServersConfig } from '../../../system/config/mcp-servers-config.js';
 import {
   createMcpGatewayBroker,
+  fingerprintMcpToolDefinition,
   type McpCogSecScreeningPort,
   type McpGatewayBroker,
 } from './broker.js';
@@ -23,6 +25,25 @@ import { createMcpSdkClientFactory } from './sdk-client.js';
 
 const BEARER_TOKEN = 'mcp-integration-secret';
 const PROTOCOL_VERSION = '2026-07-28';
+
+const INITIAL_SEARCH_TOOL: Tool = {
+  name: 'search_notes',
+  description: 'Search private notes',
+  inputSchema: {
+    type: 'object',
+    properties: { query: { type: 'string' } },
+    required: ['query'],
+  },
+};
+const WRITE_TOOL: Tool = {
+  name: 'write_note',
+  description: 'Write a private note',
+  inputSchema: {
+    type: 'object',
+    properties: { text: { type: 'string' } },
+    required: ['text'],
+  },
+};
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -266,8 +287,18 @@ function config(url: string): McpServersConfig {
         toolPolicy: {
           default: 'deny',
           tools: {
-            search_notes: { effect: 'read', confirmation: 'never' },
-            write_note: { effect: 'write', confirmation: 'sensitive' },
+            search_notes: {
+              effect: 'read',
+              confirmation: 'never',
+              maxOutboundSensitivity: 'confidential',
+              metadataSha256: fingerprintMcpToolDefinition(INITIAL_SEARCH_TOOL),
+            },
+            write_note: {
+              effect: 'write',
+              confirmation: 'sensitive',
+              maxOutboundSensitivity: 'confidential',
+              metadataSha256: fingerprintMcpToolDefinition(WRITE_TOOL),
+            },
           },
         },
       },
@@ -349,14 +380,6 @@ describe('MCP Streamable HTTPS certification', () => {
     ).toHaveLength(2);
     expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(1);
 
-    endpoint.metadataRevision = 2;
-    now += 101;
-    await broker.searchTools({ companionId: 'ada', query: 'updated' });
-    expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(2);
-    expect(
-      broker.health({ companionId: 'ada' }).servers[0]?.metadata.sha256,
-    ).not.toBe(firstHash);
-
     const first = await broker.invokeTool({
       companionId: 'ada',
       serverId: 'notes',
@@ -375,6 +398,21 @@ describe('MCP Streamable HTTPS certification', () => {
     expect(second.effectiveText).toBe('[CogSec-screened MCP output]');
     expect(JSON.stringify([first, second])).not.toContain('raw-private-result');
     expect(cogsec.screenDynamicOutput).toHaveBeenCalledTimes(2);
+
+    endpoint.metadataRevision = 2;
+    now += 101;
+    await broker.searchTools({ companionId: 'ada', query: 'updated' });
+    expect(cogsec.screenStaticMetadata).toHaveBeenCalledTimes(2);
+    expect(
+      broker.health({ companionId: 'ada' }).servers[0]?.metadata.sha256,
+    ).not.toBe(firstHash);
+    await expect(broker.invokeTool({
+      companionId: 'ada',
+      serverId: 'notes',
+      toolName: 'search_notes',
+      arguments: { query: 'changed' },
+      outboundSensitivity: 'public',
+    })).rejects.toMatchObject({ code: 'TOOL_DENIED' });
 
     const callsBeforeDenials = endpoint.observations.filter(
       (entry) => entry.method === 'tools/call',

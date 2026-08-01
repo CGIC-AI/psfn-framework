@@ -512,10 +512,12 @@ const DECISION_TO_STATUS = {
   discard: 'discarded',
 } as const;
 
+type LazyExpiryReadMode = 'persist_transition' | 'project_only';
+
 function createIntakeQuarantineStoreInternal(
   filePath: string,
   options: IntakeQuarantineStoreOptions,
-  persistLazyExpiry: boolean,
+  lazyExpiryReadMode: LazyExpiryReadMode,
 ): IntakeQuarantineStore {
   if (!Number.isFinite(options.itemTtlHours) || options.itemTtlHours <= 0) {
     throw new Error('Intake quarantine store requires a positive itemTtlHours');
@@ -618,7 +620,7 @@ function createIntakeQuarantineStoreInternal(
   const loadAfterLazySweep = (atMs: number): Map<string, IntakeQuarantineEntry> => {
     const entries = load();
     if (!hasExpiredEntries(entries, atMs)) return entries;
-    if (!persistLazyExpiry) {
+    if (lazyExpiryReadMode === 'project_only') {
       for (const [id, entry] of entries) {
         if (entry.status !== 'held' || entry.expiresAtMs > atMs) continue;
         entries.set(id, expireEntry(entry, atMs, 'quarantine TTL elapsed'));
@@ -1095,7 +1097,7 @@ export function createIntakeQuarantineStore(
   filePath: string,
   options: IntakeQuarantineStoreOptions,
 ): IntakeQuarantineStore {
-  return createIntakeQuarantineStoreInternal(filePath, options, true);
+  return createIntakeQuarantineStoreInternal(filePath, options, 'persist_transition');
 }
 
 /**
@@ -1108,7 +1110,7 @@ export function createIntakeQuarantineReadStore(
   filePath: string,
   options: Pick<IntakeQuarantineStoreOptions, 'itemTtlHours' | 'maxHeldItems' | 'now'>,
 ): IntakeQuarantineReadStore {
-  const store = createIntakeQuarantineStoreInternal(filePath, options, false);
+  const store = createIntakeQuarantineStoreInternal(filePath, options, 'project_only');
   return {
     list: () => store.list(),
     getById: id => store.getById(id),

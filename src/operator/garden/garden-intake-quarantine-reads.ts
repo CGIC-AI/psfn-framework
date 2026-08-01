@@ -5,7 +5,10 @@ import {
 import {
   createIntakeQuarantineReadStore,
 } from '../../core/cogsec/intake/quarantine-store.js';
-import { resolveIntakeQuarantinePath } from '../../persistence/layout.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveIntakeQuarantinePath,
+} from '../../persistence/layout.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -22,50 +25,95 @@ import {
   type AdminIntakeQuarantineReadService,
 } from './services/intake-quarantine-service.js';
 
-export interface FleetGardenIntakeQuarantineReadsOptions {
+export interface GardenIntakeQuarantineReadsOptions {
   readonly config: SubstrateConfig;
   readonly createReadService?: (
     config: SubstrateConfig,
-    companionId: CompanionId,
+    companionId: CompanionId | undefined,
     companionDataDir: string,
   ) => AdminIntakeQuarantineReadService;
 }
 
+export interface GardenIntakeQuarantineReadPort
+extends FleetGardenIntakeQuarantineReadPort {
+  handleLocalHttp(input: {
+    readonly method: string;
+    readonly path: string;
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+  }): boolean;
+}
+
 /**
- * Garden-local, companion-bound quarantine read plane.
+ * Garden-local quarantine read plane for fixed and fleet topologies.
  *
  * Queue and detail GETs read the atomically replaced quarantine snapshot from
- * the selected companion's mounted data root. Confirm/decide mutations are
- * deliberately absent and continue through the authenticated agent transport.
+ * the selected companion's read-only mounted data root. Confirm/decide
+ * mutations are deliberately absent and continue through the authenticated
+ * agent transport.
  */
-export class FleetGardenIntakeQuarantineReads
-implements FleetGardenIntakeQuarantineReadPort {
+export class GardenIntakeQuarantineReads implements GardenIntakeQuarantineReadPort {
+  private readonly localRoutes: (() => AuthorizedAdminApiRoute[]) | undefined;
   private readonly routesByCompanion = new Map<CompanionId, () => AuthorizedAdminApiRoute[]>();
 
-  constructor(options: FleetGardenIntakeQuarantineReadsOptions) {
-    const fleet = options.config.companionFleet;
-    if (!fleet) {
-      throw new Error('Fleet Garden quarantine reads require the complete companions registry');
-    }
+  constructor(options: GardenIntakeQuarantineReadsOptions) {
     const createReadService = options.createReadService ?? createDefaultReadService;
-    for (const companion of fleet.companions) {
-      if (this.routesByCompanion.has(companion.companionId)) {
-        throw new Error(
-          `Fleet Garden quarantine read companion is duplicated: ${companion.companionId}`,
-        );
-      }
+    const createRoutes = (
+      companionId: CompanionId | undefined,
+      companionDataDir: string,
+    ): (() => AuthorizedAdminApiRoute[]) => {
       let routes: AuthorizedAdminApiRoute[] | undefined;
-      this.routesByCompanion.set(companion.companionId, () => {
+      return () => {
         routes ??= compileGardenRouteDeclarations(buildAdminIntakeQuarantineReadRoutes({
           quarantineService: createReadService(
             options.config,
-            companion.companionId,
-            companion.companionDataDir,
+            companionId,
+            companionDataDir,
           ),
         }));
         return routes;
-      });
+      };
+    };
+
+    const fleet = options.config.companionFleet;
+    if (!fleet) {
+      this.localRoutes = createRoutes(
+        undefined,
+        resolveConfiguredCompanionDataDir(options.config),
+      );
+      return;
     }
+    this.localRoutes = undefined;
+    for (const companion of fleet.companions) {
+      if (this.routesByCompanion.has(companion.companionId)) {
+        throw new Error(
+          `Garden quarantine read companion is duplicated: ${companion.companionId}`,
+        );
+      }
+      this.routesByCompanion.set(
+        companion.companionId,
+        createRoutes(companion.companionId, companion.companionDataDir),
+      );
+    }
+  }
+
+  handleLocalHttp(input: {
+    readonly method: string;
+    readonly path: string;
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+  }): boolean {
+    if (!isQuarantineRead(input.method, input.path)) return false;
+    if (!this.localRoutes) {
+      throw new Error('Local Garden quarantine read has no fixed companion-bound service');
+    }
+    return dispatchAdminRoute(
+      this.localRoutes(),
+      input.method,
+      input.path,
+      input.req,
+      input.res,
+    );
   }
 
   handleHttp(input: {
@@ -74,11 +122,7 @@ implements FleetGardenIntakeQuarantineReadPort {
     readonly res: ServerResponse;
   }): boolean {
     const { target } = input.admission;
-    if (target.method !== 'GET'
-      || (target.canonicalPath !== ADMIN_INTAKE_QUARANTINE_API_PATH
-        && !target.canonicalPath.startsWith(`${ADMIN_INTAKE_QUARANTINE_API_PATH}/`))) {
-      return false;
-    }
+    if (!isQuarantineRead(target.method, target.canonicalPath)) return false;
     const getRoutes = this.routesByCompanion.get(input.admission.companionId);
     if (!getRoutes) {
       throw new Error('Fleet Garden quarantine read has no companion-bound service');
@@ -101,9 +145,15 @@ implements FleetGardenIntakeQuarantineReadPort {
   }
 }
 
+function isQuarantineRead(method: string, path: string): boolean {
+  return method === 'GET'
+    && (path === ADMIN_INTAKE_QUARANTINE_API_PATH
+      || path.startsWith(`${ADMIN_INTAKE_QUARANTINE_API_PATH}/`));
+}
+
 function createDefaultReadService(
   config: SubstrateConfig,
-  _companionId: CompanionId,
+  _companionId: CompanionId | undefined,
   companionDataDir: string,
 ): AdminIntakeQuarantineReadService {
   let service: AdminIntakeQuarantineReadService | undefined;

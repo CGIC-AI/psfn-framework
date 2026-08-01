@@ -1,4 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
@@ -12,16 +15,25 @@ import {
   type RequestCapabilityParentBinding,
 } from '../../boundary/fleet-auth/request-capability.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createIntakeEnvelope,
+  transitionIntakeEnvelope,
+} from '../../shared/contracts/intake-envelope.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  createIntakeQuarantineReadStore,
+  createIntakeQuarantineStore,
+} from '../../core/cogsec/intake/quarantine-store.js';
 import {
   buildGardenCapabilityHeaders,
 } from './garden-admission.js';
 import { AtomicRequestCapabilityReplayPort } from './atomic-request-capability-replay.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
 import { FleetGardenDirectDatabase } from './fleet-garden-direct-database.js';
-import { FleetGardenIntakeQuarantineReads } from './fleet-garden-intake-quarantine-reads.js';
+import { GardenIntakeQuarantineReads } from './garden-intake-quarantine-reads.js';
 import { FleetGardenTargetRegistry } from './fleet-garden-target-registry.js';
 import type { FleetGardenDirectDatabaseServices } from './local-admin-contract.js';
+import { createAdminIntakeQuarantineReadService } from './services/intake-quarantine-service.js';
 import {
   GardenOperatorSurface,
   type FleetGardenTransportProxyPort,
@@ -227,7 +239,17 @@ function createFleetProxySurface(
 }
 
 describe('GardenOperatorSurface fleet transport routing', () => {
-  it('keeps every quarantine queue read available while the selected agent transport is unavailable', async () => {
+  it('keeps twenty quarantine snapshot reads within budget while ingest repeatedly writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'garden-quarantine-load-'));
+    const quarantinePath = join(dir, 'intake-quarantine.json');
+    const writer = createIntakeQuarantineStore(quarantinePath, {
+      itemTtlHours: 168,
+      maxHeldItems: 500,
+    });
+    const reader = createIntakeQuarantineReadStore(quarantinePath, {
+      itemTtlHours: 168,
+      maxHeldItems: 500,
+    });
     const registry = new FleetGardenTargetRegistry([{
       companionId: COMPANION_A,
       endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
@@ -237,7 +259,10 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       verifier: createRequestCapabilityVerifier(verifierConfig),
       replay: new AtomicRequestCapabilityReplayPort(),
     });
-    const directBindings: string[] = [];
+    const quarantineReads = new GardenIntakeQuarantineReads({
+      config: config(),
+      createReadService: () => createAdminIntakeQuarantineReadService({ store: reader }),
+    });
     const surface = new GardenOperatorSurface({
       port: 1,
       host: '127.0.0.1',
@@ -253,36 +278,104 @@ describe('GardenOperatorSurface fleet transport routing', () => {
           throw new Error('not used');
         },
       },
-      fleetIntakeQuarantineReads: {
-        handleHttp: ({ admission, res }) => {
-          if (admission.target.canonicalPath !== '/api/admin/intake/quarantine') {
-            return false;
-          }
-          directBindings.push(admission.companionId);
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end('{"items":[]}');
-          return true;
-        },
-      },
+      intakeQuarantineReads: quarantineReads,
     });
     const handleFleetRequest = (
       surface as unknown as {
         handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
       }
     ).handleFleetRequest.bind(surface);
-    const responses = Array.from({ length: 20 }, () => new CapturingResponse());
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        const atMs = 1_750_000_000_000 + index;
+        let envelope = createIntakeEnvelope({
+          sourceClass: 'document',
+          sourceRiskTier: 'untrusted',
+          contentRef: { store: 'intake-quarantine', ref: `fixture-${String(index)}` },
+          origin: { ref: `attachment:test-${String(index)}.md` },
+          atMs,
+        });
+        envelope = transitionIntakeEnvelope(envelope, {
+          to: 'screened',
+          actor: 'test:ingest',
+          reason: 'adversarial fixture',
+          atMs,
+          decision: {
+            action: 'quarantine',
+            reason: 'adversarial fixture',
+            decidedBy: 'screening',
+            decidedAtMs: atMs,
+          },
+        });
+        envelope = transitionIntakeEnvelope(envelope, {
+          to: 'quarantined',
+          actor: 'test:ingest',
+          reason: 'held during sustained ingest',
+          atMs,
+        });
+        writer.hold({ envelope, mode: 'enforce', rawText: `fixture ${String(index)}`, atMs });
+        const response = new CapturingResponse();
+        const startedAtMs = Date.now();
 
-    await Promise.all(responses.map((response, index) => handleFleetRequest(
-      signedRequestForTarget(
-        COMPANION_A,
-        String(index + 20),
-        '/api/admin/intake/quarantine',
-      ),
-      response as unknown as ServerResponse,
-    )));
+        await handleFleetRequest(
+          signedRequestForTarget(
+            COMPANION_A,
+            String(index + 20),
+            '/api/admin/intake/quarantine',
+          ),
+          response as unknown as ServerResponse,
+        );
 
-    expect(responses.every(response => response.status === 200)).toBe(true);
-    expect(directBindings).toEqual(Array.from({ length: 20 }, () => COMPANION_A));
+        expect(response.status).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({
+          items: expect.arrayContaining([expect.objectContaining({ id: envelope.id })]),
+        });
+        expect(Date.now() - startedAtMs).toBeLessThan(1_000);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('serves the same direct quarantine read plane in a fixed companion topology', () => {
+    const localConfig: SubstrateConfig = {
+      ...config(),
+      multiCompanion: false,
+      companionFleet: undefined,
+      companionDataDir: '/runtime/companion',
+    };
+    const boundDataDirs: string[] = [];
+    const quarantineReads = new GardenIntakeQuarantineReads({
+      config: localConfig,
+      createReadService: (_config, _companionId, companionDataDir) => {
+        boundDataDirs.push(companionDataDir);
+        return {
+          listItems: () => ({ items: [] }),
+          getItem: () => undefined,
+        };
+      },
+    });
+    const request = Readable.from([]) as IncomingMessage;
+    request.method = 'GET';
+    request.url = '/api/admin/intake/quarantine';
+    request.headers = {};
+    const response = new CapturingResponse();
+
+    expect(quarantineReads.handleLocalHttp({
+      method: 'GET',
+      path: '/api/admin/intake/quarantine',
+      req: request,
+      res: response as unknown as ServerResponse,
+    })).toBe(true);
+
+    expect(response.status).toBe(200);
+    expect(boundDataDirs).toEqual(['/runtime/companion']);
+    expect(quarantineReads.handleLocalHttp({
+      method: 'POST',
+      path: '/api/admin/intake/quarantine/held/confirm',
+      req: request,
+      res: response as unknown as ServerResponse,
+    })).toBe(false);
   });
 
   it.each([
@@ -534,7 +627,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       replay: new AtomicRequestCapabilityReplayPort(),
     });
     const readBindings: string[] = [];
-    const quarantineReads = new FleetGardenIntakeQuarantineReads({
+    const quarantineReads = new GardenIntakeQuarantineReads({
       config: config(),
       createReadService: (_config, companionId) => {
         readBindings.push(companionId);
@@ -550,7 +643,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       host: '127.0.0.1',
       config: config(),
       fleetControlPlane: controlPlane,
-      fleetIntakeQuarantineReads: quarantineReads,
+      intakeQuarantineReads: quarantineReads,
       fleetTransport: {
         close: callback => callback(),
         probeAll: async () => undefined,

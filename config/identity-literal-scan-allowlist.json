@@ -457,6 +457,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/boundary/gateway/mcp/sdk-client.ts",
+      "contains": "psfn-mcp-gateway",
+      "reason": "The MCP client handshake advertises a stable framework-scoped implementation identifier, not a companion identity or persona default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/boundary/gateway/methods/openrouter-web.ts",
       "contains": "psfn-framework-htm9.10",
       "reason": "Implementation comment cites the bead that owns the OpenRouter web backend.",

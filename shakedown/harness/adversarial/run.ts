@@ -22,6 +22,7 @@ import { scenarios as disclosureProbing } from './scenarios/disclosure-probing.t
 import { scenarios as quarantineSink } from './scenarios/quarantine-sink.ts';
 import { scenarios as journalBreakGlass } from './scenarios/journal-breakglass.ts';
 import { scenarios as toolAliasBypass } from './scenarios/tool-alias-bypass.ts';
+import { scenarios as corpusReplay } from './scenarios/corpus-replay.ts';
 
 const ALL_SCENARIOS: readonly AdversarialScenario[] = [
   ...trustExtraction,
@@ -31,6 +32,7 @@ const ALL_SCENARIOS: readonly AdversarialScenario[] = [
   ...quarantineSink,
   ...journalBreakGlass,
   ...toolAliasBypass,
+  ...corpusReplay,
 ];
 
 async function main(): Promise<void> {

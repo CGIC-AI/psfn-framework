@@ -140,7 +140,7 @@ describe('config generation passes the real settings-contract guard', () => {
       visionEnabled: true,
     })).toEqual({
       l2: 'deepseek/deepseek-v3.2',
-      l3: ['z-ai/glm-5'],
+      l3: ['z-ai/glm-5', 'deepseek/deepseek-v3.2'],
       vision: 'google/gemini-3.1-flash',
     });
   });

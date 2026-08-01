@@ -619,7 +619,9 @@ async function executeSingleToolCall(
         result = {
           content: [{
             type: 'text',
-            text: `Internal tool status: the ${toolCall.name} result was withheld because intake screening failed (${message}). This is not a Participant-facing message.`,
+            // The screener's own error text can quote the hostile content it failed on,
+            // so it must not ride back into the turn (hrmrq.54).
+            text: `Internal tool status: the ${toolCall.name} result was withheld because intake screening failed. This is not a Participant-facing message.`,
           }],
           details: {},
         };

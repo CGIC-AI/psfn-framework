@@ -181,6 +181,19 @@ describe('orient tool', () => {
     expect(renderedToolSurface).toContain('transition_concern');
   });
 
+  it('keeps the internal candidate lifecycle state out of ordinary concern actions', () => {
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    });
+    const parameters = tool.parameters as {
+      properties: { status: { enum: string[] } };
+    };
+
+    expect(parameters.properties.status.enum).not.toContain('candidate');
+  });
+
   it('appends to the requested orientation block', async () => {
     const store = {
       append: vi.fn<(

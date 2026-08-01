@@ -52,6 +52,7 @@ import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.j
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import type { DurableConcernCandidateReviewSnapshot } from '../../core/intention/concern-candidate-review-snapshot.js';
 import { AdminSessionDataService } from '../../operator/garden/services/session-service.js';
 import { ensureIntentionPostgresSchema } from '../../core/intention/postgres-adapters/connection.js';
 import { PostgresActiveConcernStore } from '../../core/intention/postgres-adapters/concerns-adapter.js';
@@ -92,6 +93,21 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+function durableCandidateReviewSnapshot(id: string): DurableConcernCandidateReviewSnapshot {
+  return {
+    schemaVersion: 1,
+    title: `Follow up ${id}`,
+    summary: `Review candidate ${id}.`,
+    followUpHint: 'internal_only',
+    channelId: 'api:background-work-integration',
+    triggerReason: 'manual',
+    sourceRef: `test:${id}`,
+    sourceMessageIds: [],
+    conversationContext: [],
+    relatedMemoryContext: [],
+  };
 }
 
 function makeCanonicalTurnRecord(
@@ -3127,11 +3143,13 @@ describe('PostgresBackgroundWorkStore', () => {
         text: 'Follow up concurrentcandidatealpha',
         priority: 'high',
         status: 'candidate',
+        candidateReviewSnapshot: durableCandidateReviewSnapshot('concurrentcandidatealpha'),
       });
       const secondCandidate = await concernStore.create({
         text: 'Follow up concurrentcandidatebeta',
         priority: 'high',
         status: 'candidate',
+        candidateReviewSnapshot: durableCandidateReviewSnapshot('concurrentcandidatebeta'),
       });
 
       const promotions = await Promise.allSettled([
@@ -3227,6 +3245,7 @@ describe('PostgresBackgroundWorkStore', () => {
         text: 'Follow up capreviewcandidateeighth',
         priority: 'high',
         status: 'candidate',
+        candidateReviewSnapshot: durableCandidateReviewSnapshot('capreviewcandidateeighth'),
       });
       await expect(concernStore.transitionConcernStatus(eighthCandidate.id, {
         status: 'active',

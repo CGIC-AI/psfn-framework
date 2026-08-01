@@ -52,6 +52,10 @@ import {
 } from './store.js';
 
 const LABEL_ENUM = [...CORE_MEMORY_LABELS];
+type AgentManagedConcernStatus = Exclude<ActiveConcernStatus, 'candidate'>;
+const AGENT_MANAGED_CONCERN_STATUSES = ACTIVE_CONCERN_STATUSES.filter(
+  (status): status is AgentManagedConcernStatus => status !== 'candidate',
+);
 const ORIENT_ACTIONS = [
   'append',
   'replace',
@@ -107,7 +111,7 @@ interface OrientToolParams extends ValuesListParams {
   human?: string;
   goals?: string;
   priority?: ActiveConcernPriority;
-  status?: ActiveConcernStatus;
+  status?: AgentManagedConcernStatus;
   salience?: number;
   sensitivity?: ActiveConcernSensitivity;
   owner?: ActiveConcernOwner;
@@ -275,9 +279,9 @@ export function createOrientTool(
         enum: [...ACTIVE_CONCERN_PRIORITIES],
         description: 'Relative priority metadata for the open thread noted with action=create_concern; prefer salience for how present it should be.',
       })),
-      status: Type.Optional(Type.Unsafe<ActiveConcernStatus>({
+      status: Type.Optional(Type.Unsafe<AgentManagedConcernStatus>({
         type: 'string',
-        enum: [...ACTIVE_CONCERN_STATUSES],
+        enum: [...AGENT_MANAGED_CONCERN_STATUSES],
         description: 'Open-thread lifecycle status for action=create_concern or action=transition_concern.',
       })),
       salience: Type.Optional(Type.Number({

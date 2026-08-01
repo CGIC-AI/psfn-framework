@@ -32,6 +32,7 @@ import type {
   ActiveConcernStatus,
   ActiveConcernTransitionOptions,
 } from '../concerns.js';
+import { parseDurableCandidateReviewSnapshot } from '../concern-candidate-review-snapshot.js';
 import {
   CONCERN_DUPLICATE_SIMILARITY_THRESHOLD,
   DEFAULT_CONCERN_LIST_LIMIT,
@@ -126,6 +127,7 @@ interface ConcernMergeInput {
   mergedFromIds: readonly string[];
   splitFromId?: string;
   originIcpRootInitiationId?: string;
+  candidateReviewSnapshot?: unknown;
 }
 
 export class PostgresActiveConcernStore implements ConcernStorePortBackend {
@@ -207,9 +209,19 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
       input.originIcpRootInitiationId,
     );
-    const candidateReviewSnapshot = input.candidateReviewSnapshot === undefined
-      ? null
-      : JSON.stringify(input.candidateReviewSnapshot);
+    let candidateReviewSnapshot: string | null = null;
+    if (status === 'candidate') {
+      const snapshot: unknown = input.candidateReviewSnapshot;
+      if (snapshot === undefined || snapshot === null) {
+        throw new Error(
+          'Active concern candidateReviewSnapshot is required when status is candidate',
+        );
+      }
+      parseDurableCandidateReviewSnapshot(snapshot);
+      candidateReviewSnapshot = JSON.stringify(snapshot);
+    } else if (input.candidateReviewSnapshot !== undefined) {
+      throw new Error('Active concern candidateReviewSnapshot requires status candidate');
+    }
 
     if (!isConcernTerminalStatus(status)) {
       const activeDuplicate = this.findActiveSimilarConcern({
@@ -232,6 +244,9 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           mergedFromIds,
           splitFromId,
           originIcpRootInitiationId,
+          ...(status === 'candidate'
+            ? { candidateReviewSnapshot: input.candidateReviewSnapshot }
+            : {}),
         });
       }
 
@@ -475,6 +490,9 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       return null;
     }
     const status = normalizeStatus(options.status);
+    if (status === 'candidate') {
+      throw new Error(`Invalid active concern transition: ${current.status} -> candidate`);
+    }
     const transitionedAt = options.transitionedAt
       ? normalizeIsoTimestamp(options.transitionedAt, 'transitionedAt')
       : this.now().toISOString();
@@ -786,6 +804,17 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       );
       const originIcpRootInitiationId = locked.originIcpRootInitiationId
         ?? input.originIcpRootInitiationId;
+      let candidateReviewSnapshot: string | null = null;
+      if (status === 'candidate') {
+        const snapshot = locked.candidateReviewSnapshot ?? input.candidateReviewSnapshot;
+        if (snapshot === undefined || snapshot === null) {
+          throw new Error(
+            'Active concern candidateReviewSnapshot is required when status is candidate',
+          );
+        }
+        parseDurableCandidateReviewSnapshot(snapshot);
+        candidateReviewSnapshot = JSON.stringify(snapshot);
+      }
       const updatedResult = await client.query<ActiveConcernRow>(
         `
           UPDATE active_concerns
@@ -801,7 +830,8 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
             next_review_at = $10,
             merged_from_ids = $11::jsonb,
             split_from_id = $12,
-            origin_icp_root_initiation_id = $13
+            origin_icp_root_initiation_id = $13,
+            candidate_review_snapshot = $14::jsonb
           WHERE id = $1
           RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
         `,
@@ -822,6 +852,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           serializeStringList(mergeConcernStringLists(locked.mergedFromIds ?? [], input.mergedFromIds)),
           input.splitFromId ?? locked.splitFromId ?? null,
           originIcpRootInitiationId ?? null,
+          candidateReviewSnapshot,
         ],
       );
       const updatedRow = updatedResult.rows.at(0);

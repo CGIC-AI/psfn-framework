@@ -323,7 +323,8 @@ export class FakeIntentionPool {
         mergedFromIds,
         splitFromId,
         originIcpRootInitiationId,
-      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null, string | null];
+        candidateReviewSnapshot,
+      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null, string | null, unknown];
       row.priority = priority;
       row.status = status;
       row.expires_at = expiresAt;
@@ -336,6 +337,9 @@ export class FakeIntentionPool {
       row.merged_from_ids = mergedFromIds;
       row.split_from_id = splitFromId;
       row.origin_icp_root_initiation_id = originIcpRootInitiationId;
+      if (normalized.includes('candidate_review_snapshot = $14::jsonb')) {
+        row.candidate_review_snapshot = candidateReviewSnapshot;
+      }
       if (normalized.includes('resolved_at = NULL')) {
         row.resolved_at = null;
         row.resolution_outcome = null;

@@ -19,6 +19,7 @@ import {
   type IntakeScannerResult,
   type IntakeScanScope,
 } from './types.js';
+import { decodeUpsideDownForIntakeSecurityProbe } from './security-normalization.js';
 
 export const ENCODING_SMUGGLING_SCANNER_ID = 'l1.encoding';
 
@@ -165,6 +166,17 @@ export function scanEncodingSmuggling(
       weight: 0.8,
       scope: 'all',
       detail: 'rot13-decoded text matches injection-shaped keywords',
+    });
+  }
+  if (DECODED_INJECTION_PROBE.test(
+    decodeUpsideDownForIntakeSecurityProbe(normalized),
+  )) {
+    candidates.push({
+      ruleId: 'upside_down_smuggling',
+      labels: ['injection/encoded_smuggling'],
+      weight: 0.8,
+      scope: 'all',
+      detail: 'upside-down text decodes to injection-shaped keywords',
     });
   }
 

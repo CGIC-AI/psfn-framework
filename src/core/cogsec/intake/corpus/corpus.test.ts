@@ -65,6 +65,17 @@ describe('cogsec adversarial corpus — offline replay ratchet', () => {
     expect(replay(fixture!)).toEqual({ verdict: 'pass', labels: [] });
   });
 
+  const enforcedControls = replayable.filter(fixture =>
+    fixture.kind === 'control' && fixture.status === 'enforced');
+
+  it.each(enforcedControls)(
+    'explicit false-positive control: $id stays silent',
+    (fixture) => {
+      expect(fixture.expected.verdict).toBe('pass');
+      expect(replay(fixture)).toEqual({ verdict: 'pass', labels: [] });
+    },
+  );
+
   for (const fixture of replayable) {
     if (fixture.status === 'enforced') {
       it(`enforced: ${fixture.id} → ${fixture.expected.verdict}`, () => {

@@ -1,6 +1,38 @@
 {
   "schemaVersion": 1,
+  "encodingPolicy": {
+    "maxCandidatesPerEncoding": 8,
+    "maxEncodedChars": 512,
+    "maxCipherChars": 16384,
+    "unpromptedBase64MinEncodedChars": 80,
+    "unpromptedHexMinEncodedChars": 120,
+    "unpromptedPercentMinGroups": 24,
+    "minTextBytes": 8,
+    "minPrintableRatio": 0.9,
+    "cueWindowChars": 128,
+    "decodingCuePattern": "\\b(?:decode|decoded|interpret|convert|base64|hex(?:adecimal)?|bytes?|binary)\\b",
+    "injectionProbePattern": "\\b(?:ignore|disregard|forget|override)\\s{1,8}(?:\\w{1,32}\\s{1,8}){0,8}(?:instructions|rules|directives)\\b|\\bsystem\\s{1,8}prompt\\b|\\bapi[_-]?key\\b|\\bpassword\\s{0,4}[:=]",
+    "candidatePatterns": {
+      "base64": "(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,2048}={0,2}(?![A-Za-z0-9+/=])",
+      "hex": "(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{8,2048}|(?:[0-9A-Fa-f]{2}[ \\t]){3,682}[0-9A-Fa-f]{2})(?![0-9A-Fa-f])",
+      "percent": "(?:%[0-9A-Fa-f]{2}){2,1365}"
+    }
+  },
   "rules": [
+    {
+      "id": "explicit_binary_instruction_blob",
+      "labels": ["injection/encoded_smuggling"],
+      "scope": "all",
+      "weight": 0.7,
+      "match": {
+        "kind": "near",
+        "left": "\\binterpret\\s{1,8}(?:this\\s{1,8})?binary\\b",
+        "right": "(?:[01]{8}[ \\t]){2,255}[01]{8}",
+        "maxGapChars": 64,
+        "sameLine": true
+      },
+      "note": "The published 'interpret this binary' instruction beside byte-shaped data is high-signal without adding the general binary decoder owned by tc6nk."
+    },
     {
       "id": "injection_ignore_instructions",
       "labels": ["injection/override_attempt"],

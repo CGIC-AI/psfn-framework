@@ -53,11 +53,16 @@ import {
 export * from './types.js';
 export * from './proximity.js';
 export {
+  compileIntakeEncodingPolicyFile,
+  compileIntakeL1ConfigFile,
   compileIntakeL1RuleFile,
   createIntakeRuleEngine,
   INTAKE_L1_RULES_FILE_NAME,
   INTAKE_RULE_ENGINE_SCANNER_ID,
 } from './rule-engine.js';
+export type {
+  IntakeEncodingPolicy,
+} from './encoding-policy.js';
 export type {
   IntakeL1Rule,
   IntakeL1RuleFile,
@@ -214,7 +219,11 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
       INTAKE_RULE_ENGINE_SCANNER_ID,
       () => ruleEngine.scan(securityNormalized, scope),
     );
-    run('l1.encoding', () => scanEncodingSmuggling(securityNormalized, scope));
+    run('l1.encoding', () => scanEncodingSmuggling(
+      securityNormalized,
+      scope,
+      ruleEngine.encodingPolicy(),
+    ));
     const knownDomains = options.knownDomains ?? config.knownDomains;
     run('l1.urls', () => scanUrls(
       normalized,

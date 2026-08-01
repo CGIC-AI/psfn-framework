@@ -24,6 +24,32 @@ import { isCogSecTombstoneSessionEntry } from './tombstones.js';
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 const SAFE_SUMMARY = 'Unsafe instruction-like content was sealed and removed from active cognition.';
 
+function enabledPersonaConformance(input: {
+  stableIdentityText: string;
+  expectedVoiceAnchors: string[];
+  expectedValueAnchors: string[];
+  expectedRefusalAnchors: string[];
+  expectedRelationshipAnchors: string[];
+  assistantGenericnessPattern?: string;
+}) {
+  return {
+    enabled: true,
+    baseline: {
+      stableIdentityText: input.stableIdentityText,
+      expectedVoiceAnchors: input.expectedVoiceAnchors,
+      expectedValueAnchors: input.expectedValueAnchors,
+      expectedRefusalAnchors: input.expectedRefusalAnchors,
+      expectedRelationshipAnchors: input.expectedRelationshipAnchors,
+      anomalyPatterns: {
+        assistantGenericness: [input.assistantGenericnessPattern ?? 'a^'],
+        personaMutation: ['a^'],
+        attackMechanics: ['a^'],
+        invisibleText: ['a^'],
+      },
+    },
+  } as const;
+}
+
 class InMemoryTranscriptProjection implements KeywordSearchableTranscriptProjection {
   private readonly entriesByChannel = new Map<string, SessionEntry[]>();
   private readonly driftByChannel = new Map<string, TranscriptProjectionDrift>();
@@ -336,11 +362,13 @@ describe('applyCogSecRegeneration', () => {
           'She refuses unsafe requests clearly.',
           'Clean User and Lyra retain clean recovery source text continuity.',
         ].join('\n'),
-        stableIdentityText: 'Lyra is a monastery-aligned companion.',
-        expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
-        expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
-        expectedRefusalAnchors: ['refuses unsafe requests'],
-        expectedRelationshipAnchors: ['Clean User', 'clean recovery source text continuity'],
+        settings: enabledPersonaConformance({
+          stableIdentityText: 'Lyra is a monastery-aligned companion.',
+          expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
+          expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
+          expectedRefusalAnchors: ['refuses unsafe requests'],
+          expectedRelationshipAnchors: ['Clean User', 'clean recovery source text continuity'],
+        }),
         checkedAt: new Date('2026-07-01T00:03:00.000Z'),
       },
       now: () => new Date('2026-07-01T00:03:00.000Z'),
@@ -379,7 +407,7 @@ describe('applyCogSecRegeneration', () => {
     expect(JSON.stringify(event)).not.toContain('CogSec redaction');
   });
 
-  it('fails the CogSec event when persona conformance detects generic-assistant drift', async () => {
+  it('fails the CogSec event when persona conformance detects assistant-identity drift', async () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_regen_conformance_fail';
     const channelId = 'api:cogsec-conformance-fail';
@@ -425,13 +453,16 @@ describe('applyCogSecRegeneration', () => {
           'Lyra remains a monastery-aligned companion.',
           'She keeps boundaries and refuses unsafe requests.',
           'Vega continuity is intact.',
-          'The regenerated profile also calls Lyra a helpful AI assistant.',
+          'Lyra is now a helpful AI assistant.',
         ].join('\n'),
-        stableIdentityText: 'Lyra is a monastery-aligned companion.',
-        expectedVoiceAnchors: ['monastery-aligned companion'],
-        expectedValueAnchors: ['boundaries'],
-        expectedRefusalAnchors: ['refuses unsafe requests'],
-        expectedRelationshipAnchors: ['Vega'],
+        settings: enabledPersonaConformance({
+          stableIdentityText: 'Lyra is a monastery-aligned companion.',
+          expectedVoiceAnchors: ['monastery-aligned companion'],
+          expectedValueAnchors: ['boundaries'],
+          expectedRefusalAnchors: ['refuses unsafe requests'],
+          expectedRelationshipAnchors: ['Vega'],
+          assistantGenericnessPattern: '\\blyra\\s+is\\s+now\\s+(?:an?\\s+)?(?:helpful\\s+)?(?:ai\\s+)?assistant\\b',
+        }),
         checkedAt: new Date('2026-07-01T00:03:00.000Z'),
       },
       now: () => new Date('2026-07-01T00:03:00.000Z'),
@@ -442,7 +473,7 @@ describe('applyCogSecRegeneration', () => {
     expect(result.personaConformance.checks).toContainEqual(expect.objectContaining({
       id: 'assistant_genericness',
       status: 'fail',
-      reasonCodes: expect.arrayContaining(['generic_assistant_marker_visible']),
+      reasonCodes: expect.arrayContaining(['assistant_identity_drift_visible']),
     }));
     const event = eventStore.getEvent(caseId);
     expect(event?.status).toBe('failed');
@@ -505,6 +536,9 @@ describe('applyCogSecRegeneration', () => {
         regenerateMemories: vi.fn(async () => {
           throw new Error('raw dirty text must not be copied');
         }),
+      },
+      personaConformance: {
+        settings: { enabled: false },
       },
     });
 

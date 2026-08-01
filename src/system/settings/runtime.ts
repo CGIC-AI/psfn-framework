@@ -23,6 +23,7 @@ import {
 } from '../config/memory-presentation-profile.js';
 import { cloneMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { createDefaultShellExecSettings } from '../config/shell-exec-config.js';
+import { cloneCogSecPersonaConformanceSettings } from '../config/cogsec-persona-conformance-config.js';
 import {
   cloneImageWorkflowSettings,
   normalizeFalCreateModelSetting,
@@ -200,6 +201,9 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     lifecycleKubernetes: config.lifecycleKubernetes
       ? structuredClone(config.lifecycleKubernetes)
       : null,
+    cogSecPersonaConformance: config.cogSecPersonaConformance
+      ? cloneCogSecPersonaConformanceSettings(config.cogSecPersonaConformance)
+      : null,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
     sessionMirrorActiveWindowMs:
@@ -232,6 +236,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'wikiRetrievalGroupSimilarityThreshold'
     | 'wikiStartupHydration'
     | 'lifecycleKubernetes'
+    | 'cogSecPersonaConformance'
     | 'sessionMirrorEnabled'
     | 'sessionMirrorMaxChars'
     | 'sessionMirrorActiveWindowMs'
@@ -686,6 +691,11 @@ function applyCoreSettings(
   if ('lifecycleKubernetes' in settings) {
     config.lifecycleKubernetes = settings.lifecycleKubernetes
       ? structuredClone(settings.lifecycleKubernetes)
+      : undefined;
+  }
+  if ('cogSecPersonaConformance' in settings) {
+    config.cogSecPersonaConformance = settings.cogSecPersonaConformance
+      ? cloneCogSecPersonaConformanceSettings(settings.cogSecPersonaConformance)
       : undefined;
   }
   if ('sessionTailCache' in settings) {

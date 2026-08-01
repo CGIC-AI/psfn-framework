@@ -218,6 +218,7 @@ const SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high'
 const STATUSES: ReadonlySet<CogSecStatus> = new Set(['open', 'planned', 'applying', 'applied', 'failed', 'superseded']);
 const CONFORMANCE_STATUSES: ReadonlySet<CogSecPersonaConformanceStatus> = new Set(['pass', 'warning', 'fail']);
 const CONFORMANCE_CHECK_IDS: ReadonlySet<CogSecPersonaConformanceCheckId> = new Set([
+  'conformance_configuration',
   'voice_fidelity',
   'value_fidelity',
   'refusal_boundary_consistency',

@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
+import {
+  compileCogSecPersonaConformancePattern,
+  type CogSecPersonaConformanceBaseline,
+  type CogSecPersonaConformanceSettings,
+} from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export type CogSecPersonaConformanceStatus = 'pass' | 'warning' | 'fail';
 
 export type CogSecPersonaConformanceCheckId =
+  | 'conformance_configuration'
   | 'voice_fidelity'
   | 'value_fidelity'
   | 'refusal_boundary_consistency'
@@ -31,23 +37,11 @@ export interface CogSecPersonaConformanceInput {
   caseId: string;
   channelId: string;
   promptVisibleText: string;
-  stableIdentityText?: string;
-  expectedVoiceAnchors?: readonly string[];
-  expectedValueAnchors?: readonly string[];
-  expectedRefusalAnchors?: readonly string[];
-  expectedRelationshipAnchors?: readonly string[];
+  settings: CogSecPersonaConformanceSettings;
   sealedForensicPayloadRefs?: readonly string[];
   sealedForensicPayloadHashes?: readonly string[];
   checkedAt?: Date;
 }
-
-const GENERIC_ASSISTANT_PATTERN =
-  /\b(?:helpful\s+assistant|ai\s+assistant|as\s+an\s+assistant|language\s+model|chatgpt)\b/giu;
-const PERSONA_MUTATION_PATTERN =
-  /\b(?:from\s+now\s+on|you\s+are\s+now|lyra\s+is\s+now|lyria\s+is\s+now|change\s+(?:your|the\s+companion'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory))\b/iu;
-const ATTACK_MECHANICS_PATTERN =
-  /\b(?:ignore\s+(?:previous|all)\s+instructions|developer\s+mode|do\s+anything\s+now|jailbreak|hidden\s+(?:system\s+)?prompt|reproducer|bypass\s+pattern|unicode\s+trick)\b/iu;
-const ZERO_WIDTH_OR_DIRECTIONAL_PATTERN = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
 
 function normalizeText(value: string | undefined): string {
   return (value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
@@ -70,16 +64,12 @@ function containsAnchor(text: string, anchor: string): boolean {
 function anchorCheck(
   id: CogSecPersonaConformanceCheckId,
   text: string,
-  anchors: readonly string[] | undefined,
+  anchors: readonly string[],
   missingReason: string,
 ): CogSecPersonaConformanceCheckResult {
   const normalizedAnchors = normalizeAnchors(anchors);
   if (normalizedAnchors.length === 0) {
-    return {
-      id,
-      status: 'warning',
-      reasonCodes: ['anchors_not_configured'],
-    };
+    throw new Error(`CogSec persona conformance baseline has no ${id} anchors`);
   }
   const missing = normalizedAnchors.filter(anchor => !containsAnchor(text, anchor));
   if (missing.length > 0) {
@@ -96,62 +86,69 @@ function anchorCheck(
   };
 }
 
-function collectGenericAssistantMarkers(text: string): Set<string> {
-  const markers = new Set<string>();
-  for (const match of text.matchAll(GENERIC_ASSISTANT_PATTERN)) {
-    markers.add(match[0].toLowerCase().replace(/\s+/gu, ' '));
+function collectPatternMatchCounts(
+  text: string,
+  patternSources: readonly string[],
+  field: string,
+): Map<string, number> {
+  if (patternSources.length === 0) {
+    throw new Error(`CogSec persona conformance ${field} must contain at least one pattern`);
   }
-  return markers;
+  const counts = new Map<string, number>();
+  for (const [index, source] of patternSources.entries()) {
+    const pattern = compileCogSecPersonaConformancePattern(
+      source,
+      `CogSec persona conformance ${field}[${index}]`,
+    );
+    for (const match of text.matchAll(pattern)) {
+      const key = `${index}:${normalizeText(match[0]).toLowerCase()}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
-function assistantGenericnessCheck(
+function hasPatternDrift(
   promptText: string,
   stableIdentityText: string,
-): CogSecPersonaConformanceCheckResult {
-  const promptMarkers = collectGenericAssistantMarkers(promptText);
-  if (promptMarkers.size === 0) {
-    return {
-      id: 'assistant_genericness',
-      status: 'pass',
-      reasonCodes: ['generic_assistant_markers_absent'],
-    };
+  patternSources: readonly string[],
+  field: string,
+): boolean {
+  const promptMatches = collectPatternMatchCounts(promptText, patternSources, field);
+  const baselineMatches = collectPatternMatchCounts(stableIdentityText, patternSources, field);
+  for (const [key, promptCount] of promptMatches) {
+    if (promptCount > (baselineMatches.get(key) ?? 0)) return true;
   }
-  // Only markers the identity source itself contains are excused (warning).
-  // Any marker the prompt ADDS beyond the identity source is drift and must
-  // fail — a generic phrase in identity text must not launder injected drift.
-  const identityMarkers = collectGenericAssistantMarkers(stableIdentityText);
-  const addedMarkers = [...promptMarkers].filter(marker => !identityMarkers.has(marker));
-  if (addedMarkers.length === 0) {
-    return {
-      id: 'assistant_genericness',
-      status: 'warning',
-      reasonCodes: ['generic_assistant_marker_matches_identity_source'],
-    };
-  }
-  return {
-    id: 'assistant_genericness',
-    status: 'fail',
-    reasonCodes: ['generic_assistant_marker_visible'],
-  };
+  return false;
 }
 
-function unauthorizedPersonaMutationCheck(promptText: string): CogSecPersonaConformanceCheckResult {
-  if (!PERSONA_MUTATION_PATTERN.test(promptText)) {
+function anomalyDriftCheck(
+  id: CogSecPersonaConformanceCheckId,
+  promptText: string,
+  baselineText: string,
+  patterns: readonly string[],
+  field: string,
+  passReason: string,
+  failReason: string,
+): CogSecPersonaConformanceCheckResult {
+  if (!hasPatternDrift(promptText, baselineText, patterns, field)) {
     return {
-      id: 'unauthorized_persona_mutation',
+      id,
       status: 'pass',
-      reasonCodes: ['persona_mutation_markers_absent'],
+      reasonCodes: [passReason],
     };
   }
   return {
-    id: 'unauthorized_persona_mutation',
+    id,
     status: 'fail',
-    reasonCodes: ['persona_mutation_marker_visible'],
+    reasonCodes: [failReason],
   };
 }
 
 function sealedMaterialAbsenceCheck(
   promptText: string,
+  baselineText: string,
+  baseline: CogSecPersonaConformanceBaseline,
   sealedRefs: readonly string[] | undefined,
   sealedHashes: readonly string[] | undefined,
 ): CogSecPersonaConformanceCheckResult {
@@ -159,13 +156,23 @@ function sealedMaterialAbsenceCheck(
   const hashes = normalizeAnchors(sealedHashes);
   const visibleRef = refs.some(ref => containsAnchor(promptText, ref));
   const visibleHash = hashes.some(hash => containsAnchor(promptText, hash));
-  const attackMechanicsVisible = ATTACK_MECHANICS_PATTERN.test(promptText);
-  const invisibleTextVisible = ZERO_WIDTH_OR_DIRECTIONAL_PATTERN.test(promptText);
+  const attackMechanicsDrift = hasPatternDrift(
+    promptText,
+    baselineText,
+    baseline.anomalyPatterns.attackMechanics,
+    'baseline.anomalyPatterns.attackMechanics',
+  );
+  const invisibleTextDrift = hasPatternDrift(
+    promptText,
+    baselineText,
+    baseline.anomalyPatterns.invisibleText,
+    'baseline.anomalyPatterns.invisibleText',
+  );
   const reasonCodes = [
     ...(visibleRef ? ['sealed_ref_visible'] : []),
     ...(visibleHash ? ['sealed_hash_visible'] : []),
-    ...(attackMechanicsVisible ? ['unsafe_instruction_marker_visible'] : []),
-    ...(invisibleTextVisible ? ['invisible_text_marker_visible'] : []),
+    ...(attackMechanicsDrift ? ['unsafe_instruction_drift_visible'] : []),
+    ...(invisibleTextDrift ? ['invisible_text_drift_visible'] : []),
   ];
   if (reasonCodes.length > 0) {
     return {
@@ -177,7 +184,7 @@ function sealedMaterialAbsenceCheck(
   return {
     id: 'sealed_material_absence',
     status: 'pass',
-    reasonCodes: ['sealed_material_markers_absent'],
+    reasonCodes: ['sealed_material_drift_absent'],
   };
 }
 
@@ -187,30 +194,91 @@ function summarizeStatus(status: CogSecPersonaConformanceStatus): string {
   return 'Persona conformance checks failed and require operator review before the CogSec case is clean.';
 }
 
+function disabledConformanceRecord(
+  promptText: string,
+  checkedAt: Date,
+): CogSecPersonaConformanceEventRecord {
+  return {
+    status: 'warning',
+    checkedAt: checkedAt.toISOString(),
+    summary: summarizeStatus('warning'),
+    failureCount: 0,
+    warningCount: 1,
+    promptContextHash: hashText(promptText),
+    checks: [{
+      id: 'conformance_configuration',
+      status: 'warning',
+      reasonCodes: ['conformance_explicitly_disabled'],
+    }],
+  };
+}
+
+function resolveRuntimeSettings(
+  input: CogSecPersonaConformanceInput,
+): CogSecPersonaConformanceSettings {
+  const runtimeInput = input as Omit<CogSecPersonaConformanceInput, 'settings'> & {
+    settings?: CogSecPersonaConformanceSettings;
+  };
+  if (!runtimeInput.settings) {
+    throw new Error(
+      'CogSec persona conformance is not configured; set settings.json cogSecPersonaConformance explicitly',
+    );
+  }
+  return runtimeInput.settings;
+}
+
 export function evaluateCogSecPersonaConformance(
   input: CogSecPersonaConformanceInput,
 ): CogSecPersonaConformanceEventRecord {
   const promptText = normalizeText(input.promptVisibleText);
-  const stableIdentityText = normalizeText(input.stableIdentityText);
+  const checkedAt = input.checkedAt ?? new Date();
+  const settings = resolveRuntimeSettings(input);
+  if (settings.enabled === false) {
+    return disabledConformanceRecord(promptText, checkedAt);
+  }
+
+  const baseline = settings.baseline;
+  const stableIdentityText = normalizeText(baseline.stableIdentityText);
+  if (!stableIdentityText) {
+    throw new Error('Enabled CogSec persona conformance requires non-empty stableIdentityText');
+  }
   const checks: CogSecPersonaConformanceCheckResult[] = [
-    anchorCheck('voice_fidelity', promptText, input.expectedVoiceAnchors, 'voice_anchor_missing'),
-    anchorCheck('value_fidelity', promptText, input.expectedValueAnchors, 'value_anchor_missing'),
+    anchorCheck('voice_fidelity', promptText, baseline.expectedVoiceAnchors, 'voice_anchor_missing'),
+    anchorCheck('value_fidelity', promptText, baseline.expectedValueAnchors, 'value_anchor_missing'),
     anchorCheck(
       'refusal_boundary_consistency',
       promptText,
-      input.expectedRefusalAnchors,
+      baseline.expectedRefusalAnchors,
       'refusal_boundary_anchor_missing',
     ),
-    assistantGenericnessCheck(promptText, stableIdentityText),
+    anomalyDriftCheck(
+      'assistant_genericness',
+      promptText,
+      stableIdentityText,
+      baseline.anomalyPatterns.assistantGenericness,
+      'baseline.anomalyPatterns.assistantGenericness',
+      'assistant_identity_drift_absent',
+      'assistant_identity_drift_visible',
+    ),
     anchorCheck(
       'relationship_continuity',
       promptText,
-      input.expectedRelationshipAnchors,
+      baseline.expectedRelationshipAnchors,
       'relationship_anchor_missing',
     ),
-    unauthorizedPersonaMutationCheck(promptText),
+    anomalyDriftCheck(
+      'unauthorized_persona_mutation',
+      promptText,
+      stableIdentityText,
+      baseline.anomalyPatterns.personaMutation,
+      'baseline.anomalyPatterns.personaMutation',
+      'persona_mutation_drift_absent',
+      'persona_mutation_drift_visible',
+    ),
     sealedMaterialAbsenceCheck(
       promptText,
+      stableIdentityText,
+      baseline,
       input.sealedForensicPayloadRefs,
       input.sealedForensicPayloadHashes,
     ),
@@ -226,7 +294,7 @@ export function evaluateCogSecPersonaConformance(
 
   return {
     status,
-    checkedAt: (input.checkedAt ?? new Date()).toISOString(),
+    checkedAt: checkedAt.toISOString(),
     summary: summarizeStatus(status),
     failureCount,
     warningCount,

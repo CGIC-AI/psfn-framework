@@ -2953,34 +2953,6 @@
       "note": "Security/conformance policy matcher ZERO_WIDTH_OR_DIRECTIONAL_PATTERN; inventoried as named ownership debt for the security subsystem and not silently accepted as immutable configuration."
     },
     {
-      "file": "src/core/cogsec/persona-conformance.ts",
-      "name": "ATTACK_MECHANICS_PATTERN",
-      "value": "/\\b(?:ignore\\s+(?:previous|all)\\s+instructions|developer\\s+mode|do\\s+anything\\s+now|jailbreak|hidden\\s+(?:system\\s+)?prompt|reproducer|bypass\\s+pattern|unicode\\s+trick)\\b/iu",
-      "form": "regex",
-      "note": "Mutable persona-conformance marker policy ATTACK_MECHANICS_PATTERN; baselined as existing debt pending psfn-framework-7qeo1.15 owner-file migration, not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/cogsec/persona-conformance.ts",
-      "name": "GENERIC_ASSISTANT_PATTERN",
-      "value": "/\\b(?:helpful\\s+assistant|ai\\s+assistant|as\\s+an\\s+assistant|language\\s+model|chatgpt)\\b/giu",
-      "form": "regex",
-      "note": "Mutable persona-conformance marker policy GENERIC_ASSISTANT_PATTERN; baselined as existing debt pending psfn-framework-7qeo1.15 owner-file migration, not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/cogsec/persona-conformance.ts",
-      "name": "PERSONA_MUTATION_PATTERN",
-      "value": "/\\b(?:from\\s+now\\s+on|you\\s+are\\s+now|lyra\\s+is\\s+now|lyria\\s+is\\s+now|change\\s+(?:your|the\\s+companion'?s)\\s+(?:persona|identity|character|self[-\\s]?concept|core\\s+memory))\\b/iu",
-      "form": "regex",
-      "note": "Mutable persona-conformance marker policy PERSONA_MUTATION_PATTERN; baselined as existing debt pending psfn-framework-7qeo1.15 owner-file migration, not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/cogsec/persona-conformance.ts",
-      "name": "ZERO_WIDTH_OR_DIRECTIONAL_PATTERN",
-      "value": "/[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\uFEFF]/u",
-      "form": "regex",
-      "note": "Mutable persona-conformance marker policy ZERO_WIDTH_OR_DIRECTIONAL_PATTERN; baselined as existing debt pending psfn-framework-7qeo1.15 owner-file migration, not approved as immutable code ownership."
-    },
-    {
       "file": "src/core/contacts/contact-lifecycle-recovery-runtime.ts",
       "name": "CONTACT_LIFECYCLE_RECOVERY_RUNTIME_POLICY.pollIntervalMs",
       "value": "5_000",

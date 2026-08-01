@@ -329,7 +329,7 @@ describe('Hardcoded-settings repository gate', () => {
     expect(result.stderr).not.toContain('sendRequest.port');
   });
 
-  it('flags the persona-conformance marker policy specifically', () => {
+  it('keeps migrated persona-conformance marker policy out of source', () => {
     const root = makeFixture();
     const source = readFileSync(resolve('src/core/cogsec/persona-conformance.ts'), 'utf8');
     writeSource(root, 'src/core/cogsec/persona-conformance.ts', source);
@@ -341,7 +341,11 @@ describe('Hardcoded-settings repository gate', () => {
     const baseline = JSON.parse(readFileSync(join(root, BASELINE_RELATIVE_PATH), 'utf8')) as {
       entries: Array<{ name: string }>;
     };
-    expect(baseline.entries.map(entry => entry.name)).toContain('GENERIC_ASSISTANT_PATTERN');
+    const names = baseline.entries.map(entry => entry.name);
+    expect(names).not.toContain('GENERIC_ASSISTANT_PATTERN');
+    expect(names).not.toContain('PERSONA_MUTATION_PATTERN');
+    expect(names).not.toContain('ATTACK_MECHANICS_PATTERN');
+    expect(names).not.toContain('ZERO_WIDTH_OR_DIRECTIONAL_PATTERN');
   });
 
   it('keeps executable child-source tuning constants visible to the AST scanner', () => {

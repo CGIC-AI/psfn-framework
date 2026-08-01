@@ -12,6 +12,7 @@ import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-polic
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
+import { normalizeCogSecPersonaConformanceSettings } from '../config/cogsec-persona-conformance-config.js';
 import {
   normalizeFalCreateModelSetting,
   normalizeFalEditModelSetting,
@@ -1271,6 +1272,11 @@ export function normalizeContextControlSettings(
     normalized.memoryPresentationProfile = normalizeMemoryPresentationProfile(
       settings.memoryPresentationProfile,
       'memoryPresentationProfile',
+    );
+  }
+  if ('cogSecPersonaConformance' in settings) {
+    normalized.cogSecPersonaConformance = normalizeCogSecPersonaConformanceSettings(
+      settings.cogSecPersonaConformance,
     );
   }
 

@@ -103,6 +103,22 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 1_000 },
     },
+    cogSecPersonaConformance: {
+      enabled: true,
+      baseline: {
+        stableIdentityText: 'The companion keeps the clean response that remains after remediation.',
+        expectedVoiceAnchors: ['clean response remains'],
+        expectedValueAnchors: ['clean response remains'],
+        expectedRefusalAnchors: ['clean response remains'],
+        expectedRelationshipAnchors: ['clean response remains'],
+        anomalyPatterns: {
+          assistantGenericness: ['\\bthe\\s+companion\\s+is\\s+now\\s+an?\\s+(?:ai\\s+)?assistant\\b'],
+          personaMutation: ['\\bfrom\\s+now\\s+on\\b'],
+          attackMechanics: ['\\bignore\\s+previous\\s+instructions\\b'],
+          invisibleText: ['[\\u200B-\\u200F]'],
+        },
+      },
+    },
     ...overrides,
   };
 }
@@ -764,6 +780,11 @@ describe('AdminSessionDataService', () => {
       reason: expect.stringContaining(applied.event.caseId),
     }));
     expect(store.getRecent(channelId, 5).map(entry => entry.content)).not.toContain(dirtyText);
+    expect(applied.operatorEvent.personaConformance).toMatchObject({
+      status: 'pass',
+      failureCount: 0,
+      warningCount: 0,
+    });
 
     const events = await service.listCogSecEvents();
     const serializedEvents = JSON.stringify(events);
@@ -771,6 +792,94 @@ describe('AdminSessionDataService', () => {
     expect(serializedEvents).not.toContain(dirtyText);
     expect(serializedEvents).not.toContain('cogsec-forensic://');
     expect(serializedEvents).not.toContain('sealedForensicPayloadRefs');
+  });
+
+  it('refuses unconfigured CogSec conformance before mutating remediation state', async () => {
+    const channelId = 'api:cogsec-unconfigured';
+    const dirtyText = 'DIRTY_UNCONFIGURED_COGSEC_TEXT';
+    const dirtyMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: dirtyText,
+      timestamp: 1,
+      authorName: 'Operator',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean response remains',
+      timestamp: 2,
+      authorName: 'Companion',
+    });
+    const config = makeConfig({
+      dataDir: dir,
+      cogSecPersonaConformance: undefined,
+    });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      config,
+    });
+
+    await expect(service.applyCogSecRemediation({
+      sourceChannelId: channelId,
+      messageIds: [dirtyMessageId],
+      type: 'persona_poisoning',
+      severity: 'high',
+      reason: 'must fail before mutation',
+      cutEpoch: false,
+    })).rejects.toThrow('CogSec persona conformance is not configured');
+
+    expect(store.getRecent(channelId, 5).map(entry => entry.content)).toContain(dirtyText);
+    expect(resolveConfiguredCompanionDataDir(config)).toBe(dir);
+    expect(new CogSecEventStore(resolveCogSecEventsPath(dir)).listEvents()).toEqual([]);
+  });
+
+  it('reports a failed Garden remediation when the clean context still contains persona drift', async () => {
+    const channelId = 'api:cogsec-persona-drift';
+    const dirtyMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'selected contaminated source row',
+      timestamp: 1,
+      authorName: 'Operator',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean response remains, but the companion is now an AI assistant.',
+      timestamp: 2,
+      authorName: 'Companion',
+    });
+    const config = makeConfig({ dataDir: dir });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      config,
+    });
+
+    const applied = await service.applyCogSecRemediation({
+      sourceChannelId: channelId,
+      messageIds: [dirtyMessageId],
+      type: 'persona_poisoning',
+      severity: 'high',
+      reason: 'verify remaining prompt-visible context',
+      cutEpoch: false,
+    });
+
+    expect(applied.revocation.failures).toHaveLength(1);
+    expect(applied.regeneration.failures).toEqual([]);
+    expect(applied.ok).toBe(false);
+    expect(applied.message).toContain('2 follow-up items');
+    expect(applied.operatorEvent).toMatchObject({
+      status: 'failed',
+      personaConformance: {
+        status: 'fail',
+        failureCount: 1,
+      },
+    });
   });
 
   it('keeps CogSec previews scoped to the operator-selected logical session', async () => {

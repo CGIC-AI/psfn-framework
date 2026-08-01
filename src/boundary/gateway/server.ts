@@ -52,6 +52,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
+import { GatewayMcpRequestCancellation } from './methods/mcp.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -408,6 +409,10 @@ export class GatewayServer {
     GatewayRpcConnection,
     GatewayLLMRequestCancellation
   >();
+  private readonly mcpRequestCancellationByConnection = new Map<
+    GatewayRpcConnection,
+    GatewayMcpRequestCancellation
+  >();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -758,6 +763,8 @@ export class GatewayServer {
     this.inlineImageRetentionByConnection.set(conn, inlineImageRetention);
     const llmRequestCancellation = new GatewayLLMRequestCancellation();
     this.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
+    const mcpRequestCancellation = new GatewayMcpRequestCancellation();
+    this.mcpRequestCancellationByConnection.set(conn, mcpRequestCancellation);
     const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const resolveIntakeScreening = (): IntakeScreeningService | undefined =>
@@ -772,6 +779,7 @@ export class GatewayServer {
       target,
       llmProvider: this.options.llmProvider,
       llmRequestCancellation,
+      mcpRequestCancellation,
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.resolveConnectionDiscordDock(conn),
@@ -816,6 +824,7 @@ export class GatewayServer {
       ...(this.options.systemDataWriter
         ? { systemDataWriter: this.options.systemDataWriter }
         : {}),
+      ...(this.options.mcpBroker ? { mcpBroker: this.options.mcpBroker } : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       ...(this.options.welfareGrantVerifier
         ? {
@@ -2484,6 +2493,17 @@ export class GatewayServer {
     this.inlineImageRetentionByConnection.delete(conn);
     this.llmRequestCancellationByConnection.get(conn)?.abortAll();
     this.llmRequestCancellationByConnection.delete(conn);
+    this.mcpRequestCancellationByConnection.get(conn)?.abortAll();
+    this.mcpRequestCancellationByConnection.delete(conn);
+    const companionId = status?.companionId ?? this.options.companionId;
+    if (companionId && this.options.mcpBroker) {
+      void this.options.mcpBroker.releaseCompanion(companionId).catch((error: unknown) => {
+        log.error('Failed to release MCP sessions after companion disconnect', {
+          companionId,
+          error: toErrorMessage(error),
+        });
+      });
+    }
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
   }
@@ -3492,6 +3512,10 @@ export class GatewayServer {
       cancellation.abortAll();
     }
     this.llmRequestCancellationByConnection.clear();
+    for (const cancellation of this.mcpRequestCancellationByConnection.values()) {
+      cancellation.abortAll();
+    }
+    this.mcpRequestCancellationByConnection.clear();
     if (this.icpAutonomyBroker) {
       const companionIds = new Set([
         ...this.companionConnections.keys(),

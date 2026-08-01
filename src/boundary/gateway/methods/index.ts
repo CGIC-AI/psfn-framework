@@ -20,6 +20,7 @@ import { registerKubeSelfManagementMethods } from './kube-self-management.js';
 import { registerContactLifecycleMethods } from './contact-lifecycle.js';
 import { registerSystemDataMethods } from './system-data.js';
 import { registerMemoryDeletionMethods } from './memory-deletion.js';
+import { registerMcpMethods } from './mcp.js';
 
 export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerLLMMethods(runtime);
@@ -43,4 +44,5 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerContactLifecycleMethods(runtime);
   registerSystemDataMethods(runtime);
   registerMemoryDeletionMethods(runtime);
+  registerMcpMethods(runtime);
 }

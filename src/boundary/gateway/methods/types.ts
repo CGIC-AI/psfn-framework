@@ -44,6 +44,7 @@ import type {
   ShardBackendRequestResult,
 } from '../protocol.js';
 import type { GatewaySystemDataWriterPort } from '../system-data-writer.js';
+import type { McpGatewayBroker } from '../mcp/broker.js';
 
 /**
  * Gateway-created authority passed to a shard backend executor only after the
@@ -69,6 +70,15 @@ export interface GatewayMethodRuntime {
   llmProvider: LLMProviderPort;
   /** Cancellable provider calls owned exclusively by this authenticated connection. */
   llmRequestCancellation: GatewayLLMRequestCancellation;
+  /** Cancellable MCP discovery/call operations owned by this authenticated connection. */
+  mcpRequestCancellation: {
+    run<T>(
+      cancellationId: unknown,
+      operation: (signal: AbortSignal | undefined) => Promise<T>,
+    ): Promise<T>;
+    cancel(cancellationId: unknown): boolean;
+    abortAll(): number;
+  };
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
@@ -117,6 +127,8 @@ export interface GatewayMethodRuntime {
   contactLifecycleAuthority?: GatewayContactLifecycleAuthorityPort;
   /** The gateway-owned, audited single writer for the system-data PVC. */
   systemDataWriter?: GatewaySystemDataWriterPort;
+  /** Gateway-owned lazy MCP broker; absent means external MCP is disabled. */
+  mcpBroker?: McpGatewayBroker;
   /**
    * Authoritative capability tier resolved from the gateway's own
    * CapabilityRuntime (never the caller-declared value). Gateway methods that

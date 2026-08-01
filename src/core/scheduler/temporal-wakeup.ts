@@ -42,6 +42,7 @@ import {
   evaluateProactiveOutboundTimeGate,
   type ProactiveQuietHoursConfig,
 } from '../intention/proactive-time-gate.js';
+import type { ProactiveOutboundDispatchResult } from '../intention/proactive-outbound.js';
 import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId, isTestingSessionId } from '../session/session-id.js';
 import {
@@ -529,9 +530,7 @@ export interface TemporalWakeupSessionManagerPort {
   appendContextSystemNote(channelId: string, note: string, source?: string): void;
 }
 
-export type TemporalWakeupOutboundResult =
-  | { outcome: 'sent' }
-  | { outcome: 'blocked'; reason: string; retryAfterMs?: number };
+export type TemporalWakeupOutboundResult = ProactiveOutboundDispatchResult;
 
 export interface TemporalWakeupRuntimeOptions {
   scheduler: Scheduler;
@@ -904,6 +903,15 @@ async function runOutwardPhase(
     content: outwardContent,
   });
   if (dispatchResult.outcome === 'blocked') {
+    if (dispatchResult.reason === 'channel_not_approved_for_primary') {
+      throw new Error(
+        `Temporal wake proactive outbound refused: ${dispatchResult.reason}. `
+        + `Refused channel: ${decision.sessionId}. `
+        + 'Remedy: set channels.json.discord.heartbeatChannelId (or the companion account '
+        + 'heartbeatChannelId) to this channel only if it is the approved primary private DM; '
+        + 'otherwise keep the channel gated.',
+      );
+    }
     log.info('Morning wake outward delivery blocked by proactive-outbound policy; internal frame update stands', {
       sessionId: decision.sessionId,
       reason: dispatchResult.reason,
@@ -1083,6 +1091,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             sessionId: outwardTarget.decision.sessionId,
             error: String(error),
           });
+          throw error;
         }
       },
       eligibility: { requiredTokens: ['memory.write'] },

@@ -10,7 +10,10 @@ import {
   type TemporalWakeupConfig,
 } from '../../system/config/scheduler-config.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
-import { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import {
+  createApprovedPrimaryChannelPolicy,
+  ProactiveOutboundDispatcher,
+} from '../intention/proactive-outbound.js';
 import {
   detectInternalOriginForUserAttribution,
   normalizeSessionEntryAttribution,
@@ -661,7 +664,10 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
 });
 
 describe('morning wake outward phase', () => {
-  function makePort(input?: { partnerAt?: number; channelType?: string }): {
+  const APPROVED_PRIMARY_DM_CHANNEL = 'discord:approved-primary-dm';
+  const ACTIVE_UNAPPROVED_DISCORD_CHANNEL = 'discord:active-unapproved-channel';
+
+  function makePort(input?: { partnerAt?: number; channelType?: string; sessionId?: string }): {
     port: TemporalWakeupSessionManagerPort;
     appended: Array<{ note: string; source?: string; atMs: number }>;
   } {
@@ -670,7 +676,7 @@ describe('morning wake outward phase', () => {
     const persisted: SessionEntry[] = [];
     const port: TemporalWakeupSessionManagerPort = {
       resolveStartupSessionMetadata: () => ({
-        sessionId: 'api:main',
+        sessionId: input?.sessionId ?? 'api:main',
         channelType: input?.channelType ?? 'discord',
         timestamp: partnerAt,
       }),
@@ -690,20 +696,25 @@ describe('morning wake outward phase', () => {
     return { port, appended };
   }
 
-  function makeScheduler(): Scheduler {
-    return new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+  function makeScheduler(eventBus = new EventBus()): Scheduler {
+    return new Scheduler(eventBus, { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
   }
 
-  it('routes outward content through the real proactive-outbound dispatcher; policy denial does not block the frame update', async () => {
+  it('keeps the frame update but fails observably when proactive policy refuses the wake message', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));
-    const { port, appended } = makePort();
-    const scheduler = makeScheduler();
+    const { port, appended } = makePort({ sessionId: ACTIVE_UNAPPROVED_DISCORD_CHANNEL });
+    const eventBus = new EventBus();
+    const failures: Array<{ taskId: string; error: string }> = [];
+    eventBus.on('schedule.task.failed', (event) => {
+      failures.push({ taskId: event.taskId, error: event.error });
+    });
+    const scheduler = makeScheduler(eventBus);
     const sent: string[] = [];
     const dispatcher = new ProactiveOutboundDispatcher({
       sender: { send: async (_channelId, content) => { sent.push(content); } },
       rateLimiter: new ExternalCommunicationRateLimiter(),
-      isApprovedPrimaryChannel: () => false, // policy denies every channel
+      isApprovedPrimaryChannel: createApprovedPrimaryChannelPolicy(APPROVED_PRIMARY_DM_CHANNEL),
     });
     registerTemporalWakeupTasks({
       scheduler,
@@ -724,19 +735,29 @@ describe('morning wake outward phase', () => {
     expect(appended).toHaveLength(1); // internal frame update landed
     expect(appended[0].source).toBe(TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE);
     expect(sent).toHaveLength(0); // outward delivery blocked by policy
-    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.lastOutcome).toBe('succeeded');
+    const morningTask = scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID);
+    expect(morningTask).toMatchObject({
+      lastOutcome: 'failed',
+      lastError: expect.stringContaining('channel_not_approved_for_primary'),
+    });
+    expect(morningTask?.lastError).toContain('channels.json.discord.heartbeatChannelId');
+    expect(morningTask?.lastError).toContain(ACTIVE_UNAPPROVED_DISCORD_CHANNEL);
+    expect(failures).toEqual([{
+      taskId: TEMPORAL_WAKEUP_MORNING_TASK_ID,
+      error: expect.stringContaining('channel_not_approved_for_primary'),
+    }]);
   });
 
   it('delivers outward content when policy and rate limits allow', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));
-    const { port, appended } = makePort();
+    const { port, appended } = makePort({ sessionId: APPROVED_PRIMARY_DM_CHANNEL });
     const scheduler = makeScheduler();
     const sent: string[] = [];
     const dispatcher = new ProactiveOutboundDispatcher({
       sender: { send: async (_channelId, content) => { sent.push(content); } },
       rateLimiter: new ExternalCommunicationRateLimiter(),
-      isApprovedPrimaryChannel: () => true,
+      isApprovedPrimaryChannel: createApprovedPrimaryChannelPolicy(APPROVED_PRIMARY_DM_CHANNEL),
     });
     registerTemporalWakeupTasks({
       scheduler,
@@ -759,6 +780,34 @@ describe('morning wake outward phase', () => {
 
     expect(appended).toHaveLength(1);
     expect(sent).toEqual(['thinking of you this morning']);
+  });
+
+  it('does not escalate a routine rate-limit block into a channel-configuration failure', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_NIGHT));
+    const { port, appended } = makePort({ sessionId: APPROVED_PRIMARY_DM_CHANNEL });
+    const eventBus = new EventBus();
+    const failures = vi.fn();
+    eventBus.on('schedule.task.failed', failures);
+    const scheduler = makeScheduler(eventBus);
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      invokeWakeTurn: async () => 'thinking of you this morning',
+      dispatchOutbound: async () => ({
+        outcome: 'blocked',
+        reason: 'rate_limited',
+        retryAfterMs: 60_000,
+      }),
+    });
+
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    await scheduler.tick();
+
+    expect(appended).toHaveLength(1);
+    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.lastOutcome).toBe('succeeded');
+    expect(failures).not.toHaveBeenCalled();
   });
 
   it('respects quiet hours for outward delivery while the internal note still lands', async () => {
@@ -840,7 +889,7 @@ describe('morning wake outward phase', () => {
     expect(dispatchOutbound).not.toHaveBeenCalled();
   });
 
-  it('keeps the frame update when the wake turn itself throws', async () => {
+  it('keeps the frame update and records a failed task when the wake turn throws', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));
     const { port, appended } = makePort();
@@ -857,7 +906,10 @@ describe('morning wake outward phase', () => {
     await scheduler.tick();
 
     expect(appended).toHaveLength(1);
-    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.lastOutcome).toBe('succeeded');
+    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)).toMatchObject({
+      lastOutcome: 'failed',
+      lastError: 'Error: provider offline',
+    });
   });
 
   it('skips the full turn entirely for cold sessions (note-only spend)', async () => {

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ProactiveOutboundDispatcher } from './proactive-outbound.js';
+import {
+  createApprovedPrimaryChannelPolicy,
+  ProactiveOutboundDispatcher,
+} from './proactive-outbound.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import {
   INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
@@ -21,7 +24,8 @@ function makeDispatcher(overrides: {
   const dispatcher = new ProactiveOutboundDispatcher({
     sender: { send },
     rateLimiter: overrides.rateLimiter ?? new ExternalCommunicationRateLimiter(),
-    isApprovedPrimaryChannel: overrides.approved ?? ((channelId) => channelId === PRIMARY_DM_CHANNEL),
+    isApprovedPrimaryChannel: overrides.approved
+      ?? createApprovedPrimaryChannelPolicy(PRIMARY_DM_CHANNEL),
   });
   return { dispatcher, send };
 }

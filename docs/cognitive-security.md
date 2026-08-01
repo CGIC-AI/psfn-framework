@@ -961,10 +961,11 @@ silently ignores or aliases the retired keys.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
-| `schemaVersion` | `3` | Must be 3. Schema 1/2 and affected pre-remediation schema-3 owners require the explicit `migrate:intake-policy-owner` command. |
+| `schemaVersion` | `4` | Must be 4. Schema 1/2/3 owners require the explicit `migrate:intake-policy-owner` command. |
 | `mode` | `"shadow"` | `off`: no screening service or sink gate constructed, no envelopes exist. `shadow`: envelopes created, screened, journaled, and audited, but delivered content never changes and gates never block. `enforce`: `effectiveText` honors decisions (sanitize substitutes sanitized text; quarantine/block substitute the withheld notice) and sink-gate denials are real. |
 | `sourceRiskTiers` | see below | Risk tier per source class; every class required. |
 | `sourceLists` | all four empty | Operator-curated trusted/denied sites and people (flywheel target). |
+| `urlScanner.schemeActions` | `javascript`: deny; `data`: deny except inline images; `mailto`/`tel`: allow | Per-scheme URL-scanner treatment. Missing or invalid actions fail owner-file validation; unlisted schemes stay silent to avoid false positives in ordinary conversation. |
 
 Seed `sourceRiskTiers`: `operator`/`companion_self`/`primary_user` → `trusted`;
 `trusted_contact`/`regular_contact`/`audio_transcript`/`shard_foldback` →

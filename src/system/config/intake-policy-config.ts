@@ -22,10 +22,17 @@ import {
 import { loadRequiredJson } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  validateIntakeUrlScannerPolicy,
+  type IntakeUrlScannerPolicyConfig,
+} from './intake-url-scanner-policy.js';
+
+export type { IntakeUrlSchemeAction } from '../../shared/contracts/intake-url-scanner.js';
+export type { IntakeUrlScannerPolicyConfig } from './intake-url-scanner-policy.js';
 
 export const INTAKE_POLICY_FILE_NAME = 'intake-policy.json';
 export const INTAKE_POLICY_SEED_FILE_NAME = 'intake-policy.seed.json';
-export const INTAKE_POLICY_SCHEMA_VERSION = 3 as const;
+export const INTAKE_POLICY_SCHEMA_VERSION = 4 as const;
 
 /**
  * Firewall rollout mode:
@@ -691,6 +698,8 @@ export interface IntakePolicyConfig {
   sourceRiskTiers: Record<IntakeSourceClass, IntakeSourceRiskTier>;
   /** Operator-curated trusted/denied sites and people (htm9.13). */
   sourceLists: IntakeSourceListsConfig;
+  /** Policy-owned URI-scheme handling for the deterministic URL scanner. */
+  urlScanner: IntakeUrlScannerPolicyConfig;
   quarantine: IntakePolicyQuarantineConfig;
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
   l2Screener: IntakeL2ScreenerPolicyConfig;
@@ -1368,14 +1377,16 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
     'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener', 'sinkGates',
-    'driftDetection',
+    'driftDetection', 'urlScanner',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
   }
   if (raw.schemaVersion !== INTAKE_POLICY_SCHEMA_VERSION) {
-    const migrationGuidance = raw.schemaVersion === 1 || raw.schemaVersion === 2
+    const migrationGuidance = raw.schemaVersion === 1
+      || raw.schemaVersion === 2
+      || raw.schemaVersion === 3
       ? `; schemaVersion ${String(raw.schemaVersion)} owners require the explicit `
         + 'migrate:intake-policy-owner command'
       : '';
@@ -1424,6 +1435,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     mode: mode as IntakeFirewallMode,
     sourceRiskTiers,
     sourceLists: validateSourceLists(raw.sourceLists, sourcePath),
+    urlScanner: validateIntakeUrlScannerPolicy(raw.urlScanner, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),

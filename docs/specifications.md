@@ -91,18 +91,19 @@ Supported until beta:
   scheduler shape.
 - Explicit intake-policy owner migration through
   `npm run migrate:intake-policy-owner -- --data-dir <exact-system-data-dir>`.
-  This operator-only command upgrades schema v1/v2 to v3: v1 gains the
-  canonical `skill_write` sink rule, and both legacy schemas gain the explicit
+  This operator-only command upgrades schema v1/v2/v3 to v4: v1 gains the
+  canonical `skill_write` sink rule, and legacy schemas gain the explicit
   trusted `companion_self` source class used for screened self-authored
-  mutations. Persona/trust caps remain `standard`, preserving the invariant
+  mutations plus the URL scanner scheme policy from the distributed seed.
+  Persona/trust caps remain `standard`, preserving the invariant
   that released untrusted external content may inform but never instruct those
-  sinks. The command also repairs schema-v3 owners created before this security
+  sinks. The command also repairs schema-v4 owners created before this security
   remediation by adding the missing source class and restoring those caps.
   Dry-run is the default and `--apply` performs a validated durable atomic
   replacement. Runtime loading never invokes the migrator and rejects legacy
   or unremediated owners. Validate the result through the canonical
   startup-owner preflight. Remove the command before beta after every system
-  owner uses canonical schema v3.
+  owner uses canonical schema v4.
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Helm's one-time per-companion owner and scheduler-schema cutover for
   `scheduler.json` and `capability-tier.json`. The chart init path may copy a legacy regular file

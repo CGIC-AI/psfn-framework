@@ -4216,6 +4216,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       }),
       expect.objectContaining({ stage: 'compaction_wait', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'context_assembly', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'session_context_assembly', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'emotion_observation', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'prompt_assembly', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'provider_request', model: 'test-model', provider: 'test' }),
       expect.objectContaining({

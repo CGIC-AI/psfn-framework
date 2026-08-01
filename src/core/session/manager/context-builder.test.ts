@@ -677,6 +677,54 @@ describe('orientation context surface wiring', () => {
     }
   });
 
+  it('selects a summary boundary with linearithmic tokenization work for long histories', async () => {
+    let encodedTextCount = 0;
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => {
+        encodedTextCount += 1;
+        return { length: text.length };
+      },
+    }));
+    try {
+      const entries: SessionEntry[] = Array.from({ length: 2_000 }, (_, index) => ({
+        id: index + 1,
+        channelId: 'api:main',
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        content: `History entry ${index + 1} ${'context '.repeat(8)}`,
+        ...(index % 2 === 0
+          ? { authorId: 'u1', authorName: 'User' }
+          : { authorName: 'Companion' }),
+        timestamp: 1_700_000_000_000 + (index * 60_000),
+      }));
+      const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+        content: 'Earlier history retained as a compact summary.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      });
+
+      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+        entries,
+        channelVisibility: 'private',
+        renderGroupUserAttribution: false,
+        tokenBudget: 700,
+        channelId: 'api:main',
+        llmProvider: makeSummaryProvider(complete),
+        promptRegistry: null,
+      });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(assembled.summarizedEntryCount).toBeGreaterThan(1_900);
+      // A linear split scan re-tokenizes progressively shorter tails and
+      // encodes millions of message fields at this live-sized history depth.
+      expect(encodedTextCount).toBeLessThan(25_000);
+    } finally {
+      tokenTestUtils.resetTokenizerState();
+    }
+  });
+
   it('supersedes older time-of-day refreshers before history summarization and assembly', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),

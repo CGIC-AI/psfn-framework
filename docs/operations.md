@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-20.
+Last updated: 2026-08-01.
 
 Before touching a Helm release, follow the canonical
 [Helm Cluster Upgrade Guide](./helm-upgrades.md). It is the detailed, mandatory
@@ -28,6 +28,30 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 - `agent:docker` is the production profile (`network_mode: "none"`).
 - `agent:docker:continuous` is the continuous/dev profile on an isolated internal network.
 - Use `npm run verify:agent-docker-isolation` after changing compose files or operator docs.
+
+### Interactive turn latency budget
+
+For an idle, warm companion, a no-attachment single-sentence chat turn has an
+operational budget of 30 seconds from transport receipt to visible completion.
+The foreground stages are expected to stay within these regression budgets:
+
+- channel queue wait: 1 second;
+- session-context assembly: 2 seconds;
+- all other pre-turn context work, including emotion observation: 2 seconds;
+- prompt assembly: 2 seconds;
+- provider request to first token: 20 seconds; and
+- first token to visible turn completion: the remaining 3 seconds for a short
+  reply.
+
+These are observability budgets, not client or provider timeouts. Exceeding one
+should identify the stage to investigate; it must not be handled by raising an
+outer timeout. Garden's dashboard response exposes the content-free live
+percentiles at
+`stats.transientSessionTelemetry.latencyPercentiles.series`. Relevant metrics
+include `channel_queue_wait`, `session_context_assembly`,
+`emotion_observation`, `context_assembly`, `prompt_assembly`, `llm_ttft`, and
+`turn_complete`. The aggregate is process-local and resets when the operator
+process restarts.
 
 ## Companion Cluster Operations
 

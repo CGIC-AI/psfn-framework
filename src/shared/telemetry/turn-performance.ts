@@ -9,6 +9,8 @@ export const TURN_PERFORMANCE_STAGES = [
   'post_turn_drain_wait',
   'compaction_wait',
   'context_assembly',
+  'session_context_assembly',
+  'emotion_observation',
   'prompt_assembly',
   'provider_request',
   'provider_first_token',

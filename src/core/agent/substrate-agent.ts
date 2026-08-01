@@ -729,6 +729,19 @@ export class SubstrateAgent {
           ...(screened.markingPlan ? { markingPlan: screened.markingPlan } : {}),
         };
       },
+      onToolResultAdmitted: () => {
+        const lineage = this.currentTurnDisclosureLineage;
+        if (lineage && lineage.effectiveSensitivity !== 'confidential') {
+          this.currentTurnDisclosureLineage = {
+            ...lineage,
+            // Disclosure generation assigns every admitted tool result the
+            // most restrictive sensitivity floor. Tighten immediately so a
+            // later MCP call in the same model loop cannot reuse pre-tool data
+            // sensitivity.
+            effectiveSensitivity: 'confidential',
+          };
+        }
+      },
       onTelemetry: (eventName, payload) => {
         this.turnSupportRuntime.emitTelemetry(eventName, {
           ...this.turnSupportRuntime.withAdaptiveCorrelation(
@@ -1668,6 +1681,7 @@ export class SubstrateAgent {
         setCurrentTurnDisclosureLineage: (lineage) => {
           this.currentTurnDisclosureLineage = lineage;
         },
+        getCurrentTurnDisclosureLineage: () => this.currentTurnDisclosureLineage,
         buildRuntimeContext: (
           turnMessage,
           resolvedUserName,

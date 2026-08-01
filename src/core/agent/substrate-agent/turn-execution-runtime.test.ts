@@ -605,6 +605,9 @@ function createRuntime(params: {
   configOverrides?: Partial<SubstrateConfig>;
   cogSecMode?: TurnExecutionRuntime['cogSecMode'];
 }) {
+  let currentTurnDisclosureLineage: ReturnType<
+    TurnExecutionRuntime['getCurrentTurnDisclosureLineage']
+  >;
   const agentState = {
     messages: [] as any[],
     tools: [] as any[],
@@ -842,7 +845,10 @@ function createRuntime(params: {
     buildPromptTemplateVariables: vi.fn(() => ({})),
     buildDynamicPromptTemplateVariables: vi.fn(async () => ({ ...BASE_TURN_PROMPT_VARIABLES })),
     setCurrentSelfModelState: vi.fn(),
-    setCurrentTurnDisclosureLineage: vi.fn(),
+    setCurrentTurnDisclosureLineage: vi.fn((lineage) => {
+      currentTurnDisclosureLineage = lineage;
+    }),
+    getCurrentTurnDisclosureLineage: vi.fn(() => currentTurnDisclosureLineage),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
     buildStaticPromptSettingsHash: vi.fn(() => 'settings-hash'),
@@ -978,6 +984,39 @@ function createPersistenceBackedRuntime(
 
   return { runtime, store, sessionManager, turnSupportRuntime };
 }
+
+describe('handleMessageForTurn MCP disclosure context', () => {
+  it('publishes the admitted turn lineage before the model invocation', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      expect(runtime.getCurrentTurnDisclosureLineage()).toMatchObject({
+        effectiveSensitivity: expect.any(String),
+        sourceCount: 1,
+      });
+      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-mcp-disclosure-context'));
+
+    expect(runtime.setCurrentTurnDisclosureLineage).toHaveBeenCalled();
+    expect(runtime.agent.prompt).toHaveBeenCalledOnce();
+  });
+});
 
 describe('handleMessageForTurn intentional no-reply', () => {
   it('returns structured no-reply metadata and skips assistant persistence', async () => {

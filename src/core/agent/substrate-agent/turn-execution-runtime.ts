@@ -55,6 +55,7 @@ import {
   DISCLOSURE_CLASSIFIER_VERSION,
   buildGenerationDisclosureLineage,
 } from '../../cogsec/disclosure/index.js';
+import { runWithMcpTurnDisclosureContext } from '../../cogsec/disclosure/mcp-turn-context.js';
 import {
   mergeChargedImageDeliverableSummaries,
   readGeneratedImageSensitivityClassifications,
@@ -917,6 +918,24 @@ export async function handleMessageForTurn(
     fullPrompt = promptAssembly.fullPrompt;
     contextMessageCount = promptAssembly.contextMessageCount;
 
+    if (!recoveredResponse) {
+      // Publish the context already admitted before the first model step. MCP
+      // authorization reads this lineage lazily; the scheduler tightens it to
+      // confidential as soon as any screened tool result enters the loop.
+      runtime.setCurrentTurnDisclosureLineage(buildGenerationDisclosureLineage({
+        context: {
+          generationContextRef: `turn:${turnId}`,
+          classifierVersion: DISCLOSURE_CLASSIFIER_VERSION,
+          classifiedAt: new Date().toISOString(),
+        },
+        conversationScope,
+        conversationChannelEpoch: currentChannelClassificationEpoch(conversationScope.channelId),
+        memorySources: preTurnState.disclosureMemorySources,
+        wikiSources: preTurnState.disclosureWikiSources,
+        toolResultSources: [],
+      }));
+    }
+
     const promptStageStart = Date.now();
     // Establish the turn-scoped paid-deliverable registry around the agent
     // invocation so charged tools (e.g. paid image generation) can record an
@@ -980,12 +999,15 @@ export async function handleMessageForTurn(
     const invokeWithCanary = () => canaryToken
       ? runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
       : invokeWithPaidDeliverableTracking();
+    const invokeWithMcpDisclosure = () => runWithMcpTurnDisclosureContext({
+      getLineage: runtime.getCurrentTurnDisclosureLineage,
+    }, invokeWithCanary);
     assertForegroundWorkOwned(foregroundLease);
     const invocationResult = recoveredInvocationResult ?? await invokeWithCompanionSocialCharge({
       chargePolicy: runtime.config.chargePolicy,
       correlation: turnCorrelationBase,
       fatigue: fatigueDecision?.metadata,
-      invoke: invokeWithCanary,
+      invoke: invokeWithMcpDisclosure,
       recordChargeEvent: runtime.durableChargeRecorder,
       probeChargeEvent: runtime.durableChargeProbe,
       turnId,

@@ -295,6 +295,7 @@ export interface TurnExecutionRuntime {
    * tool guard composes the destination check over it for the rest of the turn.
    */
   setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
+  getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,

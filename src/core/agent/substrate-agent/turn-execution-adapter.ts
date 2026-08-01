@@ -106,6 +106,7 @@ interface TurnExecutionAdapterCallbacks {
     metacognitiveFlags: readonly MetacognitiveFlag[],
   ) => void;
   setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
+  getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -394,6 +395,8 @@ export function createTurnExecutionRuntimeAdapter(
     ) => options.callbacks.setCurrentSelfModelState(state, snapshotRef, metacognitiveFlags),
     setCurrentTurnDisclosureLineage: (lineage) =>
       options.callbacks.setCurrentTurnDisclosureLineage(lineage),
+    getCurrentTurnDisclosureLineage: () =>
+      options.callbacks.getCurrentTurnDisclosureLineage(),
     buildRuntimeContext: (
       message,
       resolvedUserName,

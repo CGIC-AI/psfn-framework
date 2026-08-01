@@ -28,6 +28,7 @@ const startupOwnerSeeds = [
   ['capability-tier.seed.json', 'capability-tier.json'],
   ['charge-policy.seed.json', 'charge-policy.json'],
   ['backup.seed.json', 'backup.json'],
+  ['mcp-servers.seed.json', 'mcp-servers.json'],
   ['skills.seed.json', 'skills.json'],
   ['intake-policy.seed.json', 'intake-policy.json'],
   ['partner-affect-shadow.seed.json', 'partner-affect-shadow.json'],

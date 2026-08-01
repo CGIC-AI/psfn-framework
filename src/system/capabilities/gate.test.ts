@@ -335,6 +335,13 @@ describe('capability tool gating', () => {
       .toContain('external.companion');
   });
 
+  it('grants external MCP only above nursery or through an explicit custom grant', () => {
+    expect(resolveTierCapabilityTokens('nursery')).not.toContain('external.mcp');
+    expect(resolveTierCapabilityTokens('apprentice')).toContain('external.mcp');
+    expect(resolveTierCapabilityTokens('autonomous')).toContain('external.mcp');
+    expect(resolveTierCapabilityTokens('custom', ['external.mcp'])).toContain('external.mcp');
+  });
+
   it.each([
     ['Discord send', { action: 'send', target_kind: 'external', delivery_channel: 'discord' }, 'external.discord'],
     ['email send', { action: 'send', target_kind: 'external', delivery_channel: 'email' }, 'external.email'],

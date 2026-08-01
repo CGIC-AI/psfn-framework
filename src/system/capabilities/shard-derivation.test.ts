@@ -51,7 +51,7 @@ describe('SHARD_CAPABILITY_DENIAL_MASK', () => {
     expect(SHARD_GRANT_DERIVATION_VERSION).toBe('psfn.shard-grant.v2');
   });
 
-  it('contains exactly the ten approved tokens in canonical order', () => {
+  it('contains exactly the eleven approved tokens in canonical order', () => {
     expect(SHARD_CAPABILITY_DENIAL_MASK).toEqual([
       'identity.write.base',
       'identity.write.operator',
@@ -60,6 +60,7 @@ describe('SHARD_CAPABILITY_DENIAL_MASK', () => {
       'external.email',
       'external.web',
       'external.companion',
+      'external.mcp',
       'lifecycle.restart',
       'lifecycle.rebuild',
       'world.control',
@@ -88,6 +89,7 @@ describe('SHARD_CAPABILITY_DENIAL_MASK', () => {
       'external.email',
       'external.web',
       'external.companion',
+      'external.mcp',
       'lifecycle.restart',
       'lifecycle.rebuild',
     ];
@@ -202,7 +204,13 @@ describe('deriveShardCapabilityGrant', () => {
     // Egress backstop (psfn-framework-tu0mw): no external-send capability
     // survives derivation, so even a re-injected or renamed external tool is
     // capability-denied for a shard regardless of parent authority.
-    for (const egress of ['external.discord', 'external.email', 'external.web', 'external.companion'] as const) {
+    for (const egress of [
+      'external.discord',
+      'external.email',
+      'external.web',
+      'external.companion',
+      'external.mcp',
+    ] as const) {
       expect(grant.access.has(egress)).toBe(false);
     }
   });

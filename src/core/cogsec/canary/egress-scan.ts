@@ -32,6 +32,7 @@ export const EGRESS_CANARY_METHODS: ReadonlySet<string> = new Set([
   'web.request_binary',
   'web.search',
   'companion.message.send',
+  'mcp.execute',
 ]);
 
 export function isEgressCanaryMethod(method: string): boolean {

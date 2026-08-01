@@ -2743,7 +2743,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/disclosure/publication-tool.ts",
@@ -7320,7 +7320,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
+      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append \u2014 classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -7472,7 +7472,7 @@
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "PERSONAL_MARKER_PATTERN",
-      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[ée]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
+      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[\u00e9e]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
       "form": "regex",
       "note": "Sleeptime-wiki personal-context classifier currently encoded in code; explicitly baselined as named migration debt by psfn-framework-7qeo1.18, not immutable policy."
     },
@@ -8747,7 +8747,7 @@
     {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
-      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
+      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[\u2014:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
     },
@@ -9639,6 +9639,13 @@
       "value": "{ sectionId: 'import', surface: 'advanced' }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_GARDEN_FIELD_EXPOSURE.importProcessingStrictPolicy; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.memoryDeletionPolicy",
+      "value": "{ sectionId: 'memory', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Garden surface placement for the memoryDeletionPolicy settings field (7qeo1.17). Structural UI binding for a code-declared settings field, not a tunable value: changing it requires a code change to the field itself, so it is code-owned by design."
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",

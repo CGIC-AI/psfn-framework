@@ -9,6 +9,7 @@ import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
 import { INTAKE_POLICY_FILE_NAME } from './intake-policy-config.js';
+import { MCP_SERVERS_FILE_NAME } from './mcp-servers-config.js';
 import { PARTNER_AFFECT_SHADOW_FILE_NAME } from './partner-affect-shadow-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { PROVIDERS_FILE_NAME } from './providers-config.js';
@@ -45,7 +46,8 @@ export type SettingsSubsystemId =
   | 'intakePolicy'
   | 'partnerAffectShadow'
   | 'backup'
-  | 'channels';
+  | 'channels'
+  | 'mcp';
 
 export type SettingsFieldType =
   | 'string'
@@ -188,6 +190,12 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     ownerFile: CHANNELS_FILE_NAME,
     mode: 'raw_only',
     scope: ownerFileScope(CHANNELS_FILE_NAME),
+  },
+  mcp: {
+    id: 'mcp',
+    ownerFile: MCP_SERVERS_FILE_NAME,
+    mode: 'raw_only',
+    scope: ownerFileScope(MCP_SERVERS_FILE_NAME),
   },
 };
 

@@ -66,6 +66,7 @@ import {
   loadStartupSchedulerOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupChargePolicyOwnerFile,
+  loadStartupMcpServersOwnerFile,
   loadStartupSubagentRolesOwnerFile,
   type StartupOwnerFileState,
 } from './startup-owner-files.js';
@@ -74,6 +75,11 @@ import {
   loadIntakePolicyConfig,
   saveIntakePolicyConfig,
 } from './intake-policy-config.js';
+import type { McpServersConfig } from './mcp-servers-config.js';
+import {
+  loadMcpServersConfig,
+  saveMcpServersConfig,
+} from './mcp-servers-config.js';
 import type { TrustPolicyConfig } from './trust-policy-config.js';
 import {
   loadTrustPolicyConfig,
@@ -114,6 +120,8 @@ export interface ConfigStorePort {
   saveIntakePolicy(nextConfig: unknown): IntakePolicyConfig;
   loadPartnerAffectShadow(): PartnerAffectShadowPolicy;
   savePartnerAffectShadow(nextConfig: unknown): PartnerAffectShadowPolicy;
+  loadMcpServers(): McpServersConfig;
+  saveMcpServers(nextConfig: unknown): McpServersConfig;
   /** Read-only system owner. Garden must never turn this into a raw editor. */
   loadFleetAuthOwnerFile(): FleetAuthConfig | null;
   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
@@ -124,6 +132,7 @@ export interface ConfigStorePort {
   loadStartupCapabilityTier(): CapabilityTierConfig;
   loadStartupChargePolicy(): ChargePolicyConfig;
   loadStartupIntakePolicy(): IntakePolicyConfig;
+  loadStartupMcpServers(): McpServersConfig;
   loadSubagentRoles(): SubagentRoleRegistryConfig;
   saveSubagentRoles(nextConfig: unknown): SubagentRoleRegistryConfig;
   loadStartupSubagentRoles(): SubagentRoleRegistryConfig;
@@ -201,6 +210,8 @@ export function createOwnerFileConfigStore(
     saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
     loadPartnerAffectShadow: () => loadPartnerAffectShadowConfig(options.dataDir, loadOptions),
     savePartnerAffectShadow: (nextConfig) => savePartnerAffectShadowConfig(options.dataDir, nextConfig),
+    loadMcpServers: () => loadMcpServersConfig(options.dataDir, loadOptions),
+    saveMcpServers: (nextConfig) => saveMcpServersConfig(options.dataDir, nextConfig),
     loadFleetAuthOwnerFile: () => (
       existsSync(fleetAuthFilePath(options.dataDir))
         ? loadFleetAuthConfig(options.dataDir, options.seedDir)
@@ -230,6 +241,10 @@ export function createOwnerFileConfigStore(
       options.seedDir,
     ),
     loadStartupIntakePolicy: () => loadStartupIntakePolicyOwnerFile(
+      options.dataDir,
+      options.seedDir,
+    ),
+    loadStartupMcpServers: () => loadStartupMcpServersOwnerFile(
       options.dataDir,
       options.seedDir,
     ),

@@ -295,6 +295,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
   'charge-policy': 'chargePolicy',
   'partner-affect-shadow': 'partnerAffectShadow',
   backup: 'backup',
+  mcp: 'mcp',
 } as const;
 
 export type GardenSettingsRawEditorKey = keyof typeof SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY;
@@ -322,6 +323,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
   'charge-policy': 'charge-policy.json',
   'partner-affect-shadow': 'partner-affect-shadow.json',
   backup: 'backup.json',
+  mcp: 'mcp-servers.json',
 };
 
 export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
@@ -337,6 +339,7 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'intakePolicy',
   'partnerAffectShadow',
   'backup',
+  'mcp',
 ] as const;
 
 export function listGardenSettingsTunableFieldCoverage(): GardenSettingsTunableFieldCoverage[] {

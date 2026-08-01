@@ -299,6 +299,7 @@ describe('settings contract guard', () => {
       { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
       { rawEditorKey: 'partner-affect-shadow', subsystemId: 'partnerAffectShadow', ownerFile: 'partner-affect-shadow.json' },
       { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
+      { rawEditorKey: 'mcp', subsystemId: 'mcp', ownerFile: 'mcp-servers.json' },
     ]);
 
     for (const entry of inventory) {
@@ -317,6 +318,17 @@ describe('settings contract guard', () => {
     expect(contractData.subsystems.channels).toEqual({
       id: 'channels',
       ownerFile: 'channels.json',
+      mode: 'raw_only',
+      scope: 'global',
+    });
+  });
+
+  it('declares MCP servers as a global raw-only owner-file subsystem', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.subsystems.mcp).toEqual({
+      id: 'mcp',
+      ownerFile: 'mcp-servers.json',
       mode: 'raw_only',
       scope: 'global',
     });

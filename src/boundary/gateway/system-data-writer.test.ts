@@ -19,6 +19,7 @@ describe('GatewaySystemDataWriter', () => {
         saveIntakePolicy: vi.fn(),
         savePartnerAffectShadow: vi.fn(),
         saveBackup: vi.fn(),
+        saveMcpServers: vi.fn(),
       },
       systemDataDir,
     });
@@ -42,6 +43,7 @@ describe('GatewaySystemDataWriter', () => {
         saveIntakePolicy: vi.fn(),
         savePartnerAffectShadow: vi.fn(),
         saveBackup,
+        saveMcpServers: vi.fn(),
       },
       systemDataDir: '/unused',
     });
@@ -66,6 +68,7 @@ describe('GatewaySystemDataWriter', () => {
         saveIntakePolicy: vi.fn(),
         savePartnerAffectShadow: vi.fn(),
         saveBackup: vi.fn(),
+        saveMcpServers: vi.fn(),
       },
       systemDataDir: '/unused',
     });
@@ -91,6 +94,7 @@ describe('GatewaySystemDataWriter', () => {
         saveIntakePolicy: vi.fn(),
         savePartnerAffectShadow: vi.fn(),
         saveBackup: vi.fn(),
+        saveMcpServers: vi.fn(),
       },
       systemDataDir,
     });

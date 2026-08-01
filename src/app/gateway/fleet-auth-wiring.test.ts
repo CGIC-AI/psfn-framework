@@ -40,12 +40,13 @@ describe('gateway fleet authorization context wiring', () => {
     const manifestGuard = mainSource.indexOf(
       'requireFleetSsoFleetManifest(config.companionFleet)',
     );
-    const persistenceInitialization = mainSource.indexOf(
-      'const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({',
+    const guardedPersistenceInitialization = mainSource.indexOf(
+      "? await awaitPostgresStoreReadiness('fleet_auth', initializeFleetAuthPersistence)",
     );
 
     expect(manifestGuard).toBeGreaterThanOrEqual(0);
-    expect(manifestGuard).toBeLessThan(persistenceInitialization);
+    expect(guardedPersistenceInitialization).toBeGreaterThanOrEqual(0);
+    expect(manifestGuard).toBeLessThan(guardedPersistenceInitialization);
     expect(mainSource).toContain(
       'const fleetAuthKnownCompanionIds = config.companionFleet?.companions',
     );

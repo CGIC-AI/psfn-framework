@@ -328,7 +328,7 @@ async function executeContactSetTrust(
       );
     }
     return textResultWithError(
-      `Contact ${contactId} not found or carries primary trust (cannot change primary trust level)`,
+      `Contact ${contactId} not found or is the primary user (cannot change primary trust level)`,
       true,
     );
   }

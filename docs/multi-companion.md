@@ -1,6 +1,6 @@
 # Multi-Companion Substrate
 
-Last updated: 2026-07-31.
+Last updated: 2026-07-14.
 
 This is the canonical page for running more than one companion on a single PSFN
 cluster: the topology, the mandatory cluster manifest, and the cluster operations
@@ -27,9 +27,9 @@ activates only when the manifest has more than one entry).
 - **Process/schema/workspace boundaries isolate their declared domains.** The
   process boundary isolates agent-local execution and failures, the Postgres
   schema isolates tenant database state, and the authenticated companion
-  identity selects exactly one deterministic Personal Workspace. Enabled shell
-  execution runs inside the OS-mediated Bubblewrap sandbox, with the workspace
-  mounted writable, no network, and bounded resources.
+  identity selects exactly one deterministic Personal Workspace. Shell
+  interpreters are denied until an OS-mediated filesystem sandbox exists;
+  other allowlisted commands retain the existing cwd and argument-path checks.
 - **Companion ID is a UUID.** The cluster keys on lowercase RFC-4122 UUIDs
   (`src/system/config/companions-config.ts`, `COMPANION_ID_PATTERN`).
 - **Peers, not shards.** A cluster companion is independently rooted. A shard is
@@ -72,7 +72,7 @@ carries exactly:
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
 | `postgresRole` | dedicated owner/runtime role for that schema | safe PostgreSQL role name, unique across the cluster and distinct from the shared migration role |
 | `postgresDatabaseUrlRef` | launcher-resolved credential reference delivered to this agent through an inherited file descriptor | valid credential reference, unique across the cluster and never `POSTGRES_DATABASE_URL` |
-| `displayName` | optional Partner-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
+| `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
 | `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
 
 `displayName` and `avatarRef` are surfaced **only** through the authenticated
@@ -183,9 +183,9 @@ Each agent process pins its runtime persistence to its own schema; there is one
 extra `shared` schema for cross-companion world data.
 
 - Env: `COMPANION_PG_SCHEMA` is parsed in `src/system/config/load-config.ts`
-  into `config.postgresSchema`. The cluster supervisor derives it from the
-  selected `companions.json` entry; it is never derived from `COMPANION_ID` or
-  accepted as browser authority.
+  into `config.postgresSchema`. It is an **explicit opt-in**, deliberately not
+  derived from `COMPANION_ID`. Leave it unset for single-companion (the `public`
+  schema).
 - Pool pinning: `createPostgresPool(url, { schema })`
   (`src/persistence/postgres.ts`) sets `options=-c search_path=<schema>,extensions`
   at connection startup. The schema name is validated by
@@ -275,7 +275,7 @@ installation-owned **Shared Companion Workspace**. The existing site-scoped
 shared-world wiki is one governed knowledge surface within the shared domain; it
 is not a general shared filesystem.
 
-The canonical layout is:
+The target layout is:
 
 ```text
 <runtime root>/
@@ -362,20 +362,20 @@ not generic `api` traffic.
   vendored dependency this wave; if a future hub revision emits a signed
   channel-type claim it can replace the attachment-derived classification without
   changing the downstream stamp.
-- **Contact binding.** A Discord-SSO'd Partner binds to their existing canonical
+- **Contact binding.** A Discord-SSO'd human binds to their existing canonical
   contact via the attachment's validated contact binding
   (`hubDeviceAttachment.actor.contact.contactId`) — never minted as a new person
   or an `api` principal. `isHubDeviceAttachmentSnapshot` guarantees a non-empty
   contact id, so the binding is fail-closed. Guests (`guestMode: 'explicit'`)
   author as `hub-device-guest:<deviceId>` with no contact.
-- **Channel privacy.** companion-ui is a 1:1 Partner↔Companion surface, so turns
+- **Channel privacy.** companion-ui is a 1:1 human↔companion surface, so turns
   carry a non-null `channelPrivacy` (default `private`) sourced from the
   operator-owned `channels.json > companionUi` section. This clears the
   observer-eval sidecar privacy gate
   (`src/core/eval/observer-sidecar/privacy.ts`) instead of failing closed on
   `missing_channel_privacy_metadata`.
 - **Owner file.** `channels.json > companionUi` owns `{ channelPrivacy }`.
-  Contact identity comes only from the authenticated Partner attachment; the
+  Contact identity comes only from the authenticated human attachment; the
   owner file cannot override it. Unknown keys are rejected on load and save
   (`src/channels/backplane/config.ts`,
   `parseCompanionUiSection`). Availability is decided by the fleet-auth/hub-device
@@ -454,16 +454,15 @@ Multi-companion layers on top of the single-companion locations/world surface
   by the cross-companion presence writer
   (`src/core/agent/companion-presence-runtime.ts`,
   `CompanionPresenceRuntime` / `CompanionPresenceTurnPort`) as emanation or a
-  deliberate virtual `move` changes. It is the durable last-known runtime state
-  behind the prompt's "who else is here" projection, not raw observation or
-  proof of physical occupancy. Recording a matching place emits a co-location
-  event. Wired only under multi-companion topology (a multi-entry cluster).
+  deliberate `move` changes. It is the durable authority behind "who else is
+  here," and entering a place where another companion is present emits a
+  co-location event. Wired only under multi-companion topology (a multi-entry cluster).
 - **Companion channels.** Same-cluster companion↔companion conversation runs
   through the normal turn pipeline as ordinary channels
   (`src/shared/contracts/companion-channels.ts`): a many-to-many room
   (`companion-room:<placeId>`) and a 1:1 DM (`companion-dm:<a>:<b>`). Because they
   are normal turns, fatigue governs them with no new mechanism — MI↔MI turns
-  charge `companion_room` budgets, Partner participation is free, and hard
+  charge `companion_room` budgets, human participation is free, and hard
   exhaustion suppresses the model call (see the fatigue section in
   [`docs/operations.md`](./operations.md)).
 - **Autonomous initiation (ICP) is shipped, same-cluster, and opt-in.** When

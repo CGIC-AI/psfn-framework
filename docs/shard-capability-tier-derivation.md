@@ -1,10 +1,8 @@
 # Shard capability-tier derivation
 
-Status: implemented runtime contract (approved under `psfn-framework-yijy.1`,
-delivered through the `psfn-framework-mus2` work). The canonical implementation
-is in `src/system/capabilities/shard-derivation.ts`, with manager launch wiring
-in `src/faculties/shards/launch-capabilities.ts` and independent gateway
-admission in `src/boundary/gateway/methods/shard-backends.ts`.
+Status: approved design for `psfn-framework-yijy.1` (operator direction,
+2026-07-17). This document specifies the follow-up implementation; it does not
+change runtime behavior by itself.
 
 ## Decision
 
@@ -69,7 +67,7 @@ The derived grant has these invariants:
   grant digest exactly match the gateway's atomic snapshot. Owner authority
   churn between the two checks denies that launch.
 
-The canonical implementation is one pure capability-system helper used
+The canonical implementation should be one pure capability-system helper used
 by both the shard manager and gateway. It should iterate the canonical
 `CAPABILITY_TOKENS` order so audit records, canonical serialization, and digest
 checks are deterministic. Unknown or malformed tokens must be rejected before
@@ -86,16 +84,16 @@ The complete standing mask contains ten tokens:
 
 | Token | Rationale |
 | --- | --- |
-| `world.control` | Physical and virtual effectors, including satellite-hub objects, remain under the parent Companion's precedence. A shard may inherit `world.read`, but never standing actuation authority. A task-specific control request uses the scoped temporary-grant path instead. |
-| `lifecycle.restart` | The parent Companion, shard manager, and gateway own process lifecycle. A task copy must not restart the parent runtime or its own managed backend from inside the task loop. |
+| `world.control` | Physical and virtual effectors, including satellite-hub objects, remain under the primary companion's precedence. A shard may inherit `world.read`, but never standing actuation authority. A task-specific control request uses the scoped temporary-grant path instead. |
+| `lifecycle.restart` | The parent companion, shard manager, and gateway own process lifecycle. A task copy must not restart the primary runtime or its own managed backend from inside the task loop. |
 | `lifecycle.rebuild` | Rebuild is a deployment operation with a larger and less reversible blast radius than restart. It remains with the parent/operator lifecycle boundary. |
 | `identity.write.base` | Base identity is canonical shared identity state. Allowing a shard copy to stage or commit base-layer changes creates competing authors and an unsafe fold-back ambiguity. |
-| `identity.write.operator` | The operator layer represents Operator-owned direction and is never delegated to a task copy. A shard must not edit or impersonate Operator authority. |
+| `identity.write.operator` | The operator layer represents human-owned direction and is never delegated to a task copy. A shard must not edit or impersonate operator authority. |
 | `memory.delete` | Shard memory mutation already flows through isolated staging, sync policy, and fold review; delete/redact/restore operations are currently denied on shard-to-prime sync. Removing the token as well is defense-in-depth: a newly injected or renamed memory tool must not gain destructive memory authority merely because a parent has it. |
 | `external.discord` | Standing outbound communication is not a shard authority. The `notify` tool is the operator emergency button (contact the operator when a normal channel is down), never a companion surface a task copy may drive. `notify` is name-blocked at injection (`BLOCKED_SHARD_TOOL_NAMES`); masking the egress token as well is defense-in-depth so a renamed or newly injected external-send tool cannot regain Discord egress merely because a parent has it. |
 | `external.email` | Same rationale as `external.discord`: no standing email egress for a shard. |
 | `external.web` | Same rationale: the operator-directed `notify` brief/clarify/approval_request paths and any other `external.web`-gated egress are not a standing shard authority. |
-| `external.companion` | Companion-to-companion outreach (`notify` send/consider to a contact) is a parent-Companion surface, not a shard authority. |
+| `external.companion` | Companion-to-companion outreach (`notify` send/consider to a contact) is a primary-companion surface, not a shard authority. |
 
 Tokens not in this table are not globally promised to every shard. They remain
 only when the parent actually has them. In particular,
@@ -115,7 +113,7 @@ uniformly across the mask:
 
 | Token | Request-scoped authority | TTL authority | Disposition |
 | --- | --- | --- | --- |
-| `world.control` | Eligible only after explicit Partner approval, bound to one parent, shard instance, request, normalized action, and effector scope. | Disabled by default. It may be offered only when a separately approved canonical JSON-owned server policy defines the eligible actions, maximum TTL, revocation, and recovery rules. Browser state, environment values, and shard input are never policy authority. | Delegable only through the exceptional-action path; it never enters the standing custom token set. |
+| `world.control` | Eligible only after explicit human approval, bound to one parent, shard instance, request, normalized action, and effector scope. | Disabled by default. It may be offered only when a separately approved canonical JSON-owned server policy defines the eligible actions, maximum TTL, revocation, and recovery rules. Browser state, environment values, and shard input are never policy authority. | Delegable only through the exceptional-action path; it never enters the standing custom token set. |
 | `lifecycle.restart` | Never. | Never. | Nondelegable: lifecycle remains with the parent, shard manager, gateway, and operator. |
 | `lifecycle.rebuild` | Never. | Never. | Nondelegable: rebuild remains an operator/deployment action. |
 | `identity.write.base` | Never. | Never. | Nondelegable: shards cannot temporarily become competing authors of canonical base identity. |
@@ -124,7 +122,7 @@ uniformly across the mask:
 | `external.discord` | Never. | Never. | Nondelegable: outbound communication egress is operator-only and is never lent to a task copy. |
 | `external.email` | Never. | Never. | Nondelegable: same as `external.discord`. |
 | `external.web` | Never. | Never. | Nondelegable: same as `external.discord`. |
-| `external.companion` | Never. | Never. | Nondelegable: companion outreach is a parent-Companion surface, never a shard authority. |
+| `external.companion` | Never. | Never. | Nondelegable: companion outreach is a primary-companion surface, never a shard authority. |
 
 Request-scoped `world.control` authority is exact-use and cannot be auto-cleared
 from the parent's autonomous tier. TTL support remains unavailable until the
@@ -246,9 +244,9 @@ If the manager and gateway resolve different owner versions or grant digests,
 admission must stop. The discrepancy is a policy/TOCTOU failure, not a reason to
 choose the newer, older, or broader set.
 
-## Delivered implementation graph
+## Filed implementation graph
 
-The coordinated implementation was delivered under `psfn-framework-mus2`:
+The coordinated implementation is filed under `psfn-framework-mus2`:
 
 - `psfn-framework-mus2.1` owns the atomic authoritative snapshot, canonical
   derivation, immutable custom access, owner version, and grant digest.

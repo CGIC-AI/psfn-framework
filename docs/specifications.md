@@ -2,7 +2,7 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-07-31.
+Last updated: 2026-07-14.
 
 ## Source Of Truth Order
 
@@ -10,19 +10,13 @@ Last updated: 2026-07-31.
    - `src/app/startup/index.ts`
    - `src/app/gateway/main.ts`
    - `src/app/agent/main.ts`
-   - `src/app/operator/main.ts`
    - `src/app/startup/composition/composition.ts`
    - `src/app/startup/composition/parity.ts`
 2. Config and persistence contracts
    - `src/shared/contracts/runtime.ts`
-   - `src/system/config/runtime-config-contracts.ts`
-   - `src/system/config/load-config.ts`
-   - `src/system/config/settings-contract-guard.ts`
-   - `src/system/config/startup-owner-files.ts`
    - `src/system/settings.ts`
    - `src/system/settings/contracts.ts`
    - `src/persistence/layout.ts`
-   - `src/persistence/runtime-factory.ts`
 3. Bootstrap example only
    - `.env.example`
 
@@ -32,7 +26,7 @@ Last updated: 2026-07-31.
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
-### Cluster Partner and Operator surfaces
+### Cluster human and operator surfaces
 
 - The canonical HTTPS origin's `/fleet` route is the cluster overview inside the
   same compiled Garden frontend used for companion administration.
@@ -190,26 +184,16 @@ Out of boundary:
 
 ### JSON owner files own mutable runtime state
 
-System-scoped owners:
-
 - `settings.json`
 - `models.json`
 - `providers.json`
-- `channels.json`
-- `trust-policy.json`
-- `intake-policy.json`
-- `partner-affect-shadow.json`
-- `backup.json`
-- `companions.json`
-- optional `fleet-auth.json`
-- optional `subagent-roles.json`
-
-Per-companion whole-file owners rooted at `COMPANION_DATA_DIR`:
-
 - `scheduler.json`
 - `capability-tier.json`
-- `charge-policy.json`
+- `channels.json`
 - `skills.json`
+- `trust-policy.json`
+- `charge-policy.json`
+- `backup.json`
 
 Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
 
@@ -273,13 +257,12 @@ wikis, memory, skills, or modules.
 
 ### System-owned
 
-- system-scoped JSON owner files listed above
+- JSON owner files listed above
 - capability and runtime policy state
 - channel configuration
 
 ### Companion-owned
 
-- per-companion JSON owner files listed above
 - character card
 - PostgreSQL-backed companion runtime state
 - append-only session JSONL archives
@@ -307,13 +290,12 @@ Path helpers for these artifacts live in `src/persistence/layout.ts`.
 
 ## Startup Hydration Guarantees
 
-Gateway and agent startup both reach canonical hydration through
-`resolveStartupPreflightBundle` and `hydrateCanonicalStartupConfig`, which:
+Both gateway and agent startup run canonical hydration through `hydrateCanonicalStartupConfig`, which:
 
 - resolves runtime path layout
 - loads settings and splits them by owner domain
 - loads model and provider registries with legacy migration support
-- loads system-scoped and per-companion owner files from their canonical roots
+- loads trust-policy, scheduler, capability, charge-policy, backup, skills, and channel config
 - warns on legacy drift instead of silently re-authorizing `.env`
 
 ## Same-Cluster Inter-Companion Autonomy

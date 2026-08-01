@@ -12,11 +12,6 @@ stored-data read decoder is the only surviving consumer of the retired vocabular
 and response style is decoupled from privacy via channel-owned `deliveryStyle`
 labels.
 
-Role vocabulary: **Companion** is the subject, **Partner** is a known
-relational human, **Operator** is authenticated administration/security, and
-**Participant** is used when the relationship is unresolved. The trust value
-`primary` is a technical modifier only, not a replacement role name.
-
 Canonical code: `src/system/trust/context-envelope.ts`.
 
 ## Why an envelope

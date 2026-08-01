@@ -783,7 +783,7 @@ describe('companion relay routes', () => {
         channelType: 'api',
         authorId: 'test-user',
         authorName: 'Test User',
-        content: 'Your Partner gives you a gentle headpat.',
+        content: 'Your primary user gives you a gentle headpat.',
         isDirectMessage: true,
         routing: {
           source: 'satellite',

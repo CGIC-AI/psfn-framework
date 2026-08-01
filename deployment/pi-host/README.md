@@ -1,20 +1,14 @@
 # Pi host-side backup
 
-Repository-owned templates for an optional host-level, off-node backup lane on
-a single-node k3s host. This lane supplements the runtime's encrypted backup
-system; it is not Kubernetes runtime authority. The live application and owner
-files remain the workloads and PVCs in namespace `psfn` as described in
-[`docs/operations.md`](../../docs/operations.md#live-deployment-authority-read-this-first).
-
-Install the script and systemd units through an operator-reviewed host
-procedure, then run `systemctl daemon-reload`. Treat this directory as the
-template source of truth and keep the installed copies synchronized with it.
+Canonical copies of the host-level off-node backup units running on the
+single-node k3s Pi deployment (bead psfn-framework-q9ra.6; originally gwq9). The live
+files are `/usr/local/bin/psfn-backup.sh` plus the systemd units in
+`/etc/systemd/system/` — deploy by copying and `systemctl daemon-reload`.
+Treat this directory as the source of truth; edit here first, then ship.
 
 Host-specific paths (NAS mount, backup root, PVC directories, source checkout)
-belong in the operator-selected host env file — deliberately not repo-tracked.
-The script's `PSFN_BACKUP_ENV_FILE` override selects that file; without the
-override it uses `/etc/psfn-backup.env`. It fails closed if the file or a
-required key is missing.
+live in `/etc/psfn-backup.env` on the node — deliberately not repo-tracked;
+the script fails closed if the file or any required key is missing.
 
 The script dumps the in-cluster Postgres (validated with `pg_restore --list`),
 rsyncs the companion-data and system-data PVC trees, records helm values and

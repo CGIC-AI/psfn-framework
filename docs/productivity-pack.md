@@ -31,7 +31,7 @@ The working product names are:
 
 - **Productivity Pack** — the optional capability set and runtime modules;
 - **Productivity Companion** — the one companion authorized to operate it;
-- **Dayboard** — the dedicated Partner-facing planning and review application;
+- **Dayboard** — the dedicated human-facing planning and review application;
 - **Partner Operating Model** — the inspectable, correctable model of the
   partner's preferences, routines, context, and relevant behavioral patterns.
 
@@ -85,7 +85,7 @@ mistake cannot silently bind it to somebody else.
 The first implementation must not add organizations, workspaces, teams,
 tenant administration, billing, or generalized multi-user ownership.
 
-### 2.4 Partner authority over inferred work
+### 2.4 Human authority over inferred work
 
 An explicit instruction may create or change work directly. Passive or
 ambiguous inference may only create a Candidate.
@@ -148,7 +148,7 @@ belong in the optional Pack.
 | Explicit reminders and scheduled follow-ups | Yes | May attach them to Tasks and Projects |
 | Calendar event read/create/update through a canonical interface | Yes | Uses it for planning and time blocking |
 | Explicit appointment creation | Yes | May resolve it against Projects and availability |
-| Ordinary companion concerns and care nudges | Yes | Must not store the Partner's backlog in concerns |
+| Ordinary companion concerns and care nudges | Yes | Must not store the human backlog in concerns |
 | Voice conversation and direct commands | Yes | Adds Pack-aware capture and planning actions |
 | Typed sensor ingest and situated place semantics | Yes | Adds task/routine Trigger and Evidence rules |
 | Partner Dossier, contact profiles, and relationship graph | Yes | Adds operational context and import Candidates |
@@ -161,7 +161,7 @@ belong in the optional Pack.
 
 Calendar capability is therefore core-capable but policy-scoped. A companion
 does not gain access to the partner's real calendar simply because the
-interface exists. In a cluster, Partner-calendar write authority may still be
+interface exists. In a cluster, human-calendar write authority may still be
 restricted to the Productivity Companion.
 
 The existing canonical [`schedule`](tool-surface.md#canonical-schedule-surface)
@@ -187,7 +187,7 @@ These terms are canonical for the Pack.
 | **Trigger** | A deterministic rule deciding when a Task, Routine, or question becomes eligible to surface. |
 | **Evidence** | A provenance-bearing observation that supports a narrow completion or state claim. |
 | **Nudge** | One delivery attempt with a lifecycle: eligible, delivered, acknowledged, snoozed, acted on, expired, or suppressed. |
-| **Review** | A Partner-in-the-loop reconciliation of Candidates, Tasks, scheduling, outcomes, and stale work. |
+| **Review** | A human-in-the-loop reconciliation of Candidates, Tasks, scheduling, outcomes, and stale work. |
 | **Observation** | A normalized source event retained with freshness and confidence. |
 | **Insight** | A bounded correlation or pattern with its evidence window, sample size, missingness, and uncertainty. |
 | **External Binding** | The idempotent relationship between Pack state and an external object such as a calendar event or Obsidian document. |
@@ -224,7 +224,7 @@ Place trigger: costco
 A long-horizon Goal does not require an "epic" clone. Horizon and parent
 relationships are enough until real usage proves otherwise.
 
-### 4.2 Partner Tasks are not companion concerns
+### 4.2 Human Tasks are not companion concerns
 
 The current companion intention substrates are deliberately bounded:
 
@@ -240,7 +240,7 @@ The current companion intention substrates are deliberately bounded:
   companion-created projects and artifacts.
 
 Those limits protect companion welfare and attention. The Pack must not widen,
-reuse, or bypass them to hold an effectively unbounded Partner backlog.
+reuse, or bypass them to hold an effectively unbounded human backlog.
 
 ## 5. Product Topology
 
@@ -270,7 +270,7 @@ flowchart LR
     GATE -->|summary is sufficient| CANDIDATES[Candidate inbox]
     GATE -->|bounded deep read warranted| MINER[Mining pass]
     MINER --> CANDIDATES
-    CANDIDATES --> REVIEW[Direct authority or Partner review]
+    CANDIDATES --> REVIEW[Direct authority or human review]
     REVIEW --> OPS[Personal operations module]
 
     OPS --> TASKS[Tasks / Projects / Goals / Routines]
@@ -464,7 +464,7 @@ File intake must:
 - respect configured namespaces rather than scanning the entire vault blindly;
 - distinguish personal notes, passive transcripts, research material, and
   Pack-authored projections;
-- never interpret a Pack projection as a fresh Partner-authored source.
+- never interpret a Pack projection as a fresh user-authored source.
 
 ### 7.5 Other sources
 
@@ -504,7 +504,7 @@ A completed Capture Artifact passes through these stages:
 4. **Evaluate the deterministic deep-read gate.**
 5. **Optionally perform one bounded mining pass.**
 6. **Normalize and deduplicate Candidates.**
-7. **Apply direct authority or queue Partner review.**
+7. **Apply direct authority or queue human review.**
 8. **Record the decision and advance the source receipt.**
 
 Failure at any stage leaves a visible retryable or quarantined state. It does
@@ -591,7 +591,7 @@ The division of labor is:
 | Thoth | General wiki/reference data, bulk ingestion, reference-oriented Obsidian data, and research retrieval |
 | PSFN core | Companion conversation and memory, Partner Dossier, contact profiles, social graph, care, situated presence, partner affect, and core calendar/schedule |
 | Productivity Pack | Tasks, Projects, Areas, Goals, Routines, reviews, operational context, evidence, and Partner Operating Model |
-| Obsidian | Partner-facing Markdown workspace whose declared namespaces retain the authorities above |
+| Obsidian | Human-facing Markdown workspace whose declared namespaces retain the authorities above |
 
 ### 9.1 Partner Dossier versus Partner Operating Model
 
@@ -823,12 +823,12 @@ When more than one Emanation Member becomes eligible to speak:
 
 1. explicit partner address or an active conversation wins;
 2. otherwise the Satellite Primary receives a short response lease;
-3. the Satellite Primary may speak, decline, or return a deterministic no-op;
+3. the primary may speak, decline, or return a deterministic no-op;
 4. timeout or release makes the next policy-eligible member eligible;
 5. exactly one companion may hold the speech lease at a time.
 
 The Productivity Companion does not gain speaker priority merely because it
-found an eligible Task. It may speak only after the Satellite Primary declines/releases
+found an eligible Task. It may speak only after the primary declines/releases
 and the device allows its emanation.
 
 Arbitration happens before a model call when eligibility is answerable from
@@ -1046,7 +1046,7 @@ Any future self-binding feature must be:
 - safe against emergencies and account lockout;
 - independently reviewed as a high-risk control action.
 
-## 16. Partner-Facing Surfaces
+## 16. Human-Facing Surfaces
 
 ### 16.1 Dayboard
 
@@ -1286,15 +1286,15 @@ These scenarios are acceptance probes for future design and implementation.
 1. The kitchen satellite has one Satellite Primary.
 2. The Productivity Companion is an allowed presence Observation Recipient and
    Emanation Member.
-3. The Partner enters the kitchen while the Satellite Primary is resting.
+3. The partner enters the kitchen while the primary is resting.
 4. Both receive only the observations allowed by their scopes.
 5. Presence does not move or wake either companion.
 6. An eligible grocery Task gives the Productivity Companion a reason to
    request the speech lease.
-7. The Satellite Primary receives first opportunity and returns a no-op.
+7. The primary receives first opportunity and returns a no-op.
 8. The Productivity Companion acquires the released lease and gives one
    bundled grocery nudge.
-9. The audit shows observation delivery, Satellite Primary no-op, lease handoff, and one
+9. The audit shows observation delivery, primary no-op, lease handoff, and one
    speaker.
 
 ## 20. Delivery Sequence
@@ -1389,7 +1389,7 @@ inspect and extend it rather than create duplicates:
 - `psfn-framework-7ang.8` — phone GPS terminates as Place semantics;
 - `psfn-framework-vinz.20` — retired trust-gated presence auto-follow;
 - `psfn-framework-u4v0` — shipped replacement: shared-satellite observation
-  scopes, emanation allowlists, and Satellite-Primary-first response leases;
+  scopes, emanation allowlists, and primary-first response leases;
 - `psfn-framework-vinz.21` — location-scoped concerns/reminders on presence;
 - `psfn-framework-z7qe.8` — derived partner health state from biometric
   summaries;
@@ -1458,7 +1458,7 @@ slice:
    versus Partner Operating Model Candidates.
 8. The exact shared-satellite observation scopes, Emanation Member config
    fields, response-lease duration, and eligible-member ordering after the
-   Satellite Primary releases.
+   primary releases.
 
 These are bounded implementation decisions, not reasons to weaken the
 constitutional invariants.

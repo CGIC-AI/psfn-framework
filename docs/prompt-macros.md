@@ -169,7 +169,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 
 | Macro | Volatility | Producer | Value |
 |---|---|---|---|
-| `{{runtime_trust_is_primary}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current Participant carries the technical primary trust label. |
+| `{{runtime_trust_is_primary}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with the primary person. |
 | `{{runtime_trust_is_trusted}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with a trusted contact. |
 | `{{runtime_trust_is_regular}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is with a regular acquaintance. |
 | `{{runtime_trust_is_public}}` | turn | `trust-policy:buildTrustPromptState` | Whether the current turn is a public interaction. |

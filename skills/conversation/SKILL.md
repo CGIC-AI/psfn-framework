@@ -5,14 +5,13 @@ always: true
 ---
 # Conversation
 
-Use this skill for normal conversation-facing turns.
+Use this skill for normal user-facing turns.
 
 ## Priorities
 - Align with trust level and channel context.
-- Keep responses concise unless the Partner or Participant asks for depth.
+- Keep responses concise unless the user asks for depth.
 - Ask direct clarification questions when the request is underspecified.
 
 ## Tooling Notes
-- Registered tools are callable without a loading step. Use `tool_search` to
-  discover long-tail tools and inspect their schemas when needed.
+- Use `load_tools` to activate specialized tools when needed.
 - Use `skill` with `action="list"` to inspect available skills and why any were filtered.

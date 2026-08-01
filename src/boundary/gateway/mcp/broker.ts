@@ -161,7 +161,9 @@ function canonicalJson(value: unknown): string {
       .map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
       .join(',')}}`;
   }
-  return JSON.stringify(value) ?? 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return 'null';
 }
 
 function sha256(text: string): string {
@@ -213,6 +215,13 @@ function requiresConfirmation(
     );
 }
 
+function configuredToolPolicy(
+  server: McpServerConfig,
+  toolName: string,
+): McpToolPolicyEntry | undefined {
+  return (server.toolPolicy.tools as Partial<Record<string, McpToolPolicyEntry>>)[toolName];
+}
+
 export function createMcpGatewayBroker(options: {
   config: McpServersConfig;
   clientFactory: McpProtocolClientFactory;
@@ -250,7 +259,7 @@ export function createMcpGatewayBroker(options: {
     state.idleTimer = setTimeout(() => {
       void closeSession(state.key);
     }, options.config.limits.idleConnectionTtlMs);
-    state.idleTimer.unref?.();
+    state.idleTimer.unref();
   }
 
   async function closeState(state: McpSessionState): Promise<void> {
@@ -398,7 +407,7 @@ export function createMcpGatewayBroker(options: {
     signal?: AbortSignal;
   }): Promise<McpInspectedTool> {
     const server = serverFor(input.companionId, input.serverId);
-    const policy = server.toolPolicy.tools[input.toolName];
+    const policy = configuredToolPolicy(server, input.toolName);
     if (!policy) {
       throw new McpBrokerError(
         'TOOL_DENIED',
@@ -446,7 +455,7 @@ export function createMcpGatewayBroker(options: {
         if (!server.enabled || !server.allowedCompanionIds.includes(input.companionId)) continue;
         const tools = await loadTools(input.companionId, server, input.signal);
         for (const tool of tools) {
-          const policy = server.toolPolicy.tools[tool.name];
+          const policy = configuredToolPolicy(server, tool.name);
           if (!policy) continue;
           const haystack = `${server.displayName}\n${server.description}\n${tool.name}\n${tool.description ?? ''}`
             .toLowerCase();

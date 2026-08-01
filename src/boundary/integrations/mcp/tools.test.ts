@@ -1,7 +1,5 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { describe, expect, it, vi } from 'vitest';
-import type { DisclosureLineage } from '../../../core/cogsec/disclosure/contracts.js';
-import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
 import { GatewayErrors, type McpExecuteResult } from '../../gateway/protocol.js';
 import { createMcpTool, type McpToolGatewayPort } from './tools.js';
@@ -9,23 +7,6 @@ import { createMcpTool, type McpToolGatewayPort } from './tools.js';
 function text(result: Awaited<ReturnType<ReturnType<typeof createMcpTool>['execute']>>): string {
   const block = result.content[0];
   return block.type === 'text' ? block.text : '';
-}
-
-function lineage(effectiveSensitivity: DisclosureLineage['effectiveSensitivity']): DisclosureLineage {
-  return {
-    provenanceRefs: ['session:test'],
-    sourceSnapshots: [],
-    effectiveSensitivity,
-    permittedDestinations: [],
-    subjectContactIds: [],
-    sourceChannelIds: [],
-    generationContextRef: 'generation:test',
-    classification: 'auto_shareable',
-    classifiedAt: new Date(0).toISOString(),
-    classifierVersion: 'test/v1',
-    sourceCount: 1,
-    hasUnclassifiedSource: false,
-  };
 }
 
 function gateway(result?: McpExecuteResult): McpToolGatewayPort & { mcpExecute: ReturnType<typeof vi.fn> } {
@@ -40,10 +21,7 @@ function gateway(result?: McpExecuteResult): McpToolGatewayPort & { mcpExecute: 
 
 describe('canonical MCP tool', () => {
   it('keeps one bounded schema and exposes no authority, credential, or sensitivity fields', () => {
-    const tool = createMcpTool({
-      gateway: gateway(),
-      getDisclosureLineage: () => lineage('personal'),
-    });
+    const tool = createMcpTool({ gateway: gateway() });
     const serialized = JSON.stringify(tool.parameters);
 
     expect(tool.name).toBe('mcp');
@@ -70,10 +48,10 @@ describe('canonical MCP tool', () => {
         description: 'Search notes.',
         inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
       },
-      policy: { effect: 'read', confirmation: 'never' },
+      policy: { effect: 'read', confirmation: 'never', maxOutboundSensitivity: 'personal' },
     };
     const mcpGateway = gateway(inspected);
-    const tool = createMcpTool({ gateway: mcpGateway, getDisclosureLineage: () => lineage('personal') });
+    const tool = createMcpTool({ gateway: mcpGateway });
 
     const result = await tool.execute('inspect-1', {
       action: 'inspect', server_id: 'notes', tool_name: 'search_notes',
@@ -81,12 +59,12 @@ describe('canonical MCP tool', () => {
 
     expect(mcpGateway.mcpExecute).toHaveBeenCalledWith({
       action: 'inspect', serverId: 'notes', toolName: 'search_notes',
-    }, expect.objectContaining({ effectiveSensitivity: 'personal' }));
+    }, { toolCallId: 'inspect-1' });
     expect(text(result)).toContain('inputSchema');
     expect(JSON.stringify(tool.parameters)).not.toContain('search_notes');
   });
 
-  it('derives call sensitivity and shard lookup channel from runtime context, never model params', async () => {
+  it('forwards only the tool-call id needed to consume gateway-minted authority', async () => {
     const mcpGateway = gateway({
       action: 'call',
       serverId: 'notes',
@@ -95,17 +73,15 @@ describe('canonical MCP tool', () => {
       effectiveText: '[screened MCP output]',
       withheld: false,
     });
-    const tool = createMcpTool({ gateway: mcpGateway, getDisclosureLineage: () => lineage('intimate') });
+    const tool = createMcpTool({ gateway: mcpGateway });
     const controller = new AbortController();
 
-    const result = await runWithRequestContext({ channelId: 'discord:dm:operator' }, async () => (
-      await tool.execute('call-1', {
-        action: 'call',
-        server_id: 'notes',
-        tool_name: 'search_notes',
-        arguments: { query: 'Ada' },
-      }, controller.signal)
-    ));
+    const result = await tool.execute('call-1', {
+      action: 'call',
+      server_id: 'notes',
+      tool_name: 'search_notes',
+      arguments: { query: 'Ada' },
+    }, controller.signal);
 
     expect(mcpGateway.mcpExecute).toHaveBeenCalledWith({
       action: 'call',
@@ -113,37 +89,21 @@ describe('canonical MCP tool', () => {
       toolName: 'search_notes',
       arguments: { query: 'Ada' },
     }, {
-      effectiveSensitivity: 'intimate',
-      channelId: 'discord:dm:operator',
+      toolCallId: 'call-1',
       signal: controller.signal,
     });
     expect(text(result)).toBe('[screened MCP output]');
   });
 
-  it('fails closed to confidential sensitivity when turn lineage is unavailable', async () => {
-    const mcpGateway = gateway({
-      action: 'call', serverId: 'notes', toolName: 'search_notes',
-      isError: false, effectiveText: 'screened', withheld: false,
-    });
-    const tool = createMcpTool({ gateway: mcpGateway, getDisclosureLineage: () => undefined });
-
-    await tool.execute('call-2', {
-      action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: {},
-    });
-    expect(mcpGateway.mcpExecute).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      effectiveSensitivity: 'confidential',
-    }));
-  });
-
   it('releases one server or every companion session without retaining definitions', async () => {
     const mcpGateway = gateway({ action: 'release', serverId: 'notes', released: true });
-    const tool = createMcpTool({ gateway: mcpGateway, getDisclosureLineage: () => lineage('public') });
+    const tool = createMcpTool({ gateway: mcpGateway });
 
     await expect(tool.execute('release-1', { action: 'release', server_id: 'notes' }))
       .resolves.toMatchObject({ details: { mcp: { action: 'release', released: true } } });
     expect(mcpGateway.mcpExecute).toHaveBeenCalledWith(
       { action: 'release', serverId: 'notes' },
-      expect.objectContaining({ effectiveSensitivity: 'public' }),
+      { toolCallId: 'release-1' },
     );
   });
 
@@ -154,7 +114,7 @@ describe('canonical MCP tool', () => {
       GatewayErrors.NEEDS_APPROVAL,
       { approvalId: 'approval-1' },
     ));
-    const tool = createMcpTool({ gateway: mcpGateway, getDisclosureLineage: () => lineage('intimate') });
+    const tool = createMcpTool({ gateway: mcpGateway });
 
     const result = await tool.execute('call-3', {
       action: 'call', server_id: 'notes', tool_name: 'write_note', arguments: { text: 'private' },
@@ -167,7 +127,7 @@ describe('canonical MCP tool', () => {
   });
 
   it('uses identity.read for discovery/release and external.mcp only for calls', () => {
-    const tool = createMcpTool({ gateway: gateway(), getDisclosureLineage: () => lineage('public') });
+    const tool = createMcpTool({ gateway: gateway() });
     for (const action of ['catalog', 'search', 'inspect', 'release']) {
       expect(resolveToolRequiredCapabilities(tool, { action })).toEqual(['identity.read']);
     }

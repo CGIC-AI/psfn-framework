@@ -53,6 +53,7 @@ import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from './methods/mcp.js';
+import { GatewayMcpInvocationAuthority } from './mcp/invocation-authority.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -413,6 +414,10 @@ export class GatewayServer {
     GatewayRpcConnection,
     GatewayMcpRequestCancellation
   >();
+  private readonly mcpInvocationAuthorityByConnection = new Map<
+    GatewayRpcConnection,
+    GatewayMcpInvocationAuthority
+  >();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -766,6 +771,8 @@ export class GatewayServer {
     this.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
     const mcpRequestCancellation = new GatewayMcpRequestCancellation();
     this.mcpRequestCancellationByConnection.set(conn, mcpRequestCancellation);
+    const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
+    this.mcpInvocationAuthorityByConnection.set(conn, mcpInvocationAuthority);
     const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const resolveIntakeScreening = (): IntakeScreeningService | undefined =>
@@ -781,6 +788,7 @@ export class GatewayServer {
       llmProvider: this.options.llmProvider,
       llmRequestCancellation,
       mcpRequestCancellation,
+      mcpInvocationAuthority,
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.resolveConnectionDiscordDock(conn),
@@ -2496,6 +2504,8 @@ export class GatewayServer {
     this.llmRequestCancellationByConnection.delete(conn);
     this.mcpRequestCancellationByConnection.get(conn)?.abortAll();
     this.mcpRequestCancellationByConnection.delete(conn);
+    this.mcpInvocationAuthorityByConnection.get(conn)?.clear();
+    this.mcpInvocationAuthorityByConnection.delete(conn);
     const companionId = status?.companionId ?? this.options.companionId;
     if (companionId && this.options.mcpBroker) {
       void this.options.mcpBroker.releaseCompanion(companionId).catch((error: unknown) => {
@@ -3517,6 +3527,10 @@ export class GatewayServer {
       cancellation.abortAll();
     }
     this.mcpRequestCancellationByConnection.clear();
+    for (const authority of this.mcpInvocationAuthorityByConnection.values()) {
+      authority.clear();
+    }
+    this.mcpInvocationAuthorityByConnection.clear();
     if (this.icpAutonomyBroker) {
       const companionIds = new Set([
         ...this.companionConnections.keys(),

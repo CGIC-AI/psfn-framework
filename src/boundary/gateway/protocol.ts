@@ -319,19 +319,16 @@ export interface WebSearchParams {
 
 export type McpExecuteAction = 'catalog' | 'search' | 'inspect' | 'call' | 'release';
 
-/**
- * Agent-to-gateway MCP request. `effectiveSensitivity` is populated by the
- * trusted agent tool wrapper from the current turn's disclosure lineage; it is
- * deliberately absent from the model-facing schema.
- */
-export interface McpExecuteParams extends GatewayCorrelationParams {
+/** Agent-to-gateway execution of one exact gateway-authorized MCP tool call. */
+export interface McpExecuteParams {
   action: McpExecuteAction;
   serverId?: string;
   toolName?: string;
   query?: string;
   limit?: number;
   arguments?: Record<string, unknown>;
-  effectiveSensitivity?: 'public' | 'personal' | 'intimate' | 'confidential';
+  /** Opaque, single-use permit minted when the gateway observed this model tool call. */
+  permit?: string;
   cancellationId?: string;
 }
 
@@ -341,6 +338,16 @@ export interface McpCancelParams {
 
 export interface McpCancelResult {
   cancelled: boolean;
+}
+
+/** Reversible operator lifecycle action; it cannot connect or invoke a server. */
+export interface McpReleaseParams {
+  serverId?: string;
+}
+
+export interface McpReleaseResult {
+  released: true;
+  serverId?: string;
 }
 
 export type McpExecuteResult =
@@ -363,6 +370,7 @@ export type McpExecuteResult =
         description: string;
         effect: 'read' | 'write' | 'read_write' | 'destructive' | 'control';
         confirmation: 'never' | 'sensitive' | 'always';
+        maxOutboundSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
       }>;
     }
   | {
@@ -377,6 +385,7 @@ export type McpExecuteResult =
       policy: {
         effect: 'read' | 'write' | 'read_write' | 'destructive' | 'control';
         confirmation: 'never' | 'sensitive' | 'always';
+        maxOutboundSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
       };
     }
   | {
@@ -729,7 +738,13 @@ export interface LLMChatResult {
   content: string;
   reasoning?: string;
   providerObservability?: LLMProviderObservability;
-  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+    /** Gateway-client transport detail; stripped before the model loop sees the tool call. */
+    gatewayMcpPermit?: string;
+  }>;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -1179,6 +1194,7 @@ export interface GatewayMethods {
   'web.search': [WebSearchParams, WebSearchResult];
   'mcp.execute': [McpExecuteParams, McpExecuteResult];
   'mcp.cancel': [McpCancelParams, McpCancelResult];
+  'mcp.release': [McpReleaseParams, McpReleaseResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];

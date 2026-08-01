@@ -42,9 +42,7 @@ describe('agent core runtime builder', () => {
   it('registers the canonical lazy MCP client with runtime-derived disclosure lineage', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('agentLoop.registerTool(createMcpTool({');
-    expect(coreRuntimeSource).toContain(
-      'getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage()',
-    );
+    expect(coreRuntimeSource).toContain('createMcpTool({ gateway })');
   });
 
   it('wires concern resolution through isolated startup reconciliation and scoped emotion state', () => {

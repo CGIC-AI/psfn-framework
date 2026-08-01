@@ -45,6 +45,7 @@ import type {
 } from '../protocol.js';
 import type { GatewaySystemDataWriterPort } from '../system-data-writer.js';
 import type { McpGatewayBroker } from '../mcp/broker.js';
+import type { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 
 /**
  * Gateway-created authority passed to a shard backend executor only after the
@@ -129,6 +130,8 @@ export interface GatewayMethodRuntime {
   systemDataWriter?: GatewaySystemDataWriterPort;
   /** Gateway-owned lazy MCP broker; absent means external MCP is disabled. */
   mcpBroker?: McpGatewayBroker;
+  /** Connection-scoped, gateway-minted authority for exact MCP model tool calls. */
+  mcpInvocationAuthority: GatewayMcpInvocationAuthority;
   /**
    * Authoritative capability tier resolved from the gateway's own
    * CapabilityRuntime (never the caller-declared value). Gateway methods that

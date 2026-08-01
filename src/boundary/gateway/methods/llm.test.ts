@@ -19,6 +19,7 @@ import {
   createSubagentWorkSpecProvider,
 } from '../../../faculties/subagents/work-spec.js';
 import { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
+import { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -32,6 +33,7 @@ function createHarness(options: {
   authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
   llmProvider?: GatewayMethodRuntime['llmProvider'];
   audited?: GatewayMethodRuntime['audited'];
+  authenticatedCompanionId?: string;
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn<LLMProviderPort['stream']>(async () => ({
@@ -90,6 +92,7 @@ function createHarness(options: {
     invalidateCache: vi.fn(),
   };
 
+  const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
   const runtime: GatewayMethodRuntime = {
     target: {
       addMethod(name: string, handler: (params: any) => Promise<any>) {
@@ -128,8 +131,9 @@ function createHarness(options: {
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
-    authenticatedCompanionId: () => undefined,
+    authenticatedCompanionId: () => options.authenticatedCompanionId,
     llmRequestCancellation: new GatewayLLMRequestCancellation(),
+    mcpInvocationAuthority,
     ...(options.authorizeIcpConversationCorrelation
       ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
       : {}),
@@ -152,6 +156,7 @@ function createHarness(options: {
     complete,
     modelDiscovery,
     notifyRequester: runtime.notifyRequester,
+    mcpInvocationAuthority,
   };
 }
 
@@ -702,6 +707,59 @@ describe('registerLLMMethods', () => {
         transport: 'openai_developer',
       },
     });
+  });
+
+  it('mints an opaque exact MCP permit only for a non-shard model tool call', async () => {
+    const companionId = '4b90c2e6-0663-4f01-9965-9d228fa848bd';
+    const harness = createHarness({ authenticatedCompanionId: companionId });
+    harness.stream.mockResolvedValue({
+      content: '',
+      toolCalls: [{
+        id: 'mcp-call-1',
+        name: 'mcp',
+        input: {
+          action: 'call',
+          server_id: 'notes',
+          tool_name: 'search_notes',
+          arguments: { query: 'Ada' },
+        },
+      }],
+      model: 'mock-model',
+      inputTokens: 5,
+      outputTokens: 3,
+      stopReason: 'tool_use',
+    });
+
+    const result = await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      channelId: 'discord:dm:operator',
+      messages: [{ role: 'user', content: 'search notes' }],
+      systemPrompt: 'system',
+      tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+    });
+    const permit = result.toolCalls[0]?.gatewayMcpPermit;
+    expect(permit).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(harness.mcpInvocationAuthority.consume({
+      permit,
+      companionId,
+      params: {
+        action: 'call',
+        serverId: 'notes',
+        toolName: 'search_notes',
+        arguments: { query: 'Ada' },
+      },
+    })).toEqual({ outboundSensitivity: 'confidential' });
+
+    const shardResult = await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      channelId: 'shard:worker-1',
+      messages: [{ role: 'user', content: 'search notes' }],
+      systemPrompt: 'system',
+      tools: [{ name: 'mcp', description: 'MCP', inputSchema: { type: 'object' } }],
+    });
+    expect(shardResult.toolCalls[0]).not.toHaveProperty('gatewayMcpPermit');
   });
 
   it('preserves model knob fields from llm.complete params into provider context hints', async () => {

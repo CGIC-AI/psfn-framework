@@ -1,6 +1,7 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { describe, expect, it, vi } from 'vitest';
 import type { McpGatewayBroker } from '../mcp/broker.js';
+import { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 import { GatewayErrors } from '../protocol.js';
 import {
   GatewayMcpRequestCancellation,
@@ -25,6 +26,7 @@ function broker(): McpGatewayBroker {
       description: 'Search notes.',
       effect: 'read',
       confirmation: 'never',
+      maxOutboundSensitivity: 'confidential',
     }]),
     inspectTool: vi.fn(async () => ({
       serverId: 'notes',
@@ -34,7 +36,9 @@ function broker(): McpGatewayBroker {
         description: 'Search notes.',
         inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
       },
-      policy: { effect: 'read', confirmation: 'never' },
+      policy: {
+        effect: 'read', confirmation: 'never', maxOutboundSensitivity: 'confidential',
+      },
     })),
     invokeTool: vi.fn(async () => ({
       serverId: 'notes',
@@ -57,6 +61,7 @@ function runtime(input: {
   requestExplicitApproval?: ReturnType<typeof vi.fn>;
 }) {
   const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+  const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
   const value = {
     target: {
       addMethod: (name: string, handler: (params: unknown) => Promise<unknown>) => {
@@ -65,6 +70,7 @@ function runtime(input: {
     },
     mcpBroker: input.broker,
     mcpRequestCancellation: new GatewayMcpRequestCancellation(),
+    mcpInvocationAuthority,
     authenticatedCompanionId: () => input.companionId ?? COMPANION_ID,
     capabilityGrantSnapshotProvider: () => ({
       tier: 'custom' as const,
@@ -77,29 +83,50 @@ function runtime(input: {
     audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
   } as unknown as GatewayMethodRuntime;
   registerMcpMethods(value);
-  return { methods, runtime: value };
+  return {
+    methods,
+    runtime: value,
+    permit(modelInput: Record<string, unknown>): string {
+      const permit = mcpInvocationAuthority.mint({
+        companionId: input.companionId ?? COMPANION_ID,
+        modelInput,
+      });
+      if (!permit) throw new Error('test MCP input did not produce a permit');
+      return permit;
+    },
+  };
 }
 
 describe('MCP gateway RPC', () => {
   it('uses authenticated companion identity for catalog/search/inspect/call/release', async () => {
     const mcpBroker = broker();
-    const { methods } = runtime({ broker: mcpBroker });
+    const { methods, permit } = runtime({ broker: mcpBroker });
     const execute = methods.get('mcp.execute');
 
-    await expect(execute?.({ action: 'catalog' })).resolves.toMatchObject({ action: 'catalog' });
-    await expect(execute?.({ action: 'search', query: 'notes', limit: 3 })).resolves.toMatchObject({ action: 'search' });
+    await expect(execute?.({ action: 'catalog', permit: permit({ action: 'catalog' }) }))
+      .resolves.toMatchObject({ action: 'catalog' });
+    await expect(execute?.({
+      action: 'search', query: 'notes', limit: 3,
+      permit: permit({ action: 'search', query: 'notes', limit: 3 }),
+    })).resolves.toMatchObject({ action: 'search' });
     await expect(execute?.({
       action: 'inspect', serverId: 'notes', toolName: 'search_notes',
+      permit: permit({ action: 'inspect', server_id: 'notes', tool_name: 'search_notes' }),
     })).resolves.toMatchObject({ action: 'inspect' });
     await expect(execute?.({
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'Ada' },
-      effectiveSensitivity: 'personal',
+      permit: permit({
+        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Ada' },
+      }),
       cancellationId: 'de305d54-75b4-431b-adb2-eb6b9e546014',
     })).resolves.toMatchObject({ action: 'call', effectiveText: expect.stringContaining('screened') });
-    await expect(execute?.({ action: 'release', serverId: 'notes' })).resolves.toEqual({
+    await expect(execute?.({
+      action: 'release', serverId: 'notes',
+      permit: permit({ action: 'release', server_id: 'notes' }),
+    })).resolves.toEqual({
       action: 'release', serverId: 'notes', released: true,
     });
 
@@ -110,7 +137,7 @@ describe('MCP gateway RPC', () => {
     }));
     expect(mcpBroker.invokeTool).toHaveBeenCalledWith(expect.objectContaining({
       companionId: COMPANION_ID,
-      outboundSensitivity: 'personal',
+      outboundSensitivity: 'confidential',
       confirmed: false,
     }));
     expect(mcpBroker.releaseServer).toHaveBeenCalledWith({
@@ -121,27 +148,56 @@ describe('MCP gateway RPC', () => {
 
   it('rejects missing server capability at the gateway before broker dispatch', async () => {
     const mcpBroker = broker();
-    const { methods } = runtime({ broker: mcpBroker, grantedTokens: ['identity.read'] });
+    const { methods, permit } = runtime({ broker: mcpBroker, grantedTokens: ['identity.read'] });
 
     await expect(methods.get('mcp.execute')?.({
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: {},
-      effectiveSensitivity: 'public',
+      permit: permit({
+        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: {},
+      }),
     })).rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
     expect(mcpBroker.invokeTool).not.toHaveBeenCalled();
   });
 
   it('rejects model/caller authority fields and malformed action shapes', async () => {
     const mcpBroker = broker();
-    const { methods } = runtime({ broker: mcpBroker });
+    const { methods, permit } = runtime({ broker: mcpBroker });
     const execute = methods.get('mcp.execute');
 
-    await expect(execute?.({ action: 'catalog', companionId: 'spoofed' })).rejects.toThrow();
+    await expect(execute?.({
+      action: 'catalog', companionId: 'spoofed', permit: permit({ action: 'catalog' }),
+    })).rejects.toThrow();
+    await expect(execute?.({
+      action: 'call', serverId: 'notes', toolName: 'search_notes', arguments: {},
+      effectiveSensitivity: 'public',
+      permit: permit({ action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: {} }),
+    })).rejects.toThrow();
+    await expect(execute?.({
+      action: 'call', serverId: 'notes', toolName: 'search_notes', arguments: {},
+      channelId: 'discord:dm:forged',
+      permit: permit({ action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: {} }),
+    })).rejects.toThrow();
     await expect(execute?.({ action: 'call', serverId: 'notes', toolName: 'search_notes' }))
       .rejects.toThrow();
     await expect(execute?.({ action: 'unknown' })).rejects.toThrow();
+    expect(mcpBroker.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it('keeps reversible operator unload on a non-invoking lifecycle method', async () => {
+    const mcpBroker = broker();
+    const { methods } = runtime({ broker: mcpBroker });
+
+    await expect(methods.get('mcp.release')?.({ serverId: 'notes' })).resolves.toEqual({
+      released: true,
+      serverId: 'notes',
+    });
+    expect(mcpBroker.releaseServer).toHaveBeenCalledWith({
+      companionId: COMPANION_ID,
+      serverId: 'notes',
+    });
     expect(mcpBroker.invokeTool).not.toHaveBeenCalled();
   });
 
@@ -158,14 +214,16 @@ describe('MCP gateway RPC', () => {
       });
       return { id: 'approval-1', expiresAt: Date.now() + 60_000 };
     });
-    const { methods } = runtime({ broker: mcpBroker, requestExplicitApproval });
+    const { methods, permit } = runtime({ broker: mcpBroker, requestExplicitApproval });
 
     await expect(methods.get('mcp.execute')?.({
       action: 'call',
       serverId: 'notes',
       toolName: 'search_notes',
       arguments: { query: 'Ada' },
-      effectiveSensitivity: 'intimate',
+      permit: permit({
+        action: 'call', server_id: 'notes', tool_name: 'search_notes', arguments: { query: 'Ada' },
+      }),
     })).rejects.toMatchObject({
       code: GatewayErrors.NEEDS_APPROVAL,
       data: { approvalId: 'approval-1' },
@@ -193,10 +251,11 @@ describe('MCP gateway RPC', () => {
   it('uses structured policy errors instead of leaking broker internals', async () => {
     const mcpBroker = broker();
     vi.mocked(mcpBroker.inspectTool).mockRejectedValue(new Error('secret backend detail'));
-    const { methods } = runtime({ broker: mcpBroker });
+    const { methods, permit } = runtime({ broker: mcpBroker });
 
     await expect(methods.get('mcp.execute')?.({
       action: 'inspect', serverId: 'notes', toolName: 'search_notes',
+      permit: permit({ action: 'inspect', server_id: 'notes', tool_name: 'search_notes' }),
     })).rejects.toSatisfy((error: unknown) => (
       error instanceof JSONRPCErrorException
       && error.code === GatewayErrors.PROVIDER_ERROR

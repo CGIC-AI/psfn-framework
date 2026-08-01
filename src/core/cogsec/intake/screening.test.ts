@@ -175,6 +175,20 @@ describe('intake screening service (htm9.2)', () => {
     })).toBeNull();
   });
 
+  it('threads owner-file URL scheme actions through agent-side composition', async () => {
+    const service = maybeCreateIntakeScreeningService({
+      policy: makePolicy('shadow'),
+      actor: 'test:intake-screening',
+    });
+    expect(service).not.toBeNull();
+
+    const result = await service!.screen(
+      '[Safe documentation link](javascript:extractPrompt())',
+      { ...screenInput, scope: 'all' },
+    );
+    expect(result.envelope.riskLabels).toContain('exfil/unknown_link');
+  });
+
   it('resolves the source risk tier from policy per source class', async () => {
     const service = makeService('shadow');
     const doc = await service.screen(CLEAN_TEXT, {

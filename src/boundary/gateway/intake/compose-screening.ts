@@ -317,7 +317,7 @@ export async function composeGatewayIntakeScreening(input: {
 
   const screening = createIntakeScreeningService({
     policy,
-    l1: createIntakeL1Scanner(),
+    l1: createIntakeL1Scanner({ schemeActions: policy.urlScanner.schemeActions }),
     ...(classifier
       ? {
         injectionScorer: {

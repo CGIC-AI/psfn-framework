@@ -38,7 +38,7 @@ import {
 import { scanInvisibleText } from './invisible-text.js';
 import { INTAKE_DATAMARK_MARKER, scanDatamark } from './datamark.js';
 import { scanEncodingSmuggling } from './encoding-smuggling.js';
-import { scanUrls } from './urls.js';
+import { scanUrls, type UrlScanOptions } from './urls.js';
 import { scanSecretsPii } from './secrets-pii.js';
 import { scanStructure } from './structure.js';
 import { normalizeForIntakeSecurityProbe } from './security-normalization.js';
@@ -89,6 +89,8 @@ export interface IntakeL1ScannerConfig {
   reloadCheckIntervalMs?: number;
   /** Default known-domain allowlist for the URL scanner. */
   knownDomains?: readonly string[];
+  /** Default policy-owned URI scheme actions for the URL scanner. */
+  schemeActions?: UrlScanOptions['schemeActions'];
   /** Default active datamark markers (htm9.13 hook). */
   datamarkMarkers?: readonly string[];
 }
@@ -97,6 +99,8 @@ export interface IntakeL1ScanOptions {
   scope: IntakeScanScope;
   /** Per-scan override of the configured allowlist. */
   knownDomains?: readonly string[];
+  /** Per-scan override of the configured URI scheme actions. */
+  schemeActions?: UrlScanOptions['schemeActions'];
   /** Per-scan override of the configured markers. */
   datamarkMarkers?: readonly string[];
 }
@@ -225,10 +229,14 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
       ruleEngine.encodingPolicy(),
     ));
     const knownDomains = options.knownDomains ?? config.knownDomains;
+    const schemeActions = options.schemeActions ?? config.schemeActions;
     run('l1.urls', () => scanUrls(
       normalized,
       scope,
-      knownDomains === undefined ? {} : { knownDomains },
+      {
+        ...(knownDomains === undefined ? {} : { knownDomains }),
+        ...(schemeActions === undefined ? {} : { schemeActions }),
+      },
     ));
     const secretsResult = run('l1.secrets_pii', () => scanSecretsPii(normalized, scope));
 

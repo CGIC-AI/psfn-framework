@@ -23,6 +23,7 @@ import {
   VALID_RELATIONSHIP_TYPES,
   type RelationshipType,
 } from '../../core/contacts/types.js';
+import { assertPostgresRelationColumns } from './relation-contract.js';
 
 interface FleetPolicyOwner {
   companionId: string;
@@ -143,32 +144,43 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
 
   /**
    * Prove every tenant relation and selected column this gateway authority
-   * consumes. LIMIT 0 performs no content read or row lock, but the matching
-   * locking clauses still prove the role privileges required by authorization.
+   * consumes through pg_catalog. This reads and locks no data rows; catalog ACL
+   * metadata proves the runtime role's required SELECT and UPDATE privileges.
    */
   async assertReady(): Promise<void> {
     for (const owner of this.fleet.values()) {
-      const schema = quoteSchema(owner.postgresSchema);
-      await this.pool.query(`
-        SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
-          peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
-          expires_at_ms, status, reason_code, revision
-        FROM ${schema}.icp_initiation_candidates
-        LIMIT 0
-        FOR SHARE
-      `);
-      await this.pool.query(`
-        SELECT id, trust_level, relationship_type, is_machine_intelligence
-        FROM ${schema}.contacts
-        LIMIT 0
-        FOR UPDATE
-      `);
-      await this.pool.query(`
-        SELECT contact_id, channel, channel_user_id
-        FROM ${schema}.contact_channel_ids
-        LIMIT 0
-        FOR SHARE
-      `);
+      await assertPostgresRelationColumns(this.pool, {
+        schema: owner.postgresSchema,
+        relation: 'icp_initiation_candidates',
+        columns: [
+          'candidate_id',
+          'root_initiation_id',
+          'local_companion_id',
+          'peer_contact_id',
+          'peer_companion_id',
+          'preferred_channel',
+          'source',
+          'provenance_ref',
+          'created_at_ms',
+          'expires_at_ms',
+          'status',
+          'reason_code',
+          'revision',
+        ],
+        privileges: ['SELECT', 'UPDATE'],
+      });
+      await assertPostgresRelationColumns(this.pool, {
+        schema: owner.postgresSchema,
+        relation: 'contacts',
+        columns: ['id', 'trust_level', 'relationship_type', 'is_machine_intelligence'],
+        privileges: ['SELECT', 'UPDATE'],
+      });
+      await assertPostgresRelationColumns(this.pool, {
+        schema: owner.postgresSchema,
+        relation: 'contact_channel_ids',
+        columns: ['contact_id', 'channel', 'channel_user_id'],
+        privileges: ['SELECT', 'UPDATE'],
+      });
     }
   }
 

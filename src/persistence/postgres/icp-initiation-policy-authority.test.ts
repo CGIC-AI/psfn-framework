@@ -30,31 +30,49 @@ function createAuthority(query: Pool['query']): PostgresIcpInitiationPolicyAutho
 }
 
 describe('PostgresIcpInitiationPolicyAuthority readiness', () => {
-  it('proves every tenant relation and the row-lock privileges used later', async () => {
-    const query = vi.fn(async () => ({ rows: [] }));
+  it('proves every tenant relation through privilege-safe catalog metadata', async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => ({
+      rows: [{
+        schema_name: values?.[0],
+        relation_exists: true,
+        missing_columns: [],
+        missing_privileges: [],
+      }],
+    }));
     const authority = createAuthority(query as unknown as Pool['query']);
 
     await authority.assertReady();
 
     expect(query).toHaveBeenCalledTimes(6);
-    for (const offset of [0, 3]) {
-      expect(query.mock.calls[offset]?.[0]).toMatch(
-        /FROM "tenant_[ab]"\.icp_initiation_candidates[\s\S]*LIMIT 0[\s\S]*FOR SHARE/u,
-      );
-      expect(query.mock.calls[offset + 1]?.[0]).toMatch(
-        /FROM "tenant_[ab]"\.contacts[\s\S]*LIMIT 0[\s\S]*FOR UPDATE/u,
-      );
-      expect(query.mock.calls[offset + 2]?.[0]).toMatch(
-        /FROM "tenant_[ab]"\.contact_channel_ids[\s\S]*LIMIT 0[\s\S]*FOR SHARE/u,
-      );
+    for (const [sql] of query.mock.calls) {
+      expect(sql).toContain('pg_catalog.pg_attribute');
+      expect(sql).not.toMatch(/FROM\s+"tenant_[ab]"\./u);
+    }
+    expect(query.mock.calls.map(call => call[1]?.slice(0, 2))).toEqual([
+      ['tenant_a', 'icp_initiation_candidates'],
+      ['tenant_a', 'contacts'],
+      ['tenant_a', 'contact_channel_ids'],
+      ['tenant_b', 'icp_initiation_candidates'],
+      ['tenant_b', 'contacts'],
+      ['tenant_b', 'contact_channel_ids'],
+    ]);
+    for (const call of query.mock.calls) {
+      expect(call[1]?.[3]).toEqual(['SELECT', 'UPDATE']);
     }
   });
 
-  it('fails readiness when the production role cannot acquire its required lock', async () => {
-    const authority = createAuthority(vi.fn(async () => {
-      throw new Error('permission denied for table contacts');
-    }) as unknown as Pool['query']);
+  it('fails readiness when a required tenant relation is absent', async () => {
+    const authority = createAuthority(vi.fn(async (_sql: string, values?: unknown[]) => ({
+      rows: [{
+        schema_name: values?.[0],
+        relation_exists: false,
+        missing_columns: values?.[2],
+        missing_privileges: [],
+      }],
+    })) as unknown as Pool['query']);
 
-    await expect(authority.assertReady()).rejects.toThrow('permission denied for table contacts');
+    await expect(authority.assertReady()).rejects.toThrow(
+      'PostgreSQL relation tenant_a.icp_initiation_candidates is missing',
+    );
   });
 });

@@ -19,6 +19,7 @@ import { createPostgresPool, queryRows } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
 import { resolveFleetLedgerPoolScope } from './tenant-pool-scope.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
+import { assertPostgresRelationColumns } from './relation-contract.js';
 
 const MAX_ADMIN_ROWS = 100;
 
@@ -272,16 +273,25 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     });
     try {
       // Validate the fleet cost ledger independently from the shared-schema
-      // projection. LIMIT 0 proves the selected schema, role, table, and column
-      // version without reading content or performing DDL.
-      await queryRows(costPool, `
-        SELECT decision_id, conversation_id, root_initiation_id,
-          recorded_at_ms, actual_cost_usd, pending_projected_cost_usd,
-          projected_total_cost_usd, warning_threshold_usd, hard_limit_usd,
-          unknown_cost_attempt_count, allowed, reason
-        FROM icp_conversation_cost_decisions
-        LIMIT 0
-      `);
+      // projection. pg_catalog proves table/column migration shape without
+      // requiring SELECT on the data table from this tenant-role process.
+      await assertPostgresRelationColumns(costPool, {
+        relation: 'icp_conversation_cost_decisions',
+        columns: [
+          'decision_id',
+          'conversation_id',
+          'root_initiation_id',
+          'recorded_at_ms',
+          'actual_cost_usd',
+          'pending_projected_cost_usd',
+          'projected_total_cost_usd',
+          'warning_threshold_usd',
+          'hard_limit_usd',
+          'unknown_cost_attempt_count',
+          'allowed',
+          'reason',
+        ],
+      });
       const shared = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: options.knownCompanionIds,
       });

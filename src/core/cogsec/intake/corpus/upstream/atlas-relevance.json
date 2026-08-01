@@ -1,0 +1,42 @@
+[
+  {
+    "techniqueId": "AML.T0051",
+    "psfnSurface": "intake firewall (L1/L1.5/L2/L3 screening pipeline)",
+    "rationale": "LLM Prompt Injection — the entire intake firewall exists to defeat this; the Arcanum axes decompose it."
+  },
+  {
+    "techniqueId": "AML.T0054",
+    "psfnSurface": "L2/L3 semantic screeners",
+    "rationale": "LLM Jailbreak — semantic-layer evasion of safety intent; pattern screening alone does not catch jailbreak framing."
+  },
+  {
+    "techniqueId": "AML.T0024",
+    "psfnSurface": "sink gates — tool_egress leg of the lethal trifecta",
+    "rationale": "Exfiltration via AI Inference API — untrusted content + private data + egress; see psfn-framework-hrmrq.77."
+  },
+  {
+    "techniqueId": "AML.T0053",
+    "psfnSurface": "sink gates — tool invocation surface",
+    "rationale": "AI Agent Tool Invocation — attacker-steered tool calls; gated at tool_egress and per-sink policy."
+  },
+  {
+    "techniqueId": "AML.T0084.001",
+    "psfnSurface": "mcp_tool_description source class / tool-definition hydration",
+    "rationale": "Tool Definitions — poisoned declared tool surface; see psfn-framework-hrmrq.133 (declared vs hydrated reconciliation)."
+  },
+  {
+    "techniqueId": "AML.T0085.001",
+    "psfnSurface": "tool surface / sink gates",
+    "rationale": "AI Agent Tools — runtime tool surface abuse; pairs with AML.T0084.001 and hrmrq.133."
+  },
+  {
+    "techniqueId": "AML.T0070",
+    "psfnSurface": "memory_write sink / memory candidacy",
+    "rationale": "RAG Poisoning — retrieval and memory poisoning path; see src/core/cogsec/memory-candidacy.ts and the memory-poisoning adversarial scenario."
+  },
+  {
+    "techniqueId": "AML.T0013",
+    "psfnSurface": "exfil/prompt_disclosure labels, disclosure-probing defenses",
+    "rationale": "Discover AI Model Ontology — reconnaissance against the companion's self-model; disclosure probing is an existing adversarial class."
+  }
+]

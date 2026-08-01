@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "fetchedAt": "2026-08-01",
+  "purpose": "Pins the upstream taxonomy versions the CogSec adversarial fixture corpus derives from. A version bump here (or a failed hash check on regeneration) surfaces newly-uncovered taxonomy entries instead of silently passing. Regenerate with scripts/cogsec/fetch-corpus-upstream.mjs.",
+  "frameworks": {
+    "arcanum-pi-taxonomy": {
+      "version": "v1.6.1",
+      "site": "https://arcanum-sec.github.io/arc_pi_taxonomy/",
+      "repo": "https://github.com/arcanum-sec/arc_pi_taxonomy",
+      "pinnedCommit": "65b837989cbe0d1c019c9776697abee134c562cd",
+      "pinnedCommitDate": "2026-06-29T17:13:08Z",
+      "snapshotPath": "upstream/arcanum-taxonomy.json",
+      "snapshotSha256": "fc26b73a909faf73087dac4829cbd2118eb3f4505db6729dc048bc6fb3e1daa7",
+      "snapshotSourceUrl": "https://raw.githubusercontent.com/arcanum-sec/arc_pi_taxonomy/main/docs/data/taxonomy.json",
+      "note": "The repo publishes no release tags; v1.6.1 is the site-advertised version. The commit SHA is the machine-checkable pin. The taxonomy.json carries no version field — top level is the four axes.",
+      "axes": { "inputs": 12, "techniques": 70, "evasions": 63, "intents": 27 },
+      "totalEntries": 172
+    },
+    "mitre-atlas": {
+      "release": "2026.07",
+      "releaseDate": "2026-07-31",
+      "formatVersion": "6.0.0",
+      "site": "https://atlas.mitre.org/",
+      "repo": "https://github.com/mitre-atlas/atlas-data",
+      "snapshotPath": "upstream/atlas-technique-index.json",
+      "snapshotSha256": "0e07bb07fc6423d72cdf24ddc2038a6905bcbc00ba571064153119ee1a5888d4",
+      "snapshotSourceUrl": "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.07.yaml",
+      "manifestUrl": "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/manifest.yaml",
+      "note": "dist/ATLAS.yaml is DEPRECATED upstream ('no longer being updated with new content') — do not pin it. Live data is dist/v6/ATLAS-<release>.yaml with monthly releases; manifest.yaml enumerates them. snapshotSha256 covers the full source YAML; only the technique id/name index is committed (the YAML is ~700KB and only needed at regeneration time).",
+      "techniqueCount": 178
+    }
+  }
+}

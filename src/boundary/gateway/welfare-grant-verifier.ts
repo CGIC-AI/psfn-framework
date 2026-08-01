@@ -29,6 +29,7 @@ import {
   queryOne,
 } from '../../persistence/postgres.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { assertPostgresRelationColumns } from '../../persistence/postgres/relation-contract.js';
 
 const log = createComponentLogger('GatewayWelfareGrant');
 
@@ -66,20 +67,18 @@ class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
     private readonly scope: WelfareGrantVerifierScope,
   ) {}
 
-  /** Read-only proof of every tenant relation/column the verifier consumes. */
+  /** Privilege-safe catalog proof of every tenant relation/column consumed. */
   async assertReady(): Promise<void> {
     const schemas = this.scope.mode === 'fleet'
       ? [...new Set(this.scope.schemaByCompanionId.values())]
       : [this.scope.schema];
     for (const schema of schemas) {
-      const qualifier = schema
-        ? `"${assertValidPostgresSchemaName(schema)}".`
-        : '';
-      await this.pool.query(`
-        SELECT job_id, welfare_claimed, state
-        FROM ${qualifier}agent_background_work_jobs
-        LIMIT 0
-      `);
+      await assertPostgresRelationColumns(this.pool, {
+        ...(schema ? { schema: assertValidPostgresSchemaName(schema) } : {}),
+        relation: 'agent_background_work_jobs',
+        columns: ['job_id', 'welfare_claimed', 'state'],
+        privileges: ['SELECT'],
+      });
     }
   }
 

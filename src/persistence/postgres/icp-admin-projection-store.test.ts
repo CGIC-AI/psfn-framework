@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     _sql: string,
     _values?: readonly unknown[],
   ) => [] as never[]),
+  assertRelationColumns: vi.fn(async () => undefined),
   connectShared: vi.fn(),
 }));
 
@@ -21,6 +22,10 @@ vi.mock('./icp-shared-autonomy-store.js', () => ({
   },
 }));
 
+vi.mock('./relation-contract.js', () => ({
+  assertPostgresRelationColumns: mocks.assertRelationColumns,
+}));
+
 import { PostgresIcpAdminProjectionStore } from './icp-admin-projection-store.js';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
@@ -31,6 +36,8 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool.mockReset();
     mocks.queryRows.mockReset();
     mocks.queryRows.mockResolvedValue([]);
+    mocks.assertRelationColumns.mockReset();
+    mocks.assertRelationColumns.mockResolvedValue(undefined);
     mocks.connectShared.mockReset();
   });
 
@@ -57,15 +64,28 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     });
 
     expect(store.localCompanionId).toBe(LOCAL);
-    expect(mocks.queryRows).toHaveBeenCalledTimes(6);
-    const projectionCalls = mocks.queryRows.mock.calls.filter(call => call[2] !== undefined);
-    expect(projectionCalls).toHaveLength(5);
+    expect(mocks.queryRows).toHaveBeenCalledTimes(5);
+    const projectionCalls = mocks.queryRows.mock.calls;
     for (const call of projectionCalls) {
       expect(call[2]).toEqual([LOCAL, 7]);
     }
-    expect(String(mocks.queryRows.mock.calls[0]?.[1])).toMatch(
-      /FROM icp_conversation_cost_decisions\s+LIMIT 0/u,
-    );
+    expect(mocks.assertRelationColumns).toHaveBeenCalledWith(costPool, {
+      relation: 'icp_conversation_cost_decisions',
+      columns: [
+        'decision_id',
+        'conversation_id',
+        'root_initiation_id',
+        'recorded_at_ms',
+        'actual_cost_usd',
+        'pending_projected_cost_usd',
+        'projected_total_cost_usd',
+        'warning_threshold_usd',
+        'hard_limit_usd',
+        'unknown_cost_attempt_count',
+        'allowed',
+        'reason',
+      ],
+    });
     const sql = projectionCalls.map(call => String(call[1]));
     expect(sql[0]).toMatch(/WHERE companion_id = \$1/u);
     expect(sql[1]).toMatch(/WHERE \$1::uuid = ANY\(participant_companion_ids\)/u);
@@ -81,7 +101,9 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.queryRows.mockRejectedValueOnce(new Error('cost ledger schema version is missing'));
+    mocks.assertRelationColumns.mockRejectedValueOnce(
+      new Error('cost ledger schema version is missing'),
+    );
 
     await expect(PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,

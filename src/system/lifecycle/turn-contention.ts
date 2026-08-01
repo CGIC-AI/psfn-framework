@@ -36,6 +36,31 @@ export function isBusyTurnError(error: unknown): boolean {
     || text.includes('channel_busy');
 }
 
+function isAgentProcessingPromptMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized === 'agent is already processing'
+    || normalized === 'agent is already processing.'
+    || normalized === 'agent is already processing a prompt'
+    || normalized.startsWith('agent is already processing a prompt.')
+    || normalized === 'agent is already processing another prompt'
+    || normalized.startsWith('agent is already processing another prompt.');
+}
+
+/** Matches the prompt runtime's active-run rejection without classifying unrelated busy failures. */
+export function isAgentProcessingPromptError(error: unknown): boolean {
+  const visited = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !visited.has(current)) {
+    if (isAgentProcessingPromptMessage(current.message)) {
+      return true;
+    }
+    visited.add(current);
+    current = current.cause;
+  }
+  return typeof current === 'string'
+    && isAgentProcessingPromptMessage(current);
+}
+
 export class DeferredLatestByChannel<T> {
   private readonly pending = new Map<string, T>();
 

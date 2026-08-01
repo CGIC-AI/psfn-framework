@@ -41,6 +41,7 @@ import type {
 import {
   resolvePostTurnSubagentSpawnQueuedStatus,
 } from '../../../core/agent/post-turn-subagent-spawn.js';
+import { classifyPostTurnActionContention } from '../../../core/agent/post-turn-action-contention.js';
 import {
   POST_TURN_APPRAISAL_RUNTIME_CLASS,
   compareRuntimeLanePriority,
@@ -1027,14 +1028,16 @@ export function wirePostTurnActionRuntime(
       emitTelemetry('succeeded', entry);
     } catch (error) {
       const errorText = String(error);
-      if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
+      const contentionKind = classifyPostTurnActionContention(error);
+      if (contentionKind) {
         entry.attempt = Math.max(0, entry.attempt - 1);
         const delayMs = Math.max(1, Math.min(maxRetryDelayMs, baseRetryDelayMs));
         entry.nextRunAt = Date.now() + delayMs;
         persistQueue();
-        log.info('Deferred action rescheduled after model-call preemption', {
+        log.info('Deferred action rescheduled after runtime contention', {
           actionId: entry.action.id,
           actionKind: entry.action.kind,
+          contentionKind,
           nextRunAt: entry.nextRunAt,
           delayMs,
           error: errorText,
@@ -1045,11 +1048,11 @@ export function wirePostTurnActionRuntime(
           nextRetryAt: entry.nextRunAt,
         });
         emitCompletionHandoff(entry, 'progress', {
-          summary: `Post-turn action "${entry.action.kind}" was preempted and is waiting to resume.`,
-          validationPerformed: ['post_turn_action_lifecycle_nonterminal', 'model_call_preempted'],
+          summary: `Post-turn action "${entry.action.kind}" met runtime contention and is waiting to resume.`,
+          validationPerformed: ['post_turn_action_lifecycle_nonterminal', contentionKind],
           recommendedNextAction: 'Keep the task visible while higher-priority work completes.',
           partialResult: true,
-          lifecycleSequence: `preempted:${entry.attempt}:${entry.nextRunAt}`,
+          lifecycleSequence: `contended:${contentionKind}:${entry.attempt}:${entry.nextRunAt}`,
         });
         return true;
       }

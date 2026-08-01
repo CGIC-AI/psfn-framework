@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
+import {
   POSTGRES_STORE_READINESS_CATALOG,
   PostgresRuntimeReadiness,
   PostgresStoreReadinessError,
@@ -42,6 +46,56 @@ describe('PostgresRuntimeReadiness', () => {
     }]);
     expect(readiness.snapshot()).toEqual(snapshot);
   });
+
+  it.each([
+    {
+      store: 'analysis_workbench_trace' as const,
+      component: 'AnalysisWorkbenchTraceStore',
+      message: 'Analysis-workbench trace schema migration failed',
+    },
+    {
+      store: 'model_usage_diagnostics' as const,
+      component: 'ModelUsageStore',
+      message: 'Model usage schema migration failed',
+    },
+  ])(
+    'preserves the $store incident contract: rejection, named diagnostic, no unhandled escape',
+    async ({ store, component, message }) => {
+      clearDiagnosticLogRingBufferForTests();
+      const unhandled: unknown[] = [];
+      const listener = (reason: unknown): void => { unhandled.push(reason); };
+      process.on('unhandledRejection', listener);
+      try {
+        const readiness = new PostgresRuntimeReadiness();
+        const handle = readiness.start(store, async () => {
+          throw new Error('no schema has been selected to create in');
+        });
+
+        // Recreate the incident path: the constructor-created migration has no
+        // consumer yet. The coordinator itself must observe it in the same tick.
+        await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+        expect(unhandled).toEqual([]);
+        await expect(handle.waitUntilReady()).rejects.toMatchObject({
+          name: 'PostgresStoreReadinessError',
+          store,
+          mismatch: 'no schema has been selected to create in',
+        });
+        await expect(handle.waitUntilReady()).rejects.toMatchObject({ store });
+        await expect(readiness.sealBeforeReady()).resolves.toMatchObject({ phase: 'ready' });
+
+        expect(unhandled).toEqual([]);
+        const matchingDiagnostics = getRecentDiagnosticLogRecords({ limit: 20 })
+          .filter(record => (
+            record.level === 'error'
+            && record.component === component
+            && record.message === message
+          ));
+        expect(matchingDiagnostics).toHaveLength(1);
+      } finally {
+        process.off('unhandledRejection', listener);
+      }
+    },
+  );
 
   it('does not invoke PostgreSQL startup work registered after Ready', async () => {
     const readiness = new PostgresRuntimeReadiness();

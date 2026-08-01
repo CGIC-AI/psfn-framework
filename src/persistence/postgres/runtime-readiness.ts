@@ -1,4 +1,5 @@
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 export type PostgresStoreReadinessRequirement = 'required' | 'optional';
 export type PostgresRuntimeDdlAuthority = 'isolated_workload_migration';
@@ -6,6 +7,10 @@ export type PostgresRuntimeDdlAuthority = 'isolated_workload_migration';
 interface PostgresStoreReadinessCatalogEntry {
   label: string;
   requirement: PostgresStoreReadinessRequirement;
+  failureDiagnostic?: {
+    component: string;
+    message: string;
+  };
 }
 
 /**
@@ -37,12 +42,33 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   icp_initiation_policy: { label: 'ICP initiation policy', requirement: 'required' },
   gateway_audit: { label: 'gateway audit', requirement: 'required' },
   fleet_auth: { label: 'fleet authentication', requirement: 'required' },
-  model_usage_accounting: { label: 'model usage accounting', requirement: 'required' },
+  model_usage_accounting: {
+    label: 'model usage accounting',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'ModelUsageStore',
+      message: 'Model usage schema migration failed',
+    },
+  },
   shared_wiki: { label: 'shared world wiki', requirement: 'required' },
   memory_ann_index: { label: 'memory ANN index', requirement: 'optional' },
   wiki_projection: { label: 'wiki projection', requirement: 'optional' },
-  model_usage_diagnostics: { label: 'model usage diagnostics', requirement: 'optional' },
-  analysis_workbench_trace: { label: 'analysis workbench trace', requirement: 'optional' },
+  model_usage_diagnostics: {
+    label: 'model usage diagnostics',
+    requirement: 'optional',
+    failureDiagnostic: {
+      component: 'ModelUsageStore',
+      message: 'Model usage schema migration failed',
+    },
+  },
+  analysis_workbench_trace: {
+    label: 'analysis workbench trace',
+    requirement: 'optional',
+    failureDiagnostic: {
+      component: 'AnalysisWorkbenchTraceStore',
+      message: 'Analysis-workbench trace schema migration failed',
+    },
+  },
   observer_eval_sidecar: { label: 'observer eval sidecar', requirement: 'optional' },
   icp_admin_projection: { label: 'ICP admin projection', requirement: 'optional' },
   speaking_arbiter_admin_projection: {
@@ -130,6 +156,17 @@ function rejectedHandle(
   };
 }
 
+function reportPostgresStoreReadinessFailure(error: PostgresStoreReadinessError): void {
+  const classification: PostgresStoreReadinessCatalogEntry = (
+    POSTGRES_STORE_READINESS_CATALOG[error.store]
+  );
+  const diagnostic = classification.failureDiagnostic;
+  if (!diagnostic) return;
+  createComponentLogger(diagnostic.component).error(diagnostic.message, {
+    error: error.mismatch,
+  });
+}
+
 /**
  * Process-lifetime readiness ledger. Every started task is observed in the
  * same tick, so a constructor cannot create an unhandled migration promise.
@@ -171,6 +208,7 @@ export class PostgresRuntimeReadiness {
         entry.error = cause instanceof PostgresStoreReadinessError && cause.store === store
           ? cause
           : new PostgresStoreReadinessError(store, toErrorMessage(cause), { cause });
+        reportPostgresStoreReadinessFailure(entry.error);
       },
     );
     this.entries.push(entry);

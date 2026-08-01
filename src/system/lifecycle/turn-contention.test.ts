@@ -3,6 +3,7 @@ import {
   DeferredLatestByChannel,
   FifoChannelLock,
   emitTurnContentionTelemetry,
+  isAgentProcessingPromptError,
   isBusyTurnError,
 } from './turn-contention.js';
 
@@ -69,6 +70,27 @@ describe('isBusyTurnError', () => {
   it('returns false for unrelated errors', () => {
     expect(isBusyTurnError('model not found')).toBe(false);
     expect(isBusyTurnError(undefined)).toBe(false);
+  });
+});
+
+describe('isAgentProcessingPromptError', () => {
+  it('matches direct and wrapped prompt-runtime contention', () => {
+    const busyError = new Error(
+      'Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.',
+    );
+
+    expect(isAgentProcessingPromptError(busyError)).toBe(true);
+    expect(isAgentProcessingPromptError(new Error('Sleeptime review failed', { cause: busyError })))
+      .toBe(true);
+    expect(isAgentProcessingPromptError(new Error('Agent is already processing.'))).toBe(true);
+  });
+
+  it('rejects unrelated busy and already-processing failures', () => {
+    expect(isAgentProcessingPromptError(new Error('Database is already processing a migration')))
+      .toBe(false);
+    expect(isAgentProcessingPromptError(new Error('CHANNEL_BUSY while persisting output')))
+      .toBe(false);
+    expect(isAgentProcessingPromptError(undefined)).toBe(false);
   });
 });
 

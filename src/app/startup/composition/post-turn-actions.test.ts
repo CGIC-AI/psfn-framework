@@ -16,6 +16,7 @@ import { createEligibilityGate } from '../../../system/capabilities/eligibility.
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+  type PostTurnActionHandler,
   wirePostTurnActionRuntime,
 } from './post-turn-actions.js';
 import { resetCompletionHandoffDedupeForTests } from '../../../core/agent/completion-handoff.js';
@@ -107,6 +108,48 @@ function makeSubagentSpawnAction(overrides: Partial<InferredPostTurnAction> = {}
     },
     maxRetries: 0,
     ...overrides,
+  });
+}
+
+function createSleeptimeContentionHarness(handler: PostTurnActionHandler) {
+  const eventBus = new EventBus();
+  const scheduler = new Scheduler(eventBus, {
+    tickIntervalMs: 100,
+    heartbeatIntervalMs: 1_000,
+  });
+  const runtime = wirePostTurnActionRuntime({
+    eventBus,
+    scheduler,
+    agentLoop: {
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    },
+    intervalMs: 1,
+    baseRetryDelayMs: 100,
+    maxRetryDelayMs: 100,
+  });
+  runtime.registerHandler('memory.sleeptime.run', handler, {
+    executionMode: 'background',
+    runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+  });
+  const phases: string[] = [];
+  eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+    phases.push(phase);
+  });
+  return { eventBus, scheduler, runtime, phases };
+}
+
+async function enqueueSleeptimeAction(
+  eventBus: EventBus,
+  overrides: Partial<InferredPostTurnAction>,
+): Promise<void> {
+  await eventBus.emit('agent.post_turn.actions.inferred', {
+    message: makeMessage(),
+    response: makeResponse(),
+    actions: [makeAction({
+      kind: 'memory.sleeptime.run',
+      maxRetries: 0,
+      ...overrides,
+    })],
   });
 }
 
@@ -755,6 +798,94 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('reschedules an agent-busy rejection without consuming its attempt', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      const handler = vi.fn()
+        .mockRejectedValueOnce(new Error(
+          'Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.',
+        ))
+        .mockResolvedValueOnce(undefined);
+      const { eventBus, scheduler, runtime, phases } = createSleeptimeContentionHarness(handler);
+      await enqueueSleeptimeAction(eventBus, {
+        id: 'busy-sleeptime',
+        dedupeKey: 'memory.sleeptime.run:test-channel',
+      });
+
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        scheduledCount: 1,
+        queued: [
+          expect.objectContaining({
+            actionId: 'busy-sleeptime',
+            state: 'scheduled',
+            attempt: 0,
+            maxAttempts: 1,
+            nextRunAt: 1_700_000_000_100,
+          }),
+        ],
+        failures: { failedCount: 0 },
+      });
+      expect(phases).toContain('rescheduled');
+      expect(phases).not.toContain('retry_scheduled');
+      expect(phases).not.toContain('failed');
+
+      nowSpy.mockReturnValue(1_700_000_000_100);
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(runtime.listQueued()).toHaveLength(0);
+      expect(phases).toContain('succeeded');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('eventually completes sleeptime after sustained foreground contention', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      let nowMs = 1_700_000_000_000;
+      nowSpy.mockImplementation(() => nowMs);
+      const busyError = new Error('Agent is already processing a prompt.');
+      const handler = vi.fn()
+        .mockRejectedValueOnce(busyError)
+        .mockRejectedValueOnce(busyError)
+        .mockRejectedValueOnce(busyError)
+        .mockRejectedValueOnce(busyError)
+        .mockResolvedValueOnce(undefined);
+      const { eventBus, scheduler, runtime } = createSleeptimeContentionHarness(handler);
+      await enqueueSleeptimeAction(eventBus, {
+        id: 'contended-sleeptime',
+        dedupeKey: 'memory.sleeptime.run:contended',
+      });
+
+      for (let collision = 0; collision < 4; collision += 1) {
+        await scheduler.tick();
+        expect(runtime.getStatus()).toMatchObject({
+          queueDepth: 1,
+          queued: [expect.objectContaining({ attempt: 0 })],
+          failures: { failedCount: 0 },
+        });
+        nowMs += 100;
+      }
+
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(5);
+      expect(runtime.listQueued()).toHaveLength(0);
+      expect(runtime.getStatus()).toMatchObject({
+        failures: { failedCount: 0 },
+        completions: { completedCount: 1 },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('retries failures with bounded attempts and then marks failed', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
@@ -779,7 +910,7 @@ describe('wirePostTurnActionRuntime', () => {
       const handler = vi
         .fn()
         .mockRejectedValueOnce(new Error('first failure'))
-        .mockRejectedValueOnce(new Error('second failure'));
+        .mockRejectedValueOnce(new Error('Database is already processing a migration'));
       runtime.registerHandler('heartbeat.run_template', handler);
 
       const phases: string[] = [];
@@ -838,7 +969,7 @@ describe('wirePostTurnActionRuntime', () => {
               reason: 'retries_exhausted',
               attempt: 2,
               maxAttempts: 2,
-              error: 'Error: second failure',
+              error: 'Error: Database is already processing a migration',
             }),
           ],
         },

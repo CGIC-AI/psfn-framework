@@ -4,7 +4,8 @@
 // same hostile payload is proven refused at every sink no matter which
 // adapter it arrived through.
 
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -23,6 +24,9 @@ import {
 } from '../../../system/config/intake-policy-config.js';
 import { createIntakeScreeningService } from './screening.js';
 import { createIntakeL1Scanner } from './scanners/index.js';
+import { CogSecEventStore } from '../events.js';
+import { listOperatorVisibleCogSecEvents } from '../safe-log.js';
+import { createIntakeSinkGateIncidentRecorder } from './sink-gate-incidents.js';
 import {
   createIntakeSinkGate,
   evaluateEgressTrifecta,
@@ -182,8 +186,21 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   it("refuses to evaluate with mode 'off' (composition must skip gate construction)", () => {
     const policy = { ...makePolicy('shadow'), mode: 'off' as const };
     expect(() => evaluateSinkAccess(policy, 'memory_write', [])).toThrow(/mode 'off'/u);
-    expect(maybeCreateIntakeSinkGate({ policy, actor: 'test' })).toBeNull();
+    expect(maybeCreateIntakeSinkGate({
+      policy,
+      actor: 'test',
+      onBlockedEgressTrifecta: () => undefined,
+    })).toBeNull();
     expect(() => createIntakeSinkGate({ policy, actor: 'test' })).toThrow(/mode 'off'/u);
+  });
+
+  it('refuses runtime construction without a durable hard-block incident recorder', () => {
+    expect(() => maybeCreateIntakeSinkGate({
+      policy: makePolicy('shadow'),
+      actor: 'test',
+    } as Parameters<typeof maybeCreateIntakeSinkGate>[0])).toThrow(
+      /requires a durable hard-block incident recorder/u,
+    );
   });
 });
 
@@ -379,6 +396,96 @@ describe('gate service audit hook', () => {
       'sink_access:memory_write:deny',
       'egress_trifecta:tool_egress:deny',
     ]);
+  });
+
+  it('fails loud when a blocked hard trifecta cannot record its durable incident', () => {
+    const gate = createIntakeSinkGate({
+      policy: makePolicy('shadow'),
+      actor: 'test:gate',
+      onBlockedEgressTrifecta: () => {
+        throw new Error('incident store unavailable');
+      },
+    });
+
+    expect(() => gate.assessEgressTrifecta({
+      envelopes: [makeSnapshot({ state: 'quarantined', sourceRiskTier: 'untrusted' })],
+      privateDataInPath: true,
+      egressDescription: 'tool:fs',
+      blockedIncidentContext: {
+        sourceChannelId: 'discord:live-channel',
+        logicalSessionId: 'discord:live-session',
+        toolName: 'fs',
+      },
+    })).toThrow(/incident store unavailable/);
+  });
+
+  it('blocks both live shadow-mode hard trifecta attempts and records operator-visible cases', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-trifecta-incident-'));
+    try {
+      const eventStorePath = join(dir, 'cogsec-events.json');
+      const gate = createIntakeSinkGate({
+        policy: makePolicy('shadow'),
+        actor: 'test:gate',
+        onBlockedEgressTrifecta: createIntakeSinkGateIncidentRecorder({
+          cogSecEvents: () => new CogSecEventStore(eventStorePath),
+        }),
+      });
+      const liveEnvelope = makeSnapshot({
+        envelopeId: '8b70243e',
+        sourceClass: 'tool_output',
+        sourceRiskTier: 'untrusted',
+        state: 'quarantined',
+      });
+
+      const outcomes = [1, 2].map(() => gate.assessEgressTrifecta({
+        envelopes: [liveEnvelope],
+        privateDataInPath: true,
+        egressDescription: 'tool:fs',
+        blockedIncidentContext: {
+          sourceChannelId: 'discord:live-channel',
+          logicalSessionId: 'discord:live-session',
+          toolName: 'fs',
+        },
+      }, {
+        sourceChannelId: 'discord:live-channel',
+        logicalSessionId: 'discord:live-session',
+        toolName: 'fs',
+      }));
+
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          mode: 'shadow',
+          verdict: 'deny',
+          enforcement: 'hard',
+          allowed: false,
+          envelopeIds: ['8b70243e'],
+        }),
+        expect.objectContaining({
+          mode: 'shadow',
+          verdict: 'deny',
+          enforcement: 'hard',
+          allowed: false,
+          envelopeIds: ['8b70243e'],
+        }),
+      ]);
+
+      const operatorCases = listOperatorVisibleCogSecEvents(
+        new CogSecEventStore(eventStorePath).listEvents(),
+      );
+      expect(operatorCases).toHaveLength(2);
+      expect(operatorCases).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'intake_firewall',
+          severity: 'critical',
+          status: 'applied',
+          sourceChannelId: 'discord:live-channel',
+          affectedLogicalSessionIds: ['discord:live-session'],
+          safeSummary: expect.stringContaining('blocked'),
+        }),
+      ]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

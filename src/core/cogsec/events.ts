@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { withCrossProcessWriteLock } from '../../persistence/sessions/cross-process-write-lock.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type {
@@ -9,6 +11,12 @@ import type {
 } from './persona-conformance.js';
 
 export const COGSEC_EVENT_STORE_VERSION = 1 as const;
+
+const COGSEC_EVENT_LOCK_OPTIONS = {
+  pollMs: 10,
+  staleMs: 30_000,
+  timeoutMs: 10_000,
+} as const;
 
 export type CogSecCaseType =
   | 'prompt_injection'
@@ -742,23 +750,25 @@ export class CogSecEventStore {
 
   createEvent(input: CogSecCreateEventInput): CogSecEvent {
     const event = normalizeCreateInput(input, this.now());
-    if (Object.prototype.hasOwnProperty.call(this.state.events, event.caseId)) {
-      throw new Error(`CogSec event already exists: ${event.caseId}`);
-    }
-    this.state = {
-      version: COGSEC_EVENT_STORE_VERSION,
-      updatedAt: event.updatedAt,
-      events: {
-        ...this.state.events,
-        [event.caseId]: event,
-      },
-    };
-    this.persist();
-    return cloneEvent(event);
+    return this.withWriteLock(() => {
+      if (Object.prototype.hasOwnProperty.call(this.state.events, event.caseId)) {
+        throw new Error(`CogSec event already exists: ${event.caseId}`);
+      }
+      this.state = {
+        version: COGSEC_EVENT_STORE_VERSION,
+        updatedAt: event.updatedAt,
+        events: {
+          ...this.state.events,
+          [event.caseId]: event,
+        },
+      };
+      return cloneEvent(event);
+    });
   }
 
   getEvent(caseId: string): CogSecEvent | null {
     const normalized = parseCaseId(caseId, 'caseId');
+    this.state = this.load();
     if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
       return null;
     }
@@ -766,12 +776,32 @@ export class CogSecEventStore {
   }
 
   listEvents(): CogSecEvent[] {
+    this.state = this.load();
     return Object.values(this.state.events)
       .map(cloneEvent)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   updateEvent(caseId: string, input: CogSecUpdateEventInput): CogSecEvent {
+    const normalized = parseCaseId(caseId, 'caseId');
+    return this.withWriteLock(() => this.updateLoadedEvent(normalized, input));
+  }
+
+  appendEpochCut(caseId: string, epochCut: CogSecEpochCutRef): CogSecEvent {
+    const normalized = parseCaseId(caseId, 'caseId');
+    return this.withWriteLock(() => {
+      if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
+        throw new Error(`CogSec event not found: ${normalized}`);
+      }
+      const existing = this.state.events[normalized];
+      return this.updateLoadedEvent(normalized, {
+        actions: uniqueStrings([...existing.actions, 'epoch_cut']) as CogSecAction[],
+        epochCuts: [...existing.epochCuts, parseEpochCutRef(epochCut, 'epochCut')],
+      });
+    });
+  }
+
+  private updateLoadedEvent(caseId: string, input: CogSecUpdateEventInput): CogSecEvent {
     const normalized = parseCaseId(caseId, 'caseId');
     if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
       throw new Error(`CogSec event not found: ${normalized}`);
@@ -829,20 +859,7 @@ export class CogSecEventStore {
         [normalized]: next,
       },
     };
-    this.persist();
     return cloneEvent(next);
-  }
-
-  appendEpochCut(caseId: string, epochCut: CogSecEpochCutRef): CogSecEvent {
-    const normalized = parseCaseId(caseId, 'caseId');
-    if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
-      throw new Error(`CogSec event not found: ${normalized}`);
-    }
-    const existing = this.state.events[normalized];
-    return this.updateEvent(normalized, {
-      actions: uniqueStrings([...existing.actions, 'epoch_cut']) as CogSecAction[],
-      epochCuts: [...existing.epochCuts, parseEpochCutRef(epochCut, 'epochCut')],
-    });
   }
 
   private load(): CogSecEventState {
@@ -855,5 +872,22 @@ export class CogSecEventStore {
 
   private persist(): void {
     writeJsonAtomic(this.filePath, this.state);
+  }
+
+  private withWriteLock<T>(mutate: () => T): T {
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    return withCrossProcessWriteLock(
+      `${this.filePath}.lock`,
+      COGSEC_EVENT_LOCK_OPTIONS,
+      () => {
+        // Agent, gateway, and Garden can each hold a store instance over this
+        // file. Reload only after owning the shared lock so a stale instance
+        // can never publish over a sibling writer's newer event.
+        this.state = this.load();
+        const result = mutate();
+        this.persist();
+        return result;
+      },
+    );
   }
 }

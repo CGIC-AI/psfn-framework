@@ -168,7 +168,15 @@ export interface EgressToolGuard {
      * do not surface params.
      */
     params?: unknown;
-  }): { allowed: boolean; noticeText: string } | null;
+  }): {
+    allowed: boolean;
+    noticeText: string;
+    /** Safe structured failure surfaced when the guard blocks after an internal error. */
+    diagnostic?: {
+      code: 'intake_sink_gate_evaluation_failed';
+      message: string;
+    };
+  } | null;
 }
 
 export type EgressToolGuardProvider = () => EgressToolGuard | null;
@@ -247,6 +255,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
               egressGated: true,
               policyDenied: true,
               toolName: tool.name,
+              ...(egressDecision.diagnostic
+                ? { egressGuardDiagnostic: egressDecision.diagnostic }
+                : {}),
             });
           }
         }

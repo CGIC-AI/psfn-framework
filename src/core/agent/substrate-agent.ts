@@ -936,6 +936,7 @@ export class SubstrateAgent {
       intakeSinkGate: this.intakeSinkGate,
       getActiveTurnIntakeEnvelopes: () => this.getActiveTurnIntakeEnvelopes(),
       getCurrentTurnDisclosureLineage: () => this.currentTurnDisclosureLineage,
+      getActiveTurnSessionIdentity: () => this.turnSupportRuntime.getActiveTurnSessionIdentity(),
     });
   }
 

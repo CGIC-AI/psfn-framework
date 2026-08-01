@@ -91,6 +91,7 @@ import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/obse
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveConcernResolutionArcJournalPath,
+  resolveCogSecEventsPath,
   resolveContactsDir,
   resolveContactBlockListPath,
   resolveIntrospectionConsentLedgerPath,
@@ -108,6 +109,8 @@ import { createPublicationTool } from '../../core/cogsec/disclosure/publication-
 import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { createIntakeSinkGateIncidentRecorder } from '../../core/cogsec/intake/sink-gate-incidents.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -305,6 +308,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intakeSinkGate = maybeCreateIntakeSinkGate({
     policy: intakePolicy,
     actor: 'agent:intake-sink-gate',
+    onBlockedEgressTrifecta: createIntakeSinkGateIncidentRecorder({
+      cogSecEvents: () => new CogSecEventStore(
+        resolveCogSecEventsPath(pathSnapshot.companionDataDir),
+      ),
+    }),
   });
   const skillWriteIntakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,

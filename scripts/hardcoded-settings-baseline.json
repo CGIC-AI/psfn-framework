@@ -2807,6 +2807,13 @@
       "value": "140"
     },
     {
+      "file": "src/core/cogsec/events.ts",
+      "name": "COGSEC_EVENT_LOCK_OPTIONS.timeoutMs",
+      "value": "10_000",
+      "form": "object-member",
+      "note": "Code-owned safety bound for the CogSec store's cross-process persistence lock; failure must surface instead of allowing an unbounded synchronous wait."
+    },
+    {
       "file": "src/core/cogsec/intake/marking.ts",
       "name": "ELEVATED_SCORE_THRESHOLD",
       "value": "0.5"

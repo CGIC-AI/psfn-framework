@@ -41,11 +41,13 @@ import {
   SUBAGENT_STEP_TIMEOUT_MS,
   classifyCaseFailure,
   isMatrixAbortStatus,
+  probeKnownBusySettlement,
   resolveCaseTimeoutMs,
   resolveCaseCoverageHoleReason,
   runCaseWithTimeout,
   runCaseSetup,
   throwIfAborted,
+  waitForAgentQuiescence,
   withTimeout,
 } from './lib/case-execution.mjs';
 import {
@@ -142,6 +144,14 @@ const HARNESS_API_USER_ID = 'testing-harness';
 const DEFAULT_FETCH_TIMEOUT_MS = optionalIntEnv('PSFN_FETCH_TIMEOUT_MS', 120000);
 const DEFAULT_BUSY_RETRY_WINDOW_MS = optionalIntEnv('PSFN_BUSY_RETRY_WINDOW_MS', 120000);
 const DEFAULT_BUSY_SETTLE_MS = optionalIntEnv('PSFN_BUSY_RETRY_DELAY_MS', 2500);
+const DEFAULT_PRE_CASE_QUIESCE_TIMEOUT_MS = optionalIntEnv(
+  'PSFN_PRE_CASE_QUIESCE_TIMEOUT_MS',
+  DEFAULT_BUSY_RETRY_WINDOW_MS,
+);
+const DEFAULT_PRE_CASE_QUIESCE_POLL_MS = optionalIntEnv(
+  'PSFN_PRE_CASE_QUIESCE_POLL_MS',
+  DEFAULT_BUSY_SETTLE_MS,
+);
 const DEFAULT_MAX_SUBMIT_ATTEMPTS = optionalIntEnv('PSFN_MAX_SUBMIT_ATTEMPTS', 24);
 const DEFAULT_TURN_MATCH_WAIT_MS = optionalIntEnv('PSFN_TURN_MATCH_WAIT_MS', 20000);
 const DEFAULT_TURN_SETTLE_MS = optionalIntEnv('PSFN_TURN_SETTLE_MS', 20000);
@@ -160,7 +170,6 @@ const resolveSessionChannelId = probe.resolveSessionChannelId;
 const readJsonl = probe.readJsonl;
 const isAgentBusyResponse = probe.isAgentBusyResponse;
 const isCompletedAssistantTurn = probe.isCompletedAssistantTurn;
-const isActiveTurnStatus = probe.isActiveTurnStatus;
 const turnRecordPath = (sessionId, apiUserId) =>
   probe.turnRecordPath(TURN_RECORDS_DIR, sessionId, apiUserId);
 const turnRecordsForSession = (sessionId, apiUserId) =>
@@ -285,6 +294,7 @@ function buildHarnessErrorResult(
     busyRetries: 0,
     submitAttempts: 0,
     busyRejected: false,
+    busyObservedAtMs: null,
     request: null,
     response: {
       ok: false,
@@ -334,6 +344,7 @@ function buildMatrixAbortedResult(testCase, blocker) {
     busyRetries: 0,
     submitAttempts: 0,
     busyRejected: false,
+    busyObservedAtMs: null,
     request: null,
     response: null,
     acceptedWhileBusy: false,
@@ -1703,6 +1714,7 @@ async function chatCase(input) {
   let busyRetries = 0;
   let submitAttempts = 0;
   let busyRejected = false;
+  let busyObservedAtMs = null;
   let acceptedWhileBusy = false;
   let response;
   let matchingTurn = null;
@@ -1721,7 +1733,9 @@ async function chatCase(input) {
       signal: input.signal,
     });
 
-    const waitBudgetMs = isAgentBusyResponse(response)
+    const agentBusy = isAgentBusyResponse(response);
+    if (agentBusy) busyObservedAtMs = requestStartedAt;
+    const waitBudgetMs = agentBusy
       ? Math.min(5_000, turnWaitMs)
       : turnWaitMs;
     matchingTurn = await waitForMatchingTurnRecord(
@@ -1734,7 +1748,6 @@ async function chatCase(input) {
       input.signal,
     );
 
-    const agentBusy = isAgentBusyResponse(response);
     if (!agentBusy) {
       break;
     }
@@ -1812,6 +1825,7 @@ async function chatCase(input) {
     busyRetries,
     submitAttempts,
     busyRejected,
+    busyObservedAtMs,
     resolvedFromTurnRecord: Boolean(matchingTurn),
     acceptedWhileBusy,
     request: {
@@ -3543,6 +3557,7 @@ async function runCase(testCase, ctx, signal) {
     busyRetries: outcome.busyRetries,
     submitAttempts: outcome.submitAttempts,
     busyRejected: outcome.busyRejected,
+    busyObservedAtMs: outcome.busyObservedAtMs ?? null,
     request: outcome.request,
     response: outcome.response,
     acceptedWhileBusy: outcome.acceptedWhileBusy ?? false,
@@ -3654,6 +3669,7 @@ async function main() {
 
   const results = [];
   let matrixAborted = false;
+  let pendingBusyRecovery = null;
   const writePartialProgress = (harnessStatus = matrixAborted ? 'matrix_aborted' : 'running') => {
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, {
       ...outputBase,
@@ -3680,6 +3696,7 @@ async function main() {
       at: new Date().toISOString(),
     }));
     let caseResult;
+    let caseExecutionAttempted = false;
     if (coverageHoleReason) {
       caseResult = buildHarnessErrorResult(
         testCase,
@@ -3688,35 +3705,71 @@ async function main() {
         coverageHoleReason,
       );
     } else {
-      const caseTimeoutMs = resolveCaseTimeoutMs(testCase, {
-        fetchTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
-        busyRetryWindowMs: DEFAULT_BUSY_RETRY_WINDOW_MS,
-        turnMatchWaitMs: DEFAULT_TURN_MATCH_WAIT_MS,
-        turnSettleMs: DEFAULT_TURN_SETTLE_MS,
-        postAbortTurnWaitMs: DEFAULT_POST_ABORT_TURN_WAIT_MS,
-        afterTimeoutMs: DEFAULT_AFTER_TIMEOUT_MS,
-        caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
-      });
-      try {
-        caseResult = await runCaseWithTimeout({
-          label: `case ${testCase.id}`,
-          timeoutMs: caseTimeoutMs,
-          cancellationDrainTimeoutMs:
-            testCase.cancellationDrainTimeoutMs ?? DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS,
-          run: (signal) => runCase(testCase, ctx, signal),
+      const quiescence = pendingBusyRecovery
+        ? await waitForAgentQuiescence({
+            timeoutMs: DEFAULT_PRE_CASE_QUIESCE_TIMEOUT_MS,
+            pollIntervalMs: DEFAULT_PRE_CASE_QUIESCE_POLL_MS,
+            probe: () => probeKnownBusySettlement({
+              adminBase: ADMIN_BASE,
+              busyObservedAtMs: pendingBusyRecovery.busyObservedAtMs,
+              fetchJson,
+            }),
+          })
+        : null;
+      if (quiescence) {
+        recordCaseDiagnostic(testCase.id, {
+          event: 'pre_case_known_busy_settlement',
+          blockedByCaseId: pendingBusyRecovery.caseId,
+          busyObservedAtMs: pendingBusyRecovery.busyObservedAtMs,
+          ...quiescence,
         });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const failure = classifyCaseFailure(error);
+      }
+      if (quiescence && !quiescence.quiescent) {
+        const agentBusy = quiescence.reason === 'agent_busy';
         caseResult = buildHarnessErrorResult(
           testCase,
-          errorMessage,
-          failure.status,
-          failure.reason,
+          agentBusy
+            ? 'Agent remained busy through the bounded pre-case quiescence window'
+            : 'Admin session state remained unavailable through the bounded pre-case quiescence window',
+          agentBusy ? 'agent_busy' : 'harness_error',
+          agentBusy
+            ? 'agent_busy:pre_case_quiescence_timeout'
+            : 'harness_error:admin_quiescence_unreachable',
         );
+        caseResult.sideChecks.preCaseQuiescence = quiescence;
+      } else {
+        pendingBusyRecovery = null;
+        caseExecutionAttempted = true;
+        const caseTimeoutMs = resolveCaseTimeoutMs(testCase, {
+          fetchTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+          busyRetryWindowMs: DEFAULT_BUSY_RETRY_WINDOW_MS,
+          turnMatchWaitMs: DEFAULT_TURN_MATCH_WAIT_MS,
+          turnSettleMs: DEFAULT_TURN_SETTLE_MS,
+          postAbortTurnWaitMs: DEFAULT_POST_ABORT_TURN_WAIT_MS,
+          afterTimeoutMs: DEFAULT_AFTER_TIMEOUT_MS,
+          caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
+        });
+        try {
+          caseResult = await runCaseWithTimeout({
+            label: `case ${testCase.id}`,
+            timeoutMs: caseTimeoutMs,
+            cancellationDrainTimeoutMs:
+              testCase.cancellationDrainTimeoutMs ?? DEFAULT_CASE_CANCELLATION_DRAIN_TIMEOUT_MS,
+            run: (signal) => runCase(testCase, ctx, signal),
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const failure = classifyCaseFailure(error);
+          caseResult = buildHarnessErrorResult(
+            testCase,
+            errorMessage,
+            failure.status,
+            failure.reason,
+          );
+        }
       }
     }
-    if (!coverageHoleReason && typeof testCase.cleanup === 'function') {
+    if (caseExecutionAttempted && typeof testCase.cleanup === 'function') {
       let finalCleanup;
       try {
         finalCleanup = await withTimeout(
@@ -3749,6 +3802,21 @@ async function main() {
         ) {
           caseResult.caseStatus = 'semantic_failure';
         }
+      }
+    }
+    if (caseResult.caseStatus === 'agent_busy' && caseExecutionAttempted) {
+      if (typeof caseResult.busyObservedAtMs === 'number') {
+        pendingBusyRecovery = {
+          caseId: testCase.id,
+          busyObservedAtMs: caseResult.busyObservedAtMs,
+        };
+      } else {
+        caseResult.caseStatus = 'harness_error';
+        caseResult.failureReason = 'harness_error:missing_busy_observation';
+        caseResult.sideChecks = {
+          ...(caseResult.sideChecks ?? {}),
+          error: 'agent_busy result did not preserve its dispatch-start settlement boundary',
+        };
       }
     }
     caseResult.caseArtifactPath = writeCaseArtifact(caseResult, {

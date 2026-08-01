@@ -71,15 +71,15 @@ test('catalog covers every in-scope Sprint 10 executable seam without duplicatin
 });
 
 test('temporal strip probe echoes the seeded history turn real stamp', () => {
-  const seedMessage = 'Remember that this is the first turn of the temporal rendering probe.';
+  const seedMessage = 'Temporal strip-guard history witness run-fixture.';
   const previewTurn = {
     observability: {
       snapshot: {
         plan: {
-          messages: [{
-            role: 'user',
-            content: `[Fri 07-31-26 12:34] ${seedMessage}`,
-          }],
+          messages: [
+            { role: 'user', content: `[Fri 07-31-26 11:11] ${seedMessage}` },
+            { role: 'user', content: `[Fri 07-31-26 12:34] ${seedMessage}` },
+          ],
         },
       },
     },
@@ -87,8 +87,83 @@ test('temporal strip probe echoes the seeded history turn real stamp', () => {
   const prefix = extractRenderedHistoryStamp(previewTurn, seedMessage);
 
   assert.equal(prefix, '[Fri 07-31-26 12:34]');
-  assert.match(buildTemporalMessage(prefix), /\[Fri 07-31-26 12:34\]/u);
-  assert.doesNotMatch(buildTemporalMessage(prefix), /07-17-26/u);
+  assert.equal(
+    buildTemporalMessage(prefix, seedMessage),
+    `Quote this previously rendered history line exactly, including its truthful provenance prefix, and output nothing else:\n${prefix} ${seedMessage}`,
+  );
+  assert.doesNotMatch(buildTemporalMessage(prefix, seedMessage), /current date/iu);
+});
+
+test('temporal case uses a run-unique witness and proves the exact strip transformation', async () => {
+  const messages = [];
+  const stamp = '[Fri 07-31-26 12:34]';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    messages.push(body.messages[0].content);
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  let turnIndex = 0;
+  try {
+    const temporal = buildSprint10Cases(context, {
+      ...services,
+      waitForTurnRecord: async ({ message }) => {
+        turnIndex += 1;
+        if (turnIndex === 1) return { turnId: 'seed', status: 'completed' };
+        if (turnIndex === 2) {
+          return {
+            turnId: 'preview',
+            status: 'completed',
+            observability: { snapshot: { plan: { messages: [
+              { role: 'user', content: `${stamp} ${messages[0]}` },
+            ] } } },
+          };
+        }
+        return {
+          turnId: 'main',
+          status: 'completed',
+          userMessage: { content: message },
+          assistantMessage: { content: messages[0] },
+          observability: { snapshot: {
+            plan: { messages: [{ role: 'user', content: `${stamp} ${messages[0]}` }] },
+            promptContext: {
+              response: { content: `${stamp} ${messages[0]}` },
+              finalSystemSections: [{
+                id: 'runtime.current_datetime',
+                content: '<runtime.current_datetime>now</runtime.current_datetime>',
+              }],
+            },
+          } },
+        };
+      },
+    }).find((entry) => entry.id === 's10_temporal_stamp_strip');
+    const outcome = await temporal.execute({
+      sessionId: temporal.sessionId,
+      apiUserId: context.primaryApiUserId,
+    });
+
+    assert.match(messages[0], new RegExp(context.runToken, 'u'));
+    assert.equal(typeof outcome.busyObservedAtMs, 'number');
+    assert.equal(messages[2], buildTemporalMessage(stamp, messages[0]));
+    assert.deepEqual(temporal.validatePersistedProof({
+      outcome,
+      turnRecord: outcome.turnRecord,
+    }), []);
+    assert.ok(temporal.validatePersistedProof({
+      outcome,
+      turnRecord: {
+        ...outcome.turnRecord,
+        assistantMessage: { content: 'a different unstamped reply' },
+      },
+    }).includes(
+      'persisted assistant reply does not equal the raw response after the exact history-stamp strip',
+    ));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('satellite CogSec dispatch uses the scoped satellite bearer and binds proof to its real turn', async () => {

@@ -13,7 +13,7 @@ export const OBSERVED_SUBAGENT_CHILD_TURN_P95_MS = 174_000;
 // archive-settlement headroom without treating normal child work as a hang.
 export const SUBAGENT_STEP_TIMEOUT_MS = 240_000;
 
-const MATRIX_ABORT_STATUSES = new Set(['harness_error', 'agent_busy', 'runtime_stale']);
+const MATRIX_ABORT_STATUSES = new Set(['harness_error', 'runtime_stale']);
 const TIMEOUT_ERROR_PATTERN = / timed out after \d+ms$/u;
 
 export class CaseIsolationError extends Error {
@@ -127,6 +127,216 @@ export function throwIfAborted(signal) {
   throw signal.reason instanceof Error
     ? signal.reason
     : new Error('case execution aborted');
+}
+
+function waitWithSignal(delayMs, signal) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    let abort = null;
+    const cleanup = () => {
+      if (abort) signal?.removeEventListener('abort', abort);
+    };
+    const finish = () => {
+      cleanup();
+      resolve();
+    };
+    abort = () => {
+      if (timer) clearTimeout(timer);
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : new Error('quiescence wait aborted'));
+    };
+    timer = setTimeout(finish, delayMs);
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+/** Poll an explicit state probe until a previously observed busy run settles. */
+export async function waitForAgentQuiescence({
+  timeoutMs,
+  pollIntervalMs,
+  probe,
+  signal,
+  now = Date.now,
+  wait = waitWithSignal,
+}) {
+  const startedAtMs = now();
+  const deadlineMs = startedAtMs + finiteNonNegative(timeoutMs);
+  const attempts = [];
+  let lastState = null;
+
+  while (true) {
+    throwIfAborted(signal);
+    try {
+      lastState = await probe(signal);
+    } catch (error) {
+      lastState = {
+        reachable: false,
+        busy: null,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      };
+    }
+    attempts.push({ atMs: now(), ...lastState });
+    if (lastState?.reachable === true && lastState?.busy === false) {
+      return {
+        quiescent: true,
+        reason: null,
+        elapsedMs: now() - startedAtMs,
+        attempts: attempts.slice(-20),
+      };
+    }
+    const remainingMs = deadlineMs - now();
+    if (remainingMs <= 0) break;
+    await wait(Math.min(Math.max(1, finiteNonNegative(pollIntervalMs, 1)), remainingMs), signal);
+  }
+
+  return {
+    quiescent: false,
+    reason: lastState?.reachable === true && lastState?.busy === true
+      ? 'agent_busy'
+      : 'admin_unreachable',
+    elapsedMs: now() - startedAtMs,
+    attempts: attempts.slice(-20),
+  };
+}
+
+/**
+ * Prove that the run which caused an agent_busy rejection has since produced a
+ * terminal TurnRecord. The capability route is the isolated recovery-plane
+ * reachability check; the session scan is global because scheduler, heartbeat,
+ * and API turns all contend on the same agent run.
+ */
+export async function probeKnownBusySettlement({
+  adminBase,
+  busyObservedAtMs,
+  fetchJson,
+}) {
+  const capabilities = await fetchJson(
+    `${adminBase}/api/admin/settings/capabilities`,
+    {},
+    5000,
+  );
+  if (!capabilities?.ok) {
+    return {
+      reachable: false,
+      busy: null,
+      controlPlaneStatus: capabilities?.status ?? null,
+      error: capabilities?.fetchError ?? 'capability recovery route unavailable',
+    };
+  }
+
+  const sessions = await fetchJson(`${adminBase}/api/admin/sessions`, {}, 5000);
+  if (sessions?.status === 503) {
+    return {
+      reachable: true,
+      busy: true,
+      controlPlaneStatus: capabilities.status,
+      sessionListStatus: sessions.status,
+      checkedSessionCount: 0,
+      latestCompletedAtMs: null,
+    };
+  }
+  const channels = Array.isArray(sessions?.body?.channels)
+    ? sessions.body.channels
+    : null;
+  if (!sessions?.ok || !channels) {
+    return {
+      reachable: false,
+      busy: null,
+      controlPlaneStatus: capabilities.status,
+      sessionListStatus: sessions?.status ?? null,
+      error: sessions?.fetchError ?? 'admin session list unavailable or malformed',
+    };
+  }
+
+  const allSessionIds = [...new Map(
+    channels
+      .filter((channel) => typeof channel?.sessionId === 'string')
+      .sort((left, right) => (
+        finiteNonNegative(right?.lastActivityAt) - finiteNonNegative(left?.lastActivityAt)
+      ))
+      .map((channel) => [channel.sessionId, channel.sessionId]),
+  ).values()];
+  // Session detail includes full turn snapshots. Bound and parallelize the
+  // recovery scan so a saturated box cannot turn one poll into an unbounded
+  // serial N×5s wait. Failure to find the owner remains safely busy.
+  const sessionIds = allSessionIds.slice(0, 12);
+  const sessionScanTruncated = allSessionIds.length > sessionIds.length;
+  let latestCompletedAtMs = null;
+  let checkedSessionCount = 0;
+  const detailResponses = await Promise.all(sessionIds.map(async (sessionId) => ({
+    sessionId,
+    detail: await fetchJson(
+      `${adminBase}/api/admin/sessions/${encodeURIComponent(sessionId)}?limit=1`,
+      {},
+      5000,
+    ),
+  })));
+  for (const { sessionId, detail } of detailResponses) {
+    if (detail?.status === 503) {
+      return {
+        reachable: true,
+        busy: true,
+        controlPlaneStatus: capabilities.status,
+        sessionListStatus: sessions.status,
+        checkedSessionCount,
+        latestCompletedAtMs,
+        sessionScanTruncated,
+      };
+    }
+    if (!detail?.ok || !Array.isArray(detail?.body?.turns)) {
+      return {
+        reachable: false,
+        busy: null,
+        controlPlaneStatus: capabilities.status,
+        sessionListStatus: sessions.status,
+        checkedSessionCount,
+        latestCompletedAtMs,
+        sessionScanTruncated,
+        error: detail?.fetchError ?? `admin session detail unavailable for ${sessionId}`,
+      };
+    }
+    checkedSessionCount += 1;
+    for (const turn of detail.body.turns) {
+      const record = turn?.record ?? turn;
+      const startedAtMs = finiteNonNegative(record?.startedAt, -1);
+      const completedAtMs = finiteNonNegative(record?.completedAt, -1);
+      if (completedAtMs >= 0) {
+        latestCompletedAtMs = latestCompletedAtMs === null
+          ? completedAtMs
+          : Math.max(latestCompletedAtMs, completedAtMs);
+      }
+      // The failed throw-away request caused by agent_busy can itself persist a
+      // terminal record after this timestamp. It is not the lock owner. Only a
+      // turn which started before the rejected request and completed after it
+      // proves the known busy owner crossed and released that boundary.
+      if (startedAtMs < busyObservedAtMs && completedAtMs >= busyObservedAtMs) {
+        return {
+          reachable: true,
+          busy: false,
+          controlPlaneStatus: capabilities.status,
+          sessionListStatus: sessions.status,
+          checkedSessionCount,
+          latestCompletedAtMs,
+          sessionScanTruncated,
+          settledTurnId: record?.turnId ?? null,
+          settledSessionId: sessionId,
+        };
+      }
+    }
+  }
+  return {
+    reachable: true,
+    busy: true,
+    controlPlaneStatus: capabilities.status,
+    sessionListStatus: sessions.status,
+    checkedSessionCount,
+    latestCompletedAtMs,
+    sessionScanTruncated,
+  };
 }
 
 /**

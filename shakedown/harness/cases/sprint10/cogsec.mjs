@@ -287,6 +287,7 @@ function buildCogSecCase(ctx, services, env, {
         },
         response,
         turnRecord,
+        busyObservedAtMs: startedAtMs,
       });
     },
     after: async ({ outcome, sessionEntries, signal }) => ({

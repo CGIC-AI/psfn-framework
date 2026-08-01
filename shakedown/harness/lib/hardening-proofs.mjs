@@ -57,6 +57,83 @@ function pick(row, snake, camel) {
   return null;
 }
 
+function pickNumber(row, snake, camel) {
+  const value = row?.[snake] ?? row?.[camel];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/u.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  return null;
+}
+
+/** Group unknown-lane embedding rows into stable, runtime-authored call sites. */
+export function summarizeUnknownEmbeddingAttribution(rows) {
+  const sourceRows = asArray(rows);
+  const grouped = new Map();
+  for (const row of sourceRows) {
+    const dimensions = {
+      purpose: pick(row, 'purpose', 'purpose'),
+      originType: pick(row, 'origin_type', 'originType'),
+      originStage: pick(row, 'origin_stage', 'originStage'),
+      service: pick(row, 'service', 'service'),
+      process: pick(row, 'process', 'process'),
+      workloadType: pick(row, 'workload_type', 'workloadType'),
+      toolName: pick(row, 'tool_name', 'toolName'),
+      channelType: pick(row, 'channel_type', 'channelType'),
+      slotKey: pick(row, 'slot_key', 'slotKey'),
+      provider: pick(row, 'provider', 'provider'),
+      model: pick(row, 'model', 'model'),
+      chargeSurface: pick(row, 'charge_surface', 'chargeSurface'),
+    };
+    const key = JSON.stringify(dimensions);
+    const recordedAtMs = pickNumber(row, 'recorded_at_ms', 'recordedAtMs');
+    const logicalCallId = pick(row, 'logical_call_id', 'logicalCallId');
+    const current = grouped.get(key) ?? {
+      ...dimensions,
+      count: 0,
+      firstRecordedAtMs: recordedAtMs,
+      lastRecordedAtMs: recordedAtMs,
+      sampleCorrelations: [],
+    };
+    current.count += 1;
+    if (recordedAtMs !== null) {
+      current.firstRecordedAtMs = current.firstRecordedAtMs === null
+        ? recordedAtMs
+        : Math.min(current.firstRecordedAtMs, recordedAtMs);
+      current.lastRecordedAtMs = current.lastRecordedAtMs === null
+        ? recordedAtMs
+        : Math.max(current.lastRecordedAtMs, recordedAtMs);
+    }
+    if (current.sampleCorrelations.length < 5) {
+      current.sampleCorrelations.push({
+        logicalCallId,
+        sessionId: pick(row, 'session_id', 'sessionId'),
+        turnId: pick(row, 'turn_id', 'turnId'),
+        requestId: pick(row, 'request_id', 'requestId'),
+        channelId: pick(row, 'channel_id', 'channelId'),
+        workloadId: pick(row, 'workload_id', 'workloadId'),
+        metadata: row?.metadata_json ?? row?.metadataJson ?? null,
+      });
+    }
+    grouped.set(key, current);
+  }
+  const totalCount = pickNumber(
+    sourceRows[0],
+    'total_unknown_embedding_count',
+    'totalUnknownEmbeddingCount',
+  ) ?? sourceRows.length;
+  return {
+    totalCount,
+    returnedCount: sourceRows.length,
+    truncated: totalCount > sourceRows.length,
+    callSites: [...grouped.values()].sort((left, right) => (
+      right.count - left.count
+      || String(left.purpose).localeCompare(String(right.purpose))
+    )),
+  };
+}
+
 /**
  * Project the canonical models.json owner file into owner slots, mirroring
  * src/system/settings/schema-model-registry.ts:

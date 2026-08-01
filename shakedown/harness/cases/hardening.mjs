@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { buildChatHeaders, postChatCompletion } from '../lib/probe.mjs';
 import {
+  summarizeUnknownEmbeddingAttribution,
   validateBackupEncryptionRoundTripProof,
   validateBackgroundModelDriveProof,
   validateModelLaneAttributionProof,
@@ -75,6 +76,21 @@ const MODEL_USAGE_QUERY = `
       and origin_stage = 'emotion.appraisal'
     )
   order by recorded_at_ms asc
+`;
+
+// Residual diagnosis for the historical unknown-lane embedding bucket. These
+// runtime-authored provenance columns identify real callers without inferring
+// a call site from a model name or an aggregate count.
+const UNKNOWN_EMBEDDING_ATTRIBUTION_QUERY = `
+  select logical_call_id, recorded_at_ms, purpose, origin_type, origin_stage,
+         service, process, session_id, turn_id, request_id, channel_id,
+         channel_type, workload_type, workload_id, tool_name, slot_key, provider,
+         model, charge_surface, metadata_json,
+         count(*) over() as total_unknown_embedding_count
+  from model_usage_events
+  where call_kind = 'embedding' and charge_lane = 'unknown'
+  order by recorded_at_ms desc
+  limit 200
 `;
 
 const BACKGROUND_APPRAISAL_ORIGIN_QUERY = `
@@ -451,16 +467,32 @@ export function buildHardeningCases(ctx, services, options = {}) {
                 error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
               });
             }
+            stage = 'unknown_embedding_attribution_read';
+            let unknownEmbeddingRows = [];
+            try {
+              unknownEmbeddingRows = await services.pgAll(
+                UNKNOWN_EMBEDDING_ATTRIBUTION_QUERY,
+              );
+            } catch (error) {
+              proofQueryFailures.push({
+                stage,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
             const modelsConfig = services.readJsonIfExists(modelsPath);
             return normalizeCustomOutcome({
               sessionId,
               request: { privacy: 'private', message: SPEND_MESSAGE },
               response: interactive.response,
               turnRecord: interactive.turnRecord,
+              busyObservedAtMs: interactive.startedAtMs,
               sideChecks: {
                 modelLane: {
                   modelsConfig,
                   ledgerRows,
+                  unknownEmbeddingRows,
+                  unknownEmbeddingAttribution:
+                    summarizeUnknownEmbeddingAttribution(unknownEmbeddingRows),
                   proofQueryFailures,
                   // Each purpose is bound to the exact turn this case drove. Chat and
                   // vision remain distinguishable despite sharing the interactive
@@ -494,6 +526,10 @@ export function buildHardeningCases(ctx, services, options = {}) {
             ledgerRowCount: Array.isArray(outcome.sideChecks.modelLane.ledgerRows)
               ? outcome.sideChecks.modelLane.ledgerRows.length
               : 0,
+            unknownEmbeddingAttribution:
+              outcome.sideChecks.modelLane.unknownEmbeddingAttribution ?? null,
+            unknownEmbeddingRows:
+              outcome.sideChecks.modelLane.unknownEmbeddingRows ?? [],
             driven: outcome.sideChecks.modelLane.driven ?? null,
           }
           : null,
@@ -602,6 +638,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
           request: { privacy: 'private', message: BACKUP_MESSAGE, backupSavePath: BACKUP_SAVE_PATH },
           response: main.response,
           turnRecord: main.turnRecord,
+          busyObservedAtMs: main.startedAtMs,
           sideChecks: {
             backup: {
               field,

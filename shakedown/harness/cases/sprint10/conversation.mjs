@@ -12,8 +12,7 @@ import {
   proof,
 } from './common.mjs';
 
-const TEMPORAL_MESSAGE = 'Answer with one short sentence about the current date and begin the draft '
-  + 'by echoing the exact rendered stamp from the seeded history turn.';
+const TEMPORAL_MESSAGE = 'Quote a previously rendered history line with its exact provenance stamp.';
 const SSE_MESSAGE = 'Reply with one short sentence for the SSE first-chunk proof.';
 const HISTORY_STAMP_PREFIX = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /u;
 
@@ -25,7 +24,7 @@ export function extractRenderedHistoryStamp(turnRecord, historyMessage) {
   const planMessages = Array.isArray(snapshotOf(turnRecord)?.plan?.messages)
     ? snapshotOf(turnRecord).plan.messages
     : [];
-  for (const message of planMessages) {
+  for (const message of planMessages.toReversed()) {
     if (typeof message?.content !== 'string') continue;
     for (const line of message.content.split('\n')) {
       const match = line.match(HISTORY_STAMP_PREFIX);
@@ -37,10 +36,9 @@ export function extractRenderedHistoryStamp(turnRecord, historyMessage) {
   throw new Error('temporal preview PromptPlan does not contain the seeded history turn stamp');
 }
 
-export function buildTemporalMessage(seedStamp) {
-  return 'Answer with one short sentence about the current date. '
-    + `The seeded history turn above has the exact rendered prefix "${seedStamp} ". `
-    + 'For this synthetic strip-guard probe, begin the draft by echoing that exact prefix before the sentence.';
+export function buildTemporalMessage(seedStamp, seedMessage) {
+  return 'Quote this previously rendered history line exactly, including its truthful provenance prefix, '
+    + `and output nothing else:\n${seedStamp} ${seedMessage}`;
 }
 
 async function postAndWait({
@@ -70,7 +68,7 @@ async function postAndWait({
     timeoutMs: 120_000,
     signal,
   });
-  return { response, turnRecord };
+  return { response, turnRecord, startedAtMs };
 }
 
 export function buildConversationCases(ctx, services) {
@@ -87,7 +85,7 @@ export function buildConversationCases(ctx, services) {
         'history is rendered with stamps, the model emits one, and the accepted outbound text strips it',
       ),
       execute: async ({ sessionId, apiUserId, signal }) => {
-        const seedMessage = 'Remember that this is the first turn of the temporal rendering probe.';
+        const seedMessage = `Temporal strip-guard history witness ${ctx.runToken}.`;
         const seed = await postAndWait({
           services,
           sessionId,
@@ -110,7 +108,7 @@ export function buildConversationCases(ctx, services) {
           throw new Error('temporal history preview turn did not complete');
         }
         const seedStamp = extractRenderedHistoryStamp(preview.turnRecord, seedMessage);
-        const temporalMessage = buildTemporalMessage(seedStamp);
+        const temporalMessage = buildTemporalMessage(seedStamp, seedMessage);
         const main = await postAndWait({
           services,
           sessionId,
@@ -130,6 +128,7 @@ export function buildConversationCases(ctx, services) {
           },
           response: main.response,
           turnRecord: main.turnRecord,
+          busyObservedAtMs: main.startedAtMs,
         });
       },
       validatePersistedProof: validateTemporalProof,
@@ -175,6 +174,7 @@ export function buildConversationCases(ctx, services) {
           },
           response: result.response,
           turnRecord: result.turnRecord,
+          busyObservedAtMs: result.startedAtMs,
           sideChecks: { sse: result.stream },
         });
       },

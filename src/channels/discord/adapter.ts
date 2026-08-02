@@ -70,6 +70,7 @@ import {
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
@@ -144,9 +145,8 @@ interface DiscordAdapterOptions {
   account?: DiscordAdapterAccountBinding;
   enableDiscordEvidenceLifecycle?: boolean;
   /**
-   * Cognition intake firewall (htm9.2): screens parsed document attachment
-   * text before it enters <parsed_attachment_text>. Absent when the firewall
-   * mode is 'off' — ingest behavior is then unchanged.
+   * Cognition intake firewall: screens ordinary chat bodies and parsed
+   * document text before prompt assembly. Absent when firewall mode is off.
    */
   intakeScreening?: IntakeScreeningService;
 }
@@ -163,6 +163,7 @@ function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDis
 
   const latest = turns[turns.length - 1]!;
   const messages = turns.map(turn => turn.substrateMsg);
+  const intakeEnvelopes = messages.flatMap(message => message.routing?.intakeEnvelopes ?? []);
   return {
     ...latest,
     substrateMsg: {
@@ -172,6 +173,10 @@ function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDis
         .filter(content => content.trim().length > 0)
         .join('\n'),
       attachments: messages.flatMap(message => message.attachments ?? []),
+      routing: {
+        ...latest.substrateMsg.routing,
+        ...(intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
+      },
     },
     replyToOriginal: turns.some(turn => turn.replyToOriginal),
     respondToMessage: turns.some(turn => turn.respondToMessage),
@@ -1037,6 +1042,18 @@ export class DiscordAdapter implements ChannelAdapterPort {
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
     let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
+    if (content !== '(empty message)') {
+      const screenedBody = await screenChatMessageBody({
+        content,
+        screening: this.intakeScreening,
+        sourceClass: isDirectMessage ? 'regular_contact' : 'public_contact',
+        surface: 'discord',
+        channelId: msg.channelId,
+        messageId: msg.id,
+      });
+      content = screenedBody.content;
+      if (screenedBody.snapshot) intakeEnvelopes.push(screenedBody.snapshot);
+    }
     const documentCandidates = extractDiscordDocumentAttachmentCandidates(msg);
     if (documentCandidates.length > 0 && this.personalFilesDir) {
       let documentSummary = await ingestDocumentAttachments(documentCandidates, {
@@ -1064,7 +1081,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
           },
         );
         documentSummary = screened.summary;
-        intakeEnvelopes = screened.snapshots;
+        intakeEnvelopes.push(...screened.snapshots);
       }
       attachments.push(...documentSummary.results.map(result => result.attachment));
       content = appendDocumentIngestToContent(content, documentSummary);
@@ -1116,8 +1133,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
         // machine-intelligence auto-tagging. Consumed by author-context
         // resolution to mark the contact (operator corrections survive).
         ...(msg.author.bot ? { authorIsMachineIntelligence: true } : {}),
-        // htm9.2: intake-firewall envelope snapshots for screened parsed
-        // document attachments; the envelope journal stays authoritative.
+        // Intake-firewall snapshots for the body and parsed attachments; the
+        // envelope journal stays authoritative.
         ...(intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
       },
     };

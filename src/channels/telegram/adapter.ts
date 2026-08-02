@@ -23,6 +23,7 @@ import {
 } from './clarification.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../backplane/config.js';
@@ -113,9 +114,8 @@ interface TelegramAdapterOptions {
   /** Personal-files root for document downloads/quarantine (htm9.9). */
   personalFilesDir?: string;
   /**
-   * Cognition intake firewall (htm9.2/htm9.9): screens parsed document
-   * attachment text before it enters <parsed_attachment_text>. Absent when
-   * the firewall mode is 'off'.
+   * Cognition intake firewall: screens ordinary chat bodies and parsed
+   * document text before prompt assembly. Absent when firewall mode is off.
    */
   intakeScreening?: IntakeScreeningService | null;
   /**
@@ -845,43 +845,57 @@ export class TelegramAdapter implements ChannelAdapterPort {
     });
 
     const typingInterval = this.startTypingLoop(channelId);
-    // htm9.9: resolve inline image bytes and push document attachments through
-    // the shared file-ingest faculty (download → quarantine → parse → intake
-    // screening). Never throws — failures become soft in-content notices.
-    const prepared = await this.prepareIncomingAttachments({
-      message,
-      content,
-      channelId,
-      messageId,
-    });
-    const isDirectMessage = message.chat.type === 'private';
-    const channelPrivacy = classifyChannelEnvelope(channelId, { isDirectMessage }).privacy;
-    const substrateMessage: SubstrateMessage = {
-      id: messageId,
-      channelId,
-      channelType: 'telegram',
-      isDirectMessage,
-      authorId: String(message.from.id),
-      authorName: resolveAuthorName(message.from),
-      content: prepared.content,
-      ...(prepared.attachments.length > 0 ? { attachments: prepared.attachments } : {}),
-      timestamp: new Date(message.date * 1000),
-      routing: {
-        source: 'telegram',
-        channelPrivacy,
-        ...(prepared.intakeEnvelopes.length > 0
-          ? { intakeEnvelopes: prepared.intakeEnvelopes }
-          : {}),
-      },
-    };
-    const replyContext: OutboundContext = {
-      channelId,
-      replyToMessageId: replyToId ?? messageId,
-      threadId,
-    };
-    this.beginStreamResponse(replyContext);
-
     try {
+      const isDirectMessage = message.chat.type === 'private';
+      const screenedBody = contentText
+        ? await screenChatMessageBody({
+          content,
+          screening: this.intakeScreening,
+          sourceClass: isDirectMessage ? 'regular_contact' : 'public_contact',
+          surface: 'telegram',
+          channelId,
+          messageId,
+        })
+        : { content, snapshot: null };
+      // htm9.9: resolve inline image bytes and push document attachments through
+      // the shared file-ingest faculty (download → quarantine → parse → intake
+      // screening). Never throws — failures become soft in-content notices.
+      const prepared = await this.prepareIncomingAttachments({
+        message,
+        content: screenedBody.content,
+        channelId,
+        messageId,
+      });
+      const channelPrivacy = classifyChannelEnvelope(channelId, { isDirectMessage }).privacy;
+      const intakeEnvelopes = [
+        ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),
+        ...prepared.intakeEnvelopes,
+      ];
+      const substrateMessage: SubstrateMessage = {
+        id: messageId,
+        channelId,
+        channelType: 'telegram',
+        isDirectMessage,
+        authorId: String(message.from.id),
+        authorName: resolveAuthorName(message.from),
+        content: prepared.content,
+        ...(prepared.attachments.length > 0 ? { attachments: prepared.attachments } : {}),
+        timestamp: new Date(message.date * 1000),
+        routing: {
+          source: 'telegram',
+          channelPrivacy,
+          ...(intakeEnvelopes.length > 0
+            ? { intakeEnvelopes }
+            : {}),
+        },
+      };
+      const replyContext: OutboundContext = {
+        channelId,
+        replyToMessageId: replyToId ?? messageId,
+        threadId,
+      };
+      this.beginStreamResponse(replyContext);
+
       await this.eventBus.emit('message.received', { message: substrateMessage });
       let response: Awaited<ReturnType<MessageHandler>>;
       try {

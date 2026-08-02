@@ -346,7 +346,7 @@ export function buildSubstrateMessage(params: {
   canonicalContactId?: string;
   satellite?: SatelliteRoutingMetadata;
   attachments?: Attachment[];
-  /** htm9.9: intake-firewall envelope snapshots for screened document attachments. */
+  /** Intake-firewall snapshots for the body and screened document attachments. */
   intakeEnvelopes?: IntakeEnvelopeSnapshot[];
 }): SubstrateMessage {
   const {

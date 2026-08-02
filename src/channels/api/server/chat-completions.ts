@@ -76,6 +76,7 @@ import {
   resolveBearerCompanionTarget,
   type BearerCompanionRoutingConfig,
 } from './bearer-companion-selector.js';
+import { screenChatMessageBody } from '../../../core/cogsec/intake/chat-message-screening.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 
@@ -135,7 +136,7 @@ export interface ApiChatCompletionsHandlerConfig {
   satelliteRegistry: SatelliteRegistryConfig | undefined;
   satelliteRegistryProvider: SatelliteRegistryProvider | undefined;
   logger: ApiServerLogger;
-  /** htm9.9: shared document file-part ingestion; null when not configured. */
+  /** Shared chat-body screening and document ingestion; null when not configured. */
   documentIngest: ApiDocumentIngestConfig | null;
   /** Gateway-owned routing and entitlement contract for the Bearer surface. */
   bearerCompanionRouting?: BearerCompanionRoutingConfig;
@@ -821,11 +822,25 @@ export class ApiChatCompletionsHandler {
     }
     const lastUserMsg = getLastUserMessage(request.messages);
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    const bodyMessageId = `api-body-${randomUUID()}`;
+    const screenedBody = await screenChatMessageBody({
+      content: lastUserMsg,
+      screening: this.documentIngest?.intakeScreening,
+      sourceClass: source === 'api'
+        ? 'primary_user'
+        : resolvedChannelPrivacy === 'public'
+          ? 'public_contact'
+          : 'regular_contact',
+      surface: 'api',
+      channelId,
+      messageId: bodyMessageId,
+      ...(canonicalContactId ? { canonicalContactId } : {}),
+    });
     // htm9.9: `file` content parts run the shared file-ingest pipeline
     // (quarantine -> parse -> intake screening) before prompt assembly.
     const ingestedFiles = await ingestApiDocumentFileParts({
       extraction: getLastUserMessageFileParts(request.messages),
-      content: lastUserMsg,
+      content: screenedBody.content,
       channelId,
       messageId: `api-file-${randomUUID()}`,
       authorId,
@@ -845,7 +860,10 @@ export class ApiChatCompletionsHandler {
       canonicalContactId,
       satellite,
       attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
-      intakeEnvelopes: ingestedFiles.intakeEnvelopes,
+      intakeEnvelopes: [
+        ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),
+        ...ingestedFiles.intakeEnvelopes,
+      ],
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);

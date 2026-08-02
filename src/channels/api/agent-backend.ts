@@ -61,6 +61,7 @@ import {
   type ApiDocumentIngestConfig,
 } from './server/session.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
   type FifoChannelLease,
@@ -189,7 +190,7 @@ export interface AgentApiBackendConfig {
   companionId?: string;
   sensorIngest?: SensorIngestPort;
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
-  /** htm9.9: shared document file-part ingestion; null when not configured. */
+  /** Shared chat-body screening and document ingestion; null when not configured. */
   documentIngest?: ApiDocumentIngestConfig | null;
   /** Agent-side verifier for linked gateway child assertions. */
   requestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -1487,7 +1488,7 @@ export class AgentApiBackend {
     satellite?: SatelliteRoutingMetadata;
     hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
     attachments?: Attachment[];
-    /** htm9.9: intake-firewall envelope snapshots for screened document attachments. */
+    /** Intake-firewall snapshots for the body and screened document attachments. */
     intakeEnvelopes?: IntakeEnvelopeSnapshot[];
   }): SubstrateMessage {
     const approvalToken = this.readHeader(params.headers, 'x-broadcast-approval-token', 256);
@@ -1689,11 +1690,24 @@ export class AgentApiBackend {
     }
 
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    const screenedBody = await screenChatMessageBody({
+      content: this.getLastUserMessage(request.messages),
+      screening: this.documentIngest?.intakeScreening,
+      sourceClass: source === 'api'
+        ? 'primary_user'
+        : resolvedChannelPrivacy === 'public' || hubDeviceAttachment?.actor.kind === 'guest'
+          ? 'public_contact'
+          : 'regular_contact',
+      surface: 'api',
+      channelId,
+      messageId: requestId,
+      ...(canonicalContactId ? { canonicalContactId } : {}),
+    });
     // htm9.9: `file` content parts run the shared file-ingest pipeline
     // (quarantine -> parse -> intake screening) before prompt assembly.
     const ingestedFiles = await ingestApiDocumentFileParts({
       extraction: getLastUserMessageFileParts(request.messages),
-      content: this.getLastUserMessage(request.messages),
+      content: screenedBody.content,
       channelId,
       messageId: `api-file-${randomUUID()}`,
       authorId,
@@ -1721,7 +1735,10 @@ export class AgentApiBackend {
       satellite,
       ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
       attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
-      intakeEnvelopes: ingestedFiles.intakeEnvelopes,
+      intakeEnvelopes: [
+        ...(screenedBody.snapshot ? [screenedBody.snapshot] : []),
+        ...ingestedFiles.intakeEnvelopes,
+      ],
     });
     const releaseChannel = await this.acquireChannel(channelId, requestId, signal);
     if (!releaseChannel) {

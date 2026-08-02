@@ -96,6 +96,7 @@ async function readyAuthority(
     capacityAuthority: capacity,
     pool: poolFixture.pool,
     randomUuid: () => HOLD_ID,
+    now: () => 2_000,
     ...overrides,
   });
   await authority.assertReady();
@@ -192,6 +193,7 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
       issuedAtMs: 2_000,
       expiresAtMs: 10_000,
       status: 'consumed',
+      consumedAtMs: 2_500,
       revision: 2,
     } as const;
     await expect(authority.acquire({

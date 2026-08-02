@@ -19,7 +19,7 @@ PSFN should narrow that gap by combining authorized behavioral observations
 into a fallible estimate of how much support the partner may need.
 
 The feature is called **Partner Affect Estimation**. It is a core companionship
-capability, not a Productivity Pack feature and not a medical classifier.
+capability, not a Personal Operations Pack feature and not a medical classifier.
 
 Its intended path is:
 
@@ -68,7 +68,7 @@ for help.
 | **Directional Deviation** | A normalized change from the Personal Baseline after applying the signal's configured direction. |
 | **Partner Affect Estimate** | A composite, uncertain assessment of change and support relevance. |
 | **Support Posture** | A bounded interaction policy selected from the estimate; it is not an emotion label. |
-| **Partner Dossier** | The governed core view of the partner and their social context, assembled from existing contact profiles, memories, social graph, and personal wiki references. |
+| **Partner Model** | The governed Core aggregate of Partner Assertions, a slow-changing Partner Profile, expiring Partner Current Context, contacts, memories, and relationship references. It is not an affect estimate or one giant prompt. |
 | **Prospective Support Plan** | Partner-authored preferences for support, interaction style, and allowed low-risk actions. |
 | **Response Authority** | The companion allowed to decide how to respond to an estimate or advisory. |
 | **Affect Advisory** | A bounded ICP summary sent by one authorized companion to another without raw source data. |
@@ -101,22 +101,24 @@ than creating an exception to it.
 The system succeeds when companionship becomes more attentive without making
 the partner more dependent on the system.
 
-## 5. Core and Productivity Pack Ownership
+## 5. Core and Personal Operations Pack Ownership
 
-The estimator is core because ordinary companionship must not depend on an
-optional productivity product.
+The estimator is Core because ordinary companionship must not depend on the
+optional Personal Operations Pack.
 
-| Responsibility | Core PSFN | Productivity Pack |
+| Responsibility | Core PSFN | Personal Operations Pack |
 |---|---:|---:|
 | Signal contract, provenance, freshness, and consent | Owns | Must comply |
 | Direct self-report and conversation cues | Owns | Reads only through core context |
+| Partner Model, Profile, and Current Context | Owns as separate Core authority | Reads bounded context; may propose assertion Candidates |
 | Presence and situated-context summaries | Owns | May use for Task triggers |
 | Partner Affect Estimate | Owns | May contribute observations |
 | Support Posture and interaction constraints | Owns | Must respect |
 | Companion response judgment | Owns | Does not script |
-| Work, Task, Routine, and calendar-shape observations | Does not require | May contribute |
+| Planning primitives and companion-self/shared ledgers | Owns | Uses but does not own |
+| Partner-delegated work, Routine, and calendar-shape observations | Does not require | May contribute |
 | Read-only delivery, purchase, or subscription summaries | Does not require | Optional, separately authorized |
-| Productivity Companion advisory to a responder | Receives through ICP | May originate |
+| Personal Operations Companion advisory to a responder | Receives through ICP | May originate |
 
 Without the Pack, core can still use direct conversation, explicit self-report,
 authorized audio cues, situated presence, and approved health or sleep
@@ -125,7 +127,7 @@ summaries.
 With the Pack, the estimator may gain more context. The Pack never becomes the
 only signal path and never owns the resulting Support Posture.
 
-See the [Productivity Pack design](productivity-pack.md) for the operational
+See the [Personal Operations Pack design](productivity-pack.md) for the operational
 data boundary.
 
 ## 6. Signal Model
@@ -146,7 +148,8 @@ calendar month can never create an affect estimate by itself.
 
 ### 6.2 Pack-enriched signal families
 
-The optional Productivity Pack may contribute:
+The optional Personal Operations Pack may contribute consented summaries from
+the partner-delegated operational scope:
 
 - work or creative-activity cadence;
 - Task and Routine completion shape;
@@ -190,16 +193,17 @@ restorative, situational, or relevant. Direction cannot be universal.
 Each signal direction is partner-specific, inspectable, and correctable.
 Unknown direction means the signal cannot raise the composite.
 
-## 7. Partner Identity and Human-Shape Context
+## 7. Partner Identity and Partner Model Context
 
 The estimate is bound to one exact canonical partner contact. It must never
 silently switch to another household member or conversation participant.
 
 Core already has contact profiles, relational memories, and a provenance-aware
-social graph. The target Partner Dossier deepens their read surface rather than
-creating another identity database.
+social graph. The target Partner Model deepens their read surface with typed,
+provenance-bearing Partner Assertions rather than creating another identity
+database or treating a synthesized profile as unquestionable fact.
 
-The Partner Dossier may provide context such as:
+The Partner Model may provide bounded context such as:
 
 - important relationships and roles;
 - normal schedule and activity ranges;
@@ -213,8 +217,14 @@ their relationship to the partner is known.
 Third-party data can explain a grounded relationship fact. It cannot become a
 hidden affect estimate for that third party.
 
-The Dossier is not one giant prompt block. Retrieval remains bounded by need,
-provenance, consent, and sensitivity.
+Partner statements and corrections outrank model inference. The slow Partner
+Profile and expiring Partner Current Context remain separate projections; a
+current observation cannot silently become a durable profile assertion.
+
+The Partner Model is not one giant prompt block. Retrieval remains bounded by
+need, provenance, consent, and sensitivity. Partner Affect remains the authority
+for support estimation; the Partner Model must not grow an independent affect
+score.
 
 ## 8. Deterministic Estimation
 
@@ -353,7 +363,7 @@ does not give every companion the partner's telemetry.
 
 ### 11.2 Affect Advisory
 
-A source-rich companion, such as a designated Productivity Companion, may
+A source-rich companion, such as a designated Personal Operations Companion, may
 notice a pattern that the primary relational companion has not observed.
 
 Target ICP adds a typed, bounded Affect Advisory with:
@@ -477,7 +487,7 @@ the revoked sensitive content itself.
 | Posture flaps at a threshold | Entry/exit hysteresis and minimum dwell |
 | Sensitive fact becomes a taunt | Consumption-as-evidence-only invariant |
 | Companion is summoned from rest | Availability and attention gate |
-| Productivity Companion overreaches | Advisory-only ICP; responder retains judgment |
+| Personal Operations Companion overreaches | Advisory-only ICP; responder retains judgment |
 | Advisory leaks to the cluster | Exact recipient, partner binding, and capability checks |
 | Sensor disable becomes coercive | Immediate revocation and no automatic revert |
 | System optimizes for being needed | Success measures support utility and reduced burden, not engagement |
@@ -549,7 +559,9 @@ The design extends existing primitives:
   holds narrow contact-local conversational mood summaries.
 - [`memory-store-port.ts`](../src/faculties/memory/memory-store-port.ts) and
   [`social-graph-queries.ts`](../src/core/contacts/postgres-adapter/social-graph-queries.ts)
-  provide current dossier ingredients.
+  provide current Partner Model ingredients. The unified Partner Assertion
+  store, slow Partner Profile projection, and expiring Partner Current Context
+  remain target work.
 - [`icp-autonomy.ts`](../src/shared/contracts/icp-autonomy.ts) provides current
   same-cluster identity, availability, fatigue, provenance, and permit
   semantics.
@@ -564,8 +576,9 @@ The current API telemetry allowlist accepts heartbeat, status, and incident
 envelopes. Presence rides the status shape. General health and behavioral
 summary contracts remain target work.
 
-Current ICP has no typed Affect Advisory. Current satellites also have no
-general multi-recipient observation policy.
+Current ICP has no typed Affect Advisory. Shared-satellite observation scopes,
+emanation allowlists, and primary-first response leases are shipped seams; they
+do not themselves grant Partner Affect signal access or define Affect Advisory.
 
 ## 19. Delivery Sequence
 
@@ -605,7 +618,7 @@ general multi-recipient observation policy.
 - add household policy and reversible overrides;
 - validate in shadow before enabling actuation.
 
-### Slice 6: Productivity Pack enrichment
+### Slice 6: Personal Operations Pack enrichment
 
 - add each Pack signal family separately;
 - require baseline calibration and source review;
@@ -629,7 +642,7 @@ Partner Affect Estimation does not:
 - override companion fatigue or personal time;
 - delay privacy revocation;
 - optimize for engagement, dependence, or exclusivity;
-- depend on the Productivity Pack.
+- depend on the Personal Operations Pack.
 
 ## 21. Evidence Posture
 

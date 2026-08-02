@@ -330,7 +330,7 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
     expect(capacity.resolve).toHaveBeenCalledWith(expect.objectContaining({ nowMs: localNowMs }));
   });
 
-  it('rolls back every retained client on expiry, disconnect cleanup, and shutdown', async () => {
+  it('rolls back every retained client on hard expiry despite wall-clock regression and cleanup', async () => {
     vi.useFakeTimers();
     try {
       const fixture = fakePool();
@@ -353,9 +353,10 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
         payloadDigest: deriveIcpLocalPolicyAcquirePayloadDigest(request),
       };
       await authority.acquire(boundRequest);
-      nowMs = 3_000;
+      nowMs = 1_500;
       await vi.advanceTimersByTimeAsync(1_000);
       expect(fixture.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(fixture.clients[0]?.release).toHaveBeenCalledOnce();
 
       const secondRequest = {
         ...request,

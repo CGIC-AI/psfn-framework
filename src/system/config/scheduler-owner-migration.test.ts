@@ -22,6 +22,7 @@ import {
   SCHEDULER_FILE_NAME,
 } from './scheduler-config.js';
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
+import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -254,6 +255,42 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
   });
 
+  it('dry-runs, applies, and idempotently preserves the missing-only ICP hold policy upgrade', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      delete (owner.icpAutonomy as Record<string, unknown>).policyHolds;
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: ['icpAutonomy.policyHolds'],
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['icpAutonomy.policyHolds'],
+    });
+    expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
+      .toEqual(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds);
+
+    const inodeAfterApply = statSync(filePath).ino;
+    const bytesAfterApply = readFileSync(filePath, 'utf8');
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'not_needed',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
+    expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
   it('explicitly plans and applies the shared-world caretaker schema addition', () => {
     const { dataDir, filePath } = prepareOwner((owner) => {
       makePreCaretakerCanonical(owner);
@@ -264,14 +301,20 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundMaintenance.sharedWorldWikiCaretaker'],
+      addedPaths: [
+        'backgroundMaintenance.sharedWorldWikiCaretaker',
+        'icpAutonomy.policyHolds',
+      ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
 
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundMaintenance.sharedWorldWikiCaretaker'],
+      addedPaths: [
+        'backgroundMaintenance.sharedWorldWikiCaretaker',
+        'icpAutonomy.policyHolds',
+      ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect(migratedRaw.operatorExtension).toEqual({ note: 'preserve me', enabled: true });
@@ -303,12 +346,12 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundWork'],
+      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds'],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundWork'],
+      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds'],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect(migratedRaw.backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
@@ -327,6 +370,23 @@ describe('migrateLegacySchedulerOwner', () => {
 
     expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
       'backgroundMaintenance.sharedWorldWikiCaretaker must be an object',
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+  });
+
+  it('refuses a present malformed ICP hold policy instead of replacing it', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      (owner.icpAutonomy as Record<string, unknown>).policyHolds = null;
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      'icpAutonomy.policyHolds must be an object',
     );
     expect(readFileSync(filePath, 'utf8')).toBe(before);
   });

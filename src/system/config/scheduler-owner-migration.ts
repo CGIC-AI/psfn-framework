@@ -19,6 +19,7 @@ import {
   SCHEDULER_FILE_NAME,
   validateSchedulerConfig,
 } from './scheduler-config.js';
+import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 
 export interface SchedulerOwnerMigrationOptions {
   dataDir: string;
@@ -38,6 +39,19 @@ export interface SchedulerOwnerMigrationResult {
   };
   removedPaths?: string[];
   addedPaths?: string[];
+}
+
+function addMissingIcpPolicyHolds(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (!isRecord(candidate.icpAutonomy)
+    || candidate.icpAutonomy.policyHolds !== undefined) return;
+  candidate.icpAutonomy = {
+    ...candidate.icpAutonomy,
+    policyHolds: structuredClone(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds),
+  };
+  addedPaths.push('icpAutonomy.policyHolds');
 }
 
 /**
@@ -98,6 +112,7 @@ export function migrateLegacySchedulerOwner(
     let candidate: Record<string, unknown>;
     let result: SchedulerOwnerMigrationResult;
     if (hasLegacyInterval) {
+      const addedPaths: string[] = [];
       // The bundled cadence inherited the legacy salience-decay interval. If that
       // key is absent, the social-graph interval is the only available owner value.
       const selectedFrom = hasSalienceInterval
@@ -117,6 +132,7 @@ export function migrateLegacySchedulerOwner(
         ...structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG),
         intervalMs: selectedInterval,
       };
+      addMissingIcpPolicyHolds(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -137,6 +153,7 @@ export function migrateLegacySchedulerOwner(
           ...(hasSalienceInterval ? ['salienceDecayIntervalMs'] : []),
           ...(hasSocialGraphInterval ? ['socialGraphBuilder.intervalMs'] : []),
         ],
+        ...(addedPaths.length > 0 ? { addedPaths } : {}),
       };
     } else {
       const backgroundMaintenance = raw.backgroundMaintenance;
@@ -156,6 +173,7 @@ export function migrateLegacySchedulerOwner(
         candidate.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
         addedPaths.push('backgroundWork');
       }
+      addMissingIcpPolicyHolds(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();

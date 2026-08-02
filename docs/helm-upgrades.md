@@ -492,7 +492,10 @@ For shakedown-era owners on this branch, inspect these exact paths:
   every companion owner, after the per-file backup. Never replace the whole
   `fatigue` or `socialRegulation` object.
 - The scheduler migrator adds the required
-  `backgroundMaintenance.sharedWorldWikiCaretaker` and `backgroundWork` blocks.
+  `backgroundMaintenance.sharedWorldWikiCaretaker`, `backgroundWork`, and
+  `icpAutonomy.policyHolds` blocks when absent. Present hold-policy values are
+  preserved; malformed or conflicting present values fail validation instead
+  of being replaced.
   On this branch, an absent `socialAutonomy` block is validated through
   `DEFAULT_SOCIAL_AUTONOMY_CONFIG`; it is not a fail-closed startup omission.
   Add it from `config/scheduler.seed.json` only when the operator wants the

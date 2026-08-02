@@ -138,6 +138,37 @@ attestation and cache without warming. Never share `node_modules` or `dist`
 between worktrees; install each worktree with
 `npm ci --offline --ignore-scripts` (normally about 15 seconds after prewarm).
 
+### Worktree identity guard
+
+Every lane assignment records an expected absolute worktree path, branch, and
+base SHA. Never rely on an inherited shell directory for a Git graph mutation.
+Run the command with the tool's explicit working directory or with
+`git -C <expected-worktree>`. Immediately before any merge, cherry-pick,
+rebase, revert, or commit-graph replay, verify all of:
+
+```bash
+git -C <expected-worktree> status --short --branch
+git -C <expected-worktree> branch --show-current
+git -C <expected-worktree> rev-parse HEAD
+git -C <expected-worktree> merge-base HEAD <expected-base>
+```
+
+The worker compares those results with the lane assignment and states the
+verified path, branch, HEAD, and base before mutating history. Any mismatch
+stops the operation. The original checkout is never an implicit scratch lane.
+
+Calculate the resulting PR budget against its intended parent before replaying
+or integrating commits. A branch already at a hard limit cannot accept a merge
+or another replay. Create a fresh stacked train first. Keep at least two commit
+slots available until P0/P1 remediation and promotion checks are complete; if
+that is impossible, split before review rather than repacking afterward.
+
+If a command still lands in the wrong worktree or branch, stop immediately.
+Do not reset, move refs, publish, or attempt an improvised repair. Report the
+current branch, local and remote heads, reflog evidence, dirty paths, and every
+remote mutation. The orchestrator preserves a safety ref and performs cleanup
+only with operator approval.
+
 A bead is an ownership boundary, never a paid PR boundary. Every external review
 costs the same flat fee whether the diff is 100 lines or 2,000, so the unit of
 publication is the **train**: assemble compatible completed beads into one
@@ -181,6 +212,48 @@ suite is the heavy phase and queues automatically on the machine-wide gate lock,
 including against unrelated sessions on the same host. Read the 15-second waiter
 diagnostics before treating a queued lane as hung; do not manually serialize
 lanes or delete a lock held by a live PID.
+
+## Publication Promotion Freeze
+
+Freeze the publication train before the assembled-train review or the first
+full `gate:pre-pr` invocation. This is a promotion boundary, not another
+implementation checkpoint. The orchestrator verifies:
+
+1. The train is based on the intended fetched `origin/main`, has its final
+   branch and commit shape, remains within the hard PR and per-commit budgets,
+   and retains the remediation slots required above. Any repack happens now.
+2. The worktree path and branch pass the identity guard, the worktree is clean,
+   the exact head is checkpoint-pushed, and `node_modules` was installed in that
+   worktree after a valid prewarm. A newly created publication worktree is not
+   gate-ready merely because its source tree is clean.
+3. Focused tests, changed-file lint, `git diff --check`, identity literals, and
+   hardcoded settings pass. Settings/configuration changes also run the settings
+   contract; owner-file, Helm, or deployment changes run their applicable
+   deployment-contract commands before the broad gate.
+4. A new required owner file or required owner-file field triggers a fixture
+   seam audit: enumerate full-object writers, copied-owner allowlists, upgrade
+   fixtures, process harnesses, and certification fixtures, then run the affected
+   integration tests. Do not wait for the full suite to discover stale fixture
+   shapes one at a time.
+5. All accepted review blockers are fixed and covered. Exactly one scoped
+   closure verifier has ruled on the complete accepted set; the original blind
+   reviewers are not each rerun.
+6. No local edit, pending review fix, branch assembly, formatting pass, baseline
+   update, or documentation correction remains. The next source-tree mutation
+   invalidates the freeze and must repeat this checklist before another broad
+   gate.
+
+Only after all six checks pass does the orchestrator invoke
+`npm run gate:pre-pr` on the committed, pushed exact head. A tree-equivalent
+commit repack is still a new head under the current exact-SHA attestation
+contract and therefore belongs before this boundary.
+
+The 2026-08-02 ICP foundation incident is the motivating failure: publication
+shape, dependency installation, identity policy, two stale owner fixtures, and
+a line-sensitive settings baseline were resolved across six gate invocations;
+a parallel lane also replayed commits from the wrong checkout. The promotion
+freeze and worktree identity guard exist to make those failures cheap preflight
+errors instead of repeated broad-gate cycles or branch contamination.
 
 ## Canonical Multi-PR Wave
 
@@ -237,8 +310,9 @@ Every bead gets this bounded loop:
    - Add focused regressions.
    - Commit and push the remediation without handing implementation to a reviewer.
 4. **Closure-only verification**
-   - A different-family reviewer checks only whether the accepted blockers are
-     closed. It does not perform another general sweep or mint a new work queue.
+   - Exactly one different-family reviewer checks the complete set of accepted
+     blockers. Do not rerun every original reviewer or schedule multiple closure
+     passes. It does not perform another general sweep or mint a new work queue.
    - A newly alleged P0/P1 requires both a concrete reproduction under the risk
      standard and severity corroboration from another model family.
    - One corroborated late blocker may receive one additional scoped fix-forward
@@ -415,6 +489,26 @@ update, rebase the branch and rerun the gate. The clean-main baseline's recorded
 base and gate version make stale branch attestations visible immediately. The
 publisher then updates the remote under an exact lease; ordinary checkpoint
 pushes still cannot rewrite it.
+
+### Failed-gate recovery before another broad run
+
+A failed gate does not authorize an immediate edit-and-rerun loop. Before the
+next full invocation:
+
+1. reproduce the failure with the exact failed stage or focused command;
+2. fix only the verified cause and run that command to green;
+3. run adjacent-risk checks selected from the changed contract—for example all
+   owner-file writers and process fixtures after a required configuration field,
+   or identity and hardcoded-settings checks after line-moving edits;
+4. recompute the branch and per-commit budgets, confirm dependency installation,
+   and repeat the Publication Promotion Freeze checklist;
+5. commit and push the new exact head, then run the broad gate once.
+
+Do not rerun past a flaky result without attribution, and do not start another
+model review unless the fix changed reviewed behavior. Passed stage records are
+reusable only on the same exact head, base, gate version, and command. Every new
+commit deliberately forfeits that reuse, so cheap adjacent checks must finish
+before minting another head for the broad gate.
 
 ### Change-budget inputs
 

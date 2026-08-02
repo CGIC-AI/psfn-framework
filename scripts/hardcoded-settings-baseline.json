@@ -685,6 +685,27 @@
       "note": "Immutable parser/wire/schema contract POLICY_KEYS; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/boundary/gateway/icp-local-policy-coordinator.ts",
+      "name": "POLICY_ACQUIRE_METHOD",
+      "value": "'icp.policy.acquire'",
+      "form": "string",
+      "note": "Immutable authenticated reverse-RPC method name; code-owned because changing this wire contract requires a coordinated code release."
+    },
+    {
+      "file": "src/boundary/gateway/icp-local-policy-coordinator.ts",
+      "name": "POLICY_INSPECT_METHOD",
+      "value": "'icp.policy.inspect'",
+      "form": "string",
+      "note": "Immutable authenticated reverse-RPC method name; code-owned because changing this wire contract requires a coordinated code release."
+    },
+    {
+      "file": "src/boundary/gateway/icp-local-policy-coordinator.ts",
+      "name": "POLICY_RELEASE_METHOD",
+      "value": "'icp.policy.release'",
+      "form": "string",
+      "note": "Immutable authenticated reverse-RPC method name; code-owned because changing this wire contract requires a coordinated code release."
+    },
+    {
       "file": "src/boundary/gateway/inbound-channel-replay.ts",
       "name": "MAX_INBOUND_CHANNEL_REPLAY_MESSAGES_PER_COMPANION",
       "value": "100",
@@ -10559,7 +10580,7 @@
     {
       "file": "src/system/config/intake-policy-config.ts",
       "name": "INTAKE_POLICY_SCHEMA_VERSION",
-      "value": "3 as const"
+      "value": "4 as const"
     },
     {
       "file": "src/system/config/intake-policy-config.ts",

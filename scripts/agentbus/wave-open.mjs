@@ -11,6 +11,7 @@
 // error; nonzero from any bus command aborts with that command's error.
 
 import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 
 const [, , waveName, ...lanes] = process.argv;
 
@@ -20,7 +21,8 @@ if (!waveName || lanes.length < 2 || lanes.some((l) => !/^[a-z0-9][a-z0-9-]*$/.t
   process.exit(2);
 }
 
-const runPath = execFileSync('bus-new', [`wave-${waveName}`], { encoding: 'utf8' }).trim();
+// Absolute path: lanes live in other worktrees and must not resolve this against their own cwd.
+const runPath = resolve(execFileSync('bus-new', [`wave-${waveName}`], { encoding: 'utf8' }).trim());
 
 execFileSync('bus-append', [
   runPath, '--agent', 'orchestrator', '--type', 'note',

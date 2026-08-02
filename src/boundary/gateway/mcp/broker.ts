@@ -222,6 +222,10 @@ function configuredToolPolicy(
   return (server.toolPolicy.tools as Partial<Record<string, McpToolPolicyEntry>>)[toolName];
 }
 
+function allowsCompanion(server: McpServerConfig, companionId: string): boolean {
+  return server.allowedCompanionIds.some(allowedCompanionId => allowedCompanionId === companionId);
+}
+
 export function createMcpGatewayBroker(options: {
   config: McpServersConfig;
   clientFactory: McpProtocolClientFactory;
@@ -244,7 +248,7 @@ export function createMcpGatewayBroker(options: {
     const server = serversById.get(serverId);
     if (!server) throw new McpBrokerError('SERVER_NOT_FOUND', `Unknown MCP server '${serverId}'`);
     if (!server.enabled) throw new McpBrokerError('SERVER_DISABLED', `MCP server '${serverId}' is disabled`);
-    if (!server.allowedCompanionIds.includes(companionId)) {
+    if (!allowsCompanion(server, companionId)) {
       throw new McpBrokerError(
         'COMPANION_NOT_ALLOWED',
         `Companion is not allowed to use MCP server '${serverId}'`,
@@ -434,7 +438,7 @@ export function createMcpGatewayBroker(options: {
     getCatalog(input) {
       assertOpen();
       return options.config.servers
-        .filter(server => server.enabled && server.allowedCompanionIds.includes(input.companionId))
+        .filter(server => server.enabled && allowsCompanion(server, input.companionId))
         .map(server => ({
           serverId: server.id,
           displayName: server.displayName,
@@ -452,7 +456,7 @@ export function createMcpGatewayBroker(options: {
       ));
       const matches: McpToolSummary[] = [];
       for (const server of options.config.servers) {
-        if (!server.enabled || !server.allowedCompanionIds.includes(input.companionId)) continue;
+        if (!server.enabled || !allowsCompanion(server, input.companionId)) continue;
         const tools = await loadTools(input.companionId, server, input.signal);
         for (const tool of tools) {
           const policy = configuredToolPolicy(server, tool.name);

@@ -704,7 +704,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/tools/adaptive'),
       handle: (_req, res) => {
-        if (!adaptiveToolsService?.releaseMcp) {
+        if (!adaptiveToolsService) {
           sendJson(res, 200, {
             state: null,
             catalog: null,
@@ -733,7 +733,8 @@ export function buildAdminApiRoutes(options: {
       method: 'POST',
       match: exactPath('/api/admin/tools/mcp/release'),
       handle: (req, res, _params, context) => {
-        if (!adaptiveToolsService) {
+        const releaseMcp = adaptiveToolsService?.releaseMcp?.bind(adaptiveToolsService);
+        if (!releaseMcp) {
           sendJson(res, 503, { error: 'MCP lifecycle control unavailable' });
           return;
         }
@@ -751,7 +752,7 @@ export function buildAdminApiRoutes(options: {
             return;
           }
           const normalizedServerId = typeof serverId === 'string' ? serverId.trim() : undefined;
-          adaptiveToolsService.releaseMcp(normalizedServerId).then(
+          releaseMcp(normalizedServerId).then(
             (result) => {
               appendAuditTimelineEntry?.(
                 'external_action',

@@ -78,3 +78,6 @@ working_docs/review/
 
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
+
+# agentbus run files (ephemeral multi-agent ledgers; tracked incident buses live elsewhere)
+bus/runs/

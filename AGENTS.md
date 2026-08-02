@@ -297,3 +297,70 @@ Use `bd remember` for durable project memory; do not create ad hoc memory files.
 The managed Beads block is task-tracking guidance, not permission to override
 current operator or repository instructions.
 <!-- END BEADS CODEX SETUP -->
+
+## The agent bus
+
+When a task is worked by more than one agent, or across several substantial phases, all
+participants share one append-only JSONL file: the run. It is the project's record of what was
+found, what was judged, what changed hands and what it cost. Its codebook is `SCHEMA.md` in
+the agentbus checkout (`~/agentbus`), and everything on a bus must be decodable by a person
+holding that document. The bus tools (`bus-new`, `bus-append`, `bus-lint`, `bus-embed`,
+`bus-model`) are on `PATH` machine-wide via `~/.local/bin` wrappers; no venv activation is
+needed.
+
+**Opening a run.** Check the vector lane with `bus-model status` and install the default with
+`bus-model fetch all-MiniLM-L6-v2` if nothing is installed. Then `bus-new <run-name>` creates
+`<YYYY-MM-DD>-<run-name>.jsonl` in `$AGENTBUS_DIR`, or in `./bus/runs` when that variable is
+unset, and prints the path. Do not open a run for single-agent work; a bus with one writer is
+overhead with no reader.
+
+**Appending.** Every participant appends as work happens, including whoever is coordinating:
+
+```sh
+bus-append <file> --agent <name> --type <type> --body '<json object>'
+```
+
+The tool builds the envelope, assigns the next sequence number for that agent, stamps an ISO
+8601 timestamp, validates the message against the whole file, and writes only if it is valid.
+A refused append exits non-zero and writes nothing. Read the error and fix the message rather
+than working around the tool. The seven types are `finding`, `rank`, `question`, `answer`,
+`handoff`, `cost` and `note`.
+
+**Provenance is mandatory on findings.** Each `finding` body carries `claim`, `provenance`,
+and normally `evidence` and `refs`. Provenance is one of:
+
+- `computed`: you ran the command, read the file, or carried out the derivation here.
+- `fetched`: you retrieved it from a source, which `refs` names.
+- `recalled`: it came from memory and you have not checked it.
+- `testimony`: a person or another agent reported it, on their authority.
+
+Nothing outbound may rest on a `recalled` finding unchecked. Such a claim is welcome on the
+bus, but it does not enter a commit message, a patch, a report or an answer until someone
+verifies it and appends a new finding with the verified provenance. Being confident is not the
+same as having checked.
+
+**Do not duplicate.** Before adding a finding, look for one that already says it. Run
+`bus-embed near <file> "<your claim>"` yourself, or `bus-embed dups <file>` to sweep a run
+that has grown, and read the file when the vector lane is unavailable. Rank or extend the
+existing finding instead.
+
+**The embedding model is yours to manage.** `bus-model list` shows what is available,
+`bus-model status` shows what is active and whether it is ready, and `bus-model fetch <name>`
+installs one. Changing the active model with `bus-model use` is the one deliberate action:
+different models produce vectors in different spaces, so a switch changes what similarity
+means and causes every finding to be embedded again. Switch only for a reason, and append a
+bus note saying which model you selected and why.
+
+**Disagreements are resolved, not averaged.** A `rank` scores a finding or a delivered handoff
+in [0, 1] with a stated `basis`. When two ranks on the same target disagree, the coordinator
+appends a third rank whose basis states which argument prevailed and why. Never average the
+scores, and never delete the ranks that disagreed.
+
+**Corrections are appends.** The file is append-only. Never rewrite or delete a line. A
+correction is a new message referencing the id of the message it corrects, which is
+`<agent>-<seq>`.
+
+**Closing.** Close substantial work with a `cost` message recording what it consumed and what
+it produced. Before closing a run, validate it with `bus-lint <file>`, which exits 0 when the
+file is clean and lists problems with line numbers otherwise. Fix problems by appending
+corrections.

@@ -9,6 +9,15 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/bus-session-start.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }

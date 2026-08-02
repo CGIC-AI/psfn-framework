@@ -9,6 +9,7 @@ import type {
   NdjsonConnection,
 } from './transport.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { deriveIcpLocalPolicyAcquirePayloadDigest } from '../../core/icp/local-policy-contract.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { runWithMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-turn-context.js';
 import type { DisclosureLineage } from '../../core/cogsec/disclosure/contracts.js';
@@ -1993,6 +1994,95 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
+  it('keeps ICP policy readiness separate and strictly routes inspect/acquire/release', async () => {
+    const authority = {
+      inspect: vi.fn(async () => ({
+        role: 'recipient' as const,
+        ready: true as const,
+        canonicalPeerContact: true,
+        trustAllows: true,
+        blocksPeer: false,
+      })),
+      acquire: vi.fn(async () => ({
+        acquired: true as const,
+        holdId: '77777777-7777-4777-8777-777777777777',
+        expiresAtMs: 3_000,
+      })),
+      release: vi.fn(async () => ({ released: true as const })),
+      releaseAll: vi.fn(async () => undefined),
+    };
+    client.onIcpLocalPolicyAuthority(authority);
+    const inspectParams = {
+      role: 'recipient',
+      senderCompanionId: '11111111-1111-4111-8111-111111111111',
+      recipientCompanionId: '22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      nowMs: 2_000,
+    } as const;
+
+    conn._emit({ jsonrpc: '2.0', id: 301, method: 'icp.policy.inspect', params: inspectParams });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 301)?.result).toEqual({
+      role: 'recipient', ready: false,
+    }));
+    expect(authority.inspect).not.toHaveBeenCalled();
+
+    client.markIcpLocalPolicyAuthorityReady();
+    conn._emit({ jsonrpc: '2.0', id: 302, method: 'icp.policy.inspect', params: inspectParams });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 302)?.result).toMatchObject({
+      role: 'recipient', ready: true, canonicalPeerContact: true,
+    }));
+    expect(authority.inspect).toHaveBeenCalledWith(inspectParams);
+
+    conn._emit({
+      jsonrpc: '2.0', id: 303, method: 'icp.policy.inspect',
+      params: { ...inspectParams, contactId: 'private-contact' },
+    });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 303)?.error).toBeDefined());
+    expect(authority.inspect).toHaveBeenCalledTimes(1);
+
+    const acquireBinding = {
+      role: 'recipient',
+      phase: 'issue',
+      senderCompanionId: inspectParams.senderCompanionId,
+      recipientCompanionId: inspectParams.recipientCompanionId,
+      candidate: {
+        candidateId: '33333333-3333-4333-8333-333333333333',
+        rootInitiationId: '44444444-4444-4444-8444-444444444444',
+        localCompanionId: inspectParams.senderCompanionId,
+        peerCompanionId: inspectParams.recipientCompanionId,
+        preferredChannel: 'dm',
+        source: 'intention',
+        provenanceRef: 'icp-prov:44444444-4444-4444-8444-444444444444',
+        createdAtMs: 1_000,
+        expiresAtMs: 20_000,
+        status: 'pending',
+        revision: 1,
+      },
+      channelId: inspectParams.channelId,
+      nonce: '66666666-6666-4666-8666-666666666666',
+      nowMs: 2_000,
+      expiresAtMs: 3_000,
+    } as const;
+    const acquireParams = {
+      ...acquireBinding,
+      payloadDigest: deriveIcpLocalPolicyAcquirePayloadDigest(acquireBinding),
+    };
+    conn._emit({ jsonrpc: '2.0', id: 304, method: 'icp.policy.acquire', params: acquireParams });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 304)?.result).toMatchObject({
+      acquired: true, holdId: '77777777-7777-4777-8777-777777777777',
+    }));
+    expect(authority.acquire).toHaveBeenCalledWith(acquireParams);
+
+    const releaseParams = {
+      holdId: '77777777-7777-4777-8777-777777777777',
+      payloadDigest: acquireParams.payloadDigest,
+      nonce: acquireParams.nonce,
+    };
+    conn._emit({ jsonrpc: '2.0', id: 305, method: 'icp.policy.release', params: releaseParams });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 305)?.result).toEqual({ released: true }));
+    expect(authority.release).toHaveBeenCalledWith(releaseParams);
+  });
+
   it('serves only a strictly parsed exact contact-authority snapshot', async () => {
     const handler = vi.fn(async (request) => ({
       schemaVersion: 1 as const,
@@ -3634,6 +3724,18 @@ describe('GatewayClient connection lifecycle', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith({ source: 'close' });
+  });
+
+  it('rolls back all companion-local ICP holds on disconnect and destroy', async () => {
+    const releaseAll = vi.fn(async () => undefined);
+    client.onIcpLocalPolicyAuthority({
+      inspect: vi.fn(), acquire: vi.fn(), release: vi.fn(), releaseAll,
+    });
+    client.markIcpLocalPolicyAuthorityReady();
+    conn._emitClose();
+    await vi.waitFor(() => expect(releaseAll).toHaveBeenCalledOnce());
+    client.destroy();
+    expect(releaseAll).toHaveBeenCalledOnce();
   });
 
   it('rejects every pending JSON-RPC request when the gateway closes', async () => {

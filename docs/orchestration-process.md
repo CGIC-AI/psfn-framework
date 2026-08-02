@@ -272,6 +272,12 @@ Use this order for every multi-PR implementation wave, including a two-PR wave:
    do not run or imply the broad publication gate. Targeted tests and changed-file
    lint remain the implementation loop. Full gate PREFLIGHT stages may run
    concurrently; HEAVY stages queue on the machine-wide lock.
+   **Multi-lane waves share one agentbus run.** When the wave has more than one
+   lane, the dispatcher opens it before spawning:
+   `node scripts/agentbus/wave-open.mjs <wave-name> <lane-a> <lane-b> [...]`
+   and pastes each printed block into that lane's brief. Lanes append findings,
+   ranks, questions, handoffs, and costs as they work; the AGENTS.md "agent bus"
+   section holds the practice.
 4. Independently verify review claims against intent and the Blocking Risk
    Standard. Only verified P0/P1 blockers enter remediation. The original
    implementer fixes them to preserve context; re-verification checks only those
@@ -619,7 +625,9 @@ After the final check:
 3. A worker validates the integrated branch with focused tests and the exact-head local gate.
 4. Assemble a coherent PR-sized train from the reviewed wave commits and publish
    it through `npm run pr:publish`; the wrapper waits
-   for both required checks on the exact pushed SHA.
+   for both required checks on the exact pushed SHA. If the wave opened an
+   agentbus run, `node scripts/agentbus/wave-close.mjs <run-file>` must exit 0
+   first — a wave run that does not lint clean is not closed.
 5. An independent lane validates and rebase-merges the PR.
 6. Rebase the pushed wave branch onto the updated `main` before assembling the
    next train.

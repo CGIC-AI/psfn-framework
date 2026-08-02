@@ -616,7 +616,7 @@ export function createMcpGatewayBroker(options: {
         }
       }
       const visibleServers = options.config.servers.filter(server => (
-        server.enabled && (!companionId || server.allowedCompanionIds.includes(companionId))
+        server.enabled && (!companionId || allowsCompanion(server, companionId))
       ));
       return {
         activeSessions: snapshot.length,

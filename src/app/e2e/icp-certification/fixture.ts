@@ -14,8 +14,7 @@ import { createBootstrapStarterCard } from '../../../core/identity/loader.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import { seedCompanionStartupOwnerFiles } from '../../../system/config/startup-owner-files.js';
-import { DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG } from '../../../system/config/scheduler-config.js';
-import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../../system/config/icp-autonomy-scheduler-config.js';
+import { DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG, DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../../system/config/scheduler-config.js';
 import {
   resolveCompanionAdminTransportSocketPath,
 } from '../../../operator/garden/transport-paths.js';
@@ -193,7 +192,6 @@ function configureCompanionOwnerFiles(
   };
   scheduler.backgroundWorkWelfare = { ...DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG };
   writeJson(schedulerPath, scheduler);
-
   const capabilityPath = join(companionDataDir, 'capability-tier.json');
   writeJson(capabilityPath, { tier: 'autonomous', customTokens: [] });
 

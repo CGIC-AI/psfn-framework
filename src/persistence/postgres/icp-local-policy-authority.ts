@@ -7,7 +7,6 @@ import type {
 import type { IcpLocalInitiationCapacityInput } from '../../core/agent/fatigue/initiation-capacity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import {
-  parseIcpInitiationCandidateSharedMetadata,
   type IcpInitiationCandidateSharedMetadata,
 } from '../../core/icp/initiation-candidate.js';
 import {
@@ -142,31 +141,6 @@ function candidateMatches(
     && row.status === candidate.status
     && (row.reason_code ?? undefined) === candidate.reasonCode
     && safeInteger(row.revision) === candidate.revision;
-}
-
-function sharedCandidateFromRow(row: CandidatePolicyRow): IcpInitiationCandidateSharedMetadata {
-  const createdAtMs = safeInteger(row.created_at_ms);
-  const expiresAtMs = safeInteger(row.expires_at_ms);
-  const revision = safeInteger(row.revision);
-  if (createdAtMs === null || expiresAtMs === null || revision === null) {
-    throw new Error('Canonical ICP candidate contains an invalid integer field');
-  }
-  return parseIcpInitiationCandidateSharedMetadata({
-    candidateId: row.candidate_id,
-    rootInitiationId: row.root_initiation_id,
-    localCompanionId: row.local_companion_id,
-    peerCompanionId: row.peer_companion_id,
-    preferredChannel: row.preferred_channel,
-    source: row.source,
-    provenanceRef: row.provenance_ref,
-    createdAtMs,
-    expiresAtMs,
-    status: row.status,
-    ...(row.reason_code !== null
-      ? { reasonCode: row.reason_code }
-      : {}),
-    revision,
-  });
 }
 
 /** Companion-owned ICP policy authority. No query can address another tenant schema. */
@@ -339,6 +313,7 @@ export class PostgresIcpLocalPolicyAuthority {
       const decision = expiresAtMs <= decisionNowMs
         ? 'stale_provenance'
         : await this.authorizeAcquire(client, input, decisionNowMs);
+      this.requireReady();
       if (decision !== null) {
         await client.query('ROLLBACK');
         return { acquired: false, reasonCode: decision };
@@ -470,16 +445,14 @@ export class PostgresIcpLocalPolicyAuthority {
     if (!relationship) return 'invalid_identity';
     if (!trustAtLeast(relationship.trustLevel, 'regular')) return 'policy_denied';
     if (this.isBlocked(peerCompanionId, input.channelId)) return 'peer_blocked';
-    if (input.role === 'recipient') return null;
+    if (input.role === 'recipient' || input.phase === 'consume') return null;
     if (!evaluateProactiveOutboundTimeGate({
       nowMs: decisionNowMs,
       quietHours: this.options.quietHours,
     }).allowed) return 'quiet_hours';
     const capacity = await this.options.capacityAuthority.resolve({
       senderCompanionId: input.senderCompanionId,
-      candidate: input.phase === 'issue'
-        ? input.candidate!
-        : sharedCandidateFromRow(candidateRow!),
+      candidate: input.candidate!,
       channelId: input.channelId,
       nowMs: decisionNowMs,
       relationshipPressure: input.relationshipPressure!,

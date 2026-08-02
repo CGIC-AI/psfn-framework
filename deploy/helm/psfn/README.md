@@ -333,8 +333,10 @@ fleet procedure is incomplete.
 - After owner routing, the compiled `migrate-scheduler-owner` entrypoint
   validates and atomically upgrades the retired `salienceDecayIntervalMs` /
   `socialGraphBuilder.intervalMs` shape to
-  `backgroundMaintenance.intervalMs`. An already-canonical scheduler is
-  validated without being rewritten; mixed or invalid shapes fail closed.
+  `backgroundMaintenance.intervalMs`, and adds required missing scheduler
+  blocks including `icpAutonomy.policyHolds`. Present policy values are never
+  replaced. An already-canonical scheduler is validated without being
+  rewritten; mixed or invalid shapes fail closed.
 - The legacy source is retained as the rollback snapshot. The runtime never
   reads it as a fallback after the upgrade.
 - A later companion-owned edit is preserved. The marker binds the unchanged

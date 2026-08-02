@@ -193,7 +193,21 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
 
   it('accepts only the exact consumed-recovery binding', async () => {
     const fixture = fakePool(policyQuery('consumed'));
-    const { authority } = await readyAuthority(fixture, { now: () => 30_000 });
+    const { authority, capacity } = await readyAuthority(fixture, {
+      now: () => 30_000,
+      quietHours: {
+        enabled: true,
+        startLocalTime: '22:00',
+        endLocalTime: '07:00',
+        timeZone: 'UTC',
+      },
+    });
+    capacity.resolve.mockResolvedValue({
+      socialPressureAllows: false,
+      chargeAllows: false,
+      fatigueAllows: false,
+      costAllows: false,
+    });
     const permit = {
       permitId: PERMIT_ID,
       candidateId: CANDIDATE_ID,
@@ -225,6 +239,7 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
       ...consumeRequest,
       payloadDigest: deriveIcpLocalPolicyAcquirePayloadDigest(consumeRequest),
     })).resolves.toMatchObject({ acquired: true });
+    expect(capacity.resolve).not.toHaveBeenCalled();
   });
 
   it('rejects an issued handoff whose candidate expired on the local decision clock', async () => {
@@ -413,5 +428,36 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
 
     unblockConnect();
     await expect(first).resolves.toMatchObject({ acquired: true, expiresAtMs: 12_000 });
+  });
+
+  it('rolls back an in-flight acquisition that resumes after shutdown', async () => {
+    let unblockConnect!: () => void;
+    const connectGate = new Promise<void>((resolve) => { unblockConnect = resolve; });
+    const fixture = fakePool(policyQuery(), async () => await connectGate);
+    const { authority } = await readyAuthority(fixture);
+    const request = {
+      role: 'sender',
+      phase: 'issue',
+      senderCompanionId: SENDER_ID,
+      recipientCompanionId: RECIPIENT_ID,
+      candidate,
+      channelId: `companion-dm:${SENDER_ID}:${RECIPIENT_ID}`,
+      nonce: NONCE,
+      nowMs: 2_000,
+      expiresAtMs: 3_000,
+      relationshipPressure: 0,
+    } as const;
+    const payloadDigest = deriveIcpLocalPolicyAcquirePayloadDigest(request);
+    const acquisition = authority.acquire({ ...request, payloadDigest });
+    await vi.waitFor(() => expect(fixture.connect).toHaveBeenCalledOnce());
+
+    await authority.close();
+    unblockConnect();
+
+    await expect(acquisition).rejects.toThrow(/closed/u);
+    expect(fixture.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(fixture.clients[0]?.release).toHaveBeenCalledOnce();
+    await expect(authority.release({ holdId: HOLD_ID, payloadDigest, nonce: NONCE }))
+      .rejects.toThrow(/unknown or already released/u);
   });
 });

@@ -2087,6 +2087,7 @@ assertIncludes(
 );
 
 const schedulerSeed = readFileSync(resolve(repoRoot, 'config/scheduler.seed.json'), 'utf8');
+const schedulerSeedConfig = JSON.parse(schedulerSeed);
 const preBundledScheduler = readFileSync(
   resolve(repoRoot, 'src/system/config/fixtures/scheduler.pre-bundled-owner.json'),
   'utf8',
@@ -2163,7 +2164,9 @@ try {
   );
   if (migratedScheduler.salienceDecayIntervalMs !== undefined
     || migratedScheduler.socialGraphBuilder?.intervalMs !== undefined
-    || migratedScheduler.backgroundMaintenance?.intervalMs !== 3_600_000) {
+    || migratedScheduler.backgroundMaintenance?.intervalMs !== 3_600_000
+    || JSON.stringify(migratedScheduler.icpAutonomy?.policyHolds)
+      !== JSON.stringify(schedulerSeedConfig.icpAutonomy.policyHolds)) {
     throw new Error('legacy scheduler owner was not converted to backgroundMaintenance');
   }
 

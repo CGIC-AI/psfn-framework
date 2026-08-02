@@ -15,6 +15,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import { seedCompanionStartupOwnerFiles } from '../../../system/config/startup-owner-files.js';
 import { DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG } from '../../../system/config/scheduler-config.js';
+import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from '../../../system/config/icp-autonomy-scheduler-config.js';
 import {
   resolveCompanionAdminTransportSocketPath,
 } from '../../../operator/garden/transport-paths.js';
@@ -174,6 +175,7 @@ function configureCompanionOwnerFiles(
     },
     permit: { ttlMs: 60_000 },
     availability: { operatorLeaseTtlMs: 120_000 },
+    policyHolds: { ...DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds },
   };
   scheduler.weightedThoughtOutreach = {
     ...(scheduler.weightedThoughtOutreach as Record<string, unknown>),

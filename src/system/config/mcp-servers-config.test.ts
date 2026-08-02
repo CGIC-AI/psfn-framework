@@ -29,7 +29,7 @@ function validConfig(): Record<string, unknown> {
       enabled: true,
       description: 'Operator-owned personal knowledge base.',
       endpoint: 'https://localhost:8443/mcp',
-      allowedCompanionIds: ['companion-a'],
+      allowedCompanionIds: ['11111111-1111-4111-8111-111111111111'],
       authentication: {
         kind: 'bearer',
         tokenRef: { kind: 'env', envName: 'MCP_PRIVATE_NOTES_TOKEN' },
@@ -56,6 +56,15 @@ function validConfig(): Record<string, unknown> {
 describe('MCP servers owner config', () => {
   it('accepts an authenticated HTTPS server with an operator-owned trust profile', () => {
     expect(validateMcpServersConfig(validConfig(), 'mcp-servers.json')).toEqual(validConfig());
+  });
+
+  it('rejects noncanonical companion allowlist identities', () => {
+    const config = validConfig();
+    const server = (config.servers as Array<Record<string, unknown>>)[0];
+    server.allowedCompanionIds = ['companion-a'];
+
+    expect(() => validateMcpServersConfig(config, 'mcp-servers.json'))
+      .toThrow(/allowedCompanionIds\[0\] must be a lowercase RFC-4122 UUID/);
   });
 
   it('accepts a gateway-vault reference for a private TLS certificate authority', () => {

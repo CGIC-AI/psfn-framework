@@ -34,6 +34,7 @@ export const SYSTEM_CONFIG_OWNER_FILES = [
   'intake-policy.json',
   'partner-affect-shadow.json',
   'fleet-auth.json',
+  'mcp-servers.json',
 ] as const;
 
 export interface CaptureSystemConfigSnapshotOptions {

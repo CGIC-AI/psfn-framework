@@ -143,6 +143,10 @@ function writeSystemOwnerFiles(systemDataDir: string): void {
       heartbeatChannelId: 'heartbeat',
     },
   }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'mcp-servers.json'), JSON.stringify({
+    schemaVersion: 1,
+    servers: [],
+  }), 'utf-8');
   writeFileSync(join(systemDataDir, '.env'), 'OPENROUTER_API_KEY=super-secret-env\n', 'utf-8');
 }
 
@@ -633,12 +637,23 @@ describe('runBackupCycle', () => {
     });
 
     expect(result.systemConfig).toBeDefined();
-    expect(result.systemConfig?.fileCount).toBe(4);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(4);
+    expect(result.systemConfig?.fileCount).toBe(5);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(5);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
+    expect(readFileSync(
+      join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
+      'utf-8',
+    )).toBe(JSON.stringify({ schemaVersion: 1, servers: [] }));
     expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
-    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(4);
+    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(5);
+
+    writeFileSync(
+      join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'mcp-servers.json'),
+      '{"schemaVersion":1,"servers":[{}]}',
+      'utf-8',
+    );
+    expect(() => verifySystemConfigSnapshot(result.backupDir)).toThrow(/hash mismatch/i);
   });
 
   it('fails closed when a system-data owner file is malformed', async () => {
@@ -696,7 +711,7 @@ describe('runBackupCycle', () => {
 
     expect(result.encryptedBackup).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
-    expect(result.systemConfigVerification?.verifiedFileCount).toBe(4);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(5);
     expect(result.kubernetesHelmVerification?.chart.verifiedFileCount).toBe(4);
     expect(result.backupContentsVerification?.kubernetesHelmRecovery).toBe('required');
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);

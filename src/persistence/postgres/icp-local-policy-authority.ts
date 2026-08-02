@@ -555,7 +555,7 @@ export class PostgresIcpLocalPolicyAuthority {
 
   private async expireHold(holdId: string): Promise<void> {
     const hold = this.holds.get(holdId);
-    if (!hold || hold.expiresAtMs > this.now()) return;
+    if (!hold) return;
     await this.releaseHold(holdId, hold);
   }
 

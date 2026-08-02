@@ -246,6 +246,7 @@ try {
     'settings',
     'models',
     'providers',
+    'mcp-servers',
     'trust-policy',
     'backup',
     'intake-policy',

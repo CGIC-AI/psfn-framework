@@ -16,7 +16,8 @@ let targets;
 if (runFile) {
   targets = [runFile];
 } else {
-  const dir = join(process.cwd(), 'bus', 'runs');
+  // Shared bus home when AGENTBUS_DIR is set (cross-repo waves), else repo-local.
+  const dir = process.env.AGENTBUS_DIR ?? join(process.cwd(), 'bus', 'runs');
   try {
     targets = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => join(dir, f));
   } catch {

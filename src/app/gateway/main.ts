@@ -47,18 +47,15 @@ import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../ch
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
-import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
-import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
-import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
+import { GatewayIcpLocalPolicyCoordinator } from '../../boundary/gateway/icp-local-policy-coordinator.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
-  resolveChargeLedgerPath,
   resolvePersonalImagesDir,
 } from '../../persistence/layout.js';
 import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
@@ -67,10 +64,7 @@ import { logLegacyWorkspaceMigrationResult } from './legacy-workspace-migration-
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
-import {
-  createCompanionId,
-  type CompanionId,
-} from '../../shared/routing/companion-id.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
 import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
@@ -563,7 +557,14 @@ async function main(): Promise<void> {
   let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
   let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
   let icpFatigueRegulationStore: PostgresIcpFatigueRegulationReservationStore | null = null;
-  let icpInitiationPolicyAuthority: PostgresIcpInitiationPolicyAuthority | null = null;
+  let icpInitiationPolicyAuthority: GatewayIcpLocalPolicyCoordinator | null = null;
+  let requestIcpPolicyAgent: (
+    companionId: string,
+    method: string,
+    params: unknown,
+  ) => Promise<unknown> = async () => {
+    throw new Error('ICP local policy routing is not ready');
+  };
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
     const databaseUrl = config.postgresDatabaseUrl?.trim();
@@ -578,9 +579,6 @@ async function main(): Promise<void> {
     }
     const companionFleet = config.companionFleet;
     const fleetCompanionIds = companionFleet.companions.map((entry) => entry.companionId);
-    const fleetByCompanionId = new Map(
-      companionFleet.companions.map(entry => [entry.companionId, entry]),
-    );
     companionPresenceStore = await awaitPostgresStoreReadiness(
       'companion_presence',
       () => PostgresCompanionPresenceStore.connect(databaseUrl),
@@ -596,44 +594,39 @@ async function main(): Promise<void> {
       () => PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl),
     );
     const requiredFatigueRegulationStore = icpFatigueRegulationStore;
-    icpInitiationPolicyAuthority = await awaitPostgresStoreReadiness(
-      'icp_initiation_policy',
-      async () => {
-        const authority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
-          fleet: companionFleet.companions,
-          quietHours: startupHydration.schedulerConfig.episodicProcessing,
-          capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
-            requiredFatigueRegulationStore,
-            {
-              read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
-            },
-            {
-              read: ({ senderCompanionId, nowMs }) => {
-                const fleetEntry = fleetByCompanionId.get(createCompanionId(
-                  senderCompanionId,
-                  'ICP social charge balance senderCompanionId',
-                ));
-                if (!fleetEntry) {
-                  throw new Error('ICP social charge balance requires a known fleet sender');
-                }
-                return readRunChargeRollingWindowFromLedger(
-                  resolveChargeLedgerPath(fleetEntry.companionDataDir),
-                  nowMs,
-                );
-              },
-            },
-          ),
-          causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
+    icpInitiationPolicyAuthority = new GatewayIcpLocalPolicyCoordinator({
+      requestCompanionAgent: async (companionId, method, params) => (
+        await requestIcpPolicyAgent(companionId, method, params)
+      ),
+      readRelationshipPressure: async ({
+        senderCompanionId,
+        recipientCompanionId,
+        nowMs,
+      }) => {
+        const regulation = resolveFleetChargePolicy(senderCompanionId)
+          .fatigue.socialRegulation;
+        const pressure = await requiredFatigueRegulationStore.readInitiationPressure({
+          localCompanionId: senderCompanionId,
+          peerCompanionId: recipientCompanionId,
+          timestampMs: nowMs,
+          relationshipPressureHalfLifeMs: regulation.relationshipPressureHalfLifeMs,
+          relationshipPressureWindowMs: regulation.relationshipPressureWindowMs,
+          unansweredAfterMs: regulation.unansweredInitiationAfterMs,
+          declinedPressureUnits: regulation.declinedPressureUnits,
+          deferredPressureUnits: regulation.deferredPressureUnits,
+          unansweredPressureUnits: regulation.unansweredPressureUnits,
         });
-        try {
-          await authority.assertReady();
-          return authority;
-        } catch (error) {
-          await authority.close();
-          throw error;
-        }
+        return pressure.relationshipPressure;
       },
-    );
+      causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
+      reportUnavailable: ({ companionIds, operation, error }) => {
+        log.warn('Companion-local ICP policy authority unavailable', {
+          companionIds: companionIds.join(','),
+          operation,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
       presence: companionPresenceStore,
@@ -704,6 +697,9 @@ async function main(): Promise<void> {
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),
   });
+  requestIcpPolicyAgent = async (companionId, method, params) => (
+    await gateway.requestCompanionAgent(companionId, method, params)
+  );
   const gatewayOperatorNotifier: NotificationPort = {
     notify: async (params) => {
       await gateway.notifyOperator(params);

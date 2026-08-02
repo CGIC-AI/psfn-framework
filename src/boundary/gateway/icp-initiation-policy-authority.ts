@@ -18,6 +18,7 @@ export interface IcpInitiationHandoffPolicyInput {
   senderCompanionId: string;
   peerContactId: string;
   permit: IcpInitiationPermit;
+  rootInitiationId: string;
   nowMs: number;
 }
 

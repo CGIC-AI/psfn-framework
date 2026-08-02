@@ -20,3 +20,6 @@ eval/**/results/**
 .dolt/
 *.db
 .beads/proxieddb/
+
+# agentbus run files (shared home is ~/agentbus-runs; local runs are ephemeral)
+bus/runs/

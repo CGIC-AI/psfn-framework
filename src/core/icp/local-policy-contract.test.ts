@@ -7,6 +7,7 @@ import {
   parseIcpLocalPolicyInspectResult,
   parseIcpLocalPolicyReleaseParams,
   parseIcpLocalPolicyReleaseResult,
+  deriveIcpLocalPolicyAcquirePayloadDigest,
 } from './local-policy-contract.js';
 
 const SENDER_ID = '11111111-1111-4111-8111-111111111111';
@@ -143,6 +144,11 @@ describe('companion-local ICP policy wire contract', () => {
       relationshipPressure: 2.5,
     });
     expect(acquire.payloadDigest).toBe(DIGEST);
+    const { payloadDigest: _payloadDigest, ...digestInput } = acquire;
+    expect(deriveIcpLocalPolicyAcquirePayloadDigest({
+      ...digestInput,
+      channelId: `${digestInput.channelId}:mutated`,
+    })).not.toBe(deriveIcpLocalPolicyAcquirePayloadDigest(digestInput));
     expect(() => parseIcpLocalPolicyAcquireParams({
       ...acquire,
       role: 'recipient',

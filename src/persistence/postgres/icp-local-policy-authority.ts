@@ -11,6 +11,7 @@ import {
   type IcpInitiationCandidateSharedMetadata,
 } from '../../core/icp/initiation-candidate.js';
 import {
+  deriveIcpLocalPolicyAcquirePayloadDigest,
   parseIcpLocalPolicyAcquireParams,
   parseIcpLocalPolicyInspectParams,
   parseIcpLocalPolicyReleaseParams,
@@ -28,6 +29,10 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import type { IcpAutonomyReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import { TRUST_LEVELS, trustAtLeast, type TrustLevel } from '../../system/trust/types.js';
+import {
+  MAX_ICP_POLICY_HOLD_TTL_MS,
+  MAX_ICP_POLICY_OUTSTANDING_HOLDS,
+} from '../../system/config/icp-autonomy-scheduler-config.js';
 import {
   VALID_RELATIONSHIP_TYPES,
   type RelationshipType,
@@ -173,6 +178,8 @@ export class PostgresIcpLocalPolicyAuthority {
   private readonly blockList: ContactBlockListStore;
   private readonly holds = new Map<string, RetainedPolicyHold>();
   private readonly usedNonces = new Map<string, number>();
+  private readonly pendingNonces = new Set<string>();
+  private acquisitionsInFlight = this.holds.size;
   private ready = false;
   private closed = false;
 
@@ -182,12 +189,14 @@ export class PostgresIcpLocalPolicyAuthority {
   ) {
     assertValidPostgresSchemaName(options.postgresSchema);
     if (!Number.isSafeInteger(options.policyHolds.ttlMs) || options.policyHolds.ttlMs < 1
+      || options.policyHolds.ttlMs > MAX_ICP_POLICY_HOLD_TTL_MS
       || !Number.isSafeInteger(options.policyHolds.maxOutstanding)
-      || options.policyHolds.maxOutstanding < 1) {
-      throw new Error('ICP local policy hold settings must be positive safe integers');
+      || options.policyHolds.maxOutstanding < 1
+      || options.policyHolds.maxOutstanding > MAX_ICP_POLICY_OUTSTANDING_HOLDS) {
+      throw new Error('ICP local policy hold settings exceed structural safety bounds');
     }
     this.pool = options.pool ?? createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-icp-local-policy',
+      applicationName: 'icp-local-policy',
       allowExitOnIdle: true,
       schema: options.postgresSchema,
       ...(options.postgresRole ? { role: options.postgresRole } : {}),
@@ -236,6 +245,7 @@ export class PostgresIcpLocalPolicyAuthority {
     const input = parseIcpLocalPolicyInspectParams(inputValue);
     this.requireLocalRole(input);
     if (!this.ready || this.closed) return { role: input.role, ready: false };
+    const decisionNowMs = this.now();
     if (input.role === 'recipient') {
       const relationship = await this.resolveContact(
         this.pool,
@@ -267,7 +277,7 @@ export class PostgresIcpLocalPolicyAuthority {
           senderCompanionId: input.senderCompanionId,
           candidate: input.candidate,
           channelId: input.channelId,
-          nowMs: input.nowMs,
+          nowMs: decisionNowMs,
           relationshipPressure: input.relationshipPressure,
           senderRelationship: relationship,
         })
@@ -281,15 +291,15 @@ export class PostgresIcpLocalPolicyAuthority {
       trustAllows: relationship !== null && trustAtLeast(relationship.trustLevel, 'regular'),
       blocksPeer: this.isBlocked(input.recipientCompanionId, input.channelId),
       quietHours: !evaluateProactiveOutboundTimeGate({
-        nowMs: input.nowMs,
+        nowMs: decisionNowMs,
         quietHours: this.options.quietHours,
       }).allowed,
       provenanceFresh: canonicalCandidate
-        && candidateRow?.status === 'pending'
+        && candidateRow.status === 'pending'
         && createdAtMs !== null
-        && createdAtMs <= input.nowMs
+        && createdAtMs <= decisionNowMs
         && expiresAtMs !== null
-        && expiresAtMs > input.nowMs,
+        && expiresAtMs > decisionNowMs,
       ...capacity,
     };
   }
@@ -299,24 +309,36 @@ export class PostgresIcpLocalPolicyAuthority {
     this.requireLocalRole(input);
     this.requireReady();
     this.cleanupUsedNonces();
-    if (this.usedNonces.has(input.nonce)) {
+    const { payloadDigest: _payloadDigest, ...digestInput } = input;
+    if (deriveIcpLocalPolicyAcquirePayloadDigest(digestInput) !== input.payloadDigest) {
       return { acquired: false, reasonCode: 'permit_mismatch' };
     }
-    if (this.holds.size >= this.options.policyHolds.maxOutstanding) {
+    if (this.usedNonces.has(input.nonce) || this.pendingNonces.has(input.nonce)) {
+      return { acquired: false, reasonCode: 'permit_mismatch' };
+    }
+    if (this.holds.size + this.acquisitionsInFlight >= this.options.policyHolds.maxOutstanding) {
       return { acquired: false, reasonCode: 'peer_busy' };
     }
+    const localNowMs = this.now();
     const expiresAtMs = Math.min(
       input.expiresAtMs,
-      input.nowMs + this.options.policyHolds.ttlMs,
+      localNowMs + this.options.policyHolds.ttlMs,
     );
-    if (expiresAtMs <= this.now()) {
+    if (expiresAtMs <= localNowMs) {
       return { acquired: false, reasonCode: 'stale_provenance' };
     }
-    const client = await this.pool.connect();
+    this.acquisitionsInFlight += 1;
+    this.pendingNonces.add(input.nonce);
+    this.usedNonces.set(input.nonce, expiresAtMs);
+    let client: PoolClient | null = null;
     let retained = false;
     try {
+      client = await this.pool.connect();
       await client.query('BEGIN');
-      const decision = await this.authorizeAcquire(client, input);
+      const decisionNowMs = this.now();
+      const decision = expiresAtMs <= decisionNowMs
+        ? 'stale_provenance'
+        : await this.authorizeAcquire(client, input, decisionNowMs);
       if (decision !== null) {
         await client.query('ROLLBACK');
         return { acquired: false, reasonCode: decision };
@@ -338,11 +360,10 @@ export class PostgresIcpLocalPolicyAuthority {
         expiresAtMs,
         timer,
       });
-      this.usedNonces.set(input.nonce, expiresAtMs);
       retained = true;
       return { acquired: true, holdId, expiresAtMs };
     } catch (error) {
-      if (!retained) {
+      if (!retained && client) {
         try {
           await client.query('ROLLBACK');
         } catch (rollbackError) {
@@ -354,7 +375,9 @@ export class PostgresIcpLocalPolicyAuthority {
       }
       throw error;
     } finally {
-      if (!retained) client.release();
+      this.acquisitionsInFlight -= 1;
+      this.pendingNonces.delete(input.nonce);
+      if (!retained) client?.release();
     }
   }
 
@@ -400,6 +423,7 @@ export class PostgresIcpLocalPolicyAuthority {
   private async authorizeAcquire(
     client: PoolClient,
     input: IcpLocalPolicyAcquireParams,
+    decisionNowMs: number,
   ): Promise<IcpAutonomyReasonCode | null> {
     let candidateRow: CandidatePolicyRow | null = null;
     if (input.role === 'sender') {
@@ -409,8 +433,14 @@ export class PostgresIcpLocalPolicyAuthority {
       candidateRow = await this.readCandidate(client, candidateId, true);
       if (!candidateRow) return 'invalid_identity';
       if (input.phase === 'issue') {
+        const createdAtMs = safeInteger(candidateRow.created_at_ms);
+        const expiresAtMs = safeInteger(candidateRow.expires_at_ms);
         if (!candidateMatches(candidateRow, input.candidate!)
-          || candidateRow.status !== 'pending') return 'stale_provenance';
+          || candidateRow.status !== 'pending'
+          || createdAtMs === null
+          || createdAtMs > decisionNowMs
+          || expiresAtMs === null
+          || expiresAtMs <= decisionNowMs) return 'stale_provenance';
       } else if (candidateRow.root_initiation_id !== input.rootInitiationId
         || candidateRow.local_companion_id !== input.senderCompanionId
         || candidateRow.peer_companion_id !== input.recipientCompanionId
@@ -421,6 +451,11 @@ export class PostgresIcpLocalPolicyAuthority {
           || (input.permit!.status === 'consumed' && candidateRow.status === 'consumed')
         )) {
         return 'permit_mismatch';
+      } else {
+        const candidateExpiresAtMs = safeInteger(candidateRow.expires_at_ms);
+        if (candidateExpiresAtMs === null
+          || (input.permit!.status === 'issued'
+            && candidateExpiresAtMs <= decisionNowMs)) return 'stale_provenance';
       }
     }
     const peerCompanionId = input.role === 'sender'
@@ -437,7 +472,7 @@ export class PostgresIcpLocalPolicyAuthority {
     if (this.isBlocked(peerCompanionId, input.channelId)) return 'peer_blocked';
     if (input.role === 'recipient') return null;
     if (!evaluateProactiveOutboundTimeGate({
-      nowMs: input.nowMs,
+      nowMs: decisionNowMs,
       quietHours: this.options.quietHours,
     }).allowed) return 'quiet_hours';
     const capacity = await this.options.capacityAuthority.resolve({
@@ -446,7 +481,7 @@ export class PostgresIcpLocalPolicyAuthority {
         ? input.candidate!
         : sharedCandidateFromRow(candidateRow!),
       channelId: input.channelId,
-      nowMs: input.nowMs,
+      nowMs: decisionNowMs,
       relationshipPressure: input.relationshipPressure!,
       senderRelationship: relationship,
     });

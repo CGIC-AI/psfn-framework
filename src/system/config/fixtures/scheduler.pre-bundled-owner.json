@@ -178,6 +178,10 @@
     "permit": {
       "ttlMs": 300000
     },
+    "policyHolds": {
+      "ttlMs": 10000,
+      "maxOutstanding": 8
+    },
     "availability": {
       "operatorLeaseTtlMs": 86400000
     }

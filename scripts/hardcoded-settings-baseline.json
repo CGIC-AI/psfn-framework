@@ -10524,6 +10524,25 @@
       "note": "Canonical owner-file/schema metadata DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.candidate.retryCadenceMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
+      "file": "src/system/config/icp-autonomy-scheduler-config.ts",
+      "name": "DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds",
+      "value": "{ ttlMs: 10_000, maxOutstanding: MAX_ICP_POLICY_OUTSTANDING_HOLDS, }",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file defaults for short ICP transaction holds; runtime consumes this owned policy and has no parallel override."
+    },
+    {
+      "file": "src/system/config/icp-autonomy-scheduler-config.ts",
+      "name": "MAX_ICP_POLICY_HOLD_TTL_MS",
+      "value": "30_000",
+      "note": "Code-owned fail-closed ceiling for a live database-lock hold; scheduler.json may lower it but can never extend it."
+    },
+    {
+      "file": "src/system/config/icp-autonomy-scheduler-config.ts",
+      "name": "MAX_ICP_POLICY_OUTSTANDING_HOLDS",
+      "value": "8",
+      "note": "Code-owned pool-exhaustion ceiling for retained database locks; scheduler.json may lower it but can never raise it."
+    },
+    {
       "file": "src/system/config/intake-policy-config.ts",
       "name": "createSkillWriteSinkRule.maxSourceRiskTier",
       "value": "'untrusted'",

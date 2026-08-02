@@ -46,19 +46,40 @@ Workers do not merge into feature, release, or main branches.
 ### Model-family independence
 
 The durable rule is about model families, not product names. Harness-specific
-model and command mappings live in files such as `CLAUDE.md`.
+model and command mappings live in harness config files (`AGENTS.md`,
+`CLAUDE.md`, harness-specific skill directories).
 
 - A reviewer must use a different model family from the implementer. Two models
   from OpenAI are not independent; neither are two Anthropic models.
 - When two reviewers are required, they must be blind to one another and use
   families different from the implementer and, whenever available, from each
-  other. A typical Codex implementation uses Anthropic plus GLM/Kimi review.
+  other. A typical Codex implementation uses Kimi plus GLM review.
 - Record implementer model/family and reviewer model/family in every review.
 - Greptile or another opaque service is additional signal unless its underlying
   family is known and satisfies the independence rule.
 - If the active harness cannot dispatch a qualifying reviewer, push the branch,
   park it with the exact remote head, and surface the missing capability. A
   same-family substitute does not count as independent review.
+
+### Harness roster (2026-08-02 operator decision)
+
+Roles are assigned per wave from the current roster, not assumed from history:
+
+- **Codex** — the default implementation driver. Runs multi-lane waves
+  (typically up to three lanes) and owns most bead implementation.
+- **Kimi** — implementation driver and the primary testing lane; increasingly
+  shares driving with Codex. Multiple concurrent Kimi lanes are expected.
+- **Pi harness + GLM** — the standing review lane. Pi does not use subagents;
+  dispatch reviews to it as single-lane assignments.
+- **Grok** — optional third-opinion reviewer for unusually difficult or
+  high-blast-radius work, or when an additional independent family is wanted.
+- **Claude** — limited availability; do not assign completion-critical
+  implementation. Historical failure mode was incomplete delivery reported as
+  complete (unwired code, missing tests, abandoned scope), so any Claude lane
+  gets explicit completion verification against the bead's acceptance criteria.
+
+Cost discipline drove this roster: assign work to the harness that finishes it,
+not the most capable one. An unfinished lane costs more than a slower one.
 
 ### Tiered review policy (2026-07-14 operator decision)
 

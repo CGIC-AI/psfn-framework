@@ -46,7 +46,10 @@ import {
 } from './startup/weighted-thought-outreach-lane.js';
 import { trustOrd } from '../../system/trust/types.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
-import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import {
+  RunChargeLedger,
+  readRunChargeRollingWindowFromLedger,
+} from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
@@ -167,6 +170,8 @@ import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../..
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import { wireAgentVaultRuntime } from './vault-runtime.js';
+import { PostgresIcpLocalPolicyAuthority } from '../../persistence/postgres/icp-local-policy-authority.js';
+import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -1132,9 +1137,53 @@ async function main(): Promise<void> {
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
   );
+  let icpLocalPolicyAuthority: PostgresIcpLocalPolicyAuthority | null = null;
   if (config.multiCompanion === true) {
     if (!config.chargePolicy) {
       throw new Error('Multi-companion fleet posture requires chargePolicy');
+    }
+    const databaseUrl = config.postgresDatabaseUrl?.trim();
+    const postgresSchema = config.postgresSchema?.trim();
+    const postgresRole = config.postgresRole?.trim();
+    if (!databaseUrl || !postgresSchema || !postgresRole) {
+      throw new Error('Companion-local ICP policy requires tenant PostgreSQL wiring');
+    }
+    const localCompanionId = resolveCoreCompanionIdFromConfig(config);
+    const chargeLedgerPath = resolveChargeLedgerPath(pathSnapshot.companionDataDir);
+    const capacityAuthority = new IcpLocalInitiationCapacityAuthority(
+      {
+        read: ({ senderCompanionId }) => {
+          if (senderCompanionId !== localCompanionId) {
+            throw new Error('ICP local charge policy requested for another companion');
+          }
+          return config.chargePolicy!;
+        },
+      },
+      {
+        read: ({ senderCompanionId, nowMs }) => {
+          if (senderCompanionId !== localCompanionId) {
+            throw new Error('ICP local charge balance requested for another companion');
+          }
+          return readRunChargeRollingWindowFromLedger(chargeLedgerPath, nowMs);
+        },
+      },
+    );
+    icpLocalPolicyAuthority = new PostgresIcpLocalPolicyAuthority(databaseUrl, {
+      companionId: localCompanionId,
+      postgresSchema,
+      postgresRole,
+      companionDataDir: pathSnapshot.companionDataDir,
+      quietHours: schedulerConfig.episodicProcessing,
+      policyHolds: schedulerConfig.icpAutonomy.policyHolds,
+      capacityAuthority,
+    });
+    try {
+      await icpLocalPolicyAuthority.assertReady();
+      gateway.onIcpLocalPolicyAuthority(icpLocalPolicyAuthority);
+      gateway.markIcpLocalPolicyAuthorityReady();
+    } catch (error) {
+      await icpLocalPolicyAuthority.close();
+      throw error;
     }
     await gateway.startFleetPostureReporting(createAgentFleetPostureProvider({
       companionId: resolveCoreCompanionIdFromConfig(config),
@@ -1279,6 +1328,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       partnerAffectShadowBridge.unsubscribe();
+      await icpLocalPolicyAuthority?.close();
       await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();

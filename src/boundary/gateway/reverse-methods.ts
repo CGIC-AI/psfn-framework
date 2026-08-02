@@ -34,6 +34,14 @@ import type {
   ContactAuthoritySnapshotRequest,
   VerifiedDiscordContactAuthoritySnapshot,
 } from '../../shared/contracts/contact-authority-snapshot.js';
+import type {
+  IcpLocalPolicyAcquireParams,
+  IcpLocalPolicyAcquireResult,
+  IcpLocalPolicyInspectParams,
+  IcpLocalPolicyInspectResult,
+  IcpLocalPolicyReleaseParams,
+  IcpLocalPolicyReleaseResult,
+} from '../../core/icp/local-policy-contract.js';
 
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -66,6 +74,15 @@ export interface ReverseGatewayMethodRuntime {
   handleMemoryDeletionResolve(
     params: MemoryDeletionResolveParams,
   ): Promise<MemoryDeletionResolveResult>;
+  handleIcpLocalPolicyInspect(
+    params: IcpLocalPolicyInspectParams,
+  ): Promise<IcpLocalPolicyInspectResult>;
+  handleIcpLocalPolicyAcquire(
+    params: IcpLocalPolicyAcquireParams,
+  ): Promise<IcpLocalPolicyAcquireResult>;
+  handleIcpLocalPolicyRelease(
+    params: IcpLocalPolicyReleaseParams,
+  ): Promise<IcpLocalPolicyReleaseResult>;
 }
 
 interface ReverseGatewayMethodDescriptor<P, R> {
@@ -74,6 +91,24 @@ interface ReverseGatewayMethodDescriptor<P, R> {
 }
 
 const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
+  {
+    names: ['icp.policy.inspect'],
+    handler: (params: IcpLocalPolicyInspectParams, runtime) => (
+      runtime.handleIcpLocalPolicyInspect(params)
+    ),
+  },
+  {
+    names: ['icp.policy.acquire'],
+    handler: (params: IcpLocalPolicyAcquireParams, runtime) => (
+      runtime.handleIcpLocalPolicyAcquire(params)
+    ),
+  },
+  {
+    names: ['icp.policy.release'],
+    handler: (params: IcpLocalPolicyReleaseParams, runtime) => (
+      runtime.handleIcpLocalPolicyRelease(params)
+    ),
+  },
   {
     names: ['memory.deletion.snapshot'],
     handler: (params: MemoryDeletionProposalSnapshotParams, runtime) => (

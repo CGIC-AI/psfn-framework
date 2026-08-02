@@ -47,6 +47,20 @@ import {
   type ContactAuthoritySnapshotRequest,
   type VerifiedDiscordContactAuthoritySnapshot,
 } from '../../shared/contracts/contact-authority-snapshot.js';
+import {
+  parseIcpLocalPolicyAcquireParams,
+  parseIcpLocalPolicyAcquireResult,
+  parseIcpLocalPolicyInspectParams,
+  parseIcpLocalPolicyInspectResult,
+  parseIcpLocalPolicyReleaseParams,
+  parseIcpLocalPolicyReleaseResult,
+  type IcpLocalPolicyAcquireParams,
+  type IcpLocalPolicyAcquireResult,
+  type IcpLocalPolicyInspectParams,
+  type IcpLocalPolicyInspectResult,
+  type IcpLocalPolicyReleaseParams,
+  type IcpLocalPolicyReleaseResult,
+} from '../../core/icp/local-policy-contract.js';
 const log = createComponentLogger('GatewayClient');
 
 /**
@@ -480,6 +494,13 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
+export interface IcpLocalPolicyAuthorityPort {
+  inspect(input: IcpLocalPolicyInspectParams): Promise<IcpLocalPolicyInspectResult>;
+  acquire(input: IcpLocalPolicyAcquireParams): Promise<IcpLocalPolicyAcquireResult>;
+  release(input: IcpLocalPolicyReleaseParams): Promise<IcpLocalPolicyReleaseResult>;
+  releaseAll(): Promise<void>;
+}
+
 export class GatewayClient implements
   LLMProviderPort,
   EmbeddingProviderPort,
@@ -527,6 +548,9 @@ export class GatewayClient implements
   private memoryDeletionResolveHandler: ((
     params: MemoryDeletionResolveParams,
   ) => Promise<MemoryDeletionResolveResult>) | null = null;
+  private icpLocalPolicyAuthority: IcpLocalPolicyAuthorityPort | null = null;
+  private icpLocalPolicyReady = false;
+  private icpLocalPolicyCleanupStarted = false;
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
@@ -2087,6 +2111,28 @@ export class GatewayClient implements
     this.registerReverseMethods();
   }
 
+  /** Install the non-model-facing local authority without declaring it ready. */
+  onIcpLocalPolicyAuthority(authority: IcpLocalPolicyAuthorityPort): void {
+    if (this.icpLocalPolicyAuthority) {
+      throw new Error('ICP local policy authority is already registered');
+    }
+    this.icpLocalPolicyAuthority = authority;
+    this.icpLocalPolicyReady = false;
+    this.icpLocalPolicyCleanupStarted = false;
+    this.registerReverseMethods();
+  }
+
+  /** Independent from ordinary runtime readiness so ICP can fail closed per companion. */
+  markIcpLocalPolicyAuthorityReady(): void {
+    if (!this.icpLocalPolicyAuthority) {
+      throw new Error('Cannot mark an unregistered ICP local policy authority ready');
+    }
+    if (this.isDestroying || this.closedNotified) {
+      throw new Error('Cannot mark ICP local policy ready on a closed gateway connection');
+    }
+    this.icpLocalPolicyReady = true;
+  }
+
   notifyApiStreamDelta(requestId: string, text: string): void {
     // d269: streamed reply frames are main-reply egress over the reverse-RPC
     // seam. Attach the live session canary (turn async context, falling back to
@@ -2145,6 +2191,58 @@ export class GatewayClient implements
       handleMemoryDeletionPartnerAlerted: params => this.handleMemoryDeletionPartnerAlerted(params),
       handleMemoryDeletionProposalSnapshot: params => this.handleMemoryDeletionProposalSnapshot(params),
       handleMemoryDeletionResolve: params => this.handleMemoryDeletionResolve(params),
+      handleIcpLocalPolicyInspect: params => this.handleIcpLocalPolicyInspect(params),
+      handleIcpLocalPolicyAcquire: params => this.handleIcpLocalPolicyAcquire(params),
+      handleIcpLocalPolicyRelease: params => this.handleIcpLocalPolicyRelease(params),
+    });
+  }
+
+  private async handleIcpLocalPolicyInspect(
+    params: IcpLocalPolicyInspectParams,
+  ): Promise<IcpLocalPolicyInspectResult> {
+    const request = parseIcpLocalPolicyInspectParams(params);
+    const authority = this.requireIcpLocalPolicyAuthority();
+    if (!this.icpLocalPolicyReady) return { role: request.role, ready: false };
+    return parseIcpLocalPolicyInspectResult(await authority.inspect(request));
+  }
+
+  private async handleIcpLocalPolicyAcquire(
+    params: IcpLocalPolicyAcquireParams,
+  ): Promise<IcpLocalPolicyAcquireResult> {
+    const request = parseIcpLocalPolicyAcquireParams(params);
+    const authority = this.requireReadyIcpLocalPolicyAuthority();
+    return parseIcpLocalPolicyAcquireResult(await authority.acquire(request));
+  }
+
+  private async handleIcpLocalPolicyRelease(
+    params: IcpLocalPolicyReleaseParams,
+  ): Promise<IcpLocalPolicyReleaseResult> {
+    const request = parseIcpLocalPolicyReleaseParams(params);
+    const authority = this.requireReadyIcpLocalPolicyAuthority();
+    return parseIcpLocalPolicyReleaseResult(await authority.release(request));
+  }
+
+  private requireIcpLocalPolicyAuthority(): IcpLocalPolicyAuthorityPort {
+    if (!this.icpLocalPolicyAuthority) {
+      throw new Error('No ICP local policy authority registered');
+    }
+    return this.icpLocalPolicyAuthority;
+  }
+
+  private requireReadyIcpLocalPolicyAuthority(): IcpLocalPolicyAuthorityPort {
+    const authority = this.requireIcpLocalPolicyAuthority();
+    if (!this.icpLocalPolicyReady) throw new Error('ICP local policy authority is not ready');
+    return authority;
+  }
+
+  private cleanupIcpLocalPolicyHolds(): void {
+    if (this.icpLocalPolicyCleanupStarted || !this.icpLocalPolicyAuthority) return;
+    this.icpLocalPolicyCleanupStarted = true;
+    this.icpLocalPolicyReady = false;
+    void this.icpLocalPolicyAuthority.releaseAll().catch((error: unknown) => {
+      log.error('Failed to release ICP local policy holds after connection shutdown', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 
@@ -2614,6 +2712,7 @@ export class GatewayClient implements
       return;
     }
     this.closedNotified = true;
+    this.cleanupIcpLocalPolicyHolds();
     this.stopKeepalive();
     this.rpcInstance.rejectAllPendingRequests(
       event.source === 'error' && event.error
@@ -2736,6 +2835,7 @@ export class GatewayClient implements
   destroy(): void {
     if (this.isDestroying) return;
     this.isDestroying = true;
+    this.cleanupIcpLocalPolicyHolds();
     this.stopKeepalive();
     this.rpcInstance.rejectAllPendingRequests('Gateway client destroyed');
     this.sessionIntegrityVerifyCache.clear();

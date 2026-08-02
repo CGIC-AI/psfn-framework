@@ -266,6 +266,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/icp-local-policy-authority.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1640,
+      "baselineSource": "measured",
+      "note": "Companion-local ICP exact-row lock suite against real Postgres. Baseline 1.64s file wall (1 test, warm tmpfs harness, this host, 2026-08-02); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/persistence/postgres/model-usage-certification.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

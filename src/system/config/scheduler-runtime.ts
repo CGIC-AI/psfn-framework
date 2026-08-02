@@ -105,6 +105,7 @@ export function resolveRuntimeSchedulerConfig(
       enabled: persisted.icpAutonomy.enabled,
       candidate: { ...persisted.icpAutonomy.candidate },
       permit: { ...persisted.icpAutonomy.permit },
+      policyHolds: { ...persisted.icpAutonomy.policyHolds },
       availability: { ...persisted.icpAutonomy.availability },
     },
     backgroundWork: {

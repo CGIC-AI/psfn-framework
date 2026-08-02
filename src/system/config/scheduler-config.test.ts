@@ -14,7 +14,11 @@ import {
   validateSchedulerConfig,
 } from './scheduler-config.js';
 import { assertPositiveInteger } from './validators.js';
-import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
+import {
+  DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+  MAX_ICP_POLICY_HOLD_TTL_MS,
+  MAX_ICP_POLICY_OUTSTANDING_HOLDS,
+} from './icp-autonomy-scheduler-config.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 function writeJson(path: string, value: unknown): void {
@@ -122,6 +126,20 @@ function withSeedDir(run: (seedDir: string) => void): void {
 }
 
 describe('config validators', () => {
+  it('fails closed above the short ICP policy-hold safety ceilings', () => {
+    for (const [field, value] of [
+      ['ttlMs', MAX_ICP_POLICY_HOLD_TTL_MS + 1],
+      ['maxOutstanding', MAX_ICP_POLICY_OUTSTANDING_HOLDS + 1],
+    ] as const) {
+      const config = buildValidSchedulerConfig();
+      config.icpAutonomy = structuredClone(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG);
+      config.icpAutonomy.policyHolds[field] = value;
+      expect(() => validateSchedulerConfig(config, 'test')).toThrow(
+        new RegExp(`icpAutonomy\\.policyHolds\\.${field}`, 'u'),
+      );
+    }
+  });
+
   it('validates positive integer min and max boundaries', () => {
     const options = { min: 2, max: 4 };
 

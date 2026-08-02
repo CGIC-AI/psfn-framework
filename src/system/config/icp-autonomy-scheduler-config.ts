@@ -16,10 +16,18 @@ export interface IcpAutonomySchedulerConfig {
   permit: {
     ttlMs: number;
   };
+  policyHolds: {
+    ttlMs: number;
+    maxOutstanding: number;
+  };
   availability: {
     operatorLeaseTtlMs: number;
   };
 }
+
+/** Structural safety ceilings: policy holds retain live tenant-row locks. */
+export const MAX_ICP_POLICY_HOLD_TTL_MS = 30_000;
+export const MAX_ICP_POLICY_OUTSTANDING_HOLDS = 8;
 
 export const DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG: IcpAutonomySchedulerConfig = {
   // Operator ruling D4 (2026-07-30, psfn-framework-hrmrq.34): autonomous
@@ -34,6 +42,10 @@ export const DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG: IcpAutonomySchedulerConfig =
   },
   permit: {
     ttlMs: 5 * 60_000,
+  },
+  policyHolds: {
+    ttlMs: 10_000,
+    maxOutstanding: MAX_ICP_POLICY_OUTSTANDING_HOLDS,
   },
   availability: {
     operatorLeaseTtlMs: MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
@@ -71,7 +83,9 @@ export function parseIcpAutonomySchedulerConfig(
   fieldPath = 'icpAutonomy',
 ): IcpAutonomySchedulerConfig {
   const root = requireRecord(value, fieldPath);
-  assertNoUnknownKeys(root, ['enabled', 'candidate', 'permit', 'availability'], fieldPath, {
+  assertNoUnknownKeys(root, [
+    'enabled', 'candidate', 'permit', 'policyHolds', 'availability',
+  ], fieldPath, {
     errorPrefix: ERROR_PREFIX,
   });
   if (typeof root.enabled !== 'boolean') {
@@ -87,6 +101,13 @@ export function parseIcpAutonomySchedulerConfig(
   );
   const permit = requireRecord(root.permit, `${fieldPath}.permit`);
   assertNoUnknownKeys(permit, ['ttlMs'], `${fieldPath}.permit`, { errorPrefix: ERROR_PREFIX });
+  const policyHolds = requireRecord(root.policyHolds, `${fieldPath}.policyHolds`);
+  assertNoUnknownKeys(
+    policyHolds,
+    ['ttlMs', 'maxOutstanding'],
+    `${fieldPath}.policyHolds`,
+    { errorPrefix: ERROR_PREFIX },
+  );
   const availability = requireRecord(root.availability, `${fieldPath}.availability`);
   assertNoUnknownKeys(
     availability,
@@ -117,6 +138,18 @@ export function parseIcpAutonomySchedulerConfig(
         permit.ttlMs,
         `${fieldPath}.permit.ttlMs`,
         MAX_ICP_PERMIT_TTL_MS,
+      ),
+    },
+    policyHolds: {
+      ttlMs: positiveInteger(
+        policyHolds.ttlMs,
+        `${fieldPath}.policyHolds.ttlMs`,
+        MAX_ICP_POLICY_HOLD_TTL_MS,
+      ),
+      maxOutstanding: positiveInteger(
+        policyHolds.maxOutstanding,
+        `${fieldPath}.policyHolds.maxOutstanding`,
+        MAX_ICP_POLICY_OUTSTANDING_HOLDS,
       ),
     },
     availability: {

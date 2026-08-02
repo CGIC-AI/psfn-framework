@@ -7,6 +7,9 @@ import type { ChargePolicyConfig } from "../../../shared/contracts/charge-policy
 import type { IcpFatigueRegulationReservationPort } from "./regulation-reservation.js";
 import { evaluateFatiguePolicy } from "./policy.js";
 import type { RunChargeRollingWindowSnapshot } from "../../../shared/telemetry/run-charge.js";
+import type { IcpInitiationCandidateSharedMetadata } from '../../icp/initiation-candidate.js';
+import type { RelationshipType } from '../../contacts/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 
 export interface IcpSocialChargeBalanceReader {
   read(input: {
@@ -19,6 +22,80 @@ export interface IcpChargePolicyReader {
   read(input: {
     senderCompanionId: string;
   }): Promise<ChargePolicyConfig> | ChargePolicyConfig;
+}
+
+export interface IcpLocalInitiationCapacityInput {
+  senderCompanionId: string;
+  candidate: IcpInitiationCandidateSharedMetadata;
+  channelId: string;
+  nowMs: number;
+  relationshipPressure: number;
+  senderRelationship: {
+    trustLevel: TrustLevel;
+    relationshipType: RelationshipType;
+  };
+}
+
+function evaluateLocalCapacity(
+  input: IcpLocalInitiationCapacityInput,
+  chargePolicy: ChargePolicyConfig,
+  rollingCharge: RunChargeRollingWindowSnapshot,
+): IcpInitiationCapacityPolicyDecision {
+  const spent = Math.ceil(input.relationshipPressure);
+  const policy = evaluateFatiguePolicy({
+    config: chargePolicy.fatigue,
+    peer: {
+      contactId: input.candidate.peerCompanionId,
+      isMachineIntelligence: true,
+      relationshipType: input.senderRelationship.relationshipType,
+      trustLevel: input.senderRelationship.trustLevel,
+    },
+    channel: {
+      channelId: input.channelId,
+      type: input.channelId.startsWith('companion-dm:') ? 'dm' : 'companion_room',
+      companionFocused: true,
+      companionHosted: true,
+      humanParticipantCount: 0,
+      machineIntelligenceParticipantCount: 2,
+      recentMessageCount: 0,
+      recentHumanMessageCount: 0,
+    },
+    recentHumanParticipation: { messageCount: 0, participantCount: 0 },
+    intent: 'social',
+    spent,
+    triggerAuthorKind: 'machine_intelligence',
+  });
+  const socialChargeCost = chargePolicy.surfaceCosts.companionSocialContinuation;
+  const rollingSocialSpent = rollingCharge.spentByLane.companion_social ?? 0;
+  return {
+    socialPressureAllows: spent < policy.softTarget,
+    chargeAllows:
+      rollingSocialSpent + socialChargeCost
+      <= chargePolicy.runChargeQuotaByLane.companion_social,
+    fatigueAllows: spent < policy.hardCap,
+    costAllows: true,
+  };
+}
+
+/** Sender-local charge/fatigue evaluation over a content-free shared pressure scalar. */
+export class IcpLocalInitiationCapacityAuthority {
+  constructor(
+    private readonly chargePolicies: IcpChargePolicyReader,
+    private readonly chargeBalance: IcpSocialChargeBalanceReader,
+  ) {}
+
+  async resolve(
+    input: IcpLocalInitiationCapacityInput,
+  ): Promise<IcpInitiationCapacityPolicyDecision> {
+    const [chargePolicy, rollingCharge] = await Promise.all([
+      this.chargePolicies.read({ senderCompanionId: input.senderCompanionId }),
+      this.chargeBalance.read({
+        senderCompanionId: input.senderCompanionId,
+        nowMs: input.nowMs,
+      }),
+    ]);
+    return evaluateLocalCapacity(input, chargePolicy, rollingCharge);
+  }
 }
 
 /**
@@ -56,51 +133,17 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       deferredPressureUnits: regulation.deferredPressureUnits,
       unansweredPressureUnits: regulation.unansweredPressureUnits,
     });
-    const spent = Math.ceil(snapshot.relationshipPressure);
-    const policy = evaluateFatiguePolicy({
-      config: chargePolicy.fatigue,
-      peer: {
-        // Private sender-local contact IDs are intentionally absent from the
-        // shared candidate projection. The authenticated peer companion UUID
-        // is the stable content-free relationship-pressure identity here.
-        contactId: input.candidate.peerCompanionId,
-        isMachineIntelligence: true,
-        relationshipType: input.senderRelationship.relationshipType,
-        trustLevel: input.senderRelationship.trustLevel,
-      },
-      channel: {
-        channelId: input.channelId,
-        type: input.channelId.startsWith("companion-dm:")
-          ? "dm"
-          : "companion_room",
-        companionFocused: true,
-        companionHosted: true,
-        humanParticipantCount: 0,
-        machineIntelligenceParticipantCount: 2,
-        recentMessageCount: 0,
-        recentHumanMessageCount: 0,
-      },
-      recentHumanParticipation: { messageCount: 0, participantCount: 0 },
-      // Private candidate content is not visible at the gateway. Do not infer
-      // a privileged work/research allowance from source labels.
-      intent: "social",
-      spent,
-      triggerAuthorKind: "machine_intelligence",
-    });
-    const socialChargeCost =
-      chargePolicy.surfaceCosts.companionSocialContinuation;
     const rollingCharge = await this.chargeBalance.read({
       senderCompanionId: input.senderCompanionId,
       nowMs: input.nowMs,
     });
-    const rollingSocialSpent = rollingCharge.spentByLane.companion_social ?? 0;
-    return {
-      socialPressureAllows: spent < policy.softTarget,
-      chargeAllows:
-        rollingSocialSpent + socialChargeCost <=
-        chargePolicy.runChargeQuotaByLane.companion_social,
-      fatigueAllows: spent < policy.hardCap,
-      costAllows: true,
-    };
+    return evaluateLocalCapacity({
+      senderCompanionId: input.senderCompanionId,
+      candidate: input.candidate,
+      channelId: input.channelId,
+      nowMs: input.nowMs,
+      relationshipPressure: snapshot.relationshipPressure,
+      senderRelationship: input.senderRelationship,
+    }, chargePolicy, rollingCharge);
   }
 }

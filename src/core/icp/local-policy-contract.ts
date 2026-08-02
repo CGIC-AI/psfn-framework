@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   ICP_AUTONOMY_REASON_CODES,
   parseIcpInitiationPermit,
@@ -80,6 +82,29 @@ export interface IcpLocalPolicyReleaseParams {
 
 export interface IcpLocalPolicyReleaseResult {
   released: true;
+}
+
+/** Canonical exact-operation digest shared by the gateway coordinator and local authority. */
+export function deriveIcpLocalPolicyAcquirePayloadDigest(
+  input: Omit<IcpLocalPolicyAcquireParams, 'payloadDigest'>,
+): string {
+  const canonical = {
+    role: input.role,
+    phase: input.phase,
+    senderCompanionId: input.senderCompanionId,
+    recipientCompanionId: input.recipientCompanionId,
+    channelId: input.channelId,
+    nowMs: input.nowMs,
+    expiresAtMs: input.expiresAtMs,
+    nonce: input.nonce,
+    relationshipPressure: input.relationshipPressure ?? null,
+    candidate: input.candidate ?? null,
+    permit: input.permit ?? null,
+    rootInitiationId: input.rootInitiationId ?? null,
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(['icp-local-policy-acquire-v1', canonical]))
+    .digest('hex');
 }
 
 const INSPECT_KEYS = [

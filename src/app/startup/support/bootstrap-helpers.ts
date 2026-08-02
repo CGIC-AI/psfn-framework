@@ -391,6 +391,7 @@ export function hydrateCanonicalStartupConfig(
       enabled: persistedScheduler.icpAutonomy.enabled,
       candidate: { ...persistedScheduler.icpAutonomy.candidate },
       permit: { ...persistedScheduler.icpAutonomy.permit },
+      policyHolds: { ...persistedScheduler.icpAutonomy.policyHolds },
       availability: { ...persistedScheduler.icpAutonomy.availability },
     },
     socialAutonomy: {

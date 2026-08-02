@@ -303,16 +303,18 @@ current operator or repository instructions.
 When a task is worked by more than one agent, or across several substantial phases, all
 participants share one append-only JSONL file: the run. It is the project's record of what was
 found, what was judged, what changed hands and what it cost. Its codebook is `SCHEMA.md` in
-the agentbus checkout (`~/agentbus`), and everything on a bus must be decodable by a person
-holding that document. The bus tools (`bus-new`, `bus-append`, `bus-lint`, `bus-embed`,
-`bus-model`) are on `PATH` machine-wide via `~/.local/bin` wrappers; no venv activation is
-needed.
+the agentbus checkout, and everything on a bus must be decodable by a person holding that
+document.
+
+The bus tools (`bus-new`, `bus-append`, `bus-lint`, `bus-embed`,
+`bus-model`, `bus-state`) are on `PATH` machine-wide via `~/.local/bin` wrappers; no venv
+activation is needed. The agentbus checkout is `~/agentbus`.
 
 **Opening a run.** Check the vector lane with `bus-model status` and install the default with
-`bus-model fetch all-MiniLM-L6-v2` if nothing is installed. Then `bus-new <run-name>` creates
-`<YYYY-MM-DD>-<run-name>.jsonl` in `$AGENTBUS_DIR`, or in `./bus/runs` when that variable is
-unset, and prints the path. Do not open a run for single-agent work; a bus with one writer is
-overhead with no reader.
+`bus-model fetch all-MiniLM-L6-v2` if nothing is installed; this is your job, not a setup step
+someone performs beforehand. Then `bus-new <run-name>` creates `<YYYY-MM-DD>-<run-name>.jsonl`
+in `$AGENTBUS_DIR`, or in `./bus/runs` when that variable is unset, and prints the path. Do
+not open a run for single-agent work; a bus with one writer is overhead with no reader.
 
 **Appending.** Every participant appends as work happens, including whoever is coordinating:
 
@@ -320,24 +322,34 @@ overhead with no reader.
 bus-append <file> --agent <name> --type <type> --body '<json object>'
 ```
 
-The tool builds the envelope, assigns the next sequence number for that agent, stamps an ISO
-8601 timestamp, validates the message against the whole file, and writes only if it is valid.
-A refused append exits non-zero and writes nothing. Read the error and fix the message rather
-than working around the tool. The seven types are `finding`, `rank`, `question`, `answer`,
-`handoff`, `cost` and `note`.
+The tool builds the schema version 2 envelope, assigns the next sequence number for that agent,
+stamps an ISO 8601 timestamp, and serializes read, validation, and append under an exclusive
+lock. A refused append exits non-zero and writes nothing. Read the error and fix the message
+rather than working around the tool. The eight types are `finding`, `rank`, `question`,
+`answer`, `handoff`, `cost`, `note`, and `correction`.
 
-**Provenance is mandatory on findings.** Each `finding` body carries `claim`, `provenance`,
-and normally `evidence` and `refs`. Provenance is one of:
+Use `--context '{...}'` to attach `work_item`, `repo`, repository revisions, `agent_instance`,
+files, symbols, or artifacts. Context is inherited when unambiguous; workers sharing one role
+must pass `--agent-instance ID` to select their own context. Use
+`--meta '{...}'` only for free-form runtime metadata.
 
-- `computed`: you ran the command, read the file, or carried out the derivation here.
-- `fetched`: you retrieved it from a source, which `refs` names.
+**Provenance is mandatory on findings.** Each `finding` body carries `claim` and `provenance`.
+Support is required according to provenance:
+
+- `computed`: you ran the command, read the file, or carried out the derivation here;
+  `evidence` plus body `refs` or envelope `context.artifacts` is required.
+- `fetched`: you retrieved it from a source; non-empty `refs` are required.
 - `recalled`: it came from memory and you have not checked it.
-- `testimony`: a person or another agent reported it, on their authority.
+- `testimony`: a person or another agent reported it; `source` is required.
 
 Nothing outbound may rest on a `recalled` finding unchecked. Such a claim is welcome on the
 bus, but it does not enter a commit message, a patch, a report or an answer until someone
 verifies it and appends a new finding with the verified provenance. Being confident is not the
 same as having checked.
+
+Verification is separate from provenance. A `verification` object records `pending`,
+`verified`, or `rejected`; verified and rejected results name the verifier and an artifact
+digest or evidence ids.
 
 **Do not duplicate.** Before adding a finding, look for one that already says it. Run
 `bus-embed near <file> "<your claim>"` yourself, or `bus-embed dups <file>` to sweep a run
@@ -351,16 +363,18 @@ different models produce vectors in different spaces, so a switch changes what s
 means and causes every finding to be embedded again. Switch only for a reason, and append a
 bus note saying which model you selected and why.
 
-**Disagreements are resolved, not averaged.** A `rank` scores a finding or a delivered handoff
-in [0, 1] with a stated `basis`. When two ranks on the same target disagree, the coordinator
-appends a third rank whose basis states which argument prevailed and why. Never average the
-scores, and never delete the ranks that disagreed.
+**Disagreements are resolved, not averaged.** A `rank` names a `dimension`, its typed `value`,
+and a `basis`. Dimensions are confidence, quality, severity, priority, and acceptance. When
+two ranks on the same target and dimension disagree, the coordinator appends another rank
+whose `resolves` array names the earlier rank message ids. Never average or delete the earlier
+judgments.
 
-**Corrections are appends.** The file is append-only. Never rewrite or delete a line. A
-correction is a new message referencing the id of the message it corrects, which is
-`<agent>-<seq>`.
+**Corrections are appends.** The file is append-only. Never rewrite or delete a line. A typed
+`correction` event names the current message id and a `corrects`, `supersedes`, or `retracts`
+relation. Correcting and superseding require a replacement body; retracting forbids one.
+Further changes target the latest correction. Use `bus-state <file>` to inspect current truth.
 
 **Closing.** Close substantial work with a `cost` message recording what it consumed and what
 it produced. Before closing a run, validate it with `bus-lint <file>`, which exits 0 when the
 file is clean and lists problems with line numbers otherwise. Fix problems by appending
-corrections.
+typed correction events when the traffic itself needs revision.

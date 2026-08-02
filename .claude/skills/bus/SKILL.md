@@ -10,11 +10,11 @@ result differently with no channel to reconcile, and return transcripts instead 
 The bus is the correction: one shared, append-only JSONL file per run, which every agent and
 the orchestrator write to as they work.
 
-The tools are `bus-new`, `bus-append`, `bus-lint`, `bus-embed` and `bus-model`. They must be on
+The tools are `bus-new`, `bus-append`, `bus-lint`, `bus-state`, `bus-bench`, `bus-embed` and `bus-model`. They must be on
 `PATH`, or invoked by path from the agentbus checkout. `SCHEMA.md` in that checkout is the
 codebook and is the authority on anything below.
 
-All five are yours to run. `bus-embed` and `bus-model` in particular are part of normal work,
+All seven are yours to run. `bus-embed` and `bus-model` in particular are part of normal work,
 not setup performed by a human beforehand: you run `bus-embed near` and `bus-embed dups` to
 check whether a finding already exists, and you run `bus-model status` and `bus-model fetch`
 to make sure the vector lane is available in the first place.
@@ -48,12 +48,18 @@ bus without writing to it leaves the record one-sided.
 bus-append <file> --agent <name> --type <type> --body '<json object>'
 ```
 
-The tool builds the envelope: schema version, run name, the next sequence number for that
-agent, and a timestamp. It validates the candidate message against the whole file before
-writing, and refuses anything invalid with a non-zero exit and nothing written. If an append
-is refused, read the error and fix the message. Do not write to the file by other means.
+The tool builds the schema version 2 envelope: run name, the next sequence number for that
+agent, and a timestamp. It holds an exclusive lock while reading, allocating the sequence,
+validating, and appending. It refuses anything invalid with a non-zero exit and nothing
+written. If an append is refused, read the error and fix the message. Do not write to the
+file by other means.
 
-The seven types are `finding`, `rank`, `question`, `answer`, `handoff`, `cost` and `note`.
+The eight types are `finding`, `rank`, `question`, `answer`, `handoff`, `cost`, `note`, and
+`correction`. Use `--context '{...}'` to attach work-item, repository-state, agent-instance,
+file, symbol, and artifact identity. Later messages inherit unambiguous context when omitted;
+workers sharing one agent role pass `--agent-instance ID` to select only their own context.
+Inheritance is per agent identity, so one parallel worker cannot replace another's scope.
+Use `--meta '{...}'` only for free-form runtime metadata.
 
 ## Findings carry provenance, and it is mandatory
 
@@ -70,16 +76,20 @@ bus-append "$BUS" --agent builder --type finding --body '{
 
 | value | use it when |
 | --- | --- |
-| `computed` | you ran the command, read the file, or carried out the derivation here |
-| `fetched` | you retrieved it from a source, which `refs` names |
+| `computed` | you ran the command, read the file, or carried out the derivation here; `evidence` plus body `refs` or envelope `context.artifacts` is required |
+| `fetched` | you retrieved it from a source; non-empty `refs` are required |
 | `recalled` | it comes from model memory and you have not checked it |
-| `testimony` | a person or another agent reported it, on their authority |
+| `testimony` | a person or another agent reported it; `source` is required |
 
 **Nothing outbound may rest on a `recalled` finding unchecked.** A recalled claim is welcome
 on the bus, because an unverified lead is still worth sharing, but it does not enter a report,
 a commit message, a patch, or an answer to the user until someone verifies it and appends a
 new finding with the verified provenance. Confidence is not provenance. A claim you are sure
 of but did not check is still `recalled`.
+
+Verification is separate from provenance. A finding's optional `verification` object records
+`pending`, `verified`, or `rejected`. Verified and rejected results must name the verifier and
+an artifact digest or evidence ids.
 
 ## Check before you add
 
@@ -115,20 +125,23 @@ embedded again under the new model. Switch only for a reason, and when you do, a
 note saying which model you selected and why, so that later similarity scores on the run can
 be read correctly.
 
+Concurrent embedding workers use a stable sidecar lock and recheck completed work before
+appending, so they do not produce duplicate or partial vector rows.
+
 ## Rank disagreements are resolved, never averaged
 
-A `rank` scores a finding, or a delivered handoff, in [0, 1] with a stated basis:
+A `rank` judges one dimension of a finding or delivered handoff:
 
 ```sh
 bus-append "$BUS" --agent reviewer --type rank \
-  --body '{"re": "builder-1", "score": 0.9, "basis": "silent truncation with a success return"}'
+  --body '{"re": "builder-1", "dimension": "severity", "value": "major", "basis": "silent truncation with a success return"}'
 ```
 
-When two ranks on the same target disagree, that disagreement is a result, not a problem to
-smooth over. The run's resolver, normally the orchestrator, appends a third `rank` whose
-`basis` states which argument prevailed and why. Never average the scores, and never delete
-the ranks that disagreed. The record of the disagreement is what makes the resolution worth
-anything.
+Dimensions are confidence, quality, severity, priority, and acceptance. Confidence and
+quality use numbers in [0, 1]; the other dimensions use the categories defined in `SCHEMA.md`.
+When two ranks on the same target and dimension disagree, the run's resolver appends another
+rank whose `resolves` array names the earlier rank message ids. Never average or delete the
+earlier judgments. The record of the disagreement is what makes the resolution worth anything.
 
 ## Handoffs, questions, costs
 
@@ -148,8 +161,13 @@ a piece of work took, and without it the run cannot be reviewed for value.
 
 ## Corrections
 
-The file is append-only. Never rewrite or delete a line. A correction is a new message that
-references the id of the message it corrects, which is `<agent>-<seq>`.
+The file is append-only. Never rewrite or delete a line. A typed `correction` event names the
+current message id and a relation of `corrects`, `supersedes`, or `retracts`. Correcting and
+superseding require a replacement body valid for the original message type. Retracting
+forbids one. Further changes target the latest correction in the lineage.
+
+Use `bus-state "$BUS"` to inspect the correction-aware current state. Use `bus-bench` when a
+run may be large; JSONL runs should be bounded to one work item or review cycle.
 
 ## Before closing the run
 
@@ -157,8 +175,8 @@ references the id of the message it corrects, which is `<agent>-<seq>`.
 bus-lint "$BUS"
 ```
 
-Exit 0 means clean. Exit 1 lists the problems, one per line, with line numbers. Fix them by
-appending corrections, not by editing. Then post a closing `note` recording what goes outbound
+Exit 0 means clean. Exit 1 lists the problems, one per line, with line numbers. Revise valid
+traffic with correction events, never by editing. Then post a closing `note` recording what goes outbound
 and what stays internal as unverified.
 
 ## What agents return

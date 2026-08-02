@@ -1,6 +1,10 @@
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import type { CredentialReference } from '../../shared/contracts/credential-contracts.js';
+import {
+  createCompanionId,
+  type CompanionId,
+} from '../../shared/routing/companion-id.js';
 import type { SensitivityLevel, TrustLevel } from '../trust/types.js';
 import { envCredential } from '../../boundary/custody/credential-vault.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -113,7 +117,7 @@ export interface McpServerConfig {
   description: string;
   endpoint: string;
   tls?: McpTlsConfig;
-  allowedCompanionIds: string[];
+  allowedCompanionIds: CompanionId[];
   authentication: McpAuthenticationConfig;
   trust: McpSystemTrustConfig;
   toolPolicy: McpToolPolicyConfig;
@@ -444,7 +448,10 @@ function normalizeServer(value: unknown, field: string): McpServerConfig {
     value.allowedCompanionIds,
     `${field}.allowedCompanionIds`,
     { errorPrefix: ERROR_PREFIX },
-  );
+  ).map((companionId, index) => createCompanionId(
+    companionId,
+    `${field}.allowedCompanionIds[${index}]`,
+  ));
   if (allowedCompanionIds.length === 0) fail(`${field}.allowedCompanionIds`, 'must not be empty');
   return {
     id,

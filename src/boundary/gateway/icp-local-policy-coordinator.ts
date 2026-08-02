@@ -111,6 +111,9 @@ export class GatewayIcpLocalPolicyCoordinator implements GatewayIcpInitiationPol
         }),
       ]);
       if (!sender.ready || !recipient.ready) return closedSnapshot();
+      if (sender.role !== 'sender' || recipient.role !== 'recipient') {
+        throw new Error('ICP local policy bilateral inspection role mismatch');
+      }
       return {
         canonicalPeerContact:
           sender.canonicalPeerContact && recipient.canonicalPeerContact,

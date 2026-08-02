@@ -249,6 +249,7 @@ export class GatewayIcpAutonomyBroker {
       senderCompanionId,
       peerContactId: input.peerContactId,
       permit,
+      rootInitiationId: episode.rootInitiationId,
       nowMs: this.now(),
     });
     if (!policy.eligible) {
@@ -500,6 +501,7 @@ export class GatewayIcpAutonomyBroker {
       senderCompanionId,
       peerContactId: input.peerContactId,
       permit,
+      rootInitiationId: input.rootInitiationId,
       nowMs: consumedAtMs,
     }, async () => await this.options.store.consumePermit({
       permitId: input.permitId,

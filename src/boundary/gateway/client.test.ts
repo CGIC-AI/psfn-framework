@@ -2012,11 +2012,13 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
       releaseAll: vi.fn(async () => undefined),
     };
     client.onIcpLocalPolicyAuthority(authority);
+    const senderCompanionId = '11111111-1111-4111-8111-111111111111';
+    const recipientCompanionId = '22222222-2222-4222-8222-222222222222';
     const inspectParams = {
       role: 'recipient',
-      senderCompanionId: '11111111-1111-4111-8111-111111111111',
-      recipientCompanionId: '22222222-2222-4222-8222-222222222222',
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      senderCompanionId,
+      recipientCompanionId,
+      channelId: `companion-dm:${senderCompanionId}:${recipientCompanionId}`,
       nowMs: 2_000,
     } as const;
 

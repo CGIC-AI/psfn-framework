@@ -488,9 +488,9 @@ emosim:
     tag: 0.1.0-emosim-854ce6a7
     digest: ""
     pullPolicy: IfNotPresent
-  # Extra server flags appended after the fixed entrypoint
-  # (python server.py --host=0.0.0.0 --statedir=/state), e.g.
-  # ["--timescale=120", "--drivescale=1", "--tick=2"].
+  # Extra server flags appended after the image entrypoint, e.g.
+  # ["--timescale=120", "--drivescale=1", "--tick=2"]. The chart appends
+  # --pidfile=/state/server.pid after these flags so the root stays read-only.
   extraArgs: []
   persistence:
     # Session snapshots + events.jsonl live here; survives restarts and

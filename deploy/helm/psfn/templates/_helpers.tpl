@@ -1105,7 +1105,8 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
 {{/*
 Container securityContext for first-party PSFN app-image containers (agent,
 gateway, Garden and their seed/wait init containers, plus the in-cluster
-LiteLLM proxy). It is the shared .Values.securityContext with
+LiteLLM proxy) and the pin-verified emo_sim image. It is the shared
+.Values.securityContext with
 readOnlyRootFilesystem forced on. The /app image is built read-only by design
 (see the "read-only /app image" note in psfn.commonEnv: every writable runtime
 path — system-data, companion-data, workspace, logs, temp, backups, the Dolt

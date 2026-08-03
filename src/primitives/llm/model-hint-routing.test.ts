@@ -169,6 +169,22 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(candidates[0]).toMatchObject({ model: 'vision/flash', provider: 'openrouter' });
   });
 
+  it('preserves wire slot attribution when the agent also pins the resolved model identity', () => {
+    const config = makeConfig({ multiCompanion: true });
+    const candidates = resolveCandidates(config, 'vision', {
+      slotKey: 'vision-flash',
+      model: 'vision/flash',
+      provider: 'openrouter',
+      pin: true,
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      slotKey: 'vision-flash',
+      model: 'vision/flash',
+      provider: 'openrouter',
+    });
+  });
+
   it('rejects a selected text-only slot for the vision lane before provider dispatch', () => {
     const config = makeConfig({ modelPurposeSelection: { vision: 'chat-primary' } });
 

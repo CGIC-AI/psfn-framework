@@ -30,9 +30,10 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
-  resolveCandidates,
-  resolveModelSelectionSlotForPurpose,
-} from '../../primitives/llm/model-hint-routing.js';
+  buildStreamTransportModelHint,
+  resolveCompanionStreamRoute,
+  resolveCompanionTransportSlotKey,
+} from './stream-model-selection.js';
 import {
   DEFAULT_BASE_DELAY_MS,
   DEFAULT_MAX_RETRIES,
@@ -279,10 +280,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
       try {
         const stream = createTransportEventStream({
           candidate,
-          ...(resolveModelSelectionSlotForPurpose(
-            params.config.modelPurposeSelection,
-            params.purpose,
-          ) && candidate.slotKey
+          ...(resolveCompanionTransportSlotKey(params.config, params.purpose, candidate)
             ? { transportSlotKey: candidate.slotKey }
             : {}),
           model: params.model,
@@ -377,10 +375,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
 interface TransportEventStreamParams {
   candidate: RoutingCandidate;
-  /**
-   * Companion-selected registry slot transported across the agent→gateway
-   * boundary. Omitted for the legacy fleet-default path.
-   */
   transportSlotKey?: string;
   model: Model<any>;
   context: unknown;
@@ -524,7 +518,7 @@ function buildTransportContext(
     ...(llmContext.promptCacheBoundaries
       ? { promptCacheBoundaries: llmContext.promptCacheBoundaries }
       : {}),
-    modelHint: buildTransportModelHint(candidate, requestOptions, transportSlotKey),
+    modelHint: buildStreamTransportModelHint(candidate, requestOptions, transportSlotKey),
     accounting,
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
   };
@@ -571,29 +565,6 @@ function normalizeTransportTool(tool: unknown): ToolSchema {
 function resolveContextTools(context: unknown): readonly unknown[] | undefined {
   const tools = (context as { tools?: unknown }).tools;
   return Array.isArray(tools) ? tools : undefined;
-}
-
-function buildTransportModelHint(
-  candidate: RoutingCandidate,
-  requestOptions: Record<string, unknown>,
-  transportSlotKey: string | undefined,
-): NonNullable<LLMContext['modelHint']> {
-  const reasoning = requestOptions.reasoning;
-  return {
-    model: candidate.model,
-    provider: candidate.provider,
-    ...(transportSlotKey ? { slotKey: transportSlotKey } : {}),
-    pin: true,
-    maxTokens: candidate.maxTokens,
-    ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
-    ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
-    ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
-    ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
-    ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
-    ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
-    ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
-    ...(typeof reasoning === 'string' ? { thinkingEffort: reasoning as ThinkingLevel } : {}),
-  };
 }
 
 type TransportMessageState = {
@@ -997,10 +968,6 @@ function resolveStreamCandidates(
   callerMaxTokens: number | undefined,
   litellmBaseUrl: string | null,
 ): RoutingCandidate[] {
-  const configuredSelectionSlotKey = resolveModelSelectionSlotForPurpose(
-    config.modelPurposeSelection,
-    purpose,
-  );
   const currentCandidate = buildCurrentCandidate(
     config,
     purpose,
@@ -1008,9 +975,10 @@ function resolveStreamCandidates(
     callerMaxTokens,
     litellmBaseUrl,
   );
-  const routingCandidates = configuredSelectionSlotKey
-    ? resolveCandidates(config, purpose, { slotKey: configuredSelectionSlotKey })
-    : resolveRoutingCandidates(config, purpose);
+  const {
+    candidates: routingCandidates,
+    selectedSlotKey,
+  } = resolveCompanionStreamRoute(config, purpose);
   const adjustedRoutingCandidates = routingCandidates.map(candidate => (
     callerMaxTokens === undefined
       ? candidate
@@ -1034,11 +1002,7 @@ function resolveStreamCandidates(
     return adjustedRoutingCandidates;
   }
 
-  // The pi-agent state model is mounted from the fleet-default catalog. A
-  // companion selection must lead the interactive chat chain even when that
-  // mounted model still identifies the shared default. The selected chain was
-  // validated above and retains every ordinary fallback candidate.
-  if (configuredSelectionSlotKey) {
+  if (selectedSlotKey) {
     return adjustedRoutingCandidates;
   }
 

@@ -200,6 +200,47 @@ describe('privacy break-glass routes', () => {
   it('registers and discloses through the companion-journal route pair', async () => {
     const calls: AuditCall[] = [];
     const appendAudit: AdminAuditTimelineAppender = (...args) => { calls.push(args); };
+    const journalContext = (phase: 'confirm' | 'decide') => ({
+      ...context(phase),
+      resource: {
+        ...context(phase).resource,
+        routeId: `POST /api/admin/privacy-break-glass/journal/:id/${phase}`,
+        area: 'values' as const,
+        pathParams: { id: 'reflection-journal' },
+      },
+      authorization: {
+        ...context(phase).authorization,
+        resource: { scope: 'personal_workspace' as const, area: 'values' as const },
+      },
+    }) as unknown as GardenRequestContext;
+    const journalAudit = { ...auditEvidence, resourceKind: 'journal' as const };
+    const begin = vi.fn().mockResolvedValue({
+      ok: true, confirmToken: TOKEN, expiresAt: journalAudit.expiresAt, audit: journalAudit,
+    });
+    const confirmRoutes = buildAdminPrivacyBreakGlassRoutes({
+      service: { begin } as unknown as AdminPrivacyBreakGlassService,
+      withBody: (_req, _res, callback) => callback(JSON.stringify(BODY)),
+      appendAuditTimelineEntry: appendAudit,
+    });
+    const confirmPath = '/api/admin/privacy-break-glass/journal/reflection-journal/confirm';
+    const confirmRoute = confirmRoutes.find(candidate => (
+      candidate.method === 'POST' && candidate.match(confirmPath)
+    ));
+    if (!confirmRoute) throw new Error('missing journal confirmation route');
+    const confirmResponse = new CapturingResponse();
+    confirmRoute.handle(
+      { headers: {} } as IncomingMessage,
+      confirmResponse as unknown as ServerResponse,
+      confirmRoute.match(confirmPath) ?? {},
+      journalContext('confirm'),
+    );
+    await confirmResponse.done;
+    expect(confirmResponse.statusCode).toBe(200);
+    expect(begin).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKind: 'journal', resourceId: 'reflection-journal', request: BODY,
+    }));
+    expect(calls[0]?.[1]).toBe('needs_approval');
+
     const journalDisclosure = {
       kind: 'journal' as const,
       journal: {
@@ -208,7 +249,7 @@ describe('privacy break-glass routes', () => {
       },
     };
     const decide = vi.fn().mockResolvedValue({
-      ok: true, disclosure: journalDisclosure, audit: { ...auditEvidence, resourceKind: 'journal' },
+      ok: true, disclosure: journalDisclosure, audit: journalAudit,
     });
     const withBody: AdminBodyReader = (_req, _res, callback) => {
       callback(JSON.stringify({ ...BODY, confirmToken: TOKEN }));
@@ -220,19 +261,23 @@ describe('privacy break-glass routes', () => {
     });
     const path = '/api/admin/privacy-break-glass/journal/reflection-journal/decide';
     const route = routes.find(candidate => candidate.method === 'POST' && candidate.match(path));
-    expect(route).toBeDefined();
+    if (!route) throw new Error('missing journal decision route');
     const response = new CapturingResponse();
-    route!.handle(
+    route.handle(
       { headers: {} } as IncomingMessage,
       response as unknown as ServerResponse,
-      route!.match(path) ?? {},
-      { ...context('decide'), resource: { ...context('decide').resource, routeId: 'POST /api/admin/privacy-break-glass/journal/:id/decide', area: 'values', pathParams: { id: 'reflection-journal' } } } as unknown as GardenRequestContext,
+      route.match(path) ?? {},
+      journalContext('decide'),
     );
     await response.done;
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain('reflection-journal');
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ resourceKind: 'journal' }));
-    expect(calls[0]?.[1]).toBe('allowed');
+    expect(calls[1]?.[1]).toBe('allowed');
+    const persistedAuditShape = JSON.stringify(calls);
+    expect(persistedAuditShape).not.toContain(BODY.reason);
+    expect(persistedAuditShape).not.toContain(TOKEN);
+    expect(persistedAuditShape).not.toContain('private companion reflection');
   });
 
   it('never returns a disclosure when durable audit persistence throws', async () => {

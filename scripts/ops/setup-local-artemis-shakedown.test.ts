@@ -99,6 +99,7 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(fleetAuth.accountRoster).toEqual([{
       providerSubjectId: ownerDiscordId,
       companionId,
+      contactId: `fleet-owner-${companionId}`,
       role: 'owner',
     }]);
     expect(fleetAuth.canonicalOrigin).toBe('https://psfn-gateway.local');
@@ -339,7 +340,12 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     }));
     expect(readJson(schedulerPath).tickIntervalMs).toBe(120_000);
     expect(readJson(fleetAuthPath)).toEqual(expect.objectContaining({
-      accountRoster: [{ providerSubjectId: ownerDiscordId, companionId, role: 'owner' }],
+      accountRoster: [{
+        providerSubjectId: ownerDiscordId,
+        companionId,
+        contactId: `fleet-owner-${companionId}`,
+        role: 'owner',
+      }],
       verifierKeys: [expect.objectContaining({ publicKeyPem: retainedVerifierKey })],
     }));
     expect(verifyStartupOwnerFiles({

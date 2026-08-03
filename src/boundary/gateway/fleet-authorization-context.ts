@@ -502,9 +502,10 @@ export function evaluateAccountRosterAuthorization(input: {
   ));
   let contact: FleetAuthorizationFacts['contact'];
   if (companionBindings.length === 0) {
+    if (!entry.contactId) return undefined;
     contact = {
       bindingId: `roster-binding-${entry.companionId}`,
-      contactId: entry.contactId ?? `roster-contact-${entry.providerSubjectId}`,
+      contactId: entry.contactId,
       bindingVersion: session.bindingVersion,
     };
   } else {

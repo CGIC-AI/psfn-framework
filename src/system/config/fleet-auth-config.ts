@@ -66,7 +66,7 @@ export type FleetAuthRole = typeof FLEET_AUTH_ROLES[number];
 export interface FleetAuthAccountRosterEntry {
   providerSubjectId: string;
   companionId: string;
-  /** Canonical companion contact fallback when no binding record exists. */
+  /** Canonical companion contact identity used when no binding record exists. */
   contactId?: string;
   role: FleetAuthRole;
 }

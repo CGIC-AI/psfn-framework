@@ -129,7 +129,12 @@ function harness(options: {
 }
 
 const OWNER_ROSTER = [
-  { providerSubjectId: SUBJECT, companionId: COMPANION_A, role: 'owner' as const },
+  {
+    providerSubjectId: SUBJECT,
+    companionId: COMPANION_A,
+    contactId: 'contact/operator',
+    role: 'owner' as const,
+  },
 ];
 
 describe('postgres fleet portal authorization roster fallback', () => {
@@ -179,6 +184,20 @@ describe('postgres fleet portal authorization roster fallback', () => {
       sessionRows: brokenSession,
     });
     expect(await foreignRoster.store.resolveBatch({ sessionToken: TOKEN })).toEqual({
+      decision: 'deny',
+      reasonCode: 'principal_not_active',
+    });
+  });
+
+  it('does not project a rostered companion when the subject has no contact mapping', async () => {
+    const { store } = harness({
+      accountRoster: [{ providerSubjectId: SUBJECT, companionId: COMPANION_A, role: 'owner' }],
+      sessionRows: [sessionRow({
+        principal_status: 'quarantined',
+        principal_restore_state: 'quarantined',
+      })],
+    });
+    expect(await store.resolveBatch({ sessionToken: TOKEN })).toEqual({
       decision: 'deny',
       reasonCode: 'principal_not_active',
     });

@@ -117,10 +117,11 @@ identity.
 For the actor's subject scope, a single valid active live principal contact
 binding is authoritative when present. Ambiguous or invalid existing binding
 state denies rather than falling through to another identity. When no binding
-row exists, the optional roster `contactId` is the configuration-owned
-canonical fallback. The synthetic roster contact identifier remains only for
-older entries that provide neither source; it does not correspond to a stored
-contact and cannot project existing subject-owned data.
+row exists, the roster `contactId` is the configuration-owned canonical
+identity. A roster entry with neither source is not authorized; the runtime
+never fabricates a contact identifier. Before enabling a contact-backed roster
+entry, provision or verify that the configured identifier names the matching
+contact in that companion's store.
 
 Because roster authorization bypasses the authority-generation staleness gate,
 its revocation trust anchor is the browser-session row itself

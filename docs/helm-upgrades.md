@@ -1154,7 +1154,9 @@ but separate apps are preferred to keep the blast radius small):
 
 The operator supplies: the Discord client ID (owner file), the client secret as
 the k8s secret env `FLEET_AUTH_DISCORD_CLIENT_SECRET`, and the operator's own
-Discord account snowflake for the initial `owner` mapping.
+Discord account snowflake plus canonical companion contact ID for the initial
+`owner` mapping. If a live principal contact binding already exists, the roster
+contact ID may be omitted; a roster entry with neither mapping is denied.
 
 Our side of the contract:
 

@@ -411,8 +411,11 @@ describe('admin-unconditional account roster authorization', () => {
     });
   }
 
-  it('grants the rostered role although every nested authority layer is broken', () => {
-    const decision = decideRoster(brokenGauntletSnapshot(), ROSTER);
+  it('grants the rostered role with a configured contact although every nested authority layer is broken', () => {
+    const decision = decideRoster(brokenGauntletSnapshot(), [{
+      ...ROSTER[0]!,
+      contactId: 'contact/operator',
+    }]);
     expect(decision).toMatchObject({
       decision: 'allow',
       facts: {
@@ -423,6 +426,13 @@ describe('admin-unconditional account roster authorization', () => {
         contact: { bindingId: `roster-binding-${COMPANION_ID}` },
         session: { recordId: SESSION_ID, provider: 'discord' },
       },
+    });
+  });
+
+  it('denies a rostered subject with neither a live binding nor a configured contact', () => {
+    expect(decideRoster(brokenGauntletSnapshot(), ROSTER)).toEqual({
+      decision: 'deny',
+      reasonCode: 'principal_not_active',
     });
   });
 

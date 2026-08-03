@@ -170,7 +170,10 @@ granted that entry's role for that companion directly from config — bypassing
 the first-owner ceremony, principal activation, and the nested authority
 version/generation gauntlet that can otherwise lock the operator out. The
 optional `contactId` binds the rostered admin to their canonical contact when
-no live principal contact binding exists (see the authority-model doc). The session itself must still be real,
+no live principal contact binding exists (see the authority-model doc). If
+neither source exists, authorization fails closed; no synthetic contact is
+created. A configured `contactId` must name the matching contact in that
+companion's store. The session itself must still be real,
 unexpired, and unrevoked, and subjects not in the roster keep the full
 gauntlet unchanged. A malformed roster entry, an unknown role, or a roster
 companion outside the companions registry refuses startup. The roster is also

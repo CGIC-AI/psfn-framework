@@ -533,6 +533,7 @@ function generateFleetAuthOwner(owner) {
     accountRoster: [{
       providerSubjectId: ownerDiscordId,
       companionId,
+      contactId: `fleet-owner-${companionId}`,
       role: 'owner',
     }],
     verifierKeys: [{

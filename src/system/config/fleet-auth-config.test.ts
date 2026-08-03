@@ -746,6 +746,7 @@ describe('fleet-auth account roster validation', () => {
     return {
       providerSubjectId: OWNER_SUBJECT,
       companionId: COMPANION_ID,
+      contactId: 'contact/operator',
       role: 'owner',
       ...overrides,
     };
@@ -760,8 +761,13 @@ describe('fleet-auth account roster validation', () => {
     const parsed = validateFleetAuthConfig({
       ...config(),
       accountRoster: [
-        entry({ contactId: 'contact/operator' }),
-        entry({ providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' }),
+        entry(),
+        entry({
+          providerSubjectId: OTHER_SUBJECT,
+          companionId: OTHER_COMPANION_ID,
+          contactId: undefined,
+          role: 'member',
+        }),
       ],
     }, FLEET_AUTH_FILE_NAME);
     expect(parsed.accountRoster).toEqual([
@@ -796,6 +802,7 @@ describe('fleet-auth account roster validation', () => {
     ['non-array roster', { accountRoster: { providerSubjectId: OWNER_SUBJECT } }, /accountRoster must be an array/],
     ['non-object entry', { accountRoster: ['owner'] }, /must be an object/],
     ['missing role', { accountRoster: [{ providerSubjectId: OWNER_SUBJECT, companionId: COMPANION_ID }] }, /role is required/],
+    ['owner without contact id', { accountRoster: [entry({ contactId: undefined })] }, /contactId is required for an owner/],
     ['unknown entry key', { accountRoster: [entry({ trustLevel: 'ultimate' })] }, /unknown/i],
     ['short snowflake', { accountRoster: [entry({ providerSubjectId: '1234567890123456' })] }, /snowflake/],
     ['leading-zero snowflake', { accountRoster: [entry({ providerSubjectId: '000000000000000001' })] }, /snowflake/],

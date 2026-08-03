@@ -646,6 +646,43 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
   });
 
+  it('keeps a persistent session-integrity timeout visible and audited without replaying the turn', async () => {
+    const handleMessage = vi.fn(async () => {
+      throw new Error('Session integrity signing failed: Session integrity RPC timed out');
+    });
+    const harness = createHarness({ handleMessage });
+    const message = makeMessage({
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    await vi.waitFor(() => {
+      expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+        'discord.message.failure_notice',
+        {
+          channelId: 'discord:general',
+          messageId: 'msg-1',
+          stage: 'handle_message',
+          delivered: true,
+        },
+      );
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.error', {
+      channelId: 'discord:general',
+      messageId: 'msg-1',
+      error: 'Session integrity signing failed: Session integrity RPC timed out',
+      stage: 'handle_message',
+    });
+    expect(harness.gateway.discordSend).toHaveBeenCalledWith(
+      'discord:general',
+      '[System delivery error] The companion could not complete that reply. Please try again.',
+    );
+  });
+
   it('surfaces a continuation-budget failure and processes the next queued message', async () => {
     const handleMessage = vi.fn()
       .mockRejectedValueOnce(new ParentTurnContinuationBudgetExceededError({

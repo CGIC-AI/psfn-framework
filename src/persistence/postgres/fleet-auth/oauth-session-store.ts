@@ -28,7 +28,8 @@ import {
   resolveOAuthCallbackDestination,
 } from './oauth-transaction-store.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
-
+import type { FleetAuthAccountRosterEntry } from '../../../system/config/fleet-auth-config.js';
+import { activateRosteredFirstOwner } from './rostered-first-owner-activation.js';
 
 export interface PostgresFleetAuthBrokerStoreOptions {
   pool: Pool;
@@ -36,6 +37,7 @@ export interface PostgresFleetAuthBrokerStoreOptions {
   sessionPepper: string;
   tokenEncryptionKey: string;
   providerRevocationAuthority: ProviderRevocationAuthorityPort;
+  accountRoster?: readonly FleetAuthAccountRosterEntry[];
 }
 
 function safeInteger(value: string, field: string): number {
@@ -51,12 +53,16 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   private readonly providerAuthorityPool: Pool;
   private readonly codec: FleetAuthSecretCodec;
   private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort;
+  private readonly accountRoster: readonly FleetAuthAccountRosterEntry[];
 
   constructor(options: PostgresFleetAuthBrokerStoreOptions) {
     this.pool = options.pool;
     this.providerAuthorityPool = options.providerAuthorityPool;
     this.codec = new FleetAuthSecretCodec(options);
     this.providerRevocationAuthority = options.providerRevocationAuthority;
+    this.accountRoster = Object.freeze(
+      (options.accountRoster ?? []).map(entry => Object.freeze({ ...entry })),
+    );
   }
 
   async createOAuthTransaction(
@@ -240,12 +246,24 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
       }
 
-      const principal = await this.resolveOrCreatePendingPrincipal(
+      const pendingPrincipal = await this.resolveOrCreatePendingPrincipal(
         client,
         input.providerSubjectId,
         input.providerMetadata,
         safeInteger(authority.authority_generation, 'authority_generation'),
       );
+      const activation = await activateRosteredFirstOwner(client, {
+        accountRoster: this.accountRoster,
+        principal: pendingPrincipal,
+        providerSubjectId: input.providerSubjectId,
+        authorityGeneration: safeInteger(
+          authority.authority_generation,
+          'authority_generation',
+        ),
+        globalAuthEpoch: safeInteger(authority.global_auth_epoch, 'global_auth_epoch'),
+        now: input.now,
+      });
+      const principal = activation.principal;
       const session = await this.insertSession(client, {
         principal,
         audience: input.audience,
@@ -254,7 +272,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         now: input.now,
         idleExpiresAt: new Date(input.now.getTime() + input.idleTtlMs),
         absoluteExpiresAt: new Date(input.now.getTime() + input.absoluteTtlMs),
-        globalAuthEpoch: safeInteger(authority.global_auth_epoch, 'global_auth_epoch'),
+        globalAuthEpoch: activation.globalAuthEpoch,
         providerSubjectId: input.providerSubjectId,
       });
       await client.query(`
@@ -289,7 +307,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       `, [
         randomUUID(),
         JSON.stringify({ kind: 'provider', provider: 'discord' }),
-        principal.status === 'pending' ? 'pending_principal' : 'existing_principal',
+        activation.activated
+          ? 'rostered_first_owner'
+          : principal.status === 'pending' ? 'pending_principal' : 'existing_principal',
         principal.principal_id,
         authority.authority_generation,
         authority.global_auth_epoch,

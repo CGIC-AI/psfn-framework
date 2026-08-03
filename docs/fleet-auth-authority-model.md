@@ -114,6 +114,19 @@ generation/version chain. Non-roster subjects remain fail-closed. The roster mus
 strictly and must never use display names or partial identifiers as fallback
 identity.
 
+On a fresh authority database with no active live principal, the first exact
+rostered `owner` login also promotes its pending principal and Discord subject
+to active before issuing the browser session when that owner has either an
+explicit canonical `contactId` or one usable live contact binding. This avoids
+creating an active-but-unusable identity from an incomplete roster. The login
+transaction serializes this one-time transition on the authority-state lock,
+advances the principal's five revocation versions, fences its earlier sessions
+and evidence, and records an `authority.first_owner` audit event. It does not
+synthesize a contact binding or role grant; the owner file remains the authority
+for those roster decisions. An unexpired pending trusted-host first-owner
+ceremony takes precedence, so the existing ceremony consumer remains usable
+instead of being invalidated by the automatic roster transition.
+
 For the actor's subject scope, a single valid active live principal contact
 binding is authoritative when present. Ambiguous or invalid existing binding
 state denies rather than falling through to another identity. When no binding

@@ -432,8 +432,13 @@ describe('model usage store startup migration on a named tenant schema', () => {
       )).rejects.toThrow(/read-only transaction|permission denied/i);
       await expect(followerPool.query(`SELECT * FROM ${PRIMARY_SCHEMA}.primary_private_probe`))
         .rejects.toThrow(/permission denied/i);
+      await expect(followerPool.query(
+        `SELECT COUNT(*)::int AS count FROM ${PRIMARY_SCHEMA}.icp_conversation_cost_decisions`,
+      )).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
       const privileges = await admin.query<{
+        cost_decisions_select: boolean;
+        cost_decisions_write: boolean;
         schema_usage: boolean;
         schema_create: boolean;
         ledger_select: boolean;
@@ -446,6 +451,16 @@ describe('model usage store startup migration on a named tenant schema', () => {
           has_table_privilege($1, $2 || '.model_usage_events', 'SELECT') AS ledger_select,
           has_table_privilege(
             $1,
+            $2 || '.icp_conversation_cost_decisions',
+            'SELECT'
+          ) AS cost_decisions_select,
+          has_table_privilege(
+            $1,
+            $2 || '.icp_conversation_cost_decisions',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          ) AS cost_decisions_write,
+          has_table_privilege(
+            $1,
             $2 || '.model_usage_events',
             'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
           ) AS ledger_write,
@@ -456,6 +471,8 @@ describe('model usage store startup migration on a named tenant schema', () => {
           ) AS private_access
       `, [fleet.followerRole, PRIMARY_SCHEMA]);
       expect(privileges.rows).toEqual([{
+        cost_decisions_select: true,
+        cost_decisions_write: false,
         schema_usage: true,
         schema_create: false,
         ledger_select: true,

@@ -6,7 +6,11 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import { createPostgresPool } from '../postgres.js';
+import {
+  createPostgresPool,
+  quotePostgresRoleName,
+  quotePostgresSchemaName,
+} from '../postgres.js';
 import { bootstrapSharedSchema } from './shared-schema.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
 import { PostgresModelUsageStore } from './model-usage-store.js';
@@ -19,7 +23,7 @@ import type { IcpConversationCorrelation } from '../../shared/contracts/icp-auto
 // `"$user", public` search_path. Operator ruling 2026-07-28: aggregation across
 // companions is intentional (a conversation charges both participating
 // companions against one shared budget pool). This proves the read still
-// aggregates across companions under the now-explicit `public` fleet ledger
+// aggregates across companions under the now-explicit canonical fleet ledger
 // scope — same totals as before — while the accidental-default path is gone.
 
 const TIMEOUT_MS = 120_000;
@@ -29,6 +33,7 @@ const CONVERSATION_ID = '44444444-4444-4444-8444-444444444444';
 const ROOT_INITIATION_ID = '99999999-9999-4999-8999-999999999999';
 const CHANNEL_ID = `companion-dm:${COMPANION_A}:${COMPANION_B}`;
 const PROVENANCE_REF = 'icp-prov:11111111-1111-4111-8111-111111111111';
+const PRIMARY_SCHEMA = 'companion_primary';
 
 const POLICY = {
   enabled: true as const,
@@ -80,17 +85,33 @@ function correlation(localCompanionId: string): IcpConversationCorrelation {
 }
 
 describe('ICP admin cost projection fleet-ledger scope', () => {
-  it('reads the shared cost ledger aggregated across both companions under the explicit public scope', async () => {
+  it('reads the shared cost ledger aggregated across both companions under the canonical scope', async () => {
     if (!harness) throw new Error('Postgres integration harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
     await bootstrapSharedSchema(databaseUrl);
 
+    const bootstrapPool = createPostgresPool(databaseUrl, {
+      applicationName: 'icp-admin-cost-scope-bootstrap',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const roleResult = await bootstrapPool.query<{ current_user: string }>(
+      'SELECT current_user',
+    );
+    const currentRole = roleResult.rows.at(0)?.current_user;
+    if (!currentRole) throw new Error('ICP cost scope test could not resolve PostgreSQL role');
+    await bootstrapPool.query(
+      `CREATE SCHEMA ${quotePostgresSchemaName(PRIMARY_SCHEMA)} `
+      + `AUTHORIZATION ${quotePostgresRoleName(currentRole)}`,
+    );
     const fleetPool = createPostgresPool(databaseUrl, {
       applicationName: 'icp-admin-cost-scope-fleet',
       allowExitOnIdle: true,
+      schema: PRIMARY_SCHEMA,
+      role: currentRole,
       max: 2,
     });
-    const pools: Pool[] = [fleetPool];
+    const pools: Pool[] = [bootstrapPool, fleetPool];
     const fleetUsage = new PostgresModelUsageStore(fleetPool, { fleetAggregation: true });
     const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: [COMPANION_A, COMPANION_B],
@@ -142,7 +163,11 @@ describe('ICP admin cost projection fleet-ledger scope', () => {
       projectionStore = await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
         localCompanionId: COMPANION_A,
         knownCompanionIds: [COMPANION_A, COMPANION_B],
-        config: { multiCompanion: true },
+        config: {
+          multiCompanion: true,
+          companionFleet: { companions: [{ postgresSchema: PRIMARY_SCHEMA }] },
+          postgresRole: currentRole,
+        },
       });
 
       const projection = await projectionStore.readProjection(50);
@@ -154,7 +179,7 @@ describe('ICP admin cost projection fleet-ledger scope', () => {
         [COMPANION_A, COMPANION_B].sort(),
       );
       // The latest decision is B's; its projected total already aggregates both
-      // companions, proving the cost pool read reaches the fleet-wide public
+      // companions, proving the cost pool read reaches the canonical fleet
       // ledger rather than a single companion's tenant slice.
       expect(cost.projectedTotalCostUsd).toBeCloseTo(0.6, 6);
       expect(cost.pendingProjectedCostUsd).toBeCloseTo(0.6, 6);

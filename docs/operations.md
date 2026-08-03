@@ -164,15 +164,16 @@ authorized projection. The retired raw cluster-status listener and
 
 `fleet-auth.json` accepts an optional admin-unconditional `accountRoster`
 (`[{ "providerSubjectId": "<discord snowflake>", "companionId": "<companion uuid>",
-"contactId": "<canonical companion contact id>", "role": "owner" }]`). A
+"contactId": "<canonical companion contact id>", "role": "owner" }]`). Owner
+entries require the canonical `contactId`; other roles may omit it only when a
+live principal contact binding already supplies the identity. A
 Discord-authenticated session whose token-verified subject matches an entry is
-granted that entry's role for that companion directly from config — bypassing
-the first-owner ceremony, principal activation, and the nested authority
-version/generation gauntlet that can otherwise lock the operator out. The
-optional `contactId` binds the rostered admin to their canonical contact when
-no live principal contact binding exists (see the authority-model doc). If
-neither source exists, authorization fails closed; no synthetic contact is
-created. A configured `contactId` must name the matching contact in that
+projected as that role for the companion. On a fresh fleet, the exact first
+rostered owner login activates the principal and provider subject, registers the
+companion authority, and materializes its contact binding and owner grant in one
+transaction. A pending trusted-host first-owner ceremony retains precedence.
+The `contactId` names the rostered admin's canonical contact; no contact identity
+is synthesized. A configured `contactId` must name the matching contact in that
 companion's store. The session itself must still be real,
 unexpired, and unrevoked, and subjects not in the roster keep the full
 gauntlet unchanged. A malformed roster entry, an unknown role, or a roster

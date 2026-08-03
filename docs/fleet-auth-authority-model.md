@@ -116,15 +116,14 @@ identity.
 
 On a fresh authority database with no active live principal, the first exact
 rostered `owner` login also promotes its pending principal and Discord subject
-to active before issuing the browser session when that owner has either an
-explicit canonical `contactId` or one usable live contact binding. This avoids
-creating an active-but-unusable identity from an incomplete roster. The login
-transaction serializes this one-time transition on the authority-state lock,
+to active before issuing the browser session. Owner roster entries carry the
+canonical `contactId`; the same transaction registers their companion authority
+and materializes active contact bindings and owner grants from those exact
+entries. It serializes the one-time transition on the authority-state lock,
 advances the principal's five revocation versions, fences its earlier sessions
-and evidence, and records an `authority.first_owner` audit event. It does not
-synthesize a contact binding or role grant; the owner file remains the authority
-for those roster decisions. An unexpired pending trusted-host first-owner
-ceremony takes precedence, so the existing ceremony consumer remains usable
+and evidence, and records an `authority.first_owner` audit event. No contact
+identity is synthesized. Any unexpired pending trusted-host first-owner ceremony
+takes precedence fleet-wide, so the existing ceremony consumer remains usable
 instead of being invalidated by the automatic roster transition.
 
 For the actor's subject scope, a single valid active live principal contact

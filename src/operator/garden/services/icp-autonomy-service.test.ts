@@ -147,6 +147,7 @@ function projectionStore(
       }],
       fatigue: [],
       costs: [],
+      costProjection: { available: true, unavailableReason: null },
       ...overrides,
     })),
     close: vi.fn(),
@@ -246,6 +247,35 @@ describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
 });
 
 describe('AdminIcpAutonomyDataService', () => {
+  it('keeps core control-plane data available while marking only costs unavailable', async () => {
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(candidate()),
+      projectionStore: projectionStore(sharedStore(), {
+        costProjection: {
+          available: false,
+          unavailableReason: 'relation_contract_unavailable',
+        },
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.available).toBe(true);
+    expect(data.candidates).toHaveLength(1);
+    expect(data.permits).toHaveLength(1);
+    expect(data.costs).toEqual([]);
+    expect(data.costProjection).toEqual({
+      available: false,
+      unavailableReason: 'relation_contract_unavailable',
+    });
+    expect(data.quietState).toBe('active');
+  });
+
   it('returns bounded control-plane state without private motivation, contacts, or bearer permits', async () => {
     const service = new AdminIcpAutonomyDataService({
       localCompanionId: LOCAL_ID,

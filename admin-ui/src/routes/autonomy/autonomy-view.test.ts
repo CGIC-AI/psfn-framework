@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import type { AdminIcpCandidateView, AdminIcpCostView } from '../../../../src/operator/garden/services/types.js';
@@ -39,5 +40,13 @@ describe('autonomy Garden view helpers', () => {
     expect(costState(cost({ allowed: false }))).toBe('hard_stop');
     expect(costState(cost({ unknownCostAttemptCount: 1, allowed: false }))).toBe('unknown_cost');
     expect(formatUsd(1.2)).toBe('$1.2000');
+  });
+
+  it('renders optional cost unavailability separately from the control plane', () => {
+    const page = readFileSync(new URL('./LazyPageContent.svelte', import.meta.url), 'utf8');
+    expect(page).toContain('{#if !data.costProjection.available}');
+    expect(page).toContain('Cost projection unavailable');
+    expect(page).toContain('core autonomy control plane remains available');
+    expect(page).toContain('No cost-breaker decisions recorded.');
   });
 });

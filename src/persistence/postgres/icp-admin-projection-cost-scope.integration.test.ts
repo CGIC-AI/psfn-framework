@@ -171,6 +171,7 @@ describe('ICP admin cost projection fleet-ledger scope', () => {
       });
 
       const projection = await projectionStore.readProjection(50);
+      expect(projection.costProjection).toEqual({ available: true, unavailableReason: null });
       expect(projection.costs).toHaveLength(1);
       const cost = projection.costs[0]!;
       expect(cost.conversationId).toBe(CONVERSATION_ID);
@@ -189,6 +190,107 @@ describe('ICP admin cost projection fleet-ledger scope', () => {
       await projectionStore?.close();
       await episodes.close();
       await Promise.all(pools.map(pool => pool.end()));
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps the shared projection available and hot-restores costs after optional provisioning', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    await bootstrapSharedSchema(databaseUrl);
+    const probePool = createPostgresPool(databaseUrl, {
+      applicationName: 'icp-admin-optional-cost-probe',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const roleResult = await probePool.query<{ current_user: string }>(
+      'SELECT current_user',
+    );
+    const currentRole = roleResult.rows.at(0)?.current_user;
+    if (!currentRole) throw new Error('ICP optional cost test could not resolve PostgreSQL role');
+    await probePool.query(
+      `CREATE SCHEMA ${quotePostgresSchemaName(PRIMARY_SCHEMA)} `
+      + `AUTHORIZATION ${quotePostgresRoleName(currentRole)}`,
+    );
+    const fleetPool = createPostgresPool(databaseUrl, {
+      applicationName: 'icp-admin-optional-cost-fleet',
+      allowExitOnIdle: true,
+      schema: PRIMARY_SCHEMA,
+      role: currentRole,
+      max: 1,
+    });
+    const pools: Pool[] = [probePool, fleetPool];
+    let projectionStore: PostgresIcpAdminProjectionStore | null = null;
+
+    try {
+      const relationBefore = await probePool.query<{ relation: string | null }>(
+        `SELECT to_regclass('${PRIMARY_SCHEMA}.icp_conversation_cost_decisions')::text AS relation`,
+      );
+      expect(relationBefore.rows[0]?.relation).toBeNull();
+
+      projectionStore = await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
+        localCompanionId: COMPANION_A,
+        knownCompanionIds: [COMPANION_A, COMPANION_B],
+        config: {
+          multiCompanion: true,
+          companionFleet: { companions: [{ postgresSchema: PRIMARY_SCHEMA }] },
+          postgresRole: currentRole,
+        },
+      });
+      const withoutCosts = await projectionStore.readProjection(50);
+      expect(withoutCosts.costs).toEqual([]);
+      expect(withoutCosts.costProjection).toEqual({
+        available: false,
+        unavailableReason: 'relation_contract_unavailable',
+      });
+      expect(withoutCosts.availability).toEqual([]);
+      expect(withoutCosts.episodes).toEqual([]);
+      expect(withoutCosts.permits).toEqual([]);
+      expect(withoutCosts.fatigue).toEqual([]);
+
+      const fleetUsage = new PostgresModelUsageStore(fleetPool, { fleetAggregation: true });
+      await fleetUsage.waitUntilReady();
+
+      const afterProvisioning = await projectionStore.readProjection(50);
+      expect(afterProvisioning.costProjection).toEqual({
+        available: true,
+        unavailableReason: null,
+      });
+      expect(afterProvisioning.costs).toEqual([]);
+    } finally {
+      await projectionStore?.close();
+      await Promise.all(pools.map(pool => pool.end()));
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects construction when a mandatory shared projection relation is missing', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    await bootstrapSharedSchema(databaseUrl);
+    const mutationPool = createPostgresPool(databaseUrl, {
+      applicationName: 'icp-admin-required-relation-fixture',
+      allowExitOnIdle: true,
+      schema: 'shared',
+      max: 1,
+    });
+    try {
+      const roleResult = await mutationPool.query<{ current_user: string }>(
+        'SELECT current_user',
+      );
+      const currentRole = roleResult.rows.at(0)?.current_user;
+      if (!currentRole) throw new Error('ICP mandatory relation test could not resolve PostgreSQL role');
+      await mutationPool.query('DROP TABLE icp_fatigue_turn_reservations');
+
+      await expect(PostgresIcpAdminProjectionStore.connect(databaseUrl, {
+        localCompanionId: COMPANION_A,
+        knownCompanionIds: [COMPANION_A, COMPANION_B],
+        config: {
+          multiCompanion: true,
+          companionFleet: { companions: [{ postgresSchema: 'public' }] },
+          postgresRole: currentRole,
+        },
+      })).rejects.toThrow('PostgreSQL relation shared.icp_fatigue_turn_reservations is missing');
+    } finally {
+      await mutationPool.end();
     }
   }, TIMEOUT_MS);
 });

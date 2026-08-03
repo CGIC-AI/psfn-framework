@@ -66,6 +66,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
       permits: [],
       fatigue: [],
       costs: [],
+      costProjection: { available: true, unavailableReason: null },
     });
 
     expect(store.localCompanionId).toBe(LOCAL);
@@ -90,7 +91,17 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
         'allowed',
         'reason',
       ],
+      privileges: ['SELECT'],
     });
+    expect(mocks.assertRelationColumns.mock.calls
+      .slice(0, 4)
+      .map(call => call[1].relation)
+      .sort()).toEqual([
+      'icp_availability_leases',
+      'icp_conversation_episodes',
+      'icp_fatigue_turn_reservations',
+      'icp_initiation_permits',
+    ]);
     const sql = projectionCalls.map(call => String(call[1]));
     expect(sql[0]).toMatch(/WHERE companion_id = \$1/u);
     expect(sql[1]).toMatch(/WHERE \$1::uuid = ANY\(participant_companion_ids\)/u);
@@ -100,21 +111,136 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     expect(sql[4]).toMatch(/WHERE \$1::uuid = ANY\(episode\.participant_companion_ids\)/u);
   });
 
-  it('fails readiness on an unavailable cost ledger before opening the shared store', async () => {
+  it('keeps the shared control plane ready when the optional cost relation is unavailable', async () => {
+    const sharedPool = { end: vi.fn(async () => {}) };
+    const costPool = { end: vi.fn(async () => {}) };
+    const shared = { close: vi.fn(async () => {}) };
+    mocks.createPostgresPool
+      .mockReturnValueOnce(sharedPool)
+      .mockReturnValueOnce(costPool);
+    mocks.connectShared.mockResolvedValue(shared);
+    mocks.assertRelationColumns.mockImplementation(async (
+      _pool: unknown,
+      contract: { relation: string },
+    ) => {
+      if (contract.relation === 'icp_conversation_cost_decisions') {
+        throw new Error('cost ledger schema version is missing');
+      }
+    });
+
+    const store = await PostgresIcpAdminProjectionStore.connect('postgres://test', {
+      localCompanionId: LOCAL,
+      knownCompanionIds: [LOCAL, PEER],
+      config: FLEET_CONFIG,
+    });
+
+    await expect(store.readProjection()).resolves.toEqual({
+      availability: [],
+      episodes: [],
+      permits: [],
+      fatigue: [],
+      costs: [],
+      costProjection: {
+        available: false,
+        unavailableReason: 'relation_contract_unavailable',
+      },
+    });
+    expect(mocks.connectShared).toHaveBeenCalledOnce();
+    expect(mocks.queryRows).toHaveBeenCalledTimes(4);
+    expect(sharedPool.end).not.toHaveBeenCalled();
+    expect(costPool.end).not.toHaveBeenCalled();
+  });
+
+  it('restores the optional cost slice on a later read after its relation appears', async () => {
     const sharedPool = { end: vi.fn(async () => {}) };
     const costPool = { end: vi.fn(async () => {}) };
     mocks.createPostgresPool
       .mockReturnValueOnce(sharedPool)
       .mockReturnValueOnce(costPool);
-    mocks.assertRelationColumns.mockRejectedValueOnce(
-      new Error('cost ledger schema version is missing'),
-    );
+    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    let costProbeCount = 0;
+    mocks.assertRelationColumns.mockImplementation(async (
+      _pool: unknown,
+      contract: { relation: string },
+    ) => {
+      if (contract.relation === 'icp_conversation_cost_decisions'
+        && costProbeCount++ === 0) {
+        throw new Error('relation is not installed yet');
+      }
+    });
+    const store = await PostgresIcpAdminProjectionStore.connect('postgres://test', {
+      localCompanionId: LOCAL,
+      knownCompanionIds: [LOCAL, PEER],
+      config: FLEET_CONFIG,
+    });
+
+    const first = await store.readProjection();
+    const second = await store.readProjection();
+
+    expect(first.costProjection).toEqual({
+      available: false,
+      unavailableReason: 'relation_contract_unavailable',
+    });
+    expect(second.costProjection).toEqual({ available: true, unavailableReason: null });
+    expect(mocks.queryRows).toHaveBeenCalledTimes(9);
+  });
+
+  it('reports an optional cost read failure without discarding the shared projection', async () => {
+    const sharedPool = { end: vi.fn(async () => {}) };
+    const costPool = { end: vi.fn(async () => {}) };
+    mocks.createPostgresPool
+      .mockReturnValueOnce(sharedPool)
+      .mockReturnValueOnce(costPool);
+    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    mocks.queryRows.mockImplementation(async (
+      _pool: unknown,
+      sql: string,
+    ) => {
+      if (sql.includes('FROM icp_conversation_cost_decisions')) {
+        throw new Error('cost ledger read failed');
+      }
+      return [];
+    });
+    const store = await PostgresIcpAdminProjectionStore.connect('postgres://test', {
+      localCompanionId: LOCAL,
+      knownCompanionIds: [LOCAL, PEER],
+      config: FLEET_CONFIG,
+    });
+
+    await expect(store.readProjection()).resolves.toEqual({
+      availability: [],
+      episodes: [],
+      permits: [],
+      fatigue: [],
+      costs: [],
+      costProjection: {
+        available: false,
+        unavailableReason: 'read_failed',
+      },
+    });
+    expect(mocks.queryRows).toHaveBeenCalledTimes(5);
+  });
+
+  it('fails readiness when a mandatory shared projection relation is malformed', async () => {
+    const sharedPool = { end: vi.fn(async () => {}) };
+    const costPool = { end: vi.fn(async () => {}) };
+    mocks.createPostgresPool
+      .mockReturnValueOnce(sharedPool)
+      .mockReturnValueOnce(costPool);
+    mocks.assertRelationColumns.mockImplementation(async (
+      _pool: unknown,
+      contract: { relation: string },
+    ) => {
+      if (contract.relation === 'icp_conversation_episodes') {
+        throw new Error('mandatory episode projection columns are missing');
+      }
+    });
 
     await expect(PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,
       knownCompanionIds: [LOCAL, PEER],
       config: FLEET_CONFIG,
-    })).rejects.toThrow('cost ledger schema version is missing');
+    })).rejects.toThrow('mandatory episode projection columns are missing');
     expect(mocks.connectShared).not.toHaveBeenCalled();
     expect(sharedPool.end).toHaveBeenCalledOnce();
     expect(costPool.end).toHaveBeenCalledOnce();

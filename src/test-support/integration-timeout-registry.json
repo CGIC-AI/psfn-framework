@@ -240,9 +240,9 @@
     {
       "file": "src/persistence/postgres/icp-admin-projection-cost-scope.integration.test.ts",
       "timeoutMs": 120000,
-      "measuredBaselineMs": 1240,
+      "measuredBaselineMs": 1870,
       "baselineSource": "measured",
-      "note": "vzh0u explicit-fleet-scope suite against the real-Postgres tmpfs harness. Baseline 1.24s file wall solo (this host, 2026-07-28); 120s is the repo-standard integration cap, headroom dominated by cold-start harness variance under the parallel heavy phase."
+      "note": "vzh0u explicit-fleet-scope plus req4p.1 optional-relation recovery and mandatory-relation failure suite against the real-Postgres tmpfs harness. Baseline 1.87s file wall solo (3 tests, this host, 2026-08-02); 120s is the repo-standard integration cap, preserving 64x headroom for cold-start harness variance under the parallel heavy phase."
     },
     {
       "file": "src/persistence/postgres/icp-autonomy.integration.test.ts",

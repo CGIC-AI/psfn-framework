@@ -270,6 +270,7 @@ export interface MemorySubjectAuthorizedQueryResult {
  */
 export type MemorySubjectAdminSelector =
   | { kind: 'admin_page'; options?: MemoryAdminListOptions }
+  | { kind: 'admin_stats' }
   | { kind: 'channel_prefix'; channelId: string; limit: number }
   | { kind: 'contact_filter'; contactId: string; limit: number }
   | { kind: 'privacy_summary' }

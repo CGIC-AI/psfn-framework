@@ -602,6 +602,13 @@ describe('AdminServer Garden routing', () => {
           dashboardMemory({
             id: 'cross-subject-intimate', contactId: 'contact-b', type: 'relational', salience: 1, sensitivity: 'intimate',
           }),
+          {
+            ...dashboardMemory({
+              id: 'self-context-feedback', contactId: 'contact-a', type: 'semantic', salience: 0.1, sensitivity: 'personal',
+            }),
+            sourceRef: 'source:context_feedback|dashboard-parity',
+            tags: ['context_feedback'],
+          },
         ],
       });
       try {
@@ -633,6 +640,7 @@ describe('AdminServer Garden routing', () => {
         expect(dashboardPayload.stats.memoryTotal).toBe(expectedTotal);
         expect(dashboardPayload.stats.memoryTotal).toBe(memoryPayload.pagination.total);
         expect(memoryPayload.memories).toHaveLength(expectedTotal);
+        expect(memoryPayload.memories.map(memory => memory.id)).not.toContain('self-context-feedback');
         if (accessMode === 'sole_admin') {
           expect(dashboardPayload.stats.memoryByType).toEqual({ semantic: 1, procedural: 1, relational: 1 });
           expect(dashboardPayload.stats.avgSalience).toBeCloseTo(2 / 3);

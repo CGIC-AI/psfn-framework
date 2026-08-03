@@ -324,6 +324,13 @@ export async function queryInMemoryAuthorizedAdmin(
     .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
   const { selector } = input;
   switch (selector.kind) {
+    case 'admin_stats':
+      return {
+        kind: 'stats',
+        stats: subjectAdminStats(
+          authorized.filter(memory => !isInternalMemoryArtifact(memory)),
+        ),
+      };
     case 'stats':
       return { kind: 'stats', stats: subjectAdminStats(authorized) };
     case 'privacy_summary':

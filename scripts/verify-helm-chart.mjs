@@ -473,6 +473,23 @@ function assertServiceSelectorsDoNotSelectPrefetch(rendered, label) {
 }
 
 const rendered = render();
+const defaultEmosim = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-emosim');
+const defaultEmosimContainer = defaultEmosim?.spec?.template?.spec?.containers
+  ?.find(container => container.name === 'emosim');
+if (!defaultEmosimContainer) {
+  throw new Error('default render must contain the stock-standard emosim Deployment');
+}
+if (defaultEmosimContainer.securityContext?.readOnlyRootFilesystem !== true) {
+  throw new Error('psfn-emosim must run with securityContext.readOnlyRootFilesystem: true');
+}
+if (!defaultEmosimContainer.args?.includes('--pidfile=/state/server.pid')) {
+  throw new Error('psfn-emosim must write its PID file to the state volume');
+}
+const defaultEmosimStateMount = defaultEmosimContainer.volumeMounts
+  ?.find(mount => mount.name === 'state' && mount.mountPath === '/state');
+if (!defaultEmosimStateMount) {
+  throw new Error('psfn-emosim must mount its writable state volume at /state');
+}
 const defaultFleetRendered = renderHelm();
 const defaultFleetDocuments = parseRenderedDocuments(defaultFleetRendered, 'default fleet render');
 const defaultFleetCertificates = defaultFleetDocuments.filter(document => (

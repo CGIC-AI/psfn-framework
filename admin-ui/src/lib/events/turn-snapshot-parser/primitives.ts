@@ -3,8 +3,20 @@ import {
   isRecord,
 } from '../../../../../src/shared/utils/types.js';
 
+export type TurnSnapshotFailureClassification = 'malformed' | 'unsupported_schema';
+
+export class TurnSnapshotParserError extends Error {
+  constructor(
+    readonly classification: TurnSnapshotFailureClassification,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'TurnSnapshotParserError';
+  }
+}
+
 export function reject(path: string, message: string): never {
-  throw new Error(`${path} ${message}`);
+  throw new TurnSnapshotParserError('malformed', `${path} ${message}`);
 }
 
 export function requirePlainRecord(value: unknown, path: string): Record<string, unknown> {
@@ -21,7 +33,12 @@ export function requireExactRecord(
   keys: readonly string[],
 ): Record<string, unknown> {
   const record = requirePlainRecord(value, path);
-  assertNoUnknownKeys(record, keys, path, { errorPrefix: 'Malformed turn snapshot' });
+  try {
+    assertNoUnknownKeys(record, keys, path, { errorPrefix: 'Malformed turn snapshot' });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : `${path} contains unsupported fields`;
+    throw new TurnSnapshotParserError('unsupported_schema', message);
+  }
   return record;
 }
 

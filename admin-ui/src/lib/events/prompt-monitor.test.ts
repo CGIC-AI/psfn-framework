@@ -242,6 +242,67 @@ test('buildPromptMonitorTurns preserves newest-first order and summary metrics',
   });
 });
 
+test('buildPromptMonitorTurns replays a 201-shape current persisted snapshot corpus', () => {
+  const source = Array.from({ length: 201 }, (_, index) => {
+    const turn = buildTurn({
+      turnId: `turn-corpus-${index}`,
+      channelId: 'api:monitor',
+      promptVersionPointer: `prompt-corpus-${index}`,
+      completedAt: 10_000 + index,
+      ttftMs: 20,
+      promptDurationMs: 100,
+    });
+    const adaptiveSnapshot = turn.snapshot?.toolContext?.adaptiveSnapshot as unknown as Record<
+      string,
+      unknown
+    >;
+    Object.assign(adaptiveSnapshot, {
+      companionId: 'companion-local',
+      sessionId: `session-corpus-${index}`,
+      channelType: 'api',
+      originType: 'chat',
+      originStage: 'turn',
+      service: 'agent',
+      process: 'turn',
+      conversationId: `conversation-corpus-${index}`,
+      rootInitiationId: `root-corpus-${index}`,
+      workloadType: index % 33 === 0 ? 'subagent' : 'turn',
+      workloadId: `workload-corpus-${index}`,
+      ...(index % 33 === 0 ? { subagentId: `subagent-corpus-${index}` } : {}),
+    });
+    if (turn.snapshot) {
+      turn.snapshot.sessionContext = {
+        channelId: 'api:monitor',
+        recentEntries: [],
+        autoCompactionEligible: index % 2 === 0,
+        sourceEntryCount: 0,
+        ...(index % 4 === 0
+          ? {
+            rolledOutSessionBoundary: {
+              sessionId: `session-corpus-${index}`,
+              beforeMs: 1_000 + index,
+            },
+          }
+          : {}),
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: `session-corpus-${index}`,
+      };
+    }
+    return turn;
+  });
+  const rejections: Array<{ classification: string }> = [];
+  const turns = buildPromptMonitorTurns(source, {
+    onRejectedSnapshot(rejection) {
+      rejections.push(rejection);
+    },
+  });
+  assert.equal(turns.length, 201);
+  assert.equal(turns.filter(turn => turn.snapshot !== null).length, 201);
+  assert.deepEqual(rejections, []);
+});
+
 test('buildPromptMonitorTurns clones API retrieval telemetry', () => {
   const turn = buildTurn({
     turnId: 'turn-retrieval-api',

@@ -1,5 +1,5 @@
-import { isObservabilityCallType } from '../../../../../src/shared/contracts/observability-call-types.js';
 import { isCapabilityToken } from '../../../../../src/system/capabilities/tokens.js';
+import { createRolledOutSessionBoundary } from '../../../../../src/core/session/rolled-out-session-boundary.js';
 import type {
   AdminAdaptiveToolSnapshotCounts,
   AdminAdaptiveToolSnapshotData,
@@ -10,6 +10,11 @@ import type {
 } from '../../types';
 import { parseToolSchema } from './plan';
 import {
+  CORRELATION_METADATA_KEYS,
+  parseCorrelationMetadataFields,
+} from './correlation';
+import {
+  optionalBoolean,
   optionalNonNegativeInteger,
   optionalString,
   parseArray,
@@ -77,11 +82,7 @@ function parseAdaptiveSnapshot(value: unknown, path: string): AdminAdaptiveToolS
     'counts',
     'taskKind',
     'intent',
-    'turnId',
-    'requestId',
-    'channelId',
-    'callType',
-    'purpose',
+    ...CORRELATION_METADATA_KEYS,
   ]);
   const taskKind = source.taskKind === undefined
     ? undefined
@@ -89,14 +90,7 @@ function parseAdaptiveSnapshot(value: unknown, path: string): AdminAdaptiveToolS
   const intent = source.intent === undefined
     ? undefined
     : parseNullableString(source.intent, `${path}.intent`);
-  const turnId = optionalString(source, 'turnId', path);
-  const requestId = optionalString(source, 'requestId', path);
-  const channelId = optionalString(source, 'channelId', path);
-  const callType = optionalString(source, 'callType', path);
-  if (callType !== undefined && !isObservabilityCallType(callType)) {
-    reject(`${path}.callType`, 'contains an unsupported value');
-  }
-  const purpose = optionalString(source, 'purpose', path);
+  const correlation = parseCorrelationMetadataFields(source, path);
   return {
     timestamp: requireNonNegativeInteger(source.timestamp, `${path}.timestamp`),
     tools: parseArray(source.tools, `${path}.tools`, parseAdaptiveTool),
@@ -104,11 +98,7 @@ function parseAdaptiveSnapshot(value: unknown, path: string): AdminAdaptiveToolS
     counts: parseAdaptiveCounts(source.counts, `${path}.counts`),
     ...(taskKind !== undefined ? { taskKind } : {}),
     ...(intent !== undefined ? { intent } : {}),
-    ...(turnId !== undefined ? { turnId } : {}),
-    ...(requestId !== undefined ? { requestId } : {}),
-    ...(channelId !== undefined ? { channelId } : {}),
-    ...(callType !== undefined ? { callType } : {}),
-    ...(purpose !== undefined ? { purpose } : {}),
+    ...correlation,
   };
 }
 
@@ -341,7 +331,9 @@ export function parseSessionContext(
   const source = requireExactRecord(value, path, [
     'channelId',
     'recentEntries',
+    'autoCompactionEligible',
     'sourceEntryCount',
+    'rolledOutSessionBoundary',
     'historySummaryText',
     'historySummaryEntryCount',
     'compactionSummaryTexts',
@@ -353,7 +345,27 @@ export function parseSessionContext(
     'compactionPromptText',
     'versionPointer',
   ]);
+  const autoCompactionEligible = optionalBoolean(source, 'autoCompactionEligible', path);
   const sourceEntryCount = optionalNonNegativeInteger(source, 'sourceEntryCount', path);
+  const rolledOutSessionBoundary = source.rolledOutSessionBoundary === undefined
+    ? undefined
+    : (() => {
+      const boundary = requireExactRecord(
+        source.rolledOutSessionBoundary,
+        `${path}.rolledOutSessionBoundary`,
+        ['sessionId', 'beforeMs'],
+      );
+      const sessionId = requireNonEmptyString(
+        boundary.sessionId,
+        `${path}.rolledOutSessionBoundary.sessionId`,
+      );
+      const beforeMs = requireNonNegativeInteger(
+        boundary.beforeMs,
+        `${path}.rolledOutSessionBoundary.beforeMs`,
+      );
+      if (beforeMs === 0) reject(`${path}.rolledOutSessionBoundary.beforeMs`, 'must be positive');
+      return createRolledOutSessionBoundary(sessionId, beforeMs);
+    })();
   const historySummaryText = optionalString(source, 'historySummaryText', path);
   const historySummaryEntryCount = optionalNonNegativeInteger(
     source,
@@ -375,7 +387,9 @@ export function parseSessionContext(
   return {
     channelId: requireNonEmptyString(source.channelId, `${path}.channelId`),
     recentEntries: parseArray(source.recentEntries, `${path}.recentEntries`, parseSessionEntry),
+    ...(autoCompactionEligible !== undefined ? { autoCompactionEligible } : {}),
     ...(sourceEntryCount !== undefined ? { sourceEntryCount } : {}),
+    ...(rolledOutSessionBoundary !== undefined ? { rolledOutSessionBoundary } : {}),
     ...(historySummaryText !== undefined ? { historySummaryText } : {}),
     ...(historySummaryEntryCount !== undefined ? { historySummaryEntryCount } : {}),
     compactionSummaryTexts: parseStringArray(

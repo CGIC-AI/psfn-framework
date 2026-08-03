@@ -43,6 +43,7 @@ export interface PromptMonitorTurn {
 
 export interface PromptMonitorSnapshotRejection {
   source: 'replay' | 'live';
+  classification: 'malformed_snapshot' | 'unsupported_snapshot_schema' | 'identity_mismatch';
   message: string;
   turnId?: string;
 }
@@ -359,10 +360,24 @@ function reportRejectedSnapshot(
       options.onRejectedSnapshot(rejection);
       return;
     }
-    console.error('Prompt monitor rejected malformed turn snapshot', rejection);
+    console.error('Prompt monitor rejected turn snapshot', rejection);
   } catch (cause) {
     console.error('Prompt monitor snapshot rejection reporter failed', cause, rejection);
   }
+}
+
+function classifyParserRejection(
+  classification: 'malformed' | 'unsupported_schema',
+): Pick<PromptMonitorSnapshotRejection, 'classification' | 'message'> {
+  return classification === 'unsupported_schema'
+    ? {
+      classification: 'unsupported_snapshot_schema',
+      message: 'snapshot uses an unsupported persisted schema',
+    }
+    : {
+      classification: 'malformed_snapshot',
+      message: 'snapshot is malformed for the current persisted schema',
+    };
 }
 
 function parseReplaySnapshot(
@@ -374,7 +389,7 @@ function parseReplaySnapshot(
   if (!parsed.ok) {
     reportRejectedSnapshot(options, {
       source: 'replay',
-      message: parsed.error,
+      ...classifyParserRejection(parsed.classification),
       turnId: turn.record.turnId,
     });
     return null;
@@ -386,6 +401,7 @@ function parseReplaySnapshot(
   ) {
     reportRejectedSnapshot(options, {
       source: 'replay',
+      classification: 'identity_mismatch',
       message: 'snapshot identity does not match its persisted turn record',
       turnId: turn.record.turnId,
     });
@@ -764,7 +780,7 @@ function readSnapshotEnvelopeData(
   if (!parsed.ok) {
     reportRejectedSnapshot(options, {
       source: 'live',
-      message: parsed.error,
+      ...classifyParserRejection(parsed.classification),
       ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
     });
     return null;
@@ -776,6 +792,7 @@ function readSnapshotEnvelopeData(
   ) {
     reportRejectedSnapshot(options, {
       source: 'live',
+      classification: 'identity_mismatch',
       message: 'snapshot identity does not match its WebSocket event correlation',
       ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
     });

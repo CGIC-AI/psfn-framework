@@ -12,7 +12,10 @@ import type {
   ObservedMemory as CanonicalObservedMemory,
   ObservedScoredMemory as CanonicalObservedScoredMemory,
 } from '../../../../src/core/turns/observability.js';
-import type { AdaptiveToolCatalogSource } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
+import type {
+  AdaptiveToolCatalogSource,
+  AdaptiveToolSnapshotTelemetry,
+} from '../../../../src/core/agent/adaptive-tools-telemetry.js';
 import type { PromptPlan } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
 import type { CapabilityToken } from '../../../../src/system/capabilities/tokens.js';
 import type { SessionEntry as CanonicalSessionEntry } from '../../../../src/core/session/types.js';
@@ -89,7 +92,6 @@ import type {
   ContextMessage,
   LLMProviderWireMessage,
   LLMSystemPromptTransport,
-  ObservabilityCallType,
 } from '../../../../src/shared/contracts/runtime.js';
 
 export type {
@@ -627,19 +629,7 @@ export interface AdminAdaptiveToolSnapshotCounts {
   total: number;
 }
 
-export interface AdminAdaptiveToolSnapshotData {
-  timestamp: number;
-  tools: AdminAdaptiveToolSnapshotTool[];
-  skipped: AdminAdaptiveToolSnapshotSkip[];
-  counts: AdminAdaptiveToolSnapshotCounts;
-  taskKind?: string | null;
-  intent?: string | null;
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
-  callType?: ObservabilityCallType;
-  purpose?: string;
-}
+export type AdminAdaptiveToolSnapshotData = AdaptiveToolSnapshotTelemetry;
 
 export type AdminTurnToolContextSnapshotData = TurnToolContextSnapshot;
 

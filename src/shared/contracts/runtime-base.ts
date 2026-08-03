@@ -331,7 +331,8 @@ export interface LLMRequestMetadata {
  */
 export const REQUESTER_PROVENANCE_VALUES = ['human', 'self_directed', 'system'] as const;
 export type RequesterProvenance = typeof REQUESTER_PROVENANCE_VALUES[number];
-export type RequestAudience = 'self' | 'primary_contact' | 'external';
+export const REQUEST_AUDIENCE_VALUES = ['self', 'primary_contact', 'external'] as const;
+export type RequestAudience = typeof REQUEST_AUDIENCE_VALUES[number];
 
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
@@ -363,6 +364,47 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
   icpCorrelation?: IcpConversationCorrelation;
 }
+
+/** Versioned allow-list shared by correlation writers and strict persisted-snapshot readers. */
+export const CORRELATION_METADATA_SCHEMA_VERSION = 1;
+export const CORRELATION_METADATA_KEYS = [
+  'companionId',
+  'sessionId',
+  'turnId',
+  'requestId',
+  'channelId',
+  'channelType',
+  'toolName',
+  'toolCallId',
+  'originType',
+  'originStage',
+  'telemetryVisibility',
+  'service',
+  'process',
+  'chargeLane',
+  'chargeSurface',
+  'chargeEventId',
+  'chargeRunId',
+  'chargeRootRunId',
+  'chargeParentRunId',
+  'shardId',
+  'subagentId',
+  'conversationId',
+  'rootInitiationId',
+  'workloadType',
+  'workloadId',
+  'callType',
+  'purpose',
+  'viewerTrustLevel',
+  'requesterProvenance',
+  'requestAudience',
+  'viewerChannelPrivacy',
+  'viewerIsDirectMessage',
+  'viewerMemorySubjectContactId',
+  'viewerAuthorId',
+  'embodimentContext',
+  'icpCorrelation',
+] as const satisfies readonly (keyof CorrelationMetadata)[];
 
 /**
  * E1.7: self-contained ConversationScope decision for scheduler-dispatched

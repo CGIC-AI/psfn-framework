@@ -160,6 +160,40 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
   };
 }
 
+function makeCompanionSelectedChatConfig(): SubstrateConfig {
+  const baseConfig = makeConfig();
+  return makeConfig({
+    multiCompanion: true,
+    retryMaxAttempts: 0,
+    retryBaseDelayMs: 0,
+    modelPurposeSelection: { chat: 'companion-chat' },
+    modelRegistry: {
+      ...baseConfig.modelRegistry!,
+      models: [
+        ...baseConfig.modelRegistry!.models,
+        {
+          id: 'companion-chat',
+          rank: 500,
+          identity: {
+            provider: 'openrouter',
+            model: 'z-ai/glm-5.2',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: {
+            maxOutputTokens: 8192,
+            contextWindow: 128_000,
+          },
+          tuning: {
+            maxOutputTokens: 8192,
+            contextWindow: 128_000,
+          },
+        },
+      ],
+    },
+  });
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -255,6 +289,8 @@ describe('createSubstrateStreamFn', () => {
         onText: expect.any(Function),
       }),
     );
+    expect((transport.stream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .not.toHaveProperty('slotKey');
     expect(events.map((event: any) => event.type)).toEqual([
       'start',
       'text_start',
@@ -745,6 +781,62 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
     expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('deepseek/deepseek-v3.2');
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
+  });
+
+  it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {
+    const config = makeCompanionSelectedChatConfig();
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'Selected companion model.',
+      toolCalls: [],
+      model: 'openrouter/z-ai/glm-5.2',
+      inputTokens: 7,
+      outputTokens: 4,
+      stopReason: 'stop',
+    });
+
+    const streamFn = makeStreamFn(config);
+    const mountedFleetDefault = resolveModel(config, 'chat');
+    const stream = await streamFn(mountedFleetDefault, makePiContext(), {});
+    await collectStreamEvents(stream);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint)
+      .toMatchObject({
+        slotKey: 'companion-chat',
+        model: 'z-ai/glm-5.2',
+        provider: 'openrouter',
+        pin: true,
+      });
+  });
+
+  it('preserves the ordinary chat fallback chain after a companion-selected model fails', async () => {
+    const config = makeCompanionSelectedChatConfig();
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {
+      if (context.modelHint?.slotKey === 'companion-chat') {
+        return Promise.reject(new Error('503 selected model unavailable'));
+      }
+      return Promise.resolve({
+        content: 'Fleet fallback recovered.',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+    await collectStreamEvents(stream);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    const hints = streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint,
+    );
+    expect(hints).toMatchObject([
+      { slotKey: 'companion-chat', model: 'z-ai/glm-5.2' },
+      { slotKey: 'chat', model: 'deepseek/deepseek-v3.2' },
+    ]);
   });
 
   it('uses one logical call with monotonic physical attempts and pinned transport candidates', async () => {

@@ -23,7 +23,10 @@ import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory
 import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
-import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  getSubjectAuthorizedAdminMemoryStats,
+} from './subject-authorized-store.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   subjectAdminFilter,
@@ -905,6 +908,65 @@ describe('postgres memory store integration', () => {
         byType: {},
         avgSalience: 0,
       });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('keeps real-Postgres Garden admin stats equal to the internal-artifact-free admin page', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const memories: PurrMemory[] = [
+        makeMemory({
+          id: 'self-semantic', type: 'semantic', sensitivity: 'personal', salience: 0.25,
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        makeMemory({
+          id: 'self-procedural', type: 'procedural', sensitivity: 'personal', salience: 0.75,
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        makeMemory({
+          id: 'cross-subject-intimate', type: 'relational', sensitivity: 'intimate', salience: 1,
+          provenance: { subjectContactId: 'contact-b' },
+        }),
+        makeMemory({
+          id: 'self-context-feedback', type: 'semantic', sensitivity: 'personal', salience: 0.1,
+          sourceRef: 'source:context_feedback|dashboard-parity', tags: ['context_feedback'],
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+      ];
+      for (const memory of memories) await store.insertMemory(memory, DEFAULT_EMBEDDING);
+
+      const cases = [
+        {
+          label: 'sole_admin',
+          context: { viewerContactId: 'contact-a', adminAccessMode: 'sole_admin' } as const,
+          expected: { total: 3, byType: { semantic: 1, procedural: 1, relational: 1 }, avgSalience: 2 / 3 },
+        },
+        {
+          label: 'multi_admin',
+          context: { viewerContactId: 'contact-a', adminAccessMode: 'multi_admin' } as const,
+          expected: { total: 2, byType: { semantic: 1, procedural: 1 }, avgSalience: 0.5 },
+        },
+        {
+          label: 'member',
+          context: { viewerContactId: 'contact-a' } as const,
+          expected: { total: 2, byType: { semantic: 1, procedural: 1 }, avgSalience: 0.5 },
+        },
+      ];
+
+      for (const testCase of cases) {
+        const stats = await getSubjectAuthorizedAdminMemoryStats(store, testCase.context);
+        const page = await createSubjectAuthorizedMemoryStore(store, testCase.context)
+          .listAdminMemories();
+        expect(stats, testCase.label).toEqual(testCase.expected);
+        expect(stats.total, testCase.label).toBe(page.total);
+        expect(page.memories.map(memory => memory.id), testCase.label)
+          .not.toContain('self-context-feedback');
+      }
+
+      // The ordinary subject-store aggregate is a different contract and keeps
+      // its existing full-active-corpus behavior for non-Garden consumers.
+      await expect(createSubjectAuthorizedMemoryStore(store, cases[0].context).getStats())
+        .resolves.toMatchObject({ total: 4 });
     });
   }, INTEGRATION_TIMEOUT_MS);
 

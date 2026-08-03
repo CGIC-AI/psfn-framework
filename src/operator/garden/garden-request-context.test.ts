@@ -25,6 +25,7 @@ function adminAggregateFromMemories(
   switch (input.selector.kind) {
     case 'privacy_summary':
       return { kind: 'privacy_summary', privacySummary: { ...ADMIN_PRIVACY_ZERO } };
+    case 'admin_stats':
     case 'stats':
       return { kind: 'stats', stats: { total: 0, byType: {}, avgSalience: 0 } };
     default:

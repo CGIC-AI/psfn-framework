@@ -182,11 +182,33 @@ function emptyAdminResult(
   switch (kind) {
     case 'privacy_summary':
       return { kind: 'privacy_summary', privacySummary: emptyPrivacySummary() };
+    case 'admin_stats':
     case 'stats':
       return { kind: 'stats', stats: emptyStats() };
     default:
       return { kind: 'memories', memories: [], total: 0 };
   }
+}
+
+/**
+ * Garden-facing subject-authorized stats over the same operator-visible corpus
+ * as `listAdminMemories`. The ordinary subject store `getStats` deliberately
+ * retains its broader active-corpus semantics for non-Garden consumers.
+ */
+export async function getSubjectAuthorizedAdminMemoryStats(
+  store: MemoryStorePort,
+  context: MemorySubjectAccessContext,
+): Promise<MemoryStoreStats> {
+  const auth = authorization(context, 'count');
+  if (!auth) return emptyStats();
+  const result = await store.aggregateAuthorizedMemorySubjects({
+    authorization: auth,
+    selector: { kind: 'admin_stats' },
+  });
+  if (result.kind !== 'stats') {
+    throw new Error('Unexpected subject admin aggregate result shape');
+  }
+  return result.stats;
 }
 
 /**

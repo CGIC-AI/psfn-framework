@@ -145,6 +145,7 @@ function assertAdminActionMatchesSelector(input: MemorySubjectAdminQuery): void 
       case 'contact_filter':
         return ['list'] as const;
       case 'privacy_summary':
+      case 'admin_stats':
       case 'stats':
         return ['count'] as const;
     }
@@ -342,10 +343,16 @@ async function queryPrivacySummary(
 async function queryStats(
   pool: Pool,
   input: MemorySubjectAdminQuery,
+  excludeInternalArtifacts = false,
 ): Promise<MemorySubjectAdminResult> {
-  // Mirrors the proxy `getStats`: no internal-artifact exclusion — it aggregates
-  // the full active authorized corpus.
-  const { where, values } = appendAuthorizationPredicate(input, [], []);
+  // Ordinary `stats` mirrors the proxy `getStats` over the full active
+  // authorized corpus. Garden `admin_stats` opts into the same internal-artifact
+  // exclusion as `admin_page` without changing that broader contract.
+  const { where, values } = appendAuthorizationPredicate(
+    input,
+    [],
+    excludeInternalArtifacts ? [INTERNAL_ARTIFACT_EXCLUSION_SQL] : [],
+  );
   const rows = await pool.query<StatsRow>(
     `
     SELECT memory.type AS type, COUNT(*) AS count, COALESCE(SUM(memory.salience), 0) AS salience_sum
@@ -390,6 +397,8 @@ export async function queryAuthorizedMemorySubjectAdmin(
       return await queryContactFilter(pool, input, input.selector.contactId, input.selector.limit);
     case 'privacy_summary':
       return await queryPrivacySummary(pool, input);
+    case 'admin_stats':
+      return await queryStats(pool, input, true);
     case 'stats':
       return await queryStats(pool, input);
   }

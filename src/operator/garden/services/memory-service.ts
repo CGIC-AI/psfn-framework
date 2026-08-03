@@ -55,7 +55,10 @@ import type {
   AdminMemoryScopeRepairView,
   MemoryMutationResult,
 } from './types.js';
-import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  getSubjectAuthorizedAdminMemoryStats,
+} from '../../../faculties/memory/subject-authorized-store.js';
 import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/memory/writer.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
@@ -234,10 +237,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   async getStatsForRequest(context: GardenRequestContext | undefined): Promise<MemoryStoreStats> {
-    const store = context?.kind === 'fleet_principal'
-      ? this.fleetStoreForRequest(context)
-      : this.deps.memoryStore;
-    return await store.getStats();
+    if (context?.kind !== 'fleet_principal') return await this.deps.memoryStore.getStats();
+    return await getSubjectAuthorizedAdminMemoryStats(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze(fleetSubjectAccessContext(context)),
+    );
   }
 
   forRequest(

@@ -162,34 +162,64 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l2_memory_subject_classifications_policy ON l2_memory_subject_classifications(status, classifier_version, subject_class, memory_revision);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memory_subject_contacts_contact ON l2_memory_subject_contacts(contact_id, memory_id);`,
   `
-  CREATE OR REPLACE FUNCTION psfn_prepare_memory_subject_evidence_change()
-  RETURNS trigger
-  LANGUAGE plpgsql
-  AS $$
+  DO $migration$
+  DECLARE
+    vector_schema pg_catalog.text;
   BEGIN
-    IF TG_OP = 'UPDATE' AND (
-      NEW.text IS DISTINCT FROM OLD.text
-      OR NEW.type IS DISTINCT FROM OLD.type
-      OR NEW.source_ref IS DISTINCT FROM OLD.source_ref
-      OR NEW.source_type IS DISTINCT FROM OLD.source_type
-      OR NEW.provenance_json IS DISTINCT FROM OLD.provenance_json
-      OR NEW.provenance_refs IS DISTINCT FROM OLD.provenance_refs
-      OR NEW.contact_id IS DISTINCT FROM OLD.contact_id
-      OR NEW.scope_ref_kind IS DISTINCT FROM OLD.scope_ref_kind
-      OR NEW.scope_ref_id IS DISTINCT FROM OLD.scope_ref_id
-      OR NEW.scope_ref_label IS DISTINCT FROM OLD.scope_ref_label
-      OR NEW.scope_tags IS DISTINCT FROM OLD.scope_tags
-      OR NEW.tags IS DISTINCT FROM OLD.tags
-      OR NEW.embedding IS DISTINCT FROM OLD.embedding
-      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
-      OR NEW.superseded_by IS DISTINCT FROM OLD.superseded_by
-    ) THEN
-      NEW.authorization_revision := OLD.authorization_revision + 1;
-      NEW.subject_evidence_digest := NULL;
+    SELECT namespace.nspname
+    INTO vector_schema
+    FROM pg_catalog.pg_extension AS extension
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = extension.extnamespace
+    WHERE extension.extname = 'vector';
+
+    IF vector_schema IS NULL OR vector_schema NOT IN ('public', 'extensions') THEN
+      RAISE EXCEPTION
+        'Memory subject evidence trigger requires pgvector in public or extensions';
     END IF;
-    RETURN NEW;
+
+    -- Function expressions are planned in the caller's session. Bake the
+    -- validated extension schema into vector_eq so tenant-only maintenance
+    -- search paths remain safe without replacing pgvector equality semantics.
+    EXECUTE pg_catalog.format($function$
+      CREATE OR REPLACE FUNCTION psfn_prepare_memory_subject_evidence_change()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $body$
+      BEGIN
+        IF TG_OP = 'UPDATE' AND (
+          NEW.text IS DISTINCT FROM OLD.text
+          OR NEW.type IS DISTINCT FROM OLD.type
+          OR NEW.source_ref IS DISTINCT FROM OLD.source_ref
+          OR NEW.source_type IS DISTINCT FROM OLD.source_type
+          OR NEW.provenance_json IS DISTINCT FROM OLD.provenance_json
+          OR NEW.provenance_refs IS DISTINCT FROM OLD.provenance_refs
+          OR NEW.contact_id IS DISTINCT FROM OLD.contact_id
+          OR NEW.scope_ref_kind IS DISTINCT FROM OLD.scope_ref_kind
+          OR NEW.scope_ref_id IS DISTINCT FROM OLD.scope_ref_id
+          OR NEW.scope_ref_label IS DISTINCT FROM OLD.scope_ref_label
+          OR NEW.scope_tags IS DISTINCT FROM OLD.scope_tags
+          OR NEW.tags IS DISTINCT FROM OLD.tags
+          OR (
+            (NEW.embedding IS NULL AND OLD.embedding IS NOT NULL)
+            OR (NEW.embedding IS NOT NULL AND OLD.embedding IS NULL)
+            OR (
+              NEW.embedding IS NOT NULL
+              AND OLD.embedding IS NOT NULL
+              AND NOT %I.vector_eq(NEW.embedding, OLD.embedding)
+            )
+          )
+          OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+          OR NEW.superseded_by IS DISTINCT FROM OLD.superseded_by
+        ) THEN
+          NEW.authorization_revision := OLD.authorization_revision + 1;
+          NEW.subject_evidence_digest := NULL;
+        END IF;
+        RETURN NEW;
+      END
+      $body$;
+    $function$, vector_schema);
   END
-  $$;
+  $migration$;
   `,
   `DROP TRIGGER IF EXISTS trg_l2_memories_prepare_subject_evidence_change ON l2_memories;`,
   `

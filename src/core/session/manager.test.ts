@@ -1193,6 +1193,46 @@ describe('SessionManager', () => {
     });
   });
 
+  it('persists transport-authoritative mentioned targets with the user journal entry', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    mgr.recordUserMessage(
+      'discord:shared-room',
+      '<@other-companion> hello there',
+      'operator-1',
+      'Operator',
+      false,
+      undefined,
+      {
+        turnId: createTurnId(),
+        requestId: 'req-addressed-room-message',
+        sourceMessageId: 'discord-message-1',
+        replyToMessageId: 'discord-parent-1',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{
+            authorId: 'other-companion',
+            authorName: 'Other Companion',
+          }],
+        },
+      },
+    );
+
+    const [entry] = store.getRecent('discord:shared-room', 1);
+    expect(JSON.parse(entry.metadata ?? '{}')).toMatchObject({
+      turn: {
+        sourceMessageId: 'discord-message-1',
+        replyToMessageId: 'discord-parent-1',
+      },
+      messageAddressing: {
+        schemaVersion: 1,
+        mentionedTargets: [{
+          authorId: 'other-companion',
+          authorName: 'Other Companion',
+        }],
+      },
+    });
+  });
+
   it('derives role-envelope refs from persisted preview metadata', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

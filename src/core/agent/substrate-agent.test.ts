@@ -2247,7 +2247,17 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
     );
-    await agent.handleMessage(makeMessage());
+    await agent.handleMessage(makeMessage({
+      replyToMessageId: 'discord-parent-responding',
+      routing: {
+        source: 'discord',
+        responseMode: 'respond',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{ authorId: 'bot-1', authorName: 'Test Companion' }],
+        },
+      },
+    }));
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
       'test-channel',
@@ -2261,6 +2271,11 @@ describe('SubstrateAgent.handleMessage', () => {
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        replyToMessageId: 'discord-parent-responding',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{ authorId: 'bot-1', authorName: 'Test Companion' }],
+        },
         turnId: expect.any(String),
       }),
     );
@@ -2283,7 +2298,12 @@ describe('SubstrateAgent.handleMessage', () => {
       routing: {
         source: 'discord',
         responseMode: 'observe',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
+        },
       },
+      replyToMessageId: 'discord-parent-observed',
     });
 
     await agent.observeMessage(message);
@@ -2301,6 +2321,11 @@ describe('SubstrateAgent.handleMessage', () => {
         trustLevel: 'regular',
         requestId: 'discord-observe-1',
         sourceMessageId: 'discord-observe-1',
+        replyToMessageId: 'discord-parent-observed',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
+        },
         turnId: expect.any(String),
         metadata: expect.stringContaining('"type":"observed_message"'),
       }),

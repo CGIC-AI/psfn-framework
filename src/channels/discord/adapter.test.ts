@@ -554,6 +554,8 @@ function makeDiscordIncomingMessage(
     content?: string;
     guildId?: string | null;
     mentioned?: boolean;
+    mentionedUsers?: Array<{ id: string; displayName: string }>;
+    replyToMessageId?: string;
     authorId?: string;
     authorDisplayName?: string;
     bot?: boolean;
@@ -562,6 +564,15 @@ function makeDiscordIncomingMessage(
 ) {
   const guildId = overrides?.guildId ?? null;
   const mentioned = overrides?.mentioned ?? false;
+  const content = overrides?.content ?? 'hello';
+  const mentionedAuthorId = content.match(/<@!?([^>]+)>/u)?.[1];
+  const mentionedUsers = overrides?.mentionedUsers
+    ?? (mentioned
+      ? [{
+          id: mentionedAuthorId ?? 'bot-1',
+          displayName: mentionedAuthorId === 'bot-1' ? 'Bot One' : 'Mentioned Companion',
+        }]
+      : []);
   const attachments = new Map(
     (overrides?.attachments ?? []).map((attachment) => [attachment.id, attachment]),
   );
@@ -571,7 +582,7 @@ function makeDiscordIncomingMessage(
     channelId,
     channel,
     guild: guildId ? { id: guildId } : null,
-    content: overrides?.content ?? 'hello',
+    content,
     createdAt: new Date(),
     author: {
       id: overrides?.authorId ?? 'user-1',
@@ -579,7 +590,13 @@ function makeDiscordIncomingMessage(
       username: 'User',
       displayName: overrides?.authorDisplayName ?? 'User',
     },
-    mentions: { has: () => mentioned },
+    mentions: {
+      has: (authorId: string) => mentionedUsers.some(user => user.id === authorId),
+      users: new Map(mentionedUsers.map(user => [user.id, user])),
+    },
+    reference: overrides?.replyToMessageId
+      ? { messageId: overrides.replyToMessageId }
+      : null,
     attachments,
     reply: vi.fn(async () => {}),
   };
@@ -1394,6 +1411,48 @@ describe('DiscordAdapter DM routing', () => {
       }),
     }));
     expect(interactive.sent).toContain('guild reply');
+  });
+
+  it('preserves another participant mention and reply lineage on an observed guild message', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-addressing-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async () => ({
+      content: 'unused reply',
+      channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-addressing-1',
+        guildId: 'guild-1',
+        content: '<@other-companion> hello there',
+        mentionedUsers: [{ id: 'other-companion', displayName: 'Other Companion' }],
+        replyToMessageId: 'guild-parent-1',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      content: '<@other-companion> hello there',
+      replyToMessageId: 'guild-parent-1',
+      routing: expect.objectContaining({
+        responseMode: 'observe',
+        addressing: {
+          schemaVersion: 1,
+          mentionedTargets: [{
+            authorId: 'other-companion',
+            authorName: 'Other Companion',
+          }],
+        },
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
   });
 
   it('stamps a configured public channel label as trusted ingress privacy provenance', async () => {

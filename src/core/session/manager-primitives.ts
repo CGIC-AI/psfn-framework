@@ -1,7 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { clampUnit } from '../../shared/utils/numeric.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { TurnID } from '../../shared/contracts/runtime.js';
+import type { MessageAddressingMetadata, TurnID } from '../../shared/contracts/runtime.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
@@ -139,6 +139,7 @@ export interface SessionMessageRecordOptions {
   sourceMessageId?: string;
   actorKind?: import('./turn-provenance.js').SessionActorKind;
   replyToMessageId?: string;
+  addressing?: MessageAddressingMetadata;
   metadata?: string;
   roleEnvelopePreview?: SessionRoleEnvelopePreview;
   channelMeta?: ChannelMeta;

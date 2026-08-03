@@ -1114,6 +1114,10 @@ export class DiscordAdapter implements ChannelAdapterPort {
       ? '(image attachment)'
       : content;
     const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
+    const mentionedTargets = [...msg.mentions.users.values()].map(user => ({
+      authorId: user.id,
+      authorName: user.displayName,
+    }));
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -1124,10 +1128,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
       content: resolvedContent,
       ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: msg.createdAt,
+      ...(msg.reference?.messageId ? { replyToMessageId: msg.reference.messageId } : {}),
       routing: {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
         channelPrivacy,
+        ...(mentionedTargets.length > 0
+          ? { addressing: { schemaVersion: 1, mentionedTargets } }
+          : {}),
         // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
         // set true for bot-authored messages so a human author never triggers
         // machine-intelligence auto-tagging. Consumed by author-context

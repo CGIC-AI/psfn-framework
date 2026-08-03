@@ -168,6 +168,9 @@ export function recordUserMessage(input: {
     ...(input.message.replyToMessageId
       ? { replyToMessageId: input.message.replyToMessageId }
       : {}),
+    ...(input.message.routing?.addressing
+      ? { addressing: input.message.routing.addressing }
+      : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
     ...(icpMetadata ? { metadata: icpMetadata } : {}),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),

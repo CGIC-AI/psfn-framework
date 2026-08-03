@@ -416,6 +416,22 @@ export interface ReflectionTurnProvenance {
   journalEntryId?: string;
 }
 
+/** Transport-authoritative participant named by an explicit message mention. */
+export interface MessageMentionTarget {
+  authorId: string;
+  authorName: string;
+}
+
+/**
+ * Structured addressing captured by the channel adapter before content
+ * normalization. Downstream cognition must prefer this evidence over prose
+ * guesses about who a shared-room message addressed.
+ */
+export interface MessageAddressingMetadata {
+  schemaVersion: 1;
+  mentionedTargets: readonly MessageMentionTarget[];
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
   /**
@@ -423,6 +439,8 @@ export interface MessageRoutingMetadata {
    * context but must not trigger model response generation or channel egress.
    */
   responseMode?: 'respond' | 'observe';
+  /** Channel-authoritative mentions, including mentions of other companions. */
+  addressing?: MessageAddressingMetadata;
   /**
    * Provenance-honest marker that the message author is another machine
    * intelligence (peer companion/agent), sourced from CHANNEL bot/app metadata

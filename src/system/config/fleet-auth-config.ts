@@ -66,7 +66,7 @@ export type FleetAuthRole = typeof FLEET_AUTH_ROLES[number];
 export interface FleetAuthAccountRosterEntry {
   providerSubjectId: string;
   companionId: string;
-  /** Canonical companion contact identity used when no binding record exists. */
+  /** Canonical companion contact identity; required for fresh owner bootstrap. */
   contactId?: string;
   role: FleetAuthRole;
 }
@@ -621,6 +621,10 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
     if (typeof record.role !== 'string' || !knownRoles.has(record.role)) {
       fail(`${field}.role must be one of ${FLEET_AUTH_ROLES.join(', ')}`);
     }
+    const role = record.role as FleetAuthRole;
+    if (role === 'owner' && contactId === undefined) {
+      fail(`${field}.contactId is required for an owner`);
+    }
     const identity = `${providerSubjectId} ${companionId}`;
     if (seen.has(identity)) {
       fail(`duplicate accountRoster entry for subject and companion at ${field}`);
@@ -630,7 +634,7 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
       providerSubjectId,
       companionId,
       ...(contactId ? { contactId } : {}),
-      role: record.role as FleetAuthRole,
+      role,
     };
   });
 }

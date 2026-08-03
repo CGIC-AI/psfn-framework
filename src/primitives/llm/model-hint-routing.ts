@@ -357,6 +357,21 @@ function findRegistryModelEntry(
   return findRegistryEntryByModelId(config, normalizedModel);
 }
 
+function modelHintTargetsRegistryEntry(
+  modelHint: LLMCompletionModelHint,
+  entry: ModelRegistryEntry,
+): boolean {
+  const hintedModel = modelHint.model?.trim();
+  if (!hintedModel) return false;
+  const qualified = parseProviderQualifiedHint(hintedModel);
+  const provider = (modelHint.provider ?? qualified?.provider)?.trim().toLowerCase();
+  const model = qualified?.model ?? hintedModel;
+  const entryProvider = entry.identity.provider.trim().toLowerCase();
+  return provider === entryProvider
+    && normalizeModelIdForProvider(provider, model)
+      === normalizeModelIdForProvider(entryProvider, entry.identity.model);
+}
+
 function ensureNonLegacyModelHint(
   config: SubstrateConfig,
   modelHint: LLMCompletionModelHint,
@@ -420,7 +435,7 @@ export function resolveCandidates(
       // it cannot redirect private imports to a remote registry provider.
       const { slotKey: _ignoredSelection, ...explicitHint } = effectiveHint ?? {};
       effectiveHint = normalizeModelHint(explicitHint);
-    } else if (!effectiveHint?.model) {
+    } else {
       let selectedCandidate = resolveRoutingCandidateForRegistryEntry(config, selectedEntry);
       if (!selectedCandidate) {
         throw new UnknownModelSelectionSlotError(
@@ -440,15 +455,25 @@ export function resolveCandidates(
             : {}),
         };
       }
-      exactSelection = {
-        entry: selectedEntry,
-        candidate: selectedCandidate,
-      };
-      effectiveHint = {
-        ...(effectiveHint ?? {}),
-        model: selectedEntry.identity.model,
-        provider: selectedEntry.identity.provider.trim().toLowerCase(),
-      };
+      if (!effectiveHint?.model) {
+        exactSelection = {
+          entry: selectedEntry,
+          candidate: selectedCandidate,
+        };
+        effectiveHint = {
+          ...(effectiveHint ?? {}),
+          model: selectedEntry.identity.model,
+          provider: selectedEntry.identity.provider.trim().toLowerCase(),
+        };
+      } else if (modelHintTargetsRegistryEntry(effectiveHint, selectedEntry)) {
+        // The agent-side stream adapter pins the already-resolved model and
+        // transports its slot identity. Preserve the exact slot so gateway
+        // fallback logs and usage attribution name the companion selection.
+        exactSelection = {
+          entry: selectedEntry,
+          candidate: selectedCandidate,
+        };
+      }
     }
   }
 

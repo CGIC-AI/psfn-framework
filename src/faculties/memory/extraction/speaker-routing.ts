@@ -534,7 +534,10 @@ function isCurrentCompanionTarget(
   target: { authorId: string; authorName: string },
   options: FactRoutingOptions,
 ): boolean {
-  if (options.companionAuthorIds?.includes(target.authorId)) return true;
+  const companionAuthorIds = options.companionAuthorIds ?? [];
+  if (companionAuthorIds.length > 0) {
+    return companionAuthorIds.includes(target.authorId);
+  }
   const normalizedName = normalizeSpeakerPhrase(target.authorName);
   return buildCompanionAliases(options.companionNames).includes(normalizedName);
 }

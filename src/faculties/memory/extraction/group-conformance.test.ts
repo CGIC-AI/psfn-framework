@@ -600,6 +600,34 @@ describe('group-room memory conformance', () => {
     );
   });
 
+  it('rejects a companion-like display name carried by a different transport id', async () => {
+    const addressedEntry = makeEntry(1, '<@imposter-bot> remember our observatory promise.', 0);
+    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+      schemaVersion: 1,
+      mentionedTargets: [{ authorId: 'imposter-bot', authorName: 'Lyra' }],
+    });
+    const { options, processFact } = buildExtractionOptions({
+      entries: [addressedEntry],
+      companionName: 'Lyra',
+      companionAuthorIds: ['current-bot'],
+      llmResponse: `<response>
+<fact>
+<text>MrDragonFox and Lyra share an observatory promise.</text>
+<type>relational</type>
+<importance>0.94</importance>
+<confidence>0.96</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<address_mode>direct_to_companion</address_mode>
+</fact>
+</response>`,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).not.toHaveBeenCalled();
+  });
+
   it('honors a configured 100-message online room window without a hidden 50-message extraction ceiling', async () => {
     const entries = makeGroupFixture(100);
     replaceEntry(entries, 15, 1, 'Lyra, remember that my favorite coffee is cardamom latte.');

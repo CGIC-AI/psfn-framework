@@ -177,11 +177,11 @@
   {
     "name": "size:XL",
     "color": "B60205",
-    "description": "Over 800 counted changed lines; split or justify"
+    "description": "801+ counted changed lines; 2,500-line publication ceiling"
   },
   {
     "name": "change-budget:exception",
     "color": "B60205",
-    "description": "Maintainer-approved exception with a written PR rationale"
+    "description": "Maintainer-approved under-800 unbundleable blocker"
   }
 ]

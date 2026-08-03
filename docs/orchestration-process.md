@@ -191,20 +191,33 @@ remote mutation. The orchestrator preserves a safety ref and performs cleanup
 only with operator approval.
 
 A bead is an ownership boundary, never a paid PR boundary. Every external review
-costs the same flat fee whether the diff is 100 lines or 2,000, so the unit of
+costs the same flat fee whether the diff is 100 lines or 2,500, so the unit of
 publication is the **train**: assemble compatible completed beads into one
-coherent PR near the budget target. Target at most 25 files, 1,500 counted lines,
-and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do
-not mix unrelated work or pad a diff.
+coherent PR inside the mandatory publication window: **800–2,500 counted changed
+lines, at most 25 files, and at most 8 commits**. These are enforced limits, not
+targets or suggestions. Do not split a coherent change merely because it reaches
+16 files or exceeds an obsolete 1,500-line target. Hold completed compatible work,
+merge it into the same train, and publish only after the train reaches 800 counted
+lines. Do not mix unrelated work or add filler to reach the floor.
 
-Publication floor: do not open a standalone PR for a small diff (roughly under 500 counted lines) while other compatible beads are completed or in flight — hold it for the train. A standalone small PR requires a recorded reason on its bead (security-urgent fix, conflict isolation, unblocking a dependent wave); "it was ready" is not a reason. The 2026-07-28 incident — fourteen single-fix PRs in one day, each paying a full external review, exhausting the review budget and stranding every remaining lane unpublished — is the failure mode this floor exists to prevent.
+**No small PRs.** A PR below 800 counted changed lines is forbidden unless it is
+an otherwise-unlandable blocker: it must need to land before a compatible train
+can be assembled, and it must be impossible to combine safely with compatible
+completed or in-flight work. Security urgency, conflict isolation, convenience,
+or "it was ready" are not exceptions by themselves. Record the blocker and why it
+cannot be bundled on the bead; the PR's `## Change-budget exception` rationale
+must begin with `BLOCKER:`. The 2026-07-28 incident — fourteen single-fix PRs in
+one day, each paying a full external review, exhausting the review budget and
+stranding every remaining lane unpublished — is the failure mode this floor
+exists to prevent. The 25-file and 2,500-line maximums cannot be bypassed.
 
 When a coherent train completes its final check, publish it the same session
 through `npm run pr:publish`. After it lands, rebase the wave branch onto the new
 `main`, then assemble the next train. The publisher is the only sanctioned path
 for replacing a previously pushed rebased head: it validates the exact gate
 attestation and uses an exact-remote `--force-with-lease`. Keep cross-train
-activation in a final small PR. An independent lane validates the exact head and uses GitHub's rebase
+activation in a qualifying train; do not carve it into a final small PR unless
+it meets the blocker exception above. An independent lane validates the exact head and uses GitHub's rebase
 merge after required checks pass. Do not squash or create merge commits. Live
 deployment remains operator-driven.
 
@@ -552,6 +565,11 @@ and apply the label through the publisher:
 npm run pr:publish -- --title "<title>" --body-file <path> \
   --label change-budget:exception
 ```
+
+This label exists only for an under-800 otherwise-unlandable blocker. The
+`## Change-budget exception` rationale must begin with `BLOCKER:` and explain
+why the change blocks publication or delivery and why it cannot be bundled with
+compatible work. It never bypasses the 25-file or 2,500-line maximum.
 
 The calculation measures the PR-owned delta. Commits that only merge the current
 base into a branch do not count toward its files, lines, or commit budget, so

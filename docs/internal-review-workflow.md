@@ -58,8 +58,12 @@ docker ps -aq --filter label=io.local-gate.test-postgres=true |
 
 Use targeted tests and `npm run lint:changed -- --base origin/main` while
 editing. A bead is an ownership unit, not automatically a PR: batch compatible
-small beads into one coherent unit, aiming for at most 25 files, 1,500 counted
-lines, and 5 commits. Never batch unrelated changes or add filler.
+beads into one coherent train inside the mandatory publication window of
+800–2,500 counted changed lines, at most 25 files, and at most 8 commits. Hold
+and merge compatible work until the train reaches the floor; never split merely
+because a coherent diff reaches 16 files. A smaller PR is permitted only for an
+otherwise-unlandable blocker that cannot be bundled safely. Never batch
+unrelated changes or add filler.
 
 Commit coherent checkpoints and push the same-name non-main branch immediately:
 

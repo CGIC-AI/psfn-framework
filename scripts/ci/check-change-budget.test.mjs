@@ -15,9 +15,50 @@ import {
   resolvePullRequestMetadata,
 } from './check-change-budget.mjs';
 
-test('uses the operator-approved normal PR target without changing the hard ceiling', () => {
+test('uses the operator-approved PR publication window', () => {
   assert.deepEqual(CHANGE_BUDGET.pullRequest.files, { target: 25, maximum: 25 });
-  assert.deepEqual(CHANGE_BUDGET.pullRequest.lines, { target: 1_500, maximum: 2_000 });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.lines, {
+    minimum: 800,
+    target: 2_500,
+    maximum: 2_500,
+  });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.commits, { target: 8, maximum: 8 });
+});
+
+test('accepts both endpoints of the mandatory publication window', () => {
+  for (const lines of [800, 2_500]) {
+    const decision = evaluateChangeBudget({
+      files: 25,
+      lines,
+      commitCount: 8,
+      commits: [],
+    });
+    assert.deepEqual(decision.violations, []);
+    assert.deepEqual(decision.warnings, []);
+  }
+
+  assert.deepEqual(
+    evaluateChangeBudget({
+      files: 25,
+      lines: 2_501,
+      commitCount: 8,
+      commits: [],
+    }).violations,
+    ['PR has 2501 changed lines; maximum is 2500'],
+  );
+});
+
+test('rejects PRs below the mandatory 800-line publication floor', () => {
+  const decision = evaluateChangeBudget({
+    files: 1,
+    lines: 799,
+    commitCount: 1,
+    commits: [],
+  });
+
+  assert.deepEqual(decision.violations, [
+    'PR has 799 changed lines; minimum is 800',
+  ]);
 });
 
 function git(cwd, ...args) {
@@ -45,7 +86,7 @@ test('rejects the contaminated PR #124 shape', () => {
 
   assert.deepEqual(decision.violations, [
     'PR has 907 files; maximum is 25',
-    'PR has 88469 changed lines; maximum is 2000',
+    'PR has 88469 changed lines; maximum is 2500',
     'PR has 100 commits; maximum is 8',
   ]);
 });
@@ -186,18 +227,18 @@ test('uses exception metadata from the authenticated current-branch PR', () => {
       return JSON.stringify({
         state: 'OPEN',
         labels: [{ name: 'change-budget:exception' }],
-        body: '## Change-budget exception\nIndivisible generated migration.',
+        body: '## Change-budget exception\nBLOCKER: cannot be bundled before the broken publication gate is restored.',
       });
     },
   });
   const decision = decideChangeBudget(
-    { files: 26, lines: 26, commitCount: 1, commits: [] },
+    { files: 1, lines: 799, commitCount: 1, commits: [] },
     metadata,
   );
 
   assert.equal(metadata.source, 'GitHub');
   assert.equal(decision.violations.length, 0);
-  assert.deepEqual(decision.bypassed, ['PR has 26 files; maximum is 25']);
+  assert.deepEqual(decision.bypassed, ['PR has 799 changed lines; minimum is 800']);
 });
 
 test('fails closed with exact offline metadata instructions', () => {
@@ -227,7 +268,7 @@ test('accepts the documented explicit offline exception metadata', () => {
     env: {
       CHANGE_BUDGET_EXCEPTION: 'true',
       CHANGE_BUDGET_PR_BODY:
-        '## Change-budget exception\nIndivisible generated migration.',
+        '## Change-budget exception\nBLOCKER: no compatible work can land until this gate fix lands.',
     },
     runGh() {
       calledGitHub = true;
@@ -258,21 +299,60 @@ test('rejects explicit exception metadata that conflicts with connected GitHub m
 });
 
 test('requires a written rationale for a maintainer exception', () => {
-  const stats = { files: 26, lines: 26, commitCount: 1, commits: [] };
+  const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
   const missing = decideChangeBudget(stats, { exception: true });
   assert.match(missing.violations.at(-1), /requires a non-empty/);
 
   const accepted = decideChangeBudget(stats, {
     exception: true,
-    pullRequestBody: '## Change-budget exception\nPure generated schema migration.',
+    pullRequestBody:
+      '## Change-budget exception\nBLOCKER: no compatible train can be published until this fix lands.',
   });
   assert.equal(accepted.violations.length, 0);
   assert.equal(accepted.bypassed.length, 1);
 });
 
+test('allows an under-floor exception only for an explicit unbundleable blocker', () => {
+  const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
+  const generic = decideChangeBudget(stats, {
+    exception: true,
+    pullRequestBody: '## Change-budget exception\nSmall cleanup that is ready.',
+  });
+  assert.deepEqual(generic.violations, [
+    'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
+  ]);
+
+  const blocker = decideChangeBudget(stats, {
+    exception: true,
+    pullRequestBody:
+      '## Change-budget exception\nBLOCKER: required to restore publication, with no compatible work available to bundle.',
+  });
+  assert.equal(blocker.violations.length, 0);
+  assert.deepEqual(blocker.bypassed, [
+    'PR has 799 changed lines; minimum is 800',
+  ]);
+});
+
+test('never permits the exception label to bypass hard maximums', () => {
+  const decision = decideChangeBudget(
+    { files: 26, lines: 800, commitCount: 1, commits: [] },
+    {
+      exception: true,
+      pullRequestBody:
+        '## Change-budget exception\nBLOCKER: this rationale cannot override the maximum.',
+    },
+  );
+
+  assert.deepEqual(decision.violations, [
+    'PR has 26 files; maximum is 25',
+    'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
+  ]);
+  assert.deepEqual(decision.bypassed, []);
+});
+
 test('does not accept stale exception labels', () => {
   const decision = decideChangeBudget(
-    { files: 1, lines: 1, commitCount: 1, commits: [] },
+    { files: 1, lines: 800, commitCount: 1, commits: [] },
     {
       exception: true,
       pullRequestBody: '## Change-budget exception\nNo longer needed.',

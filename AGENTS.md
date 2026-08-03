@@ -239,11 +239,15 @@ Before publication:
 4. Publish only with `npm run pr:publish`.
 5. Wait for `ci-required` and required external review on the exact PR head.
 
-Normal PR target: at most 25 files, 1,500 counted lines, and 5 commits. Hard
-limits: 25 files, 2,000 counted lines, and 8 commits; per commit, 15 files or 800
-counted lines. Use the documented change-budget exception only for indivisible
-generated migrations, pure renames, atomic cross-interface changes, or reviewed
-rollups—not for a wave that should be split.
+The mandatory PR publication window is 800–2,500 counted changed lines, at most
+25 files, and at most 8 commits; per commit, the maximum remains 15 files or 800
+counted lines. Bundle compatible completed and in-flight work until the train
+reaches the floor. Do not split coherent work merely because it reaches 16 files
+or exceeds an obsolete 1,500-line target, and do not add unrelated filler. A PR
+below 800 lines is allowed only for an otherwise-unlandable blocker that cannot
+be combined safely with compatible work; record it on the bead and begin the
+change-budget exception rationale with `BLOCKER:`. The 25-file and 2,500-line
+maximums cannot be bypassed.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve

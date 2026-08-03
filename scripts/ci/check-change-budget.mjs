@@ -4,8 +4,9 @@
  * PR metadata input contract:
  * - Connected runs use `gh pr view` for the open PR associated with the current branch.
  * - Offline runs set CHANGE_BUDGET_EXCEPTION=false when no exception label is present.
- * - Offline exceptions use --exception or CHANGE_BUDGET_EXCEPTION=true together with
- *   CHANGE_BUDGET_PR_BODY containing the complete PR body and its written rationale.
+ * - Offline under-floor blocker exceptions use --exception or
+ *   CHANGE_BUDGET_EXCEPTION=true together with CHANGE_BUDGET_PR_BODY containing
+ *   the complete PR body and its `BLOCKER:` rationale.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -18,8 +19,8 @@ const ZERO_SHA = /^0+$/;
 export const CHANGE_BUDGET = Object.freeze({
   pullRequest: Object.freeze({
     files: Object.freeze({ target: 25, maximum: 25 }),
-    lines: Object.freeze({ target: 1_500, maximum: 2_000 }),
-    commits: Object.freeze({ target: 5, maximum: 8 }),
+    lines: Object.freeze({ minimum: 800, target: 2_500, maximum: 2_500 }),
+    commits: Object.freeze({ target: 8, maximum: 8 }),
   }),
   commit: Object.freeze({
     files: Object.freeze({ target: 8, maximum: 15 }),
@@ -192,6 +193,12 @@ function compareMetric(scope, name, value, budget, warnings, violations) {
   }
 }
 
+function compareMinimum(scope, name, value, budget, violations) {
+  if (budget.minimum !== undefined && value < budget.minimum) {
+    violations.push(`${scope} has ${value} ${name}; minimum is ${budget.minimum}`);
+  }
+}
+
 export function evaluateChangeBudget(stats) {
   const warnings = [];
   const violations = [];
@@ -202,6 +209,13 @@ export function evaluateChangeBudget(stats) {
     stats.files,
     CHANGE_BUDGET.pullRequest.files,
     warnings,
+    violations,
+  );
+  compareMinimum(
+    'PR',
+    'changed lines',
+    stats.lines,
+    CHANGE_BUDGET.pullRequest.lines,
     violations,
   );
   compareMetric(
@@ -383,17 +397,42 @@ export function decideChangeBudget(stats, { exception = false, pullRequestBody =
       bypassed: [],
     };
   }
-  if (evaluation.violations.length === 0) {
+  const underPublicationFloor =
+    stats.lines < CHANGE_BUDGET.pullRequest.lines.minimum;
+  if (!underPublicationFloor) {
+    if (evaluation.violations.length === 0) {
+      return {
+        warnings: evaluation.warnings,
+        violations: ['remove change-budget:exception; this change is within the hard limits'],
+        bypassed: [],
+      };
+    }
     return {
       warnings: evaluation.warnings,
-      violations: ['remove change-budget:exception; this change is within the hard limits'],
+      violations: [
+        ...evaluation.violations,
+        'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
+      ],
+      bypassed: [],
+    };
+  }
+  const floorViolation =
+    `PR has ${stats.lines} changed lines; minimum is ${CHANGE_BUDGET.pullRequest.lines.minimum}`;
+  const hardViolations = evaluation.violations.filter(violation => violation !== floorViolation);
+  if (!/^BLOCKER:\s+\S/i.test(reason)) {
+    return {
+      warnings: evaluation.warnings,
+      violations: [
+        ...hardViolations,
+        'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
+      ],
       bypassed: [],
     };
   }
   return {
     warnings: evaluation.warnings,
-    violations: [],
-    bypassed: evaluation.violations,
+    violations: hardViolations,
+    bypassed: hardViolations.length === 0 ? [floorViolation] : [],
   };
 }
 
@@ -427,9 +466,10 @@ export function main(argv = process.argv.slice(2), env = process.env) {
       `${stats.commitCount} commits (${stats.base.slice(0, 12)}..${stats.head.slice(0, 12)})`,
   );
   console.log(
-    `Targets: <=${CHANGE_BUDGET.pullRequest.files.target} files, ` +
-      `<=${CHANGE_BUDGET.pullRequest.lines.target} lines, ` +
-      `<=${CHANGE_BUDGET.pullRequest.commits.target} commits`,
+    `PR limits: <=${CHANGE_BUDGET.pullRequest.files.maximum} files, ` +
+      `${CHANGE_BUDGET.pullRequest.lines.minimum}-${CHANGE_BUDGET.pullRequest.lines.maximum} lines; ` +
+      'bundle compatible work instead of publishing small PRs; ' +
+      `<=${CHANGE_BUDGET.pullRequest.commits.maximum} commits`,
   );
   console.log(`Line-count exclusions: ${[...LINE_COUNT_EXCLUSIONS].join(', ')}`);
   console.log(`Exception metadata: ${metadata.source}`);

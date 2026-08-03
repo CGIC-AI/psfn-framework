@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const postgresMocks = vi.hoisted(() => ({
   seriesOverflow: false,
   clientQueries: [] as Array<{ sql: string; values: unknown[] }>,
+  createPostgresPool: vi.fn(() => ({}) as Pool),
   ensurePostgresSchemaWithAdvisoryLock: vi.fn(async () => undefined),
+  assertModelUsageLedgerReadable: vi.fn(async () => undefined),
   queryOne: vi.fn(async (_pool: unknown, sql: string, values: unknown[] = []) => {
     if (!sql.includes('COUNT(*) AS calls,')) return undefined;
     return values[0] === 200
@@ -31,7 +33,7 @@ const postgresMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../postgres.js', () => ({
-  createPostgresPool: vi.fn(),
+  createPostgresPool: postgresMocks.createPostgresPool,
   ensurePostgresSchemaWithAdvisoryLock: postgresMocks.ensurePostgresSchemaWithAdvisoryLock,
   queryOne: postgresMocks.queryOne,
   queryRows: postgresMocks.queryRows,
@@ -47,15 +49,91 @@ vi.mock('../postgres.js', () => ({
   )),
 }));
 
-import { PostgresModelUsageStore } from './model-usage-store.js';
+vi.mock('./model-usage-access.js', () => ({
+  assertModelUsageLedgerReadable: postgresMocks.assertModelUsageLedgerReadable,
+}));
+
+import {
+  createPostgresModelUsageStoreFromConfig,
+  PostgresModelUsageStore,
+} from './model-usage-store.js';
 
 describe('PostgresModelUsageStore previous-period totals', () => {
   beforeEach(() => {
+    postgresMocks.createPostgresPool.mockClear();
     postgresMocks.ensurePostgresSchemaWithAdvisoryLock.mockClear();
+    postgresMocks.assertModelUsageLedgerReadable.mockClear();
     postgresMocks.queryOne.mockClear();
     postgresMocks.queryRows.mockClear();
     postgresMocks.seriesOverflow = false;
     postgresMocks.clientQueries.length = 0;
+  });
+
+  it('resolves the first manifest companion as the ledger and opens follower reads read-only', async () => {
+    const store = createPostgresModelUsageStoreFromConfig({
+      persistenceBackend: 'postgres',
+      postgresDatabaseUrl: 'postgres://follower:secret@localhost:5432/psfn',
+      companionId: '22222222-2222-4222-8222-222222222222',
+      multiCompanion: true,
+      postgresSchema: 'companion_follower',
+      postgresRole: 'follower_runtime',
+      companionFleet: {
+        companions: [
+          { postgresSchema: 'arbitrary_primary_schema', postgresRole: 'primary_runtime' },
+          { postgresSchema: 'companion_follower', postgresRole: 'follower_runtime' },
+        ],
+      },
+    } as never, { companionId: '22222222-2222-4222-8222-222222222222' }, 'read_only');
+
+    if (!store) throw new Error('Postgres config must create a model usage store');
+    await store.waitUntilReady();
+    expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith(
+      'postgres://follower:secret@localhost:5432/psfn',
+      expect.objectContaining({
+        schema: 'arbitrary_primary_schema',
+        role: 'follower_runtime',
+        readOnly: true,
+      }),
+    );
+    expect(postgresMocks.assertModelUsageLedgerReadable).toHaveBeenCalledTimes(1);
+    expect(postgresMocks.ensurePostgresSchemaWithAdvisoryLock).not.toHaveBeenCalled();
+  });
+
+  it('pins the gateway migration authority to the manifest primary owner', async () => {
+    const store = createPostgresModelUsageStoreFromConfig({
+      persistenceBackend: 'postgres',
+      postgresDatabaseUrl: 'postgres://primary:secret@localhost:5432/psfn',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      multiCompanion: true,
+      postgresSchema: 'canonical_primary',
+      postgresRole: 'primary_runtime',
+      companionFleet: {
+        companions: [
+          { postgresSchema: 'canonical_primary', postgresRole: 'primary_runtime' },
+          { postgresSchema: 'companion_follower', postgresRole: 'follower_runtime' },
+        ],
+      },
+    } as never, { fleetAggregation: true }, 'migration_authority');
+
+    if (!store) throw new Error('Postgres config must create a model usage store');
+    await store.waitUntilReady();
+    expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith(
+      'postgres://primary:secret@localhost:5432/psfn',
+      expect.objectContaining({
+        schema: 'canonical_primary',
+        role: 'primary_runtime',
+      }),
+    );
+    expect(postgresMocks.ensurePostgresSchemaWithAdvisoryLock).toHaveBeenCalledTimes(1);
+    expect(postgresMocks.assertModelUsageLedgerReadable).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown connection authority mode', () => {
+    expect(() => new PostgresModelUsageStore(
+      {} as Pool,
+      { companionId: 'companion-a' },
+      { access: 'write_if_possible' } as never,
+    )).toThrow(/connection access/i);
   });
 
   it('queries only totals for the shifted window with every ledger filter preserved', async () => {

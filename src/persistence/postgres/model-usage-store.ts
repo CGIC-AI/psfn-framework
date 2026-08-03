@@ -97,6 +97,7 @@ import {
   startPostgresStoreReadiness,
   type PostgresStoreReadinessHandle,
 } from './runtime-readiness.js';
+import { assertModelUsageLedgerReadable } from './model-usage-access.js';
 
 const log = createComponentLogger('ModelUsageStore');
 
@@ -321,6 +322,12 @@ interface PreparedModelUsageQuery {
 export type ModelUsageStoreScope =
   | { companionId: string; fleetAggregation?: never }
   | { companionId?: never; fleetAggregation: true };
+
+export interface ModelUsageStoreConnectionOptions {
+  access: 'migration_authority' | 'read_only';
+  schema?: string;
+  role?: string;
+}
 
 function resolveStoreCompanionId(scope: unknown): string | undefined {
   if (!isRecord(scope)) {
@@ -1218,26 +1225,42 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   constructor(
     private readonly pool: Pool,
     options: ModelUsageStoreScope,
+    connection: Pick<ModelUsageStoreConnectionOptions, 'access'> = {
+      access: 'migration_authority',
+    },
   ) {
+    const access: unknown = connection.access;
+    if (access !== 'migration_authority' && access !== 'read_only') {
+      throw new Error('PostgresModelUsageStore connection access is unsupported');
+    }
     this.companionId = resolveStoreCompanionId(options);
     this.readiness = startPostgresStoreReadiness(
       options.fleetAggregation === true
         ? 'model_usage_accounting'
         : 'model_usage_diagnostics',
-      () => ensurePostgresSchemaWithAdvisoryLock(
-        pool,
-        POSTGRES_MODEL_USAGE_MIGRATIONS,
-        POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
-      ),
+      access === 'read_only'
+        ? () => assertModelUsageLedgerReadable(pool)
+        : () => ensurePostgresSchemaWithAdvisoryLock(
+            pool,
+            POSTGRES_MODEL_USAGE_MIGRATIONS,
+            POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+          ),
     );
   }
 
-  static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {
+  static connect(
+    databaseUrl: string,
+    options: ModelUsageStoreScope,
+    connection: ModelUsageStoreConnectionOptions = { access: 'migration_authority' },
+  ): PostgresModelUsageStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-model-usage',
       allowExitOnIdle: true,
+      ...(connection.schema ? { schema: connection.schema } : {}),
+      ...(connection.role ? { role: connection.role } : {}),
+      ...(connection.access === 'read_only' ? { readOnly: true } : {}),
     });
-    return new PostgresModelUsageStore(pool, options);
+    return new PostgresModelUsageStore(pool, options, connection);
   }
 
   async waitUntilReady(): Promise<void> {
@@ -2592,18 +2615,47 @@ function appendCompanionAllowlist(
 }
 
 export function createPostgresModelUsageStoreFromConfig(
-  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl' | 'companionId'>,
+  config: Pick<
+    SubstrateConfig,
+    | 'persistenceBackend'
+    | 'postgresDatabaseUrl'
+    | 'companionId'
+    | 'companionFleet'
+    | 'multiCompanion'
+    | 'postgresSchema'
+    | 'postgresRole'
+  >,
   scope?: ModelUsageStoreScope,
+  access: ModelUsageStoreConnectionOptions['access'] = 'migration_authority',
 ): PostgresModelUsageStore | null {
   if (config.persistenceBackend !== 'postgres') {
     return null;
   }
   const databaseUrl = config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) return null;
-  if (scope) return PostgresModelUsageStore.connect(databaseUrl, scope);
+  const primary = config.companionFleet?.companions.at(0);
+  const primarySchema = primary?.postgresSchema.trim();
+  const primaryRole = primary?.postgresRole.trim();
+  const currentRole = config.postgresRole?.trim();
+  if (config.multiCompanion === true && (!primarySchema || !primaryRole)) {
+    throw new Error('Multi-companion model usage persistence requires canonical fleet topology');
+  }
+  if (access === 'migration_authority' && primaryRole
+    && currentRole && currentRole !== primaryRole) { // ubs:ignore — compares topology role identifiers, not secrets
+    throw new Error(
+      'Model usage migration authority must be the primary/canonical companion role',
+    );
+  }
+  const connectionRole = access === 'read_only' ? currentRole ?? primaryRole : primaryRole;
+  const connection: ModelUsageStoreConnectionOptions = {
+    access,
+    ...(primarySchema ? { schema: primarySchema } : {}),
+    ...(connectionRole ? { role: connectionRole } : {}),
+  };
+  if (scope) return PostgresModelUsageStore.connect(databaseUrl, scope, connection);
   const companionId = optionalText(config.companionId);
   if (!companionId) {
     throw new Error('PostgreSQL model usage persistence requires a configured companionId');
   }
-  return PostgresModelUsageStore.connect(databaseUrl, { companionId });
+  return PostgresModelUsageStore.connect(databaseUrl, { companionId }, connection);
 }

@@ -26,6 +26,7 @@ import {
   createPostgresAnalysisWorkbenchTraceStoreFromConfig,
 } from './analysis-workbench-trace-store.js';
 import { PostgresModelUsageStore } from './model-usage-store.js';
+import { grantFleetModelUsageReadAccess } from './model-usage-access.js';
 import { planPostgresTenantAccess, provisionPostgresTenantAccess } from './tenancy.js';
 import {
   startPostgresTestHarness,
@@ -40,6 +41,12 @@ const TENANT_SCHEMA = 'companion_named_tenant_boot';
 const TENANT_PASSWORD = 'named-tenant-boot';
 const COMPANION_ID = 'f1a2b3c4-d5e6-4f70-8123-456789abcdef';
 const RETENTION_CAP = 50;
+const PRIMARY_SCHEMA = 'companion_usage_primary';
+const FOLLOWER_SCHEMA = 'companion_usage_follower';
+const PRIMARY_PASSWORD = 'usage-primary';
+const FOLLOWER_PASSWORD = 'usage-follower';
+const PRIMARY_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const FOLLOWER_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
 /** Postgres' error when every search_path entry is missing or unreadable. */
 const NO_SCHEMA_SELECTED = /no schema has been selected to create in/;
 
@@ -93,6 +100,54 @@ async function namedTenantDatabase(): Promise<NamedTenantDatabase> {
     tenantUrl: tenantUrl.toString(),
     schema: plan.schema,
     role: plan.role,
+  };
+}
+
+interface FleetUsageDatabase {
+  adminUrl: string;
+  primaryUrl: string;
+  followerUrl: string;
+  primaryRole: string;
+  followerRole: string;
+}
+
+async function fleetUsageDatabase(): Promise<FleetUsageDatabase> {
+  if (!harness) throw new Error('Postgres integration harness is unavailable');
+  const database = await harness.createDatabase();
+  const primary = planPostgresTenantAccess({ schema: PRIMARY_SCHEMA });
+  const follower = planPostgresTenantAccess({ schema: FOLLOWER_SCHEMA });
+  const admin = createPostgresPool(database.databaseUrl, {
+    applicationName: 'psfn-model-usage-fleet-provision',
+    max: 1,
+  });
+  try {
+    await provisionPostgresTenantAccess(admin, { plan: primary });
+    await provisionPostgresTenantAccess(admin, { plan: follower });
+    await admin.query(
+      `ALTER ROLE "${primary.role}" LOGIN CONNECTION LIMIT 20 PASSWORD '${PRIMARY_PASSWORD}'`,
+    );
+    await admin.query(
+      `ALTER ROLE "${follower.role}" LOGIN CONNECTION LIMIT 20 PASSWORD '${FOLLOWER_PASSWORD}'`,
+    );
+    await admin.query('REVOKE ALL ON SCHEMA public FROM PUBLIC');
+    await admin.query(`SET ROLE "${primary.role}"`);
+    await admin.query(`CREATE TABLE ${PRIMARY_SCHEMA}.primary_private_probe (id integer)`);
+    await admin.query('RESET ROLE');
+  } finally {
+    await admin.end();
+  }
+  const primaryUrl = new URL(database.databaseUrl);
+  primaryUrl.username = primary.role;
+  primaryUrl.password = PRIMARY_PASSWORD;
+  const followerUrl = new URL(database.databaseUrl);
+  followerUrl.username = follower.role;
+  followerUrl.password = FOLLOWER_PASSWORD;
+  return {
+    adminUrl: database.databaseUrl,
+    primaryUrl: primaryUrl.toString(),
+    followerUrl: followerUrl.toString(),
+    primaryRole: primary.role,
+    followerRole: follower.role,
   };
 }
 
@@ -275,5 +330,143 @@ describe('model usage store startup migration on a named tenant schema', () => {
       record.component === 'ModelUsageStore'
       && record.message === 'Model usage schema migration failed'
     ))).toBe(true);
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('reads the canonical primary ledger from a follower with exact read-only authority', async () => {
+    const fleet = await fleetUsageDatabase();
+    const writer = PostgresModelUsageStore.connect(
+      fleet.primaryUrl,
+      { fleetAggregation: true },
+      {
+        access: 'migration_authority',
+        schema: PRIMARY_SCHEMA,
+        role: fleet.primaryRole,
+      },
+    );
+    await writer.waitUntilReady();
+    await writer.recordUsageEvent({
+      logicalCallId: 'follower-visible-usage',
+      recordedAtMs: 1_770_000_000_000,
+      status: 'success',
+      callKind: 'chat',
+      attribution: {
+        companionId: FOLLOWER_COMPANION_ID,
+        callType: 'chat',
+        purpose: 'chat',
+      },
+      provider: 'litellm',
+      model: 'follower-model',
+      inputTokens: 12,
+      outputTokens: 3,
+    });
+    await writer.recordUsageEvent({
+      logicalCallId: 'primary-private-usage',
+      recordedAtMs: 1_770_000_001_000,
+      status: 'success',
+      callKind: 'chat',
+      attribution: {
+        companionId: PRIMARY_COMPANION_ID,
+        callType: 'chat',
+        purpose: 'chat',
+      },
+      provider: 'litellm',
+      model: 'primary-model',
+      inputTokens: 99,
+      outputTokens: 1,
+    });
+
+    await grantFleetModelUsageReadAccess({
+      ownerDatabaseUrl: fleet.primaryUrl,
+      primarySchema: PRIMARY_SCHEMA,
+      primaryRole: fleet.primaryRole,
+      followerRoles: [fleet.followerRole],
+    });
+    await grantFleetModelUsageReadAccess({
+      ownerDatabaseUrl: fleet.primaryUrl,
+      primarySchema: PRIMARY_SCHEMA,
+      primaryRole: fleet.primaryRole,
+      followerRoles: [fleet.followerRole],
+    });
+
+    const follower = PostgresModelUsageStore.connect(
+      fleet.followerUrl,
+      { companionId: FOLLOWER_COMPANION_ID },
+      {
+        access: 'read_only',
+        schema: PRIMARY_SCHEMA,
+        role: fleet.followerRole,
+      },
+    );
+    await follower.waitUntilReady();
+    const usage = await follower.getUsageData({ range: 'all' });
+    expect(usage.totals).toMatchObject({ calls: 1, totalTokens: 15 });
+    expect(usage.recentEvents.map(event => event.model)).toEqual(['follower-model']);
+
+    const followerPool = createPostgresPool(fleet.followerUrl, {
+      applicationName: 'psfn-model-usage-follower-privilege-proof',
+      max: 1,
+      schema: PRIMARY_SCHEMA,
+      role: fleet.followerRole,
+      readOnly: true,
+    });
+    const admin = createPostgresPool(fleet.adminUrl, {
+      applicationName: 'psfn-model-usage-follower-acl-proof',
+      max: 1,
+    });
+    try {
+      await expect(followerPool.query('SHOW default_transaction_read_only'))
+        .resolves.toMatchObject({ rows: [{ default_transaction_read_only: 'on' }] });
+      await expect(followerPool.query(
+        `INSERT INTO ${PRIMARY_SCHEMA}.model_usage_events (
+          id, logical_call_id, attempt, recorded_at_ms, started_at_ms, day_key, month_key,
+          status, settlement, call_kind, call_type, purpose, telemetry_visibility,
+          companion_id, session_id, channel_type, provider, model, input_tokens,
+          output_tokens, cache_read_tokens, cache_write_tokens, total_tokens,
+          effective_cost_usd, currency, metadata_json
+        ) VALUES (
+          'forbidden', 'forbidden', 1, 1, 1, '1970-01-01', '1970-01',
+          'success', 'complete', 'chat', 'chat', 'chat', 'operator_visible',
+          $1, 'unknown', 'unknown', 'litellm', 'forbidden', 0, 0, 0, 0, 0, 0, 'USD', '{}'::jsonb
+        )`,
+        [FOLLOWER_COMPANION_ID],
+      )).rejects.toThrow(/read-only transaction|permission denied/i);
+      await expect(followerPool.query(`SELECT * FROM ${PRIMARY_SCHEMA}.primary_private_probe`))
+        .rejects.toThrow(/permission denied/i);
+
+      const privileges = await admin.query<{
+        schema_usage: boolean;
+        schema_create: boolean;
+        ledger_select: boolean;
+        ledger_write: boolean;
+        private_access: boolean;
+      }>(`
+        SELECT
+          has_schema_privilege($1, $2, 'USAGE') AS schema_usage,
+          has_schema_privilege($1, $2, 'CREATE') AS schema_create,
+          has_table_privilege($1, $2 || '.model_usage_events', 'SELECT') AS ledger_select,
+          has_table_privilege(
+            $1,
+            $2 || '.model_usage_events',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          ) AS ledger_write,
+          has_table_privilege(
+            $1,
+            $2 || '.primary_private_probe',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          ) AS private_access
+      `, [fleet.followerRole, PRIMARY_SCHEMA]);
+      expect(privileges.rows).toEqual([{
+        schema_usage: true,
+        schema_create: false,
+        ledger_select: true,
+        ledger_write: false,
+        private_access: false,
+      }]);
+    } finally {
+      await followerPool.end();
+      await admin.end();
+    }
+    expect(await schemasHoldingRelation(fleet.adminUrl, 'model_usage_events'))
+      .toEqual([PRIMARY_SCHEMA]);
   }, INTEGRATION_TIMEOUT_MS);
 });

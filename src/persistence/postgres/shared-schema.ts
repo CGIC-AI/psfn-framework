@@ -13,6 +13,7 @@ import {
 } from './migrations.js';
 import { assertPostgresRolesAreLeastPrivilege } from './role-posture.js';
 import { assertPostgresRuntimeDdlAllowed } from './runtime-readiness.js';
+import { assertExactModelUsageFollowerAccess } from './model-usage-access.js';
 
 /**
  * Cluster-wide advisory lock key serializing shared-schema provisioning.
@@ -202,12 +203,18 @@ export async function assertSharedSchemaRuntimeAuthority(
   options: {
     ownSchema: string;
     companionSchemas: readonly string[];
+    modelUsageLedgerSchema?: string;
   },
 ): Promise<void> {
   const ownSchema = assertValidPostgresSchemaName(options.ownSchema);
   const companionSchemas = options.companionSchemas.map(assertValidPostgresSchemaName);
+  const modelUsageLedgerSchema = options.modelUsageLedgerSchema === undefined
+    ? undefined
+    : assertValidPostgresSchemaName(options.modelUsageLedgerSchema);
   if (!companionSchemas.includes(ownSchema)
-    || new Set(companionSchemas).size !== companionSchemas.length) {
+    || new Set(companionSchemas).size !== companionSchemas.length
+    || (modelUsageLedgerSchema !== undefined
+      && !companionSchemas.includes(modelUsageLedgerSchema))) {
     throw new Error('Shared schema runtime authority requires one exact fleet schema identity');
   }
   const pool = createPostgresPool(databaseUrl, {
@@ -258,9 +265,22 @@ export async function assertSharedSchemaRuntimeAuthority(
             || !schema.schema_usage || schema.schema_create) {
             throw new Error('Shared schema runtime credential has invalid shared-schema authority');
           }
+        } else if (schema.schema_name === modelUsageLedgerSchema) {
+          if (schema.owner_role === current.current_user
+            || !schema.schema_usage || schema.schema_create) {
+            throw new Error('Shared schema runtime credential has invalid model-usage ledger authority');
+          }
         } else if (schema.schema_usage || schema.schema_create) {
           throw new Error('Shared schema runtime credential can access a sibling companion schema');
         }
+      }
+
+      if (modelUsageLedgerSchema !== undefined && modelUsageLedgerSchema !== ownSchema) {
+        await assertExactModelUsageFollowerAccess(
+          client,
+          modelUsageLedgerSchema,
+          [current.current_user],
+        );
       }
 
       const tableAccess = await client.query<{

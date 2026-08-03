@@ -85,3 +85,9 @@ ingress:
     enabled: false
 
 # The hub client Certificate renders automatically from satelliteHub.enabled.
+
+# The satellite-hub shape runs no companions, so the stock-standard emosim
+# engine has no consumer here; companion-bearing installs keep the default
+# (enabled: true).
+emosim:
+  enabled: false

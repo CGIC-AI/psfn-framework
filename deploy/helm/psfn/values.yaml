@@ -476,12 +476,16 @@ emosim:
   # http://<release>-emosim:17342). The emo_sim API is UNAUTHENTICATED by
   # upstream design: it is exposed ONLY as a ClusterIP service and guarded by
   # NetworkPolicy (agent pods only). Never expose these ports externally.
-  enabled: false
+  # Stock-standard on every deployment: the emotion pipeline is part of the
+  # baseline companion runtime, not an opt-in extra.
+  enabled: true
   image:
     # Built from docker/Dockerfile.emosim with an emo_sim checkout as the
     # build context; see the Dockerfile header for the exact build command.
+    # The tag carries the pin-verified emo_sim commit so the running engine
+    # is auditable against EXPECTED_EMOSIM_SHA.
     repository: localhost/psfn-emosim
-    tag: 0.1.0
+    tag: 0.1.0-emosim-854ce6a7
     digest: ""
     pullPolicy: IfNotPresent
   # Extra server flags appended after the fixed entrypoint

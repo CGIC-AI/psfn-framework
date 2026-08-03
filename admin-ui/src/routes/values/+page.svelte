@@ -1,11 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import {
-    getReflectionDailyData,
-    getReflectionJournalData,
-    getReflectionMetacognitionData,
-    getValuesData,
+  import type {
+    JournalPrivacyDisclosure,
+    JournalPrivacyStream,
   } from '$lib/api/endpoints/values';
+  import JournalPrivacyBreakGlass from '$lib/components/JournalPrivacyBreakGlass.svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenTabBar from '$lib/components/garden/GardenTabBar.svelte';
@@ -33,15 +32,13 @@
 
   interface JournalState<T> {
     entries: T[];
-    error: string;
-    endpointMissing: boolean;
+    disclosed: boolean;
   }
 
   function emptyJournalState<T>(): JournalState<T> {
     return {
       entries: [],
-      error: '',
-      endpointMissing: false,
+      disclosed: false,
     };
   }
 
@@ -49,7 +46,6 @@
   let metacognition = $state<JournalState<ReflectionMetacognitionJournalEntry>>(emptyJournalState());
   let daily = $state<JournalState<ReflectionDailyJournalEntry>>(emptyJournalState());
   let reflection = $state<JournalState<ReflectionJournalEntry>>(emptyJournalState());
-  let loading = $state(true);
   let activeTab = $state<JournalTab>('values');
   let searchQuery = $state('');
   const companionName = $derived(getCompanionName());
@@ -140,6 +136,38 @@
     }
   });
 
+  const activePrivacyTarget = $derived.by((): {
+    stream: JournalPrivacyStream;
+    label: string;
+  } => {
+    switch (activeTab) {
+      case 'values':
+        return { stream: 'values-journal', label: 'Values journal' };
+      case 'metacognition':
+        return { stream: 'reflection-metacognition', label: 'Metacognition journal' };
+      case 'daily':
+        return { stream: 'reflection-daily', label: 'Daily reflection journal' };
+      default:
+        return { stream: 'reflection-journal', label: 'Reflection journal' };
+    }
+  });
+
+  function handleJournalDisclosure(disclosure: JournalPrivacyDisclosure): void {
+    switch (disclosure.stream) {
+      case 'values-journal':
+        values = { entries: disclosure.entries, disclosed: true };
+        return;
+      case 'reflection-metacognition':
+        metacognition = { entries: disclosure.entries, disclosed: true };
+        return;
+      case 'reflection-daily':
+        daily = { entries: disclosure.entries, disclosed: true };
+        return;
+      default:
+        reflection = { entries: disclosure.entries, disclosed: true };
+    }
+  }
+
   function formatDate(isoStr: string): string {
     const date = new Date(isoStr);
     return date.toLocaleDateString();
@@ -155,50 +183,8 @@
     return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
   }
 
-  function readJournalResult<T>(
-    result: PromiseSettledResult<{ entries: T[] }>,
-    fallbackMessage: string,
-  ): JournalState<T> {
-    if (result.status === 'fulfilled') {
-      return {
-        entries: result.value.entries,
-        error: '',
-        endpointMissing: false,
-      };
-    }
-    const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
-    return {
-      entries: [],
-      error: message || fallbackMessage,
-      endpointMissing: message.includes('404') || message.includes('503'),
-    };
-  }
-
-  async function loadData() {
-    loading = true;
-
-    const [
-      valuesResult,
-      metacognitionResult,
-      dailyResult,
-      reflectionResult,
-    ] = await Promise.allSettled([
-      getValuesData(),
-      getReflectionMetacognitionData(),
-      getReflectionDailyData(),
-      getReflectionJournalData(),
-    ]);
-
-    values = readJournalResult(valuesResult, 'Failed to load values journal');
-    metacognition = readJournalResult(metacognitionResult, 'Failed to load metacognition journal');
-    daily = readJournalResult(dailyResult, 'Failed to load daily reflection journal');
-    reflection = readJournalResult(reflectionResult, 'Failed to load reflection journal');
-    loading = false;
-  }
-
   onMount(() => {
     void ensureCompanionNameLoaded();
-    void loadData();
   });
 </script>
 
@@ -226,20 +212,11 @@
 {/snippet}
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between gap-4">
+  <div>
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-900">The Journal</h1>
       <p class="text-sm text-shadow-600 mt-1">{companionName}'s values and reflection timelines</p>
     </div>
-    <button
-      onclick={loadData}
-      disabled={loading}
-      class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-             text-shadow-600 hover:bg-bark-100
-             transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-    >
-      {loading ? 'Loading...' : 'Refresh'}
-    </button>
   </div>
 
   <div class="space-y-3">
@@ -260,7 +237,7 @@
                text-shadow-800 placeholder:text-shadow-500
                focus:outline-none focus:border-gold-300"
       />
-      {#if normalizedQuery && !loading}
+      {#if normalizedQuery}
         <p class="text-xs text-shadow-600">
           Showing {activeCounts.shown} of {activeCounts.total} loaded entries
         </p>
@@ -268,17 +245,18 @@
     </div>
   </div>
 
-  {#if loading}
-    <div class="card-garden p-12 text-center">
-      <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
-      <p class="text-sm text-shadow-600">Loading journals...</p>
-    </div>
-  {:else if activeTab === 'values'}
-    {#if values.error}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-shadow-800">
-          {values.endpointMissing ? 'Values journal endpoint unavailable' : values.error}
-        </p>
+  {#key activePrivacyTarget.stream}
+    <JournalPrivacyBreakGlass
+      stream={activePrivacyTarget.stream}
+      streamLabel={activePrivacyTarget.label}
+      onDisclosure={handleJournalDisclosure}
+    />
+  {/key}
+
+  {#if activeTab === 'values'}
+    {#if !values.disclosed}
+      <div class="card-garden p-8 text-center">
+        <p class="text-sm text-shadow-600">Values journal entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if values.entries.length === 0}
       <div class="card-garden p-12 text-center">
@@ -313,11 +291,9 @@
       Every non-silent reflection writes one entry to both the daily journal and this metacognition log,
       so their counts always match — these are the same reflections viewed as run and mutation records.
     </p>
-    {#if metacognition.error}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-shadow-800">
-          {metacognition.endpointMissing ? 'Metacognition journal endpoint unavailable' : metacognition.error}
-        </p>
+    {#if !metacognition.disclosed}
+      <div class="card-garden p-8 text-center">
+        <p class="text-sm text-shadow-600">Metacognition entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if metacognition.entries.length === 0}
       <div class="card-garden p-12 text-center">
@@ -362,11 +338,9 @@
       </BoundedList>
     {/if}
   {:else if activeTab === 'daily'}
-    {#if daily.error}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-shadow-800">
-          {daily.endpointMissing ? 'Daily reflection journal endpoint unavailable' : daily.error}
-        </p>
+    {#if !daily.disclosed}
+      <div class="card-garden p-8 text-center">
+        <p class="text-sm text-shadow-600">Daily reflection entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if daily.entries.length === 0}
       <div class="card-garden p-12 text-center">
@@ -408,11 +382,9 @@
       Automated concern routing records durable follow-ups in the reflection journal under the
       "{CONCERN_ROUTE_TEMPLATE_ID}" template. They are separated here so reflection reading stays uncluttered.
     </p>
-    {#if reflection.error}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-shadow-800">
-          {reflection.endpointMissing ? 'Reflection journal endpoint unavailable' : reflection.error}
-        </p>
+    {#if !reflection.disclosed}
+      <div class="card-garden p-8 text-center">
+        <p class="text-sm text-shadow-600">Concern-routing entries remain sealed with the reflection journal until the audited confirmation is completed.</p>
       </div>
     {:else if concernEntries.length === 0}
       <div class="card-garden p-12 text-center">
@@ -443,11 +415,9 @@
       </BoundedList>
     {/if}
   {:else}
-    {#if reflection.error}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-shadow-800">
-          {reflection.endpointMissing ? 'Reflection journal endpoint unavailable' : reflection.error}
-        </p>
+    {#if !reflection.disclosed}
+      <div class="card-garden p-8 text-center">
+        <p class="text-sm text-shadow-600">Reflection entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if reflectionEntries.length === 0}
       <div class="card-garden p-12 text-center">

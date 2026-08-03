@@ -440,7 +440,7 @@ describe('SessionStore', () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
-  it('omits an observed shared-room entry that never owned a local TurnRecord', async () => {
+  it('retains an observed shared-room entry without looking up a local TurnRecord', async () => {
     const fencedStore = new SessionStore(join(dir, 'observed-shared-room-entry'), {
       turnRecordEligibilityFence: {
         withTurnRecordEligibilityFence: async (_key, operation) => operation(),
@@ -465,6 +465,7 @@ describe('SessionStore', () => {
         actorKind: 'unknown',
       }),
     }];
+    const lookupEligibility = vi.spyOn(fencedStore, 'lookupSourceTurnRecordEligibility');
     const operation = vi.fn(async (entries: readonly SessionEntry[]) => entries);
 
     await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
@@ -472,8 +473,9 @@ describe('SessionStore', () => {
       [],
       () => snapshot,
       operation,
-    )).resolves.toEqual([]);
-    expect(operation).toHaveBeenCalledWith([]);
+    )).resolves.toEqual(snapshot);
+    expect(lookupEligibility).not.toHaveBeenCalled();
+    expect(operation).toHaveBeenCalledWith(snapshot);
   });
 
   it('does not let observed provenance mask a missing locally owned TurnRecord', async () => {
@@ -516,12 +518,14 @@ describe('SessionStore', () => {
     ];
     const operation = vi.fn(async () => undefined);
 
-    await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
-      'discord:shared-room',
-      [sharedTurnId],
-      () => snapshot,
-      operation,
-    )).rejects.toThrow('Consumed TurnRecord is missing');
+    for (const entries of [snapshot, [...snapshot].reverse()]) {
+      await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
+        'discord:shared-room',
+        [sharedTurnId],
+        () => entries,
+        operation,
+      )).rejects.toThrow('Consumed TurnRecord is missing');
+    }
     expect(operation).not.toHaveBeenCalled();
   });
 

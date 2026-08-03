@@ -69,11 +69,11 @@ function referenceKey(reference: Pick<ConsumedTurnReference, 'sourceChannelId' |
 /**
  * Exposes only entries whose canonical source remains eligible.
  *
- * A missing record is omittable when the entry explicitly lacks a persisted
- * TurnID and therefore uses deterministic backfill identity, or when its
- * provenance identifies it as observed context that did not execute locally.
- * All other entries carrying an explicit TurnID fail closed if their record is
- * absent.
+ * Observed context that did not execute locally bypasses TurnRecord lookup and
+ * remains available to bounded consumers. A missing record is omittable only
+ * when the entry lacks a persisted TurnID and therefore uses deterministic
+ * backfill identity. All other entries carrying an explicit TurnID fail closed
+ * if their record is absent.
  */
 export async function selectEligibleTurnRecordSnapshotEntries(input: {
   entries: readonly SessionEntry[];
@@ -99,16 +99,19 @@ export async function selectEligibleTurnRecordSnapshotEntries(input: {
     }
   }
 
-  const omittedUnownedReferences = new Set<string>();
+  const omittedLegacyReferences = new Set<string>();
   for (const [key, reference] of uniqueConsumed) {
+    if (reference.turnIdSource === 'persisted'
+      && reference.turnRecordExpectation === 'not_expected') {
+      continue;
+    }
     const eligibility = await input.lookupEligibility(
       reference.sourceChannelId,
       input.logicalSessionId,
       reference.turnId,
     );
-    if (eligibility.kind === 'missing'
-      && reference.turnRecordExpectation === 'not_expected') {
-      omittedUnownedReferences.add(key);
+    if (eligibility.kind === 'missing' && reference.turnIdSource === 'backfilled') {
+      omittedLegacyReferences.add(key);
       continue;
     }
     if (eligibility.kind !== 'eligible') {
@@ -121,6 +124,6 @@ export async function selectEligibleTurnRecordSnapshotEntries(input: {
   }
 
   return input.entries.filter(entry => (
-    !omittedUnownedReferences.has(referenceKey(consumedTurnReference(entry)))
+    !omittedLegacyReferences.has(referenceKey(consumedTurnReference(entry)))
   ));
 }

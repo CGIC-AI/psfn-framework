@@ -69,6 +69,18 @@ bootstrap:
   # operator-provisioned.
   seedOwnerFiles: false
 
+emosim:
+  # emo_sim is stock-standard for every companion: the observer-eval sidecar
+  # on each agent points at this fleet-local engine (ClusterIP only,
+  # NetworkPolicy-guarded). The image is built from docker/Dockerfile.emosim
+  # against the pinned emo_sim commit and imported into the k3d node; the tag
+  # carries that commit so the running engine is auditable against the pin.
+  enabled: true
+  image:
+    repository: psfn-emosim
+    tag: 0.1.0-emosim-854ce6a7
+    pullPolicy: IfNotPresent
+
 fleetAuth:
   # Adopt the live anti-rollback floor PVC. It is mounted only by the gateway,
   # initialized as uid/gid 999 with mode 0700, and deliberately never included

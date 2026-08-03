@@ -433,6 +433,18 @@ describe('unified Fleet SSO origin provenance', () => {
     const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const nowSeconds = 1_783_000_000;
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const baseSigner = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-jit-test',
+      kid: 'fleet-jit-key',
+      privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+      ttlSeconds: 30,
+      nowSeconds: () => nowSeconds,
+    });
+    let signedInput: Parameters<typeof baseSigner.signOperator>[0] | undefined;
+    const signOperator = vi.fn((input: Parameters<typeof baseSigner.signOperator>[0]) => {
+      signedInput = input;
+      return baseSigner.signOperator(input);
+    });
     const authorization: FleetAuthorizationContext = Object.freeze({
       principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       providerSubject: Object.freeze({ provider: 'discord', subjectId: 'subject-a' }),
@@ -444,7 +456,7 @@ describe('unified Fleet SSO origin provenance', () => {
       }),
       operator: Object.freeze({
         grantId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-        role: 'owner',
+        role: 'admin',
         grantVersion: 1,
       }),
       session: Object.freeze({
@@ -459,7 +471,7 @@ describe('unified Fleet SSO origin provenance', () => {
         provider: 'discord',
         providerSubjectId: 'subject-a',
       }),
-      authorization: Object.freeze({ action: 'memory.reveal', decision: 'allow' }),
+      authorization: Object.freeze({ action: 'privacy.break_glass', decision: 'allow' }),
       authority: Object.freeze({ authorityGeneration: 1, globalAuthEpoch: 1 }),
       provenance: Object.freeze({
         source: 'gateway_fleet_authorization_snapshot',
@@ -472,26 +484,22 @@ describe('unified Fleet SSO origin provenance', () => {
       principalId: authorization.principalId,
       browserSessionId: authorization.session.recordId,
       companionId: companionId as string,
-      action: 'memory.reveal' as const,
-      routeId: 'POST /api/admin/memory/:id/reveal',
+      action: 'privacy.break_glass' as const,
+      routeId: 'POST /api/admin/privacy-break-glass/journal/:id/confirm',
       scopeDigest: 'c'.repeat(64),
-      assuranceRequirement: 'escalated' as const,
+      assuranceRequirement: 'privacy_break_glass' as const,
       expiresAt: new Date((nowSeconds + 300) * 1_000),
     }));
-    const replay = vi.fn(async () => ({ outcome: 'mismatch' as const }));
+    const replay = vi.fn(async (
+      input: Parameters<NonNullable<ConstructorParameters<typeof GatewayFleetSsoRouter>[0]['replay']['consume']>>[0],
+    ) => ({ outcome: 'consumed' as const, result: input.consumeResult }));
     const denialLogger = { warn: vi.fn() };
     clearGardenDenialsForTests();
     const router = new GatewayFleetSsoRouter({
       canonicalOrigin,
       trustProxy: true,
       broker: { resolveAuthorizationContext: vi.fn(async () => authorization) },
-      signer: createGatewayRequestCapabilitySigner({
-        issuer: 'fleet-jit-test',
-        kid: 'fleet-jit-key',
-        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
-        ttlSeconds: 30,
-        nowSeconds: () => nowSeconds,
-      }),
+      signer: { ...baseSigner, signOperator },
       verifier: createRequestCapabilityVerifier({
         issuer: 'fleet-jit-test',
         maxTtlSeconds: 30,
@@ -511,12 +519,13 @@ describe('unified Fleet SSO origin provenance', () => {
       nowSeconds: () => nowSeconds,
       denialLogger,
     });
-    // The reveal surface carries no request body: the audited grant, not a
-    // browser-supplied envelope, is what opens it.
-    const body = Buffer.alloc(0);
+    const body = Buffer.from(JSON.stringify({
+      reasonCategory: 'incident_response',
+      reason: 'Contain an active compromise.',
+    }), 'utf8');
     const incoming = Readable.from([body]) as IncomingMessage;
     incoming.method = 'POST';
-    incoming.url = `/companions/${companionId}/garden/api/admin/memory/memory-a/reveal`;
+    incoming.url = `/companions/${companionId}/garden/api/admin/privacy-break-glass/journal/reflection-journal/confirm`;
     incoming.headers = {
       host: 'fleet.example.test',
       'x-forwarded-host': 'fleet.example.test',
@@ -554,12 +563,52 @@ describe('unified Fleet SSO origin provenance', () => {
       reasonCode: 'escalation_grant_required',
       reason: 'escalation_grant_required',
       status: 403,
-      routeId: 'POST /api/admin/memory/:id/reveal',
-      action: 'memory.reveal',
+      routeId: 'POST /api/admin/privacy-break-glass/journal/:id/confirm',
+      action: 'privacy.break_glass',
       principalId: authorization.principalId,
     });
     expect(denialLogger.warn).toHaveBeenCalledOnce();
     expect(getGardenDenialsLastHour()).toBe(1);
+
+    const grantedRequest = Readable.from([body]) as IncomingMessage;
+    grantedRequest.method = incoming.method;
+    grantedRequest.url = incoming.url;
+    grantedRequest.headers = {
+      ...incoming.headers,
+      origin: canonicalOrigin,
+      'x-psfn-escalation-grant': '99999999-9999-4999-8999-999999999999',
+    };
+    Object.defineProperty(grantedRequest, 'socket', { value: {} });
+    const grantedResponse = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+
+    await router.handle(grantedRequest, grantedResponse);
+
+    expect(consumeGrant).toHaveBeenCalledWith(expect.objectContaining({
+      grantId: '99999999-9999-4999-8999-999999999999',
+      requestOrigin: canonicalOrigin,
+      target: expect.objectContaining({
+        action: 'privacy.break_glass',
+        resource: expect.objectContaining({
+          routeId: 'POST /api/admin/privacy-break-glass/journal/:id/confirm',
+          pathParams: { id: 'reflection-journal' },
+        }),
+      }),
+    }));
+    expect(signOperator).toHaveBeenCalledWith(expect.objectContaining({
+      authContext: expect.objectContaining({
+        principalId: authorization.principalId,
+        sessionAssurance: 'break_glass',
+        fleetAccessMode: 'multi_admin',
+      }),
+    }));
+    expect(signedInput).toBeDefined();
+    expect(replay).toHaveBeenCalledOnce();
+    expect(grantedResponse.writeHead).toHaveBeenCalledWith(502, expect.any(Object));
 
     clearGardenDenialsForTests();
     denialLogger.warn.mockClear();

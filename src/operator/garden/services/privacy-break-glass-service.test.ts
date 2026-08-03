@@ -379,6 +379,58 @@ describe('AdminPrivacyBreakGlassService', () => {
         journal: { stream: 'reflection-journal', entries: [{ id: 'reflection-1' }] },
       },
     });
+    await expect(service.decide({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: { ...REASON, confirmToken: begun.confirmToken },
+      context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-journal' }),
+    })).resolves.toMatchObject({ ok: false, code: 'confirmation_unavailable' });
+  });
+
+  it('consumes a journal confirmation on principal or stream substitution and on expiry', async () => {
+    for (const substitution of [
+      {
+        resourceId: 'reflection-journal',
+        context: context({
+          kind: 'journal', phase: 'decide', resourceId: 'reflection-journal',
+          principalId: 'principal-x',
+        }),
+      },
+      {
+        resourceId: 'reflection-daily',
+        context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-daily' }),
+      },
+    ]) {
+      const current = fixture();
+      const begun = await current.service.begin({
+        resourceKind: 'journal', resourceId: 'reflection-journal', request: REASON,
+        context: context({ kind: 'journal', phase: 'confirm', resourceId: 'reflection-journal' }),
+      });
+      if (!begun.ok) throw new Error('expected journal confirmation');
+      await expect(current.service.decide({
+        resourceKind: 'journal', resourceId: substitution.resourceId,
+        request: { ...REASON, confirmToken: begun.confirmToken },
+        context: substitution.context,
+      })).resolves.toMatchObject({ ok: false, code: 'confirmation_binding_changed' });
+      await expect(current.service.decide({
+        resourceKind: 'journal', resourceId: 'reflection-journal',
+        request: { ...REASON, confirmToken: begun.confirmToken },
+        context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-journal' }),
+      })).resolves.toMatchObject({ ok: false, code: 'confirmation_unavailable' });
+    }
+
+    const expired = fixture();
+    const begun = await expired.service.begin({
+      resourceKind: 'journal', resourceId: 'reflection-journal', request: REASON,
+      context: context({ kind: 'journal', phase: 'confirm', resourceId: 'reflection-journal' }),
+    });
+    if (!begun.ok) throw new Error('expected journal confirmation');
+    expired.advance(60_000);
+    await expect(expired.service.decide({
+      resourceKind: 'journal', resourceId: 'reflection-journal',
+      request: { ...REASON, confirmToken: begun.confirmToken },
+      context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-journal' }),
+    })).resolves.toMatchObject({ ok: false, code: 'confirmation_expired' });
   });
 
   it('treats an unknown journal stream selector as unavailable', async () => {

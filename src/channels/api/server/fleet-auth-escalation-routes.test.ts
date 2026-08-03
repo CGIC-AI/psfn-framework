@@ -120,6 +120,35 @@ describe('FleetAuthEscalationHttpRoutes', () => {
     expect(call.binding.target.resource.pathParams.id).toBe('memory-a');
   });
 
+  it('compiles the exact companion-journal confirmation target', async () => {
+    const { value, issueGrant } = coordinator(async () => ({
+      grantId: GRANT_ID,
+      routeId: 'POST /api/admin/privacy-break-glass/journal/:id/confirm',
+      expiresAt: EXPIRES_AT,
+    }));
+    const routes = new FleetAuthEscalationHttpRoutes(value);
+    const res = await handle(routes, {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      method: 'POST',
+      target: '/api/admin/privacy-break-glass/journal/reflection-journal/confirm',
+      reason: 'Contain an active compromise.',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(issueGrant).toHaveBeenCalledWith(expect.objectContaining({
+      requestOrigin: ORIGIN,
+      binding: expect.objectContaining({ reason: 'Contain an active compromise.' }),
+    }));
+    const target = issueGrant.mock.calls[0]![0].binding.target;
+    expect(target).toMatchObject({
+      action: 'privacy.break_glass',
+      resource: {
+        routeId: 'POST /api/admin/privacy-break-glass/journal/:id/confirm',
+        pathParams: { id: 'reflection-journal' },
+      },
+    });
+  });
+
   it('rejects unknown keys and malformed companion ids as 400', async () => {
     const routes = new FleetAuthEscalationHttpRoutes(coordinator().value);
     await expect(handle(routes, { ...validBody(), extra: true }))

@@ -1415,7 +1415,7 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
-  it('filters failed ICP and observed shared-room entries from bounded memory, emotion, and compaction effects', async () => {
+  it('filters failed ICP while retaining observed shared-room context in bounded memory, emotion, and compaction effects', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-post-turn-icp-projection-'));
     const store = new SessionStore(join(root, 'sessions'), {
       turnRecordEligibilityFence: {
@@ -1707,6 +1707,7 @@ describe('executePostTurnBackgroundWork', () => {
 
       for (const entries of [memoryEntries, emotionEntries]) {
         expect(entries.map(entry => entry.content)).toEqual([
+          observedContent,
           ...safeOlderContext,
           ...successfulContext,
           successfulInput,
@@ -1714,12 +1715,12 @@ describe('executePostTurnBackgroundWork', () => {
         ]);
         expect(JSON.stringify(entries)).not.toContain(failedContent);
         expect(JSON.stringify(entries)).not.toContain(unboundContent);
-        expect(JSON.stringify(entries)).not.toContain(observedContent);
+        expect(JSON.stringify(entries)).toContain(observedContent);
       }
       expect(complete).toHaveBeenCalled();
       expect(JSON.stringify(complete.mock.calls)).not.toContain(failedContent);
       expect(JSON.stringify(complete.mock.calls)).not.toContain(unboundContent);
-      expect(JSON.stringify(complete.mock.calls)).not.toContain(observedContent);
+      expect(JSON.stringify(complete.mock.calls)).toContain(observedContent);
       const summaries = store.getCompactionSummaries(ICP_CHANNEL);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]?.summary).toContain('successful B');

@@ -149,14 +149,53 @@ describe('FleetAuthEscalationHttpRoutes', () => {
     });
   });
 
+  it('compiles the exact reason-bearing CogSec concern target', async () => {
+    const { value, issueGrant } = coordinator(async () => ({
+      grantId: GRANT_ID,
+      routeId: 'POST /api/admin/concerns/:concernId/resolve',
+      expiresAt: EXPIRES_AT,
+    }));
+    const routes = new FleetAuthEscalationHttpRoutes(value);
+    await handle(routes, {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      method: 'POST',
+      target: '/api/admin/concerns/concern-a/resolve',
+      reason: 'Resolve after reviewing the CogSec evidence.',
+    });
+
+    const call = issueGrant.mock.calls[0]![0];
+    expect(call.binding.reason).toBe('Resolve after reviewing the CogSec evidence.');
+    expect(call.binding.target).toMatchObject({
+      action: 'cogsec.manage',
+      resource: {
+        routeId: 'POST /api/admin/concerns/:concernId/resolve',
+        pathParams: { concernId: 'concern-a' },
+      },
+      authorization: {
+        baseRole: 'admin',
+        requirements: {
+          assurance: 'escalated',
+          confirmation: 'explicit',
+          approvals: ['cogsec'],
+        },
+      },
+    });
+  });
+
   it('rejects unknown keys and malformed companion ids as 400', async () => {
-    const routes = new FleetAuthEscalationHttpRoutes(coordinator().value);
+    const { value, issueGrant } = coordinator();
+    const routes = new FleetAuthEscalationHttpRoutes(value);
     await expect(handle(routes, { ...validBody(), extra: true }))
       .rejects.toMatchObject({ status: 400 });
     await expect(handle(routes, { ...validBody(), companionId: 'not-a-uuid' }))
       .rejects.toMatchObject({ status: 400 });
     await expect(handle(routes, { ...validBody(), reason: undefined }))
       .rejects.toMatchObject({ status: 400 });
+    await expect(handle(routes, {
+      ...validBody(),
+      target: '/api/admin/concerns/concern-a/delete',
+    })).rejects.toMatchObject({ status: 400 });
+    expect(issueGrant).not.toHaveBeenCalled();
   });
 
   it('translates non-escalation surfaces to 404 without leaking route existence', async () => {

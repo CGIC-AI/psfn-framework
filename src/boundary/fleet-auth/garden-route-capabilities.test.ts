@@ -86,6 +86,18 @@ describe('Garden route capability catalogue', () => {
         approvals: ['cogsec', 'independent_reviewer'],
       },
     });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/concerns/concern-a/resolve',
+    )?.capability.authorization).toMatchObject({
+      action: 'cogsec.manage',
+      baseRole: 'admin',
+      requirements: {
+        assurance: 'escalated',
+        confirmation: 'explicit',
+        approvals: ['cogsec'],
+      },
+    });
     expect(resolveGardenRouteCapability('WS', '/api/admin/events')?.capability.authorization)
       .toMatchObject({ action: 'telemetry.read', baseRole: 'admin' });
     expect(resolveGardenRouteCapability(

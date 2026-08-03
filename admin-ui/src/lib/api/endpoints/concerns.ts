@@ -1,4 +1,8 @@
 import { apiGet, apiPost } from '$lib/api/client';
+import {
+  FLEET_ESCALATION_GRANT_HEADER,
+  issueFleetEscalationGrant,
+} from '$lib/api/fleet-escalation';
 
 export interface ConcernView {
   id: string;
@@ -38,14 +42,33 @@ export function listConcerns(query: ConcernListQuery = {}): Promise<ConcernListD
   return apiGet<ConcernListData>(`/api/admin/concerns${suffix}`);
 }
 
-export function resolveConcern(id: string, outcome?: string): Promise<ConcernActionResult> {
-  return apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/resolve`, {
+async function postEscalatedConcernAction(
+  target: string,
+  reason: string,
+  body: Record<string, string>,
+): Promise<ConcernActionResult> {
+  const grant = await issueFleetEscalationGrant({ method: 'POST', target, reason });
+  return apiPost<ConcernActionResult>(target, body, {
+    headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
+  });
+}
+
+export function resolveConcern(
+  id: string,
+  reason: string,
+  outcome?: string,
+): Promise<ConcernActionResult> {
+  return postEscalatedConcernAction(`/api/admin/concerns/${encodeURIComponent(id)}/resolve`, reason, {
     ...(outcome ? { outcome } : {}),
   });
 }
 
-export function suppressConcern(id: string, outcome?: string): Promise<ConcernActionResult> {
-  return apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/suppress`, {
+export function suppressConcern(
+  id: string,
+  reason: string,
+  outcome?: string,
+): Promise<ConcernActionResult> {
+  return postEscalatedConcernAction(`/api/admin/concerns/${encodeURIComponent(id)}/suppress`, reason, {
     ...(outcome ? { outcome } : {}),
   });
 }
@@ -53,17 +76,18 @@ export function suppressConcern(id: string, outcome?: string): Promise<ConcernAc
 export function transitionConcern(
   id: string,
   status: string,
+  reason: string,
   options: { outcome?: string; nextReviewAt?: string } = {},
 ): Promise<ConcernActionResult> {
-  return apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/transition`, {
+  return postEscalatedConcernAction(`/api/admin/concerns/${encodeURIComponent(id)}/transition`, reason, {
     status,
     ...(options.outcome ? { outcome: options.outcome } : {}),
     ...(options.nextReviewAt ? { nextReviewAt: options.nextReviewAt } : {}),
   });
 }
 
-export function resolveStaleConcerns(outcome?: string): Promise<ConcernActionResult> {
-  return apiPost<ConcernActionResult>('/api/admin/concerns/resolve-stale', {
+export function resolveStaleConcerns(reason: string, outcome?: string): Promise<ConcernActionResult> {
+  return postEscalatedConcernAction('/api/admin/concerns/resolve-stale', reason, {
     ...(outcome ? { outcome } : {}),
   });
 }

@@ -452,17 +452,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // observed and settled before the process advertises Ready. It remains a
   // shared handle for self-diagnosis and the tool-usage evaluator.
   const cachedModelUsageStore: PostgresModelUsageStore | null =
-    createPostgresModelUsageStoreFromConfig({
-      persistenceBackend: config.persistenceBackend,
-      postgresDatabaseUrl,
-      companionId: config.companionId,
-    });
+    createPostgresModelUsageStoreFromConfig(
+      { ...config, postgresDatabaseUrl },
+      undefined,
+      'read_only',
+    );
   const getModelUsageQuery = (): ModelUsageQueryPort | null => {
-    // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide
-    // ledger written by the gateway and aggregated across companions by the
-    // fleet Garden (psfn-framework-stmof). Pinning this reader to the companion
-    // schema would fork it away from the writer and silently read an empty
-    // per-tenant table.
+    // The factory pins this read-only handle to the canonical first
+    // companion's fleet ledger while retaining this agent's companionId query
+    // scope. Followers never migrate or write the primary schema.
     return cachedModelUsageStore;
   };
   const runtimePathLayout = pathSnapshot.runtimePathLayout;

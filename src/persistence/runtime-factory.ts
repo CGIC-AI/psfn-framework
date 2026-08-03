@@ -215,16 +215,19 @@ export async function createAgentPersistenceRuntime(
   // DML authority, reciprocal tenant isolation, and zero fleet_auth access
   // before opening a shared store.
   if (options.config.multiCompanion === true) {
-    if (!schema || !options.config.companionFleet) {
+    const companionFleet = options.config.companionFleet;
+    const modelUsagePrimary = companionFleet?.companions.at(0);
+    if (!schema || !companionFleet || !modelUsagePrimary) {
       throw new Error('Multi-companion shared persistence requires a complete fleet schema identity');
     }
     await awaitPostgresStoreReadiness(
       'shared_runtime_authority',
       () => assertSharedSchemaRuntimeAuthority(databaseUrl, {
         ownSchema: schema,
-        companionSchemas: options.config.companionFleet!.companions.map(
+        companionSchemas: companionFleet.companions.map(
           companion => companion.postgresSchema,
         ),
+        modelUsageLedgerSchema: modelUsagePrimary.postgresSchema,
       }),
     );
   }

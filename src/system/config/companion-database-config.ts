@@ -80,9 +80,11 @@ export function resolveCompanionDatabaseTopology(options: {
     throw new Error('Multi-companion topology database credentials must target the same exact database');
   }
   const gatewayDatabaseUrl = options.gatewayDatabaseUrl.trim();
-  if (!companions.some(entry => entry.databaseUrl === gatewayDatabaseUrl)) {
+  // Startup-local topology equality has no remote timing oracle; this compares
+  // canonical credential identity rather than authenticating a presented token.
+  if (companions[0]?.databaseUrl !== gatewayDatabaseUrl) { // ubs:ignore — no attacker-controlled timing boundary
     throw new Error(
-      'Gateway POSTGRES_DATABASE_URL must exactly match one configured companion runtime credential',
+      'Gateway POSTGRES_DATABASE_URL must exactly match the primary/canonical companion credential',
     );
   }
   return {

@@ -72,6 +72,7 @@ import { requireFleetSsoFleetManifest } from '../../boundary/fleet-auth/fleet-ss
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
+import { grantFleetModelUsageReadAccess } from '../../persistence/postgres/model-usage-access.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
@@ -297,6 +298,20 @@ async function main(): Promise<void> {
     privilegedServices,
     createGatewayServer,
   } = privilegedCore;
+  if (companionDatabaseTopology && companionDatabaseTopology.companions.length > 1) {
+    const primary = companionDatabaseTopology.companions[0];
+    const modelUsageStore = privilegedServices.modelUsageStore;
+    if (!modelUsageStore) {
+      throw new Error('Fleet model usage startup requires its canonical gateway authority');
+    }
+    await modelUsageStore.waitUntilReady();
+    await grantFleetModelUsageReadAccess({
+      ownerDatabaseUrl: primary.databaseUrl,
+      primarySchema: primary.companion.postgresSchema,
+      primaryRole: primary.role,
+      followerRoles: companionDatabaseTopology.companions.slice(1).map(entry => entry.role),
+    });
+  }
   let fleetAuthBackupScheduler: Scheduler | undefined;
   if (config.fleetAuth) {
     const fleetAuthDatabaseRoles = config.fleetAuth.databaseRoles;

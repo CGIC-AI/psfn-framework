@@ -30,7 +30,6 @@ vi.mock('../postgres.js', () => ({
 }));
 
 import {
-  FLEET_LEDGER_SCHEMA,
   resolveConfigTenantPoolScope,
   resolveFleetLedgerPoolScope,
 } from './tenant-pool-scope.js';
@@ -83,19 +82,33 @@ describe('resolveFleetLedgerPoolScope (explicit fleet-wide read scope)', () => {
   // Regression coverage for psfn-framework-vzh0u: the ICP admin cost projection
   // pool used to open with no schema and read the fleet-wide
   // icp_conversation_cost_decisions ledger through the libpq default
-  // `"$user", public` search_path. Operator ruling 2026-07-28: aggregation
-  // across companions is intentional (shared budget pool), so the fix only makes
-  // the target schema explicit and fails closed when the scope is ambiguous.
+  // `"$user", public` search_path. The fleet ledger now lives in the canonical
+  // first companion's schema and followers reach it under their own exact role.
 
-  it('pins the public fleet ledger schema in multi-companion mode', () => {
-    expect(resolveFleetLedgerPoolScope({ multiCompanion: true })).toEqual({
-      schema: FLEET_LEDGER_SCHEMA,
+  it('pins the canonical fleet ledger schema and current role in multi-companion mode', () => {
+    expect(resolveFleetLedgerPoolScope({
+      multiCompanion: true,
+      companionFleet: {
+        companions: [{ postgresSchema: 'companion_primary' }],
+      },
+      postgresRole: 'companion_follower_runtime',
+    })).toEqual({
+      schema: 'companion_primary',
+      role: 'companion_follower_runtime',
     });
-    expect(FLEET_LEDGER_SCHEMA).toBe('public');
   });
 
-  it('never carries a role (a public search_path with a role would be rejected)', () => {
-    expect(resolveFleetLedgerPoolScope({ multiCompanion: true })).not.toHaveProperty('role');
+  it('fails closed when canonical topology or the current role is missing', () => {
+    expect(() => resolveFleetLedgerPoolScope({
+      multiCompanion: true,
+      postgresRole: 'companion_follower_runtime',
+    })).toThrow(/canonical companion schema/u);
+    expect(() => resolveFleetLedgerPoolScope({
+      multiCompanion: true,
+      companionFleet: {
+        companions: [{ postgresSchema: 'companion_primary' }],
+      },
+    })).toThrow(/current runtime role/u);
   });
 
   it('fails closed in single-companion mode rather than opening an unscoped pool', () => {

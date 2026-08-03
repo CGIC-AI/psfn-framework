@@ -30,6 +30,11 @@ import { PostgresIcpAdminProjectionStore } from './icp-admin-projection-store.js
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
 const PEER = '22222222-2222-4222-8222-222222222222';
+const FLEET_CONFIG = {
+  multiCompanion: true,
+  companionFleet: { companions: [{ postgresSchema: 'companion_primary' }] },
+  postgresRole: 'companion_follower_runtime',
+} as const;
 
 describe('PostgresIcpAdminProjectionStore tenant binding', () => {
   beforeEach(() => {
@@ -52,7 +57,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     const store = await PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,
       knownCompanionIds: [LOCAL, PEER],
-      config: { multiCompanion: true },
+      config: FLEET_CONFIG,
     });
 
     await expect(store.readProjection(7)).resolves.toEqual({
@@ -108,18 +113,18 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     await expect(PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,
       knownCompanionIds: [LOCAL, PEER],
-      config: { multiCompanion: true },
+      config: FLEET_CONFIG,
     })).rejects.toThrow('cost ledger schema version is missing');
     expect(mocks.connectShared).not.toHaveBeenCalled();
     expect(sharedPool.end).toHaveBeenCalledOnce();
     expect(costPool.end).toHaveBeenCalledOnce();
   });
 
-  it('pins the cost pool to the explicit fleet ledger schema instead of the default search_path', async () => {
+  it('pins the cost pool to the canonical fleet ledger under the current read-only role', async () => {
     // Regression for psfn-framework-vzh0u: the cost pool used to open with no
     // schema, so its unqualified icp_conversation_cost_decisions read resolved
     // via the libpq default `"$user", public` search_path. It must now state its
-    // fleet-wide scope deliberately by pinning the `public` ledger schema.
+    // fleet-wide scope deliberately by pinning the canonical ledger schema.
     const sharedPool = { end: vi.fn() };
     const costPool = { end: vi.fn() };
     mocks.createPostgresPool
@@ -130,7 +135,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     await PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,
       knownCompanionIds: [LOCAL, PEER],
-      config: { multiCompanion: true },
+      config: FLEET_CONFIG,
     });
 
     expect(mocks.createPostgresPool).toHaveBeenCalledTimes(2);
@@ -139,11 +144,10 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     const costOptions = mocks.createPostgresPool.mock.calls[1]?.[1] ?? {};
     expect(costOptions).toMatchObject({
       applicationName: 'psfn-icp-admin-cost-projection',
-      schema: 'public',
+      schema: 'companion_primary',
+      role: 'companion_follower_runtime',
+      readOnly: true,
     });
-    // The fleet ledger pool never selects a role; a public search_path with a
-    // least-privilege role would fail closed in createPostgresPool.
-    expect(costOptions).not.toHaveProperty('role');
   });
 
   it('fails closed for an ambiguous (single-companion) scope before opening pools', async () => {
@@ -163,7 +167,7 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
     await expect(PostgresIcpAdminProjectionStore.connect('postgres://test', {
       localCompanionId: LOCAL,
       knownCompanionIds: [PEER],
-      config: { multiCompanion: true },
+      config: FLEET_CONFIG,
     })).rejects.toThrow('known local companion identity');
     expect(mocks.createPostgresPool).not.toHaveBeenCalled();
     expect(mocks.connectShared).not.toHaveBeenCalled();

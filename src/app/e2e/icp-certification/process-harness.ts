@@ -19,6 +19,7 @@ import { PostgresCompanionPresenceStore } from '../../../persistence/postgres/co
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from '../../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from '../../../persistence/postgres/icp-shared-autonomy-store.js';
+import { grantFleetModelUsageReadAccess } from '../../../persistence/postgres/model-usage-access.js';
 import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
 import { bootstrapSharedSchema } from '../../../persistence/postgres/shared-schema.js';
 import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
@@ -481,11 +482,11 @@ async function waitForDestroyed(connection: GatewayRpcConnection): Promise<void>
  *    its configured `postgresRole` (companions.json), including support
  *    companions that never boot an agent — the agent's runtime-authority proof
  *    checks the full fleet schema set and reciprocal isolation.
- *  - Each BOOTED companion role is turned into the least-privilege LOGIN
- *    credential the agent connects as: own-schema owner + DML-only shared
- *    access with a SELECT-only migrations ledger, NOINHERIT, finite connection
- *    limit, no cluster attributes, no role memberships. That credential is
- *    written to the agent's POSTGRES_DATABASE_URL_FILE.
+ *  - Each companion role is turned into the least-privilege LOGIN authority
+ *    required by the production fleet topology: own-schema owner + DML-only
+ *    shared access with a SELECT-only migrations ledger, NOINHERIT, finite
+ *    connection limit, no cluster attributes, no role memberships. Credentials
+ *    are written only for the two companions this process harness boots.
  */
 async function provisionCertificationTenantBoundaries(
   databaseUrl: string,
@@ -526,13 +527,6 @@ async function provisionCertificationTenantBoundaries(
       });
       await assertPostgresTenantAccessProvisioned(pool, plan);
 
-      const booted = bootedById.get(entry.companionId);
-      if (!booted) {
-        // A support companion in the fleet manifest that never boots an agent:
-        // its schema must merely exist and stay reciprocally isolated. Leave the
-        // role NOLOGIN (no agent connects as it).
-        continue;
-      }
       const role = quotePostgresRoleName(entry.postgresRole);
       // The migrations ledger is SELECT-only for a runtime credential; the
       // read_write tenant grant included it, so narrow it back.
@@ -545,6 +539,8 @@ async function provisionCertificationTenantBoundaries(
       await pool.query(
         `ALTER ROLE ${role} LOGIN CONNECTION LIMIT 100 PASSWORD '${CERTIFICATION_TENANT_PASSWORD}'`,
       );
+      const booted = bootedById.get(entry.companionId);
+      if (!booted) continue;
       const credentialFile = booted.env.POSTGRES_DATABASE_URL_FILE;
       if (!credentialFile) {
         throw new Error(
@@ -572,10 +568,21 @@ export async function startIcpCertificationProcessHarness(input: {
   configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
   const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = 'icp-certification-loopback-key';
+  // This hand-composed harness stands in for the production gateway migration
+  // authority. Establish both the shared and companion schemas before loading
+  // the primary agent credential used by the canonical model-usage owner.
+  await bootstrapSharedSchema(input.databaseUrl);
+  await provisionCertificationTenantBoundaries(input.databaseUrl, input.fixture);
   const config = hydrateJsonBackedRuntimeConfig(
     loadAgentConfig(input.fixture.companions[0].env),
     { seedDir: input.fixture.companions[0].env.CONFIG_DIR },
   );
+  const companionFleet = config.companionFleet;
+  const primary = companionFleet?.companions.at(0);
+  const ownerDatabaseUrl = config.postgresDatabaseUrl;
+  if (!companionFleet || !primary || !ownerDatabaseUrl) {
+    throw new Error('ICP certification requires canonical fleet model-usage authority');
+  }
   const fleet = input.fixture.companions.map(companion => ({
     companionId: companion.companionId,
     postgresSchema: companion.postgresSchema,
@@ -588,11 +595,22 @@ export async function startIcpCertificationProcessHarness(input: {
       ? { seedDir: input.fixture.companions[0].env.CONFIG_DIR }
       : {}),
   });
-  const modelUsagePool = createPostgresPool(input.databaseUrl, {
+  const modelUsagePool = createPostgresPool(ownerDatabaseUrl, {
     applicationName: 'psfn-icp-certification-model-usage',
     allowExitOnIdle: true,
+    schema: primary.postgresSchema,
+    role: primary.postgresRole,
   });
   const modelUsage = new PostgresModelUsageStore(modelUsagePool, { fleetAggregation: true });
+  await modelUsage.waitUntilReady();
+  await grantFleetModelUsageReadAccess({
+    ownerDatabaseUrl,
+    primarySchema: primary.postgresSchema,
+    primaryRole: primary.postgresRole,
+    followerRoles: companionFleet.companions.slice(1).map(
+      companion => companion.postgresRole,
+    ),
+  });
   const costDecisions: IcpConversationCostBreakerEvent[] = [];
   const llmProvider = new LLMClient(config, {
     usageRecorder: modelUsage,
@@ -612,17 +630,11 @@ export async function startIcpCertificationProcessHarness(input: {
     icpConversationChargePolicyResolver: resolveChargePolicy,
   });
   const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
-  // Shared-schema stores no longer self-provision DDL: the gateway migration
-  // authority provisions the shared schema before agents connect. This
-  // hand-composed harness stands in for that authority, so mirror it here
-  // before any shared store (presence, autonomy, fatigue) connects.
-  await bootstrapSharedSchema(input.databaseUrl);
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
   const autonomy = await PostgresIcpSharedAutonomyStore.connect(input.databaseUrl, {
     knownCompanionIds: companionIds,
   });
   const fatigue = await PostgresIcpFatigueRegulationReservationStore.connect(input.databaseUrl);
-  await provisionCertificationTenantBoundaries(input.databaseUrl, input.fixture);
   const authority = new PostgresIcpInitiationPolicyAuthority(input.databaseUrl, {
     fleet,
     quietHours: {

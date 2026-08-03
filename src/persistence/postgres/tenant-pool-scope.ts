@@ -47,25 +47,22 @@ export function resolveConfigTenantPoolScope(
 }
 
 /**
- * The fleet-wide ledger schema. ICP conversation cost decisions live in the
- * primary `public` schema: they are a shared, cluster-wide budget ledger — a
- * conversation charges both participating companions against one pool — written
- * there by the fleet-scoped model-usage store (the gateway) and aggregated
- * across every companion by the operator/admin projections. This is the same
- * fleet-wide intent recorded for `model_usage_events` in psfn-framework-3ack and
- * ratified for this cost pool by the operator ruling on psfn-framework-vzh0u
- * (2026-07-28). It is deliberately NOT a per-companion tenant schema.
- */
-export const FLEET_LEDGER_SCHEMA = 'public';
-
-/**
  * The explicit search_path scope a fleet-wide ledger aggregation pool must pin.
- * A single-field marker (never a role) so the aggregation surface states its
- * fleet-wide intent deliberately at connection startup instead of inheriting the
- * libpq default `"$user", public` search_path.
+ * The ledger is owned by the canonical first companion, while every agent uses
+ * its own mapped runtime role. Followers therefore retain their own credential
+ * and receive only the explicitly granted fleet-ledger reads.
  */
 export interface FleetLedgerPoolScope {
-  readonly schema: typeof FLEET_LEDGER_SCHEMA;
+  readonly schema: string;
+  readonly role: string;
+}
+
+export interface FleetLedgerConfig {
+  readonly companionFleet?: {
+    readonly companions: readonly { readonly postgresSchema: string }[];
+  };
+  readonly multiCompanion?: boolean;
+  readonly postgresRole?: string;
 }
 
 /**
@@ -74,11 +71,11 @@ export interface FleetLedgerPoolScope {
  *
  * This is the fleet-wide counterpart to {@link resolveConfigTenantPoolScope}:
  * where a per-companion pool pins its own tenant schema, a fleet-ledger pool
- * pins the shared `public` ledger so its unqualified reads resolve deliberately
+ * pins the canonical first companion's ledger so its unqualified reads resolve deliberately
  * rather than falling through the libpq default `"$user", public` search_path —
  * the accidental-default read class fixed fail-closed in psfn-framework-3ack and
  * closed read-side here (psfn-framework-vzh0u). The aggregation semantics are
- * unchanged: this only makes the target schema explicit.
+ * unchanged: this makes both the target schema and current reader role explicit.
  *
  * Fleet aggregation only exists in multi-companion mode; in single-companion
  * mode there is no fleet to aggregate, so an unscoped fleet pool would be
@@ -86,7 +83,7 @@ export interface FleetLedgerPoolScope {
  * default search_path.
  */
 export function resolveFleetLedgerPoolScope(
-  config: Pick<SubstrateConfig, 'multiCompanion'>,
+  config: FleetLedgerConfig,
 ): FleetLedgerPoolScope {
   if (config.multiCompanion !== true) {
     throw new Error(
@@ -94,5 +91,13 @@ export function resolveFleetLedgerPoolScope(
       + 'refusing to open an unscoped pool that would default to the public search_path',
     );
   }
-  return { schema: FLEET_LEDGER_SCHEMA };
+  const schema = config.companionFleet?.companions.at(0)?.postgresSchema.trim();
+  const role = config.postgresRole?.trim();
+  if (!schema || !role) {
+    throw new Error(
+      'Fleet-ledger aggregation pools require the canonical companion schema '
+      + 'and current runtime role',
+    );
+  }
+  return { schema, role };
 }

@@ -36,6 +36,7 @@ const PASSWORDS = {
   fleet_auth_backup: 'backup-password',
 } as const;
 const PROVIDER_SUBJECT_ID = '123456789012345679';
+const SECOND_PROVIDER_SUBJECT_ID = '223456789012345679';
 const NOW = new Date('2026-07-15T12:00:00.000Z');
 const CALLBACK_CONFIG: FleetAuthConfig = {
   schemaVersion: 1,
@@ -148,7 +149,10 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
   return url.toString();
 }
 
-async function createStore(options: { failDuringReconcile?: boolean } = {}): Promise<{
+async function createStore(options: {
+  failDuringReconcile?: boolean;
+  accountRoster?: FleetAuthConfig['accountRoster'];
+} = {}): Promise<{
   store: PostgresFleetAuthBrokerStore;
   runtime: import('pg').Pool;
   coordinator: import('pg').Pool;
@@ -214,6 +218,7 @@ async function createStore(options: { failDuringReconcile?: boolean } = {}): Pro
           };
         },
       },
+      ...(options.accountRoster ? { accountRoster: options.accountRoster } : {}),
     }),
   };
 }
@@ -671,8 +676,32 @@ describe('Postgres gateway OAuth/session authority', () => {
   }, TIMEOUT_MS);
 
   it('creates pending no-role principals, rotates once under races, and tombstones provider revocation', async () => {
-    const { store, runtime, coordinator, migration, authorityFloors } = await createStore();
+    const ceremonyId = randomUUID();
+    const companionId = randomUUID();
+    const { store, runtime, coordinator, migration, authorityFloors } = await createStore({
+      accountRoster: [{
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        companionId,
+        contactId: 'owner-contact',
+        role: 'owner',
+      }],
+    });
     try {
+      await migration.query(`
+        INSERT INTO fleet_auth.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider,
+           expected_provider_subject_id, expected_companion_id,
+           expected_contact_id, exact_scope, status, global_auth_epoch,
+           created_at, expires_at)
+        VALUES ($1, $2, 'first_owner', 'discord', $3, $4, 'owner-contact',
+                '{"role":"owner"}'::jsonb, 'pending', 1,
+                clock_timestamp(), clock_timestamp() + interval '5 minutes')
+      `, [
+        ceremonyId,
+        'd'.repeat(64),
+        PROVIDER_SUBJECT_ID,
+        companionId,
+      ]);
       const loginInput = await authenticate(store, 'first');
       const login = await store.createLoginSession({
         ...loginInput,
@@ -741,23 +770,6 @@ describe('Postgres gateway OAuth/session authority', () => {
         now: new Date(NOW.getTime() + 2000),
       });
       expect(freshCsrf).toBe('fresh-csrf-token');
-      const ceremonyId = randomUUID();
-      const companionId = randomUUID();
-      await migration.query(`
-        INSERT INTO fleet_auth.trusted_host_ceremonies
-          (ceremony_id, nonce_digest, kind, expected_provider,
-           expected_provider_subject_id, expected_companion_id,
-           expected_contact_id, exact_scope, status, global_auth_epoch,
-           created_at, expires_at)
-        VALUES ($1, $2, 'first_owner', 'discord', $3, $4, 'owner-contact',
-                '{"role":"owner"}'::jsonb, 'pending', 1,
-                clock_timestamp(), clock_timestamp() + interval '5 minutes')
-      `, [
-        ceremonyId,
-        'd'.repeat(64),
-        PROVIDER_SUBJECT_ID,
-        companionId,
-      ]);
       const firstOwnerInput = {
         token: winner.value.token,
         csrfToken: freshCsrf,
@@ -1158,4 +1170,164 @@ describe('Postgres gateway OAuth/session authority', () => {
     },
     TIMEOUT_MS,
   );
+  it('activates an exact rostered first owner during the first fresh-fleet login', async () => {
+    const companionId = randomUUID();
+    const { store, runtime, coordinator, migration } = await createStore({
+      accountRoster: [{
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        companionId,
+        contactId: 'owner-contact',
+        role: 'owner',
+      }, {
+        providerSubjectId: SECOND_PROVIDER_SUBJECT_ID,
+        companionId,
+        contactId: 'second-owner-contact',
+        role: 'owner',
+      }],
+    });
+    try {
+      const loginInput = await authenticate(store, 'rostered-first-owner');
+      const login = await store.createLoginSession({
+        ...loginInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: { mfaEnabled: true },
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+
+      expect(login.principalStatus).toBe('active');
+      const authority = await runtime.query<{
+        principal_status: string;
+        provider_state: string;
+        authn_version: string;
+        authz_version: string;
+        binding_version: string;
+        grant_version: string;
+        policy_version: string;
+        global_auth_epoch: string;
+        session_global_auth_epoch: string;
+        bindings: string;
+        grants: string;
+        activation_audits: string;
+        login_reason: string;
+      }>(`
+        SELECT principal.status AS principal_status,
+               subject.state AS provider_state,
+               principal.authn_version::text,
+               principal.authz_version::text,
+               principal.binding_version::text,
+               principal.grant_version::text,
+               principal.policy_version::text,
+               authority.global_auth_epoch::text,
+               session.global_auth_epoch::text AS session_global_auth_epoch,
+               (SELECT count(*)::text FROM fleet_auth.principal_contact_bindings
+                WHERE principal_id = principal.principal_id) AS bindings,
+               (SELECT count(*)::text FROM fleet_auth.principal_role_grants
+                WHERE principal_id = principal.principal_id) AS grants,
+               (SELECT count(*)::text FROM fleet_auth.authorization_audit_events
+                WHERE principal_id = principal.principal_id
+                  AND action = 'authority.first_owner'
+                  AND reason_code = 'account_roster_first_owner') AS activation_audits,
+               (SELECT reason_code FROM fleet_auth.authorization_audit_events
+                WHERE principal_id = principal.principal_id AND action = 'session.login'
+                ORDER BY occurred_at DESC LIMIT 1) AS login_reason
+        FROM fleet_auth.human_principals AS principal
+        JOIN fleet_auth.provider_subjects AS subject
+          ON subject.principal_id = principal.principal_id
+         AND subject.provider = 'discord'
+         AND subject.subject_id = $2
+        JOIN fleet_auth.browser_sessions AS session
+          ON session.record_id = $3
+        JOIN fleet_auth.authority_state AS authority ON authority.singleton = TRUE
+        WHERE principal.principal_id = $1
+      `, [login.principalId, PROVIDER_SUBJECT_ID, login.recordId]);
+      expect(authority.rows[0]).toEqual({
+        principal_status: 'active',
+        provider_state: 'active',
+        authn_version: '2',
+        authz_version: '2',
+        binding_version: '2',
+        grant_version: '2',
+        policy_version: '2',
+        global_auth_epoch: '1',
+        session_global_auth_epoch: '1',
+        bindings: '0',
+        grants: '0',
+        activation_audits: '1',
+        login_reason: 'rostered_first_owner',
+      });
+
+      const secondLoginInput = await authenticate(store, 'rostered-second-owner');
+      const secondLogin = await store.createLoginSession({
+        ...secondLoginInput,
+        providerSubjectId: SECOND_PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: new Date(NOW.getTime() + 1_000),
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      expect(secondLogin.principalStatus).toBe('pending');
+    } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps an unmapped rostered first owner pending until a usable binding exists', async () => {
+    const companionId = randomUUID();
+    const { store, runtime, coordinator, migration } = await createStore({
+      accountRoster: [{
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        companionId,
+        role: 'owner',
+      }],
+    });
+    try {
+      const loginInput = await authenticate(store, 'unmapped-first-owner');
+      const login = await store.createLoginSession({
+        ...loginInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+
+      expect(login.principalStatus).toBe('pending');
+      const audits = await runtime.query<{ count: string }>(`
+        SELECT count(*)::text
+        FROM fleet_auth.authorization_audit_events
+        WHERE principal_id = $1 AND action = 'authority.first_owner'
+      `, [login.principalId]);
+      expect(audits.rows[0]?.count).toBe('0');
+
+      await migration.query(`
+        INSERT INTO fleet_auth.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation)
+        VALUES ($1, $2, $3, 'owner-contact', 'active',
+                '{"kind":"integration_test"}'::jsonb, 1)
+      `, [randomUUID(), login.principalId, companionId]);
+      const retryInput = await authenticate(store, 'bound-first-owner');
+      const retry = await store.createLoginSession({
+        ...retryInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: new Date(NOW.getTime() + 1_000),
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      expect(retry.principalStatus).toBe('active');
+    } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
 });

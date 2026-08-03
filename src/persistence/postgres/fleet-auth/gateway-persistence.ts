@@ -455,6 +455,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       sessionPepper: secrets.sessionPepper,
       tokenEncryptionKey: secrets.tokenEncryptionKey,
       providerRevocationAuthority: accountAuthority,
+      ...(config.accountRoster ? { accountRoster: config.accountRoster } : {}),
     });
     const escalation = new FleetEscalationCoordinator({
       canonicalOrigin: config.canonicalOrigin,

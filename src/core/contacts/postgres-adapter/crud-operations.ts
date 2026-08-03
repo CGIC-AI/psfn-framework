@@ -537,7 +537,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return result;
   },
 
-  async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Promise<boolean> {
+  async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string, auditMetadata?: ContactMutationAuditEntry['metadata']): Promise<boolean> {
     const contact = await this.getById(contactId);
     if (!contact) return false;
     const nextDisplayName = displayName.trim() || contact.displayName;
@@ -556,10 +556,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       [nextDisplayName, nextNickname, contactId],
     );
     if (contact.displayName !== nextDisplayName) {
-      await this.appendMutationAuditEntry(contactId, 'display_name', contact.displayName, nextDisplayName, actor);
+      await this.appendMutationAuditEntry(contactId, 'display_name', contact.displayName, nextDisplayName, actor, undefined, auditMetadata);
     }
     if ((contact.nickname ?? null) !== nextNickname) {
-      await this.appendMutationAuditEntry(contactId, 'nickname', contact.nickname ?? null, nextNickname, actor);
+      await this.appendMutationAuditEntry(contactId, 'nickname', contact.nickname ?? null, nextNickname, actor, undefined, auditMetadata);
     }
     await this.upsertSocialGraphEntityForContact({
       id: contactId,
@@ -981,7 +981,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return await this.loadContactEmotionalTimeSeries(id, limit);
   },
 
-  async updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Promise<boolean> {
+  async updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string, auditMetadata?: ContactMutationAuditEntry['metadata']): Promise<boolean> {
     const contact = await this.getById(id);
     if (!contact) return false;
     if (contact.relationshipType === relationshipType) return true;
@@ -990,6 +990,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       contact.relationshipType,
       relationshipType,
       actor,
+      auditMetadata,
     );
   },
 
@@ -998,6 +999,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     expectedRelationshipType: RelationshipType,
     relationshipType: RelationshipType,
     actor?: string,
+    auditMetadata?: ContactMutationAuditEntry['metadata'],
   ): Promise<boolean> {
     if (
       requiresManualRelationshipMutation(expectedRelationshipType, relationshipType)
@@ -1023,9 +1025,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       await client.query(
         `
           INSERT INTO contact_mutation_audit (
-            contact_id, actor, field, old_value, new_value, timestamp
+            contact_id, actor, field, old_value, new_value, metadata, timestamp
           )
-          VALUES ($1, $2, $3, $4, $5, $6)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           id,
@@ -1033,6 +1035,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           'relationship_type',
           expectedRelationshipType,
           relationshipType,
+          auditMetadata ?? {},
           new Date().toISOString(),
         ],
       );
@@ -1663,7 +1666,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const rows = await queryRows<ContactMutationAuditRow>(
       this.pool,
       `
-        SELECT id, contact_id, actor, field, old_value, new_value, timestamp
+        SELECT id, contact_id, actor, field, old_value, new_value, metadata, timestamp
         FROM contact_mutation_audit
         ${clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''}
         ORDER BY timestamp DESC, id DESC

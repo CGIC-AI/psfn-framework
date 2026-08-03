@@ -72,6 +72,7 @@ export interface ContactMutationAuditRow {
   field: string;
   old_value: string | null;
   new_value: string | null;
+  metadata: unknown;
   timestamp: string;
 }
 

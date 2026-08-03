@@ -40,6 +40,7 @@ import type {
 export interface ContactTrustMutationOptions {
   allowPrimaryTrustAssignment?: boolean;
   mutationSource?: TrustMutationSource;
+  auditMetadata?: import('./types.js').ContactMutationAuditMetadata;
 }
 
 export interface ContactUpsertMutationOptions extends ContactTrustMutationOptions {
@@ -172,7 +173,7 @@ export interface ContactStorePort {
     actor: string,
   ): Awaitable<MachineIntelligenceObservationMarkResult>;
   updateLastSeen(id: string): Awaitable<void>;
-  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Awaitable<boolean>;
+  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string, auditMetadata?: import('./types.js').ContactMutationAuditMetadata): Awaitable<boolean>;
   recordChannelActivity(
     contactId: string,
     channel: ContactChannel,
@@ -211,13 +212,14 @@ export interface ContactStorePort {
   ): Awaitable<Contact | undefined>;
   getEmotionalSnapshot(id: string): Awaitable<EmotionalSnapshot | undefined>;
   getEmotionalTimeSeries(id: string, limit?: number): Awaitable<EmotionalTimeSeriesPoint[]>;
-  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Awaitable<boolean>;
+  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string, auditMetadata?: import('./types.js').ContactMutationAuditMetadata): Awaitable<boolean>;
   /** Atomically changes a relationship only while its persisted value matches `expectedRelationshipType`. */
   compareAndSetRelationshipType(
     id: string,
     expectedRelationshipType: RelationshipType,
     relationshipType: RelationshipType,
     actor?: string,
+    auditMetadata?: import('./types.js').ContactMutationAuditMetadata,
   ): Awaitable<boolean>;
   setChannelPrivacy(
     contactId: string,

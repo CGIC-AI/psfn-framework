@@ -8,6 +8,7 @@ import type {
   MemoryBulkUpdatePatch,
   MemoryLink,
   MemoryStorePort,
+  MemoryStoreStats,
 } from '../../../faculties/memory/memory-store-port.js';
 import {
   normalizeMemoryScopeRef,
@@ -222,6 +223,23 @@ export class AdminMemoryDataService implements AdminMemoryService {
     this.bodyGate = bodyGate ?? new AdminMemoryBodyGate(deps.now ? { now: deps.now } : undefined);
   }
 
+  private fleetStoreForRequest(context: FleetGardenRequestContext): MemoryStorePort {
+    return createSubjectAuthorizedMemoryStore(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze({
+        ...fleetSubjectAccessContext(context),
+        reportWithheldByAuthorization: context.actor.role === 'owner',
+      }),
+    );
+  }
+
+  async getStatsForRequest(context: GardenRequestContext | undefined): Promise<MemoryStoreStats> {
+    const store = context?.kind === 'fleet_principal'
+      ? this.fleetStoreForRequest(context)
+      : this.deps.memoryStore;
+    return await store.getStats();
+  }
+
   forRequest(
     context: GardenRequestContext | undefined,
     legacySessionKey: AdminMemorySessionKey = null,
@@ -245,13 +263,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     ].join(':');
     const scoped = new AdminMemoryDataService({
       ...this.deps,
-      memoryStore: createSubjectAuthorizedMemoryStore(
-        this.deps.fleetMemoryStore ?? this.deps.memoryStore,
-        Object.freeze({
-          ...fleetSubjectAccessContext(context),
-          reportWithheldByAuthorization: context.actor.role === 'owner',
-        }),
-      ),
+      memoryStore: this.fleetStoreForRequest(context),
     }, this.bodyGate, context);
     const service = scoped.forSession(sessionKey);
     const fleetSafeService: AdminMemorySessionService = Object.freeze({

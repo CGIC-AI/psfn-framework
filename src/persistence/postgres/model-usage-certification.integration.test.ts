@@ -7,7 +7,6 @@ import type { Pool } from 'pg';
 import { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import type { ModelUsageEventInput, ModelUsageTotals } from '../../shared/telemetry/model-usage.js';
-import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SessionStore } from '../sessions/store.js';
@@ -71,9 +70,7 @@ function makeDashboard(
   nowMs: number,
 ): AdminDashboardDataService {
   return new AdminDashboardDataService({
-    memoryStore: {
-      getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
-    } as MemoryStorePort,
+    getMemoryStatsForRequest: async () => ({ total: 0, avgSalience: 0, byType: {} }),
     sessionStore: { listChannels: () => [] } as unknown as SessionStore,
     scheduler: { taskCount: 0 } as Scheduler,
     shardManager: {

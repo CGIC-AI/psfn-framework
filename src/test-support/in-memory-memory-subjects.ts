@@ -122,6 +122,14 @@ function isAuthorized(
   const viewerIsSubject = classification.subjectContactIds.some(contactId => (
     authorization.viewerContactIds.includes(contactId)
   ));
+  if (
+    authorization.excludeHighSensitivityOtherRelation === true
+    && classification.subjectContactIds.length > 0
+    && !viewerIsSubject
+    && (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential')
+  ) {
+    return false;
+  }
   const relationAllowed = (
     classification.subjectClass === 'single_contact'
     && viewerIsSubject

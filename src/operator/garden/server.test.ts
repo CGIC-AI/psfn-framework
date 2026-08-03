@@ -22,7 +22,10 @@ import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
-import { createGatewayRequestCapabilitySigner } from '../../boundary/fleet-auth/request-capability.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  type RequestCapabilityAuthContext,
+} from '../../boundary/fleet-auth/request-capability.js';
 import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
@@ -31,6 +34,7 @@ import {
   getRecentDiagnosticLogRecords,
 } from '../../shared/logger.js';
 import { clearGardenDenialsForTests } from './garden-denial-observability.js';
+import type { PurrMemory } from '../../faculties/memory/types.js';
 
 const fleetVerifierKeyPair = generateKeyPairSync('ed25519');
 const fleetVerifierPublicKey = fleetVerifierKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -53,6 +57,36 @@ const FLEET_AUTH_CONTEXT = Object.freeze({
   authorizationEventId: 'event-a',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });
+
+function fleetCapabilityHeaders(
+  rawTarget: string,
+  authOverrides: Partial<RequestCapabilityAuthContext> = {},
+): Record<string, string> {
+  const target = compileGatewayGardenRequestTarget({
+    rawTarget,
+    method: 'GET',
+    companionId: FLEET_COMPANION_ID,
+    body: Buffer.alloc(0),
+  });
+  const requestId = randomUUID();
+  const decisionId = randomUUID();
+  const capability = createGatewayRequestCapabilitySigner({
+    issuer: 'psfn-fleet-auth',
+    kid: 'test-active',
+    privateKeyPem: fleetSignerPrivateKey,
+    ttlSeconds: 30,
+  }).signOperator({
+    target,
+    requestId,
+    decisionId,
+    authContext: { ...FLEET_AUTH_CONTEXT, ...authOverrides },
+    versions: FLEET_AUTHORITY_VERSIONS,
+  });
+  return buildGardenCapabilityHeaders({
+    token: capability,
+    context: { requestId, decisionId, versions: FLEET_AUTHORITY_VERSIONS },
+  });
+}
 
 function request(
   port: number,
@@ -223,6 +257,32 @@ const testCard: CharacterCardV2 = {
   },
 };
 
+function dashboardMemory(input: {
+  id: string;
+  contactId: string;
+  type: PurrMemory['type'];
+  salience: number;
+  sensitivity: PurrMemory['sensitivity'];
+}): PurrMemory {
+  return {
+    id: input.id,
+    text: `memory ${input.id}`,
+    type: input.type,
+    importance: 0.7,
+    confidence: 0.9,
+    emotionalValence: 0,
+    salience: input.salience,
+    sourceRef: `test:${input.id}`,
+    extractedAt: 1,
+    lastAccessed: 1,
+    accessCount: 0,
+    tags: [],
+    sensitivity: input.sensitivity,
+    contactId: input.contactId,
+    provenance: { subjectContactId: input.contactId },
+  };
+}
+
 interface ServerHarness {
   tempDir: string;
   eventBus: EventBus;
@@ -239,6 +299,7 @@ async function createHarness(options: {
     getAvailableModels: () => Promise<DiscoveredModel[]>;
     invalidateCache: () => void;
   } | null;
+  memories?: readonly PurrMemory[];
 }): Promise<ServerHarness> {
   const tempDir = mkdtempSync(join(tmpdir(), 'admin-server-test-'));
   const characterCardPath = join(tempDir, 'character.json');
@@ -356,7 +417,9 @@ async function createHarness(options: {
   });
 
   const eventBus = new EventBus();
-  const memoryStore = new InMemoryMemoryStore().asPort();
+  const inMemoryStore = new InMemoryMemoryStore();
+  for (const memory of options.memories ?? []) inMemoryStore.insertMemory(memory);
+  const memoryStore = inMemoryStore.asPort();
   const sessionStore = new SessionStore(sessionsDir);
   const sessionManager = new SessionManager(sessionStore, config, eventBus);
   const scheduler = new Scheduler(eventBus);
@@ -375,6 +438,15 @@ async function createHarness(options: {
         privacyLevel: 'private',
       }],
     }],
+    getById: (id: string) => ({
+      id,
+      displayName: id,
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      channels: [],
+    }),
     linkChannelIdentity: vi.fn(() => 'linked'),
     setChannelPrivacy: vi.fn(() => true),
     setConversationChannelPrivacy: vi.fn(() => true),
@@ -497,6 +569,78 @@ describe('AdminServer Garden routing', () => {
           }) },
         );
         expect(admitted.status).toBe(200);
+      } finally {
+        await destroyHarness(fleetHarness);
+      }
+    });
+
+    it.each<{
+      label: string;
+      role: RequestCapabilityAuthContext['role'];
+      accessMode: RequestCapabilityAuthContext['fleetAccessMode'];
+      expectedTotal: number;
+    }>([
+      { label: 'sole admin', role: 'admin', accessMode: 'sole_admin', expectedTotal: 3 },
+      { label: 'multi admin', role: 'admin', accessMode: 'multi_admin', expectedTotal: 2 },
+      { label: 'member', role: 'member', accessMode: 'multi_admin', expectedTotal: 2 },
+      { label: 'guest', role: 'guest', accessMode: 'multi_admin', expectedTotal: 2 },
+    ])('keeps $label dashboard memory totals equal to the memory-page authorized corpus', async ({
+      role,
+      accessMode,
+      expectedTotal,
+    }) => {
+      const fleetHarness = await createHarness({
+        host: '127.0.0.1',
+        fleetAuthEnabled: true,
+        memories: [
+          dashboardMemory({
+            id: 'self-semantic', contactId: 'contact-a', type: 'semantic', salience: 0.25, sensitivity: 'personal',
+          }),
+          dashboardMemory({
+            id: 'self-procedural', contactId: 'contact-a', type: 'procedural', salience: 0.75, sensitivity: 'personal',
+          }),
+          dashboardMemory({
+            id: 'cross-subject-intimate', contactId: 'contact-b', type: 'relational', salience: 1, sensitivity: 'intimate',
+          }),
+        ],
+      });
+      try {
+        const authOverrides = { role, fleetAccessMode: accessMode };
+        const dashboard = await request(
+          fleetHarness.port,
+          'GET',
+          '/api/admin/dashboard',
+          undefined,
+          fleetCapabilityHeaders('/api/admin/dashboard', authOverrides),
+        );
+        const memoryPage = await request(
+          fleetHarness.port,
+          'GET',
+          '/api/admin/memory',
+          undefined,
+          fleetCapabilityHeaders('/api/admin/memory', authOverrides),
+        );
+
+        expect(dashboard.status, dashboard.body).toBe(200);
+        expect(memoryPage.status, memoryPage.body).toBe(200);
+        const dashboardPayload = JSON.parse(dashboard.body) as {
+          stats: { memoryTotal: number; memoryByType: Record<string, number>; avgSalience: number };
+        };
+        const memoryPayload = JSON.parse(memoryPage.body) as {
+          memories: Array<{ id: string }>;
+          pagination: { total: number };
+        };
+        expect(dashboardPayload.stats.memoryTotal).toBe(expectedTotal);
+        expect(dashboardPayload.stats.memoryTotal).toBe(memoryPayload.pagination.total);
+        expect(memoryPayload.memories).toHaveLength(expectedTotal);
+        if (accessMode === 'sole_admin') {
+          expect(dashboardPayload.stats.memoryByType).toEqual({ semantic: 1, procedural: 1, relational: 1 });
+          expect(dashboardPayload.stats.avgSalience).toBeCloseTo(2 / 3);
+        } else {
+          expect(dashboardPayload.stats.memoryByType).toEqual({ semantic: 1, procedural: 1 });
+          expect(dashboardPayload.stats.avgSalience).toBe(0.5);
+          expect(memoryPayload.memories.map(memory => memory.id)).not.toContain('cross-subject-intimate');
+        }
       } finally {
         await destroyHarness(fleetHarness);
       }

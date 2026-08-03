@@ -643,10 +643,32 @@ export function createInProcessGardenAdminContract(
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
     memoryStore: gardenMemoryStore,
   });
+  const memory = new AdminMemoryDataService({
+    memoryStore: gardenMemoryStore,
+    // A fixed subject projection is created from the underlying store by
+    // AdminMemoryDataService for each immutable admitted request.
+    fleetMemoryStore: options.memoryStore,
+    contactStore: options.contactStore,
+    embeddingService: options.embeddingService,
+    resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
+    appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
+      const joinedDetails = details
+        ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+        .join(' ');
+      auditHistory.appendGardenEntry({
+        actionType,
+        decision,
+        narrative,
+        ...(joinedDetails ? { details: joinedDetails } : {}),
+        actor: 'operator',
+        ...(requestContext ? { requestContext } : {}),
+      });
+    },
+  });
 
   return {
     dashboard: new AdminDashboardDataService({
-      memoryStore: gardenMemoryStore,
+      getMemoryStatsForRequest: context => memory.getStatsForRequest(context),
       sessionStore: options.sessionStore,
       sessionManager: options.sessionManager,
       scheduler: options.scheduler,
@@ -734,28 +756,7 @@ export function createInProcessGardenAdminContract(
       companionNames: [resolveCompanionNameFromConfig(options.config)],
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),
-    memory: new AdminMemoryDataService({
-      memoryStore: gardenMemoryStore,
-      // A fixed subject projection is created from the underlying store by
-      // AdminMemoryDataService for each immutable admitted request.
-      fleetMemoryStore: options.memoryStore,
-      contactStore: options.contactStore,
-      embeddingService: options.embeddingService,
-      resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
-      appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
-        const joinedDetails = details
-          ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
-          .join(' ');
-        auditHistory.appendGardenEntry({
-          actionType,
-          decision,
-          narrative,
-          ...(joinedDetails ? { details: joinedDetails } : {}),
-          actor: 'operator',
-          ...(requestContext ? { requestContext } : {}),
-        });
-      },
-    }),
+    memory,
     privacyBreakGlass: new AdminPrivacyBreakGlassService({
       memoryStore: options.memoryStore,
       journalReader: {

@@ -18,7 +18,6 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventBus } from '../../../shared/event-bus.js';
-import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
@@ -55,16 +54,14 @@ function makeTempDir(): string {
 
 function dashboardDeps(eventBus: EventBus, channels: string[]): {
   eventBus: EventBus;
-  memoryStore: MemoryStorePort;
+  getMemoryStatsForRequest: () => Promise<{ total: number; avgSalience: number; byType: Record<string, number> }>;
   sessionStore: SessionStore;
   scheduler: Scheduler;
   shardManager: ShardExecutionPort;
 } {
   return {
     eventBus,
-    memoryStore: {
-      getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
-    } as unknown as MemoryStorePort,
+    getMemoryStatsForRequest: async () => ({ total: 0, avgSalience: 0, byType: {} }),
     sessionStore: {
       listChannels: () => channels.map(id => ({ channelId: id })),
       getLatestSessionByTimestamp: () => null,

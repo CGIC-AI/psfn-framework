@@ -25,7 +25,6 @@ import { AdminModelUsageDataService } from '../../operator/garden/services/model
 import { AdminChargeCostReconciliationDataService } from '../../operator/garden/services/charge-cost-reconciliation-service.js';
 import { AdminDashboardDataService } from '../../operator/garden/services/dashboard-service.js';
 import { startOfDashboardUtcDay } from '../../operator/garden/services/dashboard-cost-windows.js';
-import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { LLMClient } from '../../primitives/llm/client.js';
@@ -1043,9 +1042,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
     const operatorStore = new PostgresModelUsageStore(operatorPool, { companionId: 'dashboard-companion' });
     const modelUsage = new AdminModelUsageDataService(operatorStore);
     const makeDashboard = () => new AdminDashboardDataService({
-      memoryStore: {
-        getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
-      } as MemoryStorePort,
+      getMemoryStatsForRequest: async () => ({ total: 0, avgSalience: 0, byType: {} }),
       sessionStore: {
         listChannels: () => [],
       } as unknown as SessionStore,
@@ -1236,9 +1233,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       getModelUsageData: query => activeModelUsageService.getModelUsageData(query),
     };
     const dashboard = new AdminDashboardDataService({
-      memoryStore: {
-        getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
-      } as MemoryStorePort,
+      getMemoryStatsForRequest: async () => ({ total: 0, avgSalience: 0, byType: {} }),
       sessionStore: {
         listChannels: () => [],
       } as unknown as SessionStore,

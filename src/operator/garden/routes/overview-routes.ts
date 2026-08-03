@@ -348,7 +348,7 @@ export function buildAdminOverviewRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/dashboard'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/dashboard');
         const costWindowParam = url.searchParams.get('costWindow');
         if (costWindowParam !== null && !isDashboardCostWindow(costWindowParam)) {
@@ -361,7 +361,7 @@ export function buildAdminOverviewRoutes(options: {
           return;
         }
         const costWindow = resolveDashboardCostWindow(costWindowParam);
-        dashboardService.getDashboardData({ costWindow }).then(
+        dashboardService.getDashboardData({ costWindow }, context).then(
           (payload) => {
             sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS);
           },

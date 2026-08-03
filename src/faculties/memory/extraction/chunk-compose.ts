@@ -1,6 +1,8 @@
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
+import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
+import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import {
   normalizeMemoryTags,
   type ExtractedFact,
@@ -62,7 +64,19 @@ export function formatExtractionTranscript(
       } else {
         speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }
-      return `[message_id:${entry.id}] ${speaker}: ${entry.content}`;
+      const addressing = parseSessionMessageAddressing(entry.metadata);
+      const mentionedTargets = addressing?.mentionedTargets.length
+        ? `[mentioned_targets: ${addressing.mentionedTargets
+          .map(target => `${target.authorName} (author_id=${target.authorId})`)
+          .join(', ')}] `
+        : '';
+      const replyToMessageId = entry.metadata?.includes('"replyToMessageId"')
+        ? resolveSessionEntryTurnContext(entry).replyToMessageId
+        : undefined;
+      const replyLineage = replyToMessageId
+        ? `[reply_to_message_id: ${replyToMessageId}] `
+        : '';
+      return `[message_id:${entry.id}] ${mentionedTargets}${replyLineage}${speaker}: ${entry.content}`;
     })
     .join('\n');
 }

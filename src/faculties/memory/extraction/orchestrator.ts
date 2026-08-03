@@ -126,6 +126,8 @@ export interface ExtractionRunOptions {
     canonicalContactId?: string,
   ) => ExtractionParticipantNames;
   resolveSourceSpeakerContactId?: (speaker: ExtractionSourceSpeaker) => Promise<string | undefined>;
+  /** Current companion's channel-authoritative author ids for mention matching. */
+  companionAuthorIds?: readonly string[];
   llmClient: LLMProviderPort;
   sessionManager: ExtractionSessionReader;
   memoryStore: MemoryStorePort;
@@ -383,6 +385,8 @@ export async function runExtractionOrchestration(
           options.sessionManager.characterName,
         ].filter((name): name is string => Boolean(name))),
       ],
+      companionAuthorIds: options.companionAuthorIds ?? [],
+      requireStructuredAddressing: Boolean(options.groupWriteCaps),
       channelId: options.channelId,
       triggerReason: options.triggerReason,
       telemetryEnabled: options.telemetryEnabled,

@@ -5,6 +5,9 @@ import {
   isExtractionTranscriptEntry,
 } from './chunk-compose.js';
 import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../../core/session/runtime-fallback-provenance.js';
+import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
+import { buildSessionMetadataWithTurn } from '../../../core/session/turn-provenance.js';
+import { createTurnId } from '../../../core/turns/id.js';
 
 describe('chunk-compose extraction transcript filtering', () => {
   it('treats only user and assistant entries as extraction transcript content', () => {
@@ -79,5 +82,38 @@ describe('chunk-compose extraction transcript filtering', () => {
     } as const;
 
     expect(isExtractionTranscriptEntry(entry)).toBe(false);
+  });
+
+  it('renders transport addressing and reply lineage into the extraction transcript', () => {
+    const addressingMetadata = buildSessionMetadataWithMessageAddressing(undefined, {
+      schemaVersion: 1,
+      mentionedTargets: [
+        { authorId: 'other-companion', authorName: 'Other Companion' },
+        { authorId: 'second-companion', authorName: 'Second Companion' },
+      ],
+    });
+    const metadata = buildSessionMetadataWithTurn(addressingMetadata, {
+      turnId: createTurnId(),
+      requestId: 'request-addressing-transcript',
+      sourceMessageId: 'discord-message-5',
+      replyToMessageId: 'discord-parent-1',
+      role: 'user',
+    });
+
+    expect(formatExtractionTranscript([{
+      id: 5,
+      channelId: 'discord:shared-room',
+      role: 'user',
+      content: '<@other-companion> hello there',
+      authorName: 'Operator',
+      timestamp: 5,
+      metadata,
+    }])).toBe(
+      '[message_id:5] '
+      + '[mentioned_targets: Other Companion (author_id=other-companion), '
+      + 'Second Companion (author_id=second-companion)] '
+      + '[reply_to_message_id: discord-parent-1] '
+      + 'Operator: <@other-companion> hello there',
+    );
   });
 });

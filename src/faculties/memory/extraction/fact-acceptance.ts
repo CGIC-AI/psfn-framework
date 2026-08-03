@@ -112,6 +112,9 @@ export interface FactAcceptanceStageInput {
   canonicalContactId: string | undefined;
   /** Deduplicated companion aliases handed to fact routing. */
   companionNames: string[];
+  companionAuthorIds: readonly string[];
+  /** Group-room routing must prove direct address from structured journal metadata. */
+  requireStructuredAddressing?: boolean;
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   telemetryEnabled: boolean;
@@ -218,7 +221,11 @@ export function buildAcceptedFactCandidates(
         fact,
         input.speakerRouting,
         input.canonicalContactId,
-        { companionNames: input.companionNames },
+        {
+          companionNames: input.companionNames,
+          companionAuthorIds: input.companionAuthorIds,
+          requireStructuredAddressing: input.requireStructuredAddressing,
+        },
       );
     }
     if (routing.status === 'skip') {

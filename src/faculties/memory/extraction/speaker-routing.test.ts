@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { ExtractedFact } from '../types.js';
+import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
 import {
   buildSpeakerRoutingContext,
   resolveFactRouting,
@@ -44,6 +45,13 @@ async function context(entries: SessionEntry[]) {
       speaker.authorId ? contactByAuthor.get(speaker.authorId) : undefined
     ),
   );
+}
+
+function addressedTo(...targets: Array<{ authorId: string; authorName: string }>): string {
+  return buildSessionMetadataWithMessageAddressing(undefined, {
+    schemaVersion: 1,
+    mentionedTargets: targets,
+  });
 }
 
 describe('structured group fact routing', () => {
@@ -255,6 +263,140 @@ describe('structured group fact routing', () => {
       replyContext,
       undefined,
     )).toMatchObject({ status: 'route', addressMode: 'system_api' });
+  });
+
+  it('rejects an unsupported direct-to-companion claim in a group room', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', '<@other-bot> hello there', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox affectionately greeted Lyra.',
+        type: 'relational',
+        attribution: {
+          sourceMessageIds: [1],
+          addressMode: 'direct_to_companion',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Lyra'], requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'unverified_direct_address',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('keeps another participant address as observer context and trusts transport over the model', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', '<@other-bot> hello there', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox greeted Other Companion.',
+        attribution: {
+          sourceMessageIds: [1],
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Lyra'], requireStructuredAddressing: true },
+    )).toMatchObject({
+      status: 'route',
+      sourceContactId: 'contact-dragon',
+      addressMode: 'overheard_room_context',
+    });
+  });
+
+  it('derives direct address from a structured current-companion mention', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'hello there', {
+        metadata: addressedTo({ authorId: 'lyra-bot', authorName: 'Lyra' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox greeted Lyra.',
+        attribution: {
+          sourceMessageIds: [1],
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Lyra'], requireStructuredAddressing: true },
+    )).toMatchObject({
+      status: 'route',
+      addressMode: 'direct_to_companion',
+    });
+  });
+
+  it('rejects a direct claim whose attributed span mixes current and other targets', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'hello Lyra', {
+        metadata: addressedTo({ authorId: 'lyra-bot', authorName: 'Lyra' }),
+      }),
+      entry(2, 'dragon', 'MrDragonFox', 'hello Other Companion', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox addressed Lyra directly.',
+        attribution: {
+          sourceMessageIds: [1, 2],
+          addressMode: 'direct_to_companion',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Lyra'], requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'unverified_direct_address',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('recognizes the current companion by transport author id when its room display name differs', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'hello there', {
+        metadata: addressedTo({
+          authorId: 'current-companion-bot',
+          authorName: 'Room Nickname',
+        }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox greeted Lyra.',
+        attribution: {
+          sourceMessageIds: [1],
+          addressMode: 'direct_to_companion',
+        },
+      }),
+      routingContext,
+      undefined,
+      {
+        companionNames: ['Lyra'],
+        companionAuthorIds: ['current-companion-bot'],
+        requireStructuredAddressing: true,
+      },
+    )).toMatchObject({
+      status: 'route',
+      addressMode: 'direct_to_companion',
+    });
   });
 });
 

@@ -684,6 +684,9 @@ export class MemoryExtractor {
         companionName: this.sessionManager.characterName,
       }),
       resolveSourceSpeakerContactId: speaker => this.resolveSourceSpeakerContactId(channelId, speaker),
+      ...(this.runtimeConfig?.discordBotId
+        ? { companionAuthorIds: [this.runtimeConfig.discordBotId] }
+        : {}),
       llmClient: this.llmClient,
       sessionManager: this.sessionManager,
       memoryStore: this.memoryStore,

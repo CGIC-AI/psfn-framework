@@ -94,6 +94,10 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('Use subject_name "room", "channel", "group", or "conversation"');
     expect(prompt).toContain('address_mode');
     expect(prompt).toContain('direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api');
+    expect(prompt).toContain('[mentioned_targets: ...]');
+    expect(prompt).toContain('[reply_to_message_id: ...]');
+    expect(prompt).toContain('Visibility in a shared room is not evidence of direct address');
+    expect(prompt).toContain('name the actual mentioned target');
     expect(prompt).toContain('Never output raw character-card macros');
     expect(prompt).toContain('{{user}}');
     expect(prompt).toContain('{{char}}');

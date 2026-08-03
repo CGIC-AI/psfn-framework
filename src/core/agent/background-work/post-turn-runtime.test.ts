@@ -1415,7 +1415,7 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
-  it('keeps failed ICP output out of real bounded memory, emotion, and compaction effects', async () => {
+  it('filters failed ICP and observed shared-room entries from bounded memory, emotion, and compaction effects', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-post-turn-icp-projection-'));
     const store = new SessionStore(join(root, 'sessions'), {
       turnRecordEligibilityFence: {
@@ -1440,6 +1440,7 @@ describe('executePostTurnBackgroundWork', () => {
     const sessionManager = new SessionManager(store, config);
     const failedContent = 'FAILED ICP A PRIVATE OUTPUT MUST NEVER ENTER A DURABLE EFFECT';
     const unboundContent = 'PRE-TURN-RECORD L0 HISTORY MUST NOT REJECT NEW BACKGROUND WORK';
+    const observedContent = 'AMBIENT SHARED-ROOM MESSAGE MUST NOT REQUIRE A LOCAL TURN RECORD';
     const safeOlderContext = [
       `successful B safe older context 0 ${'O'.repeat(160)}`,
       `successful B safe older context 1 ${'O'.repeat(160)}`,
@@ -1480,6 +1481,23 @@ describe('executePostTurnBackgroundWork', () => {
         ICP_CHANNEL,
         unboundContent,
         'pre-turn-record-context-note',
+      );
+      sessionManager.recordUserMessage(
+        ICP_CHANNEL,
+        observedContent,
+        'ambient-room-participant',
+        'Ambient participant',
+        false,
+        undefined,
+        {
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e51',
+          requestId: 'observed-shared-room-message',
+          metadata: JSON.stringify({
+            type: 'observed_message',
+            source: 'discord',
+            responseMode: 'observe',
+          }),
+        },
       );
       for (const content of safeOlderContext) {
         sessionManager.recordUserMessage(
@@ -1696,10 +1714,12 @@ describe('executePostTurnBackgroundWork', () => {
         ]);
         expect(JSON.stringify(entries)).not.toContain(failedContent);
         expect(JSON.stringify(entries)).not.toContain(unboundContent);
+        expect(JSON.stringify(entries)).not.toContain(observedContent);
       }
       expect(complete).toHaveBeenCalled();
       expect(JSON.stringify(complete.mock.calls)).not.toContain(failedContent);
       expect(JSON.stringify(complete.mock.calls)).not.toContain(unboundContent);
+      expect(JSON.stringify(complete.mock.calls)).not.toContain(observedContent);
       const summaries = store.getCompactionSummaries(ICP_CHANNEL);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]?.summary).toContain('successful B');

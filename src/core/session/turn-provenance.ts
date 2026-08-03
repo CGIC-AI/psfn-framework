@@ -30,6 +30,7 @@ interface SessionMetadataEnvelope {
 export interface SessionEntryTurnContext {
   turnId: TurnID;
   turnIdSource: 'persisted' | 'backfilled';
+  turnRecordExpectation: 'required' | 'not_expected';
   requestId?: string;
   sourceMessageId?: string;
   replyToMessageId?: string;
@@ -154,6 +155,7 @@ export function resolveSessionEntryTurnContext(
     return {
       turnId: backfillLegacyTurnId(legacySeed(entry)),
       turnIdSource: 'backfilled',
+      turnRecordExpectation: 'not_expected',
     };
   }
 
@@ -184,6 +186,9 @@ export function resolveSessionEntryTurnContext(
   return {
     turnId,
     turnIdSource,
+    turnRecordExpectation: metadata.type === 'observed_message'
+      ? 'not_expected'
+      : 'required',
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
     ...(replyToMessageId ? { replyToMessageId } : {}),

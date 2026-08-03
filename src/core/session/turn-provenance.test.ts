@@ -44,6 +44,7 @@ describe('session turn actor provenance', () => {
   it('distinguishes persisted TurnIDs from legacy backfills and rejects corrupt explicit IDs', () => {
     expect(resolveSessionEntryTurnContext(entryWithMetadata())).toMatchObject({
       turnIdSource: 'backfilled',
+      turnRecordExpectation: 'not_expected',
     });
     expect(resolveSessionEntryTurnContext(entryWithMetadata(buildSessionMetadataWithTurn(
       undefined,
@@ -54,6 +55,7 @@ describe('session turn actor provenance', () => {
       },
     )))).toMatchObject({
       turnIdSource: 'persisted',
+      turnRecordExpectation: 'required',
     });
     expect(() => resolveSessionEntryTurnContext(entryWithMetadata(JSON.stringify({
       turn: {
@@ -63,5 +65,32 @@ describe('session turn actor provenance', () => {
         role: 'user',
       },
     })))).toThrow('turnId');
+  });
+
+  it('marks only observed-message provenance as not expecting a local TurnRecord', () => {
+    const turnId = backfillLegacyTurnId('observed-source');
+    const observedMetadata = buildSessionMetadataWithTurn(JSON.stringify({
+      type: 'observed_message',
+      source: 'discord',
+      responseMode: 'observe',
+    }), {
+      turnId,
+      requestId: 'observed-source',
+      role: 'user',
+      actorKind: 'unknown',
+    });
+    const unrelatedMetadata = buildSessionMetadataWithTurn(JSON.stringify({
+      type: 'other_context',
+    }), {
+      turnId,
+      requestId: 'ordinary-source',
+      role: 'user',
+      actorKind: 'unknown',
+    });
+
+    expect(resolveSessionEntryTurnContext(entryWithMetadata(observedMetadata)))
+      .toMatchObject({ turnRecordExpectation: 'not_expected' });
+    expect(resolveSessionEntryTurnContext(entryWithMetadata(unrelatedMetadata)))
+      .toMatchObject({ turnRecordExpectation: 'required' });
   });
 });

@@ -49,6 +49,7 @@ interface ConsumedTurnReference {
   sourceChannelId: string;
   turnId: string;
   turnIdSource: SessionEntryTurnContext['turnIdSource'];
+  turnRecordExpectation: SessionEntryTurnContext['turnRecordExpectation'];
 }
 
 function consumedTurnReference(entry: SessionEntry): ConsumedTurnReference {
@@ -57,6 +58,7 @@ function consumedTurnReference(entry: SessionEntry): ConsumedTurnReference {
     sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
     turnId: turn.turnId,
     turnIdSource: turn.turnIdSource,
+    turnRecordExpectation: turn.turnRecordExpectation,
   };
 }
 
@@ -67,10 +69,11 @@ function referenceKey(reference: Pick<ConsumedTurnReference, 'sourceChannelId' |
 /**
  * Exposes only entries whose canonical source remains eligible.
  *
- * A missing record is omittable solely when the entry explicitly lacks a
- * persisted TurnID and therefore uses deterministic backfill identity. This
- * covers pre-TurnID history and intentionally unbound context system notes.
- * Entries carrying an explicit TurnID fail closed if their record is absent.
+ * A missing record is omittable when the entry explicitly lacks a persisted
+ * TurnID and therefore uses deterministic backfill identity, or when its
+ * provenance identifies it as observed context that did not execute locally.
+ * All other entries carrying an explicit TurnID fail closed if their record is
+ * absent.
  */
 export async function selectEligibleTurnRecordSnapshotEntries(input: {
   entries: readonly SessionEntry[];
@@ -86,20 +89,26 @@ export async function selectEligibleTurnRecordSnapshotEntries(input: {
     const reference = consumedTurnReference(entry);
     const key = referenceKey(reference);
     const existing = uniqueConsumed.get(key);
-    uniqueConsumed.set(key, existing?.turnIdSource === 'persisted'
-      ? existing
-      : reference);
+    if (!existing
+      || (existing.turnRecordExpectation === 'not_expected'
+        && reference.turnRecordExpectation === 'required')
+      || (existing.turnRecordExpectation === reference.turnRecordExpectation
+        && existing.turnIdSource === 'backfilled'
+        && reference.turnIdSource === 'persisted')) {
+      uniqueConsumed.set(key, reference);
+    }
   }
 
-  const omittedLegacyReferences = new Set<string>();
+  const omittedUnownedReferences = new Set<string>();
   for (const [key, reference] of uniqueConsumed) {
     const eligibility = await input.lookupEligibility(
       reference.sourceChannelId,
       input.logicalSessionId,
       reference.turnId,
     );
-    if (eligibility.kind === 'missing' && reference.turnIdSource === 'backfilled') {
-      omittedLegacyReferences.add(key);
+    if (eligibility.kind === 'missing'
+      && reference.turnRecordExpectation === 'not_expected') {
+      omittedUnownedReferences.add(key);
       continue;
     }
     if (eligibility.kind !== 'eligible') {
@@ -112,6 +121,6 @@ export async function selectEligibleTurnRecordSnapshotEntries(input: {
   }
 
   return input.entries.filter(entry => (
-    !omittedLegacyReferences.has(referenceKey(consumedTurnReference(entry)))
+    !omittedUnownedReferences.has(referenceKey(consumedTurnReference(entry)))
   ));
 }

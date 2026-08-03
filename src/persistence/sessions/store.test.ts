@@ -440,6 +440,91 @@ describe('SessionStore', () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
+  it('omits an observed shared-room entry that never owned a local TurnRecord', async () => {
+    const fencedStore = new SessionStore(join(dir, 'observed-shared-room-entry'), {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+      },
+    });
+    const observedTurnId = createTurnId();
+    const snapshot: SessionEntry[] = [{
+      id: 1,
+      channelId: 'discord:shared-room',
+      role: 'user',
+      content: 'ambient room context observed without a local model turn',
+      timestamp: 1_700_000_000_000,
+      metadata: buildSessionMetadataWithTurn(JSON.stringify({
+        type: 'observed_message',
+        source: 'discord',
+        responseMode: 'observe',
+      }), {
+        turnId: observedTurnId,
+        requestId: 'observed-message-1',
+        role: 'user',
+        actorKind: 'unknown',
+      }),
+    }];
+    const operation = vi.fn(async (entries: readonly SessionEntry[]) => entries);
+
+    await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
+      'discord:shared-room',
+      [],
+      () => snapshot,
+      operation,
+    )).resolves.toEqual([]);
+    expect(operation).toHaveBeenCalledWith([]);
+  });
+
+  it('does not let observed provenance mask a missing locally owned TurnRecord', async () => {
+    const fencedStore = new SessionStore(join(dir, 'mixed-shared-room-provenance'), {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+      },
+    });
+    const sharedTurnId = createTurnId();
+    const snapshot: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: 'discord:shared-room',
+        role: 'user',
+        content: 'ambient observed context',
+        timestamp: 1_700_000_000_000,
+        metadata: buildSessionMetadataWithTurn(JSON.stringify({
+          type: 'observed_message',
+        }), {
+          turnId: sharedTurnId,
+          requestId: 'observed-message-1',
+          role: 'user',
+          actorKind: 'unknown',
+        }),
+      },
+      {
+        id: 2,
+        channelId: 'discord:shared-room',
+        role: 'user',
+        content: 'locally owned turn sharing the same identifier',
+        timestamp: 1_700_000_000_001,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: sharedTurnId,
+          requestId: 'local-message-1',
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+    ];
+    const operation = vi.fn(async () => undefined);
+
+    await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
+      'discord:shared-room',
+      [sharedTurnId],
+      () => snapshot,
+      operation,
+    )).rejects.toThrow('Consumed TurnRecord is missing');
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it('accepts system-attributed turn records for internal scheduler prompts', () => {
     const turnId = createTurnId();
 

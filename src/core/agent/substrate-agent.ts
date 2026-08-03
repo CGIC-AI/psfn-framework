@@ -1234,6 +1234,8 @@ export class SubstrateAgent {
       turnId,
       requestId,
       sourceMessageId: message.id,
+      ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
+      ...(message.routing?.addressing ? { addressing: message.routing.addressing } : {}),
       metadata: observationMetadata,
       channelMeta: {
         isDirectMessage: message.isDirectMessage ?? false,

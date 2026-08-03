@@ -101,6 +101,7 @@ import {
   type ToolObservationInput,
 } from './tool-observation.js';
 import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
+import { buildSessionMetadataWithMessageAddressing } from './message-addressing.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 // Type-only structural port: the session layer never imports cogsec runtime code.
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
@@ -783,8 +784,11 @@ export class SessionManager implements SessionManagerTypeSurface {
       ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
+    const addressingMetadata = options.addressing
+      ? buildSessionMetadataWithMessageAddressing(options.metadata, options.addressing)
+      : options.metadata;
     const turnMetadata = options.turnId
-      ? buildSessionMetadataWithTurn(options.metadata, {
+      ? buildSessionMetadataWithTurn(addressingMetadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
@@ -792,7 +796,7 @@ export class SessionManager implements SessionManagerTypeSurface {
         role: 'user',
         actorKind: options.actorKind ?? 'unknown',
       })
-      : options.metadata;
+      : addressingMetadata;
     const previewMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;

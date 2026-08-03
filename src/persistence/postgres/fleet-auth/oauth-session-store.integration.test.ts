@@ -1,43 +1,27 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { TLSSocket } from 'node:tls';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { FleetAuthHttpRoutes } from '../../../channels/api/server/fleet-auth-routes.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import {
-  DEFAULT_POSTGRES_TEST_IMAGE,
-  startPostgresTestHarness,
-  type PostgresTestHarness,
-} from '../../../test-support/postgres-test-harness.js';
-import { createPostgresPool } from '../../postgres.js';
-import { migrateFleetAuthSchema, type FleetAuthDatabaseRoles } from './schema.js';
-import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
-import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
-import {
   createGatewayAccountReapprovalAuthority,
-  createGatewayProviderRevocationAuthorityPort,
   reconcileFleetAuthAuthorityState,
 } from './gateway-persistence.js';
+import {
+  OAUTH_SESSION_TEST_NOW as NOW,
+  OAUTH_SESSION_TEST_PROVIDER_SUBJECT_ID as PROVIDER_SUBJECT_ID,
+  useOAuthSessionStoreIntegrationHarness,
+} from './oauth-session-store.integration-harness.js';
 
 const TIMEOUT_MS = 120_000;
-const ROLES: FleetAuthDatabaseRoles = {
-  runtime: 'fleet_auth_runtime',
-  migration: 'fleet_auth_migration',
-  backupRestore: 'fleet_auth_backup',
-};
-const PASSWORDS = {
-  fleet_auth_runtime: 'runtime-password',
-  fleet_auth_migration: 'migration-password',
-  fleet_auth_backup: 'backup-password',
-} as const;
-const PROVIDER_SUBJECT_ID = '123456789012345679';
-const SECOND_PROVIDER_SUBJECT_ID = '223456789012345679';
-const NOW = new Date('2026-07-15T12:00:00.000Z');
+const {
+  roles: ROLES,
+  createStore,
+  authenticate,
+} = useOAuthSessionStoreIntegrationHarness('oauth', TIMEOUT_MS);
 const CALLBACK_CONFIG: FleetAuthConfig = {
   schemaVersion: 1,
   activationGeneration: 1,
@@ -134,142 +118,6 @@ function callbackResponse(): ServerResponse & CapturedResponse {
     },
   }) as unknown as ServerResponse & CapturedResponse;
 }
-
-let harness: PostgresTestHarness | null = null;
-const floorRoots: string[] = [];
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
-function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
-  const url = new URL(databaseUrl);
-  url.username = role;
-  url.password = PASSWORDS[role];
-  return url.toString();
-}
-
-async function createStore(options: {
-  failDuringReconcile?: boolean;
-  accountRoster?: FleetAuthConfig['accountRoster'];
-} = {}): Promise<{
-  store: PostgresFleetAuthBrokerStore;
-  runtime: import('pg').Pool;
-  coordinator: import('pg').Pool;
-  migration: import('pg').Pool;
-  authorityFloors: FleetAuthAuthorityFloorStore;
-}> {
-  if (!harness) throw new Error('Postgres harness unavailable');
-  const database = await harness.createDatabase();
-  const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
-  try {
-    await admin.query(
-      `GRANT CREATE, CONNECT ON DATABASE ${quoteIdentifier(database.databaseName)} TO ${quoteIdentifier(ROLES.migration)}`,
-    );
-  } finally {
-    await admin.end();
-  }
-  const migrationUrl = roleUrl(database.databaseUrl, ROLES.migration);
-  await migrateFleetAuthSchema({
-    databaseUrl: migrationUrl,
-    roles: ROLES,
-  });
-  const runtime = createPostgresPool(roleUrl(database.databaseUrl, ROLES.runtime), {
-    max: 4,
-    allowExitOnIdle: true,
-  });
-  const coordinator = createPostgresPool(roleUrl(database.databaseUrl, ROLES.backupRestore), {
-    max: 1,
-    allowExitOnIdle: true,
-  });
-  const floorRoot = mkdtempSync(join(tmpdir(), 'fleet-auth-oauth-floor-'));
-  floorRoots.push(floorRoot);
-  const authorityFloors = new FleetAuthAuthorityFloorStore(floorRoot);
-  const initialFloor = authorityFloors.open({
-    activationGeneration: 1,
-    databaseHasDurableAuthority: false,
-  });
-  await reconcileFleetAuthAuthorityState(coordinator, initialFloor, randomUUID());
-  const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(
-    authorityFloors,
-  );
-  return {
-    runtime,
-    coordinator,
-    migration: createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true }),
-    authorityFloors,
-    store: new PostgresFleetAuthBrokerStore({
-      pool: runtime,
-      providerAuthorityPool: coordinator,
-      sessionPepper: 'session-pepper-at-least-thirty-two-bytes',
-      tokenEncryptionKey: 'token-encryption-key-at-least-thirty-two-bytes',
-      providerRevocationAuthority: {
-        sessionAuthorityGenerationIsCurrent: authorityGeneration => (
-          providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(authorityGeneration)
-        ),
-        fence: async (input) => {
-          const fence = await providerRevocationAuthority.fence(input);
-          if (!options.failDuringReconcile) return fence;
-          return {
-            ...fence,
-            reconcile: async () => {
-              throw new Error('injected failure during provider authority reconciliation');
-            },
-          };
-        },
-      },
-      ...(options.accountRoster ? { accountRoster: options.accountRoster } : {}),
-    }),
-  };
-}
-
-async function authenticate(
-  store: PostgresFleetAuthBrokerStore,
-  suffix: string,
-): Promise<{ transactionId: string; token: string; csrfToken: string }> {
-  const transactionId = randomUUID();
-  const stateDigest = createHash('sha256').update(suffix).digest('hex');
-  const initiatingBrowserDigest = createHash('sha256').update(`browser-${suffix}`).digest('hex');
-  await store.createOAuthTransaction({
-    transactionId,
-    stateDigest,
-    initiatingBrowserDigest,
-    pkceVerifier: `pkce-verifier-${suffix}`,
-    callbackUri: 'https://fleet.example.test/auth/discord/callback',
-    returnPath: '/fleet',
-    kind: 'login',
-    createdAt: NOW,
-    expiresAt: new Date(NOW.getTime() + 300_000),
-  });
-  const consumed = await store.consumeOAuthTransaction({
-    stateDigest,
-    initiatingBrowserDigest,
-    now: NOW,
-  });
-  expect(consumed.pkceVerifier).toBe(`pkce-verifier-${suffix}`);
-  const token = `token-${suffix}`;
-  const csrfToken = `csrf-${suffix}`;
-  return { transactionId, token, csrfToken };
-}
-
-beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
-  const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
-  try {
-    for (const role of Object.values(ROLES)) {
-      await admin.query(
-        `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${PASSWORDS[role]}'`,
-      );
-    }
-  } finally {
-    await admin.end();
-  }
-}, TIMEOUT_MS);
-
-afterAll(async () => {
-  await harness?.stop();
-  for (const root of floorRoots) rmSync(root, { recursive: true, force: true });
-}, TIMEOUT_MS);
 
 describe('Postgres gateway OAuth/session authority', () => {
   it('leaves one active session and fences dependents when same-audience logins race', async () => {
@@ -1170,164 +1018,4 @@ describe('Postgres gateway OAuth/session authority', () => {
     },
     TIMEOUT_MS,
   );
-  it('activates an exact rostered first owner during the first fresh-fleet login', async () => {
-    const companionId = randomUUID();
-    const { store, runtime, coordinator, migration } = await createStore({
-      accountRoster: [{
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        companionId,
-        contactId: 'owner-contact',
-        role: 'owner',
-      }, {
-        providerSubjectId: SECOND_PROVIDER_SUBJECT_ID,
-        companionId,
-        contactId: 'second-owner-contact',
-        role: 'owner',
-      }],
-    });
-    try {
-      const loginInput = await authenticate(store, 'rostered-first-owner');
-      const login = await store.createLoginSession({
-        ...loginInput,
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        providerMetadata: { mfaEnabled: true },
-        audience: 'fleet',
-        now: NOW,
-        idleTtlMs: 1_800_000,
-        absoluteTtlMs: 28_800_000,
-      });
-
-      expect(login.principalStatus).toBe('active');
-      const authority = await runtime.query<{
-        principal_status: string;
-        provider_state: string;
-        authn_version: string;
-        authz_version: string;
-        binding_version: string;
-        grant_version: string;
-        policy_version: string;
-        global_auth_epoch: string;
-        session_global_auth_epoch: string;
-        bindings: string;
-        grants: string;
-        activation_audits: string;
-        login_reason: string;
-      }>(`
-        SELECT principal.status AS principal_status,
-               subject.state AS provider_state,
-               principal.authn_version::text,
-               principal.authz_version::text,
-               principal.binding_version::text,
-               principal.grant_version::text,
-               principal.policy_version::text,
-               authority.global_auth_epoch::text,
-               session.global_auth_epoch::text AS session_global_auth_epoch,
-               (SELECT count(*)::text FROM fleet_auth.principal_contact_bindings
-                WHERE principal_id = principal.principal_id) AS bindings,
-               (SELECT count(*)::text FROM fleet_auth.principal_role_grants
-                WHERE principal_id = principal.principal_id) AS grants,
-               (SELECT count(*)::text FROM fleet_auth.authorization_audit_events
-                WHERE principal_id = principal.principal_id
-                  AND action = 'authority.first_owner'
-                  AND reason_code = 'account_roster_first_owner') AS activation_audits,
-               (SELECT reason_code FROM fleet_auth.authorization_audit_events
-                WHERE principal_id = principal.principal_id AND action = 'session.login'
-                ORDER BY occurred_at DESC LIMIT 1) AS login_reason
-        FROM fleet_auth.human_principals AS principal
-        JOIN fleet_auth.provider_subjects AS subject
-          ON subject.principal_id = principal.principal_id
-         AND subject.provider = 'discord'
-         AND subject.subject_id = $2
-        JOIN fleet_auth.browser_sessions AS session
-          ON session.record_id = $3
-        JOIN fleet_auth.authority_state AS authority ON authority.singleton = TRUE
-        WHERE principal.principal_id = $1
-      `, [login.principalId, PROVIDER_SUBJECT_ID, login.recordId]);
-      expect(authority.rows[0]).toEqual({
-        principal_status: 'active',
-        provider_state: 'active',
-        authn_version: '2',
-        authz_version: '2',
-        binding_version: '2',
-        grant_version: '2',
-        policy_version: '2',
-        global_auth_epoch: '1',
-        session_global_auth_epoch: '1',
-        bindings: '0',
-        grants: '0',
-        activation_audits: '1',
-        login_reason: 'rostered_first_owner',
-      });
-
-      const secondLoginInput = await authenticate(store, 'rostered-second-owner');
-      const secondLogin = await store.createLoginSession({
-        ...secondLoginInput,
-        providerSubjectId: SECOND_PROVIDER_SUBJECT_ID,
-        providerMetadata: {},
-        audience: 'fleet',
-        now: new Date(NOW.getTime() + 1_000),
-        idleTtlMs: 1_800_000,
-        absoluteTtlMs: 28_800_000,
-      });
-      expect(secondLogin.principalStatus).toBe('pending');
-    } finally {
-      await migration.end();
-      await coordinator.end();
-      await runtime.end();
-    }
-  }, TIMEOUT_MS);
-
-  it('keeps an unmapped rostered first owner pending until a usable binding exists', async () => {
-    const companionId = randomUUID();
-    const { store, runtime, coordinator, migration } = await createStore({
-      accountRoster: [{
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        companionId,
-        role: 'owner',
-      }],
-    });
-    try {
-      const loginInput = await authenticate(store, 'unmapped-first-owner');
-      const login = await store.createLoginSession({
-        ...loginInput,
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        providerMetadata: {},
-        audience: 'fleet',
-        now: NOW,
-        idleTtlMs: 1_800_000,
-        absoluteTtlMs: 28_800_000,
-      });
-
-      expect(login.principalStatus).toBe('pending');
-      const audits = await runtime.query<{ count: string }>(`
-        SELECT count(*)::text
-        FROM fleet_auth.authorization_audit_events
-        WHERE principal_id = $1 AND action = 'authority.first_owner'
-      `, [login.principalId]);
-      expect(audits.rows[0]?.count).toBe('0');
-
-      await migration.query(`
-        INSERT INTO fleet_auth.principal_contact_bindings
-          (binding_id, principal_id, companion_id, contact_id, state,
-           verification_provenance, authority_generation)
-        VALUES ($1, $2, $3, 'owner-contact', 'active',
-                '{"kind":"integration_test"}'::jsonb, 1)
-      `, [randomUUID(), login.principalId, companionId]);
-      const retryInput = await authenticate(store, 'bound-first-owner');
-      const retry = await store.createLoginSession({
-        ...retryInput,
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        providerMetadata: {},
-        audience: 'fleet',
-        now: new Date(NOW.getTime() + 1_000),
-        idleTtlMs: 1_800_000,
-        absoluteTtlMs: 28_800_000,
-      });
-      expect(retry.principalStatus).toBe('active');
-    } finally {
-      await migration.end();
-      await coordinator.end();
-      await runtime.end();
-    }
-  }, TIMEOUT_MS);
 });

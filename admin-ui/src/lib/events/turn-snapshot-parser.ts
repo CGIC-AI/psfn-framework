@@ -1,33 +1,31 @@
 import type { AdminTurnSnapshotData } from '../types';
-import { isObservabilityCallType } from '../../../../src/shared/contracts/observability-call-types.js';
-import {
-  CHARGE_POLICY_RUNTIME_LANE_VALUES,
-  CHARGE_POLICY_SURFACE_VALUES,
-} from '../../../../src/shared/contracts/charge-policy.js';
-import {
-  CHANNEL_TYPES,
-  REQUESTER_PROVENANCE_VALUES,
-} from '../../../../src/shared/contracts/runtime.js';
-import { isChannelPrivacy } from '../../../../src/system/trust/context-envelope.js';
 import { parseSessionContext, parseToolContext } from './turn-snapshot-parser/context';
+import {
+  CORRELATION_METADATA_KEYS,
+  parseCorrelationMetadataFields,
+} from './turn-snapshot-parser/correlation';
 import { parseFatigue } from './turn-snapshot-parser/fatigue';
 import { parseMemoryContext } from './turn-snapshot-parser/memory';
 import { parsePlan, parsePromptSnapshot } from './turn-snapshot-parser/plan';
 import { parsePromptContext } from './turn-snapshot-parser/provider';
 import {
   optionalString,
-  parseJsonValue,
   reject,
-  requireBoolean,
   requireExactRecord,
   requireNonEmptyString,
   requireNonNegativeInteger,
   requireString,
+  TurnSnapshotParserError,
+  type TurnSnapshotFailureClassification,
 } from './turn-snapshot-parser/primitives';
 
 export type TurnSnapshotParseResult =
   | { ok: true; value: AdminTurnSnapshotData }
-  | { ok: false; error: string };
+  | {
+    ok: false;
+    error: string;
+    classification: TurnSnapshotFailureClassification;
+  };
 
 const SNAPSHOT_KEYS = [
   'turnId',
@@ -45,68 +43,7 @@ const SNAPSHOT_KEYS = [
   'fatigue',
 ];
 
-const EVENT_DATA_KEYS = [
-  'snapshot',
-  'companionId',
-  'sessionId',
-  'turnId',
-  'requestId',
-  'channelId',
-  'channelType',
-  'toolName',
-  'toolCallId',
-  'originType',
-  'originStage',
-  'telemetryVisibility',
-  'service',
-  'process',
-  'chargeLane',
-  'chargeSurface',
-  'chargeEventId',
-  'chargeRunId',
-  'chargeRootRunId',
-  'chargeParentRunId',
-  'shardId',
-  'subagentId',
-  'conversationId',
-  'rootInitiationId',
-  'workloadType',
-  'workloadId',
-  'callType',
-  'purpose',
-  'viewerTrustLevel',
-  'requesterProvenance',
-  'viewerChannelPrivacy',
-  'viewerIsDirectMessage',
-  'viewerMemorySubjectContactId',
-  'embodimentContext',
-  'icpCorrelation',
-];
-
-const EVENT_STRING_KEYS = [
-  'companionId',
-  'sessionId',
-  'turnId',
-  'requestId',
-  'channelId',
-  'toolName',
-  'toolCallId',
-  'originStage',
-  'service',
-  'process',
-  'chargeEventId',
-  'chargeRunId',
-  'chargeRootRunId',
-  'chargeParentRunId',
-  'shardId',
-  'subagentId',
-  'conversationId',
-  'rootInitiationId',
-  'workloadType',
-  'workloadId',
-  'purpose',
-  'viewerMemorySubjectContactId',
-];
+const EVENT_DATA_KEYS = ['snapshot', ...CORRELATION_METADATA_KEYS];
 
 function requireTrustLevel(value: unknown, path: string): string {
   const result = requireString(value, path);
@@ -116,71 +53,8 @@ function requireTrustLevel(value: unknown, path: string): string {
   return result;
 }
 
-function requireOneOf(value: unknown, path: string, allowed: readonly string[]): string {
-  const result = requireString(value, path);
-  if (!allowed.includes(result)) {
-    reject(path, `contains unsupported value ${JSON.stringify(result)}`);
-  }
-  return result;
-}
-
 function validateEventMetadata(data: Record<string, unknown>): void {
-  for (const key of EVENT_STRING_KEYS) {
-    if (data[key] !== undefined) requireNonEmptyString(data[key], `event.data.${key}`);
-  }
-  for (const key of ['callType', 'originType']) {
-    const value = data[key];
-    if (value !== undefined && !isObservabilityCallType(value)) {
-      reject(`event.data.${key}`, `contains unsupported value ${JSON.stringify(value)}`);
-    }
-  }
-  if (data.channelType !== undefined) {
-    requireOneOf(data.channelType, 'event.data.channelType', CHANNEL_TYPES);
-  }
-  if (data.telemetryVisibility !== undefined) {
-    requireOneOf(data.telemetryVisibility, 'event.data.telemetryVisibility', [
-      'operator_visible',
-      'companion_private',
-    ]);
-  }
-  if (data.chargeLane !== undefined) {
-    requireOneOf(
-      data.chargeLane,
-      'event.data.chargeLane',
-      CHARGE_POLICY_RUNTIME_LANE_VALUES,
-    );
-  }
-  if (data.chargeSurface !== undefined) {
-    requireOneOf(
-      data.chargeSurface,
-      'event.data.chargeSurface',
-      CHARGE_POLICY_SURFACE_VALUES,
-    );
-  }
-  if (data.viewerTrustLevel !== undefined) {
-    requireTrustLevel(data.viewerTrustLevel, 'event.data.viewerTrustLevel');
-  }
-  if (data.requesterProvenance !== undefined) {
-    requireOneOf(
-      data.requesterProvenance,
-      'event.data.requesterProvenance',
-      REQUESTER_PROVENANCE_VALUES,
-    );
-  }
-  if (data.viewerChannelPrivacy !== undefined && !isChannelPrivacy(data.viewerChannelPrivacy)) {
-    reject(
-      'event.data.viewerChannelPrivacy',
-      `contains unsupported value ${JSON.stringify(data.viewerChannelPrivacy)}`,
-    );
-  }
-  if (data.viewerIsDirectMessage !== undefined) {
-    requireBoolean(data.viewerIsDirectMessage, 'event.data.viewerIsDirectMessage');
-  }
-  for (const key of ['embodimentContext', 'icpCorrelation']) {
-    if (data[key] !== undefined) {
-      parseJsonValue(data[key], `event.data.${key}`, new WeakSet<object>());
-    }
-  }
+  parseCorrelationMetadataFields(data, 'event.data');
 }
 
 function requireMatchingEventIdentity(
@@ -239,8 +113,19 @@ function parseSnapshot(value: unknown): AdminTurnSnapshotData {
   };
 }
 
-function describeFailure(cause: unknown): string {
-  return cause instanceof Error ? cause.message : 'Malformed turn snapshot caused an unknown parse failure';
+function describeFailure(cause: unknown): {
+  error: string;
+  classification: TurnSnapshotFailureClassification;
+} {
+  if (cause instanceof TurnSnapshotParserError) {
+    return { error: cause.message, classification: cause.classification };
+  }
+  return {
+    error: cause instanceof Error
+      ? cause.message
+      : 'Malformed turn snapshot caused an unknown parse failure',
+    classification: 'malformed',
+  };
 }
 
 /** Total parser shared by persisted API replay and live WebSocket ingestion. */
@@ -248,7 +133,7 @@ export function parsePersistedTurnSnapshot(value: unknown): TurnSnapshotParseRes
   try {
     return { ok: true, value: parseSnapshot(value) };
   } catch (cause) {
-    return { ok: false, error: describeFailure(cause) };
+    return { ok: false, ...describeFailure(cause) };
   }
 }
 
@@ -262,6 +147,6 @@ export function parsePersistedTurnSnapshotEventData(value: unknown): TurnSnapsho
     requireMatchingEventIdentity(data, snapshot);
     return { ok: true, value: snapshot };
   } catch (cause) {
-    return { ok: false, error: describeFailure(cause) };
+    return { ok: false, ...describeFailure(cause) };
   }
 }

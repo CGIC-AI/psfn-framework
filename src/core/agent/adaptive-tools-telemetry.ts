@@ -1,5 +1,5 @@
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
-import type { ObservabilityCallType } from '../../shared/contracts/runtime-base.js';
+import type { CorrelationMetadata } from '../../shared/contracts/runtime-base.js';
 
 export type AdaptiveToolCatalogSource =
   | 'core'
@@ -9,13 +9,7 @@ export type AdaptiveToolCatalogDecision =
   | 'active'
   | 'skipped';
 
-export interface AdaptiveToolTelemetryCorrelation {
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
-  callType?: ObservabilityCallType;
-  purpose?: string;
-}
+export type AdaptiveToolTelemetryCorrelation = Partial<CorrelationMetadata>;
 
 export interface AdaptiveToolDecisionTelemetry extends AdaptiveToolTelemetryCorrelation {
   timestamp: number;

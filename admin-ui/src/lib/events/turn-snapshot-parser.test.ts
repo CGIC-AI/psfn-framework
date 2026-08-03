@@ -318,6 +318,151 @@ function structuredSnapshot() {
   };
 }
 
+function productionShapedSnapshot(index = 0) {
+  const snapshot = structuredSnapshot();
+  const adaptiveSnapshot = snapshot.toolContext.adaptiveSnapshot as Record<string, unknown>;
+  Object.assign(adaptiveSnapshot, {
+    companionId: 'companion-local',
+    sessionId: `session-${index}`,
+    channelType: 'api',
+    toolName: 'contact_lookup',
+    toolCallId: `tool-call-${index}`,
+    originType: 'chat',
+    originStage: 'turn',
+    telemetryVisibility: 'operator_visible',
+    service: 'agent',
+    process: 'turn',
+    chargeLane: 'interactive',
+    chargeSurface: 'externalModelConsult',
+    chargeEventId: `charge-event-${index}`,
+    chargeRunId: `charge-run-${index}`,
+    chargeRootRunId: `charge-root-${index}`,
+    chargeParentRunId: `charge-parent-${index}`,
+    shardId: `shard-${index}`,
+    conversationId: `conversation-${index}`,
+    rootInitiationId: `root-${index}`,
+    workloadType: 'turn',
+    workloadId: `workload-${index}`,
+    viewerTrustLevel: 'regular',
+    requesterProvenance: 'human',
+    requestAudience: 'primary_contact',
+    viewerChannelPrivacy: 'private',
+    viewerIsDirectMessage: true,
+    viewerMemorySubjectContactId: 'contact-1',
+    viewerAuthorId: 'author-1',
+    embodimentContext: {
+      kind: 'embodiment',
+      embodimentId: 'embodiment-1',
+      companionId: 'companion-local',
+      channelPrivacy: 'private',
+      isActive: true,
+    },
+    icpCorrelation: {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerContactId: 'contact-peer',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: 'turn-1',
+      messageId: `message-${index}`,
+      requestId: 'request-1',
+      chargeLane: 'interactive',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'initiation',
+      fatigueDecision: 'allow',
+    },
+  });
+  if (index % 33 === 0) {
+    Object.assign(adaptiveSnapshot, {
+      subagentId: `subagent-${index}`,
+      workloadType: 'subagent',
+    });
+  }
+  const sessionContext: Record<string, unknown> = {
+    channelId: 'api:dm',
+    recentEntries: [],
+    autoCompactionEligible: index % 2 === 0,
+    sourceEntryCount: 0,
+    historySummaryEntryCount: 0,
+    compactionSummaryTexts: [],
+    focusKnowledgeTexts: [],
+    continuityEntries: [],
+    intentionAppraisalArtifactCount: 0,
+    versionPointer: `session-v${index}`,
+  };
+  if (index % 4 === 0) {
+    sessionContext.rolledOutSessionBoundary = {
+      sessionId: `session-${index}`,
+      beforeMs: 1_000 + index,
+    };
+  }
+  return { ...snapshot, sessionContext };
+}
+
+test('snapshot parser preserves current ordinary, subagent, compaction, and rollout fields', () => {
+  for (const index of [1, 33, 4]) {
+    const snapshot = productionShapedSnapshot(index);
+    const replay = parsePersistedTurnSnapshot(snapshot);
+    const live = parsePersistedTurnSnapshotEventData(eventData(snapshot));
+    assert.equal(replay.ok, true, `replay shape ${index}: ${replay.ok ? '' : replay.error}`);
+    assert.equal(live.ok, true, `live shape ${index}: ${live.ok ? '' : live.error}`);
+    if (!replay.ok || !live.ok) continue;
+    assert.deepEqual(replay.value.toolContext?.adaptiveSnapshot, snapshot.toolContext.adaptiveSnapshot);
+    assert.deepEqual(replay.value.sessionContext, snapshot.sessionContext);
+  }
+});
+
+test('201-shape production-equivalent corpus passes replay and prompt-monitor ingestion', () => {
+  const snapshots = Array.from({ length: 201 }, (_, index) => productionShapedSnapshot(index));
+  for (const [index, snapshot] of snapshots.entries()) {
+    const replay = parsePersistedTurnSnapshot(snapshot);
+    assert.equal(replay.ok, true, `replay corpus shape ${index}: ${replay.ok ? '' : replay.error}`);
+    const merged = mergePromptMonitorEvent([], {
+      type: 'agent.turn.snapshot',
+      timestamp: 2_000 + index,
+      correlation: { turnId: 'turn-1', requestId: 'request-1', channelId: 'api:dm' },
+      data: eventData(snapshot),
+    });
+    assert.equal(merged[0]?.snapshot?.turnId, 'turn-1', `monitor corpus shape ${index}`);
+  }
+});
+
+test('current snapshot additions remain fail-closed for unknown keys and wrong types', () => {
+  const unknown = productionShapedSnapshot(1);
+  Object.defineProperty(unknown.toolContext.adaptiveSnapshot, 'legacyCorrelation', {
+    value: 'retired',
+    enumerable: true,
+  });
+  const unsupported = parsePersistedTurnSnapshot(unknown);
+  assert.equal(unsupported.ok, false);
+  if (!unsupported.ok) assert.equal(unsupported.classification, 'unsupported_schema');
+
+  for (const mutate of [
+    (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
+      (snapshot.toolContext.adaptiveSnapshot as Record<string, unknown>).viewerIsDirectMessage = 'yes';
+    },
+    (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
+      const adaptive = snapshot.toolContext.adaptiveSnapshot as Record<string, unknown>;
+      adaptive.embodimentContext = { kind: 'satellite' };
+    },
+    (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
+      snapshot.sessionContext.autoCompactionEligible = 'yes';
+    },
+    (snapshot: ReturnType<typeof productionShapedSnapshot>) => {
+      snapshot.sessionContext.rolledOutSessionBoundary = { sessionId: '', beforeMs: 1 };
+    },
+  ]) {
+    const malformed = productionShapedSnapshot(4);
+    mutate(malformed);
+    const result = parsePersistedTurnSnapshot(malformed);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.classification, 'malformed');
+  }
+});
+
 test('snapshot parser preserves valid slim, explicit-empty, and full snapshot semantics', () => {
   const slim = parsePersistedTurnSnapshot(slimSnapshot());
   assert.equal(slim.ok, true);
@@ -502,7 +647,30 @@ test('malformed live snapshot events are surfaced without mutating monitor state
   assert.deepEqual(seeded, before);
   assert.equal(rejections.length, 1);
   assert.equal(rejections[0]?.source, 'live');
-  assert.match(rejections[0]?.message ?? '', /inputSchema/u);
+  assert.equal(rejections[0]?.classification, 'malformed_snapshot');
+  assert.equal(rejections[0]?.message, 'snapshot is malformed for the current persisted schema');
+});
+
+test('unsupported persisted snapshots are classified without logging snapshot content', () => {
+  const unsupported = productionShapedSnapshot(1);
+  Object.defineProperty(unsupported.toolContext.adaptiveSnapshot, 'legacyCorrelation', {
+    value: 'private-persisted-content',
+    enumerable: true,
+  });
+  const rejections: PromptMonitorSnapshotRejection[] = [];
+  mergePromptMonitorEvent([], {
+    type: 'agent.turn.snapshot',
+    timestamp: 2_000,
+    correlation: { turnId: 'turn-1', channelId: 'api:dm' },
+    data: eventData(unsupported),
+  }, {
+    onRejectedSnapshot(rejection) {
+      rejections.push(rejection);
+    },
+  });
+  assert.equal(rejections[0]?.classification, 'unsupported_snapshot_schema');
+  assert.equal(rejections[0]?.message, 'snapshot uses an unsupported persisted schema');
+  assert.doesNotMatch(JSON.stringify(rejections[0]), /private-persisted-content|legacyCorrelation/u);
 });
 
 function firstObservedMemory(snapshot: ReturnType<typeof structuredSnapshot>) {

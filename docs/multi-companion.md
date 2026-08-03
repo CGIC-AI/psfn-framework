@@ -171,16 +171,20 @@ or migrated, and no dual-read fallback is added; each companion's file simply
 starts fresh at the correct root. Model-usage accounting is already per-companion
 through the Postgres `model_usage_events` store (`companion_id` attribution), so
 there is no shared JSONL usage ledger to re-root. That ledger is fleet-wide, not
-schema-per-companion: the gateway owns LLM egress and records into the ledger
-under its own credential, and the fleet Garden aggregates across companions from
-the same relation. Pinning it to a companion schema would fork the ledger
-per tenant and leave both the gateway writer and the fleet reader looking at the
-wrong table.
+schema-per-companion: canonical topology order selects the first companion's
+schema as its one durable home. The gateway uses that schema owner for migration
+and writes; follower agents and the fleet Garden use read-only pools pinned to
+the same schema. Each follower receives only schema `USAGE` plus `SELECT` on
+`model_usage_events`, and companion-scoped queries retain their `companion_id`
+predicate. Creating a ledger in each current companion schema would fork the
+accounting history and is forbidden.
 
 ## Postgres tenancy: schema-per-companion + one shared schema
 
 Each agent process pins its runtime persistence to its own schema; there is one
-extra `shared` schema for cross-companion world data.
+extra `shared` schema for cross-companion world data. The canonical model-usage
+ledger is the one narrow cross-schema read exception described above: it remains
+owned by the primary companion rather than becoming a second shared DML schema.
 
 - Env: `COMPANION_PG_SCHEMA` is parsed in `src/system/config/load-config.ts`
   into `config.postgresSchema`. It is an **explicit opt-in**, deliberately not
@@ -196,8 +200,8 @@ extra `shared` schema for cross-companion world data.
 - Up-front provisioning: the gateway resolves the topology-owned credentials,
   verifies the companion schemas and role posture, and runs the complete shared
   migration chain once through `prepareFleetSharedSchemaRuntime`. Agent startup
-  is read-only: it verifies its tenant boundary and exact shared DML grants
-  before any store connects.
+  is read-only: it verifies its tenant boundary, exact shared DML grants, and —
+  for followers — exact primary-ledger `USAGE`/`SELECT` before any store connects.
 - Shared schema: `SHARED_SCHEMA_NAME = 'shared'`
   (`src/persistence/postgres/migrations.ts`) holds cross-companion world data —
   `companion_presence` (co-presence) and the shared-world wiki chunks. It is

@@ -78,5 +78,7 @@ describe('multi-companion database topology resolution', () => {
     })).toThrow(/same exact database/);
     expect(() => resolve(CREDENTIALS, 'postgres://other:other@db.example.test/psfn'))
       .toThrow(/Gateway POSTGRES_DATABASE_URL must exactly match/);
+    expect(() => resolve(CREDENTIALS, CREDENTIALS.BETA_DATABASE_URL))
+      .toThrow(/primary.*canonical|canonical.*primary/i);
   });
 });

@@ -286,7 +286,11 @@ export interface FleetGardenDirectDatabaseServices {
 export function createFleetGardenDirectDatabaseServices(
   config: SubstrateConfig,
 ): FleetGardenDirectDatabaseServices {
-  const modelUsageStore = createPostgresModelUsageStoreFromConfig(config);
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(
+    config,
+    undefined,
+    'read_only',
+  );
   if (!modelUsageStore) {
     throw new Error('Fleet Garden model usage access requires PostgreSQL persistence');
   }
@@ -333,12 +337,14 @@ export function createInProcessGardenAdminContract(
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const humanAttentionLedger = options.humanAttentionLedger
     ?? new HumanAttentionPressureLedger(resolveHumanAttentionLedgerPath(companionDataDir));
-  // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide ledger
-  // written by the gateway and aggregated across companions by the fleet
-  // Garden (psfn-framework-stmof). Pinning this reader to the companion schema
-  // would fork it away from the writer and silently read an empty per-tenant
-  // table.
-  const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  // The ledger is fleet-wide but has one explicit owner: the first companion
+  // in canonical topology order. Garden reads it through a read-only pool and
+  // retains the selected companion's query pin.
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(
+    options.config,
+    undefined,
+    'read_only',
+  );
   const auditOpaqueIdKeyring = requireAuditOpaqueIdKeyring(
     options.config.gatewaySessionIntegrityAuthToken,
   );

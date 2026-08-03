@@ -410,6 +410,7 @@ describe('createAgentPersistenceRuntime', () => {
       {
         ownSchema: 'companion_x',
         companionSchemas: ['companion_x', 'companion_y'],
+        modelUsageLedgerSchema: 'companion_x',
       },
     );
     expect(runtimeFactoryMocks.assertPostgresTenantAccessProvisioned).toHaveBeenCalledWith(

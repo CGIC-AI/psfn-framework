@@ -244,6 +244,12 @@ async function main(): Promise<void> {
       ...(config.gatewaySessionIntegrityAuthToken
         ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
         : {}),
+      ...(config.retryMaxAttempts !== undefined && config.retryBaseDelayMs !== undefined
+        ? {
+            sessionIntegritySignMaxRetries: config.retryMaxAttempts,
+            sessionIntegritySignRetryBaseDelayMs: config.retryBaseDelayMs,
+          }
+        : {}),
       // 23pp per-companion model selection: this companion's effective purpose →
       // slot-key map (settings.json + settings.overlay.json, validated at startup
       // against models.json). Transported per call as the wire slotKey and

@@ -329,6 +329,8 @@ export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   sessionIntegritySocketPath?: string;
   sessionIntegrityEndpoint?: GatewayRpcEndpoint;
   sessionIntegrityRpcTimeoutMs?: number;
+  sessionIntegritySignMaxRetries?: number;
+  sessionIntegritySignRetryBaseDelayMs?: number;
   keepaliveIntervalMs?: number;
   /**
    * Multi-companion (sprint-10 W1): the companion this agent process acts for
@@ -556,6 +558,8 @@ export class GatewayClient implements
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
   private readonly sessionIntegrityEndpoint: GatewayRpcEndpoint | null;
   private readonly sessionIntegrityRpcTimeoutMs: number;
+  private readonly sessionIntegritySignMaxRetries?: number;
+  private readonly sessionIntegritySignRetryBaseDelayMs?: number;
   private readonly keepaliveIntervalMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private fleetPostureProvider: (() => FleetCompanionPostureSummary) | null = null;
@@ -603,6 +607,8 @@ export class GatewayClient implements
         ? { kind: 'unix', socketPath: options.sessionIntegritySocketPath }
         : null);
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
+    this.sessionIntegritySignMaxRetries = options.sessionIntegritySignMaxRetries;
+    this.sessionIntegritySignRetryBaseDelayMs = options.sessionIntegritySignRetryBaseDelayMs;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
     this.onModelBudgetBlocked = options.onModelBudgetBlocked;
     if (options.modelPurposeSelection !== undefined) {
@@ -615,6 +621,29 @@ export class GatewayClient implements
     if (!Number.isInteger(this.sessionIntegrityRpcTimeoutMs) || this.sessionIntegrityRpcTimeoutMs <= 0) {
       throw new Error(
         `sessionIntegrityRpcTimeoutMs must be a positive integer, got ${this.sessionIntegrityRpcTimeoutMs}`,
+      );
+    }
+    const hasConfiguredSignMaxRetries = typeof this.sessionIntegritySignMaxRetries === 'number'; // ubs:ignore — compares optional retry configuration type, not signature or secret material
+    const hasConfiguredSignRetryDelay = typeof this.sessionIntegritySignRetryBaseDelayMs === 'number';
+    if (hasConfiguredSignMaxRetries !== hasConfiguredSignRetryDelay) {
+      throw new Error(
+        'sessionIntegritySignMaxRetries and sessionIntegritySignRetryBaseDelayMs must be configured together',
+      );
+    }
+    if (hasConfiguredSignMaxRetries
+      && (!Number.isInteger(this.sessionIntegritySignMaxRetries)
+        || this.sessionIntegritySignMaxRetries < 0)) {
+      throw new Error(
+        'sessionIntegritySignMaxRetries must be a non-negative integer, '
+        + `got ${this.sessionIntegritySignMaxRetries}`,
+      );
+    }
+    if (hasConfiguredSignRetryDelay
+      && (!Number.isInteger(this.sessionIntegritySignRetryBaseDelayMs)
+        || this.sessionIntegritySignRetryBaseDelayMs < 0)) {
+      throw new Error(
+        'sessionIntegritySignRetryBaseDelayMs must be a non-negative integer, '
+        + `got ${this.sessionIntegritySignRetryBaseDelayMs}`,
       );
     }
     if (!Number.isInteger(this.keepaliveIntervalMs) || this.keepaliveIntervalMs <= 0) {
@@ -1837,10 +1866,7 @@ export class GatewayClient implements
   createSessionIntegrityProvider(): SessionIntegrityProvider {
     return {
       sign: (entry, previousHmac) => {
-        const result = this.requestSessionIntegritySync<SessionHmacSignResult>('session.hmac.sign', {
-          entry,
-          previousHmac,
-        });
+        const result = this.requestSessionIntegritySignWithRetry(entry, previousHmac);
         return result.entry;
       },
       verify: (entry, previousHmac) => {
@@ -1868,6 +1894,44 @@ export class GatewayClient implements
         return result;
       },
     };
+  }
+
+  private requestSessionIntegritySignWithRetry(
+    entry: JournalEntry,
+    previousHmac: string | null,
+  ): SessionHmacSignResult {
+    const maxRetries = this.sessionIntegritySignMaxRetries;
+    let remainingRetries = maxRetries;
+    for (;;) {
+      try {
+        return this.requestSessionIntegritySync<SessionHmacSignResult>('session.hmac.sign', {
+          entry,
+          previousHmac,
+        });
+      } catch (error) {
+        const timedOut = error instanceof Error && (
+          error.message === 'Session integrity RPC timed out' // ubs:ignore — matches a public error label, not signature or secret material
+          // ubs:ignore — matches a public error label, not signature or secret material
+          || error.message === 'Session integrity RPC timed out for session.hmac.sign'
+        );
+        if (!timedOut
+          || typeof maxRetries !== 'number'
+          || typeof remainingRetries !== 'number'
+          || typeof this.sessionIntegritySignRetryBaseDelayMs !== 'number'
+          || remainingRetries <= 0) {
+          throw error;
+        }
+        const retryCount = maxRetries - remainingRetries + 1;
+        remainingRetries -= 1;
+        log.warn('Session integrity sign RPC timed out; retrying idempotent signing request', {
+          retryCount,
+          maxRetries,
+          backoffMs: this.sessionIntegritySignRetryBaseDelayMs,
+        });
+        const backoffState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+        Atomics.wait(backoffState, 0, 0, this.sessionIntegritySignRetryBaseDelayMs);
+      }
+    }
   }
 
   // ── Notification handlers ──

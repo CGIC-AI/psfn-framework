@@ -3155,6 +3155,95 @@ describe('GatewayClient session integrity RPC', () => {
     }, null)).toThrow('requires a gateway socket path');
   });
 
+  it('recovers a journal sign after a transient session-integrity timeout', () => {
+    client = new GatewayClient(conn.conn, 1024, {
+      sessionIntegritySocketPath: '/tmp/test-gateway.sock',
+      sessionIntegritySignMaxRetries: 1,
+      sessionIntegritySignRetryBaseDelayMs: 1,
+    });
+    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+      .mockImplementationOnce(() => {
+        throw new Error('Session integrity RPC timed out');
+      })
+      .mockReturnValueOnce({
+        entry: {
+          type: 'message',
+          id: 1,
+          channelId: 'discord:general',
+          role: 'user',
+          content: 'hello',
+          timestamp: 1_000,
+          _hmac: 'a'.repeat(64),
+          _hmacKeyVersion: 'v1',
+        },
+      });
+    const provider = client.createSessionIntegrityProvider();
+    const wait = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out');
+
+    try {
+      const signed = provider.sign({
+        type: 'message',
+        id: 1,
+        channelId: 'discord:general',
+        role: 'user',
+        content: 'hello',
+        timestamp: 1_000,
+      }, null);
+
+      expect(signed._hmac).toBe('a'.repeat(64));
+      expect(requestSessionIntegritySync).toHaveBeenCalledTimes(2);
+      expect(wait).toHaveBeenCalledWith(expect.any(Int32Array), 0, 0, 1);
+    } finally {
+      wait.mockRestore();
+    }
+  });
+
+  it('bounds persistent session-integrity sign timeouts and fails closed', () => {
+    client = new GatewayClient(conn.conn, 1024, {
+      sessionIntegritySocketPath: '/tmp/test-gateway.sock',
+      sessionIntegritySignMaxRetries: 2,
+      sessionIntegritySignRetryBaseDelayMs: 0,
+    });
+    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+      .mockImplementation(() => {
+        throw new Error('Session integrity RPC timed out');
+      });
+    const provider = client.createSessionIntegrityProvider();
+
+    expect(() => provider.sign({
+      type: 'message',
+      id: 1,
+      channelId: 'discord:general',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    }, null)).toThrow('Session integrity RPC timed out');
+    expect(requestSessionIntegritySync).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a non-timeout session-integrity signing failure', () => {
+    client = new GatewayClient(conn.conn, 1024, {
+      sessionIntegritySocketPath: '/tmp/test-gateway.sock',
+      sessionIntegritySignMaxRetries: 2,
+      sessionIntegritySignRetryBaseDelayMs: 0,
+    });
+    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+      .mockImplementation(() => {
+        throw new Error('Session integrity RPC returned an invalid payload');
+      });
+    const provider = client.createSessionIntegrityProvider();
+
+    expect(() => provider.sign({
+      type: 'message',
+      id: 1,
+      channelId: 'discord:general',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    }, null)).toThrow('Session integrity RPC returned an invalid payload');
+    expect(requestSessionIntegritySync).toHaveBeenCalledTimes(1);
+  });
+
   it('memoizes repeated sync session integrity verification for unchanged entries', () => {
     client = new GatewayClient(conn.conn, 1024, {
       sessionIntegritySocketPath: '/tmp/test-gateway.sock',

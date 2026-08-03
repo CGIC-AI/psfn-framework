@@ -448,6 +448,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   const backupRole = options.backupRole === undefined
     ? undefined
     : assertValidRoleName(options.backupRole, 'backupRole');
+  const mappedRuntimeRoles = [...new Set(options.contracts.flatMap(
+    contract => contract.runtimeRoles,
+  ))].sort();
+  const mappedRuntimeGrantees = mappedRuntimeRoles.map(quoteIdentifier).join(', ');
   for (const contract of options.contracts) {
     const pool = createPostgresPool(options.ownerDatabaseUrls[contract.schema], {
       applicationName: 'fleet-auth-schema-access-restore',
@@ -496,10 +500,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${grantees}`);
-      await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${grantees}`);
-      await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${grantees}`);
-      await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM ${grantees}`);
+      await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
+      await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
+      await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
+      await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
       if (contract.kind === 'shared') {
         await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${grantees}`);
         await client.query(

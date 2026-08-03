@@ -67,6 +67,12 @@ export interface PostgresConnectionOptions {
   connectionTimeoutMillis?: number;
   max?: number;
   /**
+   * Pin every session opened by this pool to PostgreSQL's read-only
+   * transaction posture. This is a session fence, not a substitute for exact
+   * schema/table ACLs; callers that cross a tenant boundary must prove both.
+   */
+  readOnly?: boolean;
+  /**
    * Optional companion/world schema. When provided it is strictly validated and
    * pinned as the pool's search_path at connection startup (libpq `options`), so
    * every connection handed out by the pool operates inside that schema and no
@@ -113,7 +119,10 @@ export function createPostgresPool(
     config.options = [
       ...(role ? [`-c role=${role}`] : []),
       `-c search_path=${schema},${POSTGRES_EXTENSION_SCHEMA_NAME}`,
+      ...(options.readOnly === true ? ['-c default_transaction_read_only=on'] : []),
     ].join(' ');
+  } else if (options.readOnly === true) {
+    config.options = '-c default_transaction_read_only=on';
   }
   const pool = new Pool(config);
   installBindParameterNulStripping(pool);

@@ -111,11 +111,11 @@ describe('per-companion store factories forward the tenant pool scope', () => {
     postgresMocks.createPostgresPool.mockClear();
   });
 
-  // Model-usage is deliberately absent here: `model_usage_events` is a
-  // fleet-wide ledger written by the gateway and aggregated across companions
-  // by the fleet Garden, so it must NOT be pinned to a companion schema
-  // (psfn-framework-stmof). The analysis-workbench trace store resolves its own
-  // tenant scope from config and is covered by
+  // Model usage is deliberately absent here: it resolves the canonical first
+  // companion's ledger schema (not the current follower's tenant schema) in
+  // createPostgresModelUsageStoreFromConfig, with dedicated read-only coverage
+  // in model-usage-store.test.ts and named-tenant-store-boot.integration.test.ts.
+  // The analysis-workbench trace store resolves its own tenant scope and is covered by
   // `named-tenant-store-boot.integration.test.ts`.
 
   it('pins observer-eval-sidecar pools to the companion schema and role when scoped', () => {

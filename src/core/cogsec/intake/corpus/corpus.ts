@@ -15,6 +15,8 @@
 //   fixtures/*.jsonl                   the corpus itself, one fixture per line
 //
 // Fixture status semantics (the ratchet):
+//   replay        — every offline case names its operational scenario and
+//                   scanner scope; sourceClass never selects a scope.
 //   enforced      — replayed offline against the real layer; actual behavior
 //                   MUST equal `expected`. A regression fails the gate.
 //   known-gap     — replayed offline; actual behavior MUST equal
@@ -38,6 +40,10 @@ import {
   type IntakeSourceClass,
 } from '../../../../shared/contracts/intake-envelope.js';
 import { isRecord } from '../../../../shared/utils/types.js';
+import {
+  INTAKE_SCAN_SCOPES,
+  type IntakeScanScope,
+} from '../scanners/types.ts';
 
 // ── Closed vocabularies ──
 
@@ -70,6 +76,19 @@ export type CorpusVerdict = typeof CORPUS_VERDICTS[number];
 export const CORPUS_PROVENANCE = ['arcanum-example', 'synthetic-derived'] as const;
 export type CorpusProvenance = typeof CORPUS_PROVENANCE[number];
 
+export const CORPUS_REPLAY_SCENARIOS = [
+  'production-intake',
+  'all-scope-control',
+] as const;
+export type CorpusReplayScenario = typeof CORPUS_REPLAY_SCENARIOS[number];
+
+export const CORPUS_REPLAY_SCOPE_BY_SCENARIO: Readonly<
+  Record<CorpusReplayScenario, IntakeScanScope>
+> = {
+  'production-intake': 'context',
+  'all-scope-control': 'all',
+};
+
 export const MAX_FIXTURE_PAYLOAD_CHARS = 8192;
 export const MAX_FIXTURE_NOTE_CHARS = 512;
 
@@ -96,6 +115,13 @@ export interface CorpusFixtureKnownGap {
   finding: string;
 }
 
+export interface CorpusFixtureReplay {
+  /** Named operational scenario whose behavior this fixture ratchets. */
+  scenario: CorpusReplayScenario;
+  /** Scanner tier selected by the scenario; never inferred from sourceClass. */
+  scope: IntakeScanScope;
+}
+
 export interface CorpusFixture {
   /** Unique across the corpus. Convention: '<axis>-<entryId>-<nn>'. */
   id: string;
@@ -104,6 +130,8 @@ export interface CorpusFixture {
   layer: CorpusLayer;
   /** The intake surface the payload arrives on. */
   sourceClass: IntakeSourceClass;
+  /** Required for offline-replayable layers; forbidden when no offline oracle exists. */
+  replay?: CorpusFixtureReplay;
   payload: string;
   expected: CorpusFixtureExpectation;
   status: CorpusFixtureStatus;
@@ -188,10 +216,11 @@ function requireEnum<T extends string>(
 }
 
 const FIXTURE_KEYS = new Set([
-  'id', 'kind', 'taxonomy', 'layer', 'sourceClass', 'payload',
+  'id', 'kind', 'taxonomy', 'layer', 'sourceClass', 'replay', 'payload',
   'expected', 'status', 'knownGap', 'provenance', 'notes',
 ]);
 const TAXONOMY_KEYS = new Set(['framework', 'axis', 'entryId']);
+const REPLAY_KEYS = new Set(['scenario', 'scope']);
 const EXPECTED_KEYS = new Set(['verdict', 'labels']);
 const KNOWN_GAP_KEYS = new Set(['actualVerdict', 'actualLabels', 'finding']);
 
@@ -222,6 +251,31 @@ function parseFixture(
   const payload = requireString(raw.payload, `${path}.payload`, MAX_FIXTURE_PAYLOAD_CHARS);
   const status = requireEnum(raw.status, CORPUS_FIXTURE_STATUSES, `${path}.status`);
   const provenance = requireEnum(raw.provenance, CORPUS_PROVENANCE, `${path}.provenance`);
+
+  const isOfflineReplayable = (OFFLINE_REPLAYABLE_LAYERS as readonly string[]).includes(layer);
+  let replay: CorpusFixtureReplay | undefined;
+  if (isOfflineReplayable) {
+    if (!isRecord(raw.replay)) {
+      fail(`${path}.replay`, `layer '${layer}' requires an explicit replay scenario and scope`);
+    }
+    rejectUnknownKeys(raw.replay, REPLAY_KEYS, `${path}.replay`);
+    const scenario = requireEnum(
+      raw.replay.scenario,
+      CORPUS_REPLAY_SCENARIOS,
+      `${path}.replay.scenario`,
+    );
+    const scope = requireEnum(raw.replay.scope, INTAKE_SCAN_SCOPES, `${path}.replay.scope`);
+    const expectedScope = CORPUS_REPLAY_SCOPE_BY_SCENARIO[scenario];
+    if (scope !== expectedScope) {
+      fail(
+        `${path}.replay.scope`,
+        `scenario '${scenario}' requires scope '${expectedScope}', got '${scope}'`,
+      );
+    }
+    replay = { scenario, scope };
+  } else if (raw.replay !== undefined) {
+    fail(`${path}.replay`, `layer '${layer}' has no offline replay oracle`);
+  }
 
   if (!isRecord(raw.taxonomy)) fail(`${path}.taxonomy`, 'must be an object');
   rejectUnknownKeys(raw.taxonomy, TAXONOMY_KEYS, `${path}.taxonomy`);
@@ -280,6 +334,7 @@ function parseFixture(
   const fixture: CorpusFixture = {
     id, kind, taxonomy: { framework, axis, entryId }, layer, sourceClass,
     payload, expected, status, provenance,
+    ...(replay === undefined ? {} : { replay }),
     ...(knownGap === undefined ? {} : { knownGap }),
     ...(raw.notes === undefined
       ? {}

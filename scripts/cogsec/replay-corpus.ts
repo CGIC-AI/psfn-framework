@@ -68,7 +68,10 @@ for (const fixture of loadFixtures(target)) {
     : actual.verdict === fixture.expected.verdict
       && (fixture.expected.labels ?? []).every((l) => actual.labels.includes(l));
   if (!ok) mismatches += 1;
-  console.log(`${ok ? 'OK  ' : 'DIFF'} ${fixture.id}  expected=${expected}  actual=${observed}`);
+  console.log(
+    `${ok ? 'OK  ' : 'DIFF'} ${fixture.id}  scenario=${actual.scenario} scope=${actual.scope} `
+    + ` expected=${expected}  actual=${observed}`,
+  );
 }
 console.log(`\n${String(mismatches)} mismatch(es)`);
 process.exit(mismatches === 0 ? 0 : 1);

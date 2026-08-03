@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 
 import {
   createPostgresPool,
@@ -32,6 +32,145 @@ async function readVectorExtensionSchema(pool: Pool): Promise<string | undefined
     WHERE extension.extname = 'vector'
   `);
   return result.rows[0]?.schema_name;
+}
+
+const LEGACY_SUBJECT_EVIDENCE_TRIGGER_FUNCTION = `
+  CREATE OR REPLACE FUNCTION psfn_prepare_memory_subject_evidence_change()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF TG_OP = 'UPDATE' AND (
+      NEW.text IS DISTINCT FROM OLD.text
+      OR NEW.type IS DISTINCT FROM OLD.type
+      OR NEW.source_ref IS DISTINCT FROM OLD.source_ref
+      OR NEW.source_type IS DISTINCT FROM OLD.source_type
+      OR NEW.provenance_json IS DISTINCT FROM OLD.provenance_json
+      OR NEW.provenance_refs IS DISTINCT FROM OLD.provenance_refs
+      OR NEW.contact_id IS DISTINCT FROM OLD.contact_id
+      OR NEW.scope_ref_kind IS DISTINCT FROM OLD.scope_ref_kind
+      OR NEW.scope_ref_id IS DISTINCT FROM OLD.scope_ref_id
+      OR NEW.scope_ref_label IS DISTINCT FROM OLD.scope_ref_label
+      OR NEW.scope_tags IS DISTINCT FROM OLD.scope_tags
+      OR NEW.tags IS DISTINCT FROM OLD.tags
+      OR NEW.embedding IS DISTINCT FROM OLD.embedding
+      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+      OR NEW.superseded_by IS DISTINCT FROM OLD.superseded_by
+    ) THEN
+      NEW.authorization_revision := OLD.authorization_revision + 1;
+      NEW.subject_evidence_digest := NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+`;
+
+interface TriggerTransitionCase {
+  expectedChange?: boolean;
+  id: string;
+  initialEmbedding: string | null;
+  initialSupersededBy: string | null;
+  nextEmbedding?: string | null;
+  nextSupersededBy?: string | null;
+}
+
+const SUBJECT_EVIDENCE_TRANSITIONS: readonly TriggerTransitionCase[] = [
+  {
+    id: 'superseded-null-to-value',
+    initialEmbedding: '[0.9,0.1,0.1,0.1]',
+    initialSupersededBy: null,
+    nextSupersededBy: 'replacement-a',
+  },
+  {
+    id: 'superseded-value-to-value',
+    initialEmbedding: '[0.9,0.1,0.1,0.1]',
+    initialSupersededBy: 'replacement-a',
+    nextSupersededBy: 'replacement-b',
+  },
+  {
+    id: 'superseded-value-to-null',
+    initialEmbedding: '[0.9,0.1,0.1,0.1]',
+    initialSupersededBy: 'replacement-a',
+    nextSupersededBy: null,
+  },
+  {
+    id: 'embedding-null-to-value',
+    initialEmbedding: null,
+    initialSupersededBy: null,
+    nextEmbedding: '[0.1,0.2,0.3,0.4]',
+  },
+  {
+    id: 'embedding-value-to-value',
+    initialEmbedding: '[0.1,0.2,0.3,0.4]',
+    initialSupersededBy: null,
+    nextEmbedding: '[0.4,0.3,0.2,0.1]',
+  },
+  {
+    id: 'embedding-value-to-null',
+    initialEmbedding: '[0.1,0.2,0.3,0.4]',
+    initialSupersededBy: null,
+    nextEmbedding: null,
+  },
+  {
+    expectedChange: false,
+    id: 'embedding-equivalent-value-is-unchanged',
+    // pgvector equality treats signed zeroes as equal. A text comparison does
+    // not, so this protects the trigger's original vector equality semantics.
+    initialEmbedding: '[0,1,0,0]',
+    initialSupersededBy: null,
+    nextEmbedding: '[-0,1,0,0]',
+  },
+];
+
+async function exerciseSubjectEvidenceTransitions(
+  client: PoolClient,
+  idPrefix: string,
+): Promise<void> {
+  for (const transition of SUBJECT_EVIDENCE_TRANSITIONS) {
+    const id = `${idPrefix}-${transition.id}`;
+    await client.query(`
+      INSERT INTO l2_memories (
+        id, text, type, importance, confidence, emotional_valence, salience,
+        source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        subject_evidence_digest, embedding
+      ) VALUES (
+        $1, 'trigger transition', 'semantic', 0.5, 0.9, 0, 0.5,
+        'integration:mk4h3', 1, 1, 0, $2, $3, $4
+      )
+    `, [id, transition.initialSupersededBy, 'a'.repeat(64), transition.initialEmbedding]);
+
+    const assignments: string[] = [];
+    const values: unknown[] = [id];
+    if ('nextSupersededBy' in transition) {
+      values.push(transition.nextSupersededBy);
+      assignments.push(`superseded_by = $${values.length}`);
+    }
+    if ('nextEmbedding' in transition) {
+      values.push(transition.nextEmbedding);
+      assignments.push(`embedding = $${values.length}`);
+    }
+    const updated = await client.query<{
+      authorization_revision: string;
+      subject_evidence_digest: string | null;
+    }>(`
+      UPDATE l2_memories
+      SET ${assignments.join(', ')}
+      WHERE id = $1
+      RETURNING authorization_revision, subject_evidence_digest
+    `, values);
+
+    expect(updated.rows[0], transition.id).toEqual(
+      transition.expectedChange === false
+        ? {
+          authorization_revision: '1',
+          subject_evidence_digest: 'a'.repeat(64),
+        }
+        : {
+          authorization_revision: '2',
+          subject_evidence_digest: null,
+        },
+    );
+  }
 }
 
 describe('Postgres pgvector extension schema targeting', () => {
@@ -103,6 +242,57 @@ describe('Postgres pgvector extension schema targeting', () => {
     } finally {
       await publicTenant.end();
       await namedTenant.end();
+      await admin.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('repairs the legacy memory evidence trigger for canonical and tenant-only callers', async () => {
+    if (!harness) throw new Error('Postgres integration harness is not available');
+    const database = await harness.createDatabase();
+    const admin = createPostgresPool(database.databaseUrl, {
+      applicationName: 'psfn-vector-trigger-admin',
+      max: 1,
+    });
+    const canonicalTenant = createPostgresPool(database.databaseUrl, {
+      applicationName: 'psfn-vector-trigger-canonical',
+      schema: 'companion_vector_trigger',
+      max: 1,
+    });
+    const tenantOnly = createPostgresPool(database.databaseUrl, {
+      applicationName: 'psfn-vector-trigger-tenant-only',
+      max: 1,
+    });
+    try {
+      await admin.query('CREATE EXTENSION vector WITH SCHEMA extensions');
+      await runPostgresMigrations(canonicalTenant, POSTGRES_MEMORY_MIGRATIONS, {
+        schema: 'companion_vector_trigger',
+      });
+
+      const canonicalClient = await canonicalTenant.connect();
+      try {
+        await exerciseSubjectEvidenceTransitions(canonicalClient, 'canonical');
+        await canonicalClient.query(LEGACY_SUBJECT_EVIDENCE_TRIGGER_FUNCTION);
+      } finally {
+        canonicalClient.release();
+      }
+
+      // The normal idempotent memory migration chain is the upgrade path for
+      // already-created companion schemas. It must replace the legacy function
+      // without requiring a trigger drop, privilege expansion, or search_path change.
+      await runPostgresMigrations(canonicalTenant, POSTGRES_MEMORY_MIGRATIONS, {
+        schema: 'companion_vector_trigger',
+      });
+
+      const tenantOnlyClient = await tenantOnly.connect();
+      try {
+        await tenantOnlyClient.query('SET search_path = companion_vector_trigger');
+        await exerciseSubjectEvidenceTransitions(tenantOnlyClient, 'tenant-only');
+      } finally {
+        tenantOnlyClient.release();
+      }
+    } finally {
+      await tenantOnly.end();
+      await canonicalTenant.end();
       await admin.end();
     }
   }, INTEGRATION_TIMEOUT_MS);

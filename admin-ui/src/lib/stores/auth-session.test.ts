@@ -2,26 +2,396 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type AuthStore = typeof import('./auth.svelte');
 
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const CSRF_TOKEN = 'c'.repeat(43);
+
+class FakeVisibilityDocument {
+  hidden: boolean;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(hidden = false) {
+    this.hidden = hidden;
+  }
+
+  addEventListener(_type: 'visibilitychange', listener: () => void): void {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener(_type: 'visibilitychange', listener: () => void): void {
+    this.listeners.delete(listener);
+  }
+
+  setHidden(hidden: boolean): void {
+    this.hidden = hidden;
+    for (const listener of this.listeners) listener();
+  }
+
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+}
+
 function shouldRedirectToLogin(auth: AuthStore): boolean {
   return auth.isAuthResolved() && !auth.isAuthenticated();
 }
 
-async function loadAuthStore(fetchImpl: typeof fetch): Promise<AuthStore> {
+async function loadAuthStore(
+  fetchImpl: typeof fetch,
+  options: { pathname?: string; documentRef?: FakeVisibilityDocument } = {},
+): Promise<AuthStore> {
   vi.resetModules();
   vi.stubGlobal('window', {
-    location: { pathname: '/' },
+    location: { pathname: options.pathname ?? '/', href: '' },
     localStorage: { removeItem: vi.fn() },
   });
+  if (options.documentRef) vi.stubGlobal('document', options.documentRef);
   vi.stubGlobal('fetch', vi.fn(fetchImpl));
   return import('./auth.svelte');
 }
 
+async function flushAsyncWork(): Promise<void> {
+  for (let count = 0; count < 8; count += 1) await Promise.resolve();
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe('Garden admin session auth guard', () => {
+  it('rotates an authenticated fleet session and schedules from the returned idle expiry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: new Date(Date.now() + 40 * 60_000).toISOString(),
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await flushAsyncWork();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    await vi.advanceTimersByTimeAsync(19 * 60_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('defers fleet session traffic while hidden and refreshes once when visible', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument(true);
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden/memory`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    documentRef.setHidden(false);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    documentRef.setHidden(false);
+    await flushAsyncWork();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('cleans the fleet refresh timer and visibility listener on teardown', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:30:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    expect(documentRef.listenerCount()).toBe(1);
+
+    auth.stopServerSessionRefresh();
+    expect(documentRef.listenerCount()).toBe(0);
+    documentRef.setHidden(true);
+    documentRef.setHidden(false);
+    await vi.advanceTimersByTimeAsync(8 * 60 * 60_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('suppresses concurrent rotation attempts while one CSRF-bound refresh is in flight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    let resolveCsrf = (_response: Response) => {};
+    const csrfPending = new Promise<Response>((resolve) => {
+      resolveCsrf = resolve;
+    });
+    const fetchImpl = vi.fn((input: string | URL | Request): Promise<Response> => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) {
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      if (path === '/v1/fleet-auth/session/csrf') return csrfPending;
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return Promise.resolve(new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:30:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 }));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+
+    documentRef.setHidden(true);
+    documentRef.setHidden(false);
+    documentRef.setHidden(false);
+    await flushAsyncWork();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    resolveCsrf(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 }));
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('abandons an in-flight rotation across teardown and starts a fresh lifecycle request', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    let resolveFirstCsrf = (_response: Response) => {};
+    const firstCsrfPending = new Promise<Response>((resolve) => {
+      resolveFirstCsrf = resolve;
+    });
+    let csrfCalls = 0;
+    const fetchImpl = vi.fn((input: string | URL | Request): Promise<Response> => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) {
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      if (path === '/v1/fleet-auth/session/csrf') {
+        csrfCalls += 1;
+        if (csrfCalls === 1) return firstCsrfPending;
+        return Promise.resolve(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), {
+          status: 200,
+        }));
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return Promise.resolve(new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:30:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 }));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+
+    auth.stopServerSessionRefresh();
+    auth.startServerSessionRefresh();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
+
+    resolveFirstCsrf(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 }));
+    await flushAsyncWork();
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('returns a definitively rejected refresh to the existing fleet login path', async () => {
+    const documentRef = new FakeVisibilityDocument();
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => (
+      String(input).endsWith('/api/admin/dashboard')
+        ? new Response('{}', { status: 200 })
+        : new Response(JSON.stringify({
+            error: { type: 'reauthentication_required', message: 'Reauthentication is required' },
+          }), { status: 401, headers: { 'content-type': 'application/json' } })
+    ));
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    await flushAsyncWork();
+
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(window.location.href).toBe('/fleet/login');
+    expect(consoleWarn).not.toHaveBeenCalled();
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('refuses to rotate after the server-reported absolute expiry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T13:00:00.000Z',
+          absoluteExpiresAt: '2026-08-03T13:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+
+    documentRef.setHidden(true);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    documentRef.setHidden(false);
+    await flushAsyncWork();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(auth.isAuthenticated()).toBe(false);
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it.each([403, 503])(
+    'retries a non-auth refresh failure (%i) from the remaining server idle window without a tight loop',
+    async (failureStatus) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+      const documentRef = new FakeVisibilityDocument();
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let csrfCalls = 0;
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+        if (path === '/v1/fleet-auth/session/csrf') {
+          csrfCalls += 1;
+          if (csrfCalls === 2) {
+            return new Response('refresh unavailable', { status: failureStatus });
+          }
+          return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+        }
+        if (path === '/v1/fleet-auth/session/refresh') {
+          return new Response(JSON.stringify({
+            csrfToken: 'd'.repeat(43),
+            principalStatus: 'active',
+            idleExpiresAt: new Date(Date.now() + 40 * 60_000).toISOString(),
+            absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+          }), { status: 200 });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      });
+      const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+        pathname: `/companions/${COMPANION_ID}/garden`,
+        documentRef,
+      });
+
+      auth.startServerSessionRefresh();
+      await auth.ensureAuthResolved();
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await flushAsyncWork();
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(auth.isAuthenticated()).toBe(true);
+      expect(window.location.href).toBe('');
+
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(6));
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+
+      auth.stopServerSessionRefresh();
+    },
+  );
+
   it('keeps a valid HttpOnly cookie session after the authenticated probe succeeds', async () => {
     const auth = await loadAuthStore(async () => new Response('{}', { status: 200 }));
 

@@ -18,6 +18,8 @@
     isAuthResolved,
     ensureAuthResolved,
     clearToken,
+    startServerSessionRefresh,
+    stopServerSessionRefresh,
   } from '$lib/stores/auth.svelte';
   import {
     ensureCompanionNameLoaded,
@@ -299,6 +301,7 @@
   }
 
   onMount(() => {
+    startServerSessionRefresh();
     if (!isLoginPage && !isFleetPage) {
       void ensureAuthResolved();
       void ensureUiPreferencesLoaded();
@@ -345,6 +348,7 @@
       document.removeEventListener('keydown', handleGlobalKeydown);
       window.clearInterval(attentionTimer);
       window.clearInterval(fleetProjectionTimer);
+      stopServerSessionRefresh();
       fleetProjectionController?.abort();
       fleetProjectionController = null;
     };

@@ -34,6 +34,7 @@ import {
   type ExtractionRunOptions,
 } from './orchestrator.js';
 import type { ExtractionSourceSpeaker } from './speaker-routing.js';
+import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
 
 const CHANNEL_ID = 'discord:lyra-room';
 
@@ -196,6 +197,8 @@ function buildExtractionOptions(params: {
   canonicalContactId?: string;
   groupMemory?: GroupMemorySettings;
   maxWrites?: number;
+  companionName?: string;
+  companionAuthorIds?: string[];
 }): {
   options: ExtractionRunOptions;
   processFact: ReturnType<typeof vi.fn>;
@@ -226,16 +229,19 @@ function buildExtractionOptions(params: {
       triggerReason: params.triggerReason ?? 'observed_count',
       ...(params.canonicalContactId ? { canonicalContactId: params.canonicalContactId } : {}),
       recoveredEntries: params.entries,
+      ...(params.companionAuthorIds
+        ? { companionAuthorIds: params.companionAuthorIds }
+        : {}),
       resolveSourceSpeakerContactId: resolveContactId,
       resolveParticipantNames: () => ({
-        companionName: 'Lyra',
+        companionName: params.companionName ?? 'Lyra',
       }),
       llmClient: {
         complete: llmComplete,
       } as ExtractionRunOptions['llmClient'],
       sessionManager: {
         getRecentMessages: vi.fn(),
-        characterName: 'Lyra',
+        characterName: params.companionName ?? 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       memoryStore: {
         getMemoriesByChannel: vi.fn().mockReturnValue([]),
@@ -325,6 +331,10 @@ describe('group-room memory conformance', () => {
   it('extracts useful memories from a configured 50-message online room window', async () => {
     const entries = makeGroupFixture(50);
     replaceEntry(entries, 8, 0, 'Lyra, remember that I prefer concise deployment summaries.');
+    entries[7].metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+      schemaVersion: 1,
+      mentionedTargets: [{ authorId: 'lyra-bot', authorName: 'Lyra' }],
+    });
     replaceEntry(entries, 24, 0, 'My friend Vega is helping run moderation tonight.');
     replaceEntry(entries, 45, 2, 'Please do not share my school schedule outside this room.');
     const settings = groupSettings({
@@ -451,6 +461,143 @@ describe('group-room memory conformance', () => {
       routedContactIds: ['contact-dragon', 'contact-iki', 'contact-vega'],
       ambiguousSpeakerSkippedCount: 0,
     }));
+  });
+
+  it('rejects observer-directed confabulation while retaining context that names the true addressee', async () => {
+    const addressedEntry = makeEntry(
+      1,
+      '<@other-companion> remember that I call you starlight when the observatory is quiet.',
+      0,
+    );
+    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+      schemaVersion: 1,
+      mentionedTargets: [{
+        authorId: 'other-companion',
+        authorName: 'Other Companion',
+      }],
+    });
+    const { options, processFact, llmComplete } = buildExtractionOptions({
+      entries: [addressedEntry],
+      maxWrites: 4,
+      llmResponse: `<response>
+<fact>
+<text>MrDragonFox affectionately called Lyra "starlight".</text>
+<type>relational</type>
+<importance>0.94</importance>
+<confidence>0.96</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<address_mode>direct_to_companion</address_mode>
+</fact>
+<fact>
+<text>MrDragonFox affectionately called Other Companion "starlight".</text>
+<type>relational</type>
+<importance>0.94</importance>
+<confidence>0.96</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<address_mode>overheard_room_context</address_mode>
+</fact>
+</response>`,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(JSON.stringify(llmComplete.mock.calls)).toContain(
+      '[mentioned_targets: Other Companion (author_id=other-companion)]',
+    );
+    expect(processFact).toHaveBeenCalledTimes(1);
+    expect(processFact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'MrDragonFox affectionately called Other Companion "starlight".',
+      }),
+      expect.any(String),
+      'contact-dragon',
+      expect.objectContaining({
+        sourceContactId: 'contact-dragon',
+        addressMode: 'overheard_room_context',
+      }),
+    );
+    expect(JSON.stringify(processFact.mock.calls)).not.toContain(
+      'MrDragonFox affectionately called Lyra',
+    );
+  });
+
+  it('does not cross-attribute a relational direct address across five companions', async () => {
+    const companionNames = ['Cedar', 'Juniper', 'Maple', 'Rowan', 'Willow'];
+    for (const companionName of companionNames) {
+      const addressedEntry = makeEntry(
+        1,
+        '<@cedar-bot> remember that our observatory promise matters to me.',
+        0,
+      );
+      addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+        schemaVersion: 1,
+        mentionedTargets: [{ authorId: 'cedar-bot', authorName: 'Cedar' }],
+      });
+      const { options, processFact } = buildExtractionOptions({
+        entries: [addressedEntry],
+        companionName,
+        llmResponse: `<response>
+<fact>
+<text>MrDragonFox and Cedar share an enduring observatory promise.</text>
+<type>relational</type>
+<importance>0.94</importance>
+<confidence>0.96</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<address_mode>direct_to_companion</address_mode>
+</fact>
+</response>`,
+      });
+
+      await runExtractionOrchestration(options);
+
+      if (companionName === 'Cedar') {
+        expect(processFact, companionName).toHaveBeenCalledTimes(1);
+        expect(processFact).toHaveBeenCalledWith(
+          expect.any(Object),
+          expect.any(String),
+          'contact-dragon',
+          expect.objectContaining({ addressMode: 'direct_to_companion' }),
+        );
+      } else {
+        expect(processFact, companionName).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('uses the current companion transport id when the room display name differs', async () => {
+    const addressedEntry = makeEntry(1, '<@current-bot> remember our observatory promise.', 0);
+    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+      schemaVersion: 1,
+      mentionedTargets: [{ authorId: 'current-bot', authorName: 'Room Nickname' }],
+    });
+    const { options, processFact } = buildExtractionOptions({
+      entries: [addressedEntry],
+      companionName: 'Lyra',
+      companionAuthorIds: ['current-bot'],
+      llmResponse: `<response>
+<fact>
+<text>MrDragonFox and Lyra share an observatory promise.</text>
+<type>relational</type>
+<importance>0.94</importance>
+<confidence>0.96</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<address_mode>direct_to_companion</address_mode>
+</fact>
+</response>`,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(String),
+      'contact-dragon',
+      expect.objectContaining({ addressMode: 'direct_to_companion' }),
+    );
   });
 
   it('honors a configured 100-message online room window without a hidden 50-message extraction ceiling', async () => {

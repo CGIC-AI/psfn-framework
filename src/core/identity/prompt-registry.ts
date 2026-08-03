@@ -81,6 +81,7 @@ When the transcript contains message IDs or line IDs, include structured attribu
 - Use subject_name "room", "channel", "group", or "conversation" when the fact is about the group context rather than a single participant.
 - subject_contact_id: known canonical subject contact ID only when explicitly available
 - address_mode: direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api
+Shared-room transcript lines may include [mentioned_targets: ...] and [reply_to_message_id: ...]. These fields are transport-authoritative addressing evidence. Visibility in a shared room is not evidence of direct address. When mentioned_targets names another participant and excludes the observing companion, use overheard_room_context and name the actual mentioned target in the fact. Never turn that message into speech addressed to the observer, even if prose or an inferred relationship would sound plausible.
 Never output raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}". Use the actual human participant or companion name when known. If a macro or generic role cannot be resolved to a real participant, skip the fact.
 Do NOT extract:
 - Small talk or social filler ("thanks", "good morning", "lol", "see you")

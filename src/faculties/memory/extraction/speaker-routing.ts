@@ -7,6 +7,7 @@ import type {
 } from '../types.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
+import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 
 type ExtractionFactRoutingReason =
   | 'single_speaker_transcript'
@@ -59,6 +60,8 @@ export interface SpeakerRoutingContext {
 export interface FactRoutingOptions {
   companionNames?: readonly string[];
   companionAuthorIds?: readonly string[];
+  /** Group-room facts may claim direct address only when journal metadata proves it. */
+  requireStructuredAddressing?: boolean;
 }
 
 export type FactRoutingDecision =
@@ -88,6 +91,7 @@ export type FactRoutingDecision =
       | 'missing_source_message_ids'
       | 'ambiguous_source_message_ids'
       | 'conflicting_source_attribution'
+      | 'unverified_direct_address'
       | 'unresolved_subject_contact';
     sourceSpeakerName?: string;
   };
@@ -234,6 +238,18 @@ function resolveStructuredFactRouting(
     };
   }
 
+  const addressModeDecision = resolveStructuredAddressMode(
+    attribution.addressMode,
+    sourceEntries,
+    options,
+  );
+  if (addressModeDecision.status === 'skip') {
+    return {
+      ...addressModeDecision,
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+
   const subject = resolveSubjectSpeaker(attribution, context.speakers);
   const roomContextScope = resolveRoomContextScope(attribution, context.entries);
   const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
@@ -248,7 +264,7 @@ function resolveStructuredFactRouting(
         attribution,
         sourceSpeaker,
         sourceEntries,
-        addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+        addressMode: addressModeDecision.addressMode,
         reason: 'structured_room_context',
         subjectName: attribution.subjectName,
         scopeRef: roomContextScope,
@@ -268,7 +284,7 @@ function resolveStructuredFactRouting(
     attribution,
     sourceSpeaker,
     sourceEntries,
-    addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+    addressMode: addressModeDecision.addressMode,
     reason: subjectContactId && subjectContactId !== sourceSpeaker.contactId
       ? 'structured_subject_metadata'
       : 'structured_source_metadata',
@@ -278,6 +294,30 @@ function resolveStructuredFactRouting(
       ? { subjectName: attribution.subjectName ?? subject?.name }
       : {}),
   });
+}
+
+function resolveStructuredAddressMode(
+  claimedAddressMode: GroupMemoryAddressMode | undefined,
+  sourceEntries: readonly SessionEntry[],
+  options: FactRoutingOptions,
+): { status: 'route'; addressMode: GroupMemoryAddressMode } | {
+  status: 'skip';
+  reason: 'unverified_direct_address';
+} {
+  const inferredAddressMode = inferAddressMode(sourceEntries, options);
+  if (!options.requireStructuredAddressing) {
+    return {
+      status: 'route',
+      addressMode: claimedAddressMode ?? inferredAddressMode,
+    };
+  }
+  if (
+    claimedAddressMode === 'direct_to_companion'
+    && inferredAddressMode !== 'direct_to_companion'
+  ) {
+    return { status: 'skip', reason: 'unverified_direct_address' };
+  }
+  return { status: 'route', addressMode: inferredAddressMode };
 }
 
 function buildStructuredRoute(params: {
@@ -458,8 +498,28 @@ function inferAddressMode(
   if (sourceEntries.some(entry => entry.role === 'system' || entry.role === 'tool')) {
     return 'system_api';
   }
+  const structuredAddressing = sourceEntries.map(entry => ({
+    entry,
+    addressing: parseSessionMessageAddressing(entry.metadata),
+  }));
+  const userAddressing = structuredAddressing.filter(item => item.entry.role === 'user');
+  const everyUserSourceTargetsCompanion = userAddressing.length > 0
+    && userAddressing.every(item => (
+      item.addressing?.mentionedTargets.some(target => (
+        isCurrentCompanionTarget(target, options)
+      )) === true
+    ));
+  if (everyUserSourceTargetsCompanion) {
+    return 'direct_to_companion';
+  }
   if (sourceEntries.some(entry => isReplyToUser(entry))) {
     return 'reply_to_user';
+  }
+  if (
+    structuredAddressing.some(item => (item.addressing?.mentionedTargets.length ?? 0) > 0)
+    || options.requireStructuredAddressing
+  ) {
+    return 'overheard_room_context';
   }
   if (sourceEntries.some(entry => isDirectCompanionAddress(entry, options))) {
     return 'direct_to_companion';
@@ -468,6 +528,15 @@ function inferAddressMode(
     return 'mention_of_companion';
   }
   return 'overheard_room_context';
+}
+
+function isCurrentCompanionTarget(
+  target: { authorId: string; authorName: string },
+  options: FactRoutingOptions,
+): boolean {
+  if (options.companionAuthorIds?.includes(target.authorId)) return true;
+  const normalizedName = normalizeSpeakerPhrase(target.authorName);
+  return buildCompanionAliases(options.companionNames).includes(normalizedName);
 }
 
 function isReplyToUser(entry: SessionEntry): boolean {

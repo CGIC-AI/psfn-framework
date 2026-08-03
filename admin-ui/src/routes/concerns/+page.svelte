@@ -9,6 +9,7 @@
     type ConcernView,
   } from '$lib/api/endpoints/concerns';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
   const TRANSITION_STATUSES = ['candidate', 'active', 'watching', 'deferred', 'blocked'] as const;
@@ -20,6 +21,17 @@
   let includeResolved = $state(false);
   let actionBusyId = $state('');
   let outcomeDrafts = $state<Record<string, string>>({});
+  let escalationReason = $state('');
+
+  interface PendingConcernAction {
+    key: string;
+    title: string;
+    context: string;
+    done: string;
+    run: (reason: string) => Promise<{ ok: boolean; message?: string }>;
+  }
+
+  let pendingAction = $state<PendingConcernAction | null>(null);
 
   const PRIORITY_BADGE: Record<string, string> = {
     high: 'bg-wilt-50 text-wilt-700 border-wilt-300',
@@ -71,13 +83,18 @@
     await load();
   }
 
-  async function runAction(id: string, action: () => Promise<{ ok: boolean; message?: string }>, done: string) {
+  async function runAction(
+    id: string,
+    action: () => Promise<{ ok: boolean; message?: string }>,
+    done: string,
+  ): Promise<boolean> {
     actionBusyId = id;
     try {
       const result = await action();
       if (result.ok) {
         pushToast(done, 'success');
         await load();
+        return true;
       } else {
         pushToast(result.message || 'Concern action failed', 'error');
       }
@@ -85,6 +102,27 @@
       pushToast(e instanceof Error ? e.message : 'Concern action failed', 'error');
     } finally {
       actionBusyId = '';
+    }
+    return false;
+  }
+
+  function requestAction(action: PendingConcernAction): void {
+    if (!escalationReason.trim()) {
+      pushToast('State an audited reason before changing a concern', 'error');
+      return;
+    }
+    pendingAction = action;
+  }
+
+  async function confirmAction(): Promise<void> {
+    const action = pendingAction;
+    if (!action) return;
+    const reason = escalationReason;
+    // Drop the local confirmation before network I/O. A retry always starts a
+    // fresh ceremony and therefore can never replay the spent grant.
+    pendingAction = null;
+    if (await runAction(action.key, () => action.run(reason), action.done)) {
+      escalationReason = '';
     }
   }
 
@@ -124,8 +162,14 @@
       </label>
       <button
         type="button"
-        onclick={() => void runAction('__stale__', () => resolveStaleConcerns(), 'Stale concerns resolved')}
-        disabled={actionBusyId !== ''}
+        onclick={() => requestAction({
+          key: '__stale__',
+          title: 'Resolve all stale concerns?',
+          context: 'Exact action: resolve stale concern projections',
+          done: 'Stale concerns resolved',
+          run: (reason) => resolveStaleConcerns(reason),
+        })}
+        disabled={actionBusyId !== '' || !escalationReason.trim()}
         class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
       >
         Resolve stale
@@ -140,6 +184,33 @@
       </button>
     </div>
   </div>
+
+  <section class="card-garden border-l-4 border-l-gold-400 p-4" aria-labelledby="concern-escalation-title">
+    <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(18rem,2fr)] md:items-end">
+      <div>
+        <h2 id="concern-escalation-title" class="font-serif font-semibold text-shadow-900">
+          Audited concern action
+        </h2>
+        <p class="mt-1 text-sm text-shadow-700">
+          Each change mints one single-use grant for the exact concern action. A failed retry
+          requires a fresh grant; ordinary sign-in never bypasses CogSec policy.
+        </p>
+      </div>
+      <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-shadow-600" for="concern-escalation-reason">
+        Audited reason
+        <textarea
+          id="concern-escalation-reason"
+          bind:value={escalationReason}
+          maxlength="512"
+          rows="2"
+          required
+          disabled={actionBusyId !== '' || pendingAction !== null}
+          placeholder="State why this exact concern change is necessary."
+          class="resize-y rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm normal-case tracking-normal text-shadow-800 disabled:opacity-60"
+        ></textarea>
+      </label>
+    </div>
+  </section>
 
   {#if error}
     <div class="card-garden border-l-4 border-l-wilt-400 p-4">
@@ -203,7 +274,18 @@
                     const status = (event.currentTarget as HTMLSelectElement).value;
                     if (!status) return;
                     (event.currentTarget as HTMLSelectElement).value = '';
-                    void runAction(concern.id, () => transitionConcern(concern.id, status, { outcome: draft(concern.id) || undefined }), 'Concern transitioned');
+                    requestAction({
+                      key: concern.id,
+                      title: `Move concern to ${status}?`,
+                      context: `Exact concern: ${concern.id}. Exact transition: ${status}.`,
+                      done: 'Concern transitioned',
+                      run: (reason) => transitionConcern(
+                        concern.id,
+                        status,
+                        reason,
+                        { outcome: draft(concern.id) || undefined },
+                      ),
+                    });
                   }}
                   class="rounded-lg border border-bark-300 bg-white px-2.5 py-1.5 text-sm text-shadow-700 disabled:opacity-50"
                 >
@@ -216,16 +298,28 @@
                 </select>
                 <button
                   type="button"
-                  disabled={actionBusyId !== ''}
-                  onclick={() => void runAction(concern.id, () => resolveConcern(concern.id, draft(concern.id) || undefined), 'Concern resolved')}
+                  disabled={actionBusyId !== '' || !escalationReason.trim()}
+                  onclick={() => requestAction({
+                    key: concern.id,
+                    title: 'Resolve this concern?',
+                    context: `Exact concern: ${concern.id}. Exact action: resolve.`,
+                    done: 'Concern resolved',
+                    run: (reason) => resolveConcern(concern.id, reason, draft(concern.id) || undefined),
+                  })}
                   class="rounded-lg border border-moss-300 bg-moss-50 px-3 py-1.5 text-sm font-medium text-moss-800 transition-colors hover:bg-moss-100 disabled:opacity-50"
                 >
                   Resolve
                 </button>
                 <button
                   type="button"
-                  disabled={actionBusyId !== ''}
-                  onclick={() => void runAction(concern.id, () => suppressConcern(concern.id, draft(concern.id) || undefined), 'Concern suppressed')}
+                  disabled={actionBusyId !== '' || !escalationReason.trim()}
+                  onclick={() => requestAction({
+                    key: concern.id,
+                    title: 'Suppress this concern?',
+                    context: `Exact concern: ${concern.id}. Exact action: suppress.`,
+                    done: 'Concern suppressed',
+                    run: (reason) => suppressConcern(concern.id, reason, draft(concern.id) || undefined),
+                  })}
                   class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
                 >
                   Suppress
@@ -238,3 +332,16 @@
     </BoundedList>
   {/if}
 </div>
+
+<ConfirmationModal
+  open={pendingAction !== null}
+  title={pendingAction?.title ?? 'Confirm concern action?'}
+  body="This spends one audited grant on only the named CogSec concern mutation. It creates no standing access or policy bypass."
+  context={pendingAction?.context ?? ''}
+  confirmLabel="Run exact action"
+  cancelLabel="Keep unchanged"
+  tone="danger"
+  busy={actionBusyId !== ''}
+  onConfirm={() => void confirmAction()}
+  onCancel={() => { pendingAction = null; }}
+/>

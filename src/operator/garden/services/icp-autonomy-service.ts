@@ -92,7 +92,17 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
     );
     const projection = this.deps.projectionStore
       ? await this.deps.projectionStore.readProjection(ADMIN_ICP_LIMIT)
-      : { availability: [], episodes: [], permits: [], fatigue: [], costs: [] };
+      : {
+        availability: [],
+        episodes: [],
+        permits: [],
+        fatigue: [],
+        costs: [],
+        costProjection: {
+          available: false as const,
+          unavailableReason: 'control_plane_unavailable' as const,
+        },
+      };
     const localCompanionId = this.deps.localCompanionId;
     const candidates = this.deps.candidateStore && localCompanionId
       ? (await this.deps.candidateStore.listCandidates({ limit: ADMIN_ICP_LIMIT }))
@@ -195,6 +205,7 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       permits: permits.map(projectPermit),
       fatigue,
       costs,
+      costProjection: projection.costProjection,
       reasonCounts: [...reasonCounts.entries()]
         .map(([reasonCode, count]) => ({ reasonCode, count }))
         .sort((left, right) => right.count - left.count

@@ -89,6 +89,33 @@ export interface StartOptionalAdminTransportServerOptions {
   operatorAlerting: OperatorAlertSinkConfiguration;
 }
 
+export async function openIcpAdminProjectionStoreForGarden(
+  config: SubstrateConfig,
+): Promise<PostgresIcpAdminProjectionStore | null> {
+  const fleetCompanionIds = config.companionFleet?.companions
+    .map(companion => companion.companionId)
+    ?? (config.companionId ? [config.companionId] : []);
+  const localCompanionId = config.companionId;
+  const postgresDatabaseUrl = config.postgresDatabaseUrl;
+  if (config.multiCompanion !== true
+    || !postgresDatabaseUrl
+    || !localCompanionId
+    || fleetCompanionIds.length === 0) {
+    return null;
+  }
+  return (await awaitOptionalPostgresStoreReadiness(
+    'icp_admin_projection',
+    () => PostgresIcpAdminProjectionStore.connect(
+      postgresDatabaseUrl,
+      {
+        localCompanionId,
+        knownCompanionIds: fleetCompanionIds,
+        config,
+      },
+    ),
+  )) ?? null;
+}
+
 export async function startOptionalAdminTransportServer(
   options: StartOptionalAdminTransportServerOptions,
 ): Promise<GardenAdminTransportServer | undefined> {
@@ -104,27 +131,8 @@ export async function startOptionalAdminTransportServer(
     satelliteRegistry: options.satelliteRegistryConfig,
   };
   const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
-  const fleetCompanionIds = options.config.companionFleet?.companions
-    .map(companion => companion.companionId)
-    ?? (options.config.companionId ? [options.config.companionId] : []);
-  const localCompanionId = options.config.companionId;
+  const icpAdminProjectionStore = await openIcpAdminProjectionStoreForGarden(options.config);
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl;
-  const icpAdminProjectionStore = options.config.multiCompanion === true
-    && postgresDatabaseUrl
-    && localCompanionId
-    && fleetCompanionIds.length > 0
-    ? (await awaitOptionalPostgresStoreReadiness(
-        'icp_admin_projection',
-        () => PostgresIcpAdminProjectionStore.connect(
-          postgresDatabaseUrl,
-          {
-            localCompanionId,
-            knownCompanionIds: fleetCompanionIds,
-            config: options.config,
-          },
-        ),
-      ) ?? null)
-    : null;
   // Fleet Command room-state and arbitration telemetry (jp36.8.1): the arbiter
   // is gateway-owned and only exists in multi-companion mode, so this read-only
   // projection is connected under the same gate. Absent → the service reports an

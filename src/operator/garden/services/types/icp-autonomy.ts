@@ -68,6 +68,16 @@ export interface AdminIcpCostView {
   reason: string;
 }
 
+export type AdminIcpCostProjectionStatus =
+  | { available: true; unavailableReason: null }
+  | {
+    available: false;
+    unavailableReason:
+      | 'control_plane_unavailable'
+      | 'relation_contract_unavailable'
+      | 'read_failed';
+  };
+
 export interface AdminIcpReasonCount {
   reasonCode: IcpAutonomyReasonCode;
   count: number;
@@ -91,6 +101,8 @@ export interface AdminIcpAutonomyData {
   permits: AdminIcpPermitView[];
   fatigue: AdminIcpFatigueView[];
   costs: AdminIcpCostView[];
+  /** Optional cost analytics never decide availability of the ICP control plane. */
+  costProjection: AdminIcpCostProjectionStatus;
   reasonCounts: AdminIcpReasonCount[];
   failureCount: number;
   quietState: 'disabled' | 'unavailable_topology' | 'no_candidates' | 'active' | 'failures_observed';

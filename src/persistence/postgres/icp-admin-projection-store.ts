@@ -10,6 +10,7 @@ import {
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
+  AdminIcpCostProjectionStatus,
   AdminIcpCostView,
   AdminIcpFatigueView,
 } from '../../operator/garden/services/types/icp-autonomy.js';
@@ -107,6 +108,7 @@ export interface IcpAdminSharedProjection {
   permits: IcpInitiationPermit[];
   fatigue: AdminIcpFatigueView[];
   costs: IcpAdminCostProjection[];
+  costProjection: AdminIcpCostProjectionStatus;
 }
 
 export interface IcpAdminProjectionStore {
@@ -277,26 +279,76 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
       max: 1,
     });
     try {
-      // Validate the fleet cost ledger independently from the shared-schema
-      // projection. pg_catalog proves table/column migration shape without
-      // requiring SELECT on the data table from this tenant-role process.
-      await assertPostgresRelationColumns(costPool, {
-        relation: 'icp_conversation_cost_decisions',
-        columns: [
-          'decision_id',
-          'conversation_id',
-          'root_initiation_id',
-          'recorded_at_ms',
-          'actual_cost_usd',
-          'pending_projected_cost_usd',
-          'projected_total_cost_usd',
-          'warning_threshold_usd',
-          'hard_limit_usd',
-          'unknown_cost_attempt_count',
-          'allowed',
-          'reason',
-        ],
-      });
+      // Every relation required by the control-plane projection is proven at
+      // construction. The optional cost ledger is deliberately excluded and
+      // re-probed per read so it cannot erase an otherwise-live control plane.
+      await Promise.all([
+        assertPostgresRelationColumns(sharedPool, {
+          relation: 'icp_availability_leases',
+          columns: [
+            'companion_id',
+            'state',
+            'issued_at_ms',
+            'expires_at_ms',
+            'source',
+            'revision',
+          ],
+          privileges: ['SELECT'],
+        }),
+        assertPostgresRelationColumns(sharedPool, {
+          relation: 'icp_conversation_episodes',
+          columns: [
+            'conversation_id',
+            'channel_id',
+            'participant_companion_ids',
+            'root_initiation_id',
+            'initiated_by_companion_id',
+            'initiation_source',
+            'provenance_ref',
+            'opened_at_ms',
+            'last_activity_at_ms',
+            'status',
+            'close_reason_code',
+            'revision',
+          ],
+          privileges: ['SELECT'],
+        }),
+        assertPostgresRelationColumns(sharedPool, {
+          relation: 'icp_initiation_permits',
+          columns: [
+            'permit_id',
+            'candidate_id',
+            'conversation_id',
+            'sender_companion_id',
+            'recipient_companion_id',
+            'channel_id',
+            'provenance_ref',
+            'issued_at_ms',
+            'expires_at_ms',
+            'status',
+            'consumed_at_ms',
+            'revoked_at_ms',
+            'reason_code',
+            'revision',
+          ],
+          privileges: ['SELECT'],
+        }),
+        assertPostgresRelationColumns(sharedPool, {
+          relation: 'icp_fatigue_turn_reservations',
+          columns: [
+            'conversation_id',
+            'root_initiation_id',
+            'local_companion_id',
+            'peer_companion_id',
+            'channel_id',
+            'decision',
+            'amount',
+            'reserved_at_ms',
+            'outcome',
+          ],
+          privileges: ['SELECT'],
+        }),
+      ]);
       const shared = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: options.knownCompanionIds,
       });
@@ -312,9 +364,76 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     }
   }
 
+  private async readCostProjection(
+    boundedLimit: number,
+  ): Promise<{
+    costs: IcpAdminCostProjection[];
+    costProjection: AdminIcpCostProjectionStatus;
+  }> {
+    try {
+      // A catalog probe on every bounded Garden read makes late provisioning
+      // self-healing without a process restart and distinguishes an empty
+      // ledger from an unavailable relation contract.
+      await assertPostgresRelationColumns(this.costPool, {
+        relation: 'icp_conversation_cost_decisions',
+        columns: [
+          'decision_id',
+          'conversation_id',
+          'root_initiation_id',
+          'recorded_at_ms',
+          'actual_cost_usd',
+          'pending_projected_cost_usd',
+          'projected_total_cost_usd',
+          'warning_threshold_usd',
+          'hard_limit_usd',
+          'unknown_cost_attempt_count',
+          'allowed',
+          'reason',
+        ],
+        privileges: ['SELECT'],
+      });
+    } catch {
+      return {
+        costs: [],
+        costProjection: {
+          available: false,
+          unavailableReason: 'relation_contract_unavailable',
+        },
+      };
+    }
+
+    try {
+      const costRows = await queryRows<CostRow>(this.costPool, `
+        SELECT DISTINCT ON (decision.conversation_id)
+          decision.conversation_id, decision.root_initiation_id,
+          decision.recorded_at_ms, decision.actual_cost_usd,
+          decision.pending_projected_cost_usd, decision.projected_total_cost_usd,
+          decision.warning_threshold_usd, decision.hard_limit_usd,
+          decision.unknown_cost_attempt_count, decision.allowed, decision.reason,
+          episode.participant_companion_ids
+        FROM icp_conversation_cost_decisions AS decision
+        INNER JOIN shared.icp_conversation_episodes AS episode
+          ON episode.conversation_id::text = decision.conversation_id
+        WHERE $1::uuid = ANY(episode.participant_companion_ids)
+        ORDER BY decision.conversation_id, decision.recorded_at_ms DESC,
+          decision.decision_id DESC
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]);
+      return {
+        costs: costRows.map(mapCost),
+        costProjection: { available: true, unavailableReason: null },
+      };
+    } catch {
+      return {
+        costs: [],
+        costProjection: { available: false, unavailableReason: 'read_failed' },
+      };
+    }
+  }
+
   async readProjection(limit = 50): Promise<IcpAdminSharedProjection> {
     const boundedLimit = Math.min(MAX_ADMIN_ROWS, Math.max(1, Math.floor(limit)));
-    const [availabilityRows, episodeRows, permitRows, fatigueRows, costRows] = await Promise.all([
+    const [availabilityRows, episodeRows, permitRows, fatigueRows, costProjection] = await Promise.all([
       queryRows<AvailabilityRow>(this.sharedPool, `
         SELECT companion_id, state, issued_at_ms, expires_at_ms, source, revision
         FROM icp_availability_leases
@@ -358,29 +477,14 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
         ORDER BY MAX(reserved_at_ms) DESC, conversation_id
         LIMIT $2
       `, [this.localCompanionId, boundedLimit]),
-      queryRows<CostRow>(this.costPool, `
-        SELECT DISTINCT ON (decision.conversation_id)
-          decision.conversation_id, decision.root_initiation_id,
-          decision.recorded_at_ms, decision.actual_cost_usd,
-          decision.pending_projected_cost_usd, decision.projected_total_cost_usd,
-          decision.warning_threshold_usd, decision.hard_limit_usd,
-          decision.unknown_cost_attempt_count, decision.allowed, decision.reason,
-          episode.participant_companion_ids
-        FROM icp_conversation_cost_decisions AS decision
-        INNER JOIN shared.icp_conversation_episodes AS episode
-          ON episode.conversation_id::text = decision.conversation_id
-        WHERE $1::uuid = ANY(episode.participant_companion_ids)
-        ORDER BY decision.conversation_id, decision.recorded_at_ms DESC,
-          decision.decision_id DESC
-        LIMIT $2
-      `, [this.localCompanionId, boundedLimit]),
+      this.readCostProjection(boundedLimit),
     ]);
     return {
       availability: availabilityRows.map(mapAvailability),
       episodes: episodeRows.map(mapEpisode),
       permits: permitRows.map(mapPermit),
       fatigue: fatigueRows.map(mapFatigue),
-      costs: costRows.map(mapCost),
+      ...costProjection,
     };
   }
 

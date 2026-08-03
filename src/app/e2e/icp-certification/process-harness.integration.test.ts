@@ -89,9 +89,20 @@ interface FreeTimeNotificationResult {
   status: string;
 }
 
-async function readProviderDispatchCounts(databaseUrl: string): Promise<ProviderDispatchCount[]> {
+async function readProviderDispatchCounts(
+  fixture: IcpCertificationFixture,
+): Promise<ProviderDispatchCount[]> {
+  const primary = fixture.companions[0];
+  const credentialFile = primary.env.POSTGRES_DATABASE_URL_FILE;
+  if (!credentialFile) {
+    throw new Error('ICP provider-dispatch assertions require the primary database credential');
+  }
+  const databaseUrl = readFileSync(credentialFile, 'utf8').trim();
   const pool = createPostgresPool(databaseUrl, {
     applicationName: 'psfn-icp-certification-provider-dispatch-assertions',
+    schema: primary.postgresSchema,
+    role: primary.postgresRole,
+    readOnly: true,
     max: 1,
   });
   try {
@@ -678,7 +689,7 @@ describe('ICP certification real process harness', () => {
         && (decision.outcome === 'reserved' || decision.outcome === 'warning')
       ))).toBe(false);
       const providerRequestCount = await waitForModelRequestQuiescence(processes);
-      const dispatchCounts = await readProviderDispatchCounts(databaseUrl);
+      const dispatchCounts = await readProviderDispatchCounts(fixture);
       expect(dispatchCounts.reduce((sum, row) => sum + row.count, 0)).toBe(providerRequestCount);
       expect(dispatchCounts.some(row => row.companionId === CERTIFICATION_COMPANION_B)).toBe(false);
       expect(dispatchCounts).toEqual(expect.arrayContaining([
@@ -715,7 +726,7 @@ describe('ICP certification real process harness', () => {
       reason: 'missing_cost_metadata',
     });
     const providerRequestCount = await waitForModelRequestQuiescence(processes);
-    const dispatchCounts = await readProviderDispatchCounts(databaseUrl);
+    const dispatchCounts = await readProviderDispatchCounts(fixture);
     expect(dispatchCounts.reduce((sum, row) => sum + row.count, 0)).toBe(providerRequestCount);
     expect(dispatchCounts.some(row => row.companionId === CERTIFICATION_COMPANION_B)).toBe(false);
     expect(dispatchCounts.some(row => row.conversationId === blocked.conversationId)).toBe(false);

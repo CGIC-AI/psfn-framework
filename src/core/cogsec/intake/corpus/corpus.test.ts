@@ -12,12 +12,14 @@
 //     silent improvement passes).
 
 import { describe, expect, it } from 'vitest';
-import { dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   computeCoverage,
   loadCorpus,
   OFFLINE_REPLAYABLE_LAYERS,
+  type CorpusFixture,
 } from './corpus.ts';
 import { createL1Replayer } from './replay-l1.ts';
 
@@ -49,8 +51,113 @@ describe('cogsec adversarial corpus — offline replay ratchet', () => {
   const replayable = corpus.fixtures.filter((f) =>
     (OFFLINE_REPLAYABLE_LAYERS as readonly string[]).includes(f.layer));
 
+  type ExplicitReplayFixture = CorpusFixture & {
+    replay: {
+      scenario: 'production-intake' | 'all-scope-control';
+      scope: 'context' | 'all';
+    };
+  };
+
+  const explicitReplayable = replayable as ExplicitReplayFixture[];
+
   it('has offline-replayable fixtures', () => {
     expect(replayable.length).toBeGreaterThan(0);
+  });
+
+  it('makes every offline replay scenario and scope explicit', () => {
+    for (const fixture of explicitReplayable) {
+      expect(fixture.replay, fixture.id).toBeDefined();
+      expect(
+        [
+          ['production-intake', 'context'],
+          ['all-scope-control', 'all'],
+        ],
+        fixture.id,
+      ).toContainEqual([fixture.replay.scenario, fixture.replay.scope]);
+    }
+  });
+
+  it('ratchets the five production-context qrch1 fixtures as enforced', () => {
+    const fixtureIds = [
+      'atlas-technique-AML.T0051-02',
+      'intents-system_prompt_leak-02',
+      'techniques-act_as_interpreter-01',
+      'techniques-meta_prompting-01',
+      'techniques-chunking-01',
+    ];
+    for (const fixtureId of fixtureIds) {
+      const fixture = explicitReplayable.find(candidate => candidate.id === fixtureId);
+      expect(fixture, fixtureId).toMatchObject({
+        status: 'enforced',
+        replay: { scenario: 'production-intake', scope: 'context' },
+      });
+      expect(replay(fixture!)).toMatchObject({
+        verdict: 'flag',
+        scenario: 'production-intake',
+        scope: 'context',
+      });
+    }
+  });
+
+  it('keeps the two scope-sensitive controls on the explicit all-scope scenario', () => {
+    expect(
+      explicitReplayable
+        .filter(fixture => fixture.replay.scenario === 'all-scope-control')
+        .map(fixture => fixture.id)
+        .sort(),
+    ).toEqual([
+      'evasions-fullwidth-02',
+      'evasions-invisible_text-04',
+    ]);
+  });
+
+  it('keeps cumulative scope behavior visible for a context-only finding', () => {
+    const fixture = explicitReplayable.find(
+      candidate => candidate.id === 'intents-system_prompt_leak-02',
+    );
+    expect(fixture).toBeDefined();
+    expect(replay({
+      ...fixture!,
+      replay: { scenario: 'all-scope-control', scope: 'all' },
+    })).toMatchObject({ verdict: 'pass', labels: [], scope: 'all' });
+    expect(replay(fixture!)).toMatchObject({
+      verdict: 'flag',
+      labels: expect.arrayContaining(['exfil/prompt_disclosure']),
+      scope: 'context',
+    });
+  });
+
+  it('does not infer scan scope from sourceClass', () => {
+    const fixture = explicitReplayable.find(
+      candidate => candidate.id === 'intents-system_prompt_leak-02',
+    );
+    expect(fixture).toBeDefined();
+    const publicContact = replay({ ...fixture!, sourceClass: 'public_contact' });
+    const document = replay({ ...fixture!, sourceClass: 'document' });
+    expect(document).toEqual(publicContact);
+    expect(document).toMatchObject({ scenario: 'production-intake', scope: 'context' });
+  });
+
+  it('fails closed on an invalid recorded replay scope', () => {
+    const fixture = explicitReplayable[0]!;
+    expect(() => replay({
+      ...fixture,
+      replay: {
+        scenario: 'production-intake',
+        scope: 'untrusted' as never,
+      },
+    })).toThrow(/scope/u);
+  });
+
+  it('prints scenario and scope for every CLI replay and fails on no recorded drift', () => {
+    const output = execFileSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), 'scripts/cogsec/replay-corpus.ts')],
+      { encoding: 'utf8' },
+    );
+    expect(output).toContain('scenario=production-intake scope=context');
+    expect(output).toContain('scenario=all-scope-control scope=all');
+    expect(output).toContain('0 mismatch(es)');
   });
 
   it.each([
@@ -62,7 +169,7 @@ describe('cogsec adversarial corpus — offline replay ratchet', () => {
     expect(fixture?.kind).toBe('control');
     expect(fixture?.status).toBe('enforced');
     expect(fixture?.expected.verdict).toBe('pass');
-    expect(replay(fixture!)).toEqual({ verdict: 'pass', labels: [] });
+    expect(replay(fixture!)).toMatchObject({ verdict: 'pass', labels: [] });
   });
 
   const enforcedControls = replayable.filter(fixture =>
@@ -72,7 +179,7 @@ describe('cogsec adversarial corpus — offline replay ratchet', () => {
     'explicit false-positive control: $id stays silent',
     (fixture) => {
       expect(fixture.expected.verdict).toBe('pass');
-      expect(replay(fixture)).toEqual({ verdict: 'pass', labels: [] });
+      expect(replay(fixture)).toMatchObject({ verdict: 'pass', labels: [] });
     },
   );
 

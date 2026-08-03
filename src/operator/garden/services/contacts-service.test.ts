@@ -6,7 +6,8 @@ import type { AdminContactRelationshipScoreReader } from './types.js';
 import { createContactRelationshipScoreReader } from '../../../core/contacts/trust-drift-signals.js';
 import type { EmotionalTimeSeriesPoint } from '../../../core/contacts/store/emotional-baseline.js';
 import { createTestPostgresContactStore } from '../../../test-support/postgres-contact-store.js';
-import type { GardenRequestContext } from '../garden-request-context.js';
+import type { FleetGardenRequestContext, GardenRequestContext } from '../garden-request-context.js';
+import { FLEET_GARDEN_CONTACT_OPERATOR_ACTOR } from '../garden-request-context.js';
 
 function fleetContext(contactId: string): GardenRequestContext {
   return {
@@ -17,8 +18,9 @@ function fleetContext(contactId: string): GardenRequestContext {
 
 async function createServiceHarness(options?: {
   relationshipScoreReader?: AdminContactRelationshipScoreReader;
+  primaryUserId?: string;
 }) {
-  const { store: contactStore } = await createTestPostgresContactStore();
+  const { store: contactStore } = await createTestPostgresContactStore(options?.primaryUserId);
   const sessionStore = {
     listChannels: () => [],
     getLastEntry: () => undefined,
@@ -44,7 +46,78 @@ async function createServiceHarness(options?: {
   return { contactStore, service, profiles, memoryStore, sessionStore };
 }
 
+function authenticatedContactMutationContext(input: {
+  contactId: string;
+  role?: 'owner' | 'admin' | 'member';
+  provider?: 'discord' | 'testing_harness';
+  accessMode?: 'sole_admin' | 'multi_admin';
+}): FleetGardenRequestContext {
+  return {
+    kind: 'fleet_principal', requestId: 'request-fixture', decisionId: 'decision-fixture',
+    authorizationEventId: 'authorization-event-fixture', resolvedAt: '2030-01-01T00:00:00.000Z',
+    versions: { authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
+      sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1 },
+    issuedAt: 1, expiresAt: 2,
+    actor: { kind: 'fleet_principal', principalId: 'principal-fixture',
+      provider: input.provider ?? 'discord', providerSubjectId: 'provider-subject-fixture',
+      contactId: input.contactId, contactBindingId: 'binding-fixture', role: input.role ?? 'owner',
+      operatorGrantId: 'grant-fixture', sessionRecordId: 'session-fixture',
+      sessionAssurance: 'oauth', accessMode: input.accessMode ?? 'sole_admin' },
+    action: 'contacts.manage',
+    resource: { routeId: 'PATCH /api/admin/contacts/:id', scope: 'personal_workspace',
+      area: 'contacts', companionId: '11111111-1111-4111-8111-111111111111',
+      pathParams: { id: input.contactId }, query: {} },
+    subjectRelation: 'self',
+    authorization: { action: 'contacts.manage', baseRole: 'admin',
+      resource: { scope: 'personal_workspace', area: 'contacts' }, subjectRelation: 'self',
+      requirements: { assurance: 'oauth', confirmation: 'none', approvals: [] },
+      publicAccess: 'never', recoveryAccess: 'forbidden' },
+  };
+}
+
 describe('AdminContactsDataService', () => {
+  it('persists protected sole-owner mutations under the canonical operator actor with SSO metadata', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const owner = await contactStore.upsert({ displayName: 'Fleet Owner' });
+    const protectedContact = await contactStore.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
+    const context = authenticatedContactMutationContext({ contactId: owner.id });
+
+    await expect(service.updateContact(protectedContact.id, JSON.stringify({
+      displayName: 'Chosen Family Updated', trustLevel: 'trusted', relationshipType: 'family',
+    }), context)).resolves.toMatchObject({ ok: true });
+
+    const audit = await contactStore.listMutationAuditEntries({ contactId: protectedContact.id });
+    expect(audit.filter(entry => ['display_name', 'trust_level', 'relationship_type'].includes(entry.field)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ actor: FLEET_GARDEN_CONTACT_OPERATOR_ACTOR,
+          metadata: expect.objectContaining({ source: 'fleet_garden', provider: 'discord',
+            providerSubjectId: 'provider-subject-fixture', principalId: 'principal-fixture' }) }),
+      ]));
+    expect(audit.filter(entry => ['display_name', 'trust_level', 'relationship_type'].includes(entry.field)))
+      .toHaveLength(3);
+  });
+
+  it.each([
+    ['non-owner', { role: 'admin' as const }],
+    ['automated harness', { provider: 'testing_harness' as const }],
+  ])('denies %s protected fleet mutations', async (_label, overrides) => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Protected Contact', relationshipType: 'friend' });
+    const result = await service.updateContact(contact.id, JSON.stringify({ trustLevel: 'trusted', relationshipType: 'family' }),
+      authenticatedContactMutationContext({ contactId: contact.id, ...overrides }));
+    expect(result).toMatchObject({ ok: false, failureKind: 'authorization' });
+    expect(await contactStore.getById(contact.id)).toMatchObject({ trustLevel: 'regular', relationshipType: 'friend' });
+  });
+
+  it('reports primary-contact trust immutability separately from authorization', async () => {
+    const { contactStore, service } = await createServiceHarness({ primaryUserId: 'primary-provider-fixture' });
+    const primary = await contactStore.upsert({ displayName: 'Primary Owner', discordUserId: 'primary-provider-fixture', trustLevel: 'primary' },
+      { actor: 'operator:test', allowPrimaryTrustAssignment: true });
+    const result = await service.updateContact(primary.id, JSON.stringify({ trustLevel: 'trusted' }),
+      authenticatedContactMutationContext({ contactId: primary.id }));
+    expect(result).toMatchObject({ ok: false, failureKind: 'immutability' });
+    expect((await contactStore.getById(primary.id))?.trustLevel).toBe('primary');
+  });
   it('does not expose another contact through fleet list projections', async () => {
     const { contactStore, service, profiles } = await createServiceHarness();
     const current = await contactStore.upsert({ displayName: 'Current Contact' });

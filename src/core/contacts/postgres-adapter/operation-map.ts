@@ -50,6 +50,7 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     newValue: string | null,
     actor?: string,
     queryable?: Pool | PoolClient,
+    metadata?: ContactMutationAuditEntry['metadata'],
   ): Promise<void>;
   upsertIdentityLinkRecord(
     contactId: string,

@@ -175,6 +175,7 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
           trustLevel,
           actor,
           client,
+          options.auditMetadata,
         );
       }
       return true;

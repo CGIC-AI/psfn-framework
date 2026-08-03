@@ -34,6 +34,7 @@ export interface AdminContactDetailData {
 export interface ContactUpdateResult {
   ok: boolean;
   message: string;
+  failureKind?: 'authorization' | 'validation' | 'immutability' | 'conflict' | 'not_found' | 'unavailable';
   contact?: Contact;
   relatedChannels?: ContactConversationChannelView[];
 }

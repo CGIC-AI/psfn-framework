@@ -22,7 +22,16 @@ export function buildAdminContactRoutes(options: {
       contactsService.updateContact(id, JSON.stringify(parsed.value), context).then(
         (result) => {
           if (!result.ok) {
-            sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
+            const status = result.failureKind === 'authorization'
+              ? 403
+              : result.failureKind === 'immutability' || result.failureKind === 'conflict'
+                ? 409
+                : result.failureKind === 'not_found' || result.message === 'Contact not found'
+                  ? 404
+                  : result.failureKind === 'unavailable'
+                    ? 503
+                    : 400;
+            sendJson(res, status, { error: result.message });
             return;
           }
           sendJson(res, 200, result);

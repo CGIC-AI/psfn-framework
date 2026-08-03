@@ -318,6 +318,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     newValue: string | null,
     actor?: string,
     queryable?: Pool | PoolClient,
+    metadata?: ContactMutationAuditEntry['metadata'],
   ): Promise<void> {
     await (queryable ?? this.pool).query(
       `
@@ -327,11 +328,12 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
           field,
           old_value,
           new_value,
+          metadata,
           timestamp
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `,
-      [contactId, normalizeAuditActor(actor), field, oldValue, newValue, new Date().toISOString()],
+      [contactId, normalizeAuditActor(actor), field, oldValue, newValue, metadata ?? {}, new Date().toISOString()],
     );
   },
 

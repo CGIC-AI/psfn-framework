@@ -243,6 +243,10 @@ export function contactMutationAuditRowToEntry(row: ContactMutationAuditRow): Co
     return undefined;
   }
 
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    && (row.metadata as { source?: unknown }).source === 'fleet_garden'
+    ? row.metadata as ContactMutationAuditEntry['metadata']
+    : undefined;
   return {
     id: row.id,
     contactId: row.contact_id,
@@ -250,6 +254,7 @@ export function contactMutationAuditRowToEntry(row: ContactMutationAuditRow): Co
     field: row.field as ContactMutationAuditEntry['field'],
     oldValue: row.old_value,
     newValue: row.new_value,
+    ...(metadata ? { metadata } : {}),
     timestamp: row.timestamp,
   };
 }

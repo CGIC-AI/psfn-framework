@@ -11,6 +11,7 @@ import type {
   GardenSubjectRelation,
 } from '../../boundary/fleet-auth/garden-route-authorization.js';
 import { privacyBreakGlassResourceKindForRoute } from '../../shared/contracts/privacy-break-glass.js';
+import type { ContactMutationAuditMetadata } from '../../core/contacts/types.js';
 
 export interface GardenRequestResourceContext {
   readonly routeId: string;
@@ -95,6 +96,38 @@ export type GardenRequestContext =
   | FleetGardenRequestContext
   | LegacyGardenRequestContext
   | PublicGardenRequestContext;
+
+export const FLEET_GARDEN_CONTACT_OPERATOR_ACTOR = 'operator:fleet-garden';
+
+export interface FleetGardenContactMutationActor {
+  readonly actorId: typeof FLEET_GARDEN_CONTACT_OPERATOR_ACTOR;
+  readonly auditMetadata: ContactMutationAuditMetadata;
+}
+
+/** Provider identity is audit attribution, never an actor or authority selector. */
+export function resolveFleetGardenContactMutationActor(
+  context: GardenRequestContext,
+): FleetGardenContactMutationActor | null {
+  if (context.kind !== 'fleet_principal'
+    || context.actor.provider !== 'discord'
+    || context.actor.role !== 'owner') return null;
+  const required = [context.actor.providerSubjectId, context.actor.principalId,
+    context.requestId, context.decisionId, context.authorizationEventId,
+    context.actor.operatorGrantId, context.actor.sessionRecordId, context.actor.contactBindingId];
+  if (required.some(value => !value.trim())) return null;
+  return Object.freeze({
+    actorId: FLEET_GARDEN_CONTACT_OPERATOR_ACTOR,
+    auditMetadata: Object.freeze({
+      source: 'fleet_garden', provider: 'discord',
+      providerSubjectId: context.actor.providerSubjectId,
+      principalId: context.actor.principalId, requestId: context.requestId,
+      decisionId: context.decisionId, authorizationEventId: context.authorizationEventId,
+      operatorGrantId: context.actor.operatorGrantId,
+      sessionRecordId: context.actor.sessionRecordId,
+      contactBindingId: context.actor.contactBindingId,
+    }),
+  });
+}
 
 function freezeResource(target: CompiledGardenRequestTarget): GardenRequestResourceContext {
   return Object.freeze({

@@ -517,6 +517,7 @@ export class FakePostgresPool {
         throw new Error('forced mutation audit failure');
       }
       const observationWrite = normalized.includes("'is_machine_intelligence', 'false', 'true'");
+      const hasMetadata = normalized.includes('metadata');
       const row: ContactMutationAuditRow = {
         id: this.contactMutationAudit.length + 1,
         contact_id: String(values[0] ?? ''),
@@ -524,13 +525,14 @@ export class FakePostgresPool {
         field: observationWrite ? 'is_machine_intelligence' : String(values[2] ?? ''),
         old_value: observationWrite ? 'false' : (values[3] == null ? null : String(values[3])),
         new_value: observationWrite ? 'true' : (values[4] == null ? null : String(values[4])),
-        timestamp: String(values[observationWrite ? 2 : 5] ?? ''),
+        metadata: hasMetadata && !observationWrite ? (values[5] ?? {}) : {},
+        timestamp: String(values[observationWrite ? 2 : hasMetadata ? 6 : 5] ?? ''),
       };
       this.contactMutationAudit.push(row);
       return result();
     }
 
-    if (normalized.startsWith('select id, contact_id, actor, field, old_value, new_value, timestamp from contact_mutation_audit')) {
+    if (normalized.startsWith('select id, contact_id, actor, field, old_value, new_value, metadata, timestamp from contact_mutation_audit')) {
       let cursor = 0;
       let rows = [...this.contactMutationAudit];
       if (normalized.includes('contact_id =')) {

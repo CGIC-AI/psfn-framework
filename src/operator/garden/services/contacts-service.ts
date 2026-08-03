@@ -36,15 +36,16 @@ import type {
 } from './types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import {
+  resolveFleetGardenContactMutationActor,
   soleAdminFleetActor,
   type GardenRequestContext,
 } from '../garden-request-context.js';
 import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
 
 function requestActor(context: GardenRequestContext | undefined): string {
-  return context?.kind === 'fleet_principal'
-    ? `fleet-principal:${context.actor.principalId}`
-    : 'admin:api';
+  if (context?.kind !== 'fleet_principal') return 'admin:api';
+  return resolveFleetGardenContactMutationActor(context)?.actorId
+    ?? `fleet-principal:${context.actor.principalId}`;
 }
 
 function isOtherFleetContact(
@@ -451,11 +452,12 @@ export class AdminContactsDataService implements AdminContactsService {
     displayName: string,
     nickname?: string,
     actor?: string,
+    auditMetadata?: ContactMutationAuditEntry['metadata'],
   ): Promise<boolean> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return false;
 
-    return contactStore.updateIdentityProfile(contact.id, displayName, nickname, actor);
+    return contactStore.updateIdentityProfile(contact.id, displayName, nickname, actor, auditMetadata);
   }
 
   async createContact(body: string, context?: GardenRequestContext): Promise<ContactUpdateResult> {
@@ -713,8 +715,21 @@ export class AdminContactsDataService implements AdminContactsService {
     body: string,
     context?: GardenRequestContext,
   ): Promise<ContactUpdateResult> {
-    if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
-    const actor = requestActor(context);
+    if (isOtherFleetContact(context, contactId)) {
+      return { ok: false, message: 'Contact not found', failureKind: 'not_found' };
+    }
+    const fleetActor = context?.kind === 'fleet_principal'
+      ? resolveFleetGardenContactMutationActor(context)
+      : null;
+    if (context?.kind === 'fleet_principal' && !fleetActor) {
+      return {
+        ok: false,
+        message: 'Contact mutation requires an authenticated fleet owner',
+        failureKind: 'authorization',
+      };
+    }
+    const actor = fleetActor?.actorId ?? 'admin:api';
+    const auditMetadata = fleetActor?.auditMetadata;
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -742,7 +757,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!displayName) {
         return { ok: false, message: 'displayName cannot be empty' };
       }
-      if (!await this.updateIdentityProfile(contact, displayName, payload.nickname, actor)) {
+      if (!await this.updateIdentityProfile(contact, displayName, payload.nickname, actor, auditMetadata)) {
         return { ok: false, message: 'Unable to update identity profile' };
       }
     }
@@ -751,8 +766,11 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!TRUST_LEVELS.includes(payload.trustLevel)) {
         return { ok: false, message: `Invalid trust level: ${payload.trustLevel}` };
       }
-      if (!await contactStore.setTrustLevel(contactId, payload.trustLevel, actor)) {
-        return { ok: false, message: 'Unable to update trust level' };
+      if (contact.trustLevel === 'primary' && payload.trustLevel !== 'primary') {
+        return { ok: false, message: 'Primary contact trust is immutable', failureKind: 'immutability' };
+      }
+      if (!await contactStore.setTrustLevel(contactId, payload.trustLevel, actor, { auditMetadata })) {
+        return { ok: false, message: 'Trust transition is not authorized', failureKind: 'authorization' };
       }
     }
 
@@ -760,8 +778,8 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!VALID_RELATIONSHIP_TYPES.includes(payload.relationshipType)) {
         return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
       }
-      if (!await contactStore.updateRelationshipType(contactId, payload.relationshipType, actor)) {
-        return { ok: false, message: 'Unable to update relationship type' };
+      if (!await contactStore.updateRelationshipType(contactId, payload.relationshipType, actor, auditMetadata)) {
+        return { ok: false, message: 'Relationship transition conflicted with current state', failureKind: 'conflict' };
       }
     }
 

@@ -120,7 +120,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare loadContactByChannelIdentity: (channel: ContactChannel, channelUserId: string) => Promise<Contact | undefined>;
   declare loadContactByRow: (row: ContactRow) => Promise<Contact>;
   declare touchContactLastSeen: (id: string) => Promise<void>;
-  declare appendMutationAuditEntry: (contactId: string, field: ContactMutationAuditEntry['field'], oldValue: string | null, newValue: string | null, actor?: string, queryable?: Pool | PoolClient) => Promise<void>;
+  declare appendMutationAuditEntry: (contactId: string, field: ContactMutationAuditEntry['field'], oldValue: string | null, newValue: string | null, actor?: string, queryable?: Pool | PoolClient, metadata?: ContactMutationAuditEntry['metadata']) => Promise<void>;
   declare upsertIdentityLinkRecord: (contactId: string, channel: string, channelUserId: string, firstSeen: string, lastSeen: string, privacyLevel?: ChannelPrivacyLevel) => Promise<ContactIdentityLinkResult>;
   declare upsertSocialGraphEntityForContact: (contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>) => Promise<SocialGraphEntity>;
   declare loadSocialGraphEntityByRow: (row: SocialGraphEntityRow | undefined) => Promise<SocialGraphEntity | undefined>;

@@ -866,9 +866,11 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     field TEXT NOT NULL,
     old_value TEXT,
     new_value TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     timestamp TEXT NOT NULL
   );
   `,
+  `ALTER TABLE contact_mutation_audit ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;`,
   `CREATE INDEX IF NOT EXISTS idx_contact_mutation_audit_contact ON contact_mutation_audit(contact_id, timestamp DESC);`,
   `
   CREATE TABLE IF NOT EXISTS social_graph_entities (

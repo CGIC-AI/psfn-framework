@@ -167,6 +167,19 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
 
 export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];
 
+export interface ContactMutationAuditMetadata {
+  source: 'fleet_garden';
+  provider: 'discord';
+  providerSubjectId: string;
+  principalId: string;
+  requestId: string;
+  decisionId: string;
+  authorizationEventId: string;
+  operatorGrantId: string;
+  sessionRecordId: string;
+  contactBindingId: string;
+}
+
 /**
  * Operator/tool demographic write (bead fnyb). Only present keys are applied;
  * a `null` clears the field, an absent key leaves it unchanged.
@@ -184,6 +197,7 @@ export interface ContactMutationAuditEntry {
   field: ContactMutationAuditField;
   oldValue: string | null;
   newValue: string | null;
+  metadata?: ContactMutationAuditMetadata;
   timestamp: string;
 }
 

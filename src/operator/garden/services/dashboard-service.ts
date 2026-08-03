@@ -28,6 +28,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performance.js';
 import type { AnalysisWorkbenchTraceStorePort } from '../../../persistence/postgres/analysis-workbench-trace-store.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
@@ -64,7 +65,9 @@ export class AdminDashboardDataService implements AdminDashboardService {
   private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
   constructor(private readonly deps: {
-    memoryStore: MemoryStorePort;
+    getMemoryStatsForRequest: (
+      context: GardenRequestContext | undefined,
+    ) => ReturnType<MemoryStorePort['getStats']>;
     sessionStore: SessionStore;
     sessionManager?: SessionManager;
     scheduler: Scheduler;
@@ -335,11 +338,14 @@ export class AdminDashboardDataService implements AdminDashboardService {
     }
   }
 
-  async getDashboardData(options: { costWindow?: DashboardCostWindow } = {}): Promise<AdminDashboardData> {
+  async getDashboardData(
+    options: { costWindow?: DashboardCostWindow } = {},
+    context?: GardenRequestContext,
+  ): Promise<AdminDashboardData> {
     const selectedCostWindow = options.costWindow ?? 'today';
     const [modelUsage, memStats, toolStatus] = await Promise.all([
       this.getModelUsage(selectedCostWindow),
-      this.deps.memoryStore.getStats(),
+      this.deps.getMemoryStatsForRequest(context),
       this.getToolStatus(),
     ]);
     const channels = this.deps.sessionStore.listChannels();

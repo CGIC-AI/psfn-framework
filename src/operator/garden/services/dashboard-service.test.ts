@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
-import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
@@ -11,6 +10,7 @@ import type { AdminAdaptiveToolsService, AdminModelUsageService } from './types.
 import { startOfDashboardUtcWeek } from './dashboard-cost-windows.js';
 import type { AnalysisWorkbenchTraceView, DashboardCostWindow } from '../types.js';
 import type { AnalysisWorkbenchTraceStorePort } from '../../../persistence/postgres/analysis-workbench-trace-store.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const EMPTY_TOTALS: ModelUsageTotals = {
   calls: 0,
@@ -63,16 +63,14 @@ function makeUsageData(
 
 function makeBaseDeps(eventBus = new EventBus()): {
   eventBus: EventBus;
-  memoryStore: MemoryStorePort;
+  getMemoryStatsForRequest: () => Promise<{ total: number; avgSalience: number; byType: Record<string, number> }>;
   sessionStore: SessionStore;
   scheduler: Scheduler;
   shardManager: ShardExecutionPort;
 } {
   return {
     eventBus,
-    memoryStore: {
-      getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
-    } as MemoryStorePort,
+    getMemoryStatsForRequest: async () => ({ total: 0, avgSalience: 0, byType: {} }),
     sessionStore: {
       listChannels: () => [],
       getLatestSessionByTimestamp: () => null,
@@ -95,6 +93,29 @@ function deferred<T>(): {
 }
 
 describe('AdminDashboardDataService', () => {
+  it('reads memory stats through the exact admitted request context', async () => {
+    const deps = makeBaseDeps();
+    const context = { kind: 'fleet_principal' } as GardenRequestContext;
+    const getStatsForRequest = vi.fn(async () => ({
+      total: 2,
+      byType: { semantic: 1, procedural: 1 },
+      avgSalience: 0.5,
+    }));
+    const service = new AdminDashboardDataService({
+      ...deps,
+      getMemoryStatsForRequest: getStatsForRequest,
+    });
+
+    const dashboard = await service.getDashboardData({}, context);
+
+    expect(getStatsForRequest).toHaveBeenCalledWith(context);
+    expect(dashboard.stats).toMatchObject({
+      memoryTotal: 2,
+      memoryByType: { semantic: 1, procedural: 1 },
+      avgSalience: 0.5,
+    });
+  });
+
   it('reads shard status through the shard execution port', async () => {
     const deps = makeBaseDeps();
     const shardManager = {

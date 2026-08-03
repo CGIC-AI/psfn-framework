@@ -77,6 +77,13 @@
       "note": "qgqw.1 archive-never-delete suite against real containerized Postgres. Baseline 1.80s file wall (5 tests, warm RAM-backed harness, 32-core host, 2026-07-28); 120s is the repo-standard integration cap, headroom dominated by cold-start container variance on small machines."
     },
     {
+      "file": "src/operator/garden/routes/contact-routes.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 2120,
+      "baselineSource": "measured",
+      "note": "o6tj6.3 Fleet Garden contact route/service attribution suite against real containerized Postgres. Baseline 2.12s file wall (4 tests, warm tmpfs harness, this host, 2026-08-03); 120s is the repo-standard integration cap with headroom dominated by cold-start and shared-heavy harness variance."
+    },
+    {
       "file": "src/core/contacts/postgres-adapter/contact-lifecycle-coordinator.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

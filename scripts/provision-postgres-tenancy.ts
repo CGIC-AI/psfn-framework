@@ -4,11 +4,13 @@ import { createPostgresContactStore } from '../src/core/contacts/postgres-adapte
 import type { ContactStorePort } from '../src/core/contacts/contact-store-port.js';
 import { resolveRuntimePathLayout } from '../src/persistence/layout.js';
 import { createPostgresPool } from '../src/persistence/postgres.js';
+import { PostgresBackgroundWorkStore } from '../src/persistence/postgres/background-work-store.js';
 import { ensureSharedSchema } from '../src/persistence/postgres/shared-schema.js';
 import {
   planPostgresTenantAccess,
   provisionPostgresTenantAccess,
 } from '../src/persistence/postgres/tenancy.js';
+import { grantWelfareVerifierReadAccessToTenantSchema } from '../src/persistence/postgres/welfare-verifier-access.js';
 import { resolveFleetAuthOwnerFile } from '../src/system/config/fleet-auth-config.js';
 
 const APPLY_ARGUMENT = '--apply';
@@ -98,6 +100,28 @@ async function main(): Promise<void> {
     await ensureSharedSchema(pool);
     for (const plan of plans) {
       await provisionPostgresTenantAccess(pool, { plan, runtimeLoginRole, backupRole });
+    }
+    // Bring every tenant schema to its background-work migration head, then
+    // re-assert the welfare-verifier read grant. A tenant provisioned before
+    // its tables existed (a newly added follower) receives the same
+    // agent_background_work_jobs SELECT as every pre-existing schema in this
+    // same operator pass; both steps are idempotent, so re-running this
+    // script is also the repair path for a drifted fleet schema.
+    for (const plan of plans) {
+      const backgroundWork = await PostgresBackgroundWorkStore.connect(databaseUrl, {
+        schema: plan.schema,
+        role: plan.role,
+      });
+      await backgroundWork.close();
+      const grant = await grantWelfareVerifierReadAccessToTenantSchema(pool, {
+        schema: plan.schema,
+        verifierRole: runtimeLoginRole,
+      });
+      if (!grant.relationGranted) {
+        throw new Error(
+          `PostgreSQL tenant ${plan.schema} has no agent_background_work_jobs after migrations`,
+        );
+      }
     }
     const stores = new Map<string, ContactStorePort>();
     for (const companion of fleet.companions) {

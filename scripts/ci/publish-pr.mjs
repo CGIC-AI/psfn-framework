@@ -25,7 +25,7 @@ function run(executable, args, { stdio = 'pipe' } = {}) {
 }
 
 function parseArguments(argv) {
-  const options = { base: 'main', title: '', bodyFile: '', labels: [] };
+  const options = { base: 'main', title: '', bodyFile: '', labels: [], wait: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--base') options.base = argv[++index] ?? '';
     else if (argv[index] === '--title') options.title = argv[++index] ?? '';
@@ -35,6 +35,7 @@ function parseArguments(argv) {
       if (!label) throw new Error('--label requires a label name');
       options.labels.push(label);
     }
+    else if (argv[index] === '--wait') options.wait = true;
     else throw new Error(`Unknown argument: ${argv[index]}`);
   }
   if (!options.base) throw new Error('--base requires a branch');
@@ -312,9 +313,15 @@ export async function publishPr(argv = process.argv.slice(2), {
 
   const pr = currentPr(branch, runCommand);
   if (!pr) throw new Error(`GitHub did not return a PR for branch ${branch}.`);
-  console.log(`Published ${pr.url} at ${state.head.slice(0, 12)}; waiting for CI and Greptile.`);
-  await wait({ reference: String(pr.number), expectedHead: state.head });
-  surfaceReviewFindings(pr.number, runCommand);
+  if (options.wait) {
+    console.log(`Published ${pr.url} at ${state.head.slice(0, 12)}; waiting for required checks.`);
+    await wait({ reference: String(pr.number), expectedHead: state.head });
+    surfaceReviewFindings(pr.number, runCommand);
+  } else {
+    console.log(
+      `Published ${pr.url} at ${state.head.slice(0, 12)}; checks continue asynchronously.`,
+    );
+  }
   return pr;
 }
 

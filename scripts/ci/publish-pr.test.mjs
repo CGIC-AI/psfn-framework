@@ -188,6 +188,18 @@ test('publisher updates only existing-PR title and body through REST before the 
     false,
     'publisher must not invoke the Projects Classic-backed gh pr edit path',
   );
+  assert.equal(
+    fixture.calls.some(call => call[0] === 'wait'),
+    false,
+    'publishing returns after PR creation instead of consuming the implementation session',
+  );
+});
+
+test('publisher waits for checks only with explicit --wait', async () => {
+  const fixture = makePublisherFixture({ existingPr: true });
+
+  await publishPr(['--wait'], fixture.dependencies);
+
   assert.deepEqual(fixture.calls.find(call => call[0] === 'wait'), ['wait', '191', HEAD]);
 });
 
@@ -294,7 +306,10 @@ test('publisher surfaces inline review findings and blocks on live P0/P1 badges'
       { position: 7, path: 'c.mjs', line: 30, body: badge('P1') },
     ]),
   });
-  await assert.rejects(publishPr([], blocked.dependencies), /live P0\/P1 review finding.*c\.mjs:30/s);
+  await assert.rejects(
+    publishPr(['--wait'], blocked.dependencies),
+    /live P0\/P1 review finding.*c\.mjs:30/s,
+  );
 
   const advisory = makePublisherFixture({
     existingPr: true,
@@ -303,7 +318,7 @@ test('publisher surfaces inline review findings and blocks on live P0/P1 badges'
       { position: null, path: 'b.mjs', original_line: 20, body: badge('P1') },
     ]),
   });
-  await publishPr([], advisory.dependencies);
+  await publishPr(['--wait'], advisory.dependencies);
 });
 
 test('publisher creates new PRs as non-draft after pushing the attested head', async () => {

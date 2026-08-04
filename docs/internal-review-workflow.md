@@ -58,12 +58,11 @@ docker ps -aq --filter label=io.local-gate.test-postgres=true |
 
 Use targeted tests and `npm run lint:changed -- --base origin/main` while
 editing. A bead is an ownership unit, not automatically a PR: batch compatible
-beads into one coherent train inside the mandatory publication window of
-800–2,500 counted changed lines, at most 25 files, and at most 8 commits. Hold
-and merge compatible work until the train reaches the floor; never split merely
-because a coherent diff reaches 16 files. A smaller PR is permitted only for an
-otherwise-unlandable blocker that cannot be bundled safely. Never batch
-unrelated changes or add filler.
+ready beads into one coherent train. The hard limits are 25 files, 2,500 counted
+changed lines, and 8 commits; 15 files, 1,500 lines, and 5 commits are planning
+targets. There is no minimum size and no exception ceremony for a small PR.
+Never batch unrelated changes, add filler, or hold completed work for an
+arbitrary line count.
 
 Commit coherent checkpoints and push the same-name non-main branch immediately:
 
@@ -110,9 +109,11 @@ git diff --stat "$review_base..$review_head"
 git diff --check "$review_base..$review_head"
 ```
 
-Give each reviewer that same range without sharing another reviewer's output.
-Every reviewer must use a model family different from the implementer; dual
-reviews also use different reviewer families whenever available:
+Review is optional and risk-selected. Use at most one independent reviewer on
+the frozen final train when the actual diff changes authentication,
+authorization, isolation, destructive persistence, concurrency, a new execution
+surface, or production deployment behavior with meaningful rollback risk. Give
+that reviewer the immutable range:
 
 ```text
 First restate the intent of immutable range <base>..<head> in one sentence and
@@ -132,17 +133,14 @@ Report every other observation as nonblocking; it triggers no fixes or beads.
 Do not approve on plausibility or review outside the immutable range.
 ```
 
-Use two blind cross-family reviewers for P0/P1 or high-risk composite work. One
-cross-family reviewer is enough for P2 and below unless concrete unexpected
-high-risk behavior appears. The orchestrator reproduces alleged blockers and
-returns only verified P0/P1 findings to the original implementer. Final review
-is closure-only: it checks accepted findings, not the whole range again. A newly
-alleged P0/P1 needs a concrete reproduction plus severity corroboration from a
-second model family; one corroborated late blocker gets one last scoped pass.
-Then stop and park the pushed branch if a blocker remains. A multi-bead seam pass
-covers only merge resolutions, shared contracts, and composite acceptance.
+Tracker priority alone never selects review intensity. Ordinary fixes proceed on
+focused tests and the final gate without model review. The implementer reproduces
+any alleged blocker and fixes accepted findings once; the focused regression is
+the closure proof. A second reviewer requires an explicit operator request or a
+single concrete high-impact claim that remains materially ambiguous. Do not run
+per-bead review followed by another train or seam review.
 
-## Publish and wait
+## Publish and return
 
 Write a PR body with summary, validation, and bead IDs, then run:
 
@@ -151,9 +149,11 @@ gh gated-pr --title "<type(scope): outcome>" --body-file <body.md>
 ```
 
 The wrapper fetches and gates the base, pushes through the cached hook, publishes
-an authenticated exact head/base commit status, and waits for `ci-required` and
-`Greptile Review`. Do not use raw `gh pr create`/`edit`; GitHub rejects a stale status
-before installing dependencies.
+an authenticated exact head/base commit status, creates or updates the PR, prints
+its URL, and returns while checks continue asynchronously. Do not use raw
+`gh pr create`/`edit`; GitHub rejects a stale status before installing
+dependencies. Use `--wait` only when the operator explicitly asks this session to
+monitor required checks.
 
 GitHub has one complementary delta runner and one status aggregator. Drafts use
 no runners; labels do not retrigger CI. Clean root builds, UI checks, and
@@ -161,12 +161,10 @@ deployment contracts run only for applicable paths. GitHub never runs the full
 repository product/Postgres suite, while local lint, typecheck, hygiene, UBS,
 Semgrep, and specialist checks are not repeated wholesale.
 
-On external failure, the wrapper returns evidence to the owning implementer.
-Triage review claims under the bounded cross-family loop above; an external P0/P1
-badge is not itself a severity ruling. Gate every corrected exact head. Never
-rerun Actions, re-request review, toggle labels to manufacture events, or start
-successive general review sweeps. At the hard cutoff, park the pushed branch and
-surface the blocker.
+On a later external failure, return evidence to the owning implementer. An
+external P0/P1 badge is not itself a severity ruling. Gate a corrected final head
+once. Never rerun Actions, re-request review, toggle labels to manufacture events,
+or start successive general review sweeps.
 
 ## Troubleshooting
 
@@ -174,4 +172,5 @@ surface the blocker.
 - Hook/alias conflict: inspect with the operator; the installer replaces nothing.
 - Stale base: fetch, rebase once, commit, and gate the new exact range.
 - Dirty or changed head: stop and resolve ownership; only committed state is attested.
-- External checks unavailable: stop; local green is not merge authority.
+- External checks unavailable: report the state and move to other implementation;
+  local green is not merge authority, but passive waiting is not implementation.

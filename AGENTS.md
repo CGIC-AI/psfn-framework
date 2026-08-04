@@ -13,6 +13,45 @@ Load detailed workflow documents only when the task needs them:
 - High-risk review practices: [`docs/adversarial-review-and-bugfixing-practices.md`](./docs/adversarial-review-and-bugfixing-practices.md)
 - Live operations: [`docs/operations.md`](./docs/operations.md)
 
+## Implementation first: process must earn its cost
+
+This project is functionality-constrained, not ceremony-constrained. Optimize for
+working, shipped behavior. A process action is justified only when it prevents a
+specific plausible defect, protects work from loss, or coordinates genuinely
+concurrent writers. Producing more tracker, review, bus, gate, or status artifacts
+is not progress by itself.
+
+Hard stopping rules:
+
+- Start the first useful source or test edit after the minimum safe setup: inspect
+  the target, run `bd prime`, read/claim the existing bead (or create one), and
+  verify the branch/worktree. For an ordinary fix this should take minutes, not a
+  review cycle.
+- If setup and coordination consume 10 minutes before implementation starts, or
+  non-implementation work exceeds roughly 25% of the active task time, stop every
+  optional process activity and return to implementation. State the concrete
+  blocker if implementation truly cannot proceed.
+- Tracker priority is product priority, not automatic review intensity. A P0/P1
+  label alone never requires extra agents, model reviews, broad tests, or a
+  separate PR.
+- Small or low-risk changes use one implementer, one branch, focused tests, and no
+  model reviewer, agent bus, clean-main canary, or extra worktree unless a concrete
+  risk or current operator instruction requires one.
+- Review the assembled PR train at most once, and only when its actual trust
+  boundaries or complexity justify review. Do not review every bead and then
+  review the same code again as an epic or train.
+- Run the broad pre-PR gate once on the final committed train head. Never run it
+  on worker checkpoints, and do not rerun an unchanged attested head.
+- When compatible fixes are ready, batch them into one train up to the hard PR
+  limits. Do not create one paid-review event per bead, but do not hold completed
+  work waiting for an arbitrary line-count floor either.
+- Publishing, CI, external review, and merging are asynchronous boundaries. After
+  creating the PR, report its URL and move to the next implementation task. Do not
+  babysit checks or wait for Greptile unless the operator explicitly asks.
+- When the operator says ship, publish, hurry, or stop reviewing, all optional
+  review and documentation work stops immediately. Finish only the minimum safe
+  validation and delivery actions requested.
+
 ## Route the task first
 
 - **Read-only answer, diagnosis, or review:** inspect freely. Do not create or
@@ -22,7 +61,8 @@ Load detailed workflow documents only when the task needs them:
   claim it, work on a named non-main branch, run focused validation, commit, and
   push the checkpoint.
 - **Several independent beads or a sprint wave:** read the orchestration process
-  before fanout. Parallelize only independent seams.
+  before fanout. Parallelize only independent seams and only when it reduces wall
+  time after including setup and integration cost.
 - **Live owner-file, persistence, or deployment work:** read the live authority
   section below and `docs/operations.md` before any mutation.
 
@@ -36,8 +76,8 @@ This repository opts into the **team-maintainer** profile.
   current operator explicitly authorizes a direct-main exception.
 - A checkpoint push is remote backup, not publication. It does not claim that
   broad gates or review passed.
-- Before publication, run `npm run gate:pre-pr` on the exact committed head and
-  publish through `npm run pr:publish`.
+- Before publication, run `npm run gate:pre-pr` once on the exact final committed
+  head and publish through `npm run pr:publish`.
 - Never manually force-push or rewrite a shared branch. Rebase before publication
   when the base moves; the exact-head `pr:publish` wrapper alone may update that
   branch with an attestation-checked, exact-remote `--force-with-lease`.
@@ -69,6 +109,9 @@ Rules:
 - Search before creating. Extend existing work instead of duplicating it.
 - If user-requested implementation has no existing bead, create and claim one
   before editing.
+- Keep bead operations compact: one claim, meaningful checkpoint/delivery notes,
+  and closure evidence. Do not narrate every command or mirror transient local
+  state into the tracker.
 - Every bead needs the why, concrete files, scope and non-goals, acceptance
   criteria, and enough context for a zero-context agent.
 - Link discovered work with `discovered-from:<parent-id>`.
@@ -235,19 +278,16 @@ Before publication:
 
 1. Fetch and rebase onto the intended base.
 2. Commit the exact clean head.
-3. Run `npm run gate:pre-pr`; it owns broad PREFLIGHT and HEAVY validation.
+3. Run `npm run gate:pre-pr` once; it owns broad PREFLIGHT and HEAVY validation.
 4. Publish only with `npm run pr:publish`.
-5. Wait for `ci-required` and required external review on the exact PR head.
+5. Return the PR URL. CI continues asynchronously; use `--wait` only when the
+   operator explicitly asks this session to monitor required checks.
 
-The mandatory PR publication window is 800–2,500 counted changed lines, at most
-25 files, and at most 8 commits; per commit, the maximum remains 15 files or 800
-counted lines. Bundle compatible completed and in-flight work until the train
-reaches the floor. Do not split coherent work merely because it reaches 16 files
-or exceeds an obsolete 1,500-line target, and do not add unrelated filler. A PR
-below 800 lines is allowed only for an otherwise-unlandable blocker that cannot
-be combined safely with compatible work; record it on the bead and begin the
-change-budget exception rationale with `BLOCKER:`. The 25-file and 2,500-line
-maximums cannot be bypassed.
+The hard PR limits are 25 files, 2,500 counted changed lines, and 8 commits.
+Fifteen files, 1,500 lines, and 5 commits are planning targets, not limits. A
+single commit may span the coherent change up to the PR hard limits. Bundle
+compatible ready work, but there is no minimum PR size and no reason to wait for
+unrelated work or add filler.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve
@@ -266,8 +306,9 @@ Preserve work owned by other agents.
   clear, `git reset --hard`, `git checkout -- .`, `git clean -f`, and recursive
   deletion of possible worktrees.
 - Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework` for parallel work.
-- One worker owns one bead, branch, and worktree. Do not edit another active
-  lane's files.
+- One worker owns each active branch/worktree. A single train lane may implement
+  several compatible beads sequentially; do not create a worktree per bead when
+  there are no concurrent writers. Do not edit another active lane's files.
 - Parallelize only independent seams. Three workers plus one orchestrator is the
   normal maximum, not a quota.
 
@@ -283,6 +324,10 @@ Before ending tracked implementation work:
    or after an explicitly authorized direct-main hotfix with equivalent evidence.
 6. Commit pending Beads state with `bd dolt commit --json`.
 7. Report tests, remaining risks, open beads, and exact delivered head.
+
+Do not remain idle after publication merely to observe CI, external review, or a
+merge. Record `published, awaiting checks`, return the PR URL, and move on. The
+merging session or a later reconciliation sweep closes delivered beads.
 
 <!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
 ## Beads quick reference
@@ -304,81 +349,15 @@ current operator or repository instructions.
 
 ## The agent bus
 
-When a task is worked by more than one agent, or across several substantial phases, all
-participants share one append-only JSONL file: the run. It is the project's record of what was
-found, what was judged, what changed hands and what it cost. Its codebook is `SCHEMA.md` in
-the agentbus checkout, and everything on a bus must be decodable by a person holding that
-document.
+The bus is optional coordination infrastructure, not a completion gate. Open one
+only when two or more concurrent writers need durable cross-lane findings or
+handoffs and the bus is cheaper than direct messages plus bead notes. Multiple
+phases, multiple reviewers, or a single orchestrator do not by themselves justify
+a bus.
 
-The bus tools (`bus-new`, `bus-append`, `bus-lint`, `bus-embed`,
-`bus-model`, `bus-state`) are on `PATH` machine-wide via `~/.local/bin` wrappers; no venv
-activation is needed. The agentbus checkout is `~/agentbus`.
-
-**Opening a run.** Check the vector lane with `bus-model status` and install the default with
-`bus-model fetch all-MiniLM-L6-v2` if nothing is installed; this is your job, not a setup step
-someone performs beforehand. Then `bus-new <run-name>` creates `<YYYY-MM-DD>-<run-name>.jsonl`
-in `$AGENTBUS_DIR`, or in `./bus/runs` when that variable is unset, and prints the path. Do
-not open a run for single-agent work; a bus with one writer is overhead with no reader.
-
-**Appending.** Every participant appends as work happens, including whoever is coordinating:
-
-```sh
-bus-append <file> --agent <name> --type <type> --body '<json object>'
-```
-
-The tool builds the schema version 2 envelope, assigns the next sequence number for that agent,
-stamps an ISO 8601 timestamp, and serializes read, validation, and append under an exclusive
-lock. A refused append exits non-zero and writes nothing. Read the error and fix the message
-rather than working around the tool. The eight types are `finding`, `rank`, `question`,
-`answer`, `handoff`, `cost`, `note`, and `correction`.
-
-Use `--context '{...}'` to attach `work_item`, `repo`, repository revisions, `agent_instance`,
-files, symbols, or artifacts. Context is inherited when unambiguous; workers sharing one role
-must pass `--agent-instance ID` to select their own context. Use
-`--meta '{...}'` only for free-form runtime metadata.
-
-**Provenance is mandatory on findings.** Each `finding` body carries `claim` and `provenance`.
-Support is required according to provenance:
-
-- `computed`: you ran the command, read the file, or carried out the derivation here;
-  `evidence` plus body `refs` or envelope `context.artifacts` is required.
-- `fetched`: you retrieved it from a source; non-empty `refs` are required.
-- `recalled`: it came from memory and you have not checked it.
-- `testimony`: a person or another agent reported it; `source` is required.
-
-Nothing outbound may rest on a `recalled` finding unchecked. Such a claim is welcome on the
-bus, but it does not enter a commit message, a patch, a report or an answer until someone
-verifies it and appends a new finding with the verified provenance. Being confident is not the
-same as having checked.
-
-Verification is separate from provenance. A `verification` object records `pending`,
-`verified`, or `rejected`; verified and rejected results name the verifier and an artifact
-digest or evidence ids.
-
-**Do not duplicate.** Before adding a finding, look for one that already says it. Run
-`bus-embed near <file> "<your claim>"` yourself, or `bus-embed dups <file>` to sweep a run
-that has grown, and read the file when the vector lane is unavailable. Rank or extend the
-existing finding instead.
-
-**The embedding model is yours to manage.** `bus-model list` shows what is available,
-`bus-model status` shows what is active and whether it is ready, and `bus-model fetch <name>`
-installs one. Changing the active model with `bus-model use` is the one deliberate action:
-different models produce vectors in different spaces, so a switch changes what similarity
-means and causes every finding to be embedded again. Switch only for a reason, and append a
-bus note saying which model you selected and why.
-
-**Disagreements are resolved, not averaged.** A `rank` names a `dimension`, its typed `value`,
-and a `basis`. Dimensions are confidence, quality, severity, priority, and acceptance. When
-two ranks on the same target and dimension disagree, the coordinator appends another rank
-whose `resolves` array names the earlier rank message ids. Never average or delete the earlier
-judgments.
-
-**Corrections are appends.** The file is append-only. Never rewrite or delete a line. A typed
-`correction` event names the current message id and a `corrects`, `supersedes`, or `retracts`
-relation. Correcting and superseding require a replacement body; retracting forbids one.
-Further changes target the latest correction. Use `bus-state <file>` to inspect current truth.
-
-**Closing.** Close substantial work with a `cost` message recording what it consumed and what
-it produced. Before closing a run, validate it with `bus-lint <file>`, which exits 0 when the
-file is clean and lists problems with line numbers otherwise. Fix problems by appending
-typed correction events when the traffic itself needs revision.
+If a run is justified, follow `~/agentbus/SCHEMA.md`, append only decisions or
+findings another lane needs, and run `bus-lint` before the last writer leaves.
+Do not install or operate an embedding model, run duplicate sweeps, or produce
+per-command traffic unless the run's size has created an observed retrieval
+problem. Bus maintenance must never delay implementation, validation, or PR
+publication.

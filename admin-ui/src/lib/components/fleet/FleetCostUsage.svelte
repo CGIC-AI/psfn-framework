@@ -287,7 +287,6 @@
     {data}
     {loading}
     {errorMessage}
-    {appliedState}
     companionNames={projectedCompanionNames}
     retry={() => void loadUsage(cloneState(appliedState), false)}
   />

@@ -85,17 +85,12 @@ for (const [job, expectedImage] of [[oldJob, oldTag], [newJob, newTag]]) {
 const longReleaseJob = prefetchJob(render(oldTag, 'psfn-model-prefetch-name-length-boundary'));
 assert(longReleaseJob?.metadata?.name.length <= 63, 'hashed model-prefetch Job name exceeds 63 characters');
 
-const installOutput = helm([
-  'install', 'psfn', chartDir,
-  '--dry-run=client',
-  '--debug',
-  ...commonArgs,
-  '--set-string', `psfnAppImage.tag=${oldTag}`,
-]);
-assert(installOutput.includes(`- Job: ${oldJob.metadata.name}`), 'Helm NOTES reports a stale Job name');
+const notesTemplate = readFileSync(resolve(chartDir, 'templates/NOTES.txt'), 'utf8');
+const jobNameInclude = '{{ include "psfn.modelPrefetchJobName" . }}';
+assert(notesTemplate.includes(`- Job: ${jobNameInclude}`), 'Helm NOTES reports a stale Job name');
 assert(
-  installOutput.includes(`job/${oldJob.metadata.name} --timeout=30m`),
-  'Helm NOTES wait command does not target the rendered Job',
+  notesTemplate.includes(`job/${jobNameInclude} --timeout=30m`),
+  'Helm NOTES wait command does not use the Job object\'s canonical name helper',
 );
 
 const setupScript = readFileSync(

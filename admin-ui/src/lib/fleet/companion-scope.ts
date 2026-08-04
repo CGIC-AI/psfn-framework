@@ -17,6 +17,13 @@ export type CompanionScopeChangeListener = (
 const scopeChangeListeners = new Set<CompanionScopeChangeListener>();
 let activeCompanionId: string | null | undefined;
 
+export class GardenPathValidationError extends Error {
+  constructor() {
+    super('Garden path must be one canonical root-absolute path');
+    this.name = 'GardenPathValidationError';
+  }
+}
+
 function requireRootAbsolutePath(path: string): void {
   const question = path.indexOf('?');
   const pathname = question < 0 ? path : path.slice(0, question);
@@ -25,10 +32,11 @@ function requireRootAbsolutePath(path: string): void {
     || path.includes('\\')
     || path.includes('#')
     || /%2f|%5c/iu.test(pathname)) {
-    throw new Error('Garden path must be one canonical root-absolute path');
+    throw new GardenPathValidationError();
   }
-  if (pathname.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(pathname)) {
-    throw new Error('Garden path must be one canonical root-absolute path');
+  if (pathname.includes('//')
+    || /(?:^|\/)(?:\.|%2e){1,2}(?:$|\/)/iu.test(pathname)) {
+    throw new GardenPathValidationError();
   }
 }
 

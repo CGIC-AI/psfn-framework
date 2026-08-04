@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
   import { onMount } from 'svelte';
   import { listGeneratedImages, updateGeneratedImage } from '$lib/api/endpoints/images';
   import type { GeneratedImageView, GeneratedImagesResponse } from '$lib/api/endpoints/images';
+  import {
+    resolveGeneratedImageDataHref,
+    resolveGeneratedImageLinks,
+    resolveGeneratedImageReferenceHref,
+  } from './generated-image-links';
 
   let data = $state<GeneratedImagesResponse | null>(null);
   let loading = $state(true);
@@ -333,15 +337,26 @@
   {:else}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {#each images as image (image.id)}
+        {@const imageLinks = resolveGeneratedImageLinks(image)}
         <article class="card-garden overflow-hidden">
-          <a href={scopeGardenDataPath(image.url)} target="_blank" rel="noreferrer" class="block bg-bark-100">
-            <img
-              src={scopeGardenDataPath(image.url)}
-              alt={image.prompt || image.fileName}
-              class="aspect-[4/3] w-full object-contain"
-              loading="lazy"
-            />
-          </a>
+          {#if imageLinks.blobHref}
+            <a href={imageLinks.blobHref} target="_blank" rel="noreferrer" class="block bg-bark-100">
+              <img
+                src={imageLinks.blobHref}
+                alt={image.prompt || image.fileName}
+                class="aspect-[4/3] w-full object-contain"
+                loading="lazy"
+              />
+            </a>
+          {:else}
+            <div
+              class="flex aspect-[4/3] items-center justify-center bg-bark-100 px-4 text-center text-sm text-shadow-500"
+              role="img"
+              aria-label={image.prompt || image.fileName}
+            >
+              Image unavailable
+            </div>
+          {/if}
           <div class="space-y-3 p-4">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
@@ -564,8 +579,9 @@
             {#if image.companionNoteRefs.length > 0}
               <div class="flex flex-wrap gap-1.5 border-t border-bark-300 pt-3">
                 {#each image.companionNoteRefs as ref}
-                  {#if ref.url}
-                    <a href={scopeGardenDataPath(ref.url)} class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800 hover:bg-moss-100">{ref.label || ref.id}</a>
+                  {@const refHref = ref.url ? resolveGeneratedImageDataHref(ref.url) : null}
+                  {#if refHref}
+                    <a href={refHref} class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800 hover:bg-moss-100">{ref.label || ref.id}</a>
                   {:else}
                     <span class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800">{ref.label || ref.id}</span>
                   {/if}
@@ -576,9 +592,9 @@
             <div class="flex items-center justify-between gap-2 border-t border-bark-300 pt-3">
               <span class="truncate text-xs font-mono text-shadow-500">{image.relativePath}</span>
               <div class="flex shrink-0 gap-2">
-                {#if image.artifactRefs.find((ref) => ref.kind === 'shared_image' && ref.url)}
+                {#if imageLinks.sourceHref}
                   <a
-                    href={scopeGardenDataPath(image.artifactRefs.find((ref) => ref.kind === 'shared_image' && ref.url)?.url ?? image.url)}
+                    href={imageLinks.sourceHref}
                     target="_blank"
                     rel="noreferrer"
                     class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"
@@ -586,14 +602,16 @@
                     Source
                   </a>
                 {/if}
-                <a
-                  href={scopeGardenDataPath(image.url)}
-                  target="_blank"
-                  rel="noreferrer"
-                  class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"
-                >
-                  Open
-                </a>
+                {#if imageLinks.blobHref}
+                  <a
+                    href={imageLinks.blobHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"
+                  >
+                    Open
+                  </a>
+                {/if}
               </div>
             </div>
           </div>

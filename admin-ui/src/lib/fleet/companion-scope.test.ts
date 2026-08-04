@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   activateCompanionScope,
   companionGardenRoot,
+  GardenPathValidationError,
   getCompanionCacheScope,
   onCompanionScopeChange,
   parseCompanionGardenScope,
@@ -65,6 +66,12 @@ describe('companion Garden browser scope', () => {
       '//api/admin/model-usage',
       '/api//admin/model-usage',
       '/api/admin/../model-usage',
+      '/api/admin/%2e/model-usage',
+      '/api/admin/%2E/model-usage',
+      '/api/admin/%2e%2e/model-usage',
+      '/api/admin/%2E%2e/model-usage',
+      '/api/admin/.%2e/model-usage',
+      '/api/admin/%2e./model-usage',
       '/api/admin/%2Fmodel-usage',
       '/api/admin/model-usage#fragment',
       String.raw`/api\admin\model-usage`,
@@ -72,6 +79,28 @@ describe('companion Garden browser scope', () => {
       expect(() => scopeGardenDataPath(invalid, pathname))
         .toThrow(/one canonical root-absolute path/u);
     }
+  });
+
+  it('rejects encoded dot segments before browser canonicalization can escape scope', () => {
+    const pathname = `/companions/${COMPANION_A}/garden/images`;
+    const crossCompanionEscape = [
+      '',
+      '%2e%2e',
+      '%2E%2e',
+      '.%2e',
+      'companions',
+      COMPANION_B,
+      'garden',
+      'api',
+      'admin',
+      'settings',
+    ].join('/');
+    const unsafeScopedPath = `/companions/${COMPANION_A}/garden${crossCompanionEscape}`;
+
+    expect(new URL(unsafeScopedPath, 'https://fleet.example').pathname)
+      .toBe(`/companions/${COMPANION_B}/garden/api/admin/settings`);
+    expect(() => scopeGardenDataPath(crossCompanionEscape, pathname))
+      .toThrow(GardenPathValidationError);
   });
 
   it('retains direct single-companion paths but rejects data calls from /fleet', () => {

@@ -8,14 +8,9 @@
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
-  import { getSettings, saveSubConfig } from '$lib/api/endpoints/settings';
+  import { saveSubConfig } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
-  import type {
-    CanonicalProviderRegistry,
-    ProviderRegistryEntry,
-    DiscoveredModel,
-    EffectiveModelSelectionView,
-  } from '$lib/types';
+  import type { CanonicalProviderRegistry, DiscoveredModel, ProviderRegistryEntry } from '$lib/types';
   import {
     CANONICAL_PURPOSES,
     DEFAULT_BUDGET_POLICY,
@@ -89,7 +84,6 @@
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
   let providerValidationErrors = $state<string[]>([]);
-  let effectiveChatModel = $state<EffectiveModelSelectionView | null>(null);
   let expandedModelIds = $state<Set<string>>(new Set());
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
@@ -130,20 +124,6 @@
   let enabledModelCount = $derived.by(() => (
     ownModelEntries.filter(({ entry }) => modelIsEnabled(entry)).length
   ));
-  let fleetDefaultChatModel = $derived.by(() => {
-    const entry = models.find(model => (
-      modelIsEnabled(model)
-      && model.purposes.some(purpose => purpose.purpose === 'chat' && purpose.primary === true)
-    ));
-    return entry
-      ? {
-          slotKey: entry.id,
-          provider: entry.identity.provider,
-          model: entry.identity.model,
-        }
-      : null;
-  });
-
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
       CANONICAL_PURPOSES.map((purpose) => [purpose, 0]),
@@ -836,10 +816,9 @@
     error = '';
     discoveryError = '';
     validationErrors = [];
-    const [modelsRaw, providersRaw, settingsData] = await Promise.all([
+    const [modelsRaw, providersRaw] = await Promise.all([
       getModelsConfigRaw(),
       getProvidersConfigRaw(),
-      getSettings(),
     ]);
     let discovered: DiscoveredModel[] = [];
     try {
@@ -852,7 +831,6 @@
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
-    effectiveChatModel = settingsData.effectiveModelSelection.chat;
     setProviderRegistryState(parseProviderRegistryJson(providersRaw));
     initialSnapshot = JSON.stringify({
       models,
@@ -986,10 +964,7 @@
     (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">LITELLM_API_KEY</span>).
   </div>
 
-  <EffectiveChatModelCard
-    effectiveChat={effectiveChatModel}
-    fleetDefault={fleetDefaultChatModel}
-  />
+  <EffectiveChatModelCard />
 
   <ProviderWiringPanel
     settingsHref={`${base}/settings#settings-providers`}

@@ -625,7 +625,7 @@ function makeSettingsService(): AdminSettingsService {
         },
       },
     },
-    effectiveModelSelection: { chat: null },
+    effectiveModelSelection: { chat: null, fleetDefaultChat: null },
     voiceProviders: {
       stt: [],
       tts: [],

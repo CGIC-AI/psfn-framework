@@ -133,6 +133,7 @@ export interface EffectiveModelSelectionView {
 
 export interface EffectiveModelSelectionProjection {
   chat: EffectiveModelSelectionView | null;
+  fleetDefaultChat: EffectiveModelSelectionView | null;
 }
 
 export interface EffectiveFleetAuthOwnerProjection {

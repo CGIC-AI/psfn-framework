@@ -166,8 +166,15 @@ describe('AdminSettingsDataService', () => {
       provider: 'openrouter',
       model: 'z-ai/glm-5.2',
     });
+    expect(settingsData.effectiveModelSelection.fleetDefaultChat).toEqual({
+      purpose: 'chat',
+      source: 'fleet_default',
+      slotKey: 'primary',
+      provider: 'openrouter',
+      model: 'moonshotai/kimi-k3',
+    });
     const canonicalPrimary = settingsData.editors.models.modelRegistry.models.find(entry => (
-      entry.purposes.some(purpose => purpose.purpose === 'chat' && purpose.primary === true)
+      entry.id === 'primary'
     ));
     expect(canonicalPrimary?.identity.model).toBe('moonshotai/kimi-k3');
   });

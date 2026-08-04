@@ -1,7 +1,26 @@
 import { resolveCandidates } from '../../../primitives/llm/model-hint-routing.js';
+import { resolveRoutingCandidates } from '../../../primitives/llm/routing.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EditableSettings } from '../../../system/settings.js';
-import type { EffectiveModelSelectionProjection } from './types.js';
+import type {
+  EffectiveModelSelectionProjection,
+  EffectiveModelSelectionView,
+} from './types.js';
+
+function toChatSelectionView(
+  candidate: ReturnType<typeof resolveCandidates>[number] | undefined,
+  source: EffectiveModelSelectionView['source'],
+): EffectiveModelSelectionView | null {
+  return candidate
+    ? {
+        purpose: 'chat',
+        source,
+        ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
+        provider: candidate.provider,
+        model: candidate.model,
+      }
+    : null;
+}
 
 /**
  * Project the same chat candidate the gateway resolves for a companion turn.
@@ -21,16 +40,13 @@ export function buildEffectiveModelSelectionProjection(
     'chat',
     selectedSlotKey ? { slotKey: selectedSlotKey } : undefined,
   ).at(0);
+  const fleetDefaultCandidate = resolveRoutingCandidates(config, 'chat').at(0);
 
   return {
-    chat: candidate
-      ? {
-          purpose: 'chat',
-          source: selectedSlotKey ? 'companion_selection' : 'fleet_default',
-          ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
-          provider: candidate.provider,
-          model: candidate.model,
-        }
-      : null,
+    chat: toChatSelectionView(
+      candidate,
+      selectedSlotKey ? 'companion_selection' : 'fleet_default',
+    ),
+    fleetDefaultChat: toChatSelectionView(fleetDefaultCandidate, 'fleet_default'),
   };
 }

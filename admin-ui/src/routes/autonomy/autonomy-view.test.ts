@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import type { AdminIcpCandidateView, AdminIcpCostView } from '../../../../src/operator/garden/services/types.js';
-import { canCancelIcpCandidate, costState, formatUsd } from './autonomy-view.js';
+import {
+  canCancelIcpCandidate,
+  costProjectionUnavailableMessage,
+  costState,
+  formatUsd,
+} from './autonomy-view.js';
 
 function candidate(status: AdminIcpCandidateView['status']): AdminIcpCandidateView {
   return { status } as AdminIcpCandidateView;
@@ -46,7 +51,11 @@ describe('autonomy Garden view helpers', () => {
     const page = readFileSync(new URL('./LazyPageContent.svelte', import.meta.url), 'utf8');
     expect(page).toContain('{#if !data.costProjection.available}');
     expect(page).toContain('Cost projection unavailable');
-    expect(page).toContain('core autonomy control plane remains available');
+    expect(page).toContain('costProjectionUnavailableMessage(data.costProjection.unavailableReason)');
+    expect(costProjectionUnavailableMessage('row_contract_invalid'))
+      .toContain('returned malformed rows');
+    expect(costProjectionUnavailableMessage('row_contract_invalid'))
+      .toContain('core autonomy control plane remains available');
     expect(page).toContain('No cost-breaker decisions recorded.');
   });
 });

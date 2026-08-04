@@ -9,6 +9,7 @@ import {
   type IcpConversationEpisode,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
+import { parseIcpConversationCostBreakerDecisionReason } from '../../shared/contracts/icp-conversation-cost.js';
 import type {
   AdminIcpCostProjectionStatus,
   AdminIcpCostView,
@@ -83,17 +84,17 @@ interface FatigueRow extends QueryResultRow {
 }
 
 interface CostRow extends QueryResultRow {
-  conversation_id: string;
-  root_initiation_id: string;
-  recorded_at_ms: string | number;
-  actual_cost_usd: string | number;
-  pending_projected_cost_usd: string | number;
-  projected_total_cost_usd: string | number;
-  warning_threshold_usd: string | number;
-  hard_limit_usd: string | number;
-  unknown_cost_attempt_count: string | number;
-  allowed: boolean;
-  reason: string;
+  conversation_id: unknown;
+  root_initiation_id: unknown;
+  recorded_at_ms: unknown;
+  actual_cost_usd: unknown;
+  pending_projected_cost_usd: unknown;
+  projected_total_cost_usd: unknown;
+  warning_threshold_usd: unknown;
+  hard_limit_usd: unknown;
+  unknown_cost_attempt_count: unknown;
+  allowed: unknown;
+  reason: unknown;
   participant_companion_ids: unknown;
 }
 
@@ -118,26 +119,46 @@ export interface IcpAdminProjectionStore {
   close(): Promise<void>;
 }
 
-function integer(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
+function numericDriverValue(value: unknown, field: string): number {
+  if (typeof value !== 'number'
+    && (typeof value !== 'string'
+      || !/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu.test(value))) {
+    throw new Error(`${field} must be a number or canonical numeric string`);
+  }
+  return typeof value === 'number' ? value : Number(value);
+}
+
+function integer(value: unknown, field: string): number {
+  const parsed = numericDriverValue(value, field);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
   return parsed;
 }
 
-function finiteNumber(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
+function finiteNumber(value: unknown, field: string): number {
+  const parsed = numericDriverValue(value, field);
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error(`${field} must be a finite non-negative number`);
   }
   return parsed;
 }
 
+function canonicalUuid(value: unknown, field: string): string {
+  if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
+  return value;
+}
+
+function booleanValue(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${field} must be boolean`);
+  return value;
+}
+
 function participantCompanionIds(value: unknown): string[] {
   if (!Array.isArray(value)
     || value.length < 2
-    || value.some(id => !isRfc4122Uuid(id))) {
+    || value.some(id => !isRfc4122Uuid(id))
+    || new Set(value).size !== value.length) {
     throw new Error('cost.participantCompanionIds must contain at least two companion UUIDs');
   }
   return value as string[];
@@ -212,9 +233,20 @@ function mapFatigue(row: FatigueRow): AdminIcpFatigueView {
 }
 
 function mapCost(row: CostRow): IcpAdminCostProjection {
+  const warningThresholdUsd = finiteNumber(
+    row.warning_threshold_usd,
+    'cost.warningThresholdUsd',
+  );
+  if (warningThresholdUsd <= 0) {
+    throw new Error('cost.warningThresholdUsd must be positive');
+  }
+  const hardLimitUsd = finiteNumber(row.hard_limit_usd, 'cost.hardLimitUsd');
+  if (hardLimitUsd <= warningThresholdUsd) {
+    throw new Error('cost.hardLimitUsd must exceed cost.warningThresholdUsd');
+  }
   return {
-    conversationId: row.conversation_id,
-    rootInitiationId: row.root_initiation_id,
+    conversationId: canonicalUuid(row.conversation_id, 'cost.conversationId'),
+    rootInitiationId: canonicalUuid(row.root_initiation_id, 'cost.rootInitiationId'),
     recordedAtMs: integer(row.recorded_at_ms, 'cost.recordedAtMs'),
     actualCostUsd: finiteNumber(row.actual_cost_usd, 'cost.actualCostUsd'),
     pendingProjectedCostUsd: finiteNumber(
@@ -222,14 +254,14 @@ function mapCost(row: CostRow): IcpAdminCostProjection {
       'cost.pendingProjectedCostUsd',
     ),
     projectedTotalCostUsd: finiteNumber(row.projected_total_cost_usd, 'cost.projectedTotalCostUsd'),
-    warningThresholdUsd: finiteNumber(row.warning_threshold_usd, 'cost.warningThresholdUsd'),
-    hardLimitUsd: finiteNumber(row.hard_limit_usd, 'cost.hardLimitUsd'),
+    warningThresholdUsd,
+    hardLimitUsd,
     unknownCostAttemptCount: integer(
       row.unknown_cost_attempt_count,
       'cost.unknownCostAttemptCount',
     ),
-    allowed: row.allowed,
-    reason: row.reason,
+    allowed: booleanValue(row.allowed, 'cost.allowed'),
+    reason: parseIcpConversationCostBreakerDecisionReason(row.reason),
     participantCompanionIds: participantCompanionIds(row.participant_companion_ids),
   };
 }
@@ -402,8 +434,9 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
       };
     }
 
+    let costRows: CostRow[];
     try {
-      const costRows = await queryRows<CostRow>(this.costPool, `
+      costRows = await queryRows<CostRow>(this.costPool, `
         SELECT DISTINCT ON (decision.conversation_id)
           decision.conversation_id, decision.root_initiation_id,
           decision.recorded_at_ms, decision.actual_cost_usd,
@@ -419,6 +452,13 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
           decision.decision_id DESC
         LIMIT $2
       `, [this.localCompanionId, boundedLimit]);
+    } catch {
+      return {
+        costs: [],
+        costProjection: { available: false, unavailableReason: 'read_failed' },
+      };
+    }
+    try {
       return {
         costs: costRows.map(mapCost),
         costProjection: { available: true, unavailableReason: null },
@@ -426,7 +466,7 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     } catch {
       return {
         costs: [],
-        costProjection: { available: false, unavailableReason: 'read_failed' },
+        costProjection: { available: false, unavailableReason: 'row_contract_invalid' },
       };
     }
   }

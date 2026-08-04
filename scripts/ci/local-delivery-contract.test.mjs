@@ -262,6 +262,9 @@ test('delivery-only gate stays fast while product changes retain full validation
   });
   const names = plan.map(({ name }) => name);
 
+  assert.equal(plan.find(({ name }) => name === 'build').nodeHeapMb, 8192);
+  assert.equal(plan.find(({ name }) => name === 'typecheck').nodeHeapMb, 4096);
+
   assert.deepEqual(names.slice(0, 4), [
     'ci-rules',
     'change-budget',

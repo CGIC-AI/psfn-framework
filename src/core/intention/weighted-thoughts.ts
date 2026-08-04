@@ -22,20 +22,8 @@ export type ThoughtClass = (typeof THOUGHT_CLASSES)[number];
 export const THOUGHT_NUDGE_STATES = ['pending', 'nudged', 'accepted', 'declined'] as const;
 export type ThoughtNudgeState = (typeof THOUGHT_NUDGE_STATES)[number];
 
-/** Where a thought originated — drives channel-resolution provenance. */
-export interface ThoughtProvenance {
-  /** Live active-concern id, when the thought tracks a concern. */
-  concernId?: string;
-  /** Live pending-follow-up id, when the thought tracks a scheduled follow-up. */
-  pendingFollowUpId?: string;
-  /**
-   * Live personal-project id, when the thought simmers unfinished project work
-   * (0ggv.3 / psfn-framework-hrmrq.85). Like concernId/pendingFollowUpId this
-   * is LIVE provenance: the outbound gate re-verifies the project against the
-   * personal-project library at dispatch time and fails closed when the
-   * project is gone or no longer resumable.
-   */
-  personalProjectId?: string;
+/** Source context shared by every weighted-thought provenance kind. */
+interface ThoughtProvenanceContext {
   /** Channel where the concern/thought was originally raised (provenance). */
   sourceChannelId?: string;
   /** Channel type of the source channel. */
@@ -45,6 +33,33 @@ export interface ThoughtProvenance {
   /** Inherited autonomous conversation root when the thought came from ICP. */
   icpRootInitiationId?: string;
 }
+
+interface ThoughtLiveThreadProvenance {
+  /** Live active-concern id, when the thought tracks a concern. */
+  concernId?: string;
+  /** Live pending-follow-up id, when the thought tracks a scheduled follow-up. */
+  pendingFollowUpId?: string;
+  personalProjectId?: never;
+}
+
+interface ThoughtPersonalProjectProvenance {
+  concernId?: never;
+  pendingFollowUpId?: never;
+  /**
+   * Live personal-project id, when the thought simmers unfinished project work
+   * (0ggv.3 / psfn-framework-hrmrq.85). Like concernId/pendingFollowUpId this
+   * is LIVE provenance: the outbound gate re-verifies the project against the
+   * personal-project library at dispatch time and fails closed when the
+   * project is gone or no longer resumable.
+   */
+  personalProjectId: string;
+}
+
+/** Where a thought originated — independent initiators cannot be crossed. */
+export type ThoughtProvenance = ThoughtProvenanceContext & (
+  | ThoughtLiveThreadProvenance
+  | ThoughtPersonalProjectProvenance
+);
 
 export interface ThoughtContextMultipliers {
   /** Boost from repeated reinforcement of the same thought. */

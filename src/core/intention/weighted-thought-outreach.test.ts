@@ -468,4 +468,27 @@ describe('personal-project provenance routing (psfn-framework-hrmrq.85)', () => 
     expect(payload.concernIds).toBeUndefined();
     expect(payload.pendingFollowUpId).toBeUndefined();
   });
+
+  it('personal-project precedence drops unrelated live-thread provenance from the candidate', () => {
+    const legacyCrossedThought = {
+      ...projectThought,
+      provenance: {
+        ...projectThought.provenance,
+        concernId: 'stale-concern',
+        pendingFollowUpId: 'stale-follow-up',
+      },
+    } as ThoughtWeight;
+
+    const candidate = buildOutboundActionCandidate({
+      thought: legacyCrossedThought,
+      content: 'I want to get back to my Moth story',
+      channelId: 'dm-primary',
+      channelType: 'discord',
+    });
+    const payload = candidate.payload as Record<string, unknown>;
+
+    expect(payload.personalProjectId).toBe('proj-1');
+    expect(payload.concernIds).toBeUndefined();
+    expect(payload.pendingFollowUpId).toBeUndefined();
+  });
 });

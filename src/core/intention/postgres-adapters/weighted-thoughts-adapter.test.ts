@@ -140,6 +140,40 @@ describe('PostgresWeightedThoughtStore', () => {
     expect(decayedWeight(snapshot[0]!, T0 + 24 * HOUR)).toBeCloseTo(thought.accumulatedWeight / 2, 6);
   });
 
+  it('hydrates legacy crossed project provenance with personal-project precedence', async () => {
+    const rows = new Map<string, FakeRow>();
+    const first = newStore(rows);
+    await first.save(createThoughtWeight(
+      {
+        id: 'wt-project',
+        content: 'return to the Moth story',
+        source: 'personal_project',
+        thoughtClass: 'standard',
+        provenance: { personalProjectId: 'project-1' },
+      },
+      CONFIG,
+      T0,
+    ));
+    const row = rows.get('wt-project');
+    expect(row).toBeDefined();
+    if (!row) {
+      return;
+    }
+    row.provenance = JSON.stringify({
+      personalProjectId: 'project-1',
+      pendingFollowUpId: 'stale-follow-up',
+      concernId: 'stale-concern',
+    });
+
+    const rebooted = newStore(rows);
+    await rebooted.hydrateCache();
+    const provenance = rebooted.snapshotActiveThoughts()[0]?.provenance;
+
+    expect(provenance.personalProjectId).toBe('project-1');
+    expect(provenance.pendingFollowUpId).toBeUndefined();
+    expect(provenance.concernId).toBeUndefined();
+  });
+
   it('excludes accepted thoughts from the active snapshot', async () => {
     const rows = new Map<string, FakeRow>();
     const store = newStore(rows);

@@ -7,6 +7,7 @@ import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safe
 import {
   INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   type IntentionActionDecision,
+  type IntentionOutboundMessageActionPayload,
 } from './appraisal/types.js';
 import {
   decisionsToPostTurnActionCandidates,
@@ -227,5 +228,28 @@ describe('external follow-up translation', () => {
         orientation: 'warm',
       },
     })).toBeNull();
+  });
+
+  it('rejects crossed personal-project and live-thread initiator provenance', () => {
+    expect(normalizeIntentionOutboundMessageActionPayload({
+      channelId: PRIMARY_DM_CHANNEL,
+      channelType: 'discord',
+      content: 'I want to get back to my story',
+      personalProjectId: 'project-1',
+      pendingFollowUpId: 'stale-follow-up',
+      concernIds: ['stale-concern'],
+    })).toBeNull();
+  });
+
+  it('models personal-project and live-thread provenance as mutually exclusive', () => {
+    // @ts-expect-error Cross-source provenance is intentionally unrepresentable.
+    const crossed: IntentionOutboundMessageActionPayload = {
+      channelId: PRIMARY_DM_CHANNEL,
+      channelType: 'discord',
+      content: 'I want to get back to my story',
+      personalProjectId: 'project-1',
+      concernIds: ['stale-concern'],
+    };
+    expect(crossed.personalProjectId).toBe('project-1');
   });
 });

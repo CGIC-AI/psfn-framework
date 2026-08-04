@@ -50,7 +50,6 @@ export function buildMemorySubjectAuthorizationPredicate(
         AND classification.classifier_version = ${classifierVersionParameter}
         AND classification.memory_revision = ${memoryAlias}.authorization_revision
         AND classification.evidence_digest = ${memoryAlias}.subject_evidence_digest
-        AND classification.subject_class NOT IN ('ambiguous', 'unattributed', 'unbound_person')
         AND classification.subject_class = ANY(${subjectClassesParameter}::text[])
         AND (
           'companion_private' = ANY(${subjectClassesParameter}::text[])

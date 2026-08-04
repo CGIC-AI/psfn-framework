@@ -385,6 +385,7 @@ describe('request-bound Garden principal isolation', () => {
         // high-sensitivity other-human carve-out active until escalation.
         allowedSubjectClasses: [
           'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+          'unbound_person', 'unattributed', 'ambiguous',
         ],
         allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
         excludeHighSensitivityOtherRelation: true,
@@ -629,6 +630,7 @@ describe('request-bound Garden principal isolation', () => {
       authorization: expect.objectContaining({
         allowedSubjectClasses: [
           'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+          'unbound_person', 'unattributed', 'ambiguous',
         ],
         allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
       }),

@@ -840,14 +840,14 @@ describe('postgres memory store integration', () => {
         selector: { kind: 'details_batch', memoryIds: [] },
       })).rejects.toThrow(/requires at least one memoryId/);
 
-      const failClosedUnknownSubjects = await store.queryAuthorizedMemorySubjects({
+      const explicitlyAuthorizedUnknownSubjects = await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'count', {
           allowedSubjectClasses: ['ambiguous', 'unattributed', 'unbound_person'],
           allowedViewerRelations: ['none'],
         }),
         selector: { kind: 'count' },
       });
-      expect(failClosedUnknownSubjects).toEqual({ memories: [], total: 0 });
+      expect(explicitlyAuthorizedUnknownSubjects).toEqual({ memories: [], total: 1 });
 
       await expect(store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'count'),
@@ -932,6 +932,9 @@ describe('postgres memory store integration', () => {
           sourceRef: 'source:context_feedback|dashboard-parity', tags: ['context_feedback'],
           provenance: { subjectContactId: 'contact-a' },
         }),
+        makeMemory({
+          id: 'unattributed-relational', type: 'relational', sensitivity: 'personal', salience: 0.5,
+        }),
       ];
       for (const memory of memories) await store.insertMemory(memory, DEFAULT_EMBEDDING);
 
@@ -939,12 +942,12 @@ describe('postgres memory store integration', () => {
         {
           label: 'sole_admin',
           context: { viewerContactId: 'contact-a', adminAccessMode: 'sole_admin' } as const,
-          expected: { total: 3, byType: { semantic: 1, procedural: 1, relational: 1 }, avgSalience: 2 / 3 },
+          expected: { total: 4, byType: { semantic: 1, procedural: 1, relational: 2 }, avgSalience: 0.625 },
         },
         {
           label: 'multi_admin',
           context: { viewerContactId: 'contact-a', adminAccessMode: 'multi_admin' } as const,
-          expected: { total: 2, byType: { semantic: 1, procedural: 1 }, avgSalience: 0.5 },
+          expected: { total: 3, byType: { semantic: 1, procedural: 1, relational: 1 }, avgSalience: 0.5 },
         },
         {
           label: 'member',
@@ -966,7 +969,7 @@ describe('postgres memory store integration', () => {
       // The ordinary subject-store aggregate is a different contract and keeps
       // its existing full-active-corpus behavior for non-Garden consumers.
       await expect(createSubjectAuthorizedMemoryStore(store, cases[0].context).getStats())
-        .resolves.toMatchObject({ total: 4 });
+        .resolves.toMatchObject({ total: 5 });
     });
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -1020,7 +1023,7 @@ describe('postgres memory store integration', () => {
           sourceRef: 'discord:dm', contactId: 'contact-a', salience: 0.3,
           provenance: { subjectContactId: 'contact-b' },
         }),
-        // Unattributed — not authorized for anyone.
+        // Unattributed — not authorized for this ordinary member projection.
         makeMemory({ id: 'u1', type: 'relational', sensitivity: 'low', extractedAt: base + 5 }),
       ];
       for (const memory of fixture) await store.insertMemory(memory, DEFAULT_EMBEDDING);

@@ -1,4 +1,7 @@
-import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
+import {
+  MEMORY_SUBJECT_CLASSES,
+  MEMORY_SUBJECT_CLASSIFIER_VERSION,
+} from '../../shared/contracts/memory-subject.js';
 import type {
   MemorySubjectGrantBinding,
   MemorySubjectQueryAuthorization,
@@ -102,9 +105,7 @@ function authorization(
     return {
       action,
       viewerContactIds,
-      allowedSubjectClasses: [
-        'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
-      ],
+      allowedSubjectClasses: [...MEMORY_SUBJECT_CLASSES],
       allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
       classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
       grantBindings: [...(context.grantBindings ?? [])],

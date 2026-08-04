@@ -1428,10 +1428,12 @@ console.log(`gateway smoke passed: model=${payload.model} user=${payload.validat
 }
 
 # The full-fleet owner preflight must run where every system and companion
-# owner root is mounted. The fleet gateway is the only long-running workload
-# that mounts each companion PVC at its canonical resolveCompanionFleetPaths
-# path; agents and the cluster-of-one maintenance Pod see only their own
-# companion root. Both compiled entrypoints resolve database wiring
+# owner root is mounted. The gateway is the chosen rollout target: it mounts
+# every companion PVC at its canonical resolveCompanionFleetPaths path and
+# carries the direct inline database wiring (the cluster Garden mounts the
+# companion roots too, but read-only and with secret-file wiring), while
+# agents and the cluster-of-one maintenance Pod see only their own companion
+# root. Both compiled entrypoints resolve database wiring
 # operator-style (inline POSTGRES_DATABASE_URL on the gateway,
 # POSTGRES_DATABASE_URL_FILE elsewhere) and never print credentials or
 # owner-file contents. The mode preflight derives the canonical

@@ -778,8 +778,10 @@ An upgrade is not complete until every check below is green, in order.
    exists, owner migration receipts are complete, and every owner file sits at
    its canonical sensitivity-specific mode (`999:999` plus `600`/`640`/`644`
    per the owner-mode authority in step 7 — not a blanket `664`). Run the
-   full-fleet preflight in the gateway, the one workload that mounts every
-   system and companion owner root at its canonical path:
+   full-fleet preflight in the gateway — the chosen rollout target because it
+   mounts every system and companion owner root at its canonical path and
+   holds the direct database wiring (the cluster Garden mounts the companion
+   roots too, but read-only and with secret-file wiring):
 
    ```bash
    kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- \

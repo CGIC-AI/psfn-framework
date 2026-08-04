@@ -1,7 +1,6 @@
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { FLEET_AUTH_FILE_NAME } from './fleet-auth-config.js';
-import type { OwnerFileSeedDescriptor } from './startup-owner-files.js';
 
 /**
  * Canonical POSIX mode authority for startup owner files.
@@ -50,6 +49,22 @@ export interface OwnerFileModeExpectation {
   optionalWhenMissing: boolean;
 }
 
+/**
+ * Narrow structural view of an owner-file registry descriptor — exactly the
+ * fields {@link buildOwnerFileModeExpectations} reads. `OwnerFileSeedDescriptor`
+ * in `startup-owner-files.ts` satisfies this structurally. Declaring it here
+ * keeps this module the one-way mode authority: `startup-owner-files.ts`
+ * imports the canonical modes from this module, and this module must not
+ * import it back (the dependency-cycle gate counts even type-only edges).
+ */
+export interface OwnerFileModeSourceDescriptor {
+  label: string;
+  ownerFileName: string;
+  scope: 'system' | 'companion';
+  optionalWhenMissing: boolean;
+  canonicalMode: number;
+}
+
 export interface OwnerFileModeObservation {
   label: string;
   path: string;
@@ -75,7 +90,7 @@ export interface OwnerFileModeVerificationResult {
 export function buildOwnerFileModeExpectations(input: {
   dataDir: string;
   companionRoots: ReadonlyArray<{ companionId?: string; companionDataDir: string }>;
-  descriptors: readonly OwnerFileSeedDescriptor[];
+  descriptors: readonly OwnerFileModeSourceDescriptor[];
 }): OwnerFileModeExpectation[] {
   const expectations: OwnerFileModeExpectation[] = [];
   for (const descriptor of input.descriptors) {

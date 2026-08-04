@@ -245,7 +245,10 @@ describe('start-gateway-agent launcher supervision', () => {
       'utf8',
     );
     const gateway = readFileSync(join(repoRoot, 'src/app/gateway/main.ts'), 'utf8');
-    expect(runtimePreflight).toContain('const config = loadConfig();');
+    // Operator-mode loading resolves the identical system/companion/fleet roots
+    // as the gateway while accepting secret-safe database wiring
+    // (POSTGRES_DATABASE_URL_FILE/_FD) in agent-derived maintenance pods.
+    expect(runtimePreflight).toContain('const config = loadOperatorConfig();');
     expect(gateway).toContain('const config = loadConfig();');
   });
 

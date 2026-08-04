@@ -22,6 +22,7 @@ const entries = {
     'verify-shell-sandbox-runtime':
       'src/app/maintenance/verify-shell-sandbox-runtime.ts',
     'preflight-startup-owner-files': 'scripts/preflight-startup-owner-files.ts',
+    'preflight-owner-file-modes': 'scripts/preflight-owner-file-modes.ts',
     'provision-injection-model': 'scripts/provision-injection-model.ts',
 } as const;
 

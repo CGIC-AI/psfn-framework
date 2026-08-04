@@ -1,5 +1,5 @@
 import '../src/shared/utils/load-dotenv.js';
-import { loadConfig } from '../src/system/config/load-config.js';
+import { loadOperatorConfig } from '../src/system/config/load-config.js';
 import {
   verifyStartupFleetOwnerFiles,
   verifyStartupOwnerFiles,
@@ -7,7 +7,12 @@ import {
 import { toErrorMessage } from '../src/shared/utils/errors.js';
 
 function main(): void {
-  const config = loadConfig();
+  // Operator-mode loading keeps this preflight secret-safe in every documented
+  // environment: the fleet gateway supplies POSTGRES_DATABASE_URL inline,
+  // agent-derived maintenance pods carry POSTGRES_DATABASE_URL_FILE or _FD,
+  // and owner-file verification needs no database credential at all. The
+  // credential is resolved only to satisfy config loading and is never printed.
+  const config = loadOperatorConfig();
   const seedDir = process.env.CONFIG_DIR?.trim() || './config';
   const commonOptions = {
     dataDir: config.dataDir,

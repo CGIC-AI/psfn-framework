@@ -16,25 +16,22 @@ import {
 } from './check-change-budget.mjs';
 
 test('uses the operator-approved PR publication window', () => {
-  assert.deepEqual(CHANGE_BUDGET.pullRequest.files, { target: 25, maximum: 25 });
-  assert.deepEqual(CHANGE_BUDGET.pullRequest.lines, {
-    minimum: 800,
-    target: 2_500,
-    maximum: 2_500,
-  });
-  assert.deepEqual(CHANGE_BUDGET.pullRequest.commits, { target: 8, maximum: 8 });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.files, { target: 15, maximum: 25 });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.lines, { target: 1_500, maximum: 2_500 });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.commits, { target: 5, maximum: 8 });
+  assert.deepEqual(CHANGE_BUDGET.commit.files, { target: 15, maximum: 25 });
+  assert.deepEqual(CHANGE_BUDGET.commit.lines, { target: 800, maximum: 2_500 });
 });
 
-test('accepts both endpoints of the mandatory publication window', () => {
-  for (const lines of [800, 2_500]) {
+test('accepts any PR size through the hard maximum', () => {
+  for (const lines of [1, 1_500, 2_500]) {
     const decision = evaluateChangeBudget({
-      files: 25,
+      files: 15,
       lines,
-      commitCount: 8,
+      commitCount: 5,
       commits: [],
     });
     assert.deepEqual(decision.violations, []);
-    assert.deepEqual(decision.warnings, []);
   }
 
   assert.deepEqual(
@@ -48,17 +45,15 @@ test('accepts both endpoints of the mandatory publication window', () => {
   );
 });
 
-test('rejects PRs below the mandatory 800-line publication floor', () => {
+test('accepts a small coherent PR without exception ceremony', () => {
   const decision = evaluateChangeBudget({
     files: 1,
-    lines: 799,
+    lines: 6,
     commitCount: 1,
     commits: [],
   });
 
-  assert.deepEqual(decision.violations, [
-    'PR has 799 changed lines; minimum is 800',
-  ]);
+  assert.deepEqual(decision, { warnings: [], violations: [] });
 });
 
 function git(cwd, ...args) {
@@ -197,7 +192,7 @@ test('checks PR-owned conflict resolution changes against the per-commit budget'
 
   git(cwd, 'switch', '--quiet', 'feature');
   assert.throws(() => git(cwd, 'merge', '--no-ff', 'main', '-m', 'merge main'));
-  writeFileSync(join(cwd, 'shared.ts'), 'resolved\n'.repeat(801));
+  writeFileSync(join(cwd, 'shared.ts'), 'resolved\n'.repeat(2_501));
   git(cwd, 'add', 'shared.ts');
   git(cwd, 'commit', '--quiet', '-m', 'merge main with resolution');
 
@@ -216,7 +211,7 @@ test('checks PR-owned conflict resolution changes against the per-commit budget'
   );
 });
 
-test('uses exception metadata from the authenticated current-branch PR', () => {
+test('rejects obsolete exception metadata from the authenticated current-branch PR', () => {
   const metadata = resolvePullRequestMetadata({
     options: { exception: false },
     env: {},
@@ -237,8 +232,10 @@ test('uses exception metadata from the authenticated current-branch PR', () => {
   );
 
   assert.equal(metadata.source, 'GitHub');
-  assert.equal(decision.violations.length, 0);
-  assert.deepEqual(decision.bypassed, ['PR has 799 changed lines; minimum is 800']);
+  assert.deepEqual(decision.violations, [
+    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
+  ]);
+  assert.deepEqual(decision.bypassed, []);
 });
 
 test('fails closed with exact offline metadata instructions', () => {
@@ -298,38 +295,18 @@ test('rejects explicit exception metadata that conflicts with connected GitHub m
   );
 });
 
-test('requires a written rationale for a maintainer exception', () => {
+test('rejects the obsolete exception label regardless of rationale', () => {
   const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
   const missing = decideChangeBudget(stats, { exception: true });
-  assert.match(missing.violations.at(-1), /requires a non-empty/);
+  assert.match(missing.violations.at(-1), /there is no minimum PR size/);
 
-  const accepted = decideChangeBudget(stats, {
+  const withRationale = decideChangeBudget(stats, {
     exception: true,
     pullRequestBody:
       '## Change-budget exception\nBLOCKER: no compatible train can be published until this fix lands.',
   });
-  assert.equal(accepted.violations.length, 0);
-  assert.equal(accepted.bypassed.length, 1);
-});
-
-test('allows an under-floor exception only for an explicit unbundleable blocker', () => {
-  const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
-  const generic = decideChangeBudget(stats, {
-    exception: true,
-    pullRequestBody: '## Change-budget exception\nSmall cleanup that is ready.',
-  });
-  assert.deepEqual(generic.violations, [
-    'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
-  ]);
-
-  const blocker = decideChangeBudget(stats, {
-    exception: true,
-    pullRequestBody:
-      '## Change-budget exception\nBLOCKER: required to restore publication, with no compatible work available to bundle.',
-  });
-  assert.equal(blocker.violations.length, 0);
-  assert.deepEqual(blocker.bypassed, [
-    'PR has 799 changed lines; minimum is 800',
+  assert.deepEqual(withRationale.violations, [
+    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
   ]);
 });
 
@@ -345,7 +322,7 @@ test('never permits the exception label to bypass hard maximums', () => {
 
   assert.deepEqual(decision.violations, [
     'PR has 26 files; maximum is 25',
-    'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
+    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
   ]);
   assert.deepEqual(decision.bypassed, []);
 });
@@ -359,7 +336,7 @@ test('does not accept stale exception labels', () => {
     },
   );
   assert.deepEqual(decision.violations, [
-    'remove change-budget:exception; this change is within the hard limits',
+    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
   ]);
 });
 

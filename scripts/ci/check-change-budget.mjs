@@ -4,9 +4,8 @@
  * PR metadata input contract:
  * - Connected runs use `gh pr view` for the open PR associated with the current branch.
  * - Offline runs set CHANGE_BUDGET_EXCEPTION=false when no exception label is present.
- * - Offline under-floor blocker exceptions use --exception or
- *   CHANGE_BUDGET_EXCEPTION=true together with CHANGE_BUDGET_PR_BODY containing
- *   the complete PR body and its `BLOCKER:` rationale.
+ * - The historical change-budget exception label is rejected. Hard limits are
+ *   intentionally not bypassable, and there is no minimum publication size.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -18,13 +17,13 @@ const ZERO_SHA = /^0+$/;
 
 export const CHANGE_BUDGET = Object.freeze({
   pullRequest: Object.freeze({
-    files: Object.freeze({ target: 25, maximum: 25 }),
-    lines: Object.freeze({ minimum: 800, target: 2_500, maximum: 2_500 }),
-    commits: Object.freeze({ target: 8, maximum: 8 }),
+    files: Object.freeze({ target: 15, maximum: 25 }),
+    lines: Object.freeze({ target: 1_500, maximum: 2_500 }),
+    commits: Object.freeze({ target: 5, maximum: 8 }),
   }),
   commit: Object.freeze({
-    files: Object.freeze({ target: 8, maximum: 15 }),
-    lines: Object.freeze({ target: 400, maximum: 800 }),
+    files: Object.freeze({ target: 15, maximum: 25 }),
+    lines: Object.freeze({ target: 800, maximum: 2_500 }),
   }),
 });
 
@@ -193,12 +192,6 @@ function compareMetric(scope, name, value, budget, warnings, violations) {
   }
 }
 
-function compareMinimum(scope, name, value, budget, violations) {
-  if (budget.minimum !== undefined && value < budget.minimum) {
-    violations.push(`${scope} has ${value} ${name}; minimum is ${budget.minimum}`);
-  }
-}
-
 export function evaluateChangeBudget(stats) {
   const warnings = [];
   const violations = [];
@@ -209,13 +202,6 @@ export function evaluateChangeBudget(stats) {
     stats.files,
     CHANGE_BUDGET.pullRequest.files,
     warnings,
-    violations,
-  );
-  compareMinimum(
-    'PR',
-    'changed lines',
-    stats.lines,
-    CHANGE_BUDGET.pullRequest.lines,
     violations,
   );
   compareMetric(
@@ -382,57 +368,16 @@ export function resolvePullRequestMetadata({
   return metadata;
 }
 
-export function decideChangeBudget(stats, { exception = false, pullRequestBody = '' } = {}) {
+export function decideChangeBudget(stats, { exception = false } = {}) {
   const evaluation = evaluateChangeBudget(stats);
   if (!exception) return { ...evaluation, bypassed: [] };
-
-  const reason = extractExceptionReason(pullRequestBody);
-  if (!reason) {
-    return {
-      warnings: evaluation.warnings,
-      violations: [
-        ...evaluation.violations,
-        'change-budget:exception requires a non-empty "## Change-budget exception" PR section',
-      ],
-      bypassed: [],
-    };
-  }
-  const underPublicationFloor =
-    stats.lines < CHANGE_BUDGET.pullRequest.lines.minimum;
-  if (!underPublicationFloor) {
-    if (evaluation.violations.length === 0) {
-      return {
-        warnings: evaluation.warnings,
-        violations: ['remove change-budget:exception; this change is within the hard limits'],
-        bypassed: [],
-      };
-    }
-    return {
-      warnings: evaluation.warnings,
-      violations: [
-        ...evaluation.violations,
-        'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
-      ],
-      bypassed: [],
-    };
-  }
-  const floorViolation =
-    `PR has ${stats.lines} changed lines; minimum is ${CHANGE_BUDGET.pullRequest.lines.minimum}`;
-  const hardViolations = evaluation.violations.filter(violation => violation !== floorViolation);
-  if (!/^BLOCKER:\s+\S/i.test(reason)) {
-    return {
-      warnings: evaluation.warnings,
-      violations: [
-        ...hardViolations,
-        'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
-      ],
-      bypassed: [],
-    };
-  }
   return {
     warnings: evaluation.warnings,
-    violations: hardViolations,
-    bypassed: hardViolations.length === 0 ? [floorViolation] : [],
+    violations: [
+      ...evaluation.violations,
+      'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
+    ],
+    bypassed: [],
   };
 }
 
@@ -467,8 +412,8 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   );
   console.log(
     `PR limits: <=${CHANGE_BUDGET.pullRequest.files.maximum} files, ` +
-      `${CHANGE_BUDGET.pullRequest.lines.minimum}-${CHANGE_BUDGET.pullRequest.lines.maximum} lines; ` +
-      'bundle compatible work instead of publishing small PRs; ' +
+      `<=${CHANGE_BUDGET.pullRequest.lines.maximum} lines; ` +
+      'bundle compatible ready work without imposing a minimum size; ' +
       `<=${CHANGE_BUDGET.pullRequest.commits.maximum} commits`,
   );
   console.log(`Line-count exclusions: ${[...LINE_COUNT_EXCLUSIONS].join(', ')}`);

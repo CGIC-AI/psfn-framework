@@ -8,12 +8,6 @@
       "note": "This audit names the provider-protocol user prompt, not the human relationship role."
     },
     {
-      "path": "docs/orchestration-process.md",
-      "pattern": "generic-user",
-      "contains": "Intent: <the user/problem outcome in one sentence>",
-      "note": "This review template names the software requester, not a relationship role in the companion product."
-    },
-    {
       "path": "src/core/cogsec/intake-firewall-notice-templates.ts",
       "pattern": "relational-human",
       "contains": "'being kept aside for your human to look over',",

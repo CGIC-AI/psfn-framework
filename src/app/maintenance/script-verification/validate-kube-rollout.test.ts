@@ -106,8 +106,9 @@ if (joined.includes('cat /app/contract-hash.txt')) {
   out('contracthash01\n');
 }
 
-// The full-fleet owner preflight runs inside the gateway, the one workload that
-// mounts every system and companion owner root at its canonical path.
+// The full-fleet owner preflight runs inside the gateway, the rollout target
+// that mounts every system and companion owner root at its canonical path and
+// holds the direct database wiring.
 if (joined.includes('exec') && joined.includes('preflight-owner-file-modes')) {
   if (typeof fixture.ownerPreflightFailure === 'string') {
     fail(fixture.ownerPreflightFailure + '\n');

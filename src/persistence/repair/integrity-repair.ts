@@ -1,8 +1,10 @@
 import {
   closeSync,
+  constants,
   copyFileSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -99,12 +101,27 @@ function syncDirectoryDurable(dirPath: string): void {
   }
 }
 
-/** Append one JSON line and fsync it (and the directory on first creation). */
+/** Create a directory (if needed) and fsync it and its parent. */
+function mkdirDurable(dirPath: string): void {
+  mkdirSync(dirPath, { recursive: true });
+  syncDirectoryDurable(dirPath);
+  syncDirectoryDurable(dirname(dirPath));
+}
+
+function writeLineFully(descriptor: number, line: string): void {
+  const buffer = Buffer.from(line, 'utf8');
+  let offset = 0;
+  while (offset < buffer.length) {
+    offset += writeSync(descriptor, buffer, offset, buffer.length - offset);
+  }
+}
+
+/** Append one JSON line fully and fsync it (and the directory on first creation). */
 function appendJsonLineDurable(filePath: string, entry: unknown): void {
   const created = !existsSync(filePath);
   const descriptor = openSync(filePath, 'a');
   try {
-    writeSync(descriptor, `${JSON.stringify(entry)}\n`);
+    writeLineFully(descriptor, `${JSON.stringify(entry)}\n`);
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
@@ -140,12 +157,25 @@ export function resolveJournalBackupPath(
   return backupPath;
 }
 
-/** Raw pre-repair copy, fsync-durable before any destructive rewrite begins. */
+/**
+ * Raw pre-repair copy, fsync-durable before any destructive rewrite begins.
+ * Fail closed twice over: the source must be a regular file (a symlink could
+ * resolve lexically inside the sessions root while its bytes live outside),
+ * and the backup must not already exist — silently trusting a pre-existing
+ * collision would let a stale or planted file masquerade as the raw evidence
+ * the receipt points at. The copy is exclusive, so a same-instant race loses
+ * loudly instead of winning.
+ */
 function ensureBackup(filePath: string, backupDir: string, sessionsDir: string): string {
+  if (!lstatSync(filePath).isFile()) {
+    throw new Error(`Refusing to back up a non-regular journal file: ${filePath}`);
+  }
   const backupPath = resolveJournalBackupPath(backupDir, sessionsDir, filePath);
-  if (existsSync(backupPath)) return backupPath;
+  if (existsSync(backupPath)) {
+    throw new Error(`Refusing to overwrite a pre-existing journal backup: ${backupPath}`);
+  }
   mkdirSync(dirname(backupPath), { recursive: true });
-  copyFileSync(filePath, backupPath);
+  copyFileSync(filePath, backupPath, constants.COPYFILE_EXCL);
   syncFileDurable(backupPath);
   syncDirectoryDurable(dirname(backupPath));
   return backupPath;
@@ -157,8 +187,9 @@ function ensureBackup(filePath: string, backupDir: string, sessionsDir: string):
  * directory (alongside the full pre-repair file copies, which preserve the raw
  * bytes) so the disposition survives even after the in-place `.quarantine`
  * sidecars are cleaned up by later canonical reads. Every record is
- * content-free: line number, byte length, parse reason, and safe
- * sessions-root/backup-relative identifiers — never row bytes or message text.
+ * content-free: line number, byte length, a stable reason code, and safe
+ * sessions-root/backup-relative identifiers — never row bytes, message text,
+ * or parser/error strings (Node JSON.parse errors can echo the raw data).
  *
  * Two-phase protocol: `prepared` rows are fsync-durable BEFORE any malformed
  * row can disappear from the chain; `completed` (or `aborted`) is appended
@@ -169,6 +200,21 @@ function ensureBackup(filePath: string, backupDir: string, sessionsDir: string):
 export const SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME = 'quarantine-receipts.jsonl';
 
 export type SessionQuarantineDispositionPhase = 'prepared' | 'completed' | 'aborted';
+
+/** Stable content-free classification of a malformed journal row. */
+export type SessionQuarantineMalformedReason = 'invalid_json' | 'invalid_journal_entry';
+
+/** Stable content-free failure code recorded when a rewrite aborts. */
+export const SESSION_QUARANTINE_ABORT_FAILURE_CODE = 'rewrite_transaction_failed';
+
+function classifyMalformedRow(raw: string): SessionQuarantineMalformedReason {
+  try {
+    JSON.parse(raw);
+  } catch {
+    return 'invalid_json';
+  }
+  return 'invalid_journal_entry';
+}
 
 let quarantineDispositionCounter = 0;
 
@@ -195,7 +241,7 @@ function writePreparedQuarantineDisposition(
         backupFile: relative(resolve(backupDir), resolveJournalBackupPath(backupDir, sessionsDir, filePath)),
         lineNumber: row.lineNumber,
         rawLength: row.raw.length,
-        reason: row.error,
+        reason: classifyMalformedRow(row.raw),
       } satisfies Record<string, unknown>);
     }
   }
@@ -206,7 +252,7 @@ function writeTerminalQuarantineDisposition(
   dispositionId: string,
   phase: 'completed' | 'aborted',
   rowCount: number,
-  errorMessage?: string,
+  failureCode?: string,
 ): void {
   const receiptsPath = join(backupDir, SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME);
   appendJsonLineDurable(receiptsPath, {
@@ -214,7 +260,7 @@ function writeTerminalQuarantineDisposition(
     phase,
     recordedAt: Date.now(),
     rowCount,
-    ...(errorMessage ? { errorMessage } : {}),
+    ...(failureCode ? { failure: failureCode } : {}),
   });
 }
 
@@ -332,12 +378,14 @@ export function rewriteJournalChainUnderLock(
     );
   } catch (error) {
     if (dispositionId) {
+      // Content-free: a stable failure code, never the error text — arbitrary
+      // error messages can echo the malformed row's raw bytes.
       writeTerminalQuarantineDisposition(
         backupDir,
         dispositionId,
         'aborted',
         quarantinedRows,
-        toErrorMessage(error),
+        SESSION_QUARANTINE_ABORT_FAILURE_CODE,
       );
     }
     throw error;
@@ -418,7 +466,9 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
   };
 
   try {
-    mkdirSync(params.backupDir, { recursive: true });
+    // The timestamped backup root is created once per run; make the creation
+    // itself durable before any file beneath it is relied on as evidence.
+    mkdirDurable(params.backupDir);
 
     const discovered = discoverSessionFileChains(params.sessionsDir);
     if (discovered.incompleteChains.length > 0) {

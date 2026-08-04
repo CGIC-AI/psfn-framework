@@ -81,6 +81,10 @@ import {
 } from './context-history-assembly.js';
 import { buildContinuityMetadataBlock } from './continuity-metadata-block.js';
 import { createRolledOutSessionBoundary } from '../rolled-out-session-boundary.js';
+import {
+  buildActiveTemporalFrame,
+  type ActiveTemporalFrameConfig,
+} from '../active-temporal-frame.js';
 
 export { assembleSessionHistoryForContextWithLlmSummary } from './context-history-assembly.js';
 
@@ -162,6 +166,8 @@ export interface CaptureTurnSessionContextParams {
    * recipient's current presence window.
    */
   roomContentWindow?: RoomContentWindow;
+  /** Latest-only temporal frame derived for an actual active model turn. */
+  activeTemporalFrame?: ActiveTemporalFrameConfig;
 }
 
 /**
@@ -297,6 +303,18 @@ export async function captureTurnSessionContext(
     .getCompactionSummaries(params.channelId)
     .filter(summary => !roomWindowGated || summary.createdAt >= roomWindowFloor)
     .map(summary => summary.summary);
+  const orientation = params.activeTemporalFrame
+    ? buildActiveTemporalFrame({
+      ...params.activeTemporalFrame,
+      channelId: params.channelId,
+      sourceChannelId: params.sourceChannelId,
+      channelMeta: params.channelMeta,
+      recentEntries: presenceWindowEntries,
+      ...(params.excludeSessionEntryId !== undefined
+        ? { currentTurnEntryId: params.excludeSessionEntryId }
+        : {}),
+    })
+    : undefined;
   return {
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
@@ -330,6 +348,7 @@ export async function captureTurnSessionContext(
     focusKnowledgeTexts: [...effectiveFocusKnowledgeTexts],
     continuityEntries: continuityEntries.map(cloneSessionEntry),
     wakeReturnArtifacts: effectiveWakeReturnArtifacts.map(cloneSessionContinuityArtifact),
+    ...(orientation ? { orientation } : {}),
     intentionAppraisalArtifactCount,
     compactionPromptText: params.compactionPromptText,
     versionPointer: buildSnapshotVersionPointer([
@@ -353,6 +372,10 @@ export async function captureTurnSessionContext(
       effectiveWakeReturnArtifacts.at(0)?.createdAt,
       effectiveWakeReturnArtifacts.at(0)?.summary,
       effectiveWakeReturnArtifacts.at(0)?.nextAnchor,
+      orientation?.observedAt,
+      orientation?.lastActivityAt,
+      orientation?.idleGapMs,
+      orientation?.noteText,
       params.compactionPromptText,
     ]),
   };
@@ -622,6 +645,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     channelIds: cogSecNoticeChannelIds,
     limit: 5,
   });
+  const orientationSectionText = params.turnSessionContext.orientation?.fired
+    ? params.turnSessionContext.orientation.noteText?.trim() ?? ''
+    : '';
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
@@ -640,6 +666,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     {
       id: 'session.focus_knowledge' as PromptRuntimeSystemPromptBlockId,
       content: focusKnowledgeSectionText,
+    },
+    {
+      id: 'session.orientation' as PromptRuntimeSystemPromptBlockId,
+      content: orientationSectionText,
     },
     {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
@@ -787,6 +817,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           section: 'compaction_summary',
           tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
         },
+        { section: 'orientation', tokenCount: countTokens(orientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
         { section: 'cogsec_notices', tokenCount: countTokens(cogSecNoticeSectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
@@ -855,6 +886,23 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         safeAsPartnerSpeech: false,
         sourceSpanCount: focusKnowledgeTexts.length || undefined,
         notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }),
+    },
+    {
+      id: 'wake_orientation',
+      title: 'Active Temporal Frame',
+      content: orientationSectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'system_note',
+        sourceAuthor: 'system',
+        transformedBy: 'runtime',
+        wording: 'direct',
+        directSpeech: false,
+        detailLoss: 'none',
+        emotionalTexture: 'preserved',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: orientationSectionText ? 1 : undefined,
+        notes: ['Ephemeral active-turn temporal frame; not a persisted session message.'],
       }),
     },
     {

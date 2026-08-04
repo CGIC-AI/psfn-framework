@@ -562,9 +562,10 @@ describe('SessionManager', () => {
     ].join('\n'));
   });
 
-  it('does not add wake orientation after a meaningful idle gap', async () => {
+  it('delivers one latest temporal frame on the next active turn without appending a journal row', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
+    mgr.configureActiveTemporalFrame({ enabled: true, minIdleMs: 2 * 60 * 60_000 });
     const previousAt = Date.parse('2026-06-10T23:30:00-04:00');
     const currentAt = Date.parse('2026-06-11T08:30:00-04:00');
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
@@ -580,7 +581,7 @@ describe('SessionManager', () => {
         authorName: 'Companion',
         timestamp: previousAt,
       });
-      store.append({
+      const currentEntryId = store.append({
         channelId: 'api:main',
         role: 'user',
         content: 'Please keep the visibility work focused.',
@@ -633,19 +634,42 @@ describe('SessionManager', () => {
         createdAt: new Date(currentAt - 500).toISOString(),
       });
 
-      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'u1' });
-      expect(snapshot.orientation).toBeUndefined();
+      const durableCountBeforeContext = mgr.getRecentMessages('api:main', 20).length;
+      const snapshot = await mgr.captureTurnSessionContext({
+        channelId: 'api:main',
+        userId: 'u1',
+        excludeSessionEntryId: currentEntryId,
+      });
+      expect(snapshot.orientation).toMatchObject({
+        fired: true,
+        reason: 'idle_gap_exceeded',
+        observedAt: currentAt,
+        lastActivityAt: previousAt,
+        idleGapMs: currentAt - previousAt,
+      });
 
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
       expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
-      expect(ctx.systemPrompt).not.toContain('<time_texture_');
+      expect(ctx.systemPrompt).toContain('<temporal_frame_update');
+      expect(ctx.systemPrompt).toContain('<last_activity_at_iso>2026-06-10T23:30:00.000-04:00</last_activity_at_iso>');
+      expect(ctx.systemPrompt).toContain('<elapsed_since_last_activity_ms>32400000</elapsed_since_last_activity_ms>');
+      expect(ctx.systemPrompt).toContain('runtime.current_datetime');
       expect(ctx.systemPrompt).not.toContain('<reconnection_warmth_');
       expect(ctx.systemPrompt).not.toContain('perform affection');
+      expect(ctx.messages.some(message => message.content.includes('temporal_frame_update'))).toBe(false);
+      expect(mgr.getRecentMessages('api:main', 20)).toHaveLength(durableCountBeforeContext);
       // Live cross-channel rendering is metadata-only (u8iv strip-content).
       expect(ctx.systemPrompt).not.toContain('The visibility audit is still open in the side thread.');
       expect(ctx.systemPrompt).not.toContain('Open threads');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection).toBeUndefined();
+      expect(orientationSection?.content).toContain('<temporal_frame_update');
+      expect(orientationSection?.provenance).toMatchObject({
+        kind: 'system_note',
+        sourceAuthor: 'system',
+        transformedBy: 'runtime',
+        wording: 'direct',
+        safeAsPartnerSpeech: false,
+      });
       const focusSection = ctx.systemPromptSections.find(section => section.id === 'focus_knowledge');
       expect(focusSection?.content).not.toContain('kind="extraction_artifact"');
       expect(focusSection?.content).toContain('[Prompt visibility] Keep the prompt stack visible and sortable.');
@@ -662,6 +686,44 @@ describe('SessionManager', () => {
         kind: 'projection',
         safeAsPartnerSpeech: false,
       });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('uses the true latest prior entry when the active turn defers current-row persistence', async () => {
+    const mgr = new SessionManager(store, makeConfig({ dataDir: dir }));
+    mgr.configureActiveTemporalFrame({ enabled: true, minIdleMs: 2 * 60 * 60_000 });
+    const nowMs = Date.parse('2026-06-11T08:30:00.000Z');
+    const oldPriorAt = nowMs - 9 * 60 * 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+
+    try {
+      store.append({
+        channelId: 'api:deferred',
+        role: 'assistant',
+        content: 'Nine hours earlier',
+        timestamp: oldPriorAt,
+      });
+
+      // Vision/ICP-style capture: the current inbound row does not exist yet,
+      // so there is no excludeSessionEntryId.
+      const idleSnapshot = await mgr.captureTurnSessionContext({ channelId: 'api:deferred' });
+      expect(idleSnapshot.orientation).toMatchObject({
+        fired: true,
+        lastActivityAt: oldPriorAt,
+        idleGapMs: nowMs - oldPriorAt,
+      });
+
+      const recentPriorAt = nowMs - 10 * 60_000;
+      store.append({
+        channelId: 'api:deferred',
+        role: 'user',
+        content: 'Ten minutes earlier',
+        timestamp: recentPriorAt,
+      });
+      const recentSnapshot = await mgr.captureTurnSessionContext({ channelId: 'api:deferred' });
+      expect(recentSnapshot.orientation).toBeUndefined();
     } finally {
       nowSpy.mockRestore();
     }

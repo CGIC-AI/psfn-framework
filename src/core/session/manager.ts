@@ -95,6 +95,7 @@ import type {
 } from './manager/contracts.js';
 import { AutoCompactionLane } from './manager/auto-compaction-lane.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
+import type { ActiveTemporalFrameConfig } from './active-temporal-frame.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -280,6 +281,7 @@ export class SessionManager implements SessionManagerTypeSurface {
   private pendingAutoCompactions = new Map<string, Promise<void>>();
   private backgroundWorkHandoffRecovery: BackgroundWorkHandoffRecovery;
   private continuityStoreRef: UserContinuityStore | null = null;
+  private activeTemporalFrameConfig: ActiveTemporalFrameConfig | null = null;
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
@@ -634,6 +636,21 @@ export class SessionManager implements SessionManagerTypeSurface {
       return this.store.listSessionsByRecentActivity(20, offset);
     }
     return this.store.listSessionsByRecentActivity(limit, offset);
+  }
+
+  /**
+   * Install scheduler.json's idle-frame policy at the session-context owner.
+   * The frame is derived only while assembling a real turn; no scheduler tick
+   * or inactive channel writes a session row.
+   */
+  configureActiveTemporalFrame(config: ActiveTemporalFrameConfig): void {
+    if (!Number.isFinite(config.minIdleMs) || config.minIdleMs < 0) {
+      throw new Error('Active temporal frame minIdleMs must be a finite non-negative number');
+    }
+    this.activeTemporalFrameConfig = {
+      enabled: config.enabled,
+      minIdleMs: Math.floor(config.minIdleMs),
+    };
   }
 
   /**
@@ -1465,6 +1482,9 @@ export class SessionManager implements SessionManagerTypeSurface {
       llmProvider: input.llmProvider,
       promptRegistry: this.promptRegistry,
       roomContentWindow: this.resolveRoomContentWindow(resolvedChannelId),
+      ...(this.activeTemporalFrameConfig
+        ? { activeTemporalFrame: this.activeTemporalFrameConfig }
+        : {}),
       ...(input.excludeSessionEntryId !== undefined
         ? { excludeSessionEntryId: input.excludeSessionEntryId }
         : {}),

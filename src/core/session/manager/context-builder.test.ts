@@ -329,7 +329,7 @@ describe('orientation context surface wiring', () => {
     expect(JSON.stringify(snapshot)).not.toContain(currentContent);
   });
 
-  it('does not assemble the retired wake-orientation prompt block', () => {
+  it('assembles only the neutral active-turn temporal frame, never the retired continuity anchor', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
     const continuityMetadataSource = readFileSync(
       resolve('src/core/session/manager/continuity-metadata-block.ts'),
@@ -342,9 +342,10 @@ describe('orientation context surface wiring', () => {
     expect(builderSource).not.toContain('<continuity_anchor authority="companion_context"');
     expect(builderSource).toContain('buildContinuityMetadataBlock(');
     expect(continuityMetadataSource).toContain('<cross_channel_continuity authority="retrieved_context"');
-    expect(builderSource).not.toContain("id: 'session.orientation'");
+    expect(builderSource).toContain('buildActiveTemporalFrame(');
+    expect(builderSource).toContain("id: 'session.orientation'");
     expect(builderSource).toContain("id: 'session.cogsec_notices'");
-    expect(builderSource).not.toContain("id: 'wake_orientation'");
+    expect(builderSource).toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
     expect(manifestSource).toContain("| 'cogsec_notices'");
   });

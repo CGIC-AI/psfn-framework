@@ -75,3 +75,13 @@ test('session recovery route wires the initial loader to onMount', () => {
   const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf-8');
   assert.match(source, /onMount\(\(\) => \{\s*void loadRoutes\(\);\s*\}\);/s);
 });
+
+test('session recovery exposes every known channel in a visible selector while retaining manual input', () => {
+  const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf-8');
+
+  assert.match(source, /const sourceChannelOptions = \$derived\([\s\S]*routes\.map[\s\S]*channels\.map/);
+  assert.match(source, /<select[\s\S]*id="known-source-channel"[\s\S]*\{#each sourceChannelOptions as channelId\}/);
+  assert.match(source, /onchange=\{\(event\) => \{[\s\S]*selectedSourceChannelId = event\.currentTarget\.value/);
+  assert.match(source, /<input[\s\S]*id="source-channel"[\s\S]*bind:value=\{selectedSourceChannelId\}/);
+  assert.doesNotMatch(source, /<datalist/);
+});

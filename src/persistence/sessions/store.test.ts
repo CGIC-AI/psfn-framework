@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from '../journals/journal-utils.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { runSessionIntegrityRepair } from '../repair/integrity-repair.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
@@ -1363,6 +1364,93 @@ describe('SessionStore', () => {
         && record.message.includes(malformedChannel)
         && record.message.includes('EBADMSG'));
     expect(malformedWarnings).toHaveLength(2);
+  });
+
+  it('recovers a malformed owner cleanly after the canonical quarantine repair, with no recurring EBADMSG warning', async () => {
+    const channelId = 'api:recovery-repair-disposition';
+    const turnId = createTurnId(1_700_000_042_000);
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'owner',
+      timestamp: 1_700_000_042_000,
+      turnId,
+    });
+    const journalPath = findSessionJournalPath(dir, 'recovery-repair-disposition');
+    appendFileSync(journalPath, '{not-json}\n');
+    const record: TurnRecord = {
+      ...buildTurnRecordFixture(channelId, 0, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+
+    // Pre-repair: the owner is skipped fail-closed and every pass re-warns.
+    const corruptedStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+    clearDiagnosticLogRingBufferForTests();
+    expect(await collectRecoverableRecords(corruptedStore, [channelId])).toEqual([]);
+    expect(getRecentDiagnosticLogRecords().filter(entry => (
+      entry.component === 'SessionStore'
+      && entry.message.includes(channelId)
+      && entry.message.includes('EBADMSG')
+    ))).toHaveLength(1);
+
+    // Canonical maintenance path: quarantine the malformed row with a durable
+    // audit receipt (psfn-framework-8xc4k).
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:recovery-repair-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const auditRecords: Array<{ event: string; details: Record<string, unknown> }> = [];
+    const backupDir = join(dir, 'repair-backups');
+    const report = runSessionIntegrityRepair({
+      sessionsDir: dir,
+      backupDir,
+      keyring: keyring!,
+      repoRoot: dir,
+      reason: 'psfn-framework-8xc4k test disposition',
+      audit: {
+        append: (event, details) => {
+          auditRecords.push({ event, details });
+        },
+      },
+    });
+    expect(report.journal.quarantinedRows).toBe(1);
+    expect(auditRecords).toHaveLength(1);
+    expect(auditRecords[0]!.details).toMatchObject({ outcome: 'completed', quarantinedRows: 1 });
+    const receipts = readFileSync(join(backupDir, 'quarantine-receipts.jsonl'), 'utf8')
+      .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ rawLength: '{not-json}'.length });
+
+    // Restart-equivalent: a fresh store over the repaired dir recovers the
+    // owner's valid handoff and emits no EBADMSG warning for it.
+    const repairedStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+    clearDiagnosticLogRingBufferForTests();
+    expect((await collectRecoverableRecords(repairedStore, [channelId]))
+      .map(recovered => recovered.turnId)).toEqual([turnId]);
+    expect(getRecentDiagnosticLogRecords().filter(entry => (
+      entry.component === 'SessionStore'
+      && entry.message.includes(channelId)
+      && entry.message.includes('EBADMSG')
+    ))).toEqual([]);
+
+    // The disposition is terminal: a second repair run quarantines nothing.
+    const secondReport = runSessionIntegrityRepair({
+      sessionsDir: dir,
+      backupDir,
+      keyring: keyring!,
+      repoRoot: dir,
+      reason: 'psfn-framework-8xc4k idempotence probe',
+    });
+    expect(secondReport.journal).toMatchObject({
+      modifiedFiles: 0,
+      modifiedEntries: 0,
+      quarantinedRows: 0,
+    });
   });
 
   it('defers a repeatedly changing owner until a later quiet recovery pass', async () => {

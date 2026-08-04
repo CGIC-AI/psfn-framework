@@ -15,6 +15,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { parseJournalText } from './file-io.js';
+import type { QuarantinedJournalEntry } from './types.js';
 
 const CHAIN_REWRITE_MANIFEST_SUFFIX = '.chain-rewrite-manifest.json';
 
@@ -83,10 +84,25 @@ function assertRedactionOnlyRewrite(
   }
 }
 
+/**
+ * Disposition hook for malformed (unparseable) rows found on disk during a
+ * chain rewrite. Malformed rows are not canonical entries: they carry no id,
+ * no authorship, and no HMAC chain linkage, so dropping them while preserving
+ * every parseable entry is integrity-preserving rather than a history rewrite.
+ * The hook is invoked with the exact disk-derived rows so the caller can record
+ * a durable quarantine receipt; when no hook is supplied the rewrite fails
+ * closed, exactly as before.
+ */
+export type MalformedRowQuarantineHook = (
+  targetPath: string,
+  quarantined: readonly QuarantinedJournalEntry[],
+) => void;
+
 function assertRedactionOnlyChainRewrite(
   targetPaths: readonly string[],
   replacementByTarget: readonly (readonly JournalEntry[])[],
   renewLease?: () => void,
+  onMalformedRowQuarantine?: MalformedRowQuarantineHook,
 ): void {
   targetPaths.forEach((targetPath, index) => {
     // Derive the originals from disk, never from the caller: trusting a
@@ -94,9 +110,15 @@ function assertRedactionOnlyChainRewrite(
     // redaction by claiming the replacement is already the original.
     const parsed = parseJournalText(readFileSync(targetPath, 'utf8'));
     if (parsed.quarantined.length > 0) {
-      throw new Error(
-        `Refusing L0 chain rewrite over a malformed journal file: ${basename(targetPath)}`,
-      );
+      if (!onMalformedRowQuarantine) {
+        throw new Error(
+          `Refusing L0 chain rewrite over a malformed journal file: ${basename(targetPath)}`,
+        );
+      }
+      // Declared quarantine: hand the caller the disk-derived rows for its
+      // receipt. The parseable entries are still checked below, so a rewrite
+      // that alters any canonical entry keeps failing closed.
+      onMalformedRowQuarantine(targetPath, parsed.quarantined);
     }
     assertRedactionOnlyRewrite(parsed.entries, replacementByTarget[index]!, targetPath);
     renewLease?.();
@@ -328,6 +350,7 @@ export function rewriteJournalChainTransaction(params: {
   writeEntries: (filePath: string, entries: readonly JournalEntry[]) => void;
   renewLease?: () => void;
   onDurablePhase?: (phase: ChainRewriteManifest['phase']) => void;
+  onMalformedRowQuarantine?: MalformedRowQuarantineHook;
 }): void {
   if (params.targetPaths.length === 0 || params.targetPaths.length !== params.entriesByTarget.length) {
     throw new Error('L0 chain rewrite requires one non-empty entry set list aligned to target files');
@@ -360,7 +383,12 @@ export function rewriteJournalChainTransaction(params: {
   assertNoPendingJournalChainRewrite(rootPath);
   // Fail closed before any artifact is created if the replacement is not a
   // redaction/re-sign of the on-disk canonical entries.
-  assertRedactionOnlyChainRewrite(params.targetPaths, params.entriesByTarget, params.renewLease);
+  assertRedactionOnlyChainRewrite(
+    params.targetPaths,
+    params.entriesByTarget,
+    params.renewLease,
+    params.onMalformedRowQuarantine,
+  );
   const originalFingerprints = params.targetPaths.map(fingerprintTarget);
   const transactionId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const files = params.targetPaths.map((targetPath) => ({

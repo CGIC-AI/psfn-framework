@@ -384,6 +384,147 @@ describe('runSessionIntegrityRepair', () => {
       'segment prompt',
     ]);
   });
+
+  it('quarantines malformed rows durably while preserving every valid entry and its original sealing', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+
+    const filePath = join(harness.sessionsDir, '20260325_api-framed_user_000006.jsonl');
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'api:framed', role: 'user', content: 'framed one', timestamp: 1000,
+    }), keyring!, null);
+    const second = signJournalEntry(buildMessageJournalEntry(2, {
+      channelId: 'api:framed', role: 'assistant', content: 'framed two', timestamp: 2000,
+    }), keyring!, first._hmac ?? null);
+    const originalLines = `${JSON.stringify(first)}\n{not-json}\n${JSON.stringify(second)}\n`;
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, originalLines, 'utf8');
+
+    const audit = createAuditSpy();
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'psfn-framework-8xc4k handoff-recovery disposition',
+      audit,
+    });
+
+    // Quarantine-only: no entry needed re-signing, so no valid byte changed.
+    expect(report.journal.quarantinedRows).toBe(1);
+    expect(report.journal.modifiedEntries).toBe(0);
+    expect(report.journal.modifiedFiles).toBe(1);
+    expect(readFileSync(filePath, 'utf8')).toBe(
+      `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`,
+    );
+
+    // Durable receipt: one append-only line per quarantined row, content-free
+    // (the full pre-repair bytes live in the timestamped backup copy).
+    const receiptsPath = join(harness.backupDir, 'quarantine-receipts.jsonl');
+    const receipts = readFileSync(receiptsPath, 'utf8').trim().split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      filePath: expect.stringContaining('20260325_api-framed_user_000006.jsonl'),
+      lineNumber: 2,
+      rawLength: '{not-json}'.length,
+    });
+    expect(typeof receipts[0]!.reason).toBe('string');
+    expect(JSON.stringify(receipts[0])).not.toContain('framed one');
+    const backupCopy = readFileSync(
+      join(harness.backupDir, 'sessions', '20260325_api-framed_user_000006.jsonl'),
+      'utf8',
+    );
+    expect(backupCopy).toBe(originalLines);
+
+    // The run-level audit event carries the durable, content-free disposition.
+    expect(audit.records).toHaveLength(1);
+    expect(audit.records[0]!.details).toMatchObject({
+      outcome: 'completed',
+      quarantinedRows: 1,
+      modifiedEntries: 0,
+    });
+
+    // The chain still verifies and loads cleanly under integrity mode.
+    const store = new SessionStore(harness.sessionsDir, { integrityKeyring: keyring });
+    expect(store.getRecent('api:framed', 10).map(entry => entry.content)).toEqual([
+      'framed one',
+      'framed two',
+    ]);
+  });
+
+  it('combines malformed-row quarantine with re-signing in one pass', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+
+    const filePath = join(harness.sessionsDir, '20260325_api-mixedframe_user_000007.jsonl');
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, [
+      JSON.stringify(buildMessageJournalEntry(1, {
+        channelId: 'api:mixedframe', role: 'user', content: 'mixed one', timestamp: 1000,
+      })),
+      '{corrupt}',
+      JSON.stringify(buildMessageJournalEntry(2, {
+        channelId: 'api:mixedframe', role: 'assistant', content: 'mixed two', timestamp: 2000,
+      })),
+      '',
+    ].join('\n'), 'utf8');
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'test',
+    });
+
+    expect(report.journal.quarantinedRows).toBe(1);
+    expect(report.journal.modifiedEntries).toBe(2);
+    const store = new SessionStore(harness.sessionsDir, { integrityKeyring: keyring });
+    expect(store.getRecent('api:mixedframe', 10).map(entry => entry.content)).toEqual([
+      'mixed one',
+      'mixed two',
+    ]);
+  });
+
+  it('is idempotent: a second run finds no corruption and rewrites nothing', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+
+    const filePath = join(harness.sessionsDir, '20260325_api-idem_user_000008.jsonl');
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'api:idem', role: 'user', content: 'idem one', timestamp: 1000,
+    }), keyring!, null);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, `${JSON.stringify(first)}\nnot json at all\n`, 'utf8');
+
+    const run = () => runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'test',
+    });
+
+    const firstReport = run();
+    expect(firstReport.journal.quarantinedRows).toBe(1);
+    const afterFirst = readFileSync(filePath, 'utf8');
+
+    const secondReport = run();
+    expect(secondReport.journal).toMatchObject({
+      modifiedFiles: 0,
+      modifiedEntries: 0,
+      quarantinedRows: 0,
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(afterFirst);
+    // The receipt ledger is append-only per dispositioned row, not per run.
+    const receipts = readFileSync(join(harness.backupDir, 'quarantine-receipts.jsonl'), 'utf8')
+      .trim().split('\n');
+    expect(receipts).toHaveLength(1);
+  });
 });
 
 function createAuditSpy(): SessionIntegrityRepairAuditSink & {
@@ -455,13 +596,14 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
     expect(audit.records).toHaveLength(0);
   });
 
-  it('records the attempt and failed outcome when a later chain aborts a partially-applied run, then rethrows', () => {
+  it('records the attempt and failed outcome when discovery refuses an unsafe chain layout, then rethrows', () => {
     const harness = createHarness();
     const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
     expect(keyring).not.toBeNull();
 
-    // Chain "alpha" sorts first and re-signs cleanly; chain "bravo" carries a
-    // malformed line that aborts the run after alpha was already rewritten.
+    // Chain "alpha" is clean; the "bravo" file carries only a malformed row, so
+    // no channel id is recoverable and discovery classifies it as an incomplete
+    // chain. The refusal precedes any rewrite: fail closed, nothing modified.
     const alphaPath = join(harness.sessionsDir, '20260325_api-alpha_user_000001.jsonl');
     writeJournal(alphaPath, [
       buildMessageJournalEntry(1, { channelId: 'api:alpha', role: 'user', content: 'alpha one', timestamp: 1000 }),
@@ -469,10 +611,7 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
     ]);
     const bravoPath = join(harness.sessionsDir, '20260325_api-bravo_user_000002.jsonl');
     mkdirSync(dirname(bravoPath), { recursive: true });
-    const bravoValid = buildMessageJournalEntry(1, {
-      channelId: 'api:bravo', role: 'user', content: 'bravo one', timestamp: 1000,
-    });
-    writeFileSync(bravoPath, `${JSON.stringify(bravoValid)}\nNOT_VALID_JSON\n`, 'utf8');
+    writeFileSync(bravoPath, 'NOT_VALID_JSON\n', 'utf8');
 
     const audit = createAuditSpy();
     expect(() => runSessionIntegrityRepair({
@@ -482,7 +621,7 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
       repoRoot: harness.root,
       reason: 'operator re-sign after hotfix churn',
       audit,
-    })).toThrow(/malformed journal file/u);
+    })).toThrow(/Refusing integrity repair with incomplete L0 chains/u);
 
     expect(audit.records).toHaveLength(1);
     const [record] = audit.records;
@@ -490,12 +629,11 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
     expect(record.details.outcome).toBe('failed');
     expect(typeof record.details.errorMessage).toBe('string');
     expect(record.details.rebuiltChannelIndex).toBe(false);
-    // Partial progress is captured: alpha was already re-signed before bravo aborted.
-    expect(record.details.modifiedEntries).toBeGreaterThan(0);
-    expect(record.details.channelIds).toEqual(
-      expect.arrayContaining(['api:alpha', 'api:bravo']),
-    );
+    expect(record.details.modifiedEntries).toBe(0);
+    expect(record.details.quarantinedRows).toBe(0);
     expect(record.details.reason).toBe('operator re-sign after hotfix churn');
+    // Fail closed means exactly that: alpha was not rewritten either.
+    expect(readFileSync(alphaPath, 'utf8')).not.toContain('_hmac');
   });
 
   it('emits no record when no audit sink is wired (repair behavior unchanged)', () => {

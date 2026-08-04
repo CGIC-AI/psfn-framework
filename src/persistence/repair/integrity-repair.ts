@@ -6,6 +6,7 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { appendJsonLine } from '../jsonl.js';
 import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
@@ -14,6 +15,7 @@ import {
   verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import type { QuarantinedJournalEntry } from '../journals/journal/types.js';
 import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
 import { discoverSessionFileChains } from '../sessions/store/session-file-chains.js';
 import { withSessionJournalWriteLock } from '../sessions/store/session-journal-write-lock.js';
@@ -23,6 +25,13 @@ export interface SessionIntegrityRepairCounts {
   scannedFiles: number;
   modifiedFiles: number;
   modifiedEntries: number;
+  /**
+   * Malformed (unparseable) journal rows quarantined out of the L0 chain during
+   * the run. These rows are not canonical entries — no id, no authorship, no
+   * HMAC linkage — so removing them preserves the integrity of every valid
+   * entry while giving background-work handoff recovery a clean authority scan.
+   */
+  quarantinedRows: number;
 }
 
 export interface SessionIntegrityRepairReport {
@@ -77,6 +86,39 @@ function ensureBackup(filePath: string, backupDir: string, repoRoot: string): vo
   copyFileSync(filePath, backupPath);
 }
 
+/**
+ * Durable, append-only quarantine receipt for malformed rows a repair run
+ * removed from the L0 chain. Lives in the run's timestamped backup directory
+ * (alongside the full pre-repair file copies, which preserve the raw bytes) so
+ * the disposition survives even after the in-place `.quarantine` sidecars are
+ * cleaned up by later canonical reads. Rows are content-free apart from the
+ * parse reason: line number, byte length, and the backup file that holds the
+ * original bytes.
+ */
+export const SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME = 'quarantine-receipts.jsonl';
+
+function appendQuarantineReceipts(
+  backupDir: string,
+  repoRoot: string,
+  quarantinedByFile: ReadonlyMap<string, readonly QuarantinedJournalEntry[]>,
+): void {
+  if (quarantinedByFile.size === 0) return;
+  const receiptsPath = join(backupDir, SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME);
+  const quarantinedAt = Date.now();
+  for (const [filePath, rows] of quarantinedByFile) {
+    for (const row of rows) {
+      appendJsonLine(receiptsPath, {
+        quarantinedAt,
+        filePath: relative(repoRoot, filePath),
+        backupPath: relative(repoRoot, join(backupDir, relative(repoRoot, filePath))),
+        lineNumber: row.lineNumber,
+        rawLength: row.raw.length,
+        reason: row.error,
+      });
+    }
+  }
+}
+
 function rewriteJournalChainUnderLock(
   filePaths: readonly string[],
   keyring: SessionHmacKeyring,
@@ -84,15 +126,14 @@ function rewriteJournalChainUnderLock(
   repoRoot: string,
   archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
   renewLease: () => void,
-): { modifiedEntries: number; modifiedFiles: number } {
-  const originalEntriesByFile = filePaths.map((filePath) => {
+): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
+  const parsedByFile = filePaths.map((filePath) => {
     const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
     renewLease();
-    if (parsed.quarantined.length > 0) {
-      throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
-    }
-    return parsed.entries;
+    return { filePath, entries: parsed.entries, quarantined: parsed.quarantined };
   });
+  const originalEntriesByFile = parsedByFile.map(parsed => parsed.entries);
+  const quarantinedRows = parsedByFile.reduce((total, parsed) => total + parsed.quarantined.length, 0);
   let modifiedEntries = 0;
   let previousHmacCandidates: Array<string | null> = [null];
   for (const entries of originalEntriesByFile) {
@@ -114,7 +155,9 @@ function rewriteJournalChainUnderLock(
       previousHmacCandidates = nextCandidates.length > 0 ? nextCandidates : [null];
     }
   }
-  if (modifiedEntries <= 0) return { modifiedEntries: 0, modifiedFiles: 0 };
+  if (modifiedEntries <= 0 && quarantinedRows === 0) {
+    return { modifiedEntries: 0, modifiedFiles: 0, quarantinedRows: 0 };
+  }
 
   for (const filePath of filePaths) {
     ensureBackup(filePath, backupDir, repoRoot);
@@ -124,6 +167,12 @@ function rewriteJournalChainUnderLock(
   let previousHmac: string | null = null;
   const rewrittenByFile = originalEntriesByFile.map(entries => entries.map((entry) => {
     renewLease();
+    if (modifiedEntries <= 0) {
+      // Quarantine-only rewrite: every parseable entry already verifies, so the
+      // original sealing is preserved exactly. Dropping unparseable rows cannot
+      // break the chain — no entry's HMAC ever linked to them.
+      return entry;
+    }
     const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
     const signed = signJournalEntry(unsigned, keyring, previousHmac);
     previousHmac = signed._hmac ?? null;
@@ -137,8 +186,20 @@ function rewriteJournalChainUnderLock(
     firstEntry.channelId,
     filePath,
   ));
-  archivePort.rewriteJournalChain(archives, rewrittenByFile, renewLease);
-  return { modifiedEntries, modifiedFiles: filePaths.length };
+  // The chain-rewrite guard re-derives malformed rows from disk and hands them
+  // back through this hook, so the receipt reflects the bytes actually dropped
+  // rather than this run's earlier parse.
+  const quarantinedByFile = new Map<string, readonly QuarantinedJournalEntry[]>();
+  archivePort.rewriteJournalChain(
+    archives,
+    rewrittenByFile,
+    renewLease,
+    (targetPath, quarantined) => {
+      quarantinedByFile.set(targetPath, quarantined);
+    },
+  );
+  appendQuarantineReceipts(backupDir, repoRoot, quarantinedByFile);
+  return { modifiedEntries, modifiedFiles: filePaths.length, quarantinedRows };
 }
 
 function rewriteJournalChain(
@@ -146,9 +207,9 @@ function rewriteJournalChain(
   keyring: SessionHmacKeyring,
   backupDir: string,
   repoRoot: string,
-): { modifiedEntries: number; modifiedFiles: number } {
+): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
   const rootPath = filePaths[0];
-  if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0 };
+  if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0, quarantinedRows: 0 };
   const archivePort = createFilesystemSessionArchivePort();
   return withSessionJournalWriteLock(rootPath, (renewLease) => {
     archivePort.recoverJournalChainRewrite(rootPath);
@@ -186,6 +247,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     scannedFiles: 0,
     modifiedFiles: 0,
     modifiedEntries: 0,
+    quarantinedRows: 0,
   };
   const channelIds = new Set<string>();
   let rebuiltChannelIndex = false;
@@ -203,6 +265,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
       scannedFiles: journalReport.scannedFiles,
       modifiedFiles: journalReport.modifiedFiles,
       modifiedEntries: journalReport.modifiedEntries,
+      quarantinedRows: journalReport.quarantinedRows,
       rebuiltChannelIndex,
       ...extra,
     });
@@ -229,6 +292,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
       );
       journalReport.modifiedFiles += modified.modifiedFiles;
       journalReport.modifiedEntries += modified.modifiedEntries;
+      journalReport.quarantinedRows += modified.quarantinedRows;
     }
 
     rebuildSessionChannelIndex(params.sessionsDir);

@@ -73,7 +73,7 @@ function runCli(): Promise<unknown> {
       `Session integrity repair complete for ${runtime.dataDir}`,
       `Reason: ${options.reason ?? ''}`,
       `Backups: ${report.backupsDir}`,
-      `Journal files: scanned=${report.journal.scannedFiles} modified=${report.journal.modifiedFiles} entries=${report.journal.modifiedEntries}`,
+      `Journal files: scanned=${report.journal.scannedFiles} modified=${report.journal.modifiedFiles} entries=${report.journal.modifiedEntries} quarantinedRows=${report.journal.quarantinedRows}`,
       `Session channel index rebuilt: ${report.rebuiltChannelIndex ? 'yes' : 'no'}`,
     ],
   });

@@ -36,6 +36,7 @@ import {
   listPendingJournalChainRewriteRoots,
   recoverJournalChainRewrite,
   rewriteJournalChainTransaction,
+  type MalformedRowQuarantineHook,
 } from './chain-transaction.js';
 
 export interface SessionJournalPort {
@@ -102,6 +103,7 @@ export interface SessionArchivePort {
     handles: readonly SessionArchiveHandle[],
     entriesByHandle: readonly (readonly JournalEntry[])[],
     renewLease?: () => void,
+    onMalformedRowQuarantine?: MalformedRowQuarantineHook,
   ): void;
   assertJournalChainReadable(handles: readonly SessionArchiveHandle[]): void;
   listPendingJournalChainRewriteRoots(sessionsDir: string): string[];
@@ -174,13 +176,14 @@ export function createFilesystemSessionArchivePort(
     writeJournalFile: (handle, entries) => (
       journalPort.writeJournalFile(requireFilesystemHandle(handle).filePath, entries)
     ),
-    rewriteJournalChain: (handles, entriesByHandle, renewLease) => {
+    rewriteJournalChain: (handles, entriesByHandle, renewLease, onMalformedRowQuarantine) => {
       const targetPaths = handles.map(handle => requireFilesystemHandle(handle).filePath);
       rewriteJournalChainTransaction({
         targetPaths,
         entriesByTarget: entriesByHandle,
         writeEntries: journalPort.writeJournalFile,
         renewLease,
+        ...(onMalformedRowQuarantine ? { onMalformedRowQuarantine } : {}),
       });
     },
     assertJournalChainReadable: (handles) => {

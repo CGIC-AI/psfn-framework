@@ -540,6 +540,12 @@ describe('intake policy owner file', () => {
     expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
     expect(policy.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
     expect(policy.sinkGates.sinks.skill_write.unscreened).toBe('deny');
+    expect(policy.sinkGates.benignClasses).toEqual({
+      beads_database_create: [{
+        ruleId: 'persona_mutation_request',
+        riskLabels: ['persona/mutation_attempt'],
+      }],
+    });
     // qg13: per-sink unscreened posture. Durable prompt-bearing self-authored
     // sinks + the security-sensitive trust sink fail closed on unscreened
     // content; the high-volume inform/derived sinks stay allow (justified).
@@ -677,6 +683,60 @@ describe('intake policy owner file', () => {
       },
       INTAKE_POLICY_FILE_NAME,
     )).toThrow(/unscreened must be one of: allow, deny/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          benignClasses: {
+            invented_class: [{
+              ruleId: 'persona_mutation_request',
+              riskLabels: ['persona/mutation_attempt'],
+            }],
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/unsupported benign classes: invented_class/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          benignClasses: {
+            beads_database_create: [{
+              ruleId: 'persona_mutation_request',
+              riskLabels: ['injection/override_attempt'],
+            }],
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/cannot suppress risk label 'injection\/override_attempt'/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          benignClasses: {
+            beads_database_create: [{
+              ruleId: 'role_hijack',
+              riskLabels: ['persona/mutation_attempt'],
+            }],
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/cannot suppress rule 'role_hijack'/);
+
+    const { benignClasses: _benignClasses, ...sinkGatesWithoutBenignClasses } = policy.sinkGates;
+    expect(validateIntakePolicy(
+      { ...policy, sinkGates: sinkGatesWithoutBenignClasses },
+      INTAKE_POLICY_FILE_NAME,
+    ).sinkGates.benignClasses).toEqual({});
 
     const { untrusted: _tier, ...partialTrifecta } = policy.sinkGates.trifecta.enforcementByTier;
     expect(() => validateIntakePolicy(

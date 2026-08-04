@@ -540,6 +540,34 @@ export function isIntakeUnscreenedDenyRequiredSink(sink: IntakeSink): boolean {
 }
 
 /**
+ * Provenance-bound internal result classes whose narrow false-positive
+ * suppressions can be enabled in intake-policy.json. The runtime classifier
+ * must prove one of these closed classes before policy can suppress anything.
+ */
+export const INTAKE_BENIGN_CLASSES = ['beads_database_create'] as const;
+export type IntakeBenignClass = typeof INTAKE_BENIGN_CLASSES[number];
+
+export interface IntakeBenignClassRuleSuppression {
+  ruleId: string;
+  riskLabels: IntakeRiskLabel[];
+}
+
+export type IntakeBenignClassesPolicyConfig = Partial<Record<
+  IntakeBenignClass,
+  IntakeBenignClassRuleSuppression[]
+>>;
+
+const INTAKE_BENIGN_CLASS_SUPPRESSIONS: Readonly<Record<
+  IntakeBenignClass,
+  readonly IntakeBenignClassRuleSuppression[]
+>> = {
+  beads_database_create: [{
+    ruleId: 'persona_mutation_request',
+    riskLabels: ['persona/mutation_attempt'],
+  }],
+};
+
+/**
  * Canonical policy introduced with intake-policy schema v2 for durable,
  * prompt-bearing managed skill writes. Kept here so the explicit v1 -> v2
  * owner migration and its tests cannot drift from the runtime contract.
@@ -571,6 +599,8 @@ export function createSkillWriteSinkRule(): IntakeSinkRuleConfig {
 }
 
 export interface IntakeSinkGatesPolicyConfig {
+  /** Optional, fail-closed allowlist: absent classes suppress nothing. */
+  benignClasses: IntakeBenignClassesPolicyConfig;
   /** Every consequential sink must be mapped explicitly — no implicit defaults. */
   sinks: Record<IntakeSink, IntakeSinkRuleConfig>;
   trifecta: {
@@ -1029,11 +1059,80 @@ function validateTrifectaEnforcement(
   return value;
 }
 
+function validateBenignClasses(
+  raw: unknown,
+  sourcePath: string,
+): IntakeBenignClassesPolicyConfig {
+  if (raw === undefined) return {};
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'sinkGates.benignClasses must be an object');
+  }
+  const unknownClasses = Object.keys(raw)
+    .filter((key) => !(INTAKE_BENIGN_CLASSES as readonly string[]).includes(key));
+  if (unknownClasses.length > 0) {
+    throw invalid(
+      sourcePath,
+      `sinkGates.benignClasses has unsupported benign classes: ${unknownClasses.join(', ')}`,
+    );
+  }
+  const result: IntakeBenignClassesPolicyConfig = {};
+  for (const benignClass of INTAKE_BENIGN_CLASSES) {
+    const configured = raw[benignClass];
+    if (configured === undefined) continue;
+    if (!Array.isArray(configured) || configured.length === 0) {
+      throw invalid(
+        sourcePath,
+        `sinkGates.benignClasses.${benignClass} must list at least one suppression`,
+      );
+    }
+    const allowed = INTAKE_BENIGN_CLASS_SUPPRESSIONS[benignClass];
+    const configuredRuleIds = new Set<string>();
+    const suppressions = configured.map((entry, index) => {
+      const field = `sinkGates.benignClasses.${benignClass}[${String(index)}]`;
+      if (!isRecord(entry)) {
+        throw invalid(sourcePath, `${field} must be an object`);
+      }
+      const unknownKeys = Object.keys(entry)
+        .filter((key) => !['ruleId', 'riskLabels'].includes(key));
+      if (unknownKeys.length > 0) {
+        throw invalid(sourcePath, `${field} has unsupported keys: ${unknownKeys.join(', ')}`);
+      }
+      if (typeof entry.ruleId !== 'string' || !entry.ruleId.trim()) {
+        throw invalid(sourcePath, `${field}.ruleId must be a non-empty string`);
+      }
+      if (configuredRuleIds.has(entry.ruleId)) {
+        throw invalid(sourcePath, `${field}.ruleId duplicates '${entry.ruleId}'`);
+      }
+      configuredRuleIds.add(entry.ruleId);
+      const riskLabels = validateDenyRiskLabels(entry.riskLabels, sourcePath, `${field}.riskLabels`);
+      const approved = allowed.find((candidate) => candidate.ruleId === entry.ruleId);
+      if (!approved) {
+        throw invalid(
+          sourcePath,
+          `${field} cannot suppress rule '${entry.ruleId}'`,
+        );
+      }
+      if (riskLabels.length === 0) {
+        throw invalid(sourcePath, `${field}.riskLabels must not be empty`);
+      }
+      for (const label of riskLabels) {
+        if (!approved.riskLabels.includes(label)) {
+          throw invalid(sourcePath, `${field} cannot suppress risk label '${label}'`);
+        }
+      }
+      return { ruleId: entry.ruleId, riskLabels };
+    });
+    result[benignClass] = suppressions;
+  }
+  return result;
+}
+
 function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'sinkGates must be an object');
   }
-  const unknownKeys = Object.keys(raw).filter((key) => !['sinks', 'trifecta'].includes(key));
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !['benignClasses', 'sinks', 'trifecta'].includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `sinkGates has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -1071,6 +1170,7 @@ function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPol
     throw invalid(sourcePath, `sinkGates.trifecta has unsupported keys: ${unknownTrifectaKeys.join(', ')}`);
   }
   return {
+    benignClasses: validateBenignClasses(raw.benignClasses, sourcePath),
     sinks,
     trifecta: {
       enforcementByTier: validateTierRecord(

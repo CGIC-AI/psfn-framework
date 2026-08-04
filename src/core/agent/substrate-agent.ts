@@ -710,12 +710,13 @@ export class SubstrateAgent {
       // loop unscreened. Resolved lazily: composition assigns
       // sessionManager.intakeScreening after construction; a null service
       // means the firewall is off for this runtime.
-      toolResultScreener: ({ toolName, toolCallId, text }) => {
+      toolResultScreener: ({ toolName, toolCallId, arguments: toolArguments, text }) => {
         const screening = this.sessionManager.intakeScreening;
         if (!screening) return null;
         const toolCallSuffix = toolCallId.trim() ? `:${toolCallId.trim()}` : '';
         const screened = screening.screenSync(text, {
           sourceClass: 'tool_output',
+          toolResultProvenance: { toolName, arguments: toolArguments },
           origin: {
             ref: `tool:${toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
             detail: 'seam:tool-scheduler',

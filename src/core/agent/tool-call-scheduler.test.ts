@@ -1393,6 +1393,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     expect(screener).toHaveBeenCalledWith({
       toolName: 'fs',
       toolCallId: 'call-1',
+      arguments: {},
       text: HOSTILE_TEXT,
     });
     const message = result.toolResults[0] as ToolResultMessage;
@@ -1501,6 +1502,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     expect(screener).toHaveBeenCalledWith({
       toolName: 'fs',
       toolCallId: 'call-1',
+      arguments: {},
       text: '',
     });
     expect(JSON.stringify((result.toolResults[0] as ToolResultMessage).content))

@@ -20,7 +20,8 @@ describe('buildMemorySubjectAuthorizationPredicate', () => {
 
     expect(predicate.sql).toContain('classification.memory_revision = candidate.authorization_revision');
     expect(predicate.sql).toContain('classification.evidence_digest = candidate.subject_evidence_digest');
-    expect(predicate.sql).toContain("classification.subject_class NOT IN ('ambiguous', 'unattributed', 'unbound_person')");
+    expect(predicate.sql).not.toContain('classification.subject_class NOT IN');
+    expect(predicate.sql).toContain('classification.subject_class = ANY');
     expect(predicate.sql).toContain('subject_contact.contact_id = ANY');
     expect(predicate.sql).toContain('grant_binding."memoryRevision" = classification.memory_revision');
     expect(predicate.values).toEqual([
@@ -36,6 +37,23 @@ describe('buildMemorySubjectAuthorizationPredicate', () => {
       }]),
       false,
     ]);
+  });
+
+  it('keeps unresolved subject classes behind the explicit class and no-contact relation allowlists', () => {
+    const predicate = buildMemorySubjectAuthorizationPredicate({
+      action: 'list',
+      viewerContactIds: ['contact-admin'],
+      allowedSubjectClasses: ['unbound_person', 'unattributed', 'ambiguous'],
+      allowedViewerRelations: ['none'],
+      classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
+      grantBindings: [],
+    });
+
+    expect(predicate.sql).toContain('classification.subject_class = ANY($2::text[])');
+    expect(predicate.sql).toContain("'none' = ANY($4::text[])");
+    expect(predicate.sql).toContain('NOT EXISTS (');
+    expect(predicate.values[1]).toEqual(['unbound_person', 'unattributed', 'ambiguous']);
+    expect(predicate.values[3]).toEqual(['none']);
   });
 
   it('activates the D1 high-sensitivity other-relation carve-out only when requested', () => {

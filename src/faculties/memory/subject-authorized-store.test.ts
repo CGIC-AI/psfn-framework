@@ -337,6 +337,7 @@ describe('subject-authorized memory store', () => {
         viewerContactIds: ['contact-self'],
         allowedSubjectClasses: [
           'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+          'unbound_person', 'unattributed', 'ambiguous',
         ],
         allowedViewerRelations: ['self', 'co_subject', 'other', 'none'],
         classifierVersion: 1,

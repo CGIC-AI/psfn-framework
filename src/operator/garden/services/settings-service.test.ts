@@ -126,6 +126,52 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
+  it('projects an overlay-selected chat model without changing the fleet catalog primary', async () => {
+    const root = makeTempDir();
+    const modelsPath = join(root, 'models.json');
+    const modelsOwner = JSON.parse(readFileSync(modelsPath, 'utf8')) as {
+      models: Array<Record<string, unknown>>;
+    };
+    const fleetPrimary = modelsOwner.models.find(entry => entry.id === 'primary');
+    if (!fleetPrimary || typeof fleetPrimary.identity !== 'object' || fleetPrimary.identity === null) {
+      throw new Error('Expected primary model fixture');
+    }
+    (fleetPrimary.identity as Record<string, unknown>).model = 'moonshotai/kimi-k3';
+    modelsOwner.models.push({
+      id: 'purrsephone-chat',
+      rank: 90,
+      identity: {
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        source: { type: 'openrouter' },
+      },
+      purposes: [{ purpose: 'chat', primary: false }],
+      capabilities: { maxOutputTokens: 16_384, contextWindow: 128_000 },
+      tuning: { maxOutputTokens: 16_384 },
+    });
+    writeFileSync(modelsPath, JSON.stringify(modelsOwner), 'utf8');
+    writeFileSync(
+      join(root, 'settings.overlay.json'),
+      JSON.stringify({ modelPurposeSelection: { chat: 'purrsephone-chat' } }),
+      'utf8',
+    );
+
+    const service = buildService(buildConfig(root));
+    const settingsData = await service.getSettingsData();
+
+    expect(settingsData.effectiveModelSelection.chat).toEqual({
+      purpose: 'chat',
+      source: 'companion_selection',
+      slotKey: 'purrsephone-chat',
+      provider: 'openrouter',
+      model: 'z-ai/glm-5.2',
+    });
+    const canonicalPrimary = settingsData.editors.models.modelRegistry.models.find(entry => (
+      entry.purposes.some(purpose => purpose.purpose === 'chat' && purpose.primary === true)
+    ));
+    expect(canonicalPrimary?.identity.model).toBe('moonshotai/kimi-k3');
+  });
+
   it('round-trips the MCP owner file through the raw Garden surface', async () => {
     const root = makeTempDir();
     const service = buildService(buildConfig(root));

@@ -206,6 +206,8 @@ export type {
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
   AdminSettingsData,
+  EffectiveModelSelectionProjection,
+  EffectiveModelSelectionView,
   EffectiveFleetAuthOwnerProjection,
   ConfigUpdateResult,
   ConstitutionUpdateResult,

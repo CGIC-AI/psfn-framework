@@ -105,6 +105,7 @@ import {
 import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-projection.js';
+import { buildEffectiveModelSelectionProjection } from './effective-model-selection.js';
 import type {
   GatewaySystemDataWriterPort,
   SystemOwnerWriteKey,
@@ -1098,15 +1099,18 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    const runtimeConfig = splitSettingsByDomain(
-      this.deps.configStore.loadEffectiveRuntimeSettings(),
-    ).runtime;
+    const effectiveRuntimeSettings = this.deps.configStore.loadEffectiveRuntimeSettings();
+    const runtimeConfig = splitSettingsByDomain(effectiveRuntimeSettings).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     const editors = this.loadSettingsConfigEditors();
     return {
       config: runtimeConfig,
       env: await this.getEnvInfo(),
       editors,
+      effectiveModelSelection: buildEffectiveModelSelectionProjection(
+        this.deps.config,
+        effectiveRuntimeSettings,
+      ),
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),

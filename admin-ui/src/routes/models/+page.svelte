@@ -8,12 +8,13 @@
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
-  import { saveSubConfig } from '$lib/api/endpoints/settings';
+  import { getSettings, saveSubConfig } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
   import type {
     CanonicalProviderRegistry,
     ProviderRegistryEntry,
     DiscoveredModel,
+    EffectiveModelSelectionView,
   } from '$lib/types';
   import {
     CANONICAL_PURPOSES,
@@ -36,6 +37,7 @@
   } from './discovery-autofill';
   import DiscoveredModelsPanel from './DiscoveredModelsPanel.svelte';
   import ProviderWiringPanel from './ProviderWiringPanel.svelte';
+  import EffectiveChatModelCard from './EffectiveChatModelCard.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import {
     parseProviderRegistryJson,
@@ -87,6 +89,7 @@
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
   let providerValidationErrors = $state<string[]>([]);
+  let effectiveChatModel = $state<EffectiveModelSelectionView | null>(null);
   let expandedModelIds = $state<Set<string>>(new Set());
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
@@ -127,6 +130,19 @@
   let enabledModelCount = $derived.by(() => (
     ownModelEntries.filter(({ entry }) => modelIsEnabled(entry)).length
   ));
+  let fleetDefaultChatModel = $derived.by(() => {
+    const entry = models.find(model => (
+      modelIsEnabled(model)
+      && model.purposes.some(purpose => purpose.purpose === 'chat' && purpose.primary === true)
+    ));
+    return entry
+      ? {
+          slotKey: entry.id,
+          provider: entry.identity.provider,
+          model: entry.identity.model,
+        }
+      : null;
+  });
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
@@ -820,9 +836,10 @@
     error = '';
     discoveryError = '';
     validationErrors = [];
-    const [modelsRaw, providersRaw] = await Promise.all([
+    const [modelsRaw, providersRaw, settingsData] = await Promise.all([
       getModelsConfigRaw(),
       getProvidersConfigRaw(),
+      getSettings(),
     ]);
     let discovered: DiscoveredModel[] = [];
     try {
@@ -835,6 +852,7 @@
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
+    effectiveChatModel = settingsData.effectiveModelSelection.chat;
     setProviderRegistryState(parseProviderRegistryJson(providersRaw));
     initialSnapshot = JSON.stringify({
       models,
@@ -967,6 +985,11 @@
     Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
     (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">LITELLM_API_KEY</span>).
   </div>
+
+  <EffectiveChatModelCard
+    effectiveChat={effectiveChatModel}
+    fleetDefault={fleetDefaultChatModel}
+  />
 
   <ProviderWiringPanel
     settingsHref={`${base}/settings#settings-providers`}

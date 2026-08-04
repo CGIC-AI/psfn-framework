@@ -240,6 +240,8 @@ export type {
   AdminSettingsStatus,
   EffectiveBackgroundMaintenanceState,
   EffectiveChargeQuotaState,
+  EffectiveModelSelectionProjection,
+  EffectiveModelSelectionView,
   EffectiveFleetAuthOwnerProjection,
   EffectiveIcpAutonomySettingsState,
   FleetAuthOwnerSnapshot,

@@ -485,23 +485,28 @@ describe('social-desire provenance at the outbound gate', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('accepts an exact-text appraisal follow-up ratified by social desire and re-fetches its original concern scope', async () => {
+  it('accepts an explicit appraisal follow-up independently and re-fetches its original concern scope', async () => {
     const getActiveConcerns = vi.fn(async () => [{ id: 'concern-1' }]);
-    const { handler, dispatch, consents } = wire({ getActiveConcerns });
-    const consent = consents.issue({ contactId: CONTACT_ID, orientation: 'warm', nowMs: Date.now() });
-    const baseAction = desireAction(consent.consentId);
+    const { handler, dispatch } = wire({ getActiveConcerns });
     const action = {
-      ...baseAction,
+      id: 'action-appraisal-concern-1',
+      kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+      dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:appraisal:concern-1`,
+      channelId: 'discord:primary',
+      sourceMessageId: 'appraisal-moment-1',
+      inferredAt: Date.now(),
       payload: {
-        ...baseAction.payload,
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        content: 'I wanted to check in before the event tonight.',
+        reason: 'Active concern about a scheduled event tonight.',
         concernIds: ['concern-1'],
         appraisalFollowUp: {
           channelId: 'session:source',
           canonicalContactKey: CONTACT_ID,
         },
       },
-    };
-    bindConsentToAction(consents, consent.consentId, action);
+    } satisfies InferredPostTurnAction;
 
     await expect(handler(action)).resolves.toEqual({ detail: 'sent' });
     expect(dispatch).toHaveBeenCalledOnce();

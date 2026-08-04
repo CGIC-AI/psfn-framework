@@ -57,9 +57,7 @@ export function createPostTurnOutboundGates(deps: PostTurnOutboundGatesDeps) {
     const requiresActiveConcern = payload.requiresActiveConcern === true;
     const socialDesire = payload.socialDesire;
     const appraisalProvenance = resolveAppraisalOutboundProvenance(action, payload);
-    if (appraisalProvenance.blockReason) {
-      return appraisalProvenance.blockReason;
-    }
+    const hasAppraisalInitiator = payload.appraisalFollowUp !== undefined;
 
     const personalProjectId = payload.personalProjectId?.trim() || undefined;
 
@@ -67,6 +65,7 @@ export function createPostTurnOutboundGates(deps: PostTurnOutboundGatesDeps) {
       !hasPendingFollowUpLink
       && linkedConcernIds.length === 0
       && !requiresActiveConcern
+      && !hasAppraisalInitiator
       && !socialDesire
       && !personalProjectId
     ) {

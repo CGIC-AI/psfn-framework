@@ -5,12 +5,7 @@ import {
   type IntentionOutboundMessageActionPayload,
 } from './types.js';
 
-export type AppraisalOutboundProvenanceBlockReason =
-  | 'appraisal_consent_required'
-  | 'appraisal_consent_scope_mismatch';
-
 export interface AppraisalOutboundProvenanceResolution {
-  blockReason?: AppraisalOutboundProvenanceBlockReason;
   concernScope: IntentionOutboundAppraisalFollowUpProvenance;
 }
 
@@ -25,34 +20,16 @@ export function createAppraisalConcernScope(
 }
 
 /**
- * Resolve the appraisal-owned part of outbound provenance before the generic
- * scheduler gate checks durable consent, concern liveness, and delivery policy.
+ * Resolve the appraisal-owned concern scope before the generic scheduler gate
+ * checks concern liveness and common delivery policy. An explicit external
+ * appraisal decision is its own exact-action companion authorship moment; it
+ * does not borrow authorization from an unrelated proactive initiator.
  */
 export function resolveAppraisalOutboundProvenance(
   action: InferredPostTurnAction,
   payload: IntentionOutboundMessageActionPayload,
 ): AppraisalOutboundProvenanceResolution {
   const appraisalFollowUp = payload.appraisalFollowUp;
-
-  // The appraisal model may propose external text, but it is not the
-  // companion's consent moment. Only the existing exact-action, single-use
-  // social-desire consent can ratify that draft for delivery.
-  if (appraisalFollowUp && !payload.socialDesire) {
-    return {
-      blockReason: 'appraisal_consent_required',
-      concernScope: createAppraisalConcernScope(action.channelId),
-    };
-  }
-  if (
-    appraisalFollowUp?.canonicalContactKey
-    && payload.socialDesire
-    && appraisalFollowUp.canonicalContactKey !== payload.socialDesire.contactId
-  ) {
-    return {
-      blockReason: 'appraisal_consent_scope_mismatch',
-      concernScope: appraisalFollowUp,
-    };
-  }
   return {
     concernScope: appraisalFollowUp ?? createAppraisalConcernScope(action.channelId),
   };

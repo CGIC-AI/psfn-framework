@@ -384,20 +384,53 @@ export function normalizeIntentionOutboundMessageActionPayload(
     if (!normalized) return null;
     appraisalFollowUp = normalized;
   }
-  return {
+  // Proactive sources are independent initiators, never stacked
+  // authorization. In particular, an appraisal decision cannot borrow a
+  // social-desire consent, and a social-desire action cannot be vetoed by
+  // unrelated concern/project provenance.
+  if (socialDesire && (
+    appraisalFollowUp
+    || pendingFollowUpId
+    || concernIds.length > 0
+    || requiresActiveConcern
+    || personalProjectId
+  )) {
+    return null;
+  }
+  if (appraisalFollowUp && personalProjectId) {
+    return null;
+  }
+  const basePayload = {
     channelId,
     channelType: channelType as ChannelType,
     content,
     ...(reason ? { reason } : {}),
-    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
-    ...(concernIds.length > 0 ? { concernIds } : {}),
-    ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
-    ...(personalProjectId ? { personalProjectId } : {}),
-    ...(appraisalFollowUp ? { appraisalFollowUp } : {}),
-    ...(socialDesire ? { socialDesire } : {}),
     ...(typeof originIcpRootInitiationId === 'string'
       ? { originIcpRootInitiationId }
       : {}),
+  };
+  if (socialDesire) {
+    return {
+      ...basePayload,
+      socialDesire,
+    };
+  }
+  const liveThreadProvenance = {
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(concernIds.length > 0 ? { concernIds } : {}),
+    ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
+  };
+  if (appraisalFollowUp) {
+    return {
+      ...basePayload,
+      ...liveThreadProvenance,
+      appraisalFollowUp,
+    };
+  }
+  return {
+    ...basePayload,
+    ...liveThreadProvenance,
+    ...(personalProjectId ? { personalProjectId } : {}),
   };
 }
 

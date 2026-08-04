@@ -400,10 +400,17 @@ artifact with live untouched; `deploy` runs through the Helm upgrade. The record
 captures source branch/commit, archive checksum, image reference and revision
 label, contract hash, gate results, k3d validation, Helm release revision, and
 the redacted live-values summary. Node-side rewrites of PVC files must run as the
-container `uid 999 gid 999`. Manual owner repair normalizes the final file to
-mode `0664`; the repo-owned durable atomic migration helper creates its
-replacement at `0600`, so the maintenance procedure must restore `0664` after
-an apply. A root-owned rewrite bricks turns with `EACCES`.
+container `uid 999 gid 999`. Manual owner repair restores each file's
+canonical sensitivity-specific mode — `0600` for the auth-adjacent
+`fleet-auth.json`, `0640` for per-companion policy owners
+(`capability-tier.json`, `scheduler.json`, `charge-policy.json`,
+`skills.json`), `0644` for the remaining fleet-shared system owners — as
+defined by the owner-mode authority in
+`src/system/config/owner-file-modes.ts` and verified by
+`npm run preflight:owner-file-modes`. The repo-owned durable atomic migration
+helper creates its replacement at `0600`, so the maintenance procedure must
+restore the file's canonical mode after an apply rather than assuming one
+blanket mode. A root-owned rewrite bricks turns with `EACCES`.
 
 Sibling surfaces build on the same seams: the post-rollout validation gate and
 manual/automatic Helm rollback consume the pipeline record and the
@@ -750,7 +757,12 @@ completion, run
 restarting the cluster. The runtime preflight validates global owners at
 `SYSTEM_DATA_DIR` once and every per-companion owner at each exact root resolved
 from `companions.json`; an owner in another companion root or a system-root
-decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
+decoy cannot satisfy the check. It resolves database wiring from inline
+`POSTGRES_DATABASE_URL`, `POSTGRES_DATABASE_URL_FILE`, or
+`POSTGRES_DATABASE_URL_FD` without printing the credential. Pair it with
+`npm run preflight:owner-file-modes`, which stats the same roots and rejects
+any ownership/mode drift from the canonical sensitivity-specific modes.
+`npm run verify:startup-owner-files` is the
 separate repository gate: it validates distributed seeds in a disposable,
 explicit split-root fixture and is never called by the launcher.
 

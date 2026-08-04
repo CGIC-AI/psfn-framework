@@ -9,7 +9,15 @@ const gatePath = join(repoRoot, 'scripts/ops/validate-kube-rollout.sh');
 const namespace = 'gate-test';
 const companionId = 'test-companion';
 const imageTag = 'test-tag';
-const agentDeployment = `psfn-agent-${companionId}`;
+// The live fleet topology: one UUID-suffixed agent Deployment per companions.json
+// entry. Three entries prove the gate covers the whole fleet, not a fixed
+// cluster-of-one agent name.
+const fleetCompanionIds = [
+  '1b2f6c9e-0000-4000-8000-aaaaaaaaaaaa',
+  '2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb',
+  '3d4b8e1a-2222-4000-8000-cccccccccccc',
+];
+const agentDeployments = fleetCompanionIds.map((id) => `psfn-agent-${id}`);
 
 /**
  * The gate is a bash script whose real inputs are kubectl responses, so the
@@ -27,7 +35,8 @@ const joined = argv.join(' ');
 const namespace = ${JSON.stringify(namespace)};
 const companionId = ${JSON.stringify(companionId)};
 const imageTag = ${JSON.stringify(imageTag)};
-const agentDeployment = ${JSON.stringify(agentDeployment)};
+const fleetCompanionIds = ${JSON.stringify(fleetCompanionIds)};
+const agentDeployments = ${JSON.stringify(agentDeployments)};
 
 function out(text) {
   process.stdout.write(text);
@@ -54,11 +63,13 @@ function pod(name, containerName, ready) {
 const allPods = [
   pod('psfn-gateway-0', 'gateway', true),
   pod('psfn-garden-0', 'garden', true),
-  pod(agentDeployment + '-0', 'agent', true),
+  ...agentDeployments.map((deployment) => pod(deployment + '-0', 'agent', true)),
 ];
 
 if (joined.includes('get deployments') && joined.includes('fleet-target=registered')) {
-  out(JSON.stringify({ items: [{ metadata: { name: agentDeployment } }] }));
+  out(JSON.stringify({
+    items: agentDeployments.map((name) => ({ metadata: { name } })),
+  }));
 }
 
 if (joined.includes('get deploy psfn-emosim')) {
@@ -93,6 +104,27 @@ if (joined.includes('get pods') && joined.includes('-o json')) {
 
 if (joined.includes('cat /app/contract-hash.txt')) {
   out('contracthash01\n');
+}
+
+// The full-fleet owner preflight runs inside the gateway, the one workload that
+// mounts every system and companion owner root at its canonical path.
+if (joined.includes('exec') && joined.includes('preflight-owner-file-modes')) {
+  if (typeof fixture.ownerPreflightFailure === 'string') {
+    fail(fixture.ownerPreflightFailure + '\n');
+  }
+  out(
+    'Runtime startup owner-file preflight passed: system=/runtime/system-data ' +
+      'fleet=3 companionRoots=' +
+      fleetCompanionIds.map((id) => '/runtime/companions/' + id).join(',') +
+      '\n' +
+      fleetCompanionIds
+        .map((id) =>
+          'OK companion ' + id + ' charge-policy /runtime/companions/' + id +
+            '/charge-policy.json 640 999:999\n',
+        )
+        .join('') +
+      'Runtime owner-file mode preflight passed: 22 files verified, 0 optional absent\n',
+  );
 }
 
 if (joined.includes('get deploy psfn-gateway') && joined.includes('-o json')) {
@@ -201,6 +233,7 @@ interface Fixture {
   secretData: Record<string, string>;
   expectedHarnessKey?: string;
   rawSecretTemplateOutput?: string;
+  ownerPreflightFailure?: string;
 }
 
 describe('validate-kube-rollout.sh coverage accounting', () => {
@@ -261,8 +294,14 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     );
     expect(result.stdout).toContain('PASS gateway models');
     expect(result.stdout).toContain('PASS gateway chat smoke');
+    expect(result.stdout).toContain('PASS fleet owner-file preflight');
+    // The three-companion fixture proves the in-gateway preflight covers every
+    // UUID-suffixed companion root, not a single fixed agent.
+    for (const id of fleetCompanionIds) {
+      expect(result.stdout).toContain(`/runtime/companions/${id}`);
+    }
     expect(result.stdout).toMatch(
-      /Summary: 12 checks planned, 12 ran; 12 passed, 0 failed, 0 skipped, 0 requested-skip, 0 not run/,
+      /Summary: 13 checks planned, 13 ran; 13 passed, 0 failed, 0 skipped, 0 requested-skip, 0 not run/,
     );
     expect(result.stdout).not.toContain('COVERAGE INCOMPLETE');
     expect(result.status).toBe(0);
@@ -298,10 +337,10 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     expect(result.stdout).toContain('PASS zero bookkeeping writes');
 
     expect(result.stdout).toMatch(
-      /Summary: 12 checks planned, 12 ran; 9 passed, 1 failed, 2 skipped/,
+      /Summary: 13 checks planned, 13 ran; 10 passed, 1 failed, 2 skipped/,
     );
     expect(result.stdout).toContain('SKIPPED — prerequisite failed, nothing was validated:');
-    expect(result.stdout).toContain('COVERAGE INCOMPLETE: 3 of 12 planned checks did not pass.');
+    expect(result.stdout).toContain('COVERAGE INCOMPLETE: 3 of 13 planned checks did not pass.');
     expect(result.status).toBe(1);
   });
 
@@ -347,7 +386,7 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     );
     expect(result.stdout).toContain('  - gateway chat smoke');
     expect(result.stdout).toContain('  - zero bookkeeping writes');
-    expect(result.stdout).toMatch(/0 skipped, 0 requested-skip, 10 not run/);
+    expect(result.stdout).toMatch(/0 skipped, 0 requested-skip, 11 not run/);
     expect(result.stdout).toContain('COVERAGE INCOMPLETE');
     expect(result.status).toBe(1);
   });
@@ -364,9 +403,34 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     );
     expect(result.stdout).toContain('SKIPPED by operator request, nothing was validated:');
     expect(result.stdout).toContain(
-      'COVERAGE REDUCED BY REQUEST: 1 of 11 planned checks validated nothing',
+      'COVERAGE REDUCED BY REQUEST: 1 of 12 planned checks validated nothing',
     );
     expect(result.stdout).not.toContain('COVERAGE INCOMPLETE');
     expect(result.status).toBe(0);
+  });
+
+  it('fails the gate when the in-gateway owner preflight reports mode drift', () => {
+    const key = 'sk-harness-owner-drift';
+    const result = runGate(
+      {
+        secretData: { TESTING_HARNESS_API_KEY: base64(key) },
+        expectedHarnessKey: key,
+        ownerPreflightFailure:
+          'Runtime owner-file mode preflight failed:\n' +
+          '- companion 2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb charge-policy owner-file mode drift at ' +
+          '/runtime/companions/2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb/charge-policy.json: ' +
+          'expected 640, found 664',
+      },
+      ['--soft'],
+    );
+
+    expect(result.stdout, result.stdout + result.stderr).toContain(
+      'FAIL fleet owner-file preflight',
+    );
+    expect(result.stdout).toContain('expected 640, found 664');
+    // --soft keeps the remaining plan running so the summary still accounts for it.
+    expect(result.stdout).toContain('PASS provider routing');
+    expect(result.stdout).toContain('COVERAGE INCOMPLETE');
+    expect(result.status).toBe(1);
   });
 });

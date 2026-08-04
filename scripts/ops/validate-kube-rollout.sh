@@ -1427,6 +1427,27 @@ console.log(`gateway smoke passed: model=${payload.model} user=${payload.validat
 '
 }
 
+# The full-fleet owner preflight must run where every system and companion
+# owner root is mounted. The fleet gateway is the only long-running workload
+# that mounts each companion PVC at its canonical resolveCompanionFleetPaths
+# path; agents and the cluster-of-one maintenance Pod see only their own
+# companion root. Both compiled entrypoints resolve database wiring
+# operator-style (inline POSTGRES_DATABASE_URL on the gateway,
+# POSTGRES_DATABASE_URL_FILE elsewhere) and never print credentials or
+# owner-file contents. The mode preflight derives the canonical
+# sensitivity-specific modes (600 auth-adjacent, 640 per-companion policy,
+# 644 fleet-shared system) from the owner-file registry authority and rejects
+# real ownership/mode drift.
+check_fleet_owner_file_preflight() {
+  local output
+  if ! output="$(run_kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- \
+    sh -c 'node /app/dist/preflight-startup-owner-files.js && node /app/dist/preflight-owner-file-modes.js' 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  printf '%s\n' "$output"
+}
+
 # The plan is the gate's documented coverage contract. Every check belongs here
 # even when it will not be executed, so the summary can name what was not
 # validated instead of silently reporting a shorter run.
@@ -1434,6 +1455,7 @@ build_check_plan() {
   plan_check gate "rollout status" check_rollout_status
   plan_check gate "app pods and images" check_app_pods_and_images
   plan_check gate "contract hash consistency" check_contract_hash_consistency
+  plan_check gate "fleet owner-file preflight" check_fleet_owner_file_preflight
   plan_check gate "$GARDEN_HEALTH_CHECK_LABEL" check_garden_health
   plan_check scoped "testing-harness key" check_testing_harness_key
   plan_check gate "gateway models" check_gateway_models

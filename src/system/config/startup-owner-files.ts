@@ -73,6 +73,7 @@ import {
   resolveFleetAuthOwnerFile,
 } from './fleet-auth-config.js';
 import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
+import { canonicalOwnerFileMode } from './owner-file-modes.js';
 import { backfillMissingRuntimeSettingsDefaults } from './settings-owner-backfill.js';
 import {
   loadMcpServersConfig,
@@ -428,6 +429,13 @@ export interface OwnerFileSeedDescriptor {
   scope: 'system' | 'companion';
   /** True when the loader tolerates a missing owner file (no seed required). */
   optionalWhenMissing: boolean;
+  /**
+   * Canonical POSIX mode for the owner file, derived from the sensitivity
+   * authority in `owner-file-modes.ts` (0600 auth-adjacent, 0640 per-companion
+   * policy, 0644 fleet-shared system). Rollout maintenance restores this mode
+   * after any rewrite and the mode preflight rejects drift from it.
+   */
+  canonicalMode: number;
 }
 
 const OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR = '__owner-file-descriptor-placeholder__';
@@ -443,6 +451,7 @@ function toOwnerFileSeedDescriptor(
     seedFileName: basename(check.seedPath),
     scope,
     optionalWhenMissing: OPTIONAL_WHEN_MISSING_OWNER_FILES.has(ownerFileName),
+    canonicalMode: canonicalOwnerFileMode({ ownerFileName, scope }),
   };
 }
 

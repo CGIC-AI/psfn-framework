@@ -11047,6 +11047,12 @@
       "note": "Canonical owner-file/schema metadata MEMORY_POLICY_TYPES; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
+      "file": "src/system/config/owner-file-modes.ts",
+      "name": "OWNER_FILE_MODE_COMPANION_POLICY",
+      "value": "0o640",
+      "note": "Deployment contract constant, not a tunable: canonical POSIX mode for per-companion policy owner files (0640), part of the owner-mode authority verified by the rollout mode preflight; matches the long-standing 0o600/0o644 filesystem contract literals."
+    },
+    {
       "file": "src/system/config/participation-config.ts",
       "name": "createDefaultEgressLeasePhaseSettings.minReplyConfidence",
       "value": "0.5",

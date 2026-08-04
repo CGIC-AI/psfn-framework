@@ -38,6 +38,7 @@ COPY tsconfig.json tsconfig.companion-id-types.json tsup.config.ts ./
 COPY type-tests/companion-id.type-test.ts ./type-tests/
 COPY src/ ./src/
 COPY scripts/preflight-startup-owner-files.ts ./scripts/preflight-startup-owner-files.ts
+COPY scripts/preflight-owner-file-modes.ts ./scripts/preflight-owner-file-modes.ts
 COPY scripts/provision-injection-model.ts ./scripts/provision-injection-model.ts
 COPY admin-ui/ ./admin-ui/
 

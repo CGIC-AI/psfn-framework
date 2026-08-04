@@ -508,19 +508,29 @@ The migration CLIs are dry-run by default, validate the complete candidate, pin
 the source identity, and publish with a durable atomic rename. They do not
 create the pre-migration backup above. They create the replacement with mode
 `0600`, so the PVC maintenance step must explicitly restore the deployment's
-owner-file contract after all applies and manual repairs. Open a shell in the
-target-image maintenance Pod, run the selected dry-run/apply commands above,
-then normalize every file they created or replaced:
+owner-file contract after all applies and manual repairs. That contract is NOT
+a blanket `664`: the canonical modes are sensitivity-specific and derive from
+the owner-file registry authority (`src/system/config/owner-file-modes.ts`):
+`0600` for the auth-adjacent `fleet-auth.json`, `0640` for the per-companion
+policy owners (`capability-tier.json`, `scheduler.json`, `charge-policy.json`,
+`skills.json`), and `0644` for the remaining fleet-shared system owners. Open a
+shell in the target-image maintenance Pod, run the selected dry-run/apply
+commands above, then restore each file's canonical mode. The target image
+prints the authoritative expectation table (paths reflect the maintenance
+Pod's mounts) and verifies it:
 
 ```bash
 kubectl -n "$NAMESPACE" exec -it "$MAINTENANCE_POD" -- sh
 
-chmod 0664 <every-owner-file-created-or-replaced>
+node /app/dist/preflight-owner-file-modes.js --print-expectations
+chmod <canonical-mode-from-the-table> <every-owner-file-created-or-replaced>
 stat -c '%u:%g %a %n' <every-owner-file-created-or-replaced>
 ```
 
 The maintenance Pod runs as uid/gid 999, so its atomic replacements retain
-that owner; the expected final output is `999:999 664`. If an existing file is
+that owner; every owner file must end at `999:999` with its canonical mode
+(for example `999:999 640` for a companion policy owner, `999:999 644` for a
+fleet-shared system owner). If an existing file is
 not already owned by 999, stop and use the platform-approved PVC ownership
 repair before continuing—the non-root Pod must not be made privileged merely
 to hide drift. A root-owned file can make the runtime fail with `EACCES`. Do
@@ -528,11 +538,12 @@ not use `bootstrap.seedOwnerFiles=true` to repair an upgrade, do not merge a
 whole seed over an existing owner, and do not add a fallback reader.
 
 For a missing new owner, use a create-only check in the target-image
-maintenance environment:
+maintenance environment with the canonical mode for that owner
+(`partner-affect-shadow.json` is a fleet-shared system owner, so `0644`):
 
 ```bash
 test ! -e "$SYSTEM_DATA_DIR/partner-affect-shadow.json"
-install -m 0664 \
+install -m 0644 \
   /app/config/partner-affect-shadow.seed.json \
   "$SYSTEM_DATA_DIR/partner-affect-shadow.json"
 ```
@@ -546,8 +557,14 @@ node /app/dist/preflight-startup-owner-files.js
 Run that command inside the maintenance Pod after all applies. It uses the
 live agent's inherited env, Secrets, system owner root, companion owner root,
 and canonical Personal Workspace, but executes the target image's compiled
-preflight. This is different from `npm run verify:startup-owner-files`, which
-validates repository seeds in an isolated fixture.
+preflight. Database wiring is secret-safe: the preflight resolves
+`POSTGRES_DATABASE_URL` inline, from `POSTGRES_DATABASE_URL_FILE`, or from
+`POSTGRES_DATABASE_URL_FD` (the agent-derived Pod carries the `_FILE` form)
+and never prints the credential. A maintenance Pod mounts only its own
+companion root, so this run covers that companion; the full-fleet preflight
+across every companion root runs in the gateway at step 9. This is different
+from `npm run verify:startup-owner-files`, which validates repository seeds in
+an isolated fixture.
 
 Leave the app Deployments at zero after a mutating owner-file maintenance
 window. The target gateway must prove the new owner contract before any agent
@@ -758,14 +775,31 @@ An upgrade is not complete until every check below is green, in order.
 7. **Persistence and owner state are valid.**
 
    Confirm Postgres/pgvector and Redis pods are Ready, every expected schema
-   exists, owner migration receipts are complete, and owner modes remain
-   `999:999 664`. Run `node /app/dist/preflight-startup-owner-files.js` in the mounted
-   maintenance Pod one final time (the npm-script form needs dev tooling the
-   production image does not carry; see step 7).
+   exists, owner migration receipts are complete, and every owner file sits at
+   its canonical sensitivity-specific mode (`999:999` plus `600`/`640`/`644`
+   per the owner-mode authority in step 7 — not a blanket `664`). Run the
+   full-fleet preflight in the gateway, the one workload that mounts every
+   system and companion owner root at its canonical path:
 
-The checked-in `scripts/ops/validate-kube-rollout.sh` still probes a fixed
-`psfn-agent` Deployment and is therefore supplemental on this branch, not a
-replacement for the label-selected agent gate above.
+   ```bash
+   kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- \
+     node /app/dist/preflight-startup-owner-files.js
+   kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- \
+     node /app/dist/preflight-owner-file-modes.js
+   ```
+
+   The content preflight must report every fleet companion root; the mode
+   preflight must verify each owner file at its canonical mode and reject any
+   ownership/mode drift. Both resolve database wiring from the gateway's
+   inline `POSTGRES_DATABASE_URL` without printing it (the npm-script form
+   needs dev tooling the production image does not carry; see step 7).
+
+The checked-in `scripts/ops/validate-kube-rollout.sh` discovers agent
+Deployments through the `psfn.io/fleet-target=registered` label (it handles
+the UUID-suffixed `psfn-agent-<companionId>` fleet topology) and runs the same
+full-fleet owner preflight in the gateway as its `fleet owner-file preflight`
+check. It remains supplemental to the browser and Garden checks above, not a
+replacement for them.
 
 **Read the gate's coverage accounting, not just its pass count.** The script
 prints its full planned check set before it runs anything, and every planned

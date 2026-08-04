@@ -190,6 +190,23 @@ describe('journal chain rewrite transactions', () => {
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 
+  it('aborts before any artifact when the quarantine hook itself throws', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+    writeFileSync(rootPath, `${journalLine(entry(1))}{not-json}\n`, 'utf8');
+
+    expect(() => rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[entry(1)], [entry(2)]],
+      writeEntries,
+      onMalformedRowQuarantine: () => {
+        throw new Error('receipt write failed');
+      },
+    })).toThrow('receipt write failed');
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(`${journalLine(entry(1))}{not-json}\n`);
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
   it('commits a content redaction that preserves entry identity', () => {
     const { dir, rootPath, segmentPath } = seedJournalHarness();
 

@@ -62,7 +62,6 @@ function runCli(): Promise<unknown> {
       sessionsDir: join(runtime.dataDir, 'sessions'),
       backupDir: runtime.backupDir,
       keyring,
-      repoRoot: process.cwd(),
       reason: options.reason ?? '',
       // Land the durable, content-free run record on the canonical safeguard
       // audit trail (companion-data/state/safeguards-audit.jsonl) that Garden

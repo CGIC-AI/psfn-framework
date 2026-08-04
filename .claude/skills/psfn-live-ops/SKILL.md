@@ -252,10 +252,13 @@ routing and the continuity smoke went unverified across two deploys
   per-restart `EBADMSG` warning. `npm run session:repair:integrity --
   --reason <text>` now quarantines such rows instead of refusing the file
   (psfn-framework-8xc4k): valid entries keep their original sealing when no
-  re-sign is needed, raw bytes stay in the timestamped backup, each dropped
-  row gets a durable content-free receipt in
-  `<backup-dir>/quarantine-receipts.jsonl`, and the `session_integrity_repair`
-  safeguard audit event carries the counts. After install + gateway restart
+  re-sign is needed, raw bytes stay in the fsynced timestamped backup, and
+  each dropped row gets a durable content-free two-phase record
+  (`prepared` before the rewrite, `completed`/`aborted` after) in
+  `<backup-dir>/quarantine-receipts.jsonl`; a `prepared` row with no
+  terminal record means an interrupted run — reconcile from the referenced
+  backup. The `session_integrity_repair` safeguard audit event carries the
+  counts. After install + gateway restart
   the owner recovers with no further warnings.
 - Postgres projection cleanup goes through `kubectl exec -i psfn-postgres-0 --
   psql` with the SQL piped on stdin (inline quoting through ssh+kubectl+psql

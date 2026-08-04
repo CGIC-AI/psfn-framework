@@ -1408,7 +1408,6 @@ describe('SessionStore', () => {
       sessionsDir: dir,
       backupDir,
       keyring: keyring!,
-      repoRoot: dir,
       reason: 'psfn-framework-8xc4k test disposition',
       audit: {
         append: (event, details) => {
@@ -1421,8 +1420,13 @@ describe('SessionStore', () => {
     expect(auditRecords[0]!.details).toMatchObject({ outcome: 'completed', quarantinedRows: 1 });
     const receipts = readFileSync(join(backupDir, 'quarantine-receipts.jsonl'), 'utf8')
       .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]).toMatchObject({ rawLength: '{not-json}'.length });
+    expect(receipts).toHaveLength(2);
+    expect(receipts[0]).toMatchObject({ phase: 'prepared', rawLength: '{not-json}'.length });
+    expect(receipts[1]).toMatchObject({
+      dispositionId: receipts[0]!.dispositionId,
+      phase: 'completed',
+      rowCount: 1,
+    });
 
     // Restart-equivalent: a fresh store over the repaired dir recovers the
     // owner's valid handoff and emits no EBADMSG warning for it.
@@ -1443,7 +1447,6 @@ describe('SessionStore', () => {
       sessionsDir: dir,
       backupDir,
       keyring: keyring!,
-      repoRoot: dir,
       reason: 'psfn-framework-8xc4k idempotence probe',
     });
     expect(secondReport.journal).toMatchObject({

@@ -584,6 +584,9 @@ embeddings:
       key: EMBEDDING_API_KEY
 
 modelPrefetch:
+  # First-boot lifecycle only. The Job name is derived from its complete
+  # immutable spec, so changed images/config create a replacement Job while
+  # the model-cache PVC survives. Persist enabled=false after completion.
   enabled: false
   image:
     repository: ""

@@ -1373,6 +1373,16 @@ PVC before the restricted-egress gateway starts. Verify the deploy contract
 npm run verify:deployment-contracts
 ```
 
+The Job is named
+`<release>-model-prefetch-<immutable-spec-hash>` rather than using one stable
+name. An app-image or prefetch-spec change therefore creates a replacement Job
+instead of mutating Kubernetes' immutable Job pod template; the model-cache PVC
+remains the same. Resolve the current Job by the release plus
+`app.kubernetes.io/component=model-prefetch` labels, wait for Complete, and
+then persist `modelPrefetch.enabled=false`. `ship:kube` closes that lifecycle
+automatically only from verified Complete Job evidence and otherwise fails
+closed.
+
 Failure symptoms:
 
 - Gateway `CrashLoopBackOff` with `mode=enforce but the L1.5 injection

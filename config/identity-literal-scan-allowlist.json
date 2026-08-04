@@ -175,6 +175,12 @@
       "pattern": "identity-proper-name"
     },
     {
+      "path": "scripts/ops/fleet-sso-forwarder.mjs",
+      "contains": "x-psfn-",
+      "reason": "The hardened loopback forwarder strips and reconstructs the established project-scoped protocol header namespace; these header names are transport authority controls, not companion identity defaults.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/ops/continuity-watchdog-healthcheck.mjs",
       "contains": "psfn",
       "reason": "Watchdog state file uses the project slug in its filename.",

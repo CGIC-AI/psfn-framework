@@ -378,6 +378,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/welfare-verifier-access.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1900,
+      "baselineSource": "measured",
+      "note": "m8zdu follower welfare-verifier privilege repair suite against real containerized Postgres. Baseline 1.9s file wall (2 tests, warm tmpfs harness, this host, 2026-08-04); 120s is the repo-standard integration cap with headroom dominated by cold-start and harness-semaphore variance."
+    },
+    {
       "file": "src/persistence/sessions/testing-session-purge.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

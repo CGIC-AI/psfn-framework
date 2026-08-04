@@ -10,9 +10,7 @@ import {
   collectRangeStats,
   decideChangeBudget,
   evaluateChangeBudget,
-  extractExceptionReason,
   parseNumstat,
-  resolvePullRequestMetadata,
 } from './check-change-budget.mjs';
 
 test('uses the operator-approved PR publication window', () => {
@@ -211,140 +209,14 @@ test('checks PR-owned conflict resolution changes against the per-commit budget'
   );
 });
 
-test('rejects obsolete exception metadata from the authenticated current-branch PR', () => {
-  const metadata = resolvePullRequestMetadata({
-    options: { exception: false },
-    env: {},
-    cwd: '/repo',
-    runGh(args, cwd) {
-      assert.deepEqual(args, ['pr', 'view', '--json', 'body,labels,state']);
-      assert.equal(cwd, '/repo');
-      return JSON.stringify({
-        state: 'OPEN',
-        labels: [{ name: 'change-budget:exception' }],
-        body: '## Change-budget exception\nBLOCKER: cannot be bundled before the broken publication gate is restored.',
-      });
-    },
+test('hard limits are evaluated without GitHub or exception metadata', () => {
+  const decision = decideChangeBudget({
+    files: 26,
+    lines: 6,
+    commitCount: 1,
+    commits: [],
   });
-  const decision = decideChangeBudget(
-    { files: 1, lines: 799, commitCount: 1, commits: [] },
-    metadata,
-  );
 
-  assert.equal(metadata.source, 'GitHub');
-  assert.deepEqual(decision.violations, [
-    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
-  ]);
+  assert.deepEqual(decision.violations, ['PR has 26 files; maximum is 25']);
   assert.deepEqual(decision.bypassed, []);
-});
-
-test('fails closed with exact offline metadata instructions', () => {
-  assert.throws(
-    () =>
-      resolvePullRequestMetadata({
-        options: { exception: false },
-        env: {},
-        runGh() {
-          throw Object.assign(new Error('gh failed'), { stderr: 'not authenticated' });
-        },
-      }),
-    (error) => {
-      assert.match(error.message, /GitHub PR metadata is unavailable \(not authenticated\)/);
-      assert.match(error.message, /CHANGE_BUDGET_EXCEPTION=false/);
-      assert.match(error.message, /CHANGE_BUDGET_EXCEPTION=true/);
-      assert.match(error.message, /CHANGE_BUDGET_PR_BODY/);
-      return true;
-    },
-  );
-});
-
-test('accepts the documented explicit offline exception metadata', () => {
-  let calledGitHub = false;
-  const metadata = resolvePullRequestMetadata({
-    options: { exception: false },
-    env: {
-      CHANGE_BUDGET_EXCEPTION: 'true',
-      CHANGE_BUDGET_PR_BODY:
-        '## Change-budget exception\nBLOCKER: no compatible work can land until this gate fix lands.',
-    },
-    runGh() {
-      calledGitHub = true;
-      throw Object.assign(new Error('gh failed'), { stderr: 'not authenticated' });
-    },
-  });
-
-  assert.equal(calledGitHub, true);
-  assert.match(metadata.source, /^offline \(GitHub unavailable:/);
-  assert.equal(metadata.exception, true);
-});
-
-test('rejects explicit exception metadata that conflicts with connected GitHub metadata', () => {
-  assert.throws(
-    () =>
-      resolvePullRequestMetadata({
-        options: { exception: true },
-        env: {
-          CHANGE_BUDGET_PR_BODY:
-            '## Change-budget exception\nThis must not override the connected PR.',
-        },
-        runGh() {
-          return JSON.stringify({ state: 'OPEN', labels: [], body: '' });
-        },
-      }),
-    /Explicit exception metadata conflicts with GitHub PR metadata/,
-  );
-});
-
-test('rejects the obsolete exception label regardless of rationale', () => {
-  const stats = { files: 1, lines: 799, commitCount: 1, commits: [] };
-  const missing = decideChangeBudget(stats, { exception: true });
-  assert.match(missing.violations.at(-1), /there is no minimum PR size/);
-
-  const withRationale = decideChangeBudget(stats, {
-    exception: true,
-    pullRequestBody:
-      '## Change-budget exception\nBLOCKER: no compatible train can be published until this fix lands.',
-  });
-  assert.deepEqual(withRationale.violations, [
-    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
-  ]);
-});
-
-test('never permits the exception label to bypass hard maximums', () => {
-  const decision = decideChangeBudget(
-    { files: 26, lines: 800, commitCount: 1, commits: [] },
-    {
-      exception: true,
-      pullRequestBody:
-        '## Change-budget exception\nBLOCKER: this rationale cannot override the maximum.',
-    },
-  );
-
-  assert.deepEqual(decision.violations, [
-    'PR has 26 files; maximum is 25',
-    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
-  ]);
-  assert.deepEqual(decision.bypassed, []);
-});
-
-test('does not accept stale exception labels', () => {
-  const decision = decideChangeBudget(
-    { files: 1, lines: 800, commitCount: 1, commits: [] },
-    {
-      exception: true,
-      pullRequestBody: '## Change-budget exception\nNo longer needed.',
-    },
-  );
-  assert.deepEqual(decision.violations, [
-    'remove change-budget:exception; there is no minimum PR size and hard limits cannot be bypassed',
-  ]);
-});
-
-test('extracts rationale without accepting the template comment', () => {
-  assert.equal(
-    extractExceptionReason(
-      '## Change-budget exception\n<!-- Leave blank unless the label is applied. -->\n',
-    ),
-    '',
-  );
 });

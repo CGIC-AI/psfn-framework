@@ -7,6 +7,7 @@ import { createEnvCredentialVault } from '../../../boundary/custody/credential-v
 import type { CanonicalModelRegistry } from '../../../shared/contracts/runtime.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import {
+  createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from '../../../system/config/runtime-config-contracts.js';
@@ -1394,6 +1395,73 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     expect(result.settingsDomains.runtime.observerEvalSidecar).toEqual(observerEvalSidecar);
     expect(config.observerEvalSidecar).toEqual(observerEvalSidecar);
+  });
+
+  it('accepts production observer levers at the canonical per-companion Kubernetes mount', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-kube-'));
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companions', companionId);
+    const observerPersistenceRootDir = join(rootDir, 'observer-eval-sidecar');
+    const workspacePath = join(rootDir, 'workspaces', 'personal', companionId);
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(workspacePath, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+
+    const defaults = createDefaultObserverEvalSidecarSettings();
+    const observerEvalSidecar = {
+      ...defaults,
+      enabled: true,
+      deploymentTarget: 'live' as const,
+      queue: {
+        ...defaults.queue,
+        observerTimeoutMs: 20_000,
+      },
+      adapter: {
+        kind: 'emosim_server' as const,
+        serverUrl: 'http://psfn-emosim:17342',
+        sessionLabel: 'psfn-purrsephone',
+        agentName: 'purrsephone',
+        includeWorldState: false,
+      },
+      persistence: {
+        enabled: true,
+        rootDir: observerPersistenceRootDir,
+        retentionDays: 90,
+        maxStoredObservations: 100_000,
+      },
+      garden: {
+        exposeHealth: true,
+        exposeTelemetry: true,
+      },
+      levers: {
+        ...createDefaultObserverEvalSidecarLeverSettings(),
+        enabled: true,
+      },
+    };
+    saveSettings(systemDataDir, { observerEvalSidecar });
+
+    const config = {
+      ...makeStartupHydrationConfig(systemDataDir, companionDataDir),
+      workspacePath,
+    };
+    const result = hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(result.settingsDomains.runtime.observerEvalSidecar).toEqual(observerEvalSidecar);
+    expect(config.observerEvalSidecar?.persistence.rootDir).toBe(observerPersistenceRootDir);
+    expect(config.observerEvalSidecar?.levers?.enabled).toBe(true);
+    expect(config.observerEvalSidecar?.garden.exposeTelemetry).toBe(true);
   });
 
   it('deep-merges a per-companion settings.overlay.json over the global settings (dnll.1)', () => {

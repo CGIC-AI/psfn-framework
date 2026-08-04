@@ -98,7 +98,7 @@ Defaults: `createDefaultObserverEvalSidecarSettings()`
 | `mode` | `'observe_only'` | `'observe_only'` | |
 | `queue` | object | `maxQueuedTurns: 32`, `overflowPolicy: 'drop_newest'`, `observerTimeoutMs: 5000`, `maxRetries: 0`, `shutdownDrainTimeoutMs: 5000` | Bounded, drop-newest. |
 | `adapter` | object | `kind: 'disabled'`, `sessionLabel: 'psfn-observer-eval'`, `agentName: 'psfn-companion'`, `includeWorldState: false` | When enabled, `kind` must be `'emosim_server'` and `serverUrl` is **required**. |
-| `persistence` | object | `enabled: false`, `retentionDays: 14`, `maxStoredObservations: 10000` | `enabled: true` additionally requires a Postgres backend + explicit URL. |
+| `persistence` | object | `enabled: false`, `retentionDays: 14`, `maxStoredObservations: 10000` | `enabled: true` additionally requires a Postgres backend, an explicit URL, and `rootDir`. In the Helm deployment, set `rootDir` to `/runtime/observer-eval-sidecar`. |
 | `garden` | object | `exposeHealth: true`, `exposeTelemetry: true` | Gates the admin surface. |
 | `levers` | object | `enabled: false`, `cooldownMs: 21600000`, plus `wouldMessage`/`wouldCheckIn`/`wouldRest`/`ruminationWatch` | `enabled: true` requires persistence + the context-coherence event bus. |
 
@@ -106,6 +106,15 @@ Turning it on requires, at minimum, `enabled: true` and
 `adapter.kind: 'emosim_server'` with a reachable `adapter.serverUrl` (for
 example `http://psfn-emosim:17342`). The emo_sim API is unauthenticated by
 design and must stay cluster-internal (ClusterIP + NetworkPolicy).
+
+The Helm chart provides `/runtime/observer-eval-sidecar` as a durable writable
+mount in every agent pod. The logical path is constant so the system-owned
+settings plus a per-companion overlay can use the same `persistence.rootDir`;
+each pod backs it with the `observer-eval-sidecar` subdirectory of that
+companion's own companion-data PVC. The seed init container creates the subpath
+before the read-only-root agent starts. Do not point `rootDir` at system-data,
+companion-data, a Personal Workspace, logs, temp, or backups; startup continues
+to reject overlap with those authoritative runtime roots.
 
 > **`emosimRoot` is a removed key.** Earlier drafts spawned a Python emo_sim
 > process per call and configured it with `emosimRoot` (plus `pythonExecutable`,

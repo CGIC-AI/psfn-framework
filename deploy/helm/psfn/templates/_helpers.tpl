@@ -85,6 +85,15 @@ psfn.io/fleet-target: registered
 {{- default (printf "%s-companion-data" (include "psfn.fullname" .)) .Values.persistence.companionData.existingClaim -}}
 {{- end -}}
 
+{{/*
+Canonical writable mount for observer-eval persistence metadata. The backing
+directory is a dedicated subPath on the companion-data PVC, while the mount
+path stays outside every runtime root that the observer isolation guard rejects.
+*/}}
+{{- define "psfn.observerEvalSidecarPersistenceRootDir" -}}
+{{- printf "%s/observer-eval-sidecar" (trimSuffix "/" .Values.fleet.runtimeRoot) -}}
+{{- end -}}
+
 {{- define "psfn.workspaceClaimName" -}}
 {{- default (printf "%s-workspace" (include "psfn.fullname" .)) .Values.persistence.workspace.existingClaim -}}
 {{- end -}}
@@ -844,6 +853,7 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
         {{ .Values.runtime.systemDataDir }} \
         {{ .Values.runtime.companionDataDir }} \
         {{ .Values.runtime.companionDataDir }}/state \
+        {{ .Values.runtime.companionDataDir }}/observer-eval-sidecar \
         {{ .Values.runtime.workspacePath }} \
         {{ .Values.runtime.logsDir }} \
         {{ .Values.runtime.tempDir }} \

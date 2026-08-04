@@ -178,6 +178,7 @@ export const TOOL_NAME_DOMAIN: Readonly<Record<string, FirstPartyToolDomain>> = 
   fs: 'boundary',
   repo: 'boundary',
   shell: 'boundary',
+  mcp: 'boundary',
   web: 'boundary',
   world: 'boundary',
   analysis_workbench: 'analysis',

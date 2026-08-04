@@ -1141,6 +1141,16 @@ Read cadence. The adapter samples the server at 1 Hz
 emo_sim internal tick rate. The server ticks fast on its own wall clock, so at
 least one tick always lands between the two per-observation reads.
 
+Kubernetes persistence root. Set
+`observerEvalSidecar.persistence.rootDir` to
+`/runtime/observer-eval-sidecar`. Each agent pod mounts that logical path from
+the `observer-eval-sidecar` subdirectory of its own companion-data PVC, which
+makes it durable and per-companion even though every companion uses the same
+settings path. The seed init container creates the subdirectory before the
+read-only-root agent starts. Do not substitute one of the authoritative runtime
+roots; startup rejects those overlaps. Lever observations and events remain
+non-authoritative PostgreSQL telemetry served through the Garden Evals surface.
+
 Physiological-drive exclusion. Per the oth4 operator ruling, physiological
 drives (hunger, thirst, sleep_pressure) saturate without real physiological
 inputs and MUST NOT drive behavior. They are excluded from every lever and

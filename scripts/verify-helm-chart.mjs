@@ -157,6 +157,37 @@ function assertAgentReadinessUsesAdminTransport(deployment, label) {
   }
 }
 
+function assertObserverEvalSidecarPersistenceMount({
+  deployment,
+  label,
+  companionDataDir,
+  runtimeRoot = '/runtime',
+}) {
+  const podSpec = deployment?.spec?.template?.spec;
+  const seedContainer = podSpec?.initContainers
+    ?.find(container => container.name === 'seed-runtime-files');
+  const seedCommand = seedContainer?.command?.join('\n') ?? '';
+  const persistenceSubPath = 'observer-eval-sidecar';
+  if (!seedCommand.includes(`${companionDataDir}/${persistenceSubPath}`)) {
+    throw new Error(
+      `${label} seed init must create the observer-eval persistence subdirectory`,
+    );
+  }
+
+  const agentContainer = podSpec?.containers?.find(container => container.name === 'agent');
+  const expectedMountPath = `${runtimeRoot}/${persistenceSubPath}`;
+  const persistenceMount = agentContainer?.volumeMounts?.find(mount => (
+    mount.name === 'companion-data'
+    && mount.mountPath === expectedMountPath
+    && mount.subPath === persistenceSubPath
+  ));
+  if (!persistenceMount) {
+    throw new Error(
+      `${label} must mount companion-data subPath ${persistenceSubPath} at ${expectedMountPath}`,
+    );
+  }
+}
+
 function assertServicePublishesNotReadyAddresses(service, label) {
   if (service?.spec?.publishNotReadyAddresses !== true) {
     throw new Error(
@@ -1125,6 +1156,12 @@ assertRenderFails(
 );
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
+const parsedAgentDeployment = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
+assertObserverEvalSidecarPersistenceMount({
+  deployment: parsedAgentDeployment,
+  label: 'agent',
+  companionDataDir: '/app/companion-data',
+});
 const agentAdminService = findParsedDocumentByKindName(
   rendered,
   'Service',
@@ -1377,6 +1414,11 @@ for (const companion of fleetGardenCompanions) {
   if (!fleetAgentContainer) {
     throw new Error(`${agentDeploymentName} must render an agent container`);
   }
+  assertObserverEvalSidecarPersistenceMount({
+    deployment: parsedAgentDeployment,
+    label: agentDeploymentName,
+    companionDataDir: `/runtime/companions/${suffix}`,
+  });
   assertAgentReadinessUsesAdminTransport(parsedAgentDeployment, agentDeploymentName);
   if (fleetAgentContainer.securityContext?.readOnlyRootFilesystem !== true) {
     throw new Error(

@@ -502,6 +502,9 @@ spec:
               readOnly: true
             - name: companion-data
               mountPath: {{ .Values.runtime.companionDataDir }}
+            - name: companion-data
+              mountPath: {{ include "psfn.observerEvalSidecarPersistenceRootDir" . }}
+              subPath: observer-eval-sidecar
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
             {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}

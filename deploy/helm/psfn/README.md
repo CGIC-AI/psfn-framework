@@ -600,6 +600,20 @@ The sidecar's `settings.json` should point at the ClusterIP service:
 http://<release>-emosim:17342
 ```
 
+When `observerEvalSidecar.persistence.enabled=true`, set its settings-owned
+`persistence.rootDir` to:
+
+```text
+/runtime/observer-eval-sidecar
+```
+
+Every agent pod mounts that constant logical path from the
+`observer-eval-sidecar` subdirectory of its own companion-data PVC. This makes
+the root durable and writable despite the agent's read-only root filesystem,
+while preserving per-companion isolation. The chart creates the subdirectory
+before the agent starts. Lever events remain non-authoritative PostgreSQL
+telemetry exposed by the existing Garden observer-eval endpoints.
+
 Security: the emo_sim API is UNAUTHENTICATED by upstream design. The chart
 exposes it only as a ClusterIP service and, when `networkPolicy.enabled=true`,
 restricts ingress to agent pods on the HTTP port and denies all egress. Never

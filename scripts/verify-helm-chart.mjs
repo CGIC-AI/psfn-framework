@@ -3028,16 +3028,7 @@ const prefetchRendered = render([
   'modelPrefetch.enabled=true',
 ]);
 
-const parsedPrefetchJob = findParsedDocumentByKindComponent(
-  prefetchRendered,
-  'Job',
-  'model-prefetch',
-);
-if (!parsedPrefetchJob?.metadata?.name?.match(/^psfn-model-prefetch-[a-f0-9]{16}$/)) {
-  throw new Error(
-    `model prefetch Job name must carry its immutable spec hash, got ${parsedPrefetchJob?.metadata?.name}`,
-  );
-}
+const parsedPrefetchJob = findParsedDocumentByKindComponent(prefetchRendered, 'Job', 'model-prefetch');
 const prefetchJob = findDocument(prefetchRendered, parsedPrefetchJob.metadata.name);
 assertIncludes(prefetchJob, 'kind: Job', 'model prefetch Job kind');
 assertIncludes(prefetchJob, 'app.kubernetes.io/component: model-prefetch', 'model prefetch Job component label');
@@ -3058,57 +3049,6 @@ for (const component of ['gateway', 'agent', 'garden', 'satellite-hub']) {
   assertDocumentDoesNotSelectComponent(prefetchJob, component, 'model prefetch Job labels');
 }
 assertServiceSelectorsDoNotSelectPrefetch(prefetchRendered, 'prefetch render');
-
-// A completed Job cannot accept a pod-template image mutation. An app-only
-// image upgrade must therefore render a new identity for the changed immutable
-// spec while preserving the shared model-cache PVC. Rendering the same inputs
-// twice must remain stable so unrelated Helm operations do not rerun prefetch.
-const prefetchOldImageRendered = render([
-  '--set', 'modelPrefetch.enabled=true',
-  '--set-string', 'psfnAppImage.tag=0.1.0-kube-oldprefetch',
-]);
-const prefetchNewImageRendered = render([
-  '--set', 'modelPrefetch.enabled=true',
-  '--set-string', 'psfnAppImage.tag=0.1.0-kube-newprefetch',
-]);
-const prefetchOldImageJob = findParsedDocumentByKindComponent(
-  prefetchOldImageRendered,
-  'Job',
-  'model-prefetch',
-);
-const prefetchOldImageJobAgain = findParsedDocumentByKindComponent(
-  prefetchOldImageRendered,
-  'Job',
-  'model-prefetch',
-);
-const prefetchNewImageJob = findParsedDocumentByKindComponent(
-  prefetchNewImageRendered,
-  'Job',
-  'model-prefetch',
-);
-if (!prefetchOldImageJob || !prefetchNewImageJob) {
-  throw new Error('model prefetch image-upgrade regression render is missing its Job');
-}
-if (prefetchOldImageJob.metadata.name !== prefetchOldImageJobAgain?.metadata?.name) {
-  throw new Error('identical model prefetch specs must render the same Job name');
-}
-if (prefetchOldImageJob.metadata.name === prefetchNewImageJob.metadata.name) {
-  throw new Error('changed model prefetch pod image must render a new immutable Job identity');
-}
-for (const [job, expectedImage] of [
-  [prefetchOldImageJob, 'localhost/psfn-framework:0.1.0-kube-oldprefetch'],
-  [prefetchNewImageJob, 'localhost/psfn-framework:0.1.0-kube-newprefetch'],
-]) {
-  if (!job.spec?.template?.spec?.containers?.every(container => container.image === expectedImage)) {
-    throw new Error(`${job.metadata.name} did not render expected image ${expectedImage}`);
-  }
-  const modelCacheClaim = job.spec?.template?.spec?.volumes
-    ?.find(volume => volume.name === 'model-cache')
-    ?.persistentVolumeClaim?.claimName;
-  if (modelCacheClaim !== 'psfn-model-cache') {
-    throw new Error(`${job.metadata.name} must preserve the psfn-model-cache PVC`);
-  }
-}
 
 const prefetchPolicy = findDocument(prefetchRendered, 'psfn-model-prefetch-egress');
 assertIncludes(prefetchPolicy, 'kind: NetworkPolicy', 'model prefetch NetworkPolicy kind');

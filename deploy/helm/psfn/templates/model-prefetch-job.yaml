@@ -107,18 +107,24 @@ template:
           claimName: {{ include "psfn.fullname" . }}-model-cache
 {{- end }}
 
+{{- define "psfn.modelPrefetchJobName" -}}
+{{- $jobSpec := include "psfn.modelPrefetchJobSpec" . -}}
+{{- $specHash := sha256sum $jobSpec | trunc 16 -}}
+{{- $nameBase := include "psfn.fullname" . | trunc 31 | trimSuffix "-" -}}
+{{- printf "%s-model-prefetch-%s" $nameBase $specHash -}}
+{{- end }}
+
 {{- $injectionEnabled := and .Values.modelPrefetch.injectionClassifier.enabled .Values.persistence.modelCache.enabled }}
 {{- if and .Values.modelPrefetch.enabled (or .Values.modelPrefetch.textEmotion.enabled $injectionEnabled) }}
 {{- $jobSpec := include "psfn.modelPrefetchJobSpec" . }}
 {{- $specHash := sha256sum $jobSpec | trunc 16 }}
-{{- $nameBase := include "psfn.fullname" . | trunc 31 | trimSuffix "-" }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   # Jobs have immutable pod templates. Keying the object identity to the
   # complete rendered spec makes an app-image or prefetch-config change create
   # a replacement Job instead of attempting an invalid in-place mutation.
-  name: {{ printf "%s-model-prefetch-%s" $nameBase $specHash }}
+  name: {{ include "psfn.modelPrefetchJobName" . }}
   labels:
     {{- include "psfn.labels" . | nindent 4 }}
     app.kubernetes.io/component: model-prefetch

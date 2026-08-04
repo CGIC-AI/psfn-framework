@@ -30,6 +30,7 @@ repo-owned entrypoints: `dist/gateway-main.js`, `dist/agent-main.js`, and
 
 - k3s or Kubernetes with a default StorageClass.
 - Helm 4.x or compatible Helm 3.x renderer.
+- `jq` for the documented selector-based model-prefetch lifecycle commands.
 - cert-manager CRDs/controllers installed before applying this chart.
 - A NetworkPolicy-capable CNI if you expect NetworkPolicies to be enforced.
   Stock k3s flannel does not enforce NetworkPolicy by itself.

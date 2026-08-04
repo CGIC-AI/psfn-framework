@@ -247,6 +247,16 @@ routing and the continuity smoke went unverified across two deploys
   `_channel_index.json` atomically and **restart the gateway** (it holds
   the session store; tail cache keys on file fingerprint but drop in-memory
   state anyway). Cf. psfn-framework-tswt/-68ou/-g59z.
+- **Malformed (unparseable) rows** in a session journal poison
+  background-work handoff recovery: the owner is skipped fail-closed with a
+  per-restart `EBADMSG` warning. `npm run session:repair:integrity --
+  --reason <text>` now quarantines such rows instead of refusing the file
+  (psfn-framework-8xc4k): valid entries keep their original sealing when no
+  re-sign is needed, raw bytes stay in the timestamped backup, each dropped
+  row gets a durable content-free receipt in
+  `<backup-dir>/quarantine-receipts.jsonl`, and the `session_integrity_repair`
+  safeguard audit event carries the counts. After install + gateway restart
+  the owner recovers with no further warnings.
 - Postgres projection cleanup goes through `kubectl exec -i psfn-postgres-0 --
   psql` with the SQL piped on stdin (inline quoting through ssh+kubectl+psql
   is a tarpit).

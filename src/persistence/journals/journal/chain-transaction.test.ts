@@ -138,6 +138,58 @@ describe('journal chain rewrite transactions', () => {
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 
+  it('refuses a rewrite over a malformed journal file without a quarantine hook', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+    writeFileSync(rootPath, `${journalLine(entry(1))}{not-json}\n`, 'utf8');
+
+    expect(() => rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[entry(1)], [entry(2)]],
+      writeEntries,
+    })).toThrow(/Refusing L0 chain rewrite over a malformed journal file/);
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(`${journalLine(entry(1))}{not-json}\n`);
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
+  it('drops malformed rows with a declared quarantine hook while preserving every canonical entry', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+    writeFileSync(rootPath, `${journalLine(entry(1))}{not-json}\n`, 'utf8');
+    const quarantined: Array<{ targetPath: string; rows: readonly unknown[] }> = [];
+
+    rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[entry(1)], [entry(2)]],
+      writeEntries,
+      onMalformedRowQuarantine: (targetPath, rows) => {
+        quarantined.push({ targetPath, rows });
+      },
+    });
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(entry(2)));
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]!.targetPath).toBe(rootPath);
+    expect(quarantined[0]!.rows).toHaveLength(1);
+    expect(quarantined[0]!.rows[0]).toMatchObject({ lineNumber: 2, raw: '{not-json}' });
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
+  it('still fails closed with a quarantine hook when a canonical entry is altered', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+    writeFileSync(rootPath, `${journalLine(entry(1))}{not-json}\n`, 'utf8');
+
+    expect(() => rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[{ ...entry(1), role: 'assistant' }], [entry(2)]],
+      writeEntries,
+      onMalformedRowQuarantine: () => {},
+    })).toThrow(/may not alter 'role'/);
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(`${journalLine(entry(1))}{not-json}\n`);
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
   it('commits a content redaction that preserves entry identity', () => {
     const { dir, rootPath, segmentPath } = seedJournalHarness();
 

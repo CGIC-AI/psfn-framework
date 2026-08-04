@@ -244,16 +244,27 @@ interface IntentionOutboundSocialDesireInitiator {
   personalProjectId?: never;
 }
 
-/** A weighted-thought nudge carries only the live source it independently accepted. */
-interface IntentionOutboundWeightedThoughtInitiator extends IntentionOutboundLiveThreadProvenance {
+/** A live-thread weighted thought carries only its independently accepted thread source. */
+interface IntentionOutboundWeightedThoughtLiveThreadInitiator
+  extends IntentionOutboundLiveThreadProvenance {
   appraisalFollowUp?: never;
   socialDesire?: never;
+  personalProjectId?: never;
+}
+
+/** A personal-project weighted thought carries no unrelated live-thread source. */
+interface IntentionOutboundPersonalProjectInitiator {
+  appraisalFollowUp?: never;
+  socialDesire?: never;
+  pendingFollowUpId?: never;
+  concernIds?: never;
+  requiresActiveConcern?: never;
   /**
    * Live personal-project provenance (hrmrq.85): the outbound gate re-verifies
    * the project against the personal-project library at dispatch and fails
    * closed when it is missing, unwired, or no longer resumable.
    */
-  personalProjectId?: string;
+  personalProjectId: string;
 }
 
 /**
@@ -263,7 +274,8 @@ interface IntentionOutboundWeightedThoughtInitiator extends IntentionOutboundLiv
 export type IntentionOutboundMessageActionPayload = IntentionOutboundMessageActionBase & (
   | IntentionOutboundAppraisalInitiator
   | IntentionOutboundSocialDesireInitiator
-  | IntentionOutboundWeightedThoughtInitiator
+  | IntentionOutboundWeightedThoughtLiveThreadInitiator
+  | IntentionOutboundPersonalProjectInitiator
 );
 
 export interface IntentionReminderActionPayload {

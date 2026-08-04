@@ -74,26 +74,36 @@ function parseChannelType(value: unknown): ChannelType | undefined {
 
 function parseProvenance(value: unknown): ThoughtProvenance {
   const raw = parseJson(value);
-  const provenance: ThoughtProvenance = {};
-  if (typeof raw.concernId === 'string' && raw.concernId.trim()) provenance.concernId = raw.concernId.trim();
-  if (typeof raw.pendingFollowUpId === 'string' && raw.pendingFollowUpId.trim()) {
-    provenance.pendingFollowUpId = raw.pendingFollowUpId.trim();
-  }
-  if (typeof raw.personalProjectId === 'string' && raw.personalProjectId.trim()) {
-    provenance.personalProjectId = raw.personalProjectId.trim();
-  }
+  const concernId = typeof raw.concernId === 'string' ? raw.concernId.trim() : '';
+  const pendingFollowUpId = typeof raw.pendingFollowUpId === 'string'
+    ? raw.pendingFollowUpId.trim()
+    : '';
+  const personalProjectId = typeof raw.personalProjectId === 'string'
+    ? raw.personalProjectId.trim()
+    : '';
+  const context: Pick<
+    ThoughtProvenance,
+    'sourceChannelId' | 'sourceChannelType' | 'coLocationRef' | 'icpRootInitiationId'
+  > = {};
   if (typeof raw.sourceChannelId === 'string' && raw.sourceChannelId.trim()) {
-    provenance.sourceChannelId = raw.sourceChannelId.trim();
+    context.sourceChannelId = raw.sourceChannelId.trim();
   }
   const channelType = parseChannelType(raw.sourceChannelType);
-  if (channelType) provenance.sourceChannelType = channelType;
+  if (channelType) context.sourceChannelType = channelType;
   if (typeof raw.coLocationRef === 'string' && raw.coLocationRef.trim()) {
-    provenance.coLocationRef = raw.coLocationRef.trim();
+    context.coLocationRef = raw.coLocationRef.trim();
   }
   if (isRfc4122Uuid(raw.icpRootInitiationId)) {
-    provenance.icpRootInitiationId = raw.icpRootInitiationId;
+    context.icpRootInitiationId = raw.icpRootInitiationId;
   }
-  return provenance;
+  if (personalProjectId) {
+    return { ...context, personalProjectId };
+  }
+  return {
+    ...context,
+    ...(concernId ? { concernId } : {}),
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+  };
 }
 
 function mapRow(row: WeightedThoughtRow): ThoughtWeight {

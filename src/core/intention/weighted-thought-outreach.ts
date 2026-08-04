@@ -163,6 +163,14 @@ export function buildOutboundActionCandidate(input: {
   channelType: ChannelType;
 }): PostTurnActionCandidate {
   const { thought, content, channelId, channelType } = input;
+  const sourceProvenance = thought.provenance.personalProjectId
+    ? { personalProjectId: thought.provenance.personalProjectId }
+    : {
+        ...(thought.provenance.pendingFollowUpId
+          ? { pendingFollowUpId: thought.provenance.pendingFollowUpId }
+          : {}),
+        ...(thought.provenance.concernId ? { concernIds: [thought.provenance.concernId] } : {}),
+      };
   return {
     kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
     dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:weighted-thought:${thought.id}:${hashString(content)}`,
@@ -171,13 +179,7 @@ export function buildOutboundActionCandidate(input: {
       channelType,
       content,
       reason: `weighted_thought:${thought.thoughtClass}`,
-      ...(thought.provenance.pendingFollowUpId
-        ? { pendingFollowUpId: thought.provenance.pendingFollowUpId }
-        : {}),
-      ...(thought.provenance.concernId ? { concernIds: [thought.provenance.concernId] } : {}),
-      ...(thought.provenance.personalProjectId
-        ? { personalProjectId: thought.provenance.personalProjectId }
-        : {}),
+      ...sourceProvenance,
     } satisfies IntentionOutboundMessageActionPayload,
     maxRetries: 1,
   };

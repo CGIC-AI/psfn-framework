@@ -400,6 +400,13 @@ export function normalizeIntentionOutboundMessageActionPayload(
   if (appraisalFollowUp && personalProjectId) {
     return null;
   }
+  if (personalProjectId && (
+    pendingFollowUpId
+    || concernIds.length > 0
+    || requiresActiveConcern
+  )) {
+    return null;
+  }
   const basePayload = {
     channelId,
     channelType: channelType as ChannelType,
@@ -427,10 +434,15 @@ export function normalizeIntentionOutboundMessageActionPayload(
       appraisalFollowUp,
     };
   }
+  if (personalProjectId) {
+    return {
+      ...basePayload,
+      personalProjectId,
+    };
+  }
   return {
     ...basePayload,
     ...liveThreadProvenance,
-    ...(personalProjectId ? { personalProjectId } : {}),
   };
 }
 

@@ -178,10 +178,5 @@
     "name": "size:XL",
     "color": "B60205",
     "description": "801+ counted changed lines; 2,500-line publication ceiling"
-  },
-  {
-    "name": "change-budget:exception",
-    "color": "B60205",
-    "description": "Maintainer-approved under-800 unbundleable blocker"
   }
 ]

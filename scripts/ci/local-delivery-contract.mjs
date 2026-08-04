@@ -18,7 +18,7 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 // result and whole-gate attestation is invalidated and forced to rerun. It is
 // embedded in every stage record and in the final attestation; a mismatch is a
 // hard reuse invalidation.
-export const GATE_VERSION = 4;
+export const GATE_VERSION = 5;
 
 // Schema version for a single per-stage record on disk. Independent of the
 // whole-gate attestation schema so the two can evolve separately.
@@ -252,7 +252,6 @@ export function buildGatePlan({
   scannablePaths = paths,
   base = 'origin/main',
   head = 'HEAD',
-  changeBudgetException = false,
   canary = false,
 }) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
@@ -281,7 +280,6 @@ export function buildGatePlan({
         base,
         '--head',
         head,
-        ...(changeBudgetException ? ['--exception'] : []),
       ],
       canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {},
     ),

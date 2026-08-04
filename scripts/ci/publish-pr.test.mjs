@@ -343,11 +343,11 @@ test('publisher creates a labeled new PR as draft with labels before flipping it
   await publishPr(
     [
       '--title',
-      'Change-budget exception',
+      'Labeled change',
       '--body-file',
       'pr-body.md',
       '--label',
-      'change-budget:exception',
+      'kind:chore',
       '--label',
       'release:manual',
     ],
@@ -366,13 +366,13 @@ test('publisher creates a labeled new PR as draft with labels before flipping it
   assert.ok(create.includes('--draft'), 'labeled new PR must suppress CI on its opened event');
   assert.deepEqual(
     create.filter((argument, index) => create[index - 1] === '--label' || argument === '--label'),
-    ['--label', 'change-budget:exception', '--label', 'release:manual'],
+    ['--label', 'kind:chore', '--label', 'release:manual'],
   );
   assert.ok(readyIndex > createIndex, 'labels must be attached before the ready-for-review event');
-  assert.deepEqual(fixture.appliedLabels, ['change-budget:exception', 'release:manual']);
+  assert.deepEqual(fixture.appliedLabels, ['kind:chore', 'release:manual']);
   assert.deepEqual(
     fixture.readyLabelSnapshots,
-    [['change-budget:exception', 'release:manual']],
+    [['kind:chore', 'release:manual']],
     'the first CI-triggering event must observe every requested label',
   );
 });
@@ -384,11 +384,11 @@ test('publisher loudly reports a labeled new PR left draft when the ready flip f
     publishPr(
       [
         '--title',
-        'Change-budget exception',
+        'Labeled change',
         '--body-file',
         'pr-body.md',
         '--label',
-        'change-budget:exception',
+        'kind:chore',
       ],
       fixture.dependencies,
     ),
@@ -408,11 +408,11 @@ test('publisher warns that a partially created labeled PR may remain draft', asy
     publishPr(
       [
         '--title',
-        'Change-budget exception',
+        'Labeled change',
         '--body-file',
         'pr-body.md',
         '--label',
-        'change-budget:exception',
+        'kind:chore',
       ],
       fixture.dependencies,
     ),
@@ -466,7 +466,7 @@ test('publisher applies labels to an existing PR through REST before pushing', a
   const fixture = makePublisherFixture({ existingPr: true });
 
   await publishPr(
-    ['--label', 'change-budget:exception', '--label', 'release:manual'],
+    ['--label', 'kind:chore', '--label', 'release:manual'],
     fixture.dependencies,
   );
 
@@ -483,11 +483,11 @@ test('publisher applies labels to an existing PR through REST before pushing', a
     'POST',
     'repos/{owner}/{repo}/issues/191/labels',
     '-f',
-    'labels[]=change-budget:exception',
+    'labels[]=kind:chore',
     '-f',
     'labels[]=release:manual',
   ]);
-  assert.deepEqual(fixture.appliedLabels, ['change-budget:exception', 'release:manual']);
+  assert.deepEqual(fixture.appliedLabels, ['kind:chore', 'release:manual']);
   assert.ok(labelIndex < pushIndex, 'existing PR labels must be applied before publishing a new head');
   assert.equal(
     fixture.calls.some(call => call[0] === 'gh' && call[1] === 'pr' && call[2] === 'edit'),
@@ -499,7 +499,7 @@ test('publisher stops before push when applying an existing-PR label fails', asy
   const fixture = makePublisherFixture({ existingPr: true, labelUpdateFails: true });
 
   await assert.rejects(
-    publishPr(['--label', 'change-budget:exception'], fixture.dependencies),
+    publishPr(['--label', 'kind:chore'], fixture.dependencies),
     /Failed to apply labels to PR #191 before push.*HTTP 422/s,
   );
   assert.equal(

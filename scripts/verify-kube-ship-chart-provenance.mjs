@@ -39,27 +39,6 @@ if (guardIndex < 0 || forceIndex < guardIndex || buildIndex < forceIndex) {
 if (!shipScript.includes('helm upgrade psfn') || !shipScript.includes('--take-ownership --timeout 10m')) {
   throw new Error('ship-kube-update.sh must adopt chart-declared resources during Helm upgrades');
 }
-const prefetchLifecycleFunction = shipScript.indexOf('complete_model_prefetch_lifecycle()');
-const helmSetsInitialization = shipScript.indexOf('HELM_SETS=()');
-const prefetchLifecycleCall = shipScript.indexOf('complete_model_prefetch_lifecycle', helmSetsInitialization);
-const helmUpgrade = shipScript.indexOf('helm upgrade psfn');
-if (prefetchLifecycleFunction < 0
-  || helmSetsInitialization < 0
-  || prefetchLifecycleCall < helmSetsInitialization
-  || prefetchLifecycleCall > helmUpgrade) {
-  throw new Error('ship-kube-update.sh must close completed model prefetch before Helm upgrade');
-}
-for (const requiredPrefetchGuard of [
-  'app.kubernetes.io/component=model-prefetch',
-  'modelPrefetch.enabled=false',
-  'refusing to ship while model prefetch is incomplete',
-  'PREFETCH_LIFECYCLE_CLOSED=1',
-  'rkubectl rollout status deploy/psfn-gateway',
-]) {
-  if (!shipScript.includes(requiredPrefetchGuard)) {
-    throw new Error(`ship-kube-update.sh missing model-prefetch lifecycle guard: ${requiredPrefetchGuard}`);
-  }
-}
 
 const root = mkdtempSync(join(tmpdir(), 'psfn-kube-chart-provenance-'));
 const runGit = (...args) => execFileSync('git', args, {

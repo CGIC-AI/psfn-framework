@@ -214,19 +214,28 @@
           This retires the current active logical session for one physical source channel and creates a new live route.
         </p>
 
-        <label class="mt-4 block text-sm font-medium text-shadow-800" for="source-channel">Source channel</label>
-        <input
-          id="source-channel"
+        <label class="mt-4 block text-sm font-medium text-shadow-800" for="known-source-channel">Known source channel</label>
+        <select
+          id="known-source-channel"
           class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
-          list="source-channel-options"
-          bind:value={selectedSourceChannelId}
-          placeholder="discord:channel-id"
-        />
-        <datalist id="source-channel-options">
+          value={sourceChannelOptions.includes(selectedSourceChannelId) ? selectedSourceChannelId : ''}
+          onchange={(event) => {
+            if (event.currentTarget.value) selectedSourceChannelId = event.currentTarget.value;
+          }}
+        >
+          <option value="">Choose from {sourceChannelOptions.length} known channel{sourceChannelOptions.length === 1 ? '' : 's'}</option>
           {#each sourceChannelOptions as channelId}
             <option value={channelId}>{channelLabel(channelId)}</option>
           {/each}
-        </datalist>
+        </select>
+
+        <label class="mt-4 block text-sm font-medium text-shadow-800" for="source-channel">Source channel ID</label>
+        <input
+          id="source-channel"
+          class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
+          bind:value={selectedSourceChannelId}
+          placeholder="discord:channel-id"
+        />
 
         <label class="mt-4 block text-sm font-medium text-shadow-800" for="mode">Mode</label>
         <select id="mode" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm" bind:value={mode}>

@@ -304,7 +304,7 @@ export function buildGatePlan({
       : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
     ...(rootRuntime
       ? [
-          command('build', 'npm', ['run', 'build'], { nodeHeapMb: 4096 }),
+          command('build', 'npm', ['run', 'build'], { nodeHeapMb: 8192 }),
           command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], {
             nodeHeapMb: 4096,
           }),

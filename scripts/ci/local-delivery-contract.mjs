@@ -18,7 +18,7 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 // result and whole-gate attestation is invalidated and forced to rerun. It is
 // embedded in every stage record and in the final attestation; a mismatch is a
 // hard reuse invalidation.
-export const GATE_VERSION = 5;
+export const GATE_VERSION = 6;
 
 // Schema version for a single per-stage record on disk. Independent of the
 // whole-gate attestation schema so the two can evolve separately.
@@ -252,6 +252,7 @@ export function buildGatePlan({
   scannablePaths = paths,
   base = 'origin/main',
   head = 'HEAD',
+  changeBudgetException = false,
   canary = false,
 }) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
@@ -280,6 +281,7 @@ export function buildGatePlan({
         base,
         '--head',
         head,
+        ...(changeBudgetException ? ['--exception'] : []),
       ],
       canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {},
     ),
@@ -401,7 +403,12 @@ export function assessHookInstallation({ hooksPath, existingHooks }) {
   return { allowed: true, reason: '' };
 }
 
-export function evaluateRequiredChecks({ expectedHead, actualHead, checks }) {
+export function evaluateRequiredChecks({
+  expectedHead,
+  actualHead,
+  checks,
+  requireGreptile = false,
+}) {
   if (actualHead !== expectedHead) {
     return {
       state: 'failed',
@@ -409,7 +416,8 @@ export function evaluateRequiredChecks({ expectedHead, actualHead, checks }) {
     };
   }
 
-  for (const requiredName of ['ci-required', 'Greptile Review']) {
+  const requiredChecks = ['ci-required', ...(requireGreptile ? ['Greptile Review'] : [])];
+  for (const requiredName of requiredChecks) {
     const check = checks.find(({ name }) => name === requiredName);
     if (!check || check.status !== 'COMPLETED') {
       return { state: 'pending', reason: `${requiredName} has not completed.` };
@@ -421,5 +429,5 @@ export function evaluateRequiredChecks({ expectedHead, actualHead, checks }) {
       };
     }
   }
-  return { state: 'passed', reason: 'ci-required and Greptile Review passed.' };
+  return { state: 'passed', reason: `${requiredChecks.join(' and ')} passed.` };
 }

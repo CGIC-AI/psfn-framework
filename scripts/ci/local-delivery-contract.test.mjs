@@ -201,6 +201,12 @@ test('delivery-only gate stays fast while product changes retain full validation
     'ubs',
     'changed-workflow-analysis',
   ]);
+  assert.ok(
+    buildGatePlan({ paths: ['README.md'], changeBudgetException: true })
+      .find(({ name }) => name === 'change-budget')
+      .args.includes('--exception'),
+  );
+
   for (const [path, specialist] of [
     ['admin-ui/src/routes/+page.svelte', 'garden-ui'],
     ['companion-ui/src/App.tsx', 'companion-ui'],
@@ -878,10 +884,18 @@ test('heavy-phase lock: describeLockWait and isProcessAlive report clearly', () 
   assert.equal(isProcessAlive(-1), false);
 });
 
-test('PR check evaluator waits for both CI and Greptile and returns failures without reruns', () => {
+test('PR check evaluator requires Greptile only for explicitly labeled paid review', () => {
+  const ordinary = evaluateRequiredChecks({
+    expectedHead: HEAD,
+    actualHead: HEAD,
+    checks: [{ name: 'ci-required', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  });
+  assert.deepEqual(ordinary, { state: 'passed', reason: 'ci-required passed.' });
+
   const pending = evaluateRequiredChecks({
     expectedHead: HEAD,
     actualHead: HEAD,
+    requireGreptile: true,
     checks: [
       { name: 'ci-required', status: 'COMPLETED', conclusion: 'SUCCESS' },
       { name: 'Greptile Review', status: 'IN_PROGRESS', conclusion: '' },
@@ -892,6 +906,7 @@ test('PR check evaluator waits for both CI and Greptile and returns failures wit
   const failed = evaluateRequiredChecks({
     expectedHead: HEAD,
     actualHead: HEAD,
+    requireGreptile: true,
     checks: [
       { name: 'ci-required', status: 'COMPLETED', conclusion: 'FAILURE' },
       { name: 'Greptile Review', status: 'COMPLETED', conclusion: 'SUCCESS' },
@@ -1002,6 +1017,14 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
     workflow,
     /npm run verify:commit-identities -- --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
   );
+});
+
+test('Greptile requires an explicit paid-review label and never rescans pushes', () => {
+  const config = JSON.parse(readFileSync('greptile.json', 'utf8'));
+
+  assert.deepEqual(config.labels, ['review:greptile']);
+  assert.equal(config.triggerOnUpdates, false);
+  assert.equal(config.triggerOnDrafts, false);
 });
 
 test('agent contracts keep one Beads block and no floating tool installers', () => {

@@ -60,9 +60,10 @@ Use targeted tests and `npm run lint:changed -- --base origin/main` while
 editing. A bead is an ownership unit, not automatically a PR: batch compatible
 ready beads into one coherent train. The hard limits are 25 files, 2,500 counted
 changed lines, and 8 commits; 15 files, 1,500 lines, and 5 commits are planning
-targets. There is no minimum size and no exception ceremony for a small PR.
-Never batch unrelated changes, add filler, or hold completed work for an
-arbitrary line count.
+targets. The publication floor is 800 counted changed lines to prevent tiny PRs
+from incurring separate flat-price external reviews. Batch compatible work and
+never add filler. An under-floor PR requires `change-budget:exception` plus a
+`BLOCKER:` rationale showing that it must land alone and cannot safely wait.
 
 Commit coherent checkpoints and push the same-name non-main branch immediately:
 
@@ -97,6 +98,11 @@ delivery. Attestation and logs live under the worktree Git directory in
 `local-delivery-gate/`, never in tracked files. The cache matches only the exact
 head and base. `npm run pr:publish` runs and verifies the same gate before
 publishing the exact head; never use `--no-verify` in the normal flow.
+
+Greptile is not part of ordinary publication. Its repository config reviews only
+PRs explicitly labeled `review:greptile` and does not rescan later pushes. Never
+apply that label or mention the bot without explicit operator authorization for
+the paid review; while credits are disabled, do not request it at all.
 
 ## Internal adversarial review
 

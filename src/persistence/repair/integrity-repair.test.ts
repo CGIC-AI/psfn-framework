@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../sessions/store.js';
@@ -10,7 +19,11 @@ import {
   signJournalEntry,
   verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
+import { pendingJournalChainRewriteManifestPath } from '../journals/journal/chain-transaction.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import {
+  resolveJournalBackupPath,
+  rewriteJournalChainUnderLock,
   runSessionIntegrityRepair,
   SESSION_INTEGRITY_REPAIR_AUDIT_EVENT,
   type SessionIntegrityRepairAuditSink,
@@ -73,7 +86,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
@@ -148,7 +160,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
@@ -213,7 +224,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
@@ -298,7 +308,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
@@ -352,7 +361,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
 
@@ -406,7 +414,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'psfn-framework-8xc4k handoff-recovery disposition',
       audit,
     });
@@ -419,21 +426,30 @@ describe('runSessionIntegrityRepair', () => {
       `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`,
     );
 
-    // Durable receipt: one append-only line per quarantined row, content-free
-    // (the full pre-repair bytes live in the timestamped backup copy).
+    // Durable two-phase receipt: one prepared line per quarantined row plus a
+    // completed terminal line, all content-free (the full pre-repair bytes
+    // live in the timestamped backup copy).
     const receiptsPath = join(harness.backupDir, 'quarantine-receipts.jsonl');
     const receipts = readFileSync(receiptsPath, 'utf8').trim().split('\n')
       .map(line => JSON.parse(line) as Record<string, unknown>);
-    expect(receipts).toHaveLength(1);
+    expect(receipts).toHaveLength(2);
     expect(receipts[0]).toMatchObject({
-      filePath: expect.stringContaining('20260325_api-framed_user_000006.jsonl'),
+      phase: 'prepared',
+      file: '20260325_api-framed_user_000006.jsonl',
+      backupFile: '20260325_api-framed_user_000006.jsonl',
       lineNumber: 2,
       rawLength: '{not-json}'.length,
     });
     expect(typeof receipts[0]!.reason).toBe('string');
-    expect(JSON.stringify(receipts[0])).not.toContain('framed one');
+    expect(receipts[1]).toMatchObject({
+      dispositionId: receipts[0]!.dispositionId,
+      phase: 'completed',
+      rowCount: 1,
+    });
+    expect(JSON.stringify(receipts)).not.toContain('framed one');
+    expect(JSON.stringify(receipts)).not.toContain('{not-json}');
     const backupCopy = readFileSync(
-      join(harness.backupDir, 'sessions', '20260325_api-framed_user_000006.jsonl'),
+      join(harness.backupDir, '20260325_api-framed_user_000006.jsonl'),
       'utf8',
     );
     expect(backupCopy).toBe(originalLines);
@@ -476,7 +492,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
 
@@ -505,7 +520,6 @@ describe('runSessionIntegrityRepair', () => {
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'test',
     });
 
@@ -520,10 +534,11 @@ describe('runSessionIntegrityRepair', () => {
       quarantinedRows: 0,
     });
     expect(readFileSync(filePath, 'utf8')).toBe(afterFirst);
-    // The receipt ledger is append-only per dispositioned row, not per run.
+    // The receipt ledger is append-only per disposition, not per run: exactly
+    // one prepared row plus its completed terminal line after both runs.
     const receipts = readFileSync(join(harness.backupDir, 'quarantine-receipts.jsonl'), 'utf8')
-      .trim().split('\n');
-    expect(receipts).toHaveLength(1);
+      .trim().split('\n').map(line => JSON.parse(line) as { phase: string });
+    expect(receipts.map(record => record.phase)).toEqual(['prepared', 'completed']);
   });
 });
 
@@ -556,7 +571,6 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'operator re-sign after hotfix churn',
       audit,
     });
@@ -589,7 +603,6 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: '   ',
       audit,
     })).toThrow(/non-empty operator reason/u);
@@ -618,7 +631,6 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'operator re-sign after hotfix churn',
       audit,
     })).toThrow(/Refusing integrity repair with incomplete L0 chains/u);
@@ -650,11 +662,203 @@ describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)'
       sessionsDir: harness.sessionsDir,
       backupDir: harness.backupDir,
       keyring: keyring!,
-      repoRoot: harness.root,
       reason: 'no-sink run',
     });
     expect(report.journal.modifiedFiles).toBe(1);
     expect(report.journal.modifiedEntries).toBe(1);
     expect(report.rebuiltChannelIndex).toBe(true);
+  });
+});
+
+describe('quarantine disposition durability + containment (psfn-framework-8xc4k review)', () => {
+  function readReceipts(backupDir: string): Array<Record<string, unknown>> {
+    return readFileSync(join(backupDir, 'quarantine-receipts.jsonl'), 'utf8')
+      .trim().split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  function writeMalformedJournal(filePath: string, channelId: string): {
+    first: JournalEntry;
+    originalLines: string;
+  } {
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId, role: 'user', content: `${channelId} content`, timestamp: 1000,
+    }), keyring!, null);
+    const originalLines = `${JSON.stringify(first)}\n{not-json}\n`;
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, originalLines, 'utf8');
+    return { first, originalLines };
+  }
+
+  it('keeps every backup inside backupDir when the sessions root lives outside the checkout', () => {
+    // Neither tree is under process.cwd(): the pre-review repoRoot-relative
+    // naming escaped backupDir through `..` segments in this exact layout.
+    const dataRoot = mkdtempSync(join(tmpdir(), 'session-integrity-data-'));
+    const backupRoot = mkdtempSync(join(tmpdir(), 'session-integrity-backup-'));
+    rootsToDelete.push(dataRoot, backupRoot);
+    const sessionsDir = join(dataRoot, 'state', 'sessions');
+    const backupDir = join(backupRoot, 'repair-backups');
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+
+    const filePath = join(sessionsDir, '20260325_api-outside_user_000001.jsonl');
+    writeMalformedJournal(filePath, 'api:outside');
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir,
+      backupDir,
+      keyring: keyring!,
+      reason: 'outside-root layout',
+    });
+    expect(report.journal.quarantinedRows).toBe(1);
+
+    const backupPath = join(backupDir, '20260325_api-outside_user_000001.jsonl');
+    expect(existsSync(backupPath)).toBe(true);
+    expect(readFileSync(backupPath, 'utf8')).toContain('{not-json}');
+    // Nothing may have been written outside the backup namespace.
+    expect(readFileSync(filePath, 'utf8')).not.toContain('{not-json}');
+    const receipts = readReceipts(backupDir);
+    expect(receipts.map(record => record.phase)).toEqual(['prepared', 'completed']);
+    for (const record of receipts) {
+      for (const value of Object.values(record)) {
+        if (typeof value !== 'string') continue;
+        expect(value.includes('..')).toBe(false);
+        expect(value.startsWith('/')).toBe(false);
+      }
+    }
+  });
+
+  it('fails closed on backup paths outside the sessions root or escaping the backup directory', () => {
+    const base = join(tmpdir(), 'session-integrity-containment');
+    expect(() => resolveJournalBackupPath(
+      join(base, 'backups'),
+      join(base, 'sessions'),
+      join(base, 'elsewhere', '20260325_api-x_user_000001.jsonl'),
+    )).toThrow(/outside the sessions data root/u);
+    expect(() => resolveJournalBackupPath(
+      join(base, 'backups'),
+      join(base, 'sessions'),
+      join(base, 'sessions', '..', '..', 'escape.jsonl'),
+    )).toThrow(/outside the sessions data root/u);
+    // The sessions root itself is not a file inside it.
+    expect(() => resolveJournalBackupPath(
+      join(base, 'backups'),
+      join(base, 'sessions'),
+      join(base, 'sessions'),
+    )).toThrow(/outside the sessions data root/u);
+    expect(resolveJournalBackupPath(
+      join(base, 'backups'),
+      join(base, 'sessions'),
+      join(base, 'sessions', '20260325_api-x_user_000001.jsonl'),
+    )).toBe(join(base, 'backups', '20260325_api-x_user_000001.jsonl'));
+  });
+
+  it('fails before any destructive step when the backup directory is not writable', () => {
+    if (process.getuid?.() === 0) return; // chmod cannot fence root
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const filePath = join(harness.sessionsDir, '20260325_api-nowrite_user_000001.jsonl');
+    const { originalLines } = writeMalformedJournal(filePath, 'api:nowrite');
+    mkdirSync(harness.backupDir, { recursive: true });
+    chmodSync(harness.backupDir, 0o555);
+    try {
+      expect(() => runSessionIntegrityRepair({
+        sessionsDir: harness.sessionsDir,
+        backupDir: harness.backupDir,
+        keyring: keyring!,
+        reason: 'unwritable backup dir',
+      })).toThrow();
+    } finally {
+      chmodSync(harness.backupDir, 0o755);
+    }
+    // Nothing destructive happened: the malformed row is still in place and no
+    // receipt claims a disposition.
+    expect(readFileSync(filePath, 'utf8')).toBe(originalLines);
+    expect(existsSync(join(harness.backupDir, 'quarantine-receipts.jsonl'))).toBe(false);
+  });
+
+  it('leaves a truthful prepared+aborted ledger and the raw backup when the rewrite aborts', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const filePath = join(harness.sessionsDir, '20260325_api-abort_user_000001.jsonl');
+    const { originalLines } = writeMalformedJournal(filePath, 'api:abort');
+    const failingArchivePort = {
+      openArchive: (channelId: string, archivePath: string) => ({ channelId, filePath: archivePath }),
+      rewriteJournalChain: () => {
+        throw new Error('injected rewrite failure');
+      },
+    } as unknown as ReturnType<typeof createFilesystemSessionArchivePort>;
+
+    expect(() => rewriteJournalChainUnderLock(
+      [filePath],
+      keyring!,
+      harness.backupDir,
+      harness.sessionsDir,
+      failingArchivePort,
+      () => {},
+    )).toThrow('injected rewrite failure');
+
+    // Ordering guarantee: the destructive commit never ran, the malformed row
+    // is still in place, and both the raw backup and the content-free
+    // disposition record were already durable.
+    expect(readFileSync(filePath, 'utf8')).toBe(originalLines);
+    expect(readFileSync(
+      join(harness.backupDir, '20260325_api-abort_user_000001.jsonl'),
+      'utf8',
+    )).toBe(originalLines);
+    const receipts = readReceipts(harness.backupDir);
+    expect(receipts.map(record => record.phase)).toEqual(['prepared', 'aborted']);
+    expect(receipts[1]).toMatchObject({
+      dispositionId: receipts[0]!.dispositionId,
+      rowCount: 1,
+      errorMessage: 'injected rewrite failure',
+    });
+    expect(JSON.stringify(receipts)).not.toContain('{not-json}');
+    expect(JSON.stringify(receipts)).not.toContain('api:abort content');
+  });
+
+  it('recovers a pending prepared-phase rewrite before dispositioning, then completes', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const filePath = join(harness.sessionsDir, '20260325_api-crash_user_000001.jsonl');
+    const { first, originalLines } = writeMalformedJournal(filePath, 'api:crash');
+
+    // Simulate a process killed after the transaction's prepared phase: the
+    // durable backup holds the original bytes and the target was left
+    // half-installed (malformed row already dropped), manifest still pending.
+    const transactionId = 'repair-crash-test';
+    const backupPath = `${filePath}.${transactionId}.backup`;
+    copyFileSync(filePath, backupPath);
+    writeFileSync(filePath, `${JSON.stringify(first)}\n`, 'utf8');
+    writeFileSync(pendingJournalChainRewriteManifestPath(filePath), JSON.stringify({
+      version: 1,
+      transactionId,
+      phase: 'prepared',
+      rootPath: filePath,
+      files: [{
+        targetPath: filePath,
+        stagedPath: `${filePath}.${transactionId}.staged`,
+        backupPath,
+      }],
+    }), 'utf8');
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      reason: 'post-crash disposition',
+    });
+
+    // Rollback restored the original (malformed row included), then the run
+    // dispositioned it exactly once.
+    expect(report.journal.quarantinedRows).toBe(1);
+    expect(readFileSync(filePath, 'utf8')).not.toContain('{not-json}');
+    expect(readFileSync(filePath, 'utf8')).toContain('api:crash content');
+    expect(readFileSync(
+      join(harness.backupDir, '20260325_api-crash_user_000001.jsonl'),
+      'utf8',
+    )).toBe(originalLines);
+    const receipts = readReceipts(harness.backupDir);
+    expect(receipts.map(record => record.phase)).toEqual(['prepared', 'completed']);
   });
 });

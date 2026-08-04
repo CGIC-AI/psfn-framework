@@ -1,12 +1,15 @@
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  writeSync,
 } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { appendJsonLine } from '../jsonl.js';
 import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
@@ -64,7 +67,6 @@ interface RepairParams {
   sessionsDir: string;
   backupDir: string;
   keyring: SessionHmacKeyring;
-  repoRoot: string;
   /**
    * Required operator reason for this run (fail closed on blank). Recorded in
    * the durable audit event so every re-sign carries its justification.
@@ -79,51 +81,156 @@ interface RepairParams {
   audit?: SessionIntegrityRepairAuditSink;
 }
 
-function ensureBackup(filePath: string, backupDir: string, repoRoot: string): void {
-  const backupPath = join(backupDir, relative(repoRoot, filePath));
-  if (existsSync(backupPath)) return;
-  mkdirSync(dirname(backupPath), { recursive: true });
-  copyFileSync(filePath, backupPath);
+function syncFileDurable(filePath: string): void {
+  const descriptor = openSync(filePath, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function syncDirectoryDurable(dirPath: string): void {
+  const descriptor = openSync(dirPath, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Append one JSON line and fsync it (and the directory on first creation). */
+function appendJsonLineDurable(filePath: string, entry: unknown): void {
+  const created = !existsSync(filePath);
+  const descriptor = openSync(filePath, 'a');
+  try {
+    writeSync(descriptor, `${JSON.stringify(entry)}\n`);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  if (created) syncDirectoryDurable(dirname(filePath));
 }
 
 /**
- * Durable, append-only quarantine receipt for malformed rows a repair run
- * removed from the L0 chain. Lives in the run's timestamped backup directory
- * (alongside the full pre-repair file copies, which preserve the raw bytes) so
- * the disposition survives even after the in-place `.quarantine` sidecars are
- * cleaned up by later canonical reads. Rows are content-free apart from the
- * parse reason: line number, byte length, and the backup file that holds the
- * original bytes.
+ * Containment-checked backup location for a journal file. The backup namespace
+ * is rooted at the sessions data root — the one authority guaranteed to contain
+ * every discovered chain file — never at process.cwd(): a sessions root outside
+ * the checkout must not escape backupDir through `..` segments. Fail closed on
+ * any file that is not strictly inside the sessions root.
+ */
+export function resolveJournalBackupPath(
+  backupDir: string,
+  sessionsDir: string,
+  filePath: string,
+): string {
+  const relativePath = relative(resolve(sessionsDir), resolve(filePath));
+  if (
+    relativePath.length === 0
+    || relativePath.startsWith('..')
+    || isAbsolute(relativePath)
+  ) {
+    throw new Error(`Refusing to back up a journal outside the sessions data root: ${filePath}`);
+  }
+  const resolvedBackupDir = resolve(backupDir);
+  const backupPath = resolve(resolvedBackupDir, relativePath);
+  if (!backupPath.startsWith(`${resolvedBackupDir}${sep}`)) {
+    throw new Error(`Refusing to back up a journal outside the backup directory: ${filePath}`);
+  }
+  return backupPath;
+}
+
+/** Raw pre-repair copy, fsync-durable before any destructive rewrite begins. */
+function ensureBackup(filePath: string, backupDir: string, sessionsDir: string): string {
+  const backupPath = resolveJournalBackupPath(backupDir, sessionsDir, filePath);
+  if (existsSync(backupPath)) return backupPath;
+  mkdirSync(dirname(backupPath), { recursive: true });
+  copyFileSync(filePath, backupPath);
+  syncFileDurable(backupPath);
+  syncDirectoryDurable(dirname(backupPath));
+  return backupPath;
+}
+
+/**
+ * Durable, append-only quarantine disposition ledger for malformed rows a
+ * repair run removes from the L0 chain. Lives in the run's timestamped backup
+ * directory (alongside the full pre-repair file copies, which preserve the raw
+ * bytes) so the disposition survives even after the in-place `.quarantine`
+ * sidecars are cleaned up by later canonical reads. Every record is
+ * content-free: line number, byte length, parse reason, and safe
+ * sessions-root/backup-relative identifiers — never row bytes or message text.
+ *
+ * Two-phase protocol: `prepared` rows are fsync-durable BEFORE any malformed
+ * row can disappear from the chain; `completed` (or `aborted`) is appended
+ * after the rewrite transaction resolves. A ledger with `prepared` rows and no
+ * terminal record means the disposition was interrupted — the raw bytes remain
+ * recoverable from the referenced backup file.
  */
 export const SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME = 'quarantine-receipts.jsonl';
 
-function appendQuarantineReceipts(
+export type SessionQuarantineDispositionPhase = 'prepared' | 'completed' | 'aborted';
+
+let quarantineDispositionCounter = 0;
+
+function nextQuarantineDispositionId(): string {
+  quarantineDispositionCounter += 1;
+  return `${process.pid}-${Date.now()}-${quarantineDispositionCounter}`;
+}
+
+function writePreparedQuarantineDisposition(
   backupDir: string,
-  repoRoot: string,
-  quarantinedByFile: ReadonlyMap<string, readonly QuarantinedJournalEntry[]>,
+  sessionsDir: string,
+  dispositionId: string,
+  rowsByFile: ReadonlyMap<string, readonly QuarantinedJournalEntry[]>,
 ): void {
-  if (quarantinedByFile.size === 0) return;
   const receiptsPath = join(backupDir, SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME);
-  const quarantinedAt = Date.now();
-  for (const [filePath, rows] of quarantinedByFile) {
+  const recordedAt = Date.now();
+  for (const [filePath, rows] of rowsByFile) {
     for (const row of rows) {
-      appendJsonLine(receiptsPath, {
-        quarantinedAt,
-        filePath: relative(repoRoot, filePath),
-        backupPath: relative(repoRoot, join(backupDir, relative(repoRoot, filePath))),
+      appendJsonLineDurable(receiptsPath, {
+        dispositionId,
+        phase: 'prepared',
+        recordedAt,
+        file: relative(resolve(sessionsDir), resolve(filePath)),
+        backupFile: relative(resolve(backupDir), resolveJournalBackupPath(backupDir, sessionsDir, filePath)),
         lineNumber: row.lineNumber,
         rawLength: row.raw.length,
         reason: row.error,
-      });
+      } satisfies Record<string, unknown>);
     }
   }
 }
 
-function rewriteJournalChainUnderLock(
+function writeTerminalQuarantineDisposition(
+  backupDir: string,
+  dispositionId: string,
+  phase: 'completed' | 'aborted',
+  rowCount: number,
+  errorMessage?: string,
+): void {
+  const receiptsPath = join(backupDir, SESSION_INTEGRITY_REPAIR_QUARANTINE_RECEIPTS_FILENAME);
+  appendJsonLineDurable(receiptsPath, {
+    dispositionId,
+    phase,
+    recordedAt: Date.now(),
+    rowCount,
+    ...(errorMessage ? { errorMessage } : {}),
+  });
+}
+
+function quarantineRowSignature(rows: readonly QuarantinedJournalEntry[]): string {
+  return rows.map(row => `${row.lineNumber}:${row.raw.length}`).join(',');
+}
+
+/**
+ * Exported for tests: the per-chain rewrite with the two-phase quarantine
+ * disposition protocol. Production callers go through {@link runSessionIntegrityRepair}.
+ */
+export function rewriteJournalChainUnderLock(
   filePaths: readonly string[],
   keyring: SessionHmacKeyring,
   backupDir: string,
-  repoRoot: string,
+  sessionsDir: string,
   archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
   renewLease: () => void,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
@@ -158,10 +265,31 @@ function rewriteJournalChainUnderLock(
   if (modifiedEntries <= 0 && quarantinedRows === 0) {
     return { modifiedEntries: 0, modifiedFiles: 0, quarantinedRows: 0 };
   }
+  // Validate before any durable artifact is created: a chain with no parseable
+  // entries cannot be rewritten at all.
+  const firstEntry = originalEntriesByFile.find(entries => entries.length > 0)?.[0];
+  if (!firstEntry) {
+    throw new Error(`Cannot rewrite an empty L0 journal chain: ${filePaths[0]}`);
+  }
 
-  for (const filePath of filePaths) {
-    ensureBackup(filePath, backupDir, repoRoot);
+  // (a) Full raw pre-repair backup: fsync-durable and containment-checked
+  // before any malformed row can disappear.
+  for (const { filePath } of parsedByFile) {
+    ensureBackup(filePath, backupDir, sessionsDir);
     renewLease();
+  }
+
+  // (b) Content-free prepared disposition record: fsync-durable before the
+  // rewrite transaction starts, so a crash mid-rewrite leaves a truthful
+  // prepared-only ledger plus the raw backups.
+  const dispositionId = quarantinedRows > 0 ? nextQuarantineDispositionId() : null;
+  if (dispositionId) {
+    writePreparedQuarantineDisposition(
+      backupDir,
+      sessionsDir,
+      dispositionId,
+      new Map(parsedByFile.map(parsed => [parsed.filePath, parsed.quarantined])),
+    );
   }
 
   let previousHmac: string | null = null;
@@ -178,27 +306,45 @@ function rewriteJournalChainUnderLock(
     previousHmac = signed._hmac ?? null;
     return signed;
   }));
-  const firstEntry = originalEntriesByFile.find(entries => entries.length > 0)?.[0];
-  if (!firstEntry) {
-    throw new Error(`Cannot rewrite an empty L0 journal chain: ${filePaths[0]}`);
-  }
   const archives = filePaths.map(filePath => archivePort.openArchive(
     firstEntry.channelId,
     filePath,
   ));
   // The chain-rewrite guard re-derives malformed rows from disk and hands them
-  // back through this hook, so the receipt reflects the bytes actually dropped
-  // rather than this run's earlier parse.
-  const quarantinedByFile = new Map<string, readonly QuarantinedJournalEntry[]>();
-  archivePort.rewriteJournalChain(
-    archives,
-    rewrittenByFile,
-    renewLease,
-    (targetPath, quarantined) => {
-      quarantinedByFile.set(targetPath, quarantined);
-    },
-  );
-  appendQuarantineReceipts(backupDir, repoRoot, quarantinedByFile);
+  // back through this hook. Fail closed if they drifted from the rows the
+  // prepared receipt covers — the ledger must always describe the bytes that
+  // are actually dropped.
+  const preparedSignatureByFile = new Map(parsedByFile.map(parsed => [
+    resolve(parsed.filePath),
+    quarantineRowSignature(parsed.quarantined),
+  ]));
+  try {
+    archivePort.rewriteJournalChain(
+      archives,
+      rewrittenByFile,
+      renewLease,
+      (targetPath, quarantined) => {
+        const expected = preparedSignatureByFile.get(targetPath) ?? '';
+        if (quarantineRowSignature(quarantined) !== expected || expected.length === 0) {
+          throw new Error(`L0 journal malformed rows changed during repair: ${targetPath}`);
+        }
+      },
+    );
+  } catch (error) {
+    if (dispositionId) {
+      writeTerminalQuarantineDisposition(
+        backupDir,
+        dispositionId,
+        'aborted',
+        quarantinedRows,
+        toErrorMessage(error),
+      );
+    }
+    throw error;
+  }
+  if (dispositionId) {
+    writeTerminalQuarantineDisposition(backupDir, dispositionId, 'completed', quarantinedRows);
+  }
   return { modifiedEntries, modifiedFiles: filePaths.length, quarantinedRows };
 }
 
@@ -206,7 +352,7 @@ function rewriteJournalChain(
   filePaths: readonly string[],
   keyring: SessionHmacKeyring,
   backupDir: string,
-  repoRoot: string,
+  sessionsDir: string,
 ): { modifiedEntries: number; modifiedFiles: number; quarantinedRows: number } {
   const rootPath = filePaths[0];
   if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0, quarantinedRows: 0 };
@@ -217,7 +363,7 @@ function rewriteJournalChain(
       filePaths,
       keyring,
       backupDir,
-      repoRoot,
+      sessionsDir,
       archivePort,
       renewLease,
     );
@@ -288,7 +434,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
         chain.filePaths,
         params.keyring,
         params.backupDir,
-        params.repoRoot,
+        params.sessionsDir,
       );
       journalReport.modifiedFiles += modified.modifiedFiles;
       journalReport.modifiedEntries += modified.modifiedEntries;

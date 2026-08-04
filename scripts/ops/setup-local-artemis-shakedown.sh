@@ -1401,23 +1401,11 @@ create_local_app_secret
 
 if ((RUN_PREFETCH)); then
   echo "==> prefetching local text-emotion model cache"
-  kubectl -n "$NAMESPACE" delete job \
-    -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=model-prefetch" \
-    --ignore-not-found --wait=true >/dev/null
+  "$SCRIPT_DIR/model-prefetch-job.sh" delete "$NAMESPACE" "$RELEASE"
   helm_upgrade "$SHORT" "$FULL" \
     --set modelPrefetch.enabled=true \
     --timeout 10m >/dev/null
-  PREFETCH_JOB="$(kubectl -n "$NAMESPACE" get job \
-    -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=model-prefetch" \
-    -o json | jq -r '
-      [.items[] | select(.metadata.deletionTimestamp == null)]
-      | if length == 1 then .[0].metadata.name else empty end
-    ')"
-  [[ -n "$PREFETCH_JOB" ]] || {
-    echo "expected exactly one active model-prefetch Job" >&2
-    exit 1
-  }
-  kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${PREFETCH_JOB}" --timeout=30m
+  "$SCRIPT_DIR/model-prefetch-job.sh" wait "$NAMESPACE" "$RELEASE"
 fi
 
 echo "==> enabling Artemis app deployments"

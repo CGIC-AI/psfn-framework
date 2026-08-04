@@ -66,6 +66,11 @@ done
 
 [[ -n "$COMPONENTS" ]] || { echo "--components is required (agent|gateway|garden|emosim|all, comma-separated)" >&2; exit 1; }
 require_private_ops_value HOST_ALIAS "--host" PSFN_HOST_ALIAS
+if [[ ${#NAMESPACE} -gt 63 || ! "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+  echo "invalid Kubernetes namespace: ${NAMESPACE}" >&2
+  exit 1
+fi
+command -v jq >/dev/null 2>&1 || { echo "missing required command: jq" >&2; exit 1; }
 
 SHIP_EMOSIM=0
 if [[ "$COMPONENTS" == "all" ]]; then
@@ -149,7 +154,7 @@ live_agent_commit() {
 # Missing or incomplete Job evidence fails closed instead of racing an app
 # image upgrade against model provisioning.
 complete_model_prefetch_lifecycle() {
-  local enabled jobs_json active_count complete_count
+  local enabled jobs_json non_deleting_job_count complete_count
 
   [[ ${#SELECTED[@]} -gt 0 ]] || return 0
   if ! enabled="$(
@@ -167,13 +172,13 @@ complete_model_prefetch_lifecycle() {
     echo "FAIL: cannot inspect the live model-prefetch Job" >&2
     return 1
   fi
-  active_count="$(jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length' <<<"$jobs_json")"
+  non_deleting_job_count="$(jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length' <<<"$jobs_json")"
   complete_count="$(jq '[
     .items[]
     | select(.metadata.deletionTimestamp == null)
     | select(any(.status.conditions[]?; .type == "Complete" and .status == "True"))
   ] | length' <<<"$jobs_json")"
-  if [[ "$active_count" -eq 0 || "$complete_count" -ne "$active_count" ]]; then
+  if [[ "$non_deleting_job_count" -eq 0 || "$complete_count" -ne "$non_deleting_job_count" ]]; then
     echo "FAIL: refusing to ship while model prefetch is incomplete or its completion evidence is missing; finish/repair prefetch, then persist modelPrefetch.enabled=false" >&2
     return 1
   fi

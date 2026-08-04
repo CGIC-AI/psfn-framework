@@ -220,30 +220,59 @@ function registerOutboundHandlerHarness(options: {
 }
 
 describe('intention appraisal runtime integration', () => {
-  it('does not let an unrelated active concern clear an off-topic external appraisal draft', async () => {
+  it('dispatches an explicit concern check-in without requiring social-desire provenance', async () => {
     const harness = registerOutboundHandlerHarness({
-      activeConcernIds: ['concern-user-seems-tired'],
+      activeConcernIds: ['concern-scheduled-event'],
     });
     try {
       const result = await harness.handler(makeOutboundAction({
         channelId: 'primary-dm',
         channelType: 'discord',
-        content: "Let's book Paris; I'll sort the flights tonight.",
-        reason: 'Spontaneous trip planning.',
-        concernIds: ['concern-user-seems-tired'],
+        content: 'I was thinking about the event tonight. How are you feeling about it?',
+        reason: 'Active concern about a scheduled event tonight; check in before it starts.',
+        concernIds: ['concern-scheduled-event'],
         appraisalFollowUp: {
           channelId: 'primary-dm',
           canonicalContactKey: 'contact-primary',
         },
       }));
 
-      expect(result).toEqual({ detail: 'blocked:appraisal_consent_required' });
-      expect(harness.dispatch).not.toHaveBeenCalled();
-      expect(harness.getActiveConcerns).not.toHaveBeenCalled();
-      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
-      expect(harness.outboxRecords[1]).toMatchObject({
-        reason: 'appraisal_consent_required',
+      expect(result).toEqual({ detail: 'sent' });
+      expect(harness.dispatch).toHaveBeenCalledWith({
+        actionId: 'outbound-action-1',
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'I was thinking about the event tonight. How are you feeling about it?',
+        reason: 'Active concern about a scheduled event tonight; check in before it starts.',
       });
+      expect(harness.getActiveConcerns).toHaveBeenCalledWith({
+        channelId: 'primary-dm',
+        canonicalContactKey: 'contact-primary',
+      });
+      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'sent']);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('treats an explicit appraisal follow-up as an independent proactive initiator', async () => {
+    const harness = registerOutboundHandlerHarness({});
+    try {
+      const result = await harness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'You crossed my mind. How has your evening been?',
+        reason: 'I genuinely want to reconnect after a quiet stretch.',
+        appraisalFollowUp: {
+          channelId: 'primary-dm',
+          canonicalContactKey: 'contact-primary',
+        },
+      }));
+
+      expect(result).toEqual({ detail: 'sent' });
+      expect(harness.dispatch).toHaveBeenCalledOnce();
+      expect(harness.getActiveConcerns).not.toHaveBeenCalled();
+      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'sent']);
     } finally {
       harness.cleanup();
     }
@@ -387,9 +416,13 @@ describe('intention appraisal runtime integration', () => {
       const result = await blockedHarness.handler(makeOutboundAction({
         channelId: 'unapproved-channel',
         channelType: 'discord',
-        content: 'Remember to call the doctor.',
+        content: 'I wanted to check in about the private medical concern.',
         pendingFollowUpId: 'pending-follow-up-1',
         concernIds: ['active-concern-1'],
+        appraisalFollowUp: {
+          channelId: 'primary-dm',
+          canonicalContactKey: 'contact-primary',
+        },
       }));
 
       expect(result).toEqual({ detail: 'blocked:channel_not_approved_for_primary' });

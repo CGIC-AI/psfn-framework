@@ -203,11 +203,29 @@ describe('external follow-up translation', () => {
     const candidates = decisionsToPostTurnActionCandidates(decisions, context);
     expect(candidates).toHaveLength(1);
     expect(candidates[0].kind).toBe('intention.follow_up');
+    expect(candidates[0].payload).not.toHaveProperty('appraisalFollowUp');
   });
 
   it('rejects malformed outbound payloads', () => {
     expect(normalizeIntentionOutboundMessageActionPayload({ channelId: '', channelType: 'discord', content: 'x' })).toBeNull();
     expect(normalizeIntentionOutboundMessageActionPayload({ channelId: 'c', channelType: 'bogus', content: 'x' })).toBeNull();
     expect(normalizeIntentionOutboundMessageActionPayload({ channelId: 'c', channelType: 'discord', content: '  ' })).toBeNull();
+  });
+
+  it('rejects crossed appraisal and social-desire initiator provenance', () => {
+    expect(normalizeIntentionOutboundMessageActionPayload({
+      channelId: PRIMARY_DM_CHANNEL,
+      channelType: 'discord',
+      content: 'thinking of you',
+      appraisalFollowUp: {
+        channelId: 'session:source',
+        canonicalContactKey: 'contact-primary',
+      },
+      socialDesire: {
+        contactId: 'contact-primary',
+        consentId: '11111111-1111-4111-8111-111111111111',
+        orientation: 'warm',
+      },
+    })).toBeNull();
   });
 });

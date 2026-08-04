@@ -202,9 +202,9 @@ export interface IntentionOutboundSocialDesireProvenance {
 }
 
 /**
- * Runtime-stamped provenance for a model-authored external appraisal draft.
- * Presence requires exact-action ratification through the single-use social
- * desire consent ledger before the outbound gate may accept the draft.
+ * Runtime-stamped provenance for an explicit external appraisal decision.
+ * The appraisal prompt makes this an exact-message, first-person companion
+ * authorship decision; raw/internal appraisal output never receives this mark.
  */
 export interface IntentionOutboundAppraisalFollowUpProvenance {
   /** Original concern lookup scope used when the appraisal was evaluated. */
@@ -212,27 +212,59 @@ export interface IntentionOutboundAppraisalFollowUpProvenance {
   canonicalContactKey?: string;
 }
 
-export interface IntentionOutboundMessageActionPayload {
+interface IntentionOutboundMessageActionBase {
   channelId: string;
   channelType: ChannelType;
   content: string;
   reason?: string;
+  /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
+  originIcpRootInitiationId?: string;
+}
+
+interface IntentionOutboundLiveThreadProvenance {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+}
+
+/** An explicit external appraisal decision is one independent initiator. */
+interface IntentionOutboundAppraisalInitiator extends IntentionOutboundLiveThreadProvenance {
+  appraisalFollowUp: IntentionOutboundAppraisalFollowUpProvenance;
+  socialDesire?: never;
+  personalProjectId?: never;
+}
+
+/** Social desire is independently authorized by its own exact-action ledger. */
+interface IntentionOutboundSocialDesireInitiator {
+  socialDesire: IntentionOutboundSocialDesireProvenance;
+  appraisalFollowUp?: never;
+  pendingFollowUpId?: never;
+  concernIds?: never;
+  requiresActiveConcern?: never;
+  personalProjectId?: never;
+}
+
+/** A weighted-thought nudge carries only the live source it independently accepted. */
+interface IntentionOutboundWeightedThoughtInitiator extends IntentionOutboundLiveThreadProvenance {
+  appraisalFollowUp?: never;
+  socialDesire?: never;
   /**
    * Live personal-project provenance (hrmrq.85): the outbound gate re-verifies
    * the project against the personal-project library at dispatch and fails
    * closed when it is missing, unwired, or no longer resumable.
    */
   personalProjectId?: string;
-  /** Marks direct external output drafted by the background appraisal model. */
-  appraisalFollowUp?: IntentionOutboundAppraisalFollowUpProvenance;
-  /** Consented social-desire provenance (verified live at the outbound gate). */
-  socialDesire?: IntentionOutboundSocialDesireProvenance;
-  /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
-  originIcpRootInitiationId?: string;
 }
+
+/**
+ * Mutually exclusive proactive initiators. Each source proves its own exact
+ * action and cannot borrow another source's consent or liveness record.
+ */
+export type IntentionOutboundMessageActionPayload = IntentionOutboundMessageActionBase & (
+  | IntentionOutboundAppraisalInitiator
+  | IntentionOutboundSocialDesireInitiator
+  | IntentionOutboundWeightedThoughtInitiator
+);
 
 export interface IntentionReminderActionPayload {
   reminderId: string;

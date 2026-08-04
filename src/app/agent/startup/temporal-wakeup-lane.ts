@@ -1,7 +1,8 @@
 // ── Temporal wake-up lane (E7.1) ──
-// Morning wake + idle time-of-day refresher, extracted from agent/main.ts
-// (charter 12.1 god-file split, emh3p.1). Both lanes inject explicit system
-// notes (never Participant speech). The catch-up summary reuses the SHARED session
+// Morning wake + latest-only active-turn temporal frame, extracted from
+// agent/main.ts (charter 12.1 god-file split, emh3p.1). Morning notes persist
+// only after model delivery; idle frames are ephemeral prompt context. The
+// catch-up summary reuses the SHARED session
 // summarization service (summarizeRecentSessionEntries, purpose 'wake_session');
 // outward messages ride the existing proactive-outbound dispatcher and
 // quiet-hours time gate.
@@ -31,6 +32,19 @@ export interface TemporalWakeupLaneDeps {
   promptRegistry: PromptRegistryStatePort | null;
   proactiveOutbound: ProactiveOutboundDispatcher | null;
   companionName: string;
+}
+
+export function buildTemporalWakeTurnPrompt(note: string): string {
+  return [
+    'Here is the current temporal frame for this morning wake turn:',
+    '',
+    note,
+    '',
+    'If you want to send your partner an outward message right now, reply with',
+    'only that message. If you have nothing you want to send outward, reply with',
+    `"${REFLECTION_SILENT_TOKEN}" — staying quiet is completely fine; nothing about`,
+    'this wake requires an outward response.',
+  ].join('\n');
 }
 
 export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
@@ -86,16 +100,7 @@ export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
         channelType: 'terminal',
         authorId: 'scheduler',
         authorName: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
-        content: [
-          'A temporal wake note was just placed in your active session:',
-          '',
-          note,
-          '',
-          'This is your morning wake turn. If you want to send your partner an',
-          'outward message right now, reply with only that message. If you have',
-          `nothing you want to send outward, reply with "${REFLECTION_SILENT_TOKEN}" — staying quiet is`,
-          'completely fine; nothing about this wake requires an outward response.',
-        ].join('\n'),
+        content: buildTemporalWakeTurnPrompt(note),
         timestamp: new Date(),
       });
       const trimmed = response.content.trim();

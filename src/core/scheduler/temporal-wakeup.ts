@@ -1,37 +1,31 @@
 // ── Temporal wake-up lanes (E7.1) ──
-// Two scheduler lanes that actively move the companion's temporal frame
-// forward instead of relying on passive datetime anchors:
+// Two complementary paths move the companion's temporal frame forward:
 //
 //   1. Scheduled morning wake — a daily wall-clock task (default 08:00 local)
-//      that injects an explicit system note establishing the new day: current
+//      that may invoke one response turn for a warm private channel, then
+//      persists the new-day note only as proof of that model delivery: current
 //      date/time, elapsed time since the last channel exchange, and a
 //      catch-up summary produced by the SHARED session summarization service
 //      (summarizeRecentSessionEntries — injected as a port; no bespoke
 //      summarizer here).
-//   2. Idle time-of-day refresher — a polling task that, after a long
-//      same-day gap, injects a lighter note refreshing the time-of-day frame
-//      using the existing time-texture classification. Overnight/multi-day
-//      textures escalate to the full new-day framing.
+//   2. Active-turn temporal frame — after a configured idle gap, the session
+//      context derives one fresh ephemeral frame when the channel next invokes
+//      the model. Idle clock changes are never queued or persisted.
 //
 // Message-ontology invariants (charter 6.17, 8.1-8.2, law 19):
-// - Both lanes emit SYSTEM NOTES via SessionManager.appendContextSystemNote —
-//   role 'system', authorId 'system', sessionLane kind 'system_note' — which
-//   participate in ordinary context builds as attributed `[SYSTEM: ...]`
-//   speech, so the frame update is actually visible to the companion while
-//   the attribution guard keeps it out of Participant speech.
+// - A morning note is persisted only after an actual wake model turn completes.
+//   Active-turn frames are prompt-only context and never session rows.
 // - Wake notes are refreshers, not partner activity: elapsed-time and
 //   ambient-presence idle accounting derive from user/assistant entries only,
 //   so system-role notes never reset them.
 // - Any outward message rides the EXISTING proactive-outbound dispatcher and
-//   quiet-hours time gate; blocked outward delivery never blocks the internal
-//   frame update (the note is appended before any outward attempt).
+//   quiet-hours time gate. A policy block cannot erase the already-completed
+//   model delivery that authorized persistence of its morning frame.
 //
-// Spend posture (documented decision): note injection itself is free (no LLM
-// call; the catch-up summary is one background summary call through the
-// shared service). A full response turn is invoked only for the morning lane
-// and only when the last partner exchange is recent enough
-// (morningWake.fullTurnMaxIdleHours); dormant sessions get the note-only
-// injection so the wake stays cheap. The idle refresher never invokes turns.
+// Spend posture: the active-turn frame is deterministic and adds no LLM call.
+// The morning lane invokes at most one full response turn, and only when the
+// last partner exchange is recent enough (morningWake.fullTurnMaxIdleHours).
+// Dormant sessions receive no scheduler write or model call.
 
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveActiveTimezone } from '../../shared/time/active-timezone.js';
@@ -52,7 +46,6 @@ import {
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import {
-  evaluateIdleRefresherPreflight,
   evaluateMorningWakePreflight,
 } from './temporal-wakeup-preflight.js';
 import {
@@ -373,6 +366,16 @@ export function evaluateMorningWakeEligibility(
     // notes only) — the double-fire guard.
     return { allowed: false, reason: 'anti_loop_note_today', nowMs, sessionId };
   }
+  if (
+    input.lastWakeupNoteAtMs !== undefined
+    && Number.isFinite(input.lastWakeupNoteAtMs)
+    && lastActivity.timestamp <= input.lastWakeupNoteAtMs
+  ) {
+    // A calendar change is not channel activation. Once a delivered morning
+    // frame has been persisted, the channel must see a new real user/assistant
+    // entry before another autonomous morning turn can add a durable row.
+    return { allowed: false, reason: 'no_activation_since_wake', nowMs, sessionId };
+  }
 
   const timeTexture = classifyIdleGapTexture({
     lastActivityAtMs: lastActivity.timestamp,
@@ -528,6 +531,8 @@ export interface TemporalWakeupSessionManagerPort {
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
   /** Context-visible system-note lane; see SessionManager.appendContextSystemNote. */
   appendContextSystemNote(channelId: string, note: string, source?: string): void;
+  /** Configure the latest-only ephemeral frame derived on a real channel turn. */
+  configureActiveTemporalFrame?(config: { enabled: boolean; minIdleMs: number }): void;
 }
 
 export type TemporalWakeupOutboundResult = ProactiveOutboundDispatchResult;
@@ -536,7 +541,7 @@ export interface TemporalWakeupRuntimeOptions {
   scheduler: Scheduler;
   sessionManager: TemporalWakeupSessionManagerPort;
   config: TemporalWakeupConfig;
-  /** Quiet hours for OUTWARD delivery only; internal notes always land. */
+  /** Quiet hours for outward delivery after the wake model turn. */
   quietHours?: ProactiveQuietHoursConfig | null;
   /**
    * Shared catch-up summarizer port. Wire to
@@ -849,9 +854,10 @@ async function runOutwardPhase(
   decision: Extract<MorningWakeDecision, { allowed: true }>,
   channelType: ChannelType,
   note: string,
+  onWakeTurnDelivered: () => void,
 ): Promise<void> {
   if (!decision.invokeFullTurn || !options.invokeWakeTurn) {
-    log.debug('Morning wake: note-only injection (no full turn)', {
+    log.debug('Morning wake: no model turn, so no frame is persisted', {
       sessionId: decision.sessionId,
       invokeFullTurn: decision.invokeFullTurn,
       hasTurnPort: Boolean(options.invokeWakeTurn),
@@ -864,6 +870,7 @@ async function runOutwardPhase(
     channelType,
     note,
   }))?.trim();
+  onWakeTurnDelivered();
   if (!outwardContent) {
     log.debug('Morning wake turn produced no outward message', {
       sessionId: decision.sessionId,
@@ -923,6 +930,12 @@ async function runOutwardPhase(
 }
 
 export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOptions): void {
+  const morning = options.config.morningWake;
+  const refresher = options.config.idleRefresher;
+  options.sessionManager.configureActiveTemporalFrame?.({
+    enabled: options.config.enabled && refresher.enabled,
+    minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
+  });
   if (!options.config.enabled) {
     log.info('Temporal wake-up lanes disabled by scheduler.json temporalWakeup.enabled');
     return;
@@ -932,10 +945,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
   // the morning summary, and a morning note must not reset the
   // refresher lane's own interval.
   const morningNoteBySession = new Map<string, number>();
-  const refresherNoteBySession = new Map<string, number>();
-  const refresherCatchUpNoteBySession = new Map<string, number>();
-  const morning = options.config.morningWake;
-  const refresher = options.config.idleRefresher;
+  let morningFrameDateKey: string | undefined;
 
   if (morning.enabled) {
     // Resolve the daily wake slot for the configured timing mode. In 'habit'
@@ -978,12 +988,36 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         // the shared fan-out pipeline (bead 2x37.9 item 1). Outward delivery
         // stays single-target (below) to avoid multi-channel proactive spam.
         const nowMs = Date.now();
-        const eligible: Array<{
-          decision: Extract<MorningWakeDecision, { allowed: true }>;
-          note: string;
-          channelType: ChannelType;
-        }> = [];
-
+        const timeZone = resolveActiveTimezone();
+        const currentFrameDateKey = temporalWakeupLocalDateKey(nowMs, timeZone);
+        if (morningFrameDateKey === currentFrameDateKey) return;
+        if (options.sessionManager.getRecentSessionEntries) {
+          for (const channel of enumerateWakeupChannels(options, nowMs)) {
+            const inMemoryLastNoteAt = morningNoteBySession.get(channel.sessionId);
+            const preflightDenial = evaluateMorningWakePreflight({
+              session: channel,
+              fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+              minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+              nowMs,
+              evaluateEligibility: evaluateMorningWakeEligibility,
+              ...(inMemoryLastNoteAt !== undefined
+                ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
+                : {}),
+            });
+            if (preflightDenial) continue;
+            const persistedMorningAt = findLatestTemporalWakeupNoteAt(
+              options.sessionManager.getRecentSessionEntries(channel.sessionId, 64),
+              MORNING_WAKEUP_NOTE_SOURCES,
+            );
+            if (
+              persistedMorningAt !== undefined
+              && temporalWakeupLocalDateKey(persistedMorningAt, timeZone) === currentFrameDateKey
+            ) {
+              morningFrameDateKey = currentFrameDateKey;
+              return;
+            }
+          }
+        }
         const eligibleChannels = collectEligibleWakeupChannels<MorningWakeDecision>({
           options,
           nowMs,
@@ -1021,73 +1055,70 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           },
         });
 
-        for (const { channel, context, decision } of eligibleChannels) {
-          const timeZone = resolveActiveTimezone();
-          const refresherAlreadyDeliveredCatchUpToday =
-            didTemporalWakeupNoteWithContentLandOnLocalDate({
-              persistedEntries: context.persistedEntries,
-              sources: REFRESHER_WAKEUP_NOTE_SOURCES,
-              contentMarker: CATCH_UP_NOTE_PREFIX,
-              inMemoryNoteAtMs: refresherCatchUpNoteBySession.get(decision.sessionId),
-              observedAtMs: decision.nowMs,
-              timeZone,
-            });
-          // Keep the morning frame after a post-midnight refresher. Reuse the
-          // fresh state by omitting only catch-up content that actually landed.
-          const catchUpSummary = refresherAlreadyDeliveredCatchUpToday
-            ? ''
-            : await buildCatchUpSummary(
-              options,
-              decision.sessionId,
-              context.recentEntries,
-            );
-          const note = buildMorningWakeNote({
-            nowMs: decision.nowMs,
-            lastActivityAtMs: decision.lastActivityAtMs,
-            ...(catchUpSummary ? { catchUpSummary } : {}),
-          });
-
-          // Internal frame update FIRST — outward delivery failures must never
-          // undo or block it.
-          options.sessionManager.appendContextSystemNote(
-            decision.sessionId,
-            note,
-            TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
-          );
-          morningNoteBySession.set(decision.sessionId, decision.nowMs);
-          log.info('Morning wake note injected', {
-            sessionId: decision.sessionId,
-            texture: decision.timeTexture.kind,
-            invokeFullTurn: decision.invokeFullTurn,
-            hasCatchUpSummary: Boolean(catchUpSummary),
-          });
-
-          eligible.push({
-            decision,
-            note,
-            channelType: resolveWakeupChannelType(channel.channelType),
-          });
+        const turnCandidates = eligibleChannels.filter(
+          candidate => candidate.decision.invokeFullTurn && options.invokeWakeTurn,
+        );
+        if (turnCandidates.length === 0) {
+          log.debug('Morning wake: no active model-turn candidate; no frame persisted');
+          return;
         }
 
-        if (eligible.length === 0) return;
-
-        // Single outward target: the channel with the most recent partner
-        // activity. Only the internal frame notes fan out; proactive outbound
-        // stays one-target so a multi-channel wake never spams every surface.
-        const outwardTarget = eligible.reduce((best, candidate) =>
+        // A durable wake note is proof of an actual model delivery, so choose
+        // the one outward target before summaries, note construction, or any
+        // append. Other eligible channels get their fresh ephemeral frame when
+        // they next become active; idle scheduler ticks never fan rows out.
+        const outwardTarget = turnCandidates.reduce((best, candidate) =>
           candidate.decision.lastPartnerActivityAtMs > best.decision.lastPartnerActivityAtMs
             ? candidate
             : best,
         );
+        const refresherAlreadyDeliveredCatchUpToday =
+          didTemporalWakeupNoteWithContentLandOnLocalDate({
+            persistedEntries: outwardTarget.context.persistedEntries,
+            sources: REFRESHER_WAKEUP_NOTE_SOURCES,
+            contentMarker: CATCH_UP_NOTE_PREFIX,
+            observedAtMs: outwardTarget.decision.nowMs,
+            timeZone,
+          });
+        const catchUpSummary = refresherAlreadyDeliveredCatchUpToday
+          ? ''
+          : await buildCatchUpSummary(
+            options,
+            outwardTarget.decision.sessionId,
+            outwardTarget.context.recentEntries,
+          );
+        const note = buildMorningWakeNote({
+          nowMs: outwardTarget.decision.nowMs,
+          lastActivityAtMs: outwardTarget.decision.lastActivityAtMs,
+          ...(catchUpSummary ? { catchUpSummary } : {}),
+        });
+        const channelType = resolveWakeupChannelType(outwardTarget.channel.channelType);
         try {
           await runOutwardPhase(
             options,
             outwardTarget.decision,
-            outwardTarget.channelType,
-            outwardTarget.note,
+            channelType,
+            note,
+            () => {
+              options.sessionManager.appendContextSystemNote(
+                outwardTarget.decision.sessionId,
+                note,
+                TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+              );
+              morningNoteBySession.set(
+                outwardTarget.decision.sessionId,
+                outwardTarget.decision.nowMs,
+              );
+              morningFrameDateKey = currentFrameDateKey;
+              log.info('Morning wake note persisted after model delivery', {
+                sessionId: outwardTarget.decision.sessionId,
+                texture: outwardTarget.decision.timeTexture.kind,
+                hasCatchUpSummary: Boolean(catchUpSummary),
+              });
+            },
           );
         } catch (error) {
-          log.error('Morning wake outward phase failed; internal frame update stands', {
+          log.error('Morning wake model/outward phase failed', {
             sessionId: outwardTarget.decision.sessionId,
             error: String(error),
           });
@@ -1099,103 +1130,10 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
     });
   }
 
-  if (refresher.enabled) {
-    options.scheduler.register({
-      id: TEMPORAL_WAKEUP_REFRESHER_TASK_ID,
-      name: TEMPORAL_WAKEUP_REFRESHER_TASK_NAME,
-      type: 'every',
-      intervalMs: Math.max(1_000, refresher.checkIntervalMs),
-      handler: async () => {
-        // Fan the time-of-day refresh out to every recently-active channel
-        // (bead 2x37.3) through the shared fan-out pipeline (bead 2x37.9
-        // item 1); each channel keeps its own idle guard and anti-loop spacing.
-        // No outward delivery on this lane.
-        const nowMs = Date.now();
-        const eligibleChannels = collectEligibleWakeupChannels<IdleRefresherDecision>({
-          options,
-          nowMs,
-          inMemoryNoteBySession: refresherNoteBySession,
-          noteSources: REFRESHER_WAKEUP_NOTE_SOURCES,
-          recentLimit: 32,
-          runPreflight: (channel, inMemoryLastNoteAt) =>
-            evaluateIdleRefresherPreflight({
-              session: channel,
-              minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
-              minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
-              nowMs,
-              evaluateEligibility: evaluateIdleRefresherEligibility,
-              ...(inMemoryLastNoteAt !== undefined
-                ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
-                : {}),
-            }),
-          evaluate: (context) =>
-            evaluateIdleRefresherEligibility({
-              session: context.session,
-              recentEntries: context.recentEntries,
-              minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
-              minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
-              ...(context.lastWakeupNoteAtMs !== undefined
-                ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
-                : {}),
-            }),
-          onSkip: (denial) => {
-            log.debug('Idle refresher skipped', {
-              reason: denial.reason,
-              sessionId: denial.sessionId,
-              idleGapMs: denial.idleGapMs,
-            });
-          },
-        });
-
-        for (const { context, decision } of eligibleChannels) {
-          const catchUpSummary = await buildCatchUpSummary(
-            options,
-            decision.sessionId,
-            context.recentEntries,
-          );
-          let note: string;
-          if (decision.kind === 'new_day') {
-            // Overnight/multi-day texture: full new-day framing, including the
-            // shared catch-up summary when available.
-            note = buildMorningWakeNote({
-              nowMs: decision.nowMs,
-              lastActivityAtMs: decision.lastActivityAtMs,
-              ...(catchUpSummary ? { catchUpSummary } : {}),
-            });
-          } else {
-            note = buildTimeOfDayRefreshNote({
-              nowMs: decision.nowMs,
-              lastActivityAtMs: decision.lastActivityAtMs,
-              ...(catchUpSummary ? { catchUpSummary } : {}),
-            });
-          }
-
-          options.sessionManager.appendContextSystemNote(
-            decision.sessionId,
-            note,
-            TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
-          );
-          refresherNoteBySession.set(decision.sessionId, decision.nowMs);
-          if (catchUpSummary) {
-            refresherCatchUpNoteBySession.set(decision.sessionId, decision.nowMs);
-          }
-          log.info('Idle time-of-day refresher note injected', {
-            sessionId: decision.sessionId,
-            kind: decision.kind,
-            texture: decision.timeTexture.kind,
-            idleGapMs: decision.idleGapMs,
-          });
-        }
-      },
-      eligibility: { requiredTokens: ['memory.write'] },
-      state: 'idle',
-    });
-  }
-
   log.info('Temporal wake-up lanes registered', {
     morningEnabled: morning.enabled,
     morningLocalTime: morning.localTime,
-    refresherEnabled: refresher.enabled,
-    refresherMinIdleMinutes: refresher.minIdleMinutes,
+    activeTurnFrameEnabled: refresher.enabled,
+    activeTurnFrameMinIdleMinutes: refresher.minIdleMinutes,
   });
 }

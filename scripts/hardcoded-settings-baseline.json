@@ -4762,13 +4762,6 @@
     },
     {
       "file": "src/core/scheduler/temporal-wakeup.ts",
-      "name": "registerTemporalWakeupTasks.eligibleChannels.recentLimit",
-      "value": "32",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate registerTemporalWakeupTasks.eligibleChannels.recentLimit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/scheduler/temporal-wakeup.ts",
       "name": "registerTemporalWakeupTasks.options.scheduler.register.arg0.cadence",
       "value": "{ kind: 'daily', hour, minute, timezone: morning.timezone }",
       "form": "object-member",

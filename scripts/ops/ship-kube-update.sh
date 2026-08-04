@@ -44,6 +44,7 @@ COMPONENTS=""
 SKIP_GATE=0
 DRY_RUN=0
 VALUES_OVERLAY=
+PREFETCH_LIFECYCLE_CLOSED=0
 
 usage() {
   sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
@@ -140,6 +141,46 @@ live_agent_commit() {
     return 1
   fi
   printf '%s' "$commit"
+}
+
+# modelPrefetch is a first-boot lifecycle, not a permanent rollout mode. A
+# completed Job proves the shared model-cache PVC was populated; normal ships
+# then persist enabled=false so they retain the PVC without rerunning prefetch.
+# Missing or incomplete Job evidence fails closed instead of racing an app
+# image upgrade against model provisioning.
+complete_model_prefetch_lifecycle() {
+  local enabled jobs_json active_count complete_count
+
+  [[ ${#SELECTED[@]} -gt 0 ]] || return 0
+  if ! enabled="$(
+    remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm get values psfn -n $NAMESPACE -o json" \
+      | jq -r '(.modelPrefetch.enabled // false) | if type == "boolean" then . else error("modelPrefetch.enabled must be boolean") end'
+  )"; then
+    echo "FAIL: cannot resolve live modelPrefetch.enabled" >&2
+    return 1
+  fi
+  [[ "$enabled" == "true" ]] || return 0
+
+  if ! jobs_json="$(rkubectl get jobs \
+    -l 'app.kubernetes.io/instance=psfn,app.kubernetes.io/component=model-prefetch' \
+    -o json)"; then
+    echo "FAIL: cannot inspect the live model-prefetch Job" >&2
+    return 1
+  fi
+  active_count="$(jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length' <<<"$jobs_json")"
+  complete_count="$(jq '[
+    .items[]
+    | select(.metadata.deletionTimestamp == null)
+    | select(any(.status.conditions[]?; .type == "Complete" and .status == "True"))
+  ] | length' <<<"$jobs_json")"
+  if [[ "$active_count" -eq 0 || "$complete_count" -ne "$active_count" ]]; then
+    echo "FAIL: refusing to ship while model prefetch is incomplete or its completion evidence is missing; finish/repair prefetch, then persist modelPrefetch.enabled=false" >&2
+    return 1
+  fi
+
+  echo "==> completed model prefetch detected; preserving its PVC and disabling the one-shot lifecycle"
+  HELM_SETS+=("--set" "modelPrefetch.enabled=false")
+  PREFETCH_LIFECYCLE_CLOSED=1
 }
 
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -321,6 +362,7 @@ if [[ -n "$VALUES_OVERLAY" ]]; then
 fi
 
 HELM_SETS=()
+complete_model_prefetch_lifecycle
 if [[ $SHIP_EMOSIM -eq 1 ]]; then
   # Persisted into release values by this upgrade, so later app-only ships
   # (which reuse exported live values) keep the emosim deployment as-is.
@@ -365,6 +407,11 @@ for c in "${SELECTED[@]}"; do
     rkubectl rollout status "deploy/psfn-${c}" --timeout=300s
   fi
 done
+if [[ $PREFETCH_LIFECYCLE_CLOSED -eq 1 && ! " ${SELECTED[*]} " == *" gateway "* ]]; then
+  # Disabling prefetch removes the gateway's model-wait init container, so the
+  # gateway rolls even when this was an agent- or Garden-selective image ship.
+  rkubectl rollout status deploy/psfn-gateway --timeout=300s
+fi
 if [[ $SHIP_EMOSIM -eq 1 ]]; then
   rkubectl rollout status deploy/psfn-emosim --timeout=300s
 fi

@@ -752,6 +752,21 @@ not inherit that access. If your cluster requires domain allowlisting, allow the
 model provider endpoints, including Hugging Face model download endpoints, in
 the CNI, firewall, proxy, or egress gateway.
 
+The concrete Job name is
+`<release>-model-prefetch-<immutable-spec-hash>`. Kubernetes Job pod templates
+are immutable, so the hash covers the complete rendered Job spec: changing the
+app image or prefetch configuration creates a replacement Job instead of
+trying to mutate a completed one. The `model-cache` PVC name is stable and its
+populated cache survives that replacement. Identical inputs keep the same Job
+name, so unrelated Helm operations do not create duplicate work.
+
+Prefetch is still a first-boot lifecycle, not a permanent release mode. After
+the Job completes, persist `modelPrefetch.enabled=false`. The repo-owned
+`ship:kube` path does this automatically only when it can verify every current
+release-labeled prefetch Job is Complete; missing or incomplete evidence fails
+the ship closed. Direct Helm operators must perform the explicit second step
+below.
+
 Helm does not safely hard-order a normal Job before Deployment startup while
 also creating the PVC it mounts. For a first boot with restricted agent egress,
 install or upgrade once with the agent scaled down, wait for the Job, then
@@ -763,7 +778,14 @@ helm upgrade --install psfn deploy/helm/psfn \
   --create-namespace \
   --set modelPrefetch.enabled=true \
   --set workloads.agent.replicaCount=0
-kubectl -n psfn wait --for=condition=complete job/psfn-model-prefetch --timeout=30m
+PREFETCH_JOB="$(kubectl -n psfn get job \
+  -l 'app.kubernetes.io/instance=psfn,app.kubernetes.io/component=model-prefetch' \
+  -o json | jq -r '
+    [.items[] | select(.metadata.deletionTimestamp == null)]
+    | if length == 1 then .[0].metadata.name else empty end
+  ')"
+test -n "$PREFETCH_JOB"
+kubectl -n psfn wait --for=condition=complete "job/$PREFETCH_JOB" --timeout=30m
 helm upgrade --install psfn deploy/helm/psfn \
   --namespace psfn \
   --set modelPrefetch.enabled=false \

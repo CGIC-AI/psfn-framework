@@ -138,6 +138,15 @@ function findParsedDocumentByKindName(rendered, kind, name) {
     .find(document => document?.kind === kind && document?.metadata?.name === name);
 }
 
+function findParsedDocumentByKindComponent(rendered, kind, component) {
+  return parseAllDocuments(rendered)
+    .map(document => document.toJS())
+    .find(document => (
+      document?.kind === kind
+      && document?.metadata?.labels?.['app.kubernetes.io/component'] === component
+    ));
+}
+
 function assertAgentReadinessUsesAdminTransport(deployment, label) {
   const agentContainer = deployment?.spec?.template?.spec?.containers
     ?.find(container => container.name === 'agent');
@@ -909,7 +918,11 @@ assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetc
   if (injectionWaitMount?.mountPath !== '/app/models/transformers' || injectionWaitMount?.readOnly !== true) {
     throw new Error('gateway injection-model wait must mount the shared model cache read-only');
   }
-  const prefetchJob = findParsedDocumentByKindName(prefetchRendered, 'Job', 'psfn-model-prefetch');
+  const prefetchJob = findParsedDocumentByKindComponent(
+    prefetchRendered,
+    'Job',
+    'model-prefetch',
+  );
   if (!prefetchJob) {
     throw new Error('modelPrefetch.enabled=true did not render the model-prefetch Job');
   }
@@ -951,10 +964,10 @@ assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetc
     '--set', 'modelPrefetch.enabled=true',
     '--set', 'modelPrefetch.textEmotion.enabled=false',
   ]);
-  const injectionOnlyJob = findParsedDocumentByKindName(
+  const injectionOnlyJob = findParsedDocumentByKindComponent(
     injectionOnlyRendered,
     'Job',
-    'psfn-model-prefetch',
+    'model-prefetch',
   );
   if (!injectionOnlyJob?.spec?.template?.spec?.containers
     ?.some(container => container?.name === 'injection-classifier')) {
@@ -3015,7 +3028,17 @@ const prefetchRendered = render([
   'modelPrefetch.enabled=true',
 ]);
 
-const prefetchJob = findDocument(prefetchRendered, 'psfn-model-prefetch');
+const parsedPrefetchJob = findParsedDocumentByKindComponent(
+  prefetchRendered,
+  'Job',
+  'model-prefetch',
+);
+if (!parsedPrefetchJob?.metadata?.name?.match(/^psfn-model-prefetch-[a-f0-9]{16}$/)) {
+  throw new Error(
+    `model prefetch Job name must carry its immutable spec hash, got ${parsedPrefetchJob?.metadata?.name}`,
+  );
+}
+const prefetchJob = findDocument(prefetchRendered, parsedPrefetchJob.metadata.name);
 assertIncludes(prefetchJob, 'kind: Job', 'model prefetch Job kind');
 assertIncludes(prefetchJob, 'app.kubernetes.io/component: model-prefetch', 'model prefetch Job component label');
 assertIncludes(prefetchJob, 'image: "localhost/psfn-framework:0.1.0-kube"', 'model prefetch Job image');
@@ -3035,6 +3058,57 @@ for (const component of ['gateway', 'agent', 'garden', 'satellite-hub']) {
   assertDocumentDoesNotSelectComponent(prefetchJob, component, 'model prefetch Job labels');
 }
 assertServiceSelectorsDoNotSelectPrefetch(prefetchRendered, 'prefetch render');
+
+// A completed Job cannot accept a pod-template image mutation. An app-only
+// image upgrade must therefore render a new identity for the changed immutable
+// spec while preserving the shared model-cache PVC. Rendering the same inputs
+// twice must remain stable so unrelated Helm operations do not rerun prefetch.
+const prefetchOldImageRendered = render([
+  '--set', 'modelPrefetch.enabled=true',
+  '--set-string', 'psfnAppImage.tag=0.1.0-kube-oldprefetch',
+]);
+const prefetchNewImageRendered = render([
+  '--set', 'modelPrefetch.enabled=true',
+  '--set-string', 'psfnAppImage.tag=0.1.0-kube-newprefetch',
+]);
+const prefetchOldImageJob = findParsedDocumentByKindComponent(
+  prefetchOldImageRendered,
+  'Job',
+  'model-prefetch',
+);
+const prefetchOldImageJobAgain = findParsedDocumentByKindComponent(
+  prefetchOldImageRendered,
+  'Job',
+  'model-prefetch',
+);
+const prefetchNewImageJob = findParsedDocumentByKindComponent(
+  prefetchNewImageRendered,
+  'Job',
+  'model-prefetch',
+);
+if (!prefetchOldImageJob || !prefetchNewImageJob) {
+  throw new Error('model prefetch image-upgrade regression render is missing its Job');
+}
+if (prefetchOldImageJob.metadata.name !== prefetchOldImageJobAgain?.metadata?.name) {
+  throw new Error('identical model prefetch specs must render the same Job name');
+}
+if (prefetchOldImageJob.metadata.name === prefetchNewImageJob.metadata.name) {
+  throw new Error('changed model prefetch pod image must render a new immutable Job identity');
+}
+for (const [job, expectedImage] of [
+  [prefetchOldImageJob, 'localhost/psfn-framework:0.1.0-kube-oldprefetch'],
+  [prefetchNewImageJob, 'localhost/psfn-framework:0.1.0-kube-newprefetch'],
+]) {
+  if (!job.spec?.template?.spec?.containers?.every(container => container.image === expectedImage)) {
+    throw new Error(`${job.metadata.name} did not render expected image ${expectedImage}`);
+  }
+  const modelCacheClaim = job.spec?.template?.spec?.volumes
+    ?.find(volume => volume.name === 'model-cache')
+    ?.persistentVolumeClaim?.claimName;
+  if (modelCacheClaim !== 'psfn-model-cache') {
+    throw new Error(`${job.metadata.name} must preserve the psfn-model-cache PVC`);
+  }
+}
 
 const prefetchPolicy = findDocument(prefetchRendered, 'psfn-model-prefetch-egress');
 assertIncludes(prefetchPolicy, 'kind: NetworkPolicy', 'model prefetch NetworkPolicy kind');

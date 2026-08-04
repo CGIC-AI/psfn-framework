@@ -87,6 +87,12 @@
           "ruleId": "persona_mutation_request",
           "riskLabels": ["persona/mutation_attempt"]
         }
+      ],
+      "beads_database_ready": [
+        {
+          "ruleId": "persona_mutation_request",
+          "riskLabels": ["persona/mutation_attempt"]
+        }
       ]
     },
     "sinks": {

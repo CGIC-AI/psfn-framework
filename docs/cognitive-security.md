@@ -1030,14 +1030,15 @@ existing schema-v4 owner) enables no exemptions.
 | Class | Seed suppression | Runtime proof required |
 | --- | --- | --- |
 | `beads_database_create` | Rule `persona_mutation_request`, label `persona/mutation_attempt` only | Native `beads` tool, `create`/`issue_create` request with a non-empty title, and the canonical pretty-printed successful `create` result containing one created issue object whose title exactly matches the request (and whose actor matches when requested). Unknown wrapper/payload keys, malformed fields, mismatches, or alternate formatting remain fully screened. |
+| `beads_database_ready` | Rule `persona_mutation_request`, label `persona/mutation_attempt` only | Native `beads` tool, `ready`/`issue_ready` request (including its default action), and the canonical pretty-printed successful `ready` result containing no more issues than the requested limit. The control scan neutralizes only the closed set of issue prose fields; persona text in labels, metadata, dependencies, or wrapper fields remains enforced. Unknown keys, malformed fields, actor mismatches, or alternate formatting remain fully screened. |
 
 The validator rejects unknown classes and prevents a known class from naming
 any rule or risk label outside its code-reviewed ceiling. Even for an enabled
 class, every other finding remains enforceable; for example, injection and
 novel persona-hijack rules in the same result still quarantine. The runtime
-also re-scans a control result with only the request-bound title neutralized;
-if the same persona rule still appears anywhere else in an approved payload
-field, it is not suppressed. Suppressions
+also re-scans a control result with only the class-owned database fields
+neutralized; if the same persona rule still appears anywhere else in an
+approved payload field, it is not suppressed. Suppressions
 are recorded on the envelope as `l1.rules.benignClass`,
 `l1.rules.suppressedRuleIds`, and `l1.rules.suppressedRiskLabels`. Operators can
 inspect or edit the canonical `intake-policy.json` owner through the Garden

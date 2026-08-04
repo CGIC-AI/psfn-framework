@@ -544,7 +544,10 @@ export function isIntakeUnscreenedDenyRequiredSink(sink: IntakeSink): boolean {
  * suppressions can be enabled in intake-policy.json. The runtime classifier
  * must prove one of these closed classes before policy can suppress anything.
  */
-export const INTAKE_BENIGN_CLASSES = ['beads_database_create'] as const;
+export const INTAKE_BENIGN_CLASSES = [
+  'beads_database_create',
+  'beads_database_ready',
+] as const;
 export type IntakeBenignClass = typeof INTAKE_BENIGN_CLASSES[number];
 
 export interface IntakeBenignClassRuleSuppression {
@@ -562,6 +565,10 @@ const INTAKE_BENIGN_CLASS_SUPPRESSIONS: Readonly<Record<
   readonly IntakeBenignClassRuleSuppression[]
 >> = {
   beads_database_create: [{
+    ruleId: 'persona_mutation_request',
+    riskLabels: ['persona/mutation_attempt'],
+  }],
+  beads_database_ready: [{
     ruleId: 'persona_mutation_request',
     riskLabels: ['persona/mutation_attempt'],
   }],

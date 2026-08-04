@@ -36,6 +36,8 @@
     "test:garden:route-body-policy": "vitest run --config vitest.garden-route-body-policy.config.ts",
     "test:garden-ui": "npm --prefix admin-ui test",
     "test:ops:kube-port-forward": "node --test scripts/ops/keep-kube-port-forward.test.mjs",
+    "test:ops:fleet-sso-forwarder": "node --test scripts/ops/fleet-sso-forwarder.test.mjs",
+    "ops:fleet-sso-forwarder": "node scripts/ops/fleet-sso-forwarder.mjs",
     "prewarm": "node scripts/prewarm-worktree.mjs",
     "test:privacy": "vitest run src/system/trust/privacy-regression.test.ts",
     "test:leak-audit": "vitest run src/core/session/context-leak-audit.test.ts",

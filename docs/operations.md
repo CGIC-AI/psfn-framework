@@ -207,6 +207,36 @@ There are two admitted HTTPS-origin shapes:
   direct-TLS metadata, or mismatched callback origins fail closed. Restrict the
   gateway listener to that proxy independently with NetworkPolicy/firewall.
 
+For a loopback TLS-terminator or private-network overlay that cannot itself
+rewrite the trusted-hop headers, use the repository-owned forwarder rather than
+an ad hoc request-only script. It preserves ordinary HTTP and WebSocket Upgrade
+on the same canonical path, including Origin, the exclusive session cookie,
+the companion prefix, both Upgrade headers, and bytes received with either
+handshake. It replaces caller-supplied forwarding metadata with the one actual
+client socket IP, strips hop-by-hop and internal `X-PSFN-*` assertions, and
+preserves only the browser-owned CSRF proof and audited escalation grant. It
+never authenticates, mints a session, or opens Garden directly. The listener
+is intentionally restricted to a loopback IP.
+
+```bash
+PSFN_FLEET_SSO_FORWARDER_LISTEN_PORT=<loopback-listen-port> \
+PSFN_FLEET_SSO_FORWARDER_UPSTREAM_PORT=<gateway-forward-port> \
+PSFN_FLEET_SSO_FORWARDER_CANONICAL_HOST=<canonical-host-without-scheme> \
+npm run ops:fleet-sso-forwarder
+```
+
+`PSFN_FLEET_SSO_FORWARDER_LISTEN_HOST` and
+`PSFN_FLEET_SSO_FORWARDER_UPSTREAM_HOST` default to `127.0.0.1`; override the
+upstream host only for a separately restricted internal gateway listener. Both
+ports and the canonical host are required, and schemes, paths, whitespace, or
+host lists are rejected. Validate the transport implementation with
+`npm run test:ops:fleet-sso-forwarder` before changing the external front door.
+Switching a live TLS/overlay rule remains a separate reviewed operation: after
+the switch, require an authenticated `101` on
+`/companions/<companion-id>/garden/api/admin/events`, an observed event and a
+bounded stable connection, plus unchanged HTTP denial for an ordinary GET and
+unchanged denial for an invalid Origin or session cookie.
+
 The local cluster launcher uses loopback Garden upstreams. Any non-loopback
 `FLEET_SSO_GARDEN_HOST` requires the complete `FLEET_SSO_GARDEN_TLS_*` tuple;
 the gateway validates the Garden SPIFFE URI and Garden validates the gateway

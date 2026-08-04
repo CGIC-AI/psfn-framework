@@ -70,6 +70,7 @@ export interface ToolResultIntakeScreeningOutcome {
 export type ToolResultIntakeScreener = (input: {
   toolName: string;
   toolCallId: string;
+  arguments: unknown;
   text: string;
 }) => ToolResultIntakeScreeningOutcome | null;
 
@@ -580,6 +581,7 @@ async function executeSingleToolCall(
         const screened = options.toolResultScreener({
           toolName: toolCall.name,
           toolCallId: toolCall.id,
+          arguments: toolCall.arguments,
           text: rawText,
         });
         if (screened) {

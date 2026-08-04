@@ -1021,6 +1021,28 @@ already suspect, so an L3 failure always holds the item (enforce mode).
 
 ### `sinkGates`
 
+`benignClasses` is the operator-visible allowlist for narrowly proven internal
+result classes. It is intentionally not a text or regular-expression
+allowlist: runtime code must first establish the trusted tool identity and an
+exact structured-result contract. Omitting `benignClasses` (including in an
+existing schema-v4 owner) enables no exemptions.
+
+| Class | Seed suppression | Runtime proof required |
+| --- | --- | --- |
+| `beads_database_create` | Rule `persona_mutation_request`, label `persona/mutation_attempt` only | Native `beads` tool, `create`/`issue_create` request with a non-empty title, and the canonical pretty-printed successful `create` result containing one created issue object whose title exactly matches the request (and whose actor matches when requested). Unknown wrapper/payload keys, malformed fields, mismatches, or alternate formatting remain fully screened. |
+
+The validator rejects unknown classes and prevents a known class from naming
+any rule or risk label outside its code-reviewed ceiling. Even for an enabled
+class, every other finding remains enforceable; for example, injection and
+novel persona-hijack rules in the same result still quarantine. The runtime
+also re-scans a control result with only the request-bound title neutralized;
+if the same persona rule still appears anywhere else in an approved payload
+field, it is not suppressed. Suppressions
+are recorded on the envelope as `l1.rules.benignClass`,
+`l1.rules.suppressedRuleIds`, and `l1.rules.suppressedRiskLabels`. Operators can
+inspect or edit the canonical `intake-policy.json` owner through the Garden
+settings surface.
+
 Per sink (`sinks.<sink>`), all seven sinks required:
 
 | Knob | What it does |
@@ -1119,7 +1141,8 @@ PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
    quarantine volume means thresholds need loosening before enforcement.
 3. Tune: per-tier thresholds under `injectionClassifier`, escalation and
    fail-closed maps under `l2Screener`/`l3Screener`, sink caps and deny
-   lists under `sinkGates`, and seed the `sourceLists` with the sites and
+   lists and the provenance-bound `benignClasses` allowlist under `sinkGates`,
+   and seed the `sourceLists` with the sites and
    people you already trust or deny (or let the release flywheel populate
    them as you review).
 4. Flip `mode` to `"enforce"` in `intake-policy.json` and restart. From that

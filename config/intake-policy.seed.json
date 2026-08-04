@@ -81,6 +81,14 @@
     "maxOutputTokens": 1600
   },
   "sinkGates": {
+    "benignClasses": {
+      "beads_database_create": [
+        {
+          "ruleId": "persona_mutation_request",
+          "riskLabels": ["persona/mutation_attempt"]
+        }
+      ]
+    },
     "sinks": {
       "prompt_assembly": {
         "maxSourceRiskTier": "hostile",

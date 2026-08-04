@@ -47,6 +47,7 @@ import {
 } from '../../../shared/contracts/intake-envelope.js';
 import {
   injectionScoreThresholdForTier,
+  type IntakeBenignClass,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
@@ -65,13 +66,16 @@ import {
   type AdjustedSourceRiskTier,
 } from './source-lists.js';
 import {
+  buildScannerResult,
   createIntakeL1Scanner,
+  INTAKE_RULE_ENGINE_SCANNER_ID,
   type IntakeL1Scanner,
   type IntakeL1ScannerConfig,
   type IntakeL1ScanReport,
   type IntakeScanScope,
 } from './scanners/index.js';
 import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
+import { classifyToolResultBenignClass } from './tool-result-benign-classes.js';
 
 export { INTAKE_QUARANTINE_RISK_LABELS, INTAKE_SANITIZE_RISK_LABELS } from './risk-label-families.js';
 
@@ -205,6 +209,8 @@ export interface IntakePriorScreeningSignal {
 
 export interface IntakeScreeningInput {
   sourceClass: IntakeSourceClass;
+  /** Trusted scheduler provenance used to prove a narrow internal tool-result class. */
+  toolResultProvenance?: { toolName: string; arguments: unknown };
   /** Origin locator: url, `discord:<channel>:<message>`, tool call id, ... */
   origin: { ref: string; detail?: string };
   scope: IntakeScanScope;
@@ -332,6 +338,67 @@ interface ScreeningSignals {
   injectionScore: number | undefined;
   injectionScoreThreshold: number;
   priorSignals: readonly IntakePriorScreeningSignal[];
+}
+
+function applyBenignClassPolicy(
+  report: IntakeL1ScanReport,
+  benignClass: IntakeBenignClass | undefined,
+  policy: IntakePolicyConfig,
+  controlReport: IntakeL1ScanReport | undefined,
+): IntakeL1ScanReport {
+  if (benignClass === undefined || controlReport === undefined) return report;
+  if (controlReport.scannerErrors.some((error) => error.scannerId === INTAKE_RULE_ENGINE_SCANNER_ID)) {
+    return report;
+  }
+  const configuredSuppressions = policy.sinkGates.benignClasses[benignClass];
+  if (!configuredSuppressions || configuredSuppressions.length === 0) return report;
+  const controlRuleIds = new Set(
+    controlReport.results
+      .filter((result) => result.scannerId === INTAKE_RULE_ENGINE_SCANNER_ID)
+      .flatMap((result) => result.findings.map((finding) => finding.ruleId)),
+  );
+  const suppressedLabels = new Set<IntakeRiskLabel>();
+  const suppressedRuleIds = new Set<string>();
+  const results = report.results.map((result) => {
+    if (result.scannerId !== INTAKE_RULE_ENGINE_SCANNER_ID) return result;
+    const findings = result.findings.flatMap((finding) => {
+      const configured = configuredSuppressions.find((entry) => entry.ruleId === finding.ruleId);
+      if (!configured || controlRuleIds.has(finding.ruleId)) return [finding];
+      const labels = finding.labels.filter((label) => {
+        if (!configured.riskLabels.includes(label)) return true;
+        suppressedLabels.add(label);
+        suppressedRuleIds.add(finding.ruleId);
+        return false;
+      });
+      if (labels.length === 0) return [];
+      return [{ ...finding, labels }];
+    });
+    if (findings.length === result.findings.length
+      && findings.every((finding, index) => finding === result.findings[index])) {
+      return result;
+    }
+    return buildScannerResult({
+      scannerId: result.scannerId,
+      findings,
+      ...(result.sanitized !== undefined ? { sanitized: result.sanitized } : {}),
+      ...(result.extracted !== undefined ? { extracted: result.extracted } : {}),
+    });
+  });
+  if (suppressedLabels.size === 0) return report;
+  const scores: Record<string, number> = {};
+  for (const result of results) scores[result.scannerId] = result.score;
+  return {
+    ...report,
+    results,
+    riskLabels: [...new Set(results.flatMap((result) => result.labels))],
+    scores,
+    extractedFields: {
+      ...report.extractedFields,
+      [`${INTAKE_RULE_ENGINE_SCANNER_ID}.benignClass`]: benignClass,
+      [`${INTAKE_RULE_ENGINE_SCANNER_ID}.suppressedRuleIds`]: [...suppressedRuleIds].join(','),
+      [`${INTAKE_RULE_ENGINE_SCANNER_ID}.suppressedRiskLabels`]: [...suppressedLabels].join(','),
+    },
+  };
 }
 
 function decideAction(signals: ScreeningSignals): { action: IntakeDecisionAction; reason: string } {
@@ -820,8 +887,27 @@ export function createIntakeScreeningService(
     }
   }
 
-  async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
+  function scanL1(text: string, input: IntakeScreeningInput): IntakeL1ScanReport {
     const report = l1.scan(text, { scope: input.scope });
+    if (input.sourceClass !== 'tool_output' || input.toolResultProvenance === undefined) {
+      return report;
+    }
+    const classification = classifyToolResultBenignClass({
+      ...input.toolResultProvenance,
+      text,
+    });
+    if (classification === undefined) return report;
+    const controlReport = l1.scan(classification.controlText, { scope: input.scope });
+    return applyBenignClassPolicy(
+      report,
+      classification.benignClass,
+      policy,
+      controlReport,
+    );
+  }
+
+  async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
+    const report = scanL1(text, input);
     let scorerOutcome: ScorerOutcome = { labels: [] };
     if (injectionScorer && text.trim()) {
       try {
@@ -856,7 +942,7 @@ export function createIntakeScreeningService(
         + 'configured — use screen()',
       );
     }
-    const report = l1.scan(text, { scope: input.scope });
+    const report = scanL1(text, input);
     return finalize(text, input, report, { labels: [] });
   }
 

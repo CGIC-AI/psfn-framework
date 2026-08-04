@@ -219,6 +219,12 @@ describe('AdminSettingsDataService', () => {
         },
       },
       sinkGates: {
+        benignClasses: {
+          beads_database_create: [{
+            ruleId: 'persona_mutation_request',
+            riskLabels: ['persona/mutation_attempt'],
+          }],
+        },
         sinks: {
           skill_write: {
             maxSourceRiskTier: 'untrusted',

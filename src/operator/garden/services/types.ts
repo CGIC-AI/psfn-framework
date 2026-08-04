@@ -94,6 +94,7 @@ export type {
   AdminIcpAvailabilityView,
   AdminIcpCandidateCancelInput,
   AdminIcpCandidateView,
+  AdminIcpCostProjectionStatus,
   AdminIcpCostView,
   AdminIcpEpisodeView,
   AdminIcpFatigueView,

@@ -6,6 +6,7 @@ import type {
   IcpInitiationPermit,
   IcpInitiationSource,
 } from '../../../../shared/contracts/icp-autonomy.js';
+import type { IcpConversationCostBreakerDecisionReason } from '../../../../shared/telemetry/model-usage.js';
 import type { EffectiveIcpAutonomySettingsState } from './settings.js';
 
 export interface AdminIcpCandidateView {
@@ -65,7 +66,7 @@ export interface AdminIcpCostView {
   hardLimitUsd: number;
   unknownCostAttemptCount: number;
   allowed: boolean;
-  reason: string;
+  reason: IcpConversationCostBreakerDecisionReason;
 }
 
 export type AdminIcpCostProjectionStatus =
@@ -75,6 +76,7 @@ export type AdminIcpCostProjectionStatus =
     unavailableReason:
       | 'control_plane_unavailable'
       | 'relation_contract_unavailable'
+      | 'row_contract_invalid'
       | 'read_failed';
   };
 

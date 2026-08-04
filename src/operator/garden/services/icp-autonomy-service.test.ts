@@ -247,14 +247,19 @@ describe('truthful quiet attribution (psfn-framework-hrmrq.34)', () => {
 });
 
 describe('AdminIcpAutonomyDataService', () => {
-  it('keeps core control-plane data available while marking only costs unavailable', async () => {
+  it.each([
+    'relation_contract_unavailable',
+    'row_contract_invalid',
+  ] as const)('keeps core data available while marking only costs unavailable: %s', async (
+    unavailableReason,
+  ) => {
     const service = new AdminIcpAutonomyDataService({
       localCompanionId: LOCAL_ID,
       candidateStore: candidateStore(candidate()),
       projectionStore: projectionStore(sharedStore(), {
         costProjection: {
           available: false,
-          unavailableReason: 'relation_contract_unavailable',
+          unavailableReason,
         },
       }),
       runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
@@ -271,7 +276,7 @@ describe('AdminIcpAutonomyDataService', () => {
     expect(data.costs).toEqual([]);
     expect(data.costProjection).toEqual({
       available: false,
-      unavailableReason: 'relation_contract_unavailable',
+      unavailableReason,
     });
     expect(data.quietState).toBe('active');
   });

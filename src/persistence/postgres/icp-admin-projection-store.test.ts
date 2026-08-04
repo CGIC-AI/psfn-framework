@@ -35,6 +35,20 @@ const FLEET_CONFIG = {
   companionFleet: { companions: [{ postgresSchema: 'companion_primary' }] },
   postgresRole: 'companion_follower_runtime',
 } as const;
+const VALID_COST_ROW = {
+  conversation_id: '33333333-3333-4333-8333-333333333333',
+  root_initiation_id: '44444444-4444-4444-8444-444444444444',
+  recorded_at_ms: '2000',
+  actual_cost_usd: 0.25,
+  pending_projected_cost_usd: '0.5',
+  projected_total_cost_usd: 0.75,
+  warning_threshold_usd: 1,
+  hard_limit_usd: 2,
+  unknown_cost_attempt_count: '0',
+  allowed: true,
+  reason: 'below_warning',
+  participant_companion_ids: [LOCAL, PEER],
+} as const;
 
 describe('PostgresIcpAdminProjectionStore tenant binding', () => {
   beforeEach(() => {
@@ -219,6 +233,79 @@ describe('PostgresIcpAdminProjectionStore tenant binding', () => {
       },
     });
     expect(mocks.queryRows).toHaveBeenCalledTimes(5);
+  });
+
+  it('isolates malformed optional cost rows and restores the slice on a later valid read', async () => {
+    const sharedPool = { end: vi.fn(async () => {}) };
+    const costPool = { end: vi.fn(async () => {}) };
+    mocks.createPostgresPool
+      .mockReturnValueOnce(sharedPool)
+      .mockReturnValueOnce(costPool);
+    mocks.connectShared.mockResolvedValue({ close: vi.fn(async () => {}) });
+    const malformedRows: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ['allowed must be boolean', { ...VALID_COST_ROW, allowed: 'false' }],
+      ['reason must be present', { ...VALID_COST_ROW, reason: null }],
+      ['reason must be supported', { ...VALID_COST_ROW, reason: 'surprise_override' }],
+      ['conversation id must be text', { ...VALID_COST_ROW, conversation_id: 42 }],
+      ['root initiation id must be nonblank', { ...VALID_COST_ROW, root_initiation_id: ' ' }],
+      ['recorded time must be numeric', { ...VALID_COST_ROW, recorded_at_ms: false }],
+      ['actual cost must be numeric', { ...VALID_COST_ROW, actual_cost_usd: null }],
+      ['pending cost must be numeric', { ...VALID_COST_ROW, pending_projected_cost_usd: [] }],
+      ['numeric strings must be canonical', { ...VALID_COST_ROW, actual_cost_usd: '0x10' }],
+      ['projected cost must be finite', { ...VALID_COST_ROW, projected_total_cost_usd: Infinity }],
+      ['warning threshold must be positive', { ...VALID_COST_ROW, warning_threshold_usd: 0 }],
+      ['hard limit must exceed warning', { ...VALID_COST_ROW, hard_limit_usd: 0.5 }],
+      ['unknown count must be an integer', { ...VALID_COST_ROW, unknown_cost_attempt_count: 0.5 }],
+      ['participants must be companion UUIDs', {
+        ...VALID_COST_ROW,
+        participant_companion_ids: [LOCAL, 'not-a-companion'],
+      }],
+    ];
+    const costRows = malformedRows.map(([, row]) => row).concat(VALID_COST_ROW);
+    let costReadCount = 0;
+    mocks.queryRows.mockImplementation(async (
+      _pool: unknown,
+      sql: string,
+    ) => (sql.includes('FROM icp_conversation_cost_decisions')
+      ? [costRows[costReadCount++]] as never[]
+      : []));
+    const store = await PostgresIcpAdminProjectionStore.connect('postgres://test', {
+      localCompanionId: LOCAL,
+      knownCompanionIds: [LOCAL, PEER],
+      config: FLEET_CONFIG,
+    });
+
+    for (const [label] of malformedRows) {
+      const projection = await store.readProjection();
+      expect(projection, label).toMatchObject({
+        availability: [],
+        episodes: [],
+        permits: [],
+        fatigue: [],
+        costs: [],
+        costProjection: {
+          available: false,
+          unavailableReason: 'row_contract_invalid',
+        },
+      });
+    }
+    await expect(store.readProjection()).resolves.toMatchObject({
+      costs: [{
+        conversationId: VALID_COST_ROW.conversation_id,
+        rootInitiationId: VALID_COST_ROW.root_initiation_id,
+        recordedAtMs: 2_000,
+        actualCostUsd: 0.25,
+        pendingProjectedCostUsd: 0.5,
+        projectedTotalCostUsd: 0.75,
+        warningThresholdUsd: 1,
+        hardLimitUsd: 2,
+        unknownCostAttemptCount: 0,
+        allowed: true,
+        reason: 'below_warning',
+        participantCompanionIds: [LOCAL, PEER],
+      }],
+      costProjection: { available: true, unavailableReason: null },
+    });
   });
 
   it('fails readiness when a mandatory shared projection relation is malformed', async () => {

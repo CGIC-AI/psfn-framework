@@ -69,6 +69,12 @@ function choice<T extends string>(value: unknown, values: readonly T[], label: s
   return match;
 }
 
+export function parseIcpConversationCostBreakerDecisionReason(
+  value: unknown,
+): IcpConversationCostBreakerDecisionReason {
+  return choice(value, DECISION_REASONS, 'ICP conversation cost decision.reason');
+}
+
 function parseProjection(value: unknown): IcpConversationCostProjection {
   const projection = record(value, 'ICP conversation cost event.projection');
   exactKeys(projection, PROJECTION_KEYS, 'ICP conversation cost event.projection');

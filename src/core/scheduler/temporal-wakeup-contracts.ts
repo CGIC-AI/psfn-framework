@@ -8,7 +8,8 @@ export type MorningWakeSkipReason =
   | 'privacy_boundary'
   | 'no_partner_activity'
   | 'partner_recently_active'
-  | 'anti_loop_note_today';
+  | 'anti_loop_note_today'
+  | 'no_activation_since_wake';
 
 export type MorningWakeDecision =
   | {

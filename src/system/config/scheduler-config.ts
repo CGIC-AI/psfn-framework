@@ -391,10 +391,9 @@ export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConf
 };
 
 /**
- * Scheduled morning wake lane (E7.1). Injects an explicit system note at a
- * configured wall-clock time that establishes the new day: current date/time,
- * elapsed time since the last partner exchange, and a catch-up summary from
- * the shared session summarization service.
+ * Scheduled morning wake lane (E7.1). At a configured wall-clock time, a warm
+ * private channel may receive one model response turn. Its new-day note is
+ * persisted only after that delivery; cold channels receive no scheduler row.
  */
 export interface TemporalWakeupMorningConfig {
   enabled: boolean;
@@ -427,7 +426,8 @@ export interface TemporalWakeupMorningConfig {
   catchUpSummaryMaxTokens: number;
   /**
    * A full (LLM) wake turn is only invoked when the last partner exchange is
-   * at most this old; staler sessions get the cheap note-only injection.
+   * at most this old; staler sessions get no scheduler write or LLM call and
+   * receive a fresh ephemeral frame only when they next become active.
    */
   fullTurnMaxIdleHours: number;
 }
@@ -463,17 +463,17 @@ export interface TemporalWakeupHabitConfig {
 }
 
 /**
- * Idle time-of-day refresher lane (E7.1). After a long same-day gap the lane
- * injects a lighter system note that moves the time-of-day frame forward;
- * overnight/multi-day textures escalate to the full new-day framing.
+ * Latest-only active-turn temporal frame (E7.1). After a long gap, the next
+ * real model turn receives one freshly derived prompt frame. Idle clock
+ * changes are never polled into, queued for, or persisted in session history.
  */
 export interface TemporalWakeupIdleRefresherConfig {
   enabled: boolean;
-  /** Poll interval for the refresher check (ms). */
+  /** Retained owner-file field; active-turn derivation performs no polling. */
   checkIntervalMs: number;
-  /** Minimum idle gap before a same-day refresher note is eligible. */
+  /** Minimum idle gap before the next active turn receives a temporal frame. */
   minIdleMinutes: number;
-  /** Anti-loop spacing between temporal wake-lane notes. */
+  /** Retained owner-file field; latest-only active-turn derivation cannot loop. */
   minNoteIntervalMinutes: number;
 }
 

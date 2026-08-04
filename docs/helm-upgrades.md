@@ -1027,13 +1027,14 @@ the boot succeeds first try.
 12. **Welfare-verifier read grant** (gateway startup): the gateway welfare
     grant verifier connects unpinned as the primary runtime role and must
     hold `USAGE` on every fleet schema plus `SELECT` on each
-    `agent_background_work_jobs`. NOINHERIT tenant membership cannot supply
-    that privilege, so `provision:postgres-tenancy --apply` grants it
-    directly and idempotently per tenant (after bringing each schema to its
-    background-work migration head). If gateway startup reports
-    `welfare_grant_verifier` degraded with `missing required role
-    privileges: SELECT`, re-running that script is the repair path; it also
-    covers a newly added follower in the same pass.
+    `agent_background_work_jobs`. The runtime role is NOINHERIT (gate 6), so
+    its tenant memberships cannot supply that privilege.
+    `provision:postgres-tenancy --apply` grants it directly and idempotently
+    per fleet tenant, after bringing each schema to its background-work
+    migration head; the shared tenancy primitive deliberately does not grant
+    it. If gateway startup reports `welfare_grant_verifier` degraded with
+    `missing required role privileges: SELECT`, re-running that script is
+    the repair path; it also covers a newly added follower in the same pass.
 
 Two upgrade-adjacent traps discovered on the same cutover, both now
 chart-owned but relevant when upgrading OLDER charts:

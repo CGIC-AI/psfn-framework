@@ -1,15 +1,18 @@
-// psfn-framework-m8zdu — real-Postgres proof that the canonical fleet tenant
-// provisioning contract restores and preserves the gateway welfare verifier's
-// read access to `agent_background_work_jobs` in every fleet schema.
+// psfn-framework-m8zdu — real-Postgres proof that the canonical fleet
+// operator path restores and preserves the gateway welfare verifier's read
+// access to `agent_background_work_jobs` in every fleet schema.
 //
 // Root cause this pins: the verifier connects unpinned as the runtime login
-// role, and tenant roles are NOINHERIT, so the membership provisioning grants
-// carries inherit_option=false — the login holds no privilege through it and
-// the readiness probe (`assertPostgresRelationColumns`, SELECT) fails closed,
-// degrading `welfare_grant_verifier` at gateway startup. The repair is the
-// idempotent least-privilege grant in `welfare-verifier-access.ts`, applied by
-// `provisionPostgresTenantAccess` and re-asserted by the
-// `provision:postgres-tenancy` operator path after tenant migrations.
+// role, and the runtime login role is NOINHERIT, so the membership
+// provisioning grants carries inherit_option=false — the login holds no
+// privilege through it and the readiness probe
+// (`assertPostgresRelationColumns`, SELECT) fails closed, degrading
+// `welfare_grant_verifier` at gateway startup. The repair is the idempotent
+// least-privilege grant in `welfare-verifier-access.ts`, applied ONLY by the
+// `provision:postgres-tenancy` operator path after tenant migrations — the
+// shared `provisionPostgresTenantAccess` primitive deliberately performs no
+// welfare grant (shard/harness callers must not see application-time
+// privilege escalation), so the primitive alone leaves the verifier degraded.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
@@ -159,9 +162,10 @@ describe('welfare verifier tenant-schema access (m8zdu, real Postgres)', () => {
     let verifier: WelfareGrantVerifier | undefined;
     try {
       const login = await createRuntimeLogin(admin, databaseName);
-      // Canonical provisioning: membership plus the welfare grant step. The
-      // tenant tables do not exist yet, so only schema USAGE can land — this
-      // is exactly the live ordering that drifted the follower schema.
+      // Canonical provisioning: the shared tenancy primitive grants membership
+      // only — it deliberately performs no welfare grant. The tenant tables do
+      // not exist yet either; both absences are exactly the live ordering that
+      // drifted the follower schema.
       for (const plan of [primary, follower]) {
         await provisionPostgresTenantAccess(admin, { plan, runtimeLoginRole: login });
       }
@@ -170,8 +174,9 @@ describe('welfare verifier tenant-schema access (m8zdu, real Postgres)', () => {
       await migrateBackgroundWork(databaseUrl, primary);
       await migrateBackgroundWork(databaseUrl, follower);
 
-      // REGRESSION PIN: the unpinned verifier login holds membership but no
-      // table privilege, so startup readiness fails closed (degraded).
+      // REGRESSION PIN: the primitive alone leaves the unpinned verifier login
+      // with membership but no table privilege, so startup readiness fails
+      // closed (degraded).
       verifier = createVerifier(databaseUrl, login, [
         { companionId: PRIMARY_COMPANION, postgresSchema: PRIMARY_SCHEMA },
         { companionId: FOLLOWER_COMPANION, postgresSchema: FOLLOWER_SCHEMA },
@@ -180,11 +185,15 @@ describe('welfare verifier tenant-schema access (m8zdu, real Postgres)', () => {
         .rejects.toThrow(/missing required role privileges: SELECT/u);
       await verifier.close();
 
-      // Operator repair: re-run the canonical provisioning pass (the
-      // provision:postgres-tenancy script re-asserts the same grant after
-      // tenant migrations). Idempotent and scoped to the verifier relation.
+      // Operator repair: the explicit grant step the provision:postgres-tenancy
+      // script applies after tenant migrations. Idempotent and scoped to the
+      // verifier relation.
       for (const plan of [primary, follower]) {
-        await provisionPostgresTenantAccess(admin, { plan, runtimeLoginRole: login });
+        const evidence = await grantWelfareVerifierReadAccessToTenantSchema(admin, {
+          schema: plan.schema,
+          verifierRole: login,
+        });
+        expect(evidence.relationGranted).toBe(true);
       }
 
       verifier = createVerifier(databaseUrl, login, [
@@ -248,7 +257,8 @@ describe('welfare verifier tenant-schema access (m8zdu, real Postgres)', () => {
       const login = await createRuntimeLogin(admin, databaseName);
       await provisionPostgresTenantAccess(admin, { plan: added, runtimeLoginRole: login });
 
-      // Pre-migration re-asserts are safe no-ops beyond schema USAGE.
+      // Pre-migration operator grant passes are safe no-ops beyond schema
+      // USAGE.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const evidence = await grantWelfareVerifierReadAccessToTenantSchema(admin, {
           schema: added.schema,
@@ -257,9 +267,18 @@ describe('welfare verifier tenant-schema access (m8zdu, real Postgres)', () => {
         expect(evidence.relationGranted).toBe(false);
       }
 
-      // The added follower runs its migrations; the operator re-assert lands
-      // the table grant exactly once, however many times it runs.
+      // The added follower runs its migrations; the shared primitive alone
+      // still leaves the verifier degraded for its schema.
       await migrateBackgroundWork(databaseUrl, added);
+      verifier = createVerifier(databaseUrl, login, [
+        { companionId: 'added-follower-id', postgresSchema: added.schema },
+      ]);
+      await expect(verifier.assertReady())
+        .rejects.toThrow(/missing required role privileges: SELECT/u);
+      await verifier.close();
+
+      // The operator grant lands the table privilege exactly once, however
+      // many times it runs.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const evidence = await grantWelfareVerifierReadAccessToTenantSchema(admin, {
           schema: added.schema,

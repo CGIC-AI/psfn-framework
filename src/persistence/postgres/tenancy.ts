@@ -10,7 +10,6 @@ import {
   withPostgresClient,
 } from '../postgres.js';
 import { grantBackupReadAccessToTenantSchema } from './backup-schema-access.js';
-import { grantWelfareVerifierReadAccessToTenantSchema } from './welfare-verifier-access.js';
 
 const TENANCY_LOCK_CLASS = 0x5053464e;
 const SHARD_SCHEMA_DIGEST_LENGTH = 40;
@@ -309,16 +308,6 @@ export async function provisionPostgresTenantAccess(
       await client.query(
         `GRANT ${role} TO ${quotePostgresRoleName(runtimeLoginRole)}`,
       );
-      // The gateway welfare grant verifier connects unpinned as the runtime
-      // login role; NOINHERIT tenant membership cannot supply its SELECT, so
-      // provisioning grants the exact read contract directly. When the tenant
-      // has not run its background-work migrations yet the table grant is
-      // deferred to the idempotent operator re-assert (see
-      // scripts/provision-postgres-tenancy.ts).
-      await grantWelfareVerifierReadAccessToTenantSchema(client, {
-        schema: plan.schema,
-        verifierRole: runtimeLoginRole,
-      });
     }
   });
   return plan;

@@ -101,12 +101,15 @@ async function main(): Promise<void> {
     for (const plan of plans) {
       await provisionPostgresTenantAccess(pool, { plan, runtimeLoginRole, backupRole });
     }
-    // Bring every tenant schema to its background-work migration head, then
-    // re-assert the welfare-verifier read grant. A tenant provisioned before
-    // its tables existed (a newly added follower) receives the same
-    // agent_background_work_jobs SELECT as every pre-existing schema in this
-    // same operator pass; both steps are idempotent, so re-running this
-    // script is also the repair path for a drifted fleet schema.
+    // Bring every fleet tenant schema to its background-work migration head,
+    // then apply the welfare-verifier read grant. This script is the ONLY
+    // applier: the shared tenancy primitive above also serves shard and
+    // harness callers and must not escalate application-time privileges. A
+    // tenant provisioned before its tables existed (a newly added follower)
+    // receives the same agent_background_work_jobs SELECT as every
+    // pre-existing schema in this same operator pass; both steps are
+    // idempotent, so re-running this script is also the repair path for a
+    // drifted fleet schema.
     for (const plan of plans) {
       const backgroundWork = await PostgresBackgroundWorkStore.connect(databaseUrl, {
         schema: plan.schema,

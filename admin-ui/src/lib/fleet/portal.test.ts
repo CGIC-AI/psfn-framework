@@ -337,15 +337,8 @@ describe('Garden fleet portal client', () => {
       expect(usagePanel).toContain(required);
     }
     expect(costResults).toContain('Cluster costs unavailable');
-    expect(costResults).toContain('privacy-preserving headline total');
-    expect(costResults).toContain('{@const rowSpendShare = spendShare(row)}');
-    expect(costResults).toContain(
-      '{rowSpendShare === null ? EMPTY_VALUE : formatPercent(rowSpendShare)}',
-    );
-    expect(costResults).not.toContain('formatPercent(spendShare(row)');
-    expect(costResults).toContain(
-      '<span class="text-shadow-600">{companionLabel(row)}</span>',
-    );
+    expect(costResults).toContain('Unavailable: {unavailableCompanionNames.join');
+    expect(costResults).not.toContain('Companion leaderboard');
     for (const required of [
       'Loading authorized cluster usage…',
       'Cluster usage unavailable',
@@ -354,6 +347,7 @@ describe('Garden fleet portal client', () => {
       'projection.combined.totalTokens',
       'companion.usage.inputTokens',
       'companion.usage.cacheWriteTokens',
+      'mb-10 space-y-4 pt-10',
     ]) {
       expect(usageSummary).toContain(required);
     }

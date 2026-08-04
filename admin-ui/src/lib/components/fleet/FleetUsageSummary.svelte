@@ -56,7 +56,7 @@
   });
 </script>
 
-<section id="fleet-usage" class="space-y-4 pt-10" aria-labelledby="fleet-usage-summary-heading">
+<section id="fleet-usage" class="mb-10 space-y-4 pt-10" aria-labelledby="fleet-usage-summary-heading">
   <div>
     <h3 id="fleet-usage-summary-heading" class="font-serif text-xl font-semibold text-shadow-900">
       Authorized companion usage

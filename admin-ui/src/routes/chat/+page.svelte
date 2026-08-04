@@ -26,8 +26,13 @@
   import {
     currentCompanionGardenScope,
     getCompanionCacheScope,
+    onCompanionScopeChange,
     scopeGardenPath,
   } from '$lib/fleet/companion-scope';
+  import {
+    classifySessionKind,
+    type SessionKindFilter,
+  } from './session-kind';
   import type {
     AdminChatBootstrapResponse,
     AdminModelRoomBootstrapResponse,
@@ -126,6 +131,8 @@
   let sessionsError = $state('');
   let sessionList = $state<ChannelInfo[]>([]);
   let sessionFilter = $state('');
+  let sessionKindFilter = $state<SessionKindFilter>('all');
+  let sessionScopeGeneration = 0;
   let selectedSessionId = $state('');
   let transcriptLoading = $state(false);
   let transcriptError = $state('');
@@ -134,7 +141,10 @@
 
   const filteredSessions = $derived.by(() => {
     const query = sessionFilter.trim().toLowerCase();
-    const sorted = [...sessionList].sort(
+    const kindFiltered = sessionKindFilter === 'all'
+      ? sessionList
+      : sessionList.filter(channel => classifySessionKind(channel) === sessionKindFilter);
+    const sorted = [...kindFiltered].sort(
       (left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0),
     );
     if (!query) return sorted;
@@ -488,9 +498,30 @@ ${context}`;
     messages = [];
   }
 
+  function resetSessionBrowser(): void {
+    sessionScopeGeneration += 1;
+    sessionsLoaded = false;
+    sessionsLoading = false;
+    sessionsError = '';
+    sessionList = [];
+    selectedSessionId = '';
+    transcriptLoading = false;
+    transcriptError = '';
+    transcriptMessages = [];
+    transcriptPagination = null;
+  }
+
+  let unsubscribeSessionScope = () => {};
+
   // ── Lifecycle ──
 
   onMount(async () => {
+    unsubscribeSessionScope = onCompanionScopeChange(async (_previous, next) => {
+      resetSessionBrowser();
+      if (next !== null && activeTab === 'transcripts') {
+        await ensureSessionsLoaded(true);
+      }
+    });
     try {
       bootstrap = await getChatBootstrap();
       setCompanionNameFromChatBootstrap(bootstrap);
@@ -554,6 +585,7 @@ ${context}`;
   });
 
   onDestroy(() => {
+    unsubscribeSessionScope();
     healthPoller.stop();
     disconnectDebugStream();
     if (abortController) abortController.abort();
@@ -1154,20 +1186,24 @@ ${context}`;
 
   async function ensureSessionsLoaded(force = false) {
     if (sessionsLoading || (sessionsLoaded && !force)) return;
+    const generation = sessionScopeGeneration;
     sessionsLoading = true;
     sessionsError = '';
     try {
       const data = await listSessions();
+      if (generation !== sessionScopeGeneration) return;
       sessionList = data.channels;
       sessionsLoaded = true;
     } catch (e) {
+      if (generation !== sessionScopeGeneration) return;
       sessionsError = e instanceof Error ? e.message : 'Failed to load sessions';
     } finally {
-      sessionsLoading = false;
+      if (generation === sessionScopeGeneration) sessionsLoading = false;
     }
   }
 
   async function openTranscript(sessionId: string) {
+    const generation = sessionScopeGeneration;
     selectedSessionId = sessionId;
     transcriptMessages = [];
     transcriptPagination = null;
@@ -1178,31 +1214,41 @@ ${context}`;
         limit: SESSION_MESSAGE_PAGE_SIZE,
         messagesOnly: true,
       });
+      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
       transcriptMessages = data.messages;
       transcriptPagination = data.pagination;
     } catch (e) {
+      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
       transcriptError = e instanceof Error ? e.message : 'Failed to load transcript';
     } finally {
-      transcriptLoading = false;
+      if (generation === sessionScopeGeneration && selectedSessionId === sessionId) {
+        transcriptLoading = false;
+      }
     }
   }
 
   async function loadEarlierTranscript() {
     if (!selectedSessionId || !transcriptPagination?.hasMoreOlder || transcriptLoading) return;
+    const generation = sessionScopeGeneration;
+    const sessionId = selectedSessionId;
     transcriptLoading = true;
     transcriptError = '';
     try {
-      const data = await getSessionMessages(selectedSessionId, {
+      const data = await getSessionMessages(sessionId, {
         limit: SESSION_MESSAGE_PAGE_SIZE,
         beforeId: transcriptPagination.nextBeforeId,
         messagesOnly: true,
       });
+      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
       transcriptMessages = [...data.messages, ...transcriptMessages];
       transcriptPagination = data.pagination;
     } catch (e) {
+      if (generation !== sessionScopeGeneration || selectedSessionId !== sessionId) return;
       transcriptError = e instanceof Error ? e.message : 'Failed to load earlier messages';
     } finally {
-      transcriptLoading = false;
+      if (generation === sessionScopeGeneration && selectedSessionId === sessionId) {
+        transcriptLoading = false;
+      }
     }
   }
 
@@ -1765,14 +1811,30 @@ ${context}`;
             Refresh
           </button>
         </div>
-        <input
-          type="text"
-          bind:value={sessionFilter}
-          placeholder="Filter sessions (try model-room:)"
-          class="mb-2 shrink-0 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
-                 placeholder:text-shadow-400
-                 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
-        />
+        <div class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 shrink-0">
+          <input
+            type="text"
+            bind:value={sessionFilter}
+            placeholder="Filter sessions"
+            aria-label="Filter sessions by text"
+            class="min-w-0 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+                   placeholder:text-shadow-400
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
+          />
+          <select
+            bind:value={sessionKindFilter}
+            aria-label="Filter sessions by kind"
+            class="rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-900
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
+          >
+            <option value="all">All kinds</option>
+            <option value="chat">Chat</option>
+            <option value="subagent">Subagent</option>
+            <option value="intake">Intake</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
         {#if sessionsError}
           <p class="text-sm text-wilt-600 shrink-0">{sessionsError}</p>
         {/if}
@@ -1794,6 +1856,8 @@ ${context}`;
                   {channel.displayLabel || channel.sessionId}
                 </p>
                 <p class="text-xs text-shadow-600 mt-0.5">
+                  <span class="capitalize">{classifySessionKind(channel)}</span>
+                  ·
                   {channel.messageCount} messages
                   {#if channel.linkedContactName}
                     · {channel.linkedContactName}

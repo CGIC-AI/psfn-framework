@@ -12,7 +12,7 @@ function gh(args) {
 
 function readPr(reference) {
   return JSON.parse(
-    gh(['pr', 'view', reference, '--json', 'number,url,headRefOid,statusCheckRollup']),
+    gh(['pr', 'view', reference, '--json', 'number,url,headRefOid,statusCheckRollup,labels']),
   );
 }
 
@@ -44,6 +44,7 @@ export async function waitForPr({
       expectedHead,
       actualHead: pr.headRefOid,
       checks,
+      requireGreptile: (pr.labels ?? []).some(({ name }) => name === 'review:greptile'),
     });
     console.log(`PR #${pr.number}: ${result.reason}`);
     if (result.state === 'passed') return pr;
@@ -55,7 +56,7 @@ export async function waitForPr({
     }
     await sleep(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
   }
-  throw new Error(`Timed out waiting for ci-required and Greptile Review on ${expectedHead.slice(0, 12)}.`);
+  throw new Error(`Timed out waiting for required checks on ${expectedHead.slice(0, 12)}.`);
 }
 
 function parseArguments(argv) {

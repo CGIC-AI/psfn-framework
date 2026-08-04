@@ -430,12 +430,13 @@ export async function withHeavyPhaseLock(config, body) {
   }
 }
 
-export function buildStateGatePlan(state) {
+export function buildStateGatePlan(state, { changeBudgetException = false } = {}) {
   return buildGatePlan({
     paths: state.paths,
     scannablePaths: state.scannablePaths,
     base: state.base,
     head: state.head,
+    changeBudgetException,
   });
 }
 
@@ -564,6 +565,7 @@ function makeGateOrchestrator(state, execute) {
 export async function runLocalGate({
   cwd = process.cwd(),
   baseRef = 'origin/main',
+  changeBudgetException = process.env.CHANGE_BUDGET_EXCEPTION === 'true',
   force = false,
   planOnly = false,
   execute = executeGate,
@@ -571,7 +573,7 @@ export async function runLocalGate({
 } = {}) {
   const state = resolveLocalGateState({ cwd, baseRef });
   const cached = readAttestation(state.attestationPath);
-  const validation = validateStateAttestation(cached, state);
+  const validation = validateStateAttestation(cached, state, { changeBudgetException });
   if (validation.result.valid && !force) {
     console.log(`Local pre-PR gate already passed for ${state.head.slice(0, 12)}.`);
     return cached;

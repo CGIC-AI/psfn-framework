@@ -35,19 +35,25 @@ Hard stopping rules:
   label alone never requires extra agents, model reviews, broad tests, or a
   separate PR.
 - Small or low-risk changes use one implementer, one branch, focused tests, and no
-  model reviewer, agent bus, clean-main canary, or extra worktree unless a concrete
-  risk or current operator instruction requires one.
+  model reviewer, agent bus, or clean-main canary unless a concrete risk or current
+  operator instruction requires one. Worktree isolation is separate from review
+  ceremony: whenever agents or subagents write concurrently, every writer uses its
+  own branch and worktree, including work in overlapping systems.
 - Review the assembled PR train at most once, and only when its actual trust
   boundaries or complexity justify review. Do not review every bead and then
   review the same code again as an epic or train.
 - Run the broad pre-PR gate once on the final committed train head. Never run it
   on worker checkpoints, and do not rerun an unchanged attested head.
 - When compatible fixes are ready, batch them into one train up to the hard PR
-  limits. Do not create one paid-review event per bead, but do not hold completed
-  work waiting for an arbitrary line-count floor either.
+  limits. The 800-line publication floor exists to prevent tiny PRs from creating
+  separate paid-review events; use its documented blocker exception, never filler,
+  when a smaller change genuinely must land alone.
 - Publishing, CI, external review, and merging are asynchronous boundaries. After
   creating the PR, report its URL and move to the next implementation task. Do not
   babysit checks or wait for Greptile unless the operator explicitly asks.
+- Greptile is paid and opt-in. Never add `review:greptile`, mention the bot, or
+  otherwise trigger it unless the operator explicitly requests that paid review.
+  A P0/P1 label, PR publication, or `--wait` is not authorization.
 - When the operator says ship, publish, hurry, or stop reviewing, all optional
   review and documentation work stops immediately. Finish only the minimum safe
   validation and delivery actions requested.
@@ -283,11 +289,12 @@ Before publication:
 5. Return the PR URL. CI continues asynchronously; use `--wait` only when the
    operator explicitly asks this session to monitor required checks.
 
-The hard PR limits are 25 files, 2,500 counted changed lines, and 8 commits.
-Fifteen files, 1,500 lines, and 5 commits are planning targets, not limits. A
-single commit may span the coherent change up to the PR hard limits. Bundle
-compatible ready work, but there is no minimum PR size and no reason to wait for
-unrelated work or add filler.
+The mandatory publication window is 800–2,500 counted changed lines, at most 25
+files, and at most 8 commits. Fifteen files, 1,500 lines, and 5 commits are
+planning targets, not limits. A coherent commit may span up to the PR hard limits.
+Bundle compatible ready work to reach the floor; never add filler. A smaller PR
+requires `change-budget:exception` and a `BLOCKER:` rationale explaining why it
+must land alone and cannot safely wait for compatible work.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve
@@ -306,11 +313,15 @@ Preserve work owned by other agents.
   clear, `git reset --hard`, `git checkout -- .`, `git clean -f`, and recursive
   deletion of possible worktrees.
 - Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework` for parallel work.
-- One worker owns each active branch/worktree. A single train lane may implement
-  several compatible beads sequentially; do not create a worktree per bead when
-  there are no concurrent writers. Do not edit another active lane's files.
-- Parallelize only independent seams. Three workers plus one orchestrator is the
-  normal maximum, not a quota.
+- Every concurrent writer—including subagents—owns a distinct branch and
+  worktree. This remains mandatory when lanes touch the same system or files;
+  coordinate ownership and integrate explicitly instead of sharing a checkout.
+- A single writer may implement several compatible beads sequentially in one
+  train worktree. Do not create a worktree per bead when no writers overlap in
+  time, and never edit another active lane's files.
+- Prefer independent seams, but overlapping-system work may run concurrently when
+  explicit ownership and integration ordering make it worthwhile. Three workers
+  plus one orchestrator is the normal maximum, not a quota.
 
 ## Session handoff
 

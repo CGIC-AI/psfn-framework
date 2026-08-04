@@ -27,8 +27,8 @@ The causes were in this repository's own instructions:
 | Every lane and phase generated bus traffic and tracker evidence. | Coordination artifacts became work with no downstream reader. | Use direct messages and concise bead notes by default. Use a bus only for concurrent writers who need durable shared findings. |
 | Clean-main canary and broad gates were run before or during fanout. | Whole-repository certification ran before the final publishable diff existed. | Run focused checks while implementing and `gate:pre-pr` once on the frozen final train head. |
 | PR publication waited synchronously for CI and Greptile. | A created, ready PR held the agent idle for up to 45 minutes and could spend paid review budget. | Publication ends when the PR is created. Checks are asynchronous; waiting is explicit opt-in. |
-| Beads were treated as PR and worktree boundaries. | Tiny changes received separate branches, worktrees, reviews, and paid PR events. | Beads are scope records. Compatible beads may share one train lane and one PR. |
-| A mandatory minimum line count governed batching. | Small completed functionality could be held or forced through exception ceremony. | Batch compatible ready work, but use no minimum PR size and never add filler or wait for arbitrary volume. |
+| Every bead became a separate PR and paid scan. | The operator reports about $230 spent this month, roughly 70% on low-value reviews, because even tiny PRs cost another flat-price scan. | Keep the 800-line PR floor, batch compatible beads into a train, and reserve the under-floor exception for an unbundleable blocker. |
+| Worktree isolation was confused with PR ceremony. | Removing worktrees would make concurrent agents and subagents collide, especially across overlapping systems. | Every concurrent writer gets a branch and worktree. Many worktrees may still integrate into one train and one PR. |
 | Agents stayed with published work until merge and tracker closure. | Delivery monitoring displaced the next ready implementation. | Mark `published, awaiting checks`, return the URL, and move on. The merger or later reconciliation closes beads. |
 
 These are not suggestions. If any later section, older document, skill, or tool
@@ -63,7 +63,7 @@ If none applies, skip it.
 
 ## Choose the Smallest Topology
 
-### One train lane is the default
+### One train lane is the default for one writer
 
 Use one branch and worktree when:
 
@@ -72,15 +72,18 @@ Use one branch and worktree when:
 - setup and integration would cost more than parallelism saves; or
 - the train is already comfortably within the hard PR limits.
 
-One train lane may claim and implement several compatible beads sequentially.
-Record each bead in the PR body; do not create a worktree or PR per bead.
+One writer may claim and implement several compatible beads sequentially in one
+train lane. Record each bead in the PR body; do not create a PR per bead.
 
-### Parallel lanes are conditional
+### Worktree isolation is mandatory for concurrent writers
 
-Use two or three worker lanes only when the seams are independent and running
-them concurrently materially reduces wall time. Each active branch/worktree has
-one writer. Workers run focused tests and push coherent checkpoints; they do not
-run broad gates or commission reviews.
+When two or more agents or subagents write concurrently, each writer uses a
+distinct branch and worktree. This rule applies even when work touches the same
+system or overlaps files: overlap requires explicit file ownership and integration
+ordering, never concurrent edits in one checkout. Parallelism should still reduce
+wall time enough to repay setup and conflict-resolution cost. Workers run focused
+tests and push coherent checkpoints; they do not run broad gates or commission
+reviews.
 
 Do not open a wave branch, train branch, and bead branch when a single train
 branch is sufficient. A wave integration branch is useful only for multiple
@@ -97,8 +100,9 @@ main
        └── train/<wave>-<n>
 ```
 
-Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework`. Do not create them
-for sequential work solely to mirror tracker structure.
+Use worktrees under `$HOME/ai/dev/worktrees/psfn-framework`. Worktrees are writer
+isolation, not PR boundaries: integrate compatible lanes into one train. A lone
+writer doing sequential work need not create one worktree per bead.
 
 ## Roles
 
@@ -136,14 +140,12 @@ Hard PR limits:
 - 8 commits.
 
 Planning targets are 15 files, 1,500 lines, and 5 commits. They are suggestions,
-not split points. A coherent commit may span up to the PR hard limits. Split only
-when the train exceeds a hard limit, has unrelated intents, or creates a genuine
-review/integration boundary.
-
-There is no minimum PR size. Before opening a very small PR, include any compatible
-completed work already available. Do not wait for arbitrary line count, pull in
-unrelated filler, or build an exception narrative. When several compatible small
-fixes are ready, publish them together immediately.
+not split points. A coherent commit may span up to the PR hard limits. The
+publication floor is 800 counted changed lines because each PR can incur a flat
+paid-review cost regardless of diff size. Hold and batch compatible ready work;
+never add unrelated filler. An under-800 PR is allowed only with
+`change-budget:exception` and a `BLOCKER:` rationale proving it must land alone
+and cannot safely wait for compatible work.
 
 ## Canonical Wave
 
@@ -204,9 +206,13 @@ request or one concrete high-impact claim that remains materially ambiguous afte
 the first review and local reproduction. Never use two reviewers merely because
 the bead is P0/P1. Never run per-bead review plus train/epic review.
 
-Greptile and other opaque or paid review services are optional signal. Never
-dispatch them per bead, wait for them synchronously, or block PR creation because
-they are absent. If they report later, triage concrete findings in a later session.
+Greptile is a paid, explicitly triggered review. Repository configuration limits
+automatic review to PRs carrying `review:greptile` and disables repeat review on
+pushes. Do not apply that label, mention the bot, or otherwise trigger a review
+unless the operator explicitly requests the spend; priority alone is never enough.
+The service is unavailable until its next renewal, so do not request it while the
+credit pool is disabled. When requested after renewal, apply the label once to the
+frozen final train, never per bead, and triage findings asynchronously.
 
 ## Focused Validation and One Final Gate
 
@@ -253,7 +259,8 @@ npm run pr:publish -- --wait --title "<title>" --body-file <path>
 ```
 
 Do not poll a PR in the foreground, spend a subagent on passive waiting, repeatedly
-rerun Actions, re-request Greptile, or toggle labels to manufacture events. A
+rerun Actions, re-request Greptile, or toggle labels to manufacture events. The
+waiter requires Greptile only when `review:greptile` is present. A
 later merge/triage session handles failures and closes delivered beads. If a
 required check is unavailable, report that fact; it does not undo implementation
 or justify waiting on every other ready lane.
@@ -298,9 +305,9 @@ handoff record.
 - Push coherent non-main checkpoints so work is remotely durable.
 - Direct pushes to `main` remain prohibited without a current explicit operator
   exception.
-- Before merge, cherry-pick, rebase, or revert, verify the explicit worktree path,
-  current branch, HEAD, and expected base. Never assume the inherited shell's
-  checkout is the intended lane.
+- At assignment and before the first edit, every writer and subagent verifies its
+  explicit worktree path, owned branch, HEAD, and expected base. Repeat the check
+  before commit, merge, cherry-pick, rebase, or revert; abort on mismatch.
 - Never manually force-push, delete worktrees/branches/stashes, or rewrite shared
   history. The exact-head publisher is the only normal lease-protected update path.
 - Preserve fail-closed security and configuration contracts.

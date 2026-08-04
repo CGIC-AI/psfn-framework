@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -439,8 +440,8 @@ describe('runSessionIntegrityRepair', () => {
       backupFile: '20260325_api-framed_user_000006.jsonl',
       lineNumber: 2,
       rawLength: '{not-json}'.length,
+      reason: 'invalid_json',
     });
-    expect(typeof receipts[0]!.reason).toBe('string');
     expect(receipts[1]).toMatchObject({
       dispositionId: receipts[0]!.dispositionId,
       phase: 'completed',
@@ -811,10 +812,105 @@ describe('quarantine disposition durability + containment (psfn-framework-8xc4k 
     expect(receipts[1]).toMatchObject({
       dispositionId: receipts[0]!.dispositionId,
       rowCount: 1,
-      errorMessage: 'injected rewrite failure',
+      failure: 'rewrite_transaction_failed',
     });
     expect(JSON.stringify(receipts)).not.toContain('{not-json}');
     expect(JSON.stringify(receipts)).not.toContain('api:abort content');
+    expect(JSON.stringify(receipts)).not.toContain('injected rewrite failure');
+  });
+
+  it('never persists parser or error text: adversarial secret material stays out of the receipt', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const rowSecret = 'hello-SECRETROW-7f3a9c2b';
+    const errorSecret = 'SECRETERR-9d4e1b08';
+    // Sanity: Node's parser really would echo a prefix of this row in its
+    // error text, so persisting parser text would leak row bytes.
+    expect(() => JSON.parse(rowSecret)).toThrow(/hello-SECR/u);
+    const filePath = join(harness.sessionsDir, '20260325_api-secret_user_000001.jsonl');
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'api:secret', role: 'user', content: 'ordinary entry', timestamp: 1000,
+    }), keyring!, null);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, `${JSON.stringify(first)}\n${rowSecret}\n`, 'utf8');
+    const failingArchivePort = {
+      openArchive: (channelId: string, archivePath: string) => ({ channelId, filePath: archivePath }),
+      rewriteJournalChain: () => {
+        throw new Error(`injected rewrite failure carrying ${errorSecret}`);
+      },
+    } as unknown as ReturnType<typeof createFilesystemSessionArchivePort>;
+
+    expect(() => rewriteJournalChainUnderLock(
+      [filePath],
+      keyring!,
+      harness.backupDir,
+      harness.sessionsDir,
+      failingArchivePort,
+      () => {},
+    )).toThrow(errorSecret);
+
+    const receiptsRaw = readFileSync(
+      join(harness.backupDir, 'quarantine-receipts.jsonl'),
+      'utf8',
+    );
+    expect(receiptsRaw).not.toContain(rowSecret);
+    expect(receiptsRaw).not.toContain('hello-SECR');
+    expect(receiptsRaw).not.toContain(errorSecret);
+    const receipts = receiptsRaw.trim().split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(receipts.map(record => record.phase)).toEqual(['prepared', 'aborted']);
+    expect(receipts[0]).toMatchObject({ reason: 'invalid_json', rawLength: rowSecret.length });
+    expect(receipts[1]).toMatchObject({ failure: 'rewrite_transaction_failed' });
+    // The raw bytes survive in exactly one place: the fsynced backup copy.
+    expect(readFileSync(
+      join(harness.backupDir, '20260325_api-secret_user_000001.jsonl'),
+      'utf8',
+    )).toContain(rowSecret);
+  });
+
+  it('fails closed on a pre-existing backup collision before receipts or mutation', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const filePath = join(harness.sessionsDir, '20260325_api-collision_user_000001.jsonl');
+    const { originalLines } = writeMalformedJournal(filePath, 'api:collision');
+    mkdirSync(harness.backupDir, { recursive: true });
+    const plantedPath = join(harness.backupDir, '20260325_api-collision_user_000001.jsonl');
+    writeFileSync(plantedPath, 'planted-stale-backup\n', 'utf8');
+
+    expect(() => runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      reason: 'collision probe',
+    })).toThrow(/pre-existing journal backup/u);
+
+    // Canonical journal untouched, planted file untouched, no receipt written.
+    expect(readFileSync(filePath, 'utf8')).toBe(originalLines);
+    expect(readFileSync(plantedPath, 'utf8')).toBe('planted-stale-backup\n');
+    expect(existsSync(join(harness.backupDir, 'quarantine-receipts.jsonl'))).toBe(false);
+  });
+
+  it('fails closed on a symlinked journal target instead of backing up outside bytes', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'session-integrity-symlink-'));
+    rootsToDelete.push(outsideRoot);
+    const outsidePath = join(outsideRoot, 'outside.jsonl');
+    const { originalLines } = writeMalformedJournal(outsidePath, 'api:linked');
+    const linkPath = join(harness.sessionsDir, '20260325_api-linked_user_000001.jsonl');
+    mkdirSync(dirname(linkPath), { recursive: true });
+    symlinkSync(outsidePath, linkPath);
+
+    expect(() => runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      reason: 'symlink probe',
+    })).toThrow(/non-regular journal file/u);
+
+    expect(readFileSync(outsidePath, 'utf8')).toBe(originalLines);
+    expect(existsSync(join(harness.backupDir, 'quarantine-receipts.jsonl'))).toBe(false);
+    expect(existsSync(join(harness.backupDir, '20260325_api-linked_user_000001.jsonl'))).toBe(false);
   });
 
   it('recovers a pending prepared-phase rewrite before dispositioning, then completes', () => {

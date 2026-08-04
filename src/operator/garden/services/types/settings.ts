@@ -123,6 +123,18 @@ export type FleetAuthOwnerSnapshot =
   | LoadedFleetAuthOwnerSnapshot
   | UnloadedFleetAuthOwnerSnapshot;
 
+export interface EffectiveModelSelectionView {
+  purpose: 'chat';
+  source: 'companion_selection' | 'fleet_default';
+  slotKey?: string;
+  provider: string;
+  model: string;
+}
+
+export interface EffectiveModelSelectionProjection {
+  chat: EffectiveModelSelectionView | null;
+}
+
 export interface EffectiveFleetAuthOwnerProjection {
   ownerFile: 'fleet-auth.json';
   scope: 'global';
@@ -148,6 +160,7 @@ export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
   editors: SettingsConfigEditors;
+  effectiveModelSelection: EffectiveModelSelectionProjection;
   voiceProviders: AdminVoiceProviderData;
   status: AdminSettingsStatus;
   effectiveChargeQuota: EffectiveChargeQuotaState;

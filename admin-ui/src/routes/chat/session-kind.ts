@@ -42,4 +42,3 @@ export function classifySessionKind(
   }
   return 'other';
 }
-

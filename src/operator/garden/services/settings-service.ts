@@ -1107,10 +1107,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       config: runtimeConfig,
       env: await this.getEnvInfo(),
       editors,
-      effectiveModelSelection: buildEffectiveModelSelectionProjection(
-        this.deps.config,
-        effectiveRuntimeSettings,
-      ),
+      effectiveModelSelection: buildEffectiveModelSelectionProjection(this.deps.config, effectiveRuntimeSettings),
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),

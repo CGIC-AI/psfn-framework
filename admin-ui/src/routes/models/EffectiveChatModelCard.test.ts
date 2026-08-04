@@ -1,10 +1,10 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
-import EffectiveChatModelCard from './EffectiveChatModelCard.svelte';
+import EffectiveChatModelView from './EffectiveChatModelView.svelte';
 
 describe('EffectiveChatModelCard', () => {
   it('shows the companion overlay selection separately from the fleet default', () => {
-    const rendered = render(EffectiveChatModelCard, {
+    const rendered = render(EffectiveChatModelView, {
       props: {
         effectiveChat: {
           purpose: 'chat',
@@ -14,10 +14,14 @@ describe('EffectiveChatModelCard', () => {
           model: 'z-ai/glm-5.2',
         },
         fleetDefault: {
+          purpose: 'chat',
+          source: 'fleet_default',
           slotKey: 'primary',
           provider: 'openrouter',
           model: 'moonshotai/kimi-k3',
         },
+        loading: false,
+        loadError: '',
       },
     });
 

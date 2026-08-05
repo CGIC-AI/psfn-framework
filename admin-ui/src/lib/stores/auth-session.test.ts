@@ -44,6 +44,11 @@ async function loadAuthStore(
     location: { pathname: options.pathname ?? '/', href: '' },
     localStorage: { removeItem: vi.fn() },
   });
+  // Node 24 exposes its own process-wide Web Locks implementation. These
+  // store tests exercise refresh lifecycle behavior with synthetic fetches;
+  // keep them on the browser fallback path while fleet-session.test.ts covers
+  // origin-lock serialization explicitly.
+  vi.stubGlobal('navigator', {});
   if (options.documentRef) vi.stubGlobal('document', options.documentRef);
   vi.stubGlobal('fetch', vi.fn(fetchImpl));
   return import('./auth.svelte');

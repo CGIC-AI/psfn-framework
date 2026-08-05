@@ -146,8 +146,9 @@ async function readFleetSessionStateUnlocked(
   });
   if (signal) throwIfAborted(signal);
   if (response.status === 401) return 'signed_out';
+  if (response.status === 200) return 'signed_in';
   await throwIfFleetSessionCeremonyFailed(response);
-  return 'signed_in';
+  throw new Error(`Fleet session authority returned unexpected status ${response.status}`);
 }
 
 export async function readFleetSessionState(

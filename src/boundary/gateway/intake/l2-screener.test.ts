@@ -193,6 +193,8 @@ describe('screenL2', () => {
     // The untrusted content is delimited and marked untrusted in the user turn.
     const messages = request.body.messages as Array<{ role: string; content: string }>;
     expect(messages[0].role).toBe('system');
+    expect(messages[0].content).toContain('platform routing identifiers');
+    expect(messages[0].content).toContain('are not PII, secrets, or credentials');
     expect(messages[1].content).toContain('<untrusted_content>');
     expect(messages[1].content).toContain('payload');
   });

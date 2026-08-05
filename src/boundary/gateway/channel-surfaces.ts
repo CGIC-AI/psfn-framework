@@ -1,5 +1,8 @@
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
-import type { DiscordAdapter } from '../../channels/discord/adapter.js';
+import type {
+  DiscordAdapter,
+  DiscordPrimaryUserBinding,
+} from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
 import { startDiscordWithRetry } from './discord-startup.js';
@@ -17,6 +20,7 @@ import type {
 import type { ContactBlockGate } from './contact-block-gate.js';
 import { assertDiscordAccountTokensConfigured } from '../../channels/backplane/config.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import type { FleetAuthAccountRosterEntry } from '../../system/config/fleet-auth-config.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
@@ -46,6 +50,31 @@ export interface GatewayChannelSurfaces {
   /** Present only in multi-account mode; includes the primary account. */
   discordAccounts?: GatewayDiscordAccountSurface[];
   telegram?: TelegramAdapter;
+}
+
+interface DiscordPrimaryUserAuthority {
+  fleetAuth?: {
+    provider: { kind: 'discord' };
+    accountRoster?: readonly FleetAuthAccountRosterEntry[];
+  };
+}
+
+/**
+ * Resolve only system-owner roster entries that prove a Discord subject owns
+ * the exact companion behind this bot account. Mutable social labels are not
+ * accepted as gateway authentication evidence.
+ */
+export function resolveDiscordPrimaryUsers(
+  config: DiscordPrimaryUserAuthority,
+  companionId: CompanionId | undefined,
+): DiscordPrimaryUserBinding[] {
+  if (!companionId || config.fleetAuth?.provider.kind !== 'discord') return [];
+  return (config.fleetAuth.accountRoster ?? [])
+    .filter(entry => entry.companionId === companionId && entry.role === 'owner')
+    .map(entry => ({
+      userId: entry.providerSubjectId,
+      ...(entry.contactId ? { canonicalContactId: entry.contactId } : {}),
+    }));
 }
 
 /** All discord adapter instances owned by the gateway, in configured order. */
@@ -203,6 +232,7 @@ export async function loadGatewayChannelSurfaces(
           `discord account ${account.accountId}`,
         ),
         allowedBotUserIds: account.allowedBotUserIds,
+        primaryUsers: resolveDiscordPrimaryUsers(input.config, account.companionId),
         ...(account.customEmojiMeanings
           ? { customEmojiMeanings: account.customEmojiMeanings }
           : {}),
@@ -236,6 +266,10 @@ export async function loadGatewayChannelSurfaces(
           intakeScreeningRouting,
           discordChannelConfig.companionId,
           'discord',
+        ),
+        primaryUsers: resolveDiscordPrimaryUsers(
+          input.config,
+          discordChannelConfig.companionId,
         ),
         enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       }),

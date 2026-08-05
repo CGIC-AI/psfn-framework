@@ -68,7 +68,10 @@ import {
   screenDocumentIngestSummary,
 } from '../../faculties/file-ingest/index.js';
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
-import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type {
+  IntakeEnvelopeSnapshot,
+  IntakeSourceClass,
+} from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
@@ -131,10 +134,17 @@ export interface DiscordAdapterAccountBinding {
   siblingBotUserIds?: () => readonly string[];
 }
 
+/** System-owner binding from a Discord subject to this companion's primary contact. */
+export interface DiscordPrimaryUserBinding {
+  userId: string;
+  canonicalContactId?: string;
+}
+
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
   allowedBotUserIds?: string[];
+  primaryUsers?: readonly DiscordPrimaryUserBinding[];
   personalFilesDir?: string;
   /**
    * jp36.3.1.2: per-guild custom-emoji one-line meanings from channels.json.
@@ -243,6 +253,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private statusUnsubscribers: Array<() => void> = [];
   private readonly longRunningToolStatus: LongRunningToolStatusTracker;
   private allowedBotUserIds: Set<string>;
+  private primaryUsersById: Map<string, DiscordPrimaryUserBinding>;
   private readonly customEmojiMeanings: CustomEmojiMeaningsByGuild;
   private personalFilesDir: string | null;
   private initialized = false;
@@ -262,6 +273,12 @@ export class DiscordAdapter implements ChannelAdapterPort {
       (options.allowedBotUserIds ?? [])
         .map(id => id.trim())
         .filter(id => id.length > 0),
+    );
+    this.primaryUsersById = new Map(
+      (options.primaryUsers ?? [])
+        .map(binding => ({ ...binding, userId: binding.userId.trim() }))
+        .filter(binding => binding.userId.length > 0)
+        .map(binding => [binding.userId, binding]),
     );
     this.customEmojiMeanings = options.customEmojiMeanings ?? {};
     this.config = {
@@ -1041,15 +1058,24 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
+    const sourceClass = this.resolveMessageSourceClass(msg, isDirectMessage, runtimeBotId);
+    const primaryUser = sourceClass === 'primary_user'
+      ? this.primaryUsersById.get(msg.author.id)
+      : undefined;
     let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     if (content !== '(empty message)') {
       const screenedBody = await screenChatMessageBody({
         content,
         screening: this.intakeScreening,
-        sourceClass: isDirectMessage ? 'regular_contact' : 'public_contact',
+        sourceClass,
         surface: 'discord',
         channelId: msg.channelId,
         messageId: msg.id,
+        channelPrivacy,
+        ...(primaryUser?.canonicalContactId
+          ? { canonicalContactId: primaryUser.canonicalContactId }
+          : {}),
       });
       content = screenedBody.content;
       if (screenedBody.snapshot) intakeEnvelopes.push(screenedBody.snapshot);
@@ -1113,7 +1139,6 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const resolvedContent = content === '(empty message)' && attachments.length > 0
       ? '(image attachment)'
       : content;
-    const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
     const mentionedTargets = [...msg.mentions.users.values()].map(user => ({
       authorId: user.id,
       authorName: user.displayName,
@@ -1209,6 +1234,20 @@ export class DiscordAdapter implements ChannelAdapterPort {
     if (!normalized) return false;
     if (runtimeBotId && normalized === runtimeBotId) return false;
     return provider().includes(normalized);
+  }
+
+  private resolveMessageSourceClass(
+    msg: Message,
+    isDirectMessage: boolean,
+    runtimeBotId?: string,
+  ): IntakeSourceClass {
+    if (msg.author.bot && this.isSiblingCompanionBot(msg.author.id, runtimeBotId)) {
+      return 'companion_self';
+    }
+    if (!msg.author.bot && this.primaryUsersById.has(msg.author.id)) {
+      return 'primary_user';
+    }
+    return isDirectMessage ? 'regular_contact' : 'public_contact';
   }
 
   private listeningWindowKey(channelId: string, userId: string): string {

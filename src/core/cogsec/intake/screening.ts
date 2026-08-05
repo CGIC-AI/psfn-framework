@@ -27,7 +27,10 @@
 // The L1.5 score never quarantines alone (known over-defense — InjecGuard,
 // arXiv 2410.22770): uncorroborated, an above-threshold score downgrades to a
 // 'sanitize' decision so the signal is recorded and the text is normalized,
-// but nothing is withheld on the classifier's word alone.
+// but nothing is withheld on the classifier's word alone. For authenticated
+// first-party authors in private/invite-only channels, a clean deterministic
+// scan makes that semantic-only signal audit-only: the original text passes
+// without invoking the slower escalation layers.
 
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -50,6 +53,7 @@ import {
   type IntakeBenignClass,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
 import {
   INTAKE_QUARANTINE_RISK_LABELS,
@@ -221,6 +225,8 @@ export interface IntakeScreeningInput {
    * against the trustedPeople/deniedPeople source lists (htm9.13).
    */
   canonicalContactId?: string;
+  /** Canonical channel classification supplied by the authenticated surface. */
+  channelPrivacy?: ChannelPrivacy;
   /**
    * Signals from screeners that already ran on this content upstream (htm9.8
    * vision screener). Folded into the envelope; quarantine-family prior labels
@@ -497,6 +503,8 @@ interface EscalationExtras {
   forced?: { action: Extract<IntakeDecisionAction, 'quarantine'>; reason: string };
   /** Present only when the override was caused by a screening runtime failure. */
   failure?: { stage: 'escalation'; error: string };
+  /** Keep an uncorroborated semantic score for audit, but do not act on it. */
+  observeUncorroboratedSemanticScore?: boolean;
 }
 
 export function createIntakeScreeningService(
@@ -591,11 +599,14 @@ export function createIntakeScreeningService(
     // tier, or an escalation-port failure) replaces the L1/L1.5 decision;
     // otherwise the decision derives from the cheaper layers exactly as it
     // did before escalation was wired.
+    const injectionScoreForDecision = escalationExtras?.observeUncorroboratedSemanticScore
+      ? undefined
+      : scorerOutcome.score;
     const decision = escalationExtras?.forced
       ? { action: escalationExtras.forced.action, reason: escalationExtras.forced.reason }
       : decideAction({
         report,
-        injectionScore: scorerOutcome.score,
+        injectionScore: injectionScoreForDecision,
         injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
         priorSignals,
       });
@@ -606,7 +617,23 @@ export function createIntakeScreeningService(
       decidedAtMs: atMs,
     };
 
-    const base = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const collected = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const base = escalationExtras?.observeUncorroboratedSemanticScore
+      ? {
+        ...collected,
+        // A record-only score must not leave an actionable injection label on
+        // the envelope: sink gates consume riskLabels independently of the
+        // screening action. Preserve the classifier output as audit metadata.
+        riskLabels: [
+          ...report.riskLabels,
+          ...priorSignals.flatMap(signal => signal.labels),
+        ],
+        extractedFields: {
+          ...collected.extractedFields,
+          'semantic_score.labels': scorerOutcome.labels.join(','),
+        },
+      }
+      : collected;
     const scores: Record<string, number> = {
       ...base.scores,
       ...(escalationExtras?.contribution?.scores ?? {}),
@@ -614,6 +641,9 @@ export function createIntakeScreeningService(
     const extractedFields: Record<string, string> = {
       ...base.extractedFields,
       ...(escalationExtras?.contribution?.extractedFields ?? {}),
+      ...(escalationExtras?.observeUncorroboratedSemanticScore
+        ? { 'semantic_score.disposition': 'observed_first_party_closed_channel' }
+        : {}),
     };
 
     // htm9.13: the marking plan is a pure function of (labels, max score,
@@ -927,6 +957,27 @@ export function createIntakeScreeningService(
           error: error instanceof Error ? error.message : String(error),
         };
       }
+    }
+    const adjustedTier = resolveTier(input).tier;
+    const aboveSemanticThreshold = scorerOutcome.score !== undefined
+      && scorerOutcome.score >= injectionScoreThresholdForTier(policy, adjustedTier);
+    const closedFirstPartyConversation = (
+      input.sourceClass === 'primary_user' || input.sourceClass === 'companion_self'
+    ) && (
+      input.channelPrivacy === 'private' || input.channelPrivacy === 'invite_only'
+    );
+    const deterministicScreenIsClean = report.riskLabels.length === 0
+      && report.scannerErrors.length === 0
+      && !report.truncated
+      && (input.priorSignals ?? []).every((signal) => signal.labels.length === 0);
+    if (aboveSemanticThreshold && closedFirstPartyConversation && deterministicScreenIsClean) {
+      // The local classifier remains visible telemetry, but an uncorroborated
+      // false positive must not rewrite or delay an authenticated first-party
+      // conversation in a closed channel. Deterministic findings still take
+      // their ordinary fail-closed path before this narrow optimization.
+      return finalize(text, input, report, scorerOutcome, {
+        observeUncorroboratedSemanticScore: true,
+      });
     }
     if (!escalation || !text.trim()) {
       return finalize(text, input, report, scorerOutcome);

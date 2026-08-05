@@ -92,8 +92,16 @@ async function runServerSessionRefresh(
   controller: AbortController,
 ): Promise<void> {
   try {
-    const { refreshFleetSession } = await import('$lib/api/fleet-session');
-    const refreshed = await refreshFleetSession(controller.signal);
+    const { readFleetSessionState, refreshFleetSession } = await import('$lib/api/fleet-session');
+    let refreshed: Awaited<ReturnType<typeof refreshFleetSession>>;
+    try {
+      refreshed = await refreshFleetSession(controller.signal);
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      const state = await readFleetSessionState(controller.signal);
+      if (state === 'signed_out') throw error;
+      refreshed = await refreshFleetSession(controller.signal);
+    }
     if (generation !== sessionRefreshGeneration
       || !sessionRefreshRunning
       || !serverSessionAuthenticated
@@ -115,6 +123,7 @@ async function runServerSessionRefresh(
       serverSessionAuthenticated = false;
       authResolved = true;
       clearSessionRefreshSchedule();
+      if (typeof window !== 'undefined') window.location.href = '/fleet/login';
       return;
     }
     console.warn('Garden fleet session refresh failed; retaining the current session.', error);

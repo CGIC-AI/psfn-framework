@@ -9587,6 +9587,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.analysisWorkbenchMaxIterations",
+      "value": "{ sectionId: 'analysis-workbench', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_GARDEN_FIELD_EXPOSURE.analysisWorkbenchMaxIterations; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.analysisWorkbenchMaxSubQueries",
       "value": "{ sectionId: 'analysis-workbench', surface: 'advanced' }",
       "form": "object-member",
@@ -11837,6 +11844,13 @@
       "value": "{ min: 500, max: 600000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.analysisWorkbenchExecutionTimeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.analysisWorkbenchMaxIterations",
+      "value": "{ min: 1, max: 200 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.analysisWorkbenchMaxIterations; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

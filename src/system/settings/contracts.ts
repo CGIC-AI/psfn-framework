@@ -192,6 +192,7 @@ export interface EditableSettings {
   analysisWorkbenchMaxWallTimeMs?: number;
   analysisWorkbenchDirectResponseTimeoutMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  analysisWorkbenchMaxIterations?: number;
   analysisWorkbenchExecutionTimeoutMs?: number;
   analysisWorkbenchOutputTruncation?: number;
   fsReadMaxBytes?: number;
@@ -364,6 +365,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchDirectResponseTimeoutMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchMaxIterations',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
   'fsReadMaxBytes',

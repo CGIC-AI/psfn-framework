@@ -8,6 +8,7 @@ import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js'
 import {
   DEFAULT_REPL_CONFIG,
   type REPLConfig,
+  type TierAnalysisWorkbenchBudget,
   validateAnalysisWorkbenchDirectResponseTimeoutMs,
 } from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
@@ -167,6 +168,22 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
     );
   }
   if (config.analysisWorkbenchMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.analysisWorkbenchMaxSubQueries;
+  if (config.analysisWorkbenchMaxIterations !== undefined) {
+    const maxIterations = config.analysisWorkbenchMaxIterations;
+    replConfig.budget.maxIterations = maxIterations;
+    // Lift every tier ceiling so the loop's Math.min(base, tier.maxIterations)
+    // clamp honors the operator's explicit value. Copy per tier: DEFAULT_REPL_CONFIG
+    // shares its tierBudgets object, so in-place mutation would leak globally.
+    const liftTierCeiling = (tier: TierAnalysisWorkbenchBudget): TierAnalysisWorkbenchBudget => ({
+      ...tier,
+      maxIterations: Math.max(tier.maxIterations, maxIterations),
+    });
+    replConfig.tierBudgets = {
+      nursery: liftTierCeiling(replConfig.tierBudgets.nursery),
+      apprentice: liftTierCeiling(replConfig.tierBudgets.apprentice),
+      autonomous: liftTierCeiling(replConfig.tierBudgets.autonomous),
+    };
+  }
   if (config.analysisWorkbenchExecutionTimeoutMs !== undefined) replConfig.executionTimeoutMs = config.analysisWorkbenchExecutionTimeoutMs;
   if (config.analysisWorkbenchOutputTruncation !== undefined) replConfig.outputTruncation = config.analysisWorkbenchOutputTruncation;
   return replConfig;

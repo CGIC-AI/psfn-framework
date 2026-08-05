@@ -2015,6 +2015,7 @@ describe('settings', () => {
       expect(snapshot.analysisWorkbenchMaxTokens).toBeNull();
       expect(snapshot.analysisWorkbenchMaxWallTimeMs).toBeNull();
       expect(snapshot.analysisWorkbenchMaxSubQueries).toBeNull();
+      expect(snapshot.analysisWorkbenchMaxIterations).toBeNull();
       expect(snapshot.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
       expect(snapshot.groupMemory).toEqual(createDefaultGroupMemorySettings());
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
@@ -2067,6 +2068,7 @@ describe('settings', () => {
 
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('analysisWorkbenchMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('analysisWorkbenchMaxIterations')).toBe(true);
       expect(isRuntimeSettingKey('observerEvalSidecar')).toBe(true);
       expect(isRuntimeSettingKey('groupMemory')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);

@@ -135,6 +135,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchDirectResponseTimeoutMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchMaxIterations',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
   'fsReadMaxBytes',
@@ -299,6 +300,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     analysisWorkbenchDirectResponseTimeoutMs:
       config.analysisWorkbenchDirectResponseTimeoutMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
+    analysisWorkbenchMaxIterations: config.analysisWorkbenchMaxIterations ?? null,
     analysisWorkbenchExecutionTimeoutMs:
       config.analysisWorkbenchExecutionTimeoutMs ?? null,
     analysisWorkbenchOutputTruncation:
@@ -335,6 +337,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchMaxWallTimeMs'
     | 'analysisWorkbenchDirectResponseTimeoutMs'
     | 'analysisWorkbenchMaxSubQueries'
+    | 'analysisWorkbenchMaxIterations'
     | 'analysisWorkbenchExecutionTimeoutMs'
     | 'analysisWorkbenchOutputTruncation'
     | 'observerEvalSidecar'

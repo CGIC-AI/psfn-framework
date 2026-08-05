@@ -12,6 +12,7 @@ function parse(entries: Record<string, string>) {
 }
 
 const VALID = {
+  analysisWorkbenchMaxIterations: '40',
   analysisWorkbenchExecutionTimeoutMs: '8000',
   analysisWorkbenchOutputTruncation: '16384',
   voiceSessionTimeoutMs: '60000',
@@ -23,6 +24,7 @@ describe('Tier 1 non-memory settings — form validation (fail closed)', () => {
   it('accepts in-range values and parses them as integers', () => {
     const [settings, errors] = parse({ ...VALID });
     expect(errors).toEqual([]);
+    expect(settings.analysisWorkbenchMaxIterations).toBe(40);
     expect(settings.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(settings.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(settings.voiceSessionTimeoutMs).toBe(60000);
@@ -31,6 +33,9 @@ describe('Tier 1 non-memory settings — form validation (fail closed)', () => {
   });
 
   it.each([
+    ['analysisWorkbenchMaxIterations', '0'],
+    ['analysisWorkbenchMaxIterations', '201'],
+    ['analysisWorkbenchMaxIterations', 'abc'],
     ['analysisWorkbenchExecutionTimeoutMs', '10'],
     ['analysisWorkbenchExecutionTimeoutMs', '9999999'],
     ['analysisWorkbenchOutputTruncation', '1'],
@@ -52,6 +57,7 @@ describe('Tier 1 non-memory settings — owner-file → config → snapshot wiri
     const config = {} as SubstrateConfig;
     applySettings(config, settings);
 
+    expect(config.analysisWorkbenchMaxIterations).toBe(40);
     expect(config.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(config.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(config.voiceSessionTimeoutMs).toBe(60000);
@@ -59,6 +65,7 @@ describe('Tier 1 non-memory settings — owner-file → config → snapshot wiri
     expect(config.voiceMaxPendingFrames).toBe(16);
 
     const snapshot = getRuntimeSettingsSnapshot(config);
+    expect(snapshot.analysisWorkbenchMaxIterations).toBe(40);
     expect(snapshot.analysisWorkbenchExecutionTimeoutMs).toBe(8000);
     expect(snapshot.analysisWorkbenchOutputTruncation).toBe(16384);
     expect(snapshot.voiceSessionTimeoutMs).toBe(60000);

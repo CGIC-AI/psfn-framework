@@ -401,6 +401,8 @@ export interface SubstrateConfig {
   /** Shared response-wait window for direct-parent Workbench execution. */
   analysisWorkbenchDirectResponseTimeoutMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  /** Operator override for the analysis workbench iteration cap (turns). */
+  analysisWorkbenchMaxIterations?: number;
   /** Per-code-block sandbox execution timeout (ms) for the analysis workbench. */
   analysisWorkbenchExecutionTimeoutMs?: number;
   /** Character cap on a single analysis-workbench code execution's output. */

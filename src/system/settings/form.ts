@@ -70,6 +70,7 @@ export const SETTINGS_VALIDATION = {
     max: PARENT_TURN_MAX_WALL_TIME_MS - 60_000,
   },
   analysisWorkbenchMaxSubQueries: { min: 1, max: 100 },
+  analysisWorkbenchMaxIterations: { min: 1, max: 200 },
   analysisWorkbenchExecutionTimeoutMs: { min: 500, max: 600000 },
   analysisWorkbenchOutputTruncation: { min: 256, max: 1000000 },
   fsReadMaxBytes: {

@@ -114,6 +114,8 @@ const DETECTORS: readonly SecretsPiiDetector[] = [
 ];
 
 const CARD_CANDIDATE = /\b(?:\d[ -]?){12,18}\d\b/g;
+const RFC4122_IDENTIFIER = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const DISCORD_MENTION_IDENTIFIER = /<(?:@!?|@&|#)\d{15,22}>/g;
 
 function passesLuhn(digits: string): boolean {
   let sum = 0;
@@ -134,6 +136,27 @@ interface RedactionRange {
   start: number;
   end: number;
   id: string;
+}
+
+function collectOpaqueIdentifierRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const pattern of [RFC4122_IDENTIFIER, DISCORD_MENTION_IDENTIFIER]) {
+    pattern.lastIndex = 0;
+    for (let examined = 0; examined < MAX_MATCHES_PER_DETECTOR; examined += 1) {
+      const match = pattern.exec(text);
+      if (match === null) break;
+      ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+  return ranges;
+}
+
+function overlapsOpaqueIdentifier(
+  match: { index: number; value: string },
+  ranges: readonly { start: number; end: number }[],
+): boolean {
+  const end = match.index + match.value.length;
+  return ranges.some(range => match.index < range.end && end > range.start);
 }
 
 function applyRedactions(text: string, ranges: RedactionRange[]): string {
@@ -181,11 +204,16 @@ export function scanSecretsPii(normalized: string, scope: IntakeScanScope): Inta
   // Luhn-verified payment-card numbers (13–19 digits with optional
   // space/dash separators). Verified PANs are redacted.
   if (scanScopeIncludes(scope, 'context')) {
+    const opaqueIdentifierRanges = collectOpaqueIdentifierRanges(normalized);
     CARD_CANDIDATE.lastIndex = 0;
     let cardCount = 0;
     for (let examined = 0; examined < MAX_MATCHES_PER_DETECTOR; examined += 1) {
       const match = CARD_CANDIDATE.exec(normalized);
       if (match === null) break;
+      if (overlapsOpaqueIdentifier(
+        { index: match.index, value: match[0] },
+        opaqueIdentifierRanges,
+      )) continue;
       const digits = match[0].replace(/[ -]/g, '');
       if (digits.length < 13 || digits.length > 19) continue;
       if (!passesLuhn(digits)) continue;

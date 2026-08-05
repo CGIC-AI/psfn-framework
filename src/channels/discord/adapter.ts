@@ -84,6 +84,7 @@ import {
 } from './attachments.js';
 import { createDiscordClient, type DiscordEvidenceAdapterSurface } from './evidence-adapter-surface.js';
 import { LongRunningToolStatusTracker } from '../shared/long-running-tool-status.js';
+import { isCompanionReadyLifecycleNotification } from '../../system/lifecycle/notifications.js';
 
 const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
@@ -130,8 +131,13 @@ export interface DiscordAdapterAccountBinding {
   accountId: string;
   companionId: CompanionId;
   token: string;
-  /** Live bot user ids of the other companion accounts on this gateway. */
-  siblingBotUserIds?: () => readonly string[];
+  /** Live authenticated identities of the other companion accounts on this gateway. */
+  siblingBotIdentities?: () => readonly DiscordSiblingBotIdentity[];
+}
+
+export interface DiscordSiblingBotIdentity {
+  botUserId: string;
+  companionId: CompanionId;
 }
 
 /** System-owner binding from a Discord subject to this companion's primary contact. */
@@ -716,6 +722,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
     // direct mention is allowed to produce egress.
     if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot && !isAllowedBotAuthor) return;
+    if (this.isAuthenticatedSiblingReadyNotification(msg, runtimeBotId)) {
+      log.debug('Discord sibling ready notification excluded from conversational intake', {
+        channelId: msg.channelId,
+        authorId: msg.author.id,
+      });
+      return;
+    }
     if (!this.handler) return;
 
     // Respond to DMs always. Guild messages are all observed for context, but
@@ -801,6 +814,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
       ? this.isPermittedBotAuthor(targetMessage.author.id, runtimeBotId)
       : false;
     if (targetMessage.author.bot && !isAllowedBotTarget) return;
+    if (this.isAuthenticatedSiblingReadyNotification(targetMessage as Message, runtimeBotId)) {
+      return;
+    }
 
     const channelId = targetMessage.channelId;
     log.debug('Discord reaction trigger matched', {
@@ -1228,12 +1244,29 @@ export class DiscordAdapter implements ChannelAdapterPort {
   }
 
   private isSiblingCompanionBot(authorId: string, runtimeBotId?: string): boolean {
-    const provider = this.account?.siblingBotUserIds;
-    if (!provider) return false;
+    return this.resolveSiblingCompanionId(authorId, runtimeBotId) !== null;
+  }
+
+  private resolveSiblingCompanionId(
+    authorId: string,
+    runtimeBotId?: string,
+  ): CompanionId | null {
+    const provider = this.account?.siblingBotIdentities;
+    if (!provider) return null;
     const normalized = authorId.trim();
-    if (!normalized) return false;
-    if (runtimeBotId && normalized === runtimeBotId) return false;
-    return provider().includes(normalized);
+    if (!normalized) return null;
+    if (runtimeBotId && normalized === runtimeBotId) return null;
+    return provider().find(identity => identity.botUserId === normalized)?.companionId ?? null;
+  }
+
+  private isAuthenticatedSiblingReadyNotification(
+    msg: Message,
+    runtimeBotId?: string,
+  ): boolean {
+    if (!msg.author.bot) return false;
+    const siblingCompanionId = this.resolveSiblingCompanionId(msg.author.id, runtimeBotId);
+    return siblingCompanionId !== null
+      && isCompanionReadyLifecycleNotification(msg.content, siblingCompanionId);
   }
 
   private resolveMessageSourceClass(
@@ -1594,6 +1627,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         for (const msg of sorted) {
           if (runtimeBotId && msg.author.id === runtimeBotId) continue;
           if (msg.author.bot && !this.isPermittedBotAuthor(msg.author.id, runtimeBotId)) continue;
+          if (this.isAuthenticatedSiblingReadyNotification(msg, runtimeBotId)) continue;
           if (dedupIds.has(msg.id)) continue;
 
           this.sessionStore.append({

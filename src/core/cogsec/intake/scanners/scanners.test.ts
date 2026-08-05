@@ -359,6 +359,31 @@ describe('secrets/PII scanner', () => {
     expect(ruleIds(invalid)).toEqual([]);
   });
 
+  it('does not classify internal UUIDs or Discord mentions as payment cards', () => {
+    const result = scanSecretsPii(
+      '[agent:11111111-1111-4111-8111-111111111111] '
+        + '<@123456789012345678> <@!123456789012345679> '
+        + '<@&123456789012345680> <#123456789012345681>',
+      'context',
+    );
+
+    expect(ruleIds(result)).not.toContain('payment_card');
+    expect(result.labels).not.toContain('pii/financial');
+    expect(result.sanitized).toBeUndefined();
+  });
+
+  it('still redacts a real PAN beside an opaque Discord identifier', () => {
+    const result = scanSecretsPii(
+      '<@123456789012345678> reported card 4111 1111 1111 1111',
+      'context',
+    );
+
+    expect(ruleIds(result)).toContain('payment_card');
+    expect(result.sanitized).toBe(
+      '<@123456789012345678> reported card [REDACTED:payment_card]',
+    );
+  });
+
   it('keeps assigned-secret literals at strict tier (config-doc placeholders)', () => {
     const text = 'api_key: "abcdef0123456789abcdef" # from the setup guide';
     expect(ruleIds(scanSecretsPii(text, 'strict'))).toContain('assigned_secret_literal');

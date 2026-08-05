@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolveLastActiveSessionPath } from '../../persistence/layout.js';
 import {
   DiscordLifecycleNotifier,
+  isCompanionReadyLifecycleNotification,
   readLastActiveSession,
   resolveLastActiveSession,
   restoreLastActiveSession,
@@ -13,6 +14,32 @@ import {
   writeLastActiveChannel,
 } from './notifications.js';
 import type { MessageSender } from './notifications.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+
+describe('companion ready lifecycle notification authentication', () => {
+  const companionId = createCompanionId('22222222-2222-4222-8222-222222222222');
+
+  it('matches only the exact ready message for the bound companion identity', () => {
+    expect(isCompanionReadyLifecycleNotification(
+      `[agent:${companionId}] I'm back~ (startup took 0s)`,
+      companionId,
+    )).toBe(true);
+    expect(isCompanionReadyLifecycleNotification(
+      `[agent:${companionId}] I'm back~ (startup took 17s)`,
+      companionId,
+    )).toBe(true);
+  });
+
+  it.each([
+    "[agent:22222222-2222-4222-8222-222222222223] I'm back~ (startup took 0s)",
+    "[agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took 00s)",
+    "[agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took -1s)",
+    "[agent:22222222-2222-4222-8222-222222222222] I'm back (startup took 0s)",
+    "prefix [agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took 0s)",
+  ])('rejects unauthenticated or non-canonical lookalike %j', (content) => {
+    expect(isCompanionReadyLifecycleNotification(content, companionId)).toBe(false);
+  });
+});
 
 async function waitForFile(path: string, timeoutMs = 1000): Promise<void> {
   const start = Date.now();

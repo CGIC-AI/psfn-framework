@@ -390,6 +390,51 @@ describe('DiscordAdapter startup backfill', () => {
     }));
   });
 
+  it('excludes authenticated sibling ready notices from startup backfill', async () => {
+    const siblingCompanionId = createCompanionId('22222222-2222-4222-8222-222222222222');
+    store.append({
+      channelId: '123456789012345678',
+      role: 'user',
+      content: 'old user',
+      authorId: 'user-1',
+      authorName: 'User One',
+      timestamp: 1000,
+      discordMessageId: 'm-old',
+    });
+
+    const textChannel = makeTextChannel([
+      makeMessage('m-sibling-ready', 1200, {
+        bot: true,
+        authorId: 'sibling-bot',
+        content: `[agent:${siblingCompanionId}] I'm back~ (startup took 0s)`,
+      }),
+      makeMessage('m-sibling-chat', 1300, {
+        bot: true,
+        authorId: 'sibling-bot',
+        content: 'ordinary sibling chat remains conversational context',
+      }),
+    ]);
+    discordMock.channelsById.set('123456789012345678', textChannel.channel);
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus(), {
+      sessionStore: store,
+      account: {
+        accountId: 'acct-a',
+        companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
+        token: 'token-acct-a',
+        siblingBotIdentities: () => [{
+          botUserId: 'sibling-bot',
+          companionId: siblingCompanionId,
+        }],
+      },
+    });
+    await adapter.start();
+
+    const appendedIds = store.getRecent('123456789012345678', 10)
+      .map(entry => entry.discordMessageId);
+    expect(appendedIds).toEqual(['m-old', 'm-sibling-chat']);
+  });
+
   it('deduplicates by discord message id before appending', async () => {
     store.append({
       channelId: '123456789012345678',
@@ -2773,7 +2818,7 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
 
   function makeAccountAdapter(overrides?: {
     token?: string;
-    siblings?: () => readonly string[];
+    siblings?: () => readonly Array<{ botUserId: string; companionId: ReturnType<typeof createCompanionId> }>;
     allowedBotUserIds?: string[];
     primaryUsers?: Array<{ userId: string; canonicalContactId?: string }>;
     intakeScreening?: IntakeScreeningService;
@@ -2787,7 +2832,7 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
         accountId: 'acct-a',
         companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
         token: overrides?.token ?? 'token-acct-a',
-        ...(overrides?.siblings ? { siblingBotUserIds: overrides.siblings } : {}),
+        ...(overrides?.siblings ? { siblingBotIdentities: overrides.siblings } : {}),
       },
     });
     return { adapter, eventBus };
@@ -2835,7 +2880,10 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       },
     }));
     const { adapter } = makeAccountAdapter({
-      siblings: () => ['bot-b'],
+      siblings: () => [{
+        botUserId: 'bot-b',
+        companionId: createCompanionId('22222222-2222-4222-8222-222222222222'),
+      }],
       intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
     });
     await adapter.init();
@@ -2925,6 +2973,75 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it('excludes authenticated sibling ready notices while screening text lookalikes', async () => {
+    const siblingCompanionId = createCompanionId('22222222-2222-4222-8222-222222222222');
+    const readyText = `[agent:${siblingCompanionId}] I'm back~ (startup took 0s)`;
+    const screen = vi.fn(async (content: string, input: IntakeScreeningInput) => ({
+      effectiveText: content,
+      snapshot: {
+        envelopeId: `env-${input.origin.ref}`,
+        sourceClass: input.sourceClass,
+        sourceRiskTier: 'trusted' as const,
+        state: 'released' as const,
+        riskLabels: [],
+        subject: { kind: 'body' as const },
+      },
+    }));
+    const { adapter } = makeAccountAdapter({
+      siblings: () => [{ botUserId: 'bot-b', companionId: siblingCompanionId }],
+      primaryUsers: [{ userId: 'owner-user' }],
+      intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
+    });
+    await adapter.init();
+    (adapter as any).client.user = { id: 'bot-a' };
+
+    const channelId = 'guild-lifecycle-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: '',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'authenticated-ready',
+        guildId: 'guild-1',
+        authorId: 'bot-b',
+        bot: true,
+        content: readyText,
+      }),
+    );
+    expect(screen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'human-lookalike',
+        guildId: 'guild-1',
+        authorId: 'owner-user',
+        bot: false,
+        content: readyText,
+      }),
+    );
+    expect(screen).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'sibling-identity-mismatch',
+        guildId: 'guild-1',
+        authorId: 'bot-b',
+        bot: true,
+        content: "[agent:33333333-3333-4333-8333-333333333333] I'm back~ (startup took 0s)",
+      }),
+    );
+    expect(screen).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
   it('classifies a rostered owner as primary while preserving identity after body screening', async () => {
     const screen = vi.fn(async (_content: string, input: IntakeScreeningInput) => ({
       effectiveText: '[screened body]',
@@ -2987,8 +3104,11 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
   });
 
   it('resolves siblings lazily so bots that log in later are recognized', async () => {
-    const siblingIds: string[] = [];
-    const { adapter } = makeAccountAdapter({ siblings: () => siblingIds });
+    const siblingIdentities: Array<{
+      botUserId: string;
+      companionId: ReturnType<typeof createCompanionId>;
+    }> = [];
+    const { adapter } = makeAccountAdapter({ siblings: () => siblingIdentities });
     await adapter.init();
     (adapter as any).client.user = { id: 'bot-a' };
 
@@ -3013,7 +3133,10 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
     await (adapter as any).onDiscordMessage(siblingMessage());
     expect(handler).not.toHaveBeenCalled();
 
-    siblingIds.push('bot-late');
+    siblingIdentities.push({
+      botUserId: 'bot-late',
+      companionId: createCompanionId('22222222-2222-4222-8222-222222222222'),
+    });
     await (adapter as any).onDiscordMessage(siblingMessage());
     expect(handler).toHaveBeenCalledTimes(1);
   });

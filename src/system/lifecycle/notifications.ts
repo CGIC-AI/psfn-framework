@@ -11,6 +11,7 @@ import {
   resolveReadyNotificationMarkerPath,
 } from '../../persistence/layout.js';
 import { inferSessionChannelType, isInternalSessionId } from '../../core/session/session-id.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('Lifecycle');
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
@@ -18,6 +19,27 @@ const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 // Suppress duplicate "I'm back" announcements when a deploy boots the agent 2-3 times
 // (initial start + restart(s) on gateway RPC loss) for the same image tag + channel.
 const READY_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * Match only the ready notification emitted for an authenticated companion.
+ * The caller must separately bind the Discord author id to `companionId`;
+ * free text alone is never lifecycle authority.
+ */
+export function isCompanionReadyLifecycleNotification(
+  content: string,
+  companionId: CompanionId,
+): boolean {
+  const prefix = `[agent:${companionId}] I'm back~ (startup took `;
+  const suffix = 's)';
+  if (!content.startsWith(prefix) || !content.endsWith(suffix)) return false;
+
+  const seconds = content.slice(prefix.length, -suffix.length);
+  if (!seconds) return false;
+  const parsedSeconds = Number(seconds);
+  return Number.isSafeInteger(parsedSeconds)
+    && parsedSeconds >= 0
+    && String(parsedSeconds) === seconds;
+}
 
 // ── Interfaces ──
 

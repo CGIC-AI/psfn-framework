@@ -160,6 +160,49 @@ describe('intake screening service (htm9.2)', () => {
       .toBe('observed_first_party_closed_channel');
   });
 
+  it.each([
+    { sourceClass: 'primary_user', channelPrivacy: 'private', fast: true },
+    { sourceClass: 'primary_user', channelPrivacy: 'invite_only', fast: true },
+    { sourceClass: 'primary_user', channelPrivacy: 'public', fast: false },
+    { sourceClass: 'companion_self', channelPrivacy: 'private', fast: true },
+    { sourceClass: 'companion_self', channelPrivacy: 'invite_only', fast: true },
+    { sourceClass: 'companion_self', channelPrivacy: 'public', fast: false },
+    { sourceClass: 'regular_contact', channelPrivacy: 'private', fast: false },
+    { sourceClass: 'regular_contact', channelPrivacy: 'invite_only', fast: false },
+    { sourceClass: 'public_contact', channelPrivacy: 'invite_only', fast: false },
+    { sourceClass: 'public_contact', channelPrivacy: 'public', fast: false },
+  ] as const)(
+    'applies the closed first-party trust matrix to $sourceClass in $channelPrivacy',
+    async ({ sourceClass, channelPrivacy, fast }) => {
+      const escalate = vi.fn(async () => ({ kind: 'skipped' as const, reason: 'test' }));
+      const service = createIntakeScreeningService({
+        policy: makePolicy('enforce'),
+        l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+        injectionScorer: {
+          scannerId: 'onnx-prompt-injection',
+          classify: async () => ({
+            score: 0.9998,
+            labels: ['injection/override_attempt'],
+          }),
+        },
+        escalation: { escalate },
+        actor: 'test:intake-screening',
+      });
+
+      const result = await service.screen(CLEAN_TEXT, {
+        sourceClass,
+        origin: { ref: `discord:trust-matrix:${sourceClass}:${channelPrivacy}` },
+        scope: 'context',
+        channelPrivacy,
+      });
+
+      expect(escalate).toHaveBeenCalledTimes(fast ? 0 : 1);
+      expect(result.action).toBe(fast ? 'pass' : 'sanitize');
+      expect(result.envelope.extractedFields['semantic_score.disposition'])
+        .toBe(fast ? 'observed_first_party_closed_channel' : undefined);
+    },
+  );
+
   it('still quarantines a deterministic injection from a closed first-party conversation', async () => {
     const escalate = vi.fn();
     const service = createIntakeScreeningService({

@@ -9,6 +9,12 @@
         "src/app/operator/main.ts",
         "src/app/e2e/contact-lifecycle-certification/agent-process.ts",
         "src/app/e2e/icp-certification/agent-process.ts",
+        "src/app/maintenance/force-episodic-synthesis.ts",
+        "src/app/maintenance/migrate-required-settings-blocks.ts",
+        "src/app/maintenance/owner-upgrade-readiness-probe.ts",
+        "src/app/maintenance/verify-shell-sandbox-runtime.ts",
+        "src/persistence/sessions/turn-record-recovery-worker.ts",
+        "src/persistence/sessions/turn-tombstone-authority-worker.ts",
         "scripts/**/*.{ts,mjs}",
         "shakedown/harness/*.mjs"
       ],
@@ -17,17 +23,21 @@
         "scripts/**/*.{ts,mjs}",
         "shakedown/harness/**/*.{ts,mts,mjs}"
       ],
+      "ignore": [
+        "shakedown/harness/**/*.d.mts"
+      ],
       "ignoreDependencies": [
         "@snazzah/davey",
         "sherpa-onnx-node"
       ]
     },
     "admin-ui": {
+      "entry": [
+        "src/hooks.ts",
+        "src/routes/models/+page.svelte"
+      ],
       "project": [
         "src/**/*.{ts,svelte}"
-      ],
-      "ignore": [
-        ".svelte-kit/**"
       ],
       "svelte": true
     },
@@ -36,7 +46,8 @@
         "index.html",
         "src/main.tsx",
         "vite.config.ts",
-        "playwright.config.ts"
+        "playwright.config.ts",
+        "e2e/fixtures/legacy-main.tsx"
       ],
       "project": [
         "src/**/*.{ts,tsx}",

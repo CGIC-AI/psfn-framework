@@ -12,6 +12,8 @@ import {
   isRfc4122Uuid,
 } from '../../../../src/shared/utils/types.js';
 import { serializeModelUsageQuery } from '../api/endpoints/model-usage-query.js';
+import { throwIfAborted } from '../api/abort.js';
+import { withFleetSessionTransitionLock } from '../api/fleet-session.js';
 
 const MAX_FLEET_COMPANIONS = 256;
 const TOKEN_TOTAL_FIELDS = [
@@ -192,20 +194,23 @@ export async function fetchFleetModelUsageProjection(
   query: FleetModelUsageQuery = {},
   signal?: AbortSignal,
 ): Promise<FleetModelUsageProjection> {
-  const response = await fetch(buildFleetModelUsageSummaryPath(query), {
-    cache: 'no-store',
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-    ...(signal ? { signal } : {}),
-  });
-  if (response.status === 401) {
-    if (typeof window !== 'undefined') window.location.assign('/fleet/login');
-    throw new Error('Cluster session expired');
-  }
-  if (!response.ok) {
-    throw new Error(response.status === 403
-      ? 'Cluster usage access is unavailable'
-      : 'Cluster usage is temporarily unavailable');
-  }
-  return parseFleetModelUsageProjection(await response.json());
+  return await withFleetSessionTransitionLock(async transitionSignal => {
+    const response = await fetch(buildFleetModelUsageSummaryPath(query), {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      signal: transitionSignal,
+    });
+    throwIfAborted(transitionSignal);
+    if (response.status === 401) {
+      if (typeof window !== 'undefined') window.location.assign('/fleet/login');
+      throw new Error('Cluster session expired');
+    }
+    if (!response.ok) {
+      throw new Error(response.status === 403
+        ? 'Cluster usage access is unavailable'
+        : 'Cluster usage is temporarily unavailable');
+    }
+    return parseFleetModelUsageProjection(await response.json());
+  }, signal);
 }

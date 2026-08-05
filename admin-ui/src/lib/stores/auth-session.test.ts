@@ -160,6 +160,50 @@ describe('Garden admin session auth guard', () => {
     auth.stopServerSessionRefresh();
   });
 
+  it('reconciles a stale tab-local idle deadline after a sibling refresh', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    let refreshCalls = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({
+          principalStatus: 'active',
+          idleExpiresAt: refreshCalls === 1
+            ? '2026-08-03T12:30:00.000Z'
+            : '2026-08-03T13:30:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    documentRef.setHidden(true);
+
+    // A sibling tab rotates the origin-wide cookie while this hidden tab keeps
+    // its older local 12:30 idle deadline.
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    documentRef.setHidden(false);
+    await vi.waitFor(() => expect(refreshCalls).toBe(2));
+
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(window.location.href).toBe('');
+    auth.stopServerSessionRefresh();
+  });
+
   it('cleans the fleet refresh timer and visibility listener on teardown', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
@@ -437,7 +481,7 @@ describe('Garden admin session auth guard', () => {
     expect(dashboardCalls).toBe(1);
   });
 
-  it('refuses to rotate after the server-reported absolute expiry', async () => {
+  it('revalidates a server-reported absolute expiry before signing out', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
     const documentRef = new FakeVisibilityDocument();
@@ -469,9 +513,8 @@ describe('Garden admin session auth guard', () => {
     documentRef.setHidden(true);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     documentRef.setHidden(false);
-    await flushAsyncWork();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(5));
 
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(auth.isAuthenticated()).toBe(false);
 
     auth.stopServerSessionRefresh();

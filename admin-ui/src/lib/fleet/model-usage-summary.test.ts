@@ -1,13 +1,26 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildFleetModelUsageSummaryPath,
   fetchFleetModelUsageProjection,
   parseFleetModelUsageProjection,
   resolveFleetUsageViewState,
 } from './model-usage-summary';
+import { refreshFleetSession } from '../api/fleet-session';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
+
+beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
+});
 
 function usage(inputTokens: number, outputTokens: number) {
   return {
@@ -100,6 +113,60 @@ describe('fleet model-usage summary client', () => {
         credentials: 'include',
       }),
     );
+  });
+
+  it('queues the model-usage read behind a sibling session rotation', async () => {
+    let lockTail = Promise.resolve();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = lockTail;
+      let release = () => {};
+      lockTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    let finishRotation = (_response: Response) => {};
+    const requestedPaths: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      requestedPaths.push(path);
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: 'c'.repeat(43) }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return await new Promise<Response>((resolve) => { finishRotation = resolve; });
+      }
+      if (path === '/v1/fleet/model-usage') {
+        return new Response(JSON.stringify(projection()), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rotation = refreshFleetSession();
+    await vi.waitFor(() => expect(requestedPaths).toContain('/v1/fleet-auth/session/refresh'));
+    const usageRead = fetchFleetModelUsageProjection();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(requestedPaths).not.toContain('/v1/fleet/model-usage');
+
+    finishRotation(new Response(JSON.stringify({
+      principalStatus: 'active',
+      idleExpiresAt: '2026-08-05T12:40:00.000Z',
+      absoluteExpiresAt: '2026-08-05T20:00:00.000Z',
+    }), { status: 200 }));
+
+    await expect(rotation).resolves.toMatchObject({ principalStatus: 'active' });
+    await expect(usageRead).resolves.toMatchObject({ combined: { totalTokens: 330 } });
+    expect(requestLock).toHaveBeenCalledTimes(2);
+    expect(requestLock.mock.calls.every(call => call[0] === 'fleet-session-transition')).toBe(true);
   });
 
   it('renders unavailable rather than manufacturing zeroes on transport failure', async () => {

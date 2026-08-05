@@ -12,6 +12,16 @@ and writable CogSec state submount share it.
 - name: {{ ternary "companion-data" (printf "gateway-companion-data-%d" $index) (eq $index 0) }}
   mountPath: {{ printf "%s/companions/%s" $.Values.fleet.runtimeRoot $companion.companionId }}
   readOnly: true
+{{- if gt $index 0 }}
+# The union quarantined-artifact guard audits every companion's store on each
+# fs.read/fs.search/shell.exec, so each follower companion also needs its
+# writable CogSec state submount. Without it the store's write-lock fails
+# EROFS against the read-only parent mount and every boundary read fails
+# closed. The first companion's state submount lives in workloads.yaml.
+- name: {{ printf "gateway-companion-data-%d" $index }}
+  mountPath: {{ printf "%s/companions/%s/state" $.Values.fleet.runtimeRoot $companion.companionId }}
+  subPath: state
+{{- end }}
 {{- end }}
 {{- else }}
 - name: companion-data

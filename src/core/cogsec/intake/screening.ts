@@ -961,6 +961,8 @@ export function createIntakeScreeningService(
     const adjustedTier = resolveTier(input).tier;
     const aboveSemanticThreshold = scorerOutcome.score !== undefined
       && scorerOutcome.score >= injectionScoreThresholdForTier(policy, adjustedTier);
+    const mandatoryDeepScreening = policy.l2Screener.mandatoryTiers.includes(adjustedTier)
+      || policy.l3Screener.mandatoryTiers.includes(adjustedTier);
     const closedFirstPartyConversation = (
       input.sourceClass === 'primary_user' || input.sourceClass === 'companion_self'
     ) && (
@@ -970,11 +972,17 @@ export function createIntakeScreeningService(
       && report.scannerErrors.length === 0
       && !report.truncated
       && (input.priorSignals ?? []).every((signal) => signal.labels.length === 0);
-    if (aboveSemanticThreshold && closedFirstPartyConversation && deterministicScreenIsClean) {
+    if (
+      aboveSemanticThreshold
+      && !mandatoryDeepScreening
+      && closedFirstPartyConversation
+      && deterministicScreenIsClean
+    ) {
       // The local classifier remains visible telemetry, but an uncorroborated
       // false positive must not rewrite or delay an authenticated first-party
       // conversation in a closed channel. Deterministic findings still take
-      // their ordinary fail-closed path before this narrow optimization.
+      // their ordinary fail-closed path before this narrow optimization, and
+      // operator-mandated L2/L3 tiers retain their configured deep screening.
       return finalize(text, input, report, scorerOutcome, {
         observeUncorroboratedSemanticScore: true,
       });

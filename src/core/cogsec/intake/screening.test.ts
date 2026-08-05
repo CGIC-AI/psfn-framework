@@ -211,6 +211,64 @@ describe('intake screening service (htm9.2)', () => {
     expect(result.envelope.riskLabels).toContain('injection/override_attempt');
   });
 
+  it('does not bypass mandatory deep screening for a deny-listed first-party author', async () => {
+    const escalate = vi.fn(async () => ({ kind: 'skipped' as const, reason: 'test' }));
+    const service = createIntakeScreeningService({
+      policy: makePolicyWithLists('enforce', {
+        deniedPeople: [listEntry('contact-denied-owner')],
+      }),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      injectionScorer: {
+        scannerId: 'onnx-prompt-injection',
+        classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+      },
+      escalation: { escalate },
+      actor: 'test:intake-screening',
+    });
+
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'primary_user',
+      origin: { ref: 'discord:closed-room:message-denied-owner' },
+      scope: 'context',
+      channelPrivacy: 'invite_only',
+      canonicalContactId: 'contact-denied-owner',
+    });
+
+    expect(escalate).toHaveBeenCalledTimes(1);
+    expect(result.snapshot.sourceRiskTier).toBe('hostile');
+    expect(result.action).toBe('sanitize');
+    expect(result.envelope.extractedFields['semantic_score.disposition']).toBeUndefined();
+  });
+
+  it.each(['l2Screener', 'l3Screener'] as const)(
+    'respects an operator-mandated trusted tier in %s',
+    async (stage) => {
+      const policy = makePolicy('enforce');
+      policy[stage].mandatoryTiers = ['trusted'];
+      const escalate = vi.fn(async () => ({ kind: 'skipped' as const, reason: 'test' }));
+      const service = createIntakeScreeningService({
+        policy,
+        l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+        injectionScorer: {
+          scannerId: 'onnx-prompt-injection',
+          classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+        },
+        escalation: { escalate },
+        actor: 'test:intake-screening',
+      });
+
+      const result = await service.screen(CLEAN_TEXT, {
+        sourceClass: 'primary_user',
+        origin: { ref: `discord:closed-room:message-mandatory-${stage}` },
+        scope: 'context',
+        channelPrivacy: 'invite_only',
+      });
+
+      expect(escalate).toHaveBeenCalledTimes(1);
+      expect(result.action).toBe('sanitize');
+    },
+  );
+
   it.each([
     { condition: 'truncated', reportPatch: { truncated: true } },
     {

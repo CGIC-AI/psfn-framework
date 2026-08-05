@@ -2,6 +2,7 @@ import type {
   IntakeEnvelopeSnapshot,
   IntakeSourceClass,
 } from '../../../shared/contracts/intake-envelope.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { IntakeScreeningService } from './screening.js';
 
 export type ChatMessageSurface = 'api' | 'discord' | 'telegram';
@@ -14,6 +15,7 @@ export interface ScreenChatMessageBodyInput {
   channelId: string;
   messageId: string;
   canonicalContactId?: string;
+  channelPrivacy?: ChannelPrivacy;
 }
 
 export interface ScreenedChatMessageBody {
@@ -41,6 +43,7 @@ export async function screenChatMessageBody(
     ...(input.canonicalContactId
       ? { canonicalContactId: input.canonicalContactId }
       : {}),
+    ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
   });
 
   return {

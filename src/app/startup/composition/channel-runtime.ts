@@ -3,7 +3,11 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
-import { DiscordAdapter, type DiscordAdapterAccountBinding } from '../../../channels/discord/adapter.js';
+import {
+  DiscordAdapter,
+  type DiscordAdapterAccountBinding,
+  type DiscordPrimaryUserBinding,
+} from '../../../channels/discord/adapter.js';
 import type { DiscordChannelConfig, TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import type { CustomEmojiMeaningsByGuild } from '../../../channels/shared/reaction-surface.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
@@ -37,6 +41,7 @@ export interface DiscordChannelAdapterFactoryOptions {
    */
   account?: DiscordAdapterAccountBinding;
   allowedBotUserIds?: string[];
+  primaryUsers?: readonly DiscordPrimaryUserBinding[];
   /**
    * jp36.3.1.2: per-guild custom-emoji meanings for this adapter. On the
    * multi-account path this is supplied explicitly (per account) since
@@ -68,6 +73,7 @@ export function createDiscordChannelAdapterFactoryEntry(
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
         ...(allowedBotUserIds ? { allowedBotUserIds } : {}),
+        ...(options.primaryUsers ? { primaryUsers: options.primaryUsers } : {}),
         ...(customEmojiMeanings ? { customEmojiMeanings } : {}),
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),

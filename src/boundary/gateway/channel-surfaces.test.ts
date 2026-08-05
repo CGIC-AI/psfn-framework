@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  resolveDiscordPrimaryUsers,
   resolveChannelIntakeScreening,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
@@ -189,6 +190,45 @@ describe('gateway channel intake ownership', () => {
     screenSync: () => {
       throw new Error('screening invocation is outside this routing test');
     },
+  });
+
+  it('derives primary Discord authors only from exact companion owner-roster bindings', () => {
+    const companionA = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const companionB = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    const config = {
+      fleetAuth: {
+        provider: { kind: 'discord' },
+        accountRoster: [
+          {
+            providerSubjectId: '123456789012345678',
+            companionId: companionA,
+            contactId: 'contact-owner-a',
+            role: 'owner',
+          },
+          {
+            providerSubjectId: '223456789012345678',
+            companionId: companionA,
+            contactId: 'contact-admin-a',
+            role: 'admin',
+          },
+          {
+            providerSubjectId: '323456789012345678',
+            companionId: companionB,
+            contactId: 'contact-owner-b',
+            role: 'owner',
+          },
+        ],
+      },
+    } satisfies Parameters<typeof resolveDiscordPrimaryUsers>[0];
+
+    expect(resolveDiscordPrimaryUsers(config, companionA)).toEqual([{
+      userId: '123456789012345678',
+      canonicalContactId: 'contact-owner-a',
+    }]);
+    expect(resolveDiscordPrimaryUsers(config, companionB)).toEqual([{
+      userId: '323456789012345678',
+      canonicalContactId: 'contact-owner-b',
+    }]);
   });
 
   it('resolves each fleet surface to its exact companion service', () => {

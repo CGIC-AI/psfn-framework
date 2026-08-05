@@ -245,6 +245,8 @@ describe('screenL3', () => {
     expect(request.url).toBe('https://openrouter.ai/api/v1/chat/completions');
     const messages = request.body.messages as Array<{ role: string; content: string }>;
     expect(messages[0].role).toBe('system');
+    expect(messages[0].content).toContain('platform routing identifiers');
+    expect(messages[0].content).toContain('are not PII, secrets, or credentials');
     expect(messages[1].content).toContain('<untrusted_content>');
     expect(messages[1].content).toContain('payload');
   });

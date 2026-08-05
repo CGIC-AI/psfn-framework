@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validateIntakeEnvelope } from '../../../shared/contracts/intake-envelope.js';
 import {
   validateIntakePolicy,
@@ -118,6 +118,132 @@ describe('intake screening service (htm9.2)', () => {
     expect(result.action).toBe('sanitize');
     expect(result.withheld).toBe(false);
     expect(result.envelope.decision?.reason).toContain('uncorroborated');
+  });
+
+  it('records but does not act on an uncorroborated score in a closed first-party conversation', async () => {
+    const scorer: IntakeInjectionScorerPort = {
+      scannerId: 'onnx-prompt-injection',
+      classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+    };
+    const escalate = vi.fn(async () => ({
+      kind: 'skipped' as const,
+      reason: 'test should never reach semantic escalation',
+    }));
+    const service = createIntakeScreeningService({
+      policy: makePolicy('enforce'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      injectionScorer: scorer,
+      escalation: { escalate },
+      actor: 'test:intake-screening',
+    });
+
+    const result = await service.screen(
+      'Normal sibling chat mentioning platform user 123456789012345678.',
+      {
+        sourceClass: 'companion_self',
+        origin: { ref: 'discord:closed-room:message-1' },
+        scope: 'context',
+        channelPrivacy: 'invite_only',
+      },
+    );
+
+    expect(escalate).not.toHaveBeenCalled();
+    expect(result.action).toBe('pass');
+    expect(result.effectiveText).toBe(
+      'Normal sibling chat mentioning platform user 123456789012345678.',
+    );
+    expect(result.envelope.scores['onnx-prompt-injection']).toBe(0.9998);
+    expect(result.envelope.riskLabels).not.toContain('injection/override_attempt');
+    expect(result.envelope.extractedFields['semantic_score.labels'])
+      .toBe('injection/override_attempt');
+    expect(result.envelope.extractedFields['semantic_score.disposition'])
+      .toBe('observed_first_party_closed_channel');
+  });
+
+  it('still quarantines a deterministic injection from a closed first-party conversation', async () => {
+    const escalate = vi.fn();
+    const service = createIntakeScreeningService({
+      policy: makePolicy('enforce'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      injectionScorer: {
+        scannerId: 'onnx-prompt-injection',
+        classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+      },
+      escalation: { escalate },
+      actor: 'test:intake-screening',
+    });
+
+    const result = await service.screen(HOSTILE_TEXT, {
+      sourceClass: 'primary_user',
+      origin: { ref: 'discord:closed-room:message-attack' },
+      scope: 'context',
+      channelPrivacy: 'invite_only',
+    });
+
+    expect(escalate).not.toHaveBeenCalled();
+    expect(result.action).toBe('quarantine');
+    expect(result.withheld).toBe(true);
+    expect(result.envelope.riskLabels).toContain('injection/override_attempt');
+  });
+
+  it('does not grant the first-party fast path to an unknown author in a closed room', async () => {
+    const escalate = vi.fn(async () => ({ kind: 'skipped' as const, reason: 'test' }));
+    const service = createIntakeScreeningService({
+      policy: makePolicy('enforce'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      injectionScorer: {
+        scannerId: 'onnx-prompt-injection',
+        classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+      },
+      escalation: { escalate },
+      actor: 'test:intake-screening',
+    });
+
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'public_contact',
+      origin: { ref: 'discord:closed-room:message-unknown' },
+      scope: 'context',
+      channelPrivacy: 'invite_only',
+    });
+
+    expect(escalate).toHaveBeenCalledTimes(1);
+    expect(result.action).toBe('sanitize');
+    expect(result.envelope.riskLabels).toContain('injection/override_attempt');
+  });
+
+  it.each([
+    { condition: 'truncated', reportPatch: { truncated: true } },
+    {
+      condition: 'scanner failure',
+      reportPatch: {
+        scannerErrors: [{ scannerId: 'test-scanner', message: 'scanner unavailable' }],
+      },
+    },
+  ])('does not fast-path an incomplete deterministic scan ($condition)', async ({ reportPatch }) => {
+    const l1 = createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 });
+    const cleanReport = l1.scan(CLEAN_TEXT, { scope: 'context' });
+    vi.spyOn(l1, 'scan').mockReturnValue({ ...cleanReport, ...reportPatch });
+    const escalate = vi.fn(async () => ({ kind: 'skipped' as const, reason: 'test' }));
+    const service = createIntakeScreeningService({
+      policy: makePolicy('enforce'),
+      l1,
+      injectionScorer: {
+        scannerId: 'onnx-prompt-injection',
+        classify: async () => ({ score: 0.9998, labels: ['injection/override_attempt'] }),
+      },
+      escalation: { escalate },
+      actor: 'test:intake-screening',
+    });
+
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'primary_user',
+      origin: { ref: 'discord:closed-room:message-incomplete-scan' },
+      scope: 'context',
+      channelPrivacy: 'invite_only',
+    });
+
+    expect(escalate).toHaveBeenCalledTimes(1);
+    expect(result.action).toBe('sanitize');
   });
 
   it('quarantines when the L1.5 score is corroborated by an L1 finding', async () => {

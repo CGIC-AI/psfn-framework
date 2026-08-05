@@ -1,15 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FleetRosterClient,
   FleetRosterProtocolError,
   parseFleetApprovalsView,
   parseFleetRoster,
 } from './fleet-roster.js';
+import { withFleetSessionTransitionLock } from './fleet-session.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
 const WS_A = `/companion-ui/companions/${COMPANION_A}/ws`;
 const WS_B = `/companion-ui/companions/${COMPANION_B}/ws`;
+
+beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function json(value: unknown, status = 200, cacheControl = 'no-store, private'): Response {
   return new Response(JSON.stringify(value), {
@@ -155,6 +172,78 @@ describe('fleet roster client', () => {
     expect(fetchImpl).toHaveBeenCalledWith('/v1/fleet-auth/approvals', expect.objectContaining({
       credentials: 'include', cache: 'no-store',
     }));
+  });
+
+  it('queues roster and approvals reads behind a sibling session rotation', async () => {
+    let lockTail = Promise.resolve();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = lockTail;
+      let release = () => {};
+      lockTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    let sessionGeneration = 'T0';
+    let finishRotation = () => {};
+    const rotation = withFleetSessionTransitionLock(async () => {
+      await new Promise<void>((resolve) => { finishRotation = resolve; });
+      sessionGeneration = 'T1';
+    });
+    await vi.waitFor(() => expect(requestLock).toHaveBeenCalledOnce());
+    const requestGenerations: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      requestGenerations.push(`${String(input)}:${sessionGeneration}`);
+      return String(input) === '/v1/fleet-auth/companions'
+        ? json({ schemaVersion: 1, companions: [] })
+        : json({ schemaVersion: 1, approvals: [] });
+    });
+    const client = new FleetRosterClient(fetchImpl as typeof fetch);
+
+    const rosterRead = client.readRoster();
+    const approvalsRead = client.readApprovals();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    finishRotation();
+    await rotation;
+    await expect(Promise.all([rosterRead, approvalsRead])).resolves.toHaveLength(2);
+    expect(requestGenerations).toEqual([
+      '/v1/fleet-auth/companions:T1',
+      '/v1/fleet-auth/approvals:T1',
+    ]);
+    expect(requestLock).toHaveBeenCalledTimes(3);
+    expect(requestLock.mock.calls.every(call => call[0] === 'fleet-session-transition')).toBe(true);
+  });
+
+  it('loads the routing snapshot in one coordinated parallel read', async () => {
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => await callback());
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => (
+      String(input) === '/v1/fleet-auth/companions'
+        ? json({ schemaVersion: 1, companions: [] })
+        : json({ schemaVersion: 1, approvals: [] })
+    ));
+    const client = new FleetRosterClient(fetchImpl as typeof fetch);
+
+    await expect(client.readRoutingSnapshot()).resolves.toEqual({
+      roster: { schemaVersion: 1, companions: [] },
+      approvals: { schemaVersion: 1, approvals: [] },
+    });
+    expect(requestLock).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed when the response is not no-store', async () => {

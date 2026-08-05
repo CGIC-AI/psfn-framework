@@ -4,7 +4,10 @@ import type {
   ApprovalSourceSystem,
 } from '../../../src/shared/contracts/approval-envelope.js';
 import { isObjectRecord as isRecord } from '../../../src/shared/utils/types.js';
-import { validWebsocketPath } from './fleet-session.js';
+import {
+  validWebsocketPath,
+  withFleetSessionTransitionLock,
+} from './fleet-session.js';
 import {
   hasExactKeys,
   isBoundedString,
@@ -211,20 +214,40 @@ export class FleetRosterClient {
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
   async readRoster(): Promise<FleetRoster> {
-    return parseFleetRoster(await this.readNoStoreJson(COMPANIONS_PATH));
+    return await withFleetSessionTransitionLock(async transitionSignal => (
+      parseFleetRoster(await this.readNoStoreJson(COMPANIONS_PATH, transitionSignal))
+    ));
   }
 
   async readApprovals(): Promise<FleetApprovalsView> {
-    return parseFleetApprovalsView(await this.readNoStoreJson(APPROVALS_PATH));
+    return await withFleetSessionTransitionLock(async transitionSignal => (
+      parseFleetApprovalsView(await this.readNoStoreJson(APPROVALS_PATH, transitionSignal))
+    ));
   }
 
-  private async readNoStoreJson(path: string): Promise<unknown> {
+  async readRoutingSnapshot(): Promise<Readonly<{
+    roster: FleetRoster;
+    approvals: FleetApprovalsView;
+  }>> {
+    return await withFleetSessionTransitionLock(async transitionSignal => {
+      const [roster, approvals] = await Promise.all([
+        this.readNoStoreJson(COMPANIONS_PATH, transitionSignal),
+        this.readNoStoreJson(APPROVALS_PATH, transitionSignal),
+      ]);
+      return Object.freeze({
+        roster: parseFleetRoster(roster),
+        approvals: parseFleetApprovalsView(approvals),
+      });
+    });
+  }
+
+  private async readNoStoreJson(path: string, signal: AbortSignal): Promise<unknown> {
     const response = await this.fetchImpl(path, {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',
       redirect: 'error',
-      signal: AbortSignal.timeout(10_000),
+      signal,
       headers: { Accept: 'application/json' },
     });
     if (!response.ok

@@ -92,7 +92,7 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
 
 type FetchLike = typeof fetch;
 
-async function withFleetSessionTransitionLock<T>(
+export async function withFleetSessionTransitionLock<T>(
   operation: (transitionSignal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const transitionSignal = AbortSignal.timeout(FLEET_SESSION_TRANSITION_TIMEOUT_MS);

@@ -263,4 +263,12 @@ describe('refreshFleetSession', () => {
     await expect(readFleetSessionState()).resolves.toBe('signed_out');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it.each([201, 204, 206])('rejects unexpected successful portal status %i', async status => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status })));
+
+    await expect(readFleetSessionState()).rejects.toThrow(
+      `Fleet session authority returned unexpected status ${status}`,
+    );
+  });
 });

@@ -82,6 +82,47 @@ afterEach(() => {
 });
 
 describe('Garden admin session auth guard', () => {
+  it('resolves and renews an authenticated fleet overview session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path === '/v1/fleet-auth/session/status') {
+        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
+          status: 200,
+        });
+      }
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        return new Response(JSON.stringify({
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:40:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: '/fleet',
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(fetchImpl.mock.calls.map(call => String(call[0]))).toEqual([
+      '/v1/fleet-auth/session/status',
+      '/v1/fleet-auth/session/csrf',
+      '/v1/fleet-auth/session/refresh',
+    ]);
+    auth.stopServerSessionRefresh();
+  });
+
   it('rotates an authenticated fleet session and schedules from the returned idle expiry', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
@@ -201,6 +242,54 @@ describe('Garden admin session auth guard', () => {
 
     expect(auth.isAuthenticated()).toBe(true);
     expect(window.location.href).toBe('');
+    auth.stopServerSessionRefresh();
+  });
+
+  it('retries a transient foreground failure after a stale local idle deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let csrfCalls = 0;
+    let refreshCalls = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        csrfCalls += 1;
+        if (csrfCalls === 2) return new Response('temporarily unavailable', { status: 503 });
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({
+          principalStatus: 'active',
+          idleExpiresAt: refreshCalls === 1
+            ? '2026-08-03T12:30:00.000Z'
+            : '2026-08-03T13:30:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await auth.ensureAuthResolved();
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    documentRef.setHidden(true);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    documentRef.setHidden(false);
+    await vi.waitFor(() => expect(csrfCalls).toBe(2));
+
+    expect(auth.isAuthenticated()).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(refreshCalls).toBe(2));
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
     auth.stopServerSessionRefresh();
   });
 

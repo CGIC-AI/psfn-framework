@@ -287,8 +287,10 @@
 
   onMount(() => {
     startServerSessionRefresh();
-    if (!isLoginPage && !isFleetPage) {
+    if (!isLoginPage) {
       void ensureAuthResolved();
+    }
+    if (!isLoginPage && !isFleetPage) {
       void ensureUiPreferencesLoaded();
     }
 

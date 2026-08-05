@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   FleetSessionClient,
   FleetSessionProtocolError,
@@ -28,7 +29,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('fleet session protocol', () => {
@@ -83,6 +86,45 @@ describe('fleet session protocol', () => {
       credentials: 'include',
       headers: expect.objectContaining({ 'X-PSFN-CSRF': 'c'.repeat(43) }),
     }));
+  });
+
+  it('renews an active Companion UI session before its idle expiry', async () => {
+    let now = Date.parse('2026-08-05T12:00:00.000Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(json({ csrfToken: 'c'.repeat(43) }))
+      .mockResolvedValueOnce(json({
+        csrfToken: 'd'.repeat(43),
+        principalStatus: 'active',
+        idleExpiresAt: '2026-08-05T12:40:00.000Z',
+        absoluteExpiresAt: '2026-08-05T20:00:00.000Z',
+      }))
+      .mockResolvedValueOnce(json({ csrfToken: 'e'.repeat(43) }))
+      .mockResolvedValueOnce(json({
+        csrfToken: 'f'.repeat(43),
+        principalStatus: 'active',
+        idleExpiresAt: '2026-08-05T13:00:00.000Z',
+        absoluteExpiresAt: '2026-08-05T20:00:00.000Z',
+      }));
+    const client = new FleetSessionClient(fetchImpl as typeof fetch);
+
+    await client.renewIfDue();
+    await client.renewIfDue();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    now = Date.parse('2026-08-05T12:20:00.000Z');
+    await client.renewIfDue();
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenNthCalledWith(4, '/v1/fleet-auth/session/refresh', expect.objectContaining({
+      method: 'POST',
+      credentials: 'include',
+      headers: expect.objectContaining({ 'X-PSFN-CSRF': 'e'.repeat(43) }),
+    }));
+  });
+
+  it('wires renewal into initial routing load and the active approvals cadence', () => {
+    const source = readFileSync('src/ui/use-fleet-routing.ts', 'utf8');
+    expect(source.match(/sessionClient\.renewIfDue\(\)/gu)).toHaveLength(2);
   });
 
   it('fails closed when a browser cannot coordinate origin-wide session transitions', async () => {

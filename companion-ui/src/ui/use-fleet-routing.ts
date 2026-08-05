@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FleetSessionStatus } from '../lib/fleet-session.js';
+import { FleetSessionClient, type FleetSessionStatus } from '../lib/fleet-session.js';
 import { mergeFleetApprovalHistory } from '../lib/fleet-approval-routing.js';
 import {
   FleetRosterClient,
@@ -16,6 +16,8 @@ export function useFleetRouting(input: {
 }) {
   const clientRef = useRef<FleetRosterClient | null>(null);
   clientRef.current ??= new FleetRosterClient();
+  const sessionClientRef = useRef<FleetSessionClient | null>(null);
+  sessionClientRef.current ??= new FleetSessionClient();
   const connectRef = useRef(input.connect);
   connectRef.current = input.connect;
   const reportErrorRef = useRef(input.reportError);
@@ -41,7 +43,9 @@ export function useFleetRouting(input: {
     connectWhenAllowed: boolean,
   ): Promise<void> {
     const client = clientRef.current;
-    if (!client) throw new Error('Cluster roster client is unavailable');
+    const sessionClient = sessionClientRef.current;
+    if (!client || !sessionClient) throw new Error('Cluster roster client is unavailable');
+    await sessionClient.renewIfDue();
     const { roster: nextRoster, approvals: nextApprovals } = await client.readRoutingSnapshot();
     if (!isCurrent()) return;
     const selected = nextRoster.companions.find(
@@ -59,8 +63,10 @@ export function useFleetRouting(input: {
 
   async function refreshApprovals(): Promise<void> {
     const client = clientRef.current;
-    if (!client || input.accessState !== 'signed_in') return;
+    const sessionClient = sessionClientRef.current;
+    if (!client || !sessionClient || input.accessState !== 'signed_in') return;
     try {
+      await sessionClient.renewIfDue();
       const next = await client.readApprovals();
       rememberApprovals(next.approvals);
     } catch (error) {

@@ -8,7 +8,7 @@ const FLEET_SESSION_REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const FLEET_CSRF_HEADER = 'X-PSFN-CSRF';
 const FLEET_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
-const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
+export const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
 
 export interface FleetSessionRefreshResult {
   principalStatus: 'pending' | 'active';

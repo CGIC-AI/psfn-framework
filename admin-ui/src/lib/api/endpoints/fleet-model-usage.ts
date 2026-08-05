@@ -6,6 +6,7 @@ import type {
 import type { FleetModelUsageData } from '../../../../../src/operator/garden/services/fleet-model-usage-service.js';
 import { parseCompanionGardenScope } from '$lib/fleet/companion-scope';
 import { parseFleetModelUsageData } from '$lib/fleet/model-usage-data';
+import { withFleetSessionRequestLock } from '$lib/api/fleet-session';
 import { serializeModelUsageQuery } from './model-usage-query';
 
 export interface FleetModelUsageQuery {
@@ -49,12 +50,14 @@ export async function getAuthorizedFleetModelUsage(
   if (!scope || scope.publicPrefix !== gardenPath || scope.innerPath !== '/') {
     throw new Error('Cluster costs require one server-authorized companion Garden path');
   }
-  const response = await fetch(`${gardenPath}${buildFleetModelUsagePath(query)}`, {
-    cache: 'no-store',
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-    ...(signal ? { signal } : {}),
-  });
+  const response = await withFleetSessionRequestLock(async requestSignal => (
+    await fetch(`${gardenPath}${buildFleetModelUsagePath(query)}`, {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      signal: requestSignal,
+    })
+  ), signal);
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');
     throw new Error('Cluster session expired');

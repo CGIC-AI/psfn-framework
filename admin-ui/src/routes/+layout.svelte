@@ -16,6 +16,7 @@
     getToken,
     isAuthenticated,
     isAuthResolved,
+    activateSessionScopeFromPath,
     ensureAuthResolved,
     clearToken,
     startServerSessionRefresh,
@@ -187,7 +188,9 @@
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
     const pathname = $page.url.pathname;
-    void activateCompanionScopeFromPath(pathname);
+    void activateSessionScopeFromPath(pathname).catch((error: unknown) => {
+      console.warn('Garden session scope activation failed.', error);
+    });
     collapsedGroups = loadCollapsedGroups();
     attentionCounts = {};
     clearToasts();

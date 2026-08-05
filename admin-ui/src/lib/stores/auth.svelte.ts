@@ -3,6 +3,7 @@ import {
   clearLegacyScriptReadableAdminTokenCookie,
 } from './auth-storage';
 import {
+  activateCompanionScopeFromPath,
   currentCompanionGardenScope,
   getCompanionCacheScope,
   isFleetOverviewPath,
@@ -135,6 +136,8 @@ async function runServerSessionRefresh(
         return;
       }
       sessionRefreshDueAtMs = now + Math.floor((sessionIdleExpiresAtMs - now) / 2);
+    } else if (transitionRetryDelayMs !== null) {
+      sessionRefreshDueAtMs = now + transitionRetryDelayMs;
     }
     scheduleSessionRefreshTimer();
   } finally {
@@ -279,6 +282,15 @@ export async function ensureAuthResolved(): Promise<boolean> {
     sessionProbePromise = probeServerSession();
   }
   return sessionProbePromise;
+}
+
+export async function activateSessionScopeFromPath(pathname: string): Promise<void> {
+  await activateCompanionScopeFromPath(pathname);
+  // A client-side Garden -> fleet navigation changes the companion cache
+  // scope after the layout effect has already observed the route. Re-probe
+  // only after that asynchronous clear so the fleet session and renewal
+  // lifecycle cannot remain disabled until a full reload.
+  if (isFleetOverviewPath(pathname)) await ensureAuthResolved();
 }
 
 export function setToken(t: string) {

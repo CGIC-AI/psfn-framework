@@ -1,12 +1,25 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api/client', () => ({ apiGet: vi.fn() }));
 import {
   buildFleetModelUsagePath,
   getAuthorizedFleetModelUsage,
 } from './fleet-model-usage.js';
+import { refreshFleetSession } from '../fleet-session.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
+
+beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
+});
 
 function zeroCost() {
   return {
@@ -141,11 +154,65 @@ describe('fleet model-usage endpoint', () => {
       expect.objectContaining({
         cache: 'no-store',
         credentials: 'include',
-        signal,
+        signal: expect.any(AbortSignal),
       }),
     );
     await expect(getAuthorizedFleetModelUsage('/api/admin', {}))
       .rejects.toThrow(/server-authorized companion Garden path/u);
+  });
+
+  it('queues the authorized direct cost read behind session rotation', async () => {
+    let lockTail = Promise.resolve();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = lockTail;
+      let release = () => {};
+      lockTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    let resolveRefresh = (_response: Response) => {};
+    const refreshPending = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    let costCalls = 0;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request): Promise<Response> => {
+      const path = String(input);
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return Promise.resolve(new Response(JSON.stringify({ csrfToken: 'c'.repeat(43) }), {
+          status: 200,
+        }));
+      }
+      if (path === '/v1/fleet-auth/session/refresh') return refreshPending;
+      if (path.includes('/api/admin/fleet-model-usage')) {
+        costCalls += 1;
+        return Promise.resolve(new Response(JSON.stringify(fleetResponse()), { status: 200 }));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    const rotation = refreshFleetSession();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const costs = getAuthorizedFleetModelUsage(`/companions/${COMPANION_A}/garden`);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(costCalls).toBe(0);
+
+    resolveRefresh(new Response(JSON.stringify({
+      principalStatus: 'active',
+      idleExpiresAt: '2026-08-05T13:00:00.000Z',
+      absoluteExpiresAt: '2026-08-05T20:00:00.000Z',
+    }), { status: 200 }));
+
+    await expect(rotation).resolves.toMatchObject({ principalStatus: 'active' });
+    await expect(costs).resolves.toMatchObject({ deployment: 'fleet' });
+    expect(requestLock.mock.calls.map(call => call[1].mode)).toEqual(['exclusive', 'shared']);
   });
 
   it('fails closed when the authorized cost response is widened or incomplete', async () => {

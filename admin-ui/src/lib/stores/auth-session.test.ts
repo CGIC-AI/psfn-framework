@@ -293,6 +293,54 @@ describe('Garden admin session auth guard', () => {
     auth.stopServerSessionRefresh();
   });
 
+  it('retries the first transient renewal failure before an idle deadline is learned', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let csrfCalls = 0;
+    let refreshCalls = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/csrf') {
+        csrfCalls += 1;
+        if (csrfCalls === 1) return new Response('temporarily unavailable', { status: 503 });
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        refreshCalls += 1;
+        return new Response(JSON.stringify({
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:40:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await flushAsyncWork();
+    expect(csrfCalls).toBe(1);
+    expect(refreshCalls).toBe(0);
+    expect(auth.isAuthenticated()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(csrfCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    expect(csrfCalls).toBe(2);
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+
+    auth.stopServerSessionRefresh();
+  });
+
   it('cleans the fleet refresh timer and visibility listener on teardown', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
@@ -712,6 +760,41 @@ describe('Garden admin session auth guard', () => {
     expect(auth.isAuthResolved()).toBe(true);
     expect(auth.isAuthenticated()).toBe(true);
     expect(shouldRedirectToLogin(auth)).toBe(false);
+  });
+
+  it('re-probes after client-side Garden to fleet navigation clears companion scope', async () => {
+    const location = {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      href: '',
+    };
+    let dashboardCalls = 0;
+    let statusCalls = 0;
+    const auth = await loadAuthStore(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) {
+        dashboardCalls += 1;
+        return new Response('{}', { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/status') {
+        statusCalls += 1;
+        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
+          status: 200,
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }, { pathname: location.pathname });
+    Object.assign(window.location, location);
+    const { activateCompanionScope } = await import('$lib/fleet/companion-scope');
+    await activateCompanionScope(COMPANION_ID);
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+
+    window.location.pathname = '/fleet';
+    await auth.activateSessionScopeFromPath('/fleet');
+
+    expect(dashboardCalls).toBe(1);
+    expect(statusCalls).toBe(1);
+    expect(auth.isAuthResolved()).toBe(true);
+    expect(auth.isAuthenticated()).toBe(true);
   });
 
   it('does not turn a canceled probe with a raced 401 into an auth denial', async () => {

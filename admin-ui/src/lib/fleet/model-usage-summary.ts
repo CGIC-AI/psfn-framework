@@ -13,7 +13,7 @@ import {
 } from '../../../../src/shared/utils/types.js';
 import { serializeModelUsageQuery } from '../api/endpoints/model-usage-query.js';
 import { throwIfAborted } from '../api/abort.js';
-import { withFleetSessionTransitionLock } from '../api/fleet-session.js';
+import { withFleetSessionRequestLock } from '../api/fleet-session.js';
 
 const MAX_FLEET_COMPANIONS = 256;
 const TOKEN_TOTAL_FIELDS = [
@@ -194,14 +194,14 @@ export async function fetchFleetModelUsageProjection(
   query: FleetModelUsageQuery = {},
   signal?: AbortSignal,
 ): Promise<FleetModelUsageProjection> {
-  return await withFleetSessionTransitionLock(async transitionSignal => {
+  return await withFleetSessionRequestLock(async requestSignal => {
     const response = await fetch(buildFleetModelUsageSummaryPath(query), {
       cache: 'no-store',
       credentials: 'include',
       headers: { Accept: 'application/json' },
-      signal: transitionSignal,
+      signal: requestSignal,
     });
-    throwIfAborted(transitionSignal);
+    throwIfAborted(requestSignal);
     if (response.status === 401) {
       if (typeof window !== 'undefined') window.location.assign('/fleet/login');
       throw new Error('Cluster session expired');

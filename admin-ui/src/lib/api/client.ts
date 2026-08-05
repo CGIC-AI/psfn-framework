@@ -9,6 +9,10 @@ import {
 } from '$lib/fleet/companion-scope';
 import { throwIfAborted } from './abort';
 import { ApiError } from './errors';
+import {
+  isFleetSessionTransitionSignal,
+  withFleetSessionRequestLock,
+} from './fleet-session';
 
 export { ApiError } from './errors';
 
@@ -71,7 +75,16 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   try {
     let response: Response;
     try {
-      response = await fetch(url, { ...init, signal });
+      const request = async (requestSignal: AbortSignal): Promise<Response> => (
+        await fetch(url, { ...init, signal: requestSignal })
+      );
+      if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
+        response = init.signal && isFleetSessionTransitionSignal(init.signal)
+          ? await request(signal)
+          : await withFleetSessionRequestLock(request, signal);
+      } else {
+        response = await request(signal);
+      }
     } catch (error) {
       throwIfAborted(signal);
       throw error;

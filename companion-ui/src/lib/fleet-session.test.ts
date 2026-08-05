@@ -180,6 +180,7 @@ describe('fleet session protocol', () => {
     expect(new Set(requestLock.mock.calls.map(call => call[0]))).toEqual(
       new Set(['fleet-session-transition']),
     );
+    expect(requestLock.mock.calls.map(call => call[1].mode)).toEqual(['shared', 'exclusive']);
     expect(requestLock.mock.calls.every(call => call[1].signal instanceof AbortSignal)).toBe(true);
     expect(maximumActiveRequests).toBe(1);
   });

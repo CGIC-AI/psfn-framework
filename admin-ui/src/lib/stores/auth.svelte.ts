@@ -26,7 +26,6 @@ let sessionRefreshController: AbortController | null = null;
 let sessionRefreshGeneration = 0;
 let sessionRefreshDueAtMs: number | null = null;
 let sessionIdleExpiresAtMs: number | null = null;
-let sessionAbsoluteExpiresAtMs: number | null = null;
 let authenticated = $derived(!!token || serverSessionAuthenticated);
 
 function isFleetSessionPath(): boolean {
@@ -44,7 +43,6 @@ function clearSessionRefreshSchedule(): void {
   clearSessionRefreshTimer();
   sessionRefreshDueAtMs = null;
   sessionIdleExpiresAtMs = null;
-  sessionAbsoluteExpiresAtMs = null;
 }
 
 function cancelSessionRefreshRequest(): void {
@@ -58,11 +56,6 @@ function sessionRefreshDocumentHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden;
 }
 
-function sessionRefreshExpired(now: number): boolean {
-  return (sessionIdleExpiresAtMs !== null && now >= sessionIdleExpiresAtMs)
-    || (sessionAbsoluteExpiresAtMs !== null && now >= sessionAbsoluteExpiresAtMs);
-}
-
 function scheduleSessionRefreshTimer(): void {
   clearSessionRefreshTimer();
   if (!sessionRefreshRunning
@@ -74,12 +67,6 @@ function scheduleSessionRefreshTimer(): void {
     return;
   }
   const now = Date.now();
-  if (sessionRefreshExpired(now)) {
-    serverSessionAuthenticated = false;
-    authResolved = true;
-    clearSessionRefreshSchedule();
-    return;
-  }
   const delayMs = Math.max(0, sessionRefreshDueAtMs - now);
   sessionRefreshTimer = setTimeout(() => {
     sessionRefreshTimer = null;
@@ -108,7 +95,6 @@ async function runServerSessionRefresh(
       || token.length > 0) return;
     const now = Date.now();
     sessionIdleExpiresAtMs = refreshed.idleExpiresAtMs;
-    sessionAbsoluteExpiresAtMs = refreshed.absoluteExpiresAtMs;
     if (now >= refreshed.absoluteExpiresAtMs || now >= refreshed.idleExpiresAtMs) {
       serverSessionAuthenticated = false;
       authResolved = true;
@@ -130,9 +116,11 @@ async function runServerSessionRefresh(
     const now = Date.now();
     if (sessionIdleExpiresAtMs !== null) {
       if (now >= sessionIdleExpiresAtMs) {
-        serverSessionAuthenticated = false;
-        authResolved = true;
-        clearSessionRefreshSchedule();
+        // A sibling tab may have rotated the shared cookie and extended its
+        // idle window while this tab was hidden. A tab-local deadline is not
+        // session authority: retain auth and reconcile on the next foreground
+        // opportunity instead of manufacturing a logout.
+        sessionRefreshDueAtMs = null;
         return;
       }
       sessionRefreshDueAtMs = now + Math.floor((sessionIdleExpiresAtMs - now) / 2);
@@ -153,12 +141,6 @@ function requestServerSessionRefresh(): Promise<void> | null {
     || !isFleetSessionPath()
     || sessionRefreshDocumentHidden()) {
     return sessionRefreshPromise;
-  }
-  if (sessionRefreshExpired(Date.now())) {
-    serverSessionAuthenticated = false;
-    authResolved = true;
-    clearSessionRefreshSchedule();
-    return null;
   }
   if (!sessionRefreshPromise) {
     const controller = new AbortController();

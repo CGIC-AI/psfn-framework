@@ -181,7 +181,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
     expect(res.body).not.toMatch(/123456789012345678|a{20}|record|contact/iu);
   });
 
-  it('clears a denied stale cookie and exposes the WebSocket path only for explicit guest mode', async () => {
+  it('reports a denied stale cookie without erasing a concurrently rotated successor', async () => {
     const broker = {
       resolveAuthorizationContext: vi.fn(async () => {
         throw new FleetAuthorizationDeniedError('session_revoked');
@@ -206,7 +206,36 @@ describe('gateway-only fleet auth HTTP routes', () => {
       guestMode: 'explicit',
       websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
     });
-    expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(res.headers.get('set-cookie')).toBeUndefined();
+  });
+
+  it('fails status closed without clearing the session on an authorization-store outage', async () => {
+    const broker = {
+      resolveAuthorizationContext: vi.fn(async () => {
+        throw new FleetAuthorizationDeniedError('authorization_store_error');
+      }),
+    };
+    const handler = new FleetAuthHttpRoutes({
+      broker: broker as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
+    });
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(res.headers.get('set-cookie')).toBeUndefined();
+    expect(JSON.parse(res.body)).toEqual({
+      error: {
+        type: 'authorization_context_unavailable',
+        message: 'Fleet authorization context is temporarily unavailable',
+      },
+    });
   });
 
   it('redirects login with only an opaque initiating-browser __Host- cookie', async () => {

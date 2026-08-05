@@ -275,13 +275,19 @@ describe('Garden admin session auth guard', () => {
   it('returns a definitively rejected refresh to the existing fleet login path', async () => {
     const documentRef = new FakeVisibilityDocument();
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => (
-      String(input).endsWith('/api/admin/dashboard')
-        ? new Response('{}', { status: 200 })
-        : new Response(JSON.stringify({
-            error: { type: 'reauthentication_required', message: 'Reauthentication is required' },
-          }), { status: 401, headers: { 'content-type': 'application/json' } })
-    ));
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
+      if (path === '/v1/fleet-auth/session/status') {
+        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_out' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        error: { type: 'reauthentication_required', message: 'Reauthentication is required' },
+      }), { status: 401, headers: { 'content-type': 'application/json' } });
+    });
     const auth = await loadAuthStore(fetchImpl as typeof fetch, {
       pathname: `/companions/${COMPANION_ID}/garden`,
       documentRef,
@@ -289,12 +295,74 @@ describe('Garden admin session auth guard', () => {
 
     auth.startServerSessionRefresh();
     await auth.ensureAuthResolved();
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
     await flushAsyncWork();
 
     expect(auth.isAuthenticated()).toBe(false);
     expect(window.location.href).toBe('/fleet/login');
     expect(consoleWarn).not.toHaveBeenCalled();
+
+    auth.stopServerSessionRefresh();
+  });
+
+  it('reconciles a stale refresh after another tab advances the shared session cookie', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+    const documentRef = new FakeVisibilityDocument();
+    let dashboardCalls = 0;
+    let statusCalls = 0;
+    let csrfCalls = 0;
+    let refreshCalls = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/api/admin/dashboard')) {
+        dashboardCalls += 1;
+        return new Response('{}', { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/status') {
+        statusCalls += 1;
+        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (path === '/v1/fleet-auth/session/csrf') {
+        csrfCalls += 1;
+        return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
+      }
+      if (path === '/v1/fleet-auth/session/refresh') {
+        refreshCalls += 1;
+        if (refreshCalls === 1) {
+          // A sibling tab completed the single-use rotation first. The shared
+          // browser cookie already carries its valid successor by the time this
+          // tab receives the stale-session response.
+          return new Response(JSON.stringify({
+            error: { type: 'invalid_session', message: 'Session is invalid or expired' },
+          }), { status: 401, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          csrfToken: 'd'.repeat(43),
+          principalStatus: 'active',
+          idleExpiresAt: '2026-08-03T12:40:00.000Z',
+          absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+      documentRef,
+    });
+
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await vi.waitFor(() => expect(refreshCalls).toBe(2));
+
+    expect(dashboardCalls).toBe(1);
+    expect(statusCalls).toBe(1);
+    expect(csrfCalls).toBe(2);
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(window.location.href).toBe('');
 
     auth.stopServerSessionRefresh();
   });

@@ -417,7 +417,13 @@ export class FleetAuthHttpRoutes {
           return;
         } catch (error) {
           if (!(error instanceof FleetAuthorizationDeniedError)) throw error;
-          response.setHeader('Set-Cookie', clearSessionCookie());
+          if (error.code === 'authorization_store_error') {
+            throw new FleetAuthBrokerError(
+              'authorization_context_unavailable',
+              503,
+              'Fleet authorization context is temporarily unavailable',
+            );
+          }
           sendJson(response, 200, {
             schemaVersion: 1,
             state: 'signed_out',

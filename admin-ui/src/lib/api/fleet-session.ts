@@ -7,7 +7,7 @@ const FLEET_CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const FLEET_SESSION_REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const FLEET_CSRF_HEADER = 'X-PSFN-CSRF';
 const FLEET_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const FLEET_SESSION_REFRESH_LOCK = 'psfn-fleet-session-refresh';
+const FLEET_SESSION_REFRESH_LOCK = 'fleet-session-refresh';
 
 export interface FleetSessionRefreshResult {
   principalStatus: 'pending' | 'active';

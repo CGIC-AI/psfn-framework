@@ -23,6 +23,12 @@ afterEach(() => {
 describe('issueFleetEscalationGrant', () => {
   it('mints one same-origin CSRF-bound grant for an exact companion Garden target', async () => {
     companionGarden();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => callback());
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), {
         status: 200,
@@ -65,6 +71,12 @@ describe('issueFleetEscalationGrant', () => {
       target: '/api/admin/privacy-break-glass/journal/reflection-journal/confirm',
       reason: 'Investigating a companion welfare incident.',
     }));
+    expect(requestLock).toHaveBeenCalledTimes(1);
+    expect(requestLock).toHaveBeenCalledWith(
+      'fleet-session-transition',
+      expect.objectContaining({ mode: 'exclusive' }),
+      expect.any(Function),
+    );
   });
 
   it('refuses invalid reasons and requests outside an authorized companion Garden', async () => {

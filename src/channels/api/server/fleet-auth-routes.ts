@@ -224,7 +224,7 @@ export class FleetAuthHttpRoutes {
       const roster = await this.rosterSource.resolveRoster({ sessionToken });
       sendJson(response, 200, roster, { 'Cache-Control': 'no-store, private' });
     } catch (error) {
-      throw this.normalizeSessionScopedFailure(response, error);
+      throw this.normalizeSessionScopedFailure(error);
     }
   }
 
@@ -253,18 +253,25 @@ export class FleetAuthHttpRoutes {
         'Cache-Control': 'no-store, private',
       });
     } catch (error) {
-      throw this.normalizeSessionScopedFailure(response, error);
+      throw this.normalizeSessionScopedFailure(error);
     }
   }
 
   /**
-   * A denied/malformed session on a cookie-authed roster surface clears the
-   * stale cookie and fails as an invalid session; anything else propagates as a
-   * genuine internal error (500) so an invariant breach never reads as auth.
+   * Credentialed GET responses never clear the origin-wide rotating cookie:
+   * the request may carry a predecessor token while another tab has already
+   * installed its valid successor. Mutating logout/revocation ceremonies own
+   * credential deletion explicitly.
    */
-  private normalizeSessionScopedFailure(response: ServerResponse, error: unknown): unknown {
+  private normalizeSessionScopedFailure(error: unknown): unknown {
     if (error instanceof FleetAuthorizationDeniedError) {
-      response.setHeader('Set-Cookie', clearSessionCookie());
+      if (error.code === 'authorization_store_error') {
+        return new FleetAuthBrokerError(
+          'authorization_context_unavailable',
+          503,
+          'Fleet authorization context is temporarily unavailable',
+        );
+      }
       return new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
     }
     return error;

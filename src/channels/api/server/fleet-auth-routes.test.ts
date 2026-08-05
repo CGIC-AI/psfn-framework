@@ -638,7 +638,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
       expect(res.headers.get('set-cookie')).toBeUndefined();
     });
 
-    it('clears a stale cookie and fails closed when authorization is denied', async () => {
+    it('fails closed without clearing a possibly newer cookie when authorization is denied', async () => {
       const handler = rosterHandler({
         rosterSource: {
           resolveRoster: async () => {
@@ -653,9 +653,33 @@ describe('gateway-only fleet auth HTTP routes', () => {
         new URL('https://fleet.example.test/v1/fleet-auth/companions'),
       );
       expect(res.statusCode).toBe(401);
-      expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+      expect(res.headers.get('set-cookie')).toBeUndefined();
       expect(JSON.parse(res.body)).toEqual({
         error: { type: 'invalid_session', message: 'Session is invalid or expired' },
+      });
+    });
+
+    it('preserves the cookie and reports an unavailable authorization store', async () => {
+      const handler = rosterHandler({
+        rosterSource: {
+          resolveRoster: async () => {
+            throw new FleetAuthorizationDeniedError('authorization_store_error');
+          },
+        },
+      });
+      const res = response();
+      await handler.handle(
+        request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/companions'),
+      );
+      expect(res.statusCode).toBe(503);
+      expect(res.headers.get('set-cookie')).toBeUndefined();
+      expect(JSON.parse(res.body)).toEqual({
+        error: {
+          type: 'authorization_context_unavailable',
+          message: 'Fleet authorization context is temporarily unavailable',
+        },
       });
     });
   });
@@ -739,6 +763,32 @@ describe('gateway-only fleet auth HTTP routes', () => {
       );
       expect(res.statusCode).toBe(401);
     });
+
+    it.each([
+      ['session_revoked', 401, 'invalid_session'],
+      ['authorization_store_error', 503, 'authorization_context_unavailable'],
+    ] as const)(
+      'does not clear the cookie when approvals authorization fails with %s',
+      async (reason, status, errorType) => {
+        const handler = rosterHandler({
+          rosterSource: {
+            resolveRoster: async () => {
+              throw new FleetAuthorizationDeniedError(reason);
+            },
+          },
+          approvalsSource: { listPending: () => [], ownerOfConfirmation: () => undefined },
+        });
+        const res = response();
+        await handler.handle(
+          request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+          res,
+          new URL('https://fleet.example.test/v1/fleet-auth/approvals'),
+        );
+        expect(res.statusCode).toBe(status);
+        expect(res.headers.get('set-cookie')).toBeUndefined();
+        expect(JSON.parse(res.body).error.type).toBe(errorType);
+      },
+    );
   });
 
   it('logs out through session-bound CSRF even when companion runtimes are unavailable', async () => {

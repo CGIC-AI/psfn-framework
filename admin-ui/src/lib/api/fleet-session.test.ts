@@ -159,10 +159,8 @@ describe('refreshFleetSession', () => {
       await new Promise(resolve => setTimeout(resolve, 2));
       const path = String(input);
       try {
-        if (path === '/v1/fleet-auth/session/status') {
-          return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
-            status: 200,
-          });
+        if (path === '/v1/fleet/portal') {
+          return new Response(JSON.stringify({ schemaVersion: 2 }), { status: 200 });
         }
         if (path === '/v1/fleet-auth/session/csrf') {
           csrfGeneration += 1;
@@ -241,22 +239,28 @@ describe('refreshFleetSession', () => {
     expect(lockReleased).toBe(true);
   });
 
-  it('reads the canonical session state without exposing browser-owned credentials', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      schemaVersion: 1,
-      state: 'signed_in',
-      guestMode: 'disabled',
-      websocketPath: '/companion-ui/companions/11111111-1111-4111-8111-111111111111/ws',
-      human: { provider: 'discord', label: 'Discord user', role: 'owner' },
-    }), { status: 200 }));
+  it('reads session authority from the always-present fleet portal route', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ schemaVersion: 2 }), {
+      status: 200,
+    }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(readFleetSessionState()).resolves.toBe('signed_in');
-    expect(fetchMock).toHaveBeenCalledWith('/v1/fleet-auth/session/status', {
+    expect(fetchMock).toHaveBeenCalledWith('/v1/fleet/portal', {
       cache: 'no-store',
       credentials: 'include',
       headers: { Accept: 'application/json' },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it('maps a portal authentication denial to signed out without clearing credentials', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      error: { type: 'fleet_portal_denied' },
+    }), { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(readFleetSessionState()).resolves.toBe('signed_out');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

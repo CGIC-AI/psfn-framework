@@ -1,7 +1,7 @@
 import { apiDelete, apiFetch, apiGet, apiPost } from '$lib/api/client';
 import {
   FLEET_ESCALATION_GRANT_HEADER,
-  issueFleetEscalationGrant,
+  withFleetEscalationGrant,
 } from '$lib/api/fleet-escalation';
 import type {
   AdminBulkMutationResult,
@@ -78,14 +78,17 @@ export async function revealMemoryEscalated(
   reason: string,
 ): Promise<AdminMemoryDetailData> {
   const target = revealMemoryPath(id);
-  const grant = await issueFleetEscalationGrant({
-    method: 'POST',
-    target,
-    reason,
-  });
-  return apiPost<AdminMemoryDetailData>(`/api/admin/memory/${encodeURIComponent(id)}/reveal`, {}, {
-    headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-  });
+  return await withFleetEscalationGrant(
+    { method: 'POST', target, reason },
+    async (grant, signal) => await apiPost<AdminMemoryDetailData>(
+      `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
+      {},
+      {
+        headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
+        signal,
+      },
+    ),
+  );
 }
 
 export function getMemoryElevation(): Promise<AdminMemoryElevationStatus> {

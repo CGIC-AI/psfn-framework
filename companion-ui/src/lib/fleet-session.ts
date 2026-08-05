@@ -5,6 +5,7 @@ const STATUS_PATH = '/v1/fleet-auth/session/status';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
+const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
 const ROLES = ['owner', 'admin', 'member', 'guest'] as const;
 const WEBSOCKET_PATH = /^\/companion-ui\/companions\/[0-9a-f-]{36}\/ws$/u;
 
@@ -91,12 +92,18 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
 
 type FetchLike = typeof fetch;
 
-async function withFleetSessionTransitionLock<T>(operation: () => Promise<T>): Promise<T> {
-  if (typeof navigator === 'undefined' || !navigator.locks) return await operation();
+async function withFleetSessionTransitionLock<T>(
+  operation: (transitionSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const transitionSignal = AbortSignal.timeout(FLEET_SESSION_TRANSITION_TIMEOUT_MS);
+  if (typeof navigator === 'undefined') return await operation(transitionSignal);
+  if (!navigator.locks) {
+    throw new FleetSessionProtocolError('Browser session coordination is unavailable');
+  }
   return await navigator.locks.request(
     FLEET_SESSION_TRANSITION_LOCK_NAME,
-    { mode: 'exclusive' },
-    operation,
+    { mode: 'exclusive', signal: transitionSignal },
+    async () => await operation(transitionSignal),
   );
 }
 
@@ -104,13 +111,13 @@ export class FleetSessionClient {
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
   async readStatus(): Promise<FleetSessionStatus> {
-    return await withFleetSessionTransitionLock(async () => {
+    return await withFleetSessionTransitionLock(async transitionSignal => {
       const response = await this.fetchImpl(STATUS_PATH, {
         method: 'GET',
         credentials: 'include',
         cache: 'no-store',
         redirect: 'error',
-        signal: AbortSignal.timeout(10_000),
+        signal: transitionSignal,
         headers: { Accept: 'application/json' },
       });
       if (!response.ok || response.headers.get('cache-control')?.toLowerCase().includes('no-store') !== true) {
@@ -121,14 +128,14 @@ export class FleetSessionClient {
   }
 
   async logout(): Promise<void> {
-    await withFleetSessionTransitionLock(async () => {
-      const csrf = await this.readCsrf();
+    await withFleetSessionTransitionLock(async transitionSignal => {
+      const csrf = await this.readCsrf(transitionSignal);
       const response = await this.fetchImpl(LOGOUT_PATH, {
         method: 'POST',
         credentials: 'include',
         cache: 'no-store',
         redirect: 'error',
-        signal: AbortSignal.timeout(10_000),
+        signal: transitionSignal,
         headers: {
           Accept: 'application/json',
           'X-PSFN-CSRF': csrf,
@@ -138,13 +145,13 @@ export class FleetSessionClient {
     });
   }
 
-  private async readCsrf(): Promise<string> {
+  private async readCsrf(signal: AbortSignal): Promise<string> {
     const response = await this.fetchImpl(CSRF_PATH, {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',
       redirect: 'error',
-      signal: AbortSignal.timeout(10_000),
+      signal,
       headers: { Accept: 'application/json' },
     });
     const value: unknown = response.ok ? await response.json() : undefined;

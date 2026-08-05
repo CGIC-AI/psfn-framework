@@ -58,13 +58,15 @@ async function issueFleetCsrfToken(signal: AbortSignal): Promise<string> {
 }
 
 /**
- * Mints one audited, single-use fleet escalation grant for an exact declared
- * Garden route. Gateway ceremony routes remain raw same-origin requests so
- * they are never rewritten into a companion Garden data prefix.
+ * Mints and spends one audited, single-use fleet escalation grant while the
+ * origin-wide session transition remains locked. Gateway ceremony routes stay
+ * raw same-origin requests so they are never rewritten into a companion Garden
+ * data prefix, and refresh cannot revoke the grant between mint and use.
  */
-export async function issueFleetEscalationGrant(
+export async function withFleetEscalationGrant<T>(
   request: FleetEscalationGrantRequest,
-): Promise<FleetEscalationGrant> {
+  spend: (grant: FleetEscalationGrant, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const scope = currentCompanionGardenScope();
   if (!scope) {
     throw new Error('Audited escalation requires an authorized companion Garden route');
@@ -78,13 +80,13 @@ export async function issueFleetEscalationGrant(
     if (nextCompanionId !== scope.companionId) controller.abort();
   });
   try {
-    return await withFleetSessionTransitionLock(async () => {
-      const csrfToken = await issueFleetCsrfToken(controller.signal);
+    return await withFleetSessionTransitionLock(async transitionSignal => {
+      const csrfToken = await issueFleetCsrfToken(transitionSignal);
       const response = await fetch(FLEET_ESCALATION_GRANT_PATH, {
         method: 'POST',
         cache: 'no-store',
         credentials: 'include',
-        signal: controller.signal,
+        signal: transitionSignal,
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
@@ -111,11 +113,12 @@ export async function issueFleetEscalationGrant(
         || !Number.isFinite(Date.parse(result.expiresAt))) {
         throw new Error('Escalation grant response is malformed');
       }
-      return {
+      const grant = {
         grantId: result.grantId,
         routeId: result.routeId,
         expiresAt: result.expiresAt,
       };
+      return await spend(grant, transitionSignal);
     }, controller.signal);
   } finally {
     unsubscribe();

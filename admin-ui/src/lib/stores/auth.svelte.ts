@@ -232,11 +232,14 @@ async function probeServerSession(): Promise<boolean> {
   sessionProbeController = controller;
   sessionProbeScope = companionScope;
   try {
-    const res = await fetch(scopeGardenDataPath('/api/admin/dashboard'), {
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      signal: controller.signal,
-    });
+    const { withFleetSessionTransitionLock } = await import('$lib/api/fleet-session');
+    const res = await withFleetSessionTransitionLock(async transitionSignal => (
+      fetch(scopeGardenDataPath('/api/admin/dashboard'), {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+        signal: transitionSignal,
+      })
+    ), controller.signal);
     throwIfAborted(controller.signal);
     if (companionScope !== getCompanionCacheScope()) return false;
     if (res.ok) {

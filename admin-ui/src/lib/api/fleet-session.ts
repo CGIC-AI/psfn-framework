@@ -8,6 +8,7 @@ const FLEET_SESSION_REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const FLEET_CSRF_HEADER = 'X-PSFN-CSRF';
 const FLEET_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
+const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
 
 export interface FleetSessionRefreshResult {
   principalStatus: 'pending' | 'active';
@@ -16,14 +17,21 @@ export interface FleetSessionRefreshResult {
 }
 
 export async function withFleetSessionTransitionLock<T>(
-  operation: () => Promise<T>,
+  operation: (transitionSignal: AbortSignal) => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  if (typeof navigator === 'undefined' || !navigator.locks) return await operation();
+  const timeoutSignal = AbortSignal.timeout(FLEET_SESSION_TRANSITION_TIMEOUT_MS);
+  const transitionSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
+  if (typeof navigator === 'undefined') return await operation(transitionSignal);
+  if (!navigator.locks) {
+    throw new Error('Browser session coordination is unavailable');
+  }
   return await navigator.locks.request(
     FLEET_SESSION_TRANSITION_LOCK_NAME,
-    { mode: 'exclusive', ...(signal ? { signal } : {}) },
-    operation,
+    { mode: 'exclusive', signal: transitionSignal },
+    async () => await operation(transitionSignal),
   );
 }
 
@@ -85,7 +93,10 @@ async function rotateFleetSession(signal?: AbortSignal): Promise<FleetSessionRef
 }
 
 export async function refreshFleetSession(signal?: AbortSignal): Promise<FleetSessionRefreshResult> {
-  return await withFleetSessionTransitionLock(async () => await rotateFleetSession(signal), signal);
+  return await withFleetSessionTransitionLock(
+    async transitionSignal => await rotateFleetSession(transitionSignal),
+    signal,
+  );
 }
 
 async function readFleetSessionStateUnlocked(
@@ -113,7 +124,7 @@ export async function readFleetSessionState(
   signal?: AbortSignal,
 ): Promise<'signed_in' | 'signed_out'> {
   return await withFleetSessionTransitionLock(
-    async () => await readFleetSessionStateUnlocked(signal),
+    async transitionSignal => await readFleetSessionStateUnlocked(transitionSignal),
     signal,
   );
 }
@@ -147,7 +158,7 @@ async function logoutFleetSessionUnlocked(signal?: AbortSignal): Promise<void> {
 
 export async function logoutFleetSession(signal?: AbortSignal): Promise<void> {
   await withFleetSessionTransitionLock(
-    async () => await logoutFleetSessionUnlocked(signal),
+    async transitionSignal => await logoutFleetSessionUnlocked(transitionSignal),
     signal,
   );
 }

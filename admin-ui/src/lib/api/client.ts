@@ -216,6 +216,8 @@ export interface ApiPostOptions {
    * only add headers the default set does not already own.
    */
   headers?: Record<string, string>;
+  /** Bounds a session-locked grant spend together with its mint ceremony. */
+  signal?: AbortSignal;
 }
 
 export async function apiPost<T>(
@@ -234,6 +236,7 @@ export async function apiPost<T>(
       : { ...options?.headers, ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
     body: serializedBody,
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
   await throwIfNotOk(res);
   return res.json();

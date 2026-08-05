@@ -36,6 +36,15 @@ function grantResponse(): Response {
 }
 
 beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
   apiPost.mockReset();
 });
 
@@ -69,7 +78,10 @@ describe('revealMemoryEscalated', () => {
     expect(apiPost).toHaveBeenCalledWith(
       `/api/admin/memory/${MEMORY_ID}/reveal`,
       {},
-      { headers: { 'x-psfn-escalation-grant': '22222222-2222-4222-8222-222222222222' } },
+      {
+        headers: { 'x-psfn-escalation-grant': '22222222-2222-4222-8222-222222222222' },
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 

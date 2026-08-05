@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FleetSessionClient,
   FleetSessionProtocolError,
@@ -14,6 +14,18 @@ function json(value: unknown, status = 200): Response {
     headers: { 'Cache-Control': 'no-store, private', 'Content-Type': 'application/json' },
   });
 }
+
+beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -73,6 +85,15 @@ describe('fleet session protocol', () => {
     }));
   });
 
+  it('fails closed when a browser cannot coordinate origin-wide session transitions', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('navigator', {});
+    const client = new FleetSessionClient(fetchImpl as typeof fetch);
+
+    await expect(client.readStatus()).rejects.toThrow(/coordination is unavailable/u);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('serializes status and logout on the origin-wide session transition lock', async () => {
     let lockTail = Promise.resolve();
     const requestLock = vi.fn(async <T>(
@@ -117,6 +138,7 @@ describe('fleet session protocol', () => {
     expect(new Set(requestLock.mock.calls.map(call => call[0]))).toEqual(
       new Set(['fleet-session-transition']),
     );
+    expect(requestLock.mock.calls.every(call => call[1].signal instanceof AbortSignal)).toBe(true);
     expect(maximumActiveRequests).toBe(1);
   });
 });

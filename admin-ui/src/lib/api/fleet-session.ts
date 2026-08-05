@@ -1,7 +1,7 @@
 import { throwIfAborted } from './abort';
 import { ApiError } from './errors';
 
-const FLEET_SESSION_STATUS_PATH = '/v1/fleet-auth/session/status';
+const FLEET_SESSION_AUTHORITY_PATH = '/v1/fleet/portal';
 const FLEET_CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const FLEET_SESSION_REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const FLEET_CSRF_HEADER = 'X-PSFN-CSRF';
@@ -138,22 +138,16 @@ export async function refreshFleetSession(signal?: AbortSignal): Promise<FleetSe
 async function readFleetSessionStateUnlocked(
   signal?: AbortSignal,
 ): Promise<'signed_in' | 'signed_out'> {
-  const response = await fetch(FLEET_SESSION_STATUS_PATH, {
+  const response = await fetch(FLEET_SESSION_AUTHORITY_PATH, {
     cache: 'no-store',
     credentials: 'include',
     headers: { Accept: 'application/json' },
     ...(signal ? { signal } : {}),
   });
   if (signal) throwIfAborted(signal);
+  if (response.status === 401) return 'signed_out';
   await throwIfFleetSessionCeremonyFailed(response);
-  const value: unknown = await response.json();
-  if (typeof value !== 'object' || value === null
-    || !('schemaVersion' in value) || value.schemaVersion !== 1
-    || !('state' in value)
-    || (value.state !== 'signed_in' && value.state !== 'signed_out')) {
-    throw new Error('Fleet session status response is malformed');
-  }
-  return value.state;
+  return 'signed_in';
 }
 
 export async function readFleetSessionState(

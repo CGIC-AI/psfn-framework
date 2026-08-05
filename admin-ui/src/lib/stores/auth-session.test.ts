@@ -88,10 +88,8 @@ describe('Garden admin session auth guard', () => {
     const documentRef = new FakeVisibilityDocument();
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const path = String(input);
-      if (path === '/v1/fleet-auth/session/status') {
-        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
-          status: 200,
-        });
+      if (path === '/v1/fleet/portal') {
+        return new Response(JSON.stringify({ schemaVersion: 2 }), { status: 200 });
       }
       if (path === '/v1/fleet-auth/session/csrf') {
         return new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), { status: 200 });
@@ -116,7 +114,7 @@ describe('Garden admin session auth guard', () => {
 
     expect(auth.isAuthenticated()).toBe(true);
     expect(fetchImpl.mock.calls.map(call => String(call[0]))).toEqual([
-      '/v1/fleet-auth/session/status',
+      '/v1/fleet/portal',
       '/v1/fleet-auth/session/csrf',
       '/v1/fleet-auth/session/refresh',
     ]);
@@ -489,9 +487,9 @@ describe('Garden admin session auth guard', () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const path = String(input);
       if (path.endsWith('/api/admin/dashboard')) return new Response('{}', { status: 200 });
-      if (path === '/v1/fleet-auth/session/status') {
+      if (path === '/v1/fleet/portal') {
         return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_out' }), {
-          status: 200,
+          status: 401,
           headers: { 'content-type': 'application/json' },
         });
       }
@@ -530,9 +528,9 @@ describe('Garden admin session auth guard', () => {
         dashboardCalls += 1;
         return new Response('{}', { status: 200 });
       }
-      if (path === '/v1/fleet-auth/session/status') {
+      if (path === '/v1/fleet/portal') {
         statusCalls += 1;
-        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
+        return new Response(JSON.stringify({ schemaVersion: 2 }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -775,11 +773,9 @@ describe('Garden admin session auth guard', () => {
         dashboardCalls += 1;
         return new Response('{}', { status: 200 });
       }
-      if (path === '/v1/fleet-auth/session/status') {
+      if (path === '/v1/fleet/portal') {
         statusCalls += 1;
-        return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
-          status: 200,
-        });
+        return new Response(JSON.stringify({ schemaVersion: 2 }), { status: 200 });
       }
       throw new Error(`Unexpected request: ${path}`);
     }, { pathname: location.pathname });

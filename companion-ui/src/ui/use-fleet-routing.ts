@@ -45,7 +45,16 @@ export function useFleetRouting(input: {
     const client = clientRef.current;
     const sessionClient = sessionClientRef.current;
     if (!client || !sessionClient) throw new Error('Cluster roster client is unavailable');
-    await sessionClient.renewIfDue();
+    try {
+      await sessionClient.renewIfDue();
+    } catch (error) {
+      // Status already proved that the browser has a signed-in session. A
+      // transient renewal failure must not discard that authority or strand
+      // the cockpit offline; the active approvals cadence retries renewal.
+      reportErrorRef.current(error instanceof Error
+        ? error.message
+        : 'Cluster session renewal failed');
+    }
     const { roster: nextRoster, approvals: nextApprovals } = await client.readRoutingSnapshot();
     if (!isCurrent()) return;
     const selected = nextRoster.companions.find(

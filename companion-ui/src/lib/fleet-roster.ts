@@ -6,7 +6,7 @@ import type {
 import { isObjectRecord as isRecord } from '../../../src/shared/utils/types.js';
 import {
   validWebsocketPath,
-  withFleetSessionTransitionLock,
+  withFleetSessionRequestLock,
 } from './fleet-session.js';
 import {
   hasExactKeys,
@@ -214,14 +214,14 @@ export class FleetRosterClient {
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
   async readRoster(): Promise<FleetRoster> {
-    return await withFleetSessionTransitionLock(async transitionSignal => (
-      parseFleetRoster(await this.readNoStoreJson(COMPANIONS_PATH, transitionSignal))
+    return await withFleetSessionRequestLock(async requestSignal => (
+      parseFleetRoster(await this.readNoStoreJson(COMPANIONS_PATH, requestSignal))
     ));
   }
 
   async readApprovals(): Promise<FleetApprovalsView> {
-    return await withFleetSessionTransitionLock(async transitionSignal => (
-      parseFleetApprovalsView(await this.readNoStoreJson(APPROVALS_PATH, transitionSignal))
+    return await withFleetSessionRequestLock(async requestSignal => (
+      parseFleetApprovalsView(await this.readNoStoreJson(APPROVALS_PATH, requestSignal))
     ));
   }
 
@@ -229,10 +229,10 @@ export class FleetRosterClient {
     roster: FleetRoster;
     approvals: FleetApprovalsView;
   }>> {
-    return await withFleetSessionTransitionLock(async transitionSignal => {
+    return await withFleetSessionRequestLock(async requestSignal => {
       const [roster, approvals] = await Promise.all([
-        this.readNoStoreJson(COMPANIONS_PATH, transitionSignal),
-        this.readNoStoreJson(APPROVALS_PATH, transitionSignal),
+        this.readNoStoreJson(COMPANIONS_PATH, requestSignal),
+        this.readNoStoreJson(APPROVALS_PATH, requestSignal),
       ]);
       return Object.freeze({
         roster: parseFleetRoster(roster),

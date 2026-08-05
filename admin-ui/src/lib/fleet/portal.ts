@@ -1,6 +1,6 @@
 import { companionGardenRoot } from './companion-scope';
 import { throwIfAborted } from '../api/abort';
-import { withFleetSessionTransitionLock } from '../api/fleet-session';
+import { withFleetSessionRequestLock } from '../api/fleet-session';
 import {
   hasExactKeys,
   isRecord,
@@ -197,12 +197,14 @@ export async function fetchFleetCardDetails(
 ): Promise<FleetCardDetails> {
   if (!companion.gardenPath) return { adminTransport: 'unknown' };
   try {
-    const response = await fetch(`${companion.gardenPath}/api/admin/image-references`, {
-      cache: 'no-store',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-      ...(signal ? { signal } : {}),
-    });
+    const response = await withFleetSessionRequestLock(async requestSignal => (
+      await fetch(`${companion.gardenPath}/api/admin/image-references`, {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+        signal: requestSignal,
+      })
+    ), signal);
     if (response.status === 502 || response.status === 503 || response.status === 504) {
       return { adminTransport: 'down' };
     }
@@ -234,20 +236,20 @@ export async function fetchFleetCardDetails(
 }
 
 export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<FleetPortalProjection> {
-  return await withFleetSessionTransitionLock(async transitionSignal => {
+  return await withFleetSessionRequestLock(async requestSignal => {
     let response: Response;
     try {
       response = await fetch('/v1/fleet/portal', {
         cache: 'no-store',
         credentials: 'include',
         headers: { Accept: 'application/json' },
-        signal: transitionSignal,
+        signal: requestSignal,
       });
     } catch (error) {
-      throwIfAborted(transitionSignal);
+      throwIfAborted(requestSignal);
       throw error;
     }
-    throwIfAborted(transitionSignal);
+    throwIfAborted(requestSignal);
     if (response.status === 401) {
       if (typeof window !== 'undefined') window.location.assign('/fleet/login');
       throw new Error('Cluster session expired');

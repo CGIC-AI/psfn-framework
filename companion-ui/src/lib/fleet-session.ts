@@ -7,6 +7,7 @@ const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
 const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
+const fleetSessionTransitionSignals = new WeakSet<AbortSignal>();
 const ROLES = ['owner', 'admin', 'member', 'guest'] as const;
 const WEBSOCKET_PATH = /^\/companion-ui\/companions\/[0-9a-f-]{36}\/ws$/u;
 const CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
@@ -94,19 +95,40 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
 
 type FetchLike = typeof fetch;
 
-export async function withFleetSessionTransitionLock<T>(
+async function withFleetSessionLock<T>(
+  mode: 'exclusive' | 'shared',
   operation: (transitionSignal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const transitionSignal = AbortSignal.timeout(FLEET_SESSION_TRANSITION_TIMEOUT_MS);
-  if (typeof navigator === 'undefined') return await operation(transitionSignal);
+  const run = async (): Promise<T> => {
+    if (mode === 'exclusive') fleetSessionTransitionSignals.add(transitionSignal);
+    try {
+      return await operation(transitionSignal);
+    } finally {
+      if (mode === 'exclusive') fleetSessionTransitionSignals.delete(transitionSignal);
+    }
+  };
+  if (typeof navigator === 'undefined') return await run();
   if (!navigator.locks) {
     throw new FleetSessionProtocolError('Browser session coordination is unavailable');
   }
   return await navigator.locks.request(
     FLEET_SESSION_TRANSITION_LOCK_NAME,
-    { mode: 'exclusive', signal: transitionSignal },
-    async () => await operation(transitionSignal),
+    { mode, signal: transitionSignal },
+    run,
   );
+}
+
+export async function withFleetSessionRequestLock<T>(
+  operation: (requestSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return await withFleetSessionLock('shared', operation);
+}
+
+export async function withFleetSessionTransitionLock<T>(
+  operation: (transitionSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return await withFleetSessionLock('exclusive', operation);
 }
 
 export class FleetSessionClient {
@@ -115,13 +137,13 @@ export class FleetSessionClient {
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
   async readStatus(): Promise<FleetSessionStatus> {
-    return await withFleetSessionTransitionLock(async transitionSignal => {
+    return await withFleetSessionRequestLock(async requestSignal => {
       const response = await this.fetchImpl(STATUS_PATH, {
         method: 'GET',
         credentials: 'include',
         cache: 'no-store',
         redirect: 'error',
-        signal: transitionSignal,
+        signal: requestSignal,
         headers: { Accept: 'application/json' },
       });
       if (!response.ok || response.headers.get('cache-control')?.toLowerCase().includes('no-store') !== true) {

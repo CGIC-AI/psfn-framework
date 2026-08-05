@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FleetSessionClient,
   FleetSessionProtocolError,
@@ -14,6 +14,10 @@ function json(value: unknown, status = 200): Response {
     headers: { 'Cache-Control': 'no-store, private', 'Content-Type': 'application/json' },
   });
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('fleet session protocol', () => {
   it('accepts only exact sanitized status variants', () => {
@@ -67,5 +71,52 @@ describe('fleet session protocol', () => {
       credentials: 'include',
       headers: expect.objectContaining({ 'X-PSFN-CSRF': 'c'.repeat(43) }),
     }));
+  });
+
+  it('serializes status and logout on the origin-wide session transition lock', async () => {
+    let lockTail = Promise.resolve();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = lockTail;
+      let release = () => {};
+      lockTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      try {
+        const path = String(input);
+        if (path === '/v1/fleet-auth/session/status') {
+          return json({ schemaVersion: 1, state: 'signed_out', guestMode: 'disabled' });
+        }
+        if (path === '/v1/fleet-auth/session/csrf') return json({ csrfToken: 'c'.repeat(43) });
+        if (path === '/v1/fleet-auth/logout') return new Response(null, { status: 204 });
+        throw new Error(`Unexpected request: ${path}`);
+      } finally {
+        activeRequests -= 1;
+      }
+    });
+    const client = new FleetSessionClient(fetchImpl as typeof fetch);
+
+    await expect(Promise.all([client.readStatus(), client.logout()])).resolves.toHaveLength(2);
+
+    expect(requestLock).toHaveBeenCalledTimes(2);
+    expect(new Set(requestLock.mock.calls.map(call => call[0]))).toEqual(
+      new Set(['fleet-session-transition']),
+    );
+    expect(maximumActiveRequests).toBe(1);
   });
 });

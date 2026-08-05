@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFleetSessionState, refreshFleetSession } from './fleet-session';
+import {
+  logoutFleetSession,
+  readFleetSessionState,
+  refreshFleetSession,
+} from './fleet-session';
 
 const CSRF_TOKEN = 'c'.repeat(43);
 
@@ -108,6 +112,75 @@ describe('refreshFleetSession', () => {
 
     expect(requestLock).toHaveBeenCalledTimes(2);
     expect(maximumActiveCeremonies).toBe(1);
+  });
+
+  it('serializes status, refresh, and logout across the shared session transition', async () => {
+    let lockTail = Promise.resolve();
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = lockTail;
+      let release = () => {};
+      lockTail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release();
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    let csrfGeneration = 0;
+    let currentCsrf = '';
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      const path = String(input);
+      try {
+        if (path === '/v1/fleet-auth/session/status') {
+          return new Response(JSON.stringify({ schemaVersion: 1, state: 'signed_in' }), {
+            status: 200,
+          });
+        }
+        if (path === '/v1/fleet-auth/session/csrf') {
+          csrfGeneration += 1;
+          currentCsrf = String(csrfGeneration).padStart(43, 'a');
+          return new Response(JSON.stringify({ csrfToken: currentCsrf }), { status: 200 });
+        }
+        const csrf = (init?.headers as Record<string, string> | undefined)?.['X-PSFN-CSRF'];
+        if (csrf !== currentCsrf) return new Response('stale csrf', { status: 403 });
+        if (path === '/v1/fleet-auth/session/refresh') {
+          return new Response(JSON.stringify({
+            principalStatus: 'active',
+            idleExpiresAt: '2026-08-03T12:40:00.000Z',
+            absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+          }), { status: 200 });
+        }
+        if (path === '/v1/fleet-auth/logout') return new Response(null, { status: 204 });
+        throw new Error(`Unexpected request: ${path}`);
+      } finally {
+        activeRequests -= 1;
+      }
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(Promise.all([
+      readFleetSessionState(),
+      refreshFleetSession(),
+      logoutFleetSession(),
+    ])).resolves.toHaveLength(3);
+
+    expect(requestLock).toHaveBeenCalledTimes(3);
+    expect(new Set(requestLock.mock.calls.map(call => call[0]))).toHaveLength(1);
+    expect(requestLock.mock.calls.every(call => call[0] === 'fleet-session-transition')).toBe(true);
+    expect(maximumActiveRequests).toBe(1);
   });
 
   it('reads the canonical session state without exposing browser-owned credentials', async () => {

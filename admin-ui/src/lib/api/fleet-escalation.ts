@@ -3,6 +3,7 @@ import {
   currentCompanionGardenScope,
   onCompanionScopeChange,
 } from '$lib/fleet/companion-scope';
+import { withFleetSessionTransitionLock } from './fleet-session';
 
 const FLEET_CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const FLEET_ESCALATION_GRANT_PATH = '/v1/fleet-auth/escalation/grant';
@@ -77,43 +78,45 @@ export async function issueFleetEscalationGrant(
     if (nextCompanionId !== scope.companionId) controller.abort();
   });
   try {
-    const csrfToken = await issueFleetCsrfToken(controller.signal);
-    const response = await fetch(FLEET_ESCALATION_GRANT_PATH, {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'include',
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        [FLEET_CSRF_HEADER]: csrfToken,
-      },
-      body: JSON.stringify({
-        companionId: scope.companionId,
-        method: request.method,
-        target: request.target,
-        reason,
-      }),
-    });
-    await throwIfNotOk(response);
-    const result = await response.json() as {
-      grantId?: unknown;
-      routeId?: unknown;
-      expiresAt?: unknown;
-    };
-    if (typeof result.grantId !== 'string'
-      || !FLEET_GRANT_ID_PATTERN.test(result.grantId)
-      || typeof result.routeId !== 'string'
-      || !result.routeId
-      || typeof result.expiresAt !== 'string'
-      || !Number.isFinite(Date.parse(result.expiresAt))) {
-      throw new Error('Escalation grant response is malformed');
-    }
-    return {
-      grantId: result.grantId,
-      routeId: result.routeId,
-      expiresAt: result.expiresAt,
-    };
+    return await withFleetSessionTransitionLock(async () => {
+      const csrfToken = await issueFleetCsrfToken(controller.signal);
+      const response = await fetch(FLEET_ESCALATION_GRANT_PATH, {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'include',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          [FLEET_CSRF_HEADER]: csrfToken,
+        },
+        body: JSON.stringify({
+          companionId: scope.companionId,
+          method: request.method,
+          target: request.target,
+          reason,
+        }),
+      });
+      await throwIfNotOk(response);
+      const result = await response.json() as {
+        grantId?: unknown;
+        routeId?: unknown;
+        expiresAt?: unknown;
+      };
+      if (typeof result.grantId !== 'string'
+        || !FLEET_GRANT_ID_PATTERN.test(result.grantId)
+        || typeof result.routeId !== 'string'
+        || !result.routeId
+        || typeof result.expiresAt !== 'string'
+        || !Number.isFinite(Date.parse(result.expiresAt))) {
+        throw new Error('Escalation grant response is malformed');
+      }
+      return {
+        grantId: result.grantId,
+        routeId: result.routeId,
+        expiresAt: result.expiresAt,
+      };
+    }, controller.signal);
   } finally {
     unsubscribe();
   }

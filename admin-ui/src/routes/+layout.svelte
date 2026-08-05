@@ -43,6 +43,7 @@
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
   import { fleetCostNavigationPath } from '$lib/fleet/fleet-costs';
+  import { logoutFleetSession } from '$lib/api/fleet-session';
 
   let { children } = $props();
 
@@ -216,23 +217,7 @@
   async function handleLogout() {
     if (companionScope || isFleetPage) {
       try {
-        const csrfResponse = await fetch('/v1/fleet-auth/session/csrf', {
-          cache: 'no-store',
-          credentials: 'include',
-          headers: { Accept: 'application/json' },
-        });
-        const csrf = await csrfResponse.json() as { csrfToken?: unknown };
-        if (!csrfResponse.ok
-          || typeof csrf.csrfToken !== 'string'
-          || !/^[A-Za-z0-9_-]{43}$/u.test(csrf.csrfToken)) {
-          throw new Error('Cluster logout ceremony unavailable');
-        }
-        const logoutResponse = await fetch('/v1/fleet-auth/logout', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'X-PSFN-CSRF': csrf.csrfToken },
-        });
-        if (!logoutResponse.ok) throw new Error('Cluster logout failed');
+        await logoutFleetSession();
         clearToken();
         window.location.assign('/fleet/login');
         return;

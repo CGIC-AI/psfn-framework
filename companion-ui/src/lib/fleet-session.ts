@@ -3,11 +3,13 @@ import { hasExactKeys } from './protocol/validation.js';
 
 const STATUS_PATH = '/v1/fleet-auth/session/status';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
+const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
 const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
 const ROLES = ['owner', 'admin', 'member', 'guest'] as const;
 const WEBSOCKET_PATH = /^\/companion-ui\/companions\/[0-9a-f-]{36}\/ws$/u;
+const CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
 export type FleetSessionStatus = Readonly<{
   schemaVersion: 1;
@@ -108,6 +110,8 @@ export async function withFleetSessionTransitionLock<T>(
 }
 
 export class FleetSessionClient {
+  private renewalDueAtMs = 0;
+
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
   async readStatus(): Promise<FleetSessionStatus> {
@@ -145,6 +149,50 @@ export class FleetSessionClient {
     });
   }
 
+  async renewIfDue(): Promise<void> {
+    if (Date.now() < this.renewalDueAtMs) return;
+    await withFleetSessionTransitionLock(async transitionSignal => {
+      const now = Date.now();
+      if (now < this.renewalDueAtMs) return;
+      const csrf = await this.readCsrf(transitionSignal);
+      const response = await this.fetchImpl(REFRESH_PATH, {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: transitionSignal,
+        headers: {
+          Accept: 'application/json',
+          'X-PSFN-CSRF': csrf,
+        },
+      });
+      const value: unknown = response.ok ? await response.json() : undefined;
+      if (!isRecord(value)
+        || !hasExactKeys(value, [
+          'csrfToken',
+          'principalStatus',
+          'idleExpiresAt',
+          'absoluteExpiresAt',
+        ])
+        || typeof value.csrfToken !== 'string'
+        || !CSRF_TOKEN_PATTERN.test(value.csrfToken)
+        || (value.principalStatus !== 'pending' && value.principalStatus !== 'active')
+        || typeof value.idleExpiresAt !== 'string'
+        || typeof value.absoluteExpiresAt !== 'string') {
+        throw new FleetSessionProtocolError('Fleet session renewal was unavailable');
+      }
+      const idleExpiresAtMs = Date.parse(value.idleExpiresAt);
+      const absoluteExpiresAtMs = Date.parse(value.absoluteExpiresAt);
+      if (!Number.isFinite(idleExpiresAtMs)
+        || !Number.isFinite(absoluteExpiresAtMs)
+        || idleExpiresAtMs <= now
+        || idleExpiresAtMs > absoluteExpiresAtMs) {
+        throw new FleetSessionProtocolError('Fleet session renewal was malformed');
+      }
+      this.renewalDueAtMs = now + Math.floor((idleExpiresAtMs - now) / 2);
+    });
+  }
+
   private async readCsrf(signal: AbortSignal): Promise<string> {
     const response = await this.fetchImpl(CSRF_PATH, {
       method: 'GET',
@@ -156,8 +204,8 @@ export class FleetSessionClient {
     });
     const value: unknown = response.ok ? await response.json() : undefined;
     if (!isRecord(value) || !hasExactKeys(value, ['csrfToken'])
-      || typeof value.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value.csrfToken)) {
-      throw new FleetSessionProtocolError('Fleet logout authorization was unavailable');
+      || typeof value.csrfToken !== 'string' || !CSRF_TOKEN_PATTERN.test(value.csrfToken)) {
+      throw new FleetSessionProtocolError('Fleet session authorization was unavailable');
     }
     return value.csrfToken;
   }

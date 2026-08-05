@@ -5,6 +5,7 @@ import {
 import {
   currentCompanionGardenScope,
   getCompanionCacheScope,
+  isFleetOverviewPath,
   onCompanionScopeChange,
   scopeGardenDataPath,
 } from '$lib/fleet/companion-scope';
@@ -30,7 +31,8 @@ let authenticated = $derived(!!token || serverSessionAuthenticated);
 
 function isFleetSessionPath(): boolean {
   if (typeof window === 'undefined') return false;
-  return currentCompanionGardenScope(window.location.pathname) !== null;
+  return currentCompanionGardenScope(window.location.pathname) !== null
+    || isFleetOverviewPath(window.location.pathname);
 }
 
 function clearSessionRefreshTimer(): void {
@@ -78,8 +80,14 @@ async function runServerSessionRefresh(
   generation: number,
   controller: AbortController,
 ): Promise<void> {
+  let transitionRetryDelayMs: number | null = null;
   try {
-    const { readFleetSessionState, refreshFleetSession } = await import('$lib/api/fleet-session');
+    const {
+      FLEET_SESSION_TRANSITION_TIMEOUT_MS,
+      readFleetSessionState,
+      refreshFleetSession,
+    } = await import('$lib/api/fleet-session');
+    transitionRetryDelayMs = FLEET_SESSION_TRANSITION_TIMEOUT_MS;
     let refreshed: Awaited<ReturnType<typeof refreshFleetSession>>;
     try {
       refreshed = await refreshFleetSession(controller.signal);
@@ -120,7 +128,10 @@ async function runServerSessionRefresh(
         // idle window while this tab was hidden. A tab-local deadline is not
         // session authority: retain auth and reconcile on the next foreground
         // opportunity instead of manufacturing a logout.
-        sessionRefreshDueAtMs = null;
+        sessionRefreshDueAtMs = transitionRetryDelayMs === null
+          ? null
+          : now + transitionRetryDelayMs;
+        scheduleSessionRefreshTimer();
         return;
       }
       sessionRefreshDueAtMs = now + Math.floor((sessionIdleExpiresAtMs - now) / 2);
@@ -214,6 +225,16 @@ async function probeServerSession(): Promise<boolean> {
   sessionProbeController = controller;
   sessionProbeScope = companionScope;
   try {
+    if (typeof window !== 'undefined' && isFleetOverviewPath(window.location.pathname)) {
+      const { readFleetSessionState } = await import('$lib/api/fleet-session');
+      const state = await readFleetSessionState(controller.signal);
+      throwIfAborted(controller.signal);
+      if (companionScope !== getCompanionCacheScope()) return false;
+      serverSessionAuthenticated = state === 'signed_in';
+      authResolved = true;
+      if (serverSessionAuthenticated) void requestServerSessionRefresh();
+      return authenticated;
+    }
     const { withFleetSessionTransitionLock } = await import('$lib/api/fleet-session');
     const res = await withFleetSessionTransitionLock(async transitionSignal => (
       fetch(scopeGardenDataPath('/api/admin/dashboard'), {

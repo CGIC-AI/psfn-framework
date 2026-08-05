@@ -242,11 +242,16 @@ export async function loadGatewayChannelSurfaces(
           token: account.token,
           // Live sibling lookup through the registry: every other companion
           // account's logged-in bot user id counts as a sibling companion bot.
-          siblingBotUserIds: () => accountRegistryIds
-            .filter(registryId => registryId !== selfRegistryId)
-            .map(registryId => gatewayChannelRegistry
-              .optional<DiscordAdapter>(registryId)?.getBotUserId())
-            .filter((botUserId): botUserId is string => Boolean(botUserId)),
+          siblingBotIdentities: () => accountRegistryIds.flatMap((registryId, siblingIndex) => {
+            if (registryId === selfRegistryId) return [];
+            const botUserId = gatewayChannelRegistry
+              .optional<DiscordAdapter>(registryId)?.getBotUserId();
+            if (!botUserId) return [];
+            return [{
+              botUserId,
+              companionId: accountConfigs[siblingIndex]!.companionId,
+            }];
+          }),
         },
         enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       });

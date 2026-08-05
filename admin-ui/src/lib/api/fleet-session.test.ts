@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   logoutFleetSession,
   readFleetSessionState,
@@ -7,8 +7,21 @@ import {
 
 const CSRF_TOKEN = 'c'.repeat(43);
 
+beforeEach(() => {
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('refreshFleetSession', () => {
@@ -39,6 +52,7 @@ describe('refreshFleetSession', () => {
       cache: 'no-store',
       credentials: 'include',
       headers: { Accept: 'application/json' },
+      signal: expect.any(AbortSignal),
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/v1/fleet-auth/session/refresh', {
       method: 'POST',
@@ -48,6 +62,7 @@ describe('refreshFleetSession', () => {
         Accept: 'application/json',
         'X-PSFN-CSRF': CSRF_TOKEN,
       },
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -183,6 +198,49 @@ describe('refreshFleetSession', () => {
     expect(maximumActiveRequests).toBe(1);
   });
 
+  it('fails closed in a browser without origin-wide lock support', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('navigator', {});
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(readFleetSessionState()).rejects.toThrow(/coordination is unavailable/u);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds a stalled lock holder with the transition deadline', async () => {
+    const timeoutController = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutController.signal);
+    let lockReleased = false;
+    const requestLock = vi.fn(async <T>(
+      _name: string,
+      _options: LockOptions,
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await callback();
+      } finally {
+        lockReleased = true;
+      }
+    });
+    vi.stubGlobal('navigator', { locks: { request: requestLock } });
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error('Expected a bounded transition signal');
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      })
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const refresh = refreshFleetSession();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    timeoutController.abort(new DOMException('Timed out', 'TimeoutError'));
+
+    await expect(refresh).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(lockReleased).toBe(true);
+  });
+
   it('reads the canonical session state without exposing browser-owned credentials', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       schemaVersion: 1,
@@ -198,6 +256,7 @@ describe('refreshFleetSession', () => {
       cache: 'no-store',
       credentials: 'include',
       headers: { Accept: 'application/json' },
+      signal: expect.any(AbortSignal),
     });
   });
 });

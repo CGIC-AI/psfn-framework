@@ -1,7 +1,7 @@
 import { apiGet, apiPost } from '$lib/api/client';
 import {
   FLEET_ESCALATION_GRANT_HEADER,
-  issueFleetEscalationGrant,
+  withFleetEscalationGrant,
 } from '$lib/api/fleet-escalation';
 import { isRecord } from '../../../../../src/shared/utils/types.js';
 import type { PrivacyBreakGlassReasonCategory } from '../../../../../src/shared/contracts/privacy-break-glass.js';
@@ -69,13 +69,16 @@ export async function beginJournalPrivacyBreakGlass(
 ): Promise<JournalPrivacyBreakGlassConfirmation> {
   const reason = checkedPrivacyReason(input.reason);
   const target = journalPrivacyConfirmPath(input.stream);
-  const grant = await issueFleetEscalationGrant({ method: 'POST', target, reason });
-  const response: unknown = await apiPost(journalPrivacyConfirmPath(input.stream), {
-    reasonCategory: input.reasonCategory,
-    reason,
-  }, {
-    headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-  });
+  const response: unknown = await withFleetEscalationGrant(
+    { method: 'POST', target, reason },
+    async (grant, signal) => await apiPost(journalPrivacyConfirmPath(input.stream), {
+      reasonCategory: input.reasonCategory,
+      reason,
+    }, {
+      headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
+      signal,
+    }),
+  );
   if (!isRecord(response)
     || response.ok !== true
     || typeof response.confirmToken !== 'string'

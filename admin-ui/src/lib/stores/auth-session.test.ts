@@ -44,11 +44,28 @@ async function loadAuthStore(
     location: { pathname: options.pathname ?? '/', href: '' },
     localStorage: { removeItem: vi.fn() },
   });
-  // Node 24 exposes its own process-wide Web Locks implementation. These
-  // store tests exercise refresh lifecycle behavior with synthetic fetches;
-  // keep them on the browser fallback path while fleet-session.test.ts covers
-  // origin-lock serialization explicitly.
-  vi.stubGlobal('navigator', {});
+  // Node 24 exposes process-wide Web Locks. Keep each synthetic store lifecycle
+  // isolated while preserving the browser's exclusive transition semantics.
+  let lockTail = Promise.resolve();
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => {
+        const previous = lockTail;
+        let release = () => {};
+        lockTail = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
+        try {
+          return await callback();
+        } finally {
+          release();
+        }
+      },
+    },
+  });
   if (options.documentRef) vi.stubGlobal('document', options.documentRef);
   vi.stubGlobal('fetch', vi.fn(fetchImpl));
   return import('./auth.svelte');
@@ -231,18 +248,26 @@ describe('Garden admin session auth guard', () => {
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
     const documentRef = new FakeVisibilityDocument();
     let resolveFirstCsrf = (_response: Response) => {};
-    const firstCsrfPending = new Promise<Response>((resolve) => {
-      resolveFirstCsrf = resolve;
-    });
     let csrfCalls = 0;
-    const fetchImpl = vi.fn((input: string | URL | Request): Promise<Response> => {
+    const fetchImpl = vi.fn((
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
       const path = String(input);
       if (path.endsWith('/api/admin/dashboard')) {
         return Promise.resolve(new Response('{}', { status: 200 }));
       }
       if (path === '/v1/fleet-auth/session/csrf') {
         csrfCalls += 1;
-        if (csrfCalls === 1) return firstCsrfPending;
+        if (csrfCalls === 1) {
+          return new Promise<Response>((resolve, reject) => {
+            resolveFirstCsrf = resolve;
+            const requestSignal = init?.signal;
+            requestSignal?.addEventListener('abort', () => reject(requestSignal.reason), {
+              once: true,
+            });
+          });
+        }
         return Promise.resolve(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), {
           status: 200,
         }));
@@ -370,6 +395,46 @@ describe('Garden admin session auth guard', () => {
     expect(window.location.href).toBe('');
 
     auth.stopServerSessionRefresh();
+  });
+
+  it('queues the dashboard auth probe behind a sibling session rotation', async () => {
+    let resolveRefresh = (_response: Response) => {};
+    const refreshPending = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    let dashboardCalls = 0;
+    const fetchImpl = vi.fn((input: string | URL | Request): Promise<Response> => {
+      const path = String(input);
+      if (path === '/v1/fleet-auth/session/csrf') {
+        return Promise.resolve(new Response(JSON.stringify({ csrfToken: CSRF_TOKEN }), {
+          status: 200,
+        }));
+      }
+      if (path === '/v1/fleet-auth/session/refresh') return refreshPending;
+      if (path.endsWith('/api/admin/dashboard')) {
+        dashboardCalls += 1;
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, {
+      pathname: `/companions/${COMPANION_ID}/garden`,
+    });
+    const { refreshFleetSession } = await import('$lib/api/fleet-session');
+
+    const refresh = refreshFleetSession();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    const probe = auth.ensureAuthResolved();
+    await flushAsyncWork();
+    expect(dashboardCalls).toBe(0);
+
+    resolveRefresh(new Response(JSON.stringify({
+      principalStatus: 'active',
+      idleExpiresAt: '2026-08-03T12:40:00.000Z',
+      absoluteExpiresAt: '2026-08-03T20:00:00.000Z',
+    }), { status: 200 }));
+
+    await expect(refresh).resolves.toMatchObject({ principalStatus: 'active' });
+    await expect(probe).resolves.toBe(true);
+    expect(dashboardCalls).toBe(1);
   });
 
   it('refuses to rotate after the server-reported absolute expiry', async () => {
@@ -518,13 +583,17 @@ describe('Garden admin session auth guard', () => {
   });
 
   it('does not turn a canceled probe with a raced 401 into an auth denial', async () => {
+    let markProbeStarted = () => {};
     let resolveProbe = (_response: Response) => {};
+    const probeStarted = new Promise<void>((resolve) => { markProbeStarted = resolve; });
     const auth = await loadAuthStore(() => new Promise<Response>((resolve) => {
       resolveProbe = resolve;
+      markProbeStarted();
     }));
     const { activateCompanionScope } = await import('$lib/fleet/companion-scope');
 
     const authResult = auth.ensureAuthResolved();
+    await probeStarted;
     await activateCompanionScope('11111111-1111-4111-8111-111111111111');
     resolveProbe(new Response('{}', { status: 401 }));
 

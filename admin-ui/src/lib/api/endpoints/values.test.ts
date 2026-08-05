@@ -42,6 +42,15 @@ function rawCeremonyFetch(): ReturnType<typeof vi.fn> {
 
 beforeEach(() => {
   companionGarden();
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: async <T>(
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<T>,
+      ): Promise<T> => await callback(),
+    },
+  });
   apiPost.mockReset();
 });
 
@@ -85,7 +94,10 @@ describe('journal privacy break-glass client', () => {
         reasonCategory: 'safety_intervention',
         reason: 'Verify an urgent welfare anomaly.',
       },
-      { headers: { 'x-psfn-escalation-grant': GRANT_ID } },
+      {
+        headers: { 'x-psfn-escalation-grant': GRANT_ID },
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 

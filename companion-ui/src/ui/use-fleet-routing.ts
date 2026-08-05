@@ -42,10 +42,7 @@ export function useFleetRouting(input: {
   ): Promise<void> {
     const client = clientRef.current;
     if (!client) throw new Error('Cluster roster client is unavailable');
-    const [nextRoster, nextApprovals] = await Promise.all([
-      client.readRoster(),
-      client.readApprovals(),
-    ]);
+    const { roster: nextRoster, approvals: nextApprovals } = await client.readRoutingSnapshot();
     if (!isCurrent()) return;
     const selected = nextRoster.companions.find(
       companion => companion.companionId === activeCompanionIdRef.current,

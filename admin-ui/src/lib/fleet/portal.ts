@@ -1,5 +1,6 @@
 import { companionGardenRoot } from './companion-scope';
 import { throwIfAborted } from '../api/abort';
+import { withFleetSessionTransitionLock } from '../api/fleet-session';
 import {
   hasExactKeys,
   isRecord,
@@ -233,27 +234,29 @@ export async function fetchFleetCardDetails(
 }
 
 export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<FleetPortalProjection> {
-  let response: Response;
-  try {
-    response = await fetch('/v1/fleet/portal', {
-      cache: 'no-store',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-      ...(signal ? { signal } : {}),
-    });
-  } catch (error) {
-    if (signal) throwIfAborted(signal);
-    throw error;
-  }
-  if (signal) throwIfAborted(signal);
-  if (response.status === 401) {
-    if (typeof window !== 'undefined') window.location.assign('/fleet/login');
-    throw new Error('Cluster session expired');
-  }
-  if (!response.ok) {
-    throw new Error(response.status === 403
-      ? 'Cluster access is unavailable'
-      : 'Cluster status is temporarily unavailable');
-  }
-  return parseFleetPortalProjection(await response.json());
+  return await withFleetSessionTransitionLock(async transitionSignal => {
+    let response: Response;
+    try {
+      response = await fetch('/v1/fleet/portal', {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+        signal: transitionSignal,
+      });
+    } catch (error) {
+      throwIfAborted(transitionSignal);
+      throw error;
+    }
+    throwIfAborted(transitionSignal);
+    if (response.status === 401) {
+      if (typeof window !== 'undefined') window.location.assign('/fleet/login');
+      throw new Error('Cluster session expired');
+    }
+    if (!response.ok) {
+      throw new Error(response.status === 403
+        ? 'Cluster access is unavailable'
+        : 'Cluster status is temporarily unavailable');
+    }
+    return parseFleetPortalProjection(await response.json());
+  }, signal);
 }

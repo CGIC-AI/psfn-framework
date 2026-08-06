@@ -9227,31 +9227,31 @@
     },
     {
       "file": "src/operator/garden/services/scheduler-service.ts",
-      "name": "validateCadence.cadence@L136",
+      "name": "validateCadence.cadence@L140",
       "value": "{ kind: 'relative' }",
       "form": "object-member",
-      "note": "Existing mutable policy candidate validateCadence.cadence@L136; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate validateCadence.cadence@L140; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/services/scheduler-service.ts",
-      "name": "validateCadence.cadence@L171",
+      "name": "validateCadence.cadence@L175",
       "value": "{ kind: 'weekly', dayOfWeek: dayOfWeekValue, hour, minute, timezone, }",
       "form": "object-member",
-      "note": "Existing mutable policy candidate validateCadence.cadence@L171; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate validateCadence.cadence@L175; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/services/scheduler-service.ts",
-      "name": "validateCadence.cadence@L185",
+      "name": "validateCadence.cadence@L189",
       "value": "{ kind: 'daily', hour, minute, timezone, }",
       "form": "object-member",
-      "note": "Existing mutable policy candidate validateCadence.cadence@L185; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate validateCadence.cadence@L189; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/services/scheduler-service.ts",
-      "name": "validateCadence.cadence@L203",
+      "name": "validateCadence.cadence@L207",
       "value": "{ kind: 'hourly', minute, timezone, }",
       "form": "object-member",
-      "note": "Existing mutable policy candidate validateCadence.cadence@L203; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate validateCadence.cadence@L207; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/services/session-service.ts",

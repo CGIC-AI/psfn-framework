@@ -8,6 +8,7 @@ interface ParsedTurnMetadata {
 }
 
 const LEGACY_INTENTION_AUTHOR_NAME = 'Intention Appraisal';
+const INTENTION_APPRAISAL_AUTHOR_ID = 'system:intention';
 
 export interface NormalizedSessionEntryAttribution {
   role: SessionEntryRole;
@@ -282,7 +283,7 @@ export function isIntentionAppraisalArtifact(
   const content = entry.content.trimStart();
 
   return (
-    authorId.startsWith('system:')
+    authorId === INTENTION_APPRAISAL_AUTHOR_ID
     || authorName === LEGACY_INTENTION_AUTHOR_NAME
     || startsWithIntentionFollowUp(turn.requestId)
     || startsWithIntentionFollowUp(turn.sourceMessageId)

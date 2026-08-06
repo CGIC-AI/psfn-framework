@@ -7,6 +7,10 @@ import {
   normalizeToolObservation,
 } from '../tool-observation.js';
 import { resetActiveTimezone, setActiveTimezone } from '../../../shared/time/active-timezone.js';
+import {
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
+} from '../../../system/capabilities/change-notice.js';
 
 function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   return {
@@ -205,6 +209,44 @@ describe('entriesToMessages', () => {
         kind: 'companion_direct',
         sourceAuthor: 'companion',
         safeAsPartnerSpeech: false,
+      },
+    });
+  });
+
+  it('keeps capability changes distinct and marks their trusted prompt provenance', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'system',
+        content: 'ordinary system history',
+        authorId: 'system:ordinary',
+        authorName: 'Runtime',
+      }),
+      makeEntry({
+        id: 2,
+        role: 'system',
+        content: '[System notice: capability access changed] now nursery',
+        authorId: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+        authorName: 'Capability policy',
+        timestamp: 1_700_000_000_100,
+      }),
+      makeEntry({
+        id: 3,
+        role: 'system',
+        content: 'later ordinary system history',
+        authorId: 'system:ordinary',
+        authorName: 'Runtime',
+        timestamp: 1_700_000_000_200,
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('[System notice: capability access changed] now nursery'),
+      provenance: {
+        kind: 'system_note',
+        notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE],
+        sourceEntryIds: [2],
       },
     });
   });

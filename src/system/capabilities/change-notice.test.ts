@@ -3,12 +3,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
   buildCapabilityTierChange,
   deliverPendingCapabilityTierChangeNotices,
   enqueuePendingCapabilityTierChangeNotice,
   formatCapabilityTierChangeNotice,
+  partitionFreshCapabilityTierChangeNotices,
+  renderFreshCapabilityTierChangePromptBlock,
 } from './change-notice.js';
 import { resolvePendingCapabilityNoticesPath } from '../../persistence/layout.js';
+import { buildAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
+import type { ContextMessage } from '../../shared/contracts/runtime-base.js';
+
+function capabilityNoticeMessage(content: string): ContextMessage {
+  return {
+    role: 'system',
+    content,
+    provenance: buildAuthenticityProvenance({
+      kind: 'system_note',
+      sourceAuthor: 'system',
+      transformedBy: 'system',
+      wording: 'direct',
+      directSpeech: false,
+      detailLoss: 'none',
+      emotionalTexture: 'unknown',
+      safeAsPartnerSpeech: false,
+      sourceSpanCount: 1,
+      sourceEntryIds: [2],
+      notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE],
+    }),
+  };
+}
 
 describe('capability tier change notice', () => {
   it('names the old and new tier plus exact granted and withdrawn tokens', () => {
@@ -87,5 +112,45 @@ describe('capability tier change notice', () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+
+  it('promotes only notices newer than the latest conversational history entry', () => {
+    const fresh = capabilityNoticeMessage('fresh capability notice');
+    const partitioned = partitionFreshCapabilityTierChangeNotices([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' },
+      fresh,
+      { role: 'system', content: 'unrelated runtime note' },
+    ]);
+
+    expect(partitioned.noticeContents).toEqual(['fresh capability notice']);
+    expect(partitioned.historicalMessages).toEqual([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' },
+      { role: 'system', content: 'unrelated runtime note' },
+    ]);
+
+    const historical = partitionFreshCapabilityTierChangeNotices([
+      fresh,
+      { role: 'user', content: 'question after the notice' },
+      { role: 'assistant', content: 'answer after the notice' },
+    ]);
+    expect(historical.noticeContents).toEqual([]);
+    expect(historical.historicalMessages).toHaveLength(3);
+  });
+
+  it('renders a fresh-event block with the authoritative live tier', () => {
+    const block = renderFreshCapabilityTierChangePromptBlock(
+      ['The Operator changed your capability tier from "autonomous" to "nursery".'],
+      'nursery',
+    );
+
+    expect(block).toContain('<status>fresh_runtime_event</status>');
+    expect(block).toContain('<current_live_tier>nursery</current_live_tier>');
+    expect(block).toContain('mention the capability change directly');
+    expect(block).toContain('from "autonomous" to "nursery"');
+    expect(() => renderFreshCapabilityTierChangePromptBlock(['notice'], 'stale'))
+      .toThrow('current live capability tier');
+    expect(renderFreshCapabilityTierChangePromptBlock([], 'stale')).toBe('');
   });
 });

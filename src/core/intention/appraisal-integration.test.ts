@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -124,6 +124,7 @@ function registerOutboundHandlerHarness(options: {
   dispatchResult?: { outcome: 'sent' } | { outcome: 'blocked'; reason: string; retryAfterMs?: number };
   dispatchError?: Error;
   terminalRecord?: OutreachOutboxRecord;
+  verifyPersonalProjectLive?: (projectId: string) => Promise<boolean>;
 }) {
   const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-outbound-'));
   const eventBus = new EventBus();
@@ -193,6 +194,9 @@ function registerOutboundHandlerHarness(options: {
       pendingFollowUpStore: pendingFollowUpStore as any,
       onIntentionFollowUpActivated,
       getActiveConcerns,
+      ...(options.verifyPersonalProjectLive
+        ? { verifyPersonalProjectLive: options.verifyPersonalProjectLive }
+        : {}),
     },
   );
 
@@ -220,6 +224,290 @@ function registerOutboundHandlerHarness(options: {
 }
 
 describe('intention appraisal runtime integration', () => {
+  it('hydrates a serialized pre-change project nudge with project-only precedence and records its sent outcome', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-legacy-project-outreach-'));
+    const persistencePath = join(tempDir, 'post-turn-actions.queue.json');
+    const verifyPersonalProjectLive = vi.fn(async (projectId: string) => projectId === 'project-live');
+    const outboundHarness = registerOutboundHandlerHarness({ verifyPersonalProjectLive });
+
+    writeFileSync(persistencePath, JSON.stringify({
+      version: 1,
+      entries: [{
+        action: {
+          id: 'legacy-project-outreach',
+          kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          payload: {
+            channelId: 'primary-dm',
+            channelType: 'discord',
+            content: 'I want to get back to my story.',
+            reason: 'weighted_thought:standard',
+            personalProjectId: 'project-live',
+            concernIds: ['stale-concern'],
+            pendingFollowUpId: 'stale-follow-up',
+          },
+          dedupeKey: 'intention.outbound_message:weighted-thought:legacy-project',
+          channelId: 'primary-dm',
+          sourceMessageId: 'accepted-weighted-thought',
+          inferredAt: 1_699_999_999_000,
+          maxRetries: 0,
+        },
+        attempt: 0,
+        nextRunAt: 1_700_000_000_000,
+        maxRetries: 0,
+      }],
+    }), 'utf-8');
+
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 50,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      runtime.registerHandler(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND, outboundHarness.handler);
+
+      const migratedQueue = JSON.parse(readFileSync(persistencePath, 'utf-8')) as {
+        version: number;
+        entries: Array<{
+          actionPayloadVersion: number;
+          action: { payload: Record<string, unknown> };
+        }>;
+      };
+      expect(migratedQueue.version).toBe(1);
+      expect(migratedQueue.entries[0]?.actionPayloadVersion).toBe(2);
+      expect(migratedQueue.entries[0]?.action.payload).toMatchObject({
+        personalProjectId: 'project-live',
+      });
+      expect(migratedQueue.entries[0]?.action.payload.concernIds).toBeUndefined();
+      expect(migratedQueue.entries[0]?.action.payload.pendingFollowUpId).toBeUndefined();
+
+      await scheduler.tick();
+
+      expect(verifyPersonalProjectLive).toHaveBeenCalledWith('project-live');
+      expect(outboundHarness.dispatch).toHaveBeenCalledOnce();
+      expect(outboundHarness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'sent']);
+      expect(outboundHarness.sessionAudit).toHaveBeenCalledWith(
+        'primary-dm',
+        expect.stringContaining('sent: sent'),
+        'system:outreach-outbox',
+        'Outreach Outbox',
+        true,
+        undefined,
+        expect.objectContaining({ requestId: 'legacy-project-outreach' }),
+      );
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 0,
+        failures: { failedCount: 0 },
+        completions: {
+          completedCount: 1,
+          recentCompletions: [expect.objectContaining({
+            actionId: 'legacy-project-outreach',
+            detail: 'sent',
+          })],
+        },
+      });
+    } finally {
+      outboundHarness.cleanup();
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not expose a migrated legacy nudge when its canonical rewrite cannot be persisted', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-legacy-project-rewrite-failure-'));
+    const persistencePath = join(tempDir, 'post-turn-actions.queue.json');
+    writeFileSync(persistencePath, JSON.stringify({
+      version: 1,
+      entries: [{
+        action: {
+          id: 'legacy-project-rewrite-failure',
+          kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          payload: {
+            channelId: 'primary-dm',
+            channelType: 'discord',
+            content: 'This must wait for a durable migration.',
+            personalProjectId: 'project-live',
+            concernIds: ['stale-concern'],
+          },
+          dedupeKey: 'intention.outbound_message:weighted-thought:rewrite-failure',
+          channelId: 'primary-dm',
+          sourceMessageId: 'accepted-weighted-thought',
+          inferredAt: 1_700_000_000_000,
+          maxRetries: 0,
+        },
+        attempt: 0,
+        nextRunAt: 1_700_000_000_001,
+        maxRetries: 0,
+      }],
+    }), 'utf-8');
+    chmodSync(tempDir, 0o500);
+
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 50,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+
+      expect(runtime.listQueued()).toEqual([]);
+      expect(runtime.getStatus()).toMatchObject({
+        persistence: {
+          loadState: 'loaded',
+          loadedEntries: 0,
+          lastLoadError: expect.stringContaining('durably migrate'),
+          lastPersistError: expect.any(String),
+        },
+      });
+      expect(JSON.parse(readFileSync(persistencePath, 'utf-8'))).toMatchObject({
+        version: 1,
+        entries: [expect.objectContaining({
+          action: expect.objectContaining({ id: 'legacy-project-rewrite-failure' }),
+        })],
+      });
+    } finally {
+      chmodSync(tempDir, 0o700);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each<{
+    label: string;
+    actionPayloadVersion?: number;
+    crossedSource: Record<string, unknown>;
+  }>([
+    {
+      label: 'current project and live-thread provenance',
+      actionPayloadVersion: 2,
+      crossedSource: {},
+    },
+    {
+      label: 'legacy social-desire crossing',
+      crossedSource: {
+        socialDesire: {
+          contactId: 'contact-primary',
+          consentId: '11111111-1111-4111-8111-111111111111',
+          orientation: 'warm',
+        },
+      },
+    },
+    {
+      label: 'legacy appraisal crossing',
+      crossedSource: {
+        appraisalFollowUp: {
+          channelId: 'primary-dm',
+          canonicalContactKey: 'contact-primary',
+        },
+      },
+    },
+    {
+      label: 'legacy unknown-initiator crossing',
+      crossedSource: {
+        futureInitiator: { id: 'unknown-source' },
+      },
+    },
+  ])('does not migrate or dispatch $label', async ({ actionPayloadVersion, crossedSource }) => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-forged-project-outreach-'));
+    const persistencePath = join(tempDir, 'post-turn-actions.queue.json');
+    const verifyPersonalProjectLive = vi.fn().mockResolvedValue(true);
+    const outboundHarness = registerOutboundHandlerHarness({ verifyPersonalProjectLive });
+
+    writeFileSync(persistencePath, JSON.stringify({
+      version: 1,
+      entries: [{
+        ...(actionPayloadVersion !== undefined ? { actionPayloadVersion } : {}),
+        action: {
+          id: 'forged-project-outreach',
+          kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          payload: {
+            channelId: 'primary-dm',
+            channelType: 'discord',
+            content: 'This crossed payload must not dispatch.',
+            personalProjectId: 'project-live',
+            concernIds: ['crossed-concern'],
+            pendingFollowUpId: 'crossed-follow-up',
+            ...crossedSource,
+          },
+          dedupeKey: 'intention.outbound_message:forged-project',
+          channelId: 'primary-dm',
+          sourceMessageId: 'forged-source-message',
+          inferredAt: 1_700_000_000_000,
+          maxRetries: 0,
+        },
+        attempt: 0,
+        nextRunAt: 1_700_000_000_001,
+        maxRetries: 0,
+      }],
+    }), 'utf-8');
+
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 50,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      runtime.registerHandler(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND, outboundHarness.handler);
+
+      const hydratedQueue = JSON.parse(readFileSync(persistencePath, 'utf-8')) as {
+        version: number;
+        entries: Array<{
+          actionPayloadVersion: number;
+          action: { payload: Record<string, unknown> };
+        }>;
+      };
+      expect(hydratedQueue.version).toBe(1);
+      expect(hydratedQueue.entries[0]?.actionPayloadVersion).toBe(2);
+      expect(hydratedQueue.entries[0]?.action.payload).toMatchObject({
+        personalProjectId: 'project-live',
+        concernIds: ['crossed-concern'],
+        pendingFollowUpId: 'crossed-follow-up',
+        ...crossedSource,
+      });
+
+      await scheduler.tick();
+
+      expect(verifyPersonalProjectLive).not.toHaveBeenCalled();
+      expect(outboundHarness.dispatch).not.toHaveBeenCalled();
+      expect(outboundHarness.outboxRecords).toEqual([]);
+      expect(outboundHarness.sessionAudit).not.toHaveBeenCalled();
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 0,
+        completions: { completedCount: 0 },
+        failures: {
+          failedCount: 1,
+          recentFailures: [expect.objectContaining({
+            actionId: 'forged-project-outreach',
+            reason: 'retries_exhausted',
+            error: expect.stringContaining('payload is missing required fields'),
+          })],
+        },
+      });
+    } finally {
+      outboundHarness.cleanup();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('dispatches an explicit concern check-in without requiring social-desire provenance', async () => {
     const harness = registerOutboundHandlerHarness({
       activeConcernIds: ['concern-scheduled-event'],

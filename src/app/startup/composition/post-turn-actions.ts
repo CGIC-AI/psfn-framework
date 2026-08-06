@@ -4,6 +4,10 @@ import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.j
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
+  normalizePersistedPostTurnActionPayload,
+  PERSISTED_POST_TURN_ACTION_PAYLOAD_VERSION,
+} from './post-turn-action-persistence-migration.js';
+import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
 } from '../../../core/agent/post-turn-action-runtime.js';
 import {
@@ -329,14 +333,26 @@ export function wirePostTurnActionRuntime(
     };
   };
 
-  const normalizePersistedQueueEntry = (value: unknown): DeferredQueueEntry | null => {
+  const normalizePersistedQueueEntry = (
+    value: unknown,
+  ): { entry: DeferredQueueEntry; migrated: boolean; requiresRewrite: boolean } | null => {
     if (!isRecord(value)) {
       return null;
     }
-    const action = normalizePersistedAction(value.action);
-    if (!action) {
+    const hasActionPayloadVersion = Object.hasOwn(value, 'actionPayloadVersion');
+    const persistedAction = normalizePersistedAction(value.action);
+    if (!persistedAction) {
       return null;
     }
+    const normalizedPayload = normalizePersistedPostTurnActionPayload({
+      action: persistedAction,
+      actionPayloadVersion: value.actionPayloadVersion,
+      hasActionPayloadVersion,
+    });
+    if (!normalizedPayload) {
+      return null;
+    }
+    const { action } = normalizedPayload;
 
     const attempt = normalizePositiveInteger(value.attempt);
     const nextRunAt = normalizeActionRunAt(value.nextRunAt);
@@ -356,12 +372,16 @@ export function wirePostTurnActionRuntime(
       : resolveRuntimeClassForKind(action.kind);
 
     return {
-      action,
-      capability: resolveActionCapability(action.kind),
-      runtimeClass,
-      attempt,
-      nextRunAt,
-      maxRetries: resolvedMaxRetries,
+      entry: {
+        action,
+        capability: resolveActionCapability(action.kind),
+        runtimeClass,
+        attempt,
+        nextRunAt,
+        maxRetries: resolvedMaxRetries,
+      },
+      migrated: normalizedPayload.migrated,
+      requiresRewrite: normalizedPayload.requiresRewrite,
     };
   };
 
@@ -373,6 +393,7 @@ export function wirePostTurnActionRuntime(
     const serialized = {
       version: PERSISTED_QUEUE_VERSION,
       entries: [...entries].map((entry) => ({
+        actionPayloadVersion: PERSISTED_POST_TURN_ACTION_PAYLOAD_VERSION,
         action: entry.action,
         capability: entry.capability,
         runtimeClass: entry.runtimeClass,
@@ -387,15 +408,17 @@ export function wirePostTurnActionRuntime(
     lastPersistError = undefined;
   };
 
-  const persistQueue = (): void => {
+  const persistQueue = (): boolean => {
     try {
       persistQueueEntries(queue.values());
+      return true;
     } catch (error) {
       lastPersistError = String(error);
       log.error('Failed to persist deferred post-turn action queue', {
         persistencePath,
         error: lastPersistError,
       });
+      return false;
     }
   };
 
@@ -467,10 +490,13 @@ export function wirePostTurnActionRuntime(
     }
 
     let loaded = 0;
+    let migrated = 0;
+    let requiresRewrite = false;
+    const migratedDedupeKeys = new Set<string>();
     const quarantinedEntries: QuarantinedPersistedQueueEntry[] = [];
     for (const [index, rawEntry] of parsed.entries.entries()) {
-      const entry = normalizePersistedQueueEntry(rawEntry);
-      if (!entry) {
+      const normalizedEntry = normalizePersistedQueueEntry(rawEntry);
+      if (!normalizedEntry) {
         quarantinedEntries.push({
           entryNumber: index + 1,
           error: 'Invalid deferred post-turn action queue entry payload',
@@ -478,6 +504,7 @@ export function wirePostTurnActionRuntime(
         });
         continue;
       }
+      const { entry } = normalizedEntry;
       if (queue.has(entry.action.dedupeKey)) {
         quarantinedEntries.push({
           entryNumber: index + 1,
@@ -488,18 +515,17 @@ export function wirePostTurnActionRuntime(
       }
       queue.set(entry.action.dedupeKey, entry);
       loaded += 1;
+      if (normalizedEntry.migrated) {
+        migrated += 1;
+        migratedDedupeKeys.add(entry.action.dedupeKey);
+      }
+      if (normalizedEntry.requiresRewrite) {
+        requiresRewrite = true;
+      }
     }
     persistenceLoadState = 'loaded';
-    loadedEntries = loaded;
     lastLoadedAt = Date.now();
     lastLoadError = undefined;
-
-    if (loaded > 0) {
-      log.info('Loaded deferred post-turn action queue from disk', {
-        persistencePath,
-        loaded,
-      });
-    }
     const quarantineWriteSucceeded = persistQuarantinedEntries(quarantinedEntries);
     if (quarantinedEntries.length > 0) {
       log.warn('Quarantined deferred post-turn action queue entries during load', {
@@ -507,9 +533,35 @@ export function wirePostTurnActionRuntime(
         quarantined: quarantinedEntries.length,
         loaded,
       });
-      if (quarantineWriteSucceeded) {
-        persistQueue();
+    }
+    const rewriteRequired = quarantinedEntries.length > 0 || requiresRewrite;
+    const rewriteSucceeded = !rewriteRequired
+      || (quarantineWriteSucceeded && persistQueue());
+    if (!rewriteSucceeded && migratedDedupeKeys.size > 0) {
+      for (const dedupeKey of migratedDedupeKeys) {
+        queue.delete(dedupeKey);
       }
+      loaded -= migratedDedupeKeys.size;
+      lastLoadError = 'Failed to durably migrate legacy personal-project post-turn actions; left them on disk for retry';
+      log.error('Deferred post-turn action migration was not exposed because its rewrite failed', {
+        persistencePath,
+        migrated,
+        error: lastPersistError ?? 'quarantine sidecar persistence failed',
+      });
+    } else if (migrated > 0) {
+      log.info('Migrated legacy personal-project post-turn actions during queue hydration', {
+        persistencePath,
+        migrated,
+        fromVersion: 'unversioned',
+        toVersion: PERSISTED_POST_TURN_ACTION_PAYLOAD_VERSION,
+      });
+    }
+    loadedEntries = loaded;
+    if (loaded > 0) {
+      log.info('Loaded deferred post-turn action queue from disk', {
+        persistencePath,
+        loaded,
+      });
     }
   };
 

@@ -65,6 +65,16 @@ function beadsReadyResult(issues: readonly Record<string, unknown>[]): string {
   }, null, 2);
 }
 
+function beadsShowResult(issue: Record<string, unknown>): string {
+  return JSON.stringify({
+    actor: 'runtime-agent',
+    action: 'show',
+    target: issue.id,
+    result: 'success',
+    payload: [issue],
+  }, null, 2);
+}
+
 describe('classifyToolResultBenignClass', () => {
   it('recognizes a successful native beads create result bound to the requested title', () => {
     const title = 'Change persona identity wording without changing runtime identity';
@@ -129,6 +139,64 @@ describe('classifyToolResultBenignClass', () => {
         ...issue,
         dependencies: [{ issue_id: 'psfn-framework-ready1', extra: true }],
       }]),
+    })).toBeUndefined();
+  });
+
+  it('recognizes one request-bound canonical show result and neutralizes only issue prose', () => {
+    const issue = beadsReadyIssue('Routine issue description.');
+    const gap = `${' device enrollment with OAuth. '.padEnd(238, 'x')} `;
+    const design = `Replace${gap}identity`;
+    expect(design.indexOf('identity') - 'Replace'.length).toBe(239);
+    const result = beadsShowResult({ ...issue, design });
+
+    const classification = classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id, actor: 'runtime-agent' },
+      text: result,
+    });
+
+    expect(classification?.benignClass).toBe('beads_database_show');
+    expect(classification?.controlText).not.toContain(design);
+    expect(classification?.controlText).toContain('"source": "operator"');
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'issue_show', id: issue.id },
+      text: result,
+    })?.benignClass).toBe('beads_database_show');
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { id: issue.id },
+      text: result,
+    })?.benignClass).toBe('beads_database_show');
+  });
+
+  it('fails closed for mismatched, plural, drifted, or non-native show results', () => {
+    const issue = beadsReadyIssue('Replace a device workflow before identity review.');
+    const result = JSON.parse(beadsShowResult(issue)) as Record<string, unknown>;
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: 'psfn-framework-other' },
+      text: beadsShowResult(issue),
+    })).toBeUndefined();
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id, actor: 'different-actor' },
+      text: beadsShowResult(issue),
+    })).toBeUndefined();
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id },
+      text: JSON.stringify({ ...result, payload: [issue, issue] }, null, 2),
+    })).toBeUndefined();
+    expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id, unexpected: true },
+      text: beadsShowResult(issue),
+    })).toBeUndefined();
+    expect(classifyToolResultBenignClass({
+      toolName: 'shell',
+      arguments: { action: 'show', id: issue.id },
+      text: beadsShowResult(issue),
     })).toBeUndefined();
   });
 

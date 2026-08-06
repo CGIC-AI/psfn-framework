@@ -224,6 +224,10 @@ describe('AdminSettingsDataService', () => {
             ruleId: 'persona_mutation_request',
             riskLabels: ['persona/mutation_attempt'],
           }],
+          beads_database_show: [{
+            ruleId: 'persona_mutation_request',
+            riskLabels: ['persona/mutation_attempt'],
+          }],
         },
         sinks: {
           skill_write: {

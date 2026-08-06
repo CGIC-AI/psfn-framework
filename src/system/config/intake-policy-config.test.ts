@@ -549,6 +549,10 @@ describe('intake policy owner file', () => {
         ruleId: 'persona_mutation_request',
         riskLabels: ['persona/mutation_attempt'],
       }],
+      beads_database_show: [{
+        ruleId: 'persona_mutation_request',
+        riskLabels: ['persona/mutation_attempt'],
+      }],
     });
     // qg13: per-sink unscreened posture. Durable prompt-bearing self-authored
     // sinks + the security-sensitive trust sink fail closed on unscreened

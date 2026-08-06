@@ -31,6 +31,10 @@ import {
 import { parseChannelBondEntryMarker } from '../channel-bond.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
+import {
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
+} from '../../../system/capabilities/change-notice.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
 const GENERATED_IMAGE_STATUS_PATTERN = /"status"\s*:\s*"image_generated"/u;
@@ -177,6 +181,9 @@ function systemNoteProvenance(entry: SessionEntry): ContextMessage['provenance']
     safeAsPartnerSpeech: false,
     sourceSpanCount: 1,
     sourceEntryIds: [entry.id],
+    ...(entry.authorId === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+      ? { notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE] }
+      : {}),
   });
 }
 
@@ -421,7 +428,9 @@ export function entriesToMessages(
 
     // Merge consecutive same-role messages
     const last = messages.at(-1);
-    const canMerge = attribution.role !== 'tool';
+    const canMerge = attribution.role !== 'tool'
+      && entry.authorId !== CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+      && last?.provenance?.notes?.includes(CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE) !== true;
     if (canMerge && last && last.role === role && last.sourceRole === entry.role) {
       // Re-stamp appended lines only when the minute-resolution label moved,
       // so rapid-fire messages in the same minute stay unstamped.

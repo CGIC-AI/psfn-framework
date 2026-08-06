@@ -11,6 +11,11 @@ import {
   readLastActiveSession,
   writeLastActiveSession,
 } from '../../system/lifecycle/notifications.js';
+import {
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  buildCapabilityTierChange,
+  enqueuePendingCapabilityTierChangeNotice,
+} from '../../system/capabilities/change-notice.js';
 
 async function flushLastActiveWrite(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -111,5 +116,37 @@ describe('createSessionActivityTracker', () => {
       channelType: 'api',
       timestamp: 789,
     });
+  });
+
+  it('delivers a pending tier change as trusted system context before the turn', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-activity-tier-change-'));
+    tempDirs.push(dir);
+    const change = buildCapabilityTierChange(
+      { tier: 'autonomous', customTokens: [], grantedTokens: ['identity.read', 'external.web'] },
+      { tier: 'nursery', customTokens: [], grantedTokens: ['identity.read'] },
+    );
+    if (!change) throw new Error('Tier-change fixture must produce a notice');
+    enqueuePendingCapabilityTierChangeNotice(dir, change);
+    const recordSystemMessage = vi.fn(() => 17);
+    const tracker = createSessionActivityTracker(
+      {
+        resolveSessionChannelId: vi.fn(() => 'api:tracked'),
+        recordSystemMessage,
+      } as any,
+      dir,
+    );
+
+    tracker({
+      channelId: 'api:tracked',
+      channelType: 'api',
+      timestamp: new Date(790),
+    } as any);
+
+    expect(recordSystemMessage).toHaveBeenCalledWith(
+      'api:tracked',
+      expect.stringContaining('from "autonomous" to "nursery"'),
+      CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+      'Capability policy',
+    );
   });
 });

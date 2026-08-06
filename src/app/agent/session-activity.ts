@@ -7,7 +7,10 @@ import {
   readLastActiveSession,
   writeLastActiveSession,
 } from '../../system/lifecycle/notifications.js';
-import { deliverPendingCapabilityTierChangeNotices } from '../../system/capabilities/change-notice.js';
+import {
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  deliverPendingCapabilityTierChangeNotices,
+} from '../../system/capabilities/change-notice.js';
 
 const log = createComponentLogger('Agent');
 
@@ -71,7 +74,7 @@ export function createSessionActivityTracker(
         const entryId = sessionManager.recordSystemMessage(
           sessionId,
           notice,
-          'system:capability-policy',
+          CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
           'Capability policy',
         );
         if (entryId === null) {

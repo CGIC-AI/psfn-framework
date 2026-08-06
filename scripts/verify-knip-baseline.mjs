@@ -30,6 +30,7 @@ import {
 } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import process from 'node:process';
+import { isRecord } from '../src/shared/utils/types.ts';
 
 const REPOSITORY_ROOT = process.cwd();
 const DEFAULT_BASELINE_PATH = resolve(REPOSITORY_ROOT, 'config/knip-baseline.json');
@@ -97,10 +98,6 @@ function parseArgs(argv) {
 function normalizePath(pathValue) {
   const absolutePath = resolve(REPOSITORY_ROOT, pathValue);
   return relative(REPOSITORY_ROOT, absolutePath).replaceAll('\\', '/');
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function runKnip() {

@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  FleetAuthBrokerError,
-  type FleetAuthBrokerStore,
-  type FleetAuthSessionRecord,
+import type {
+  FleetAuthBrokerStore,
+  FleetAuthSessionRecord,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
@@ -11,6 +10,7 @@ import { FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME } from './first-owner-sql.js';
 import type { InsertSession, LockValidSession } from './oauth-session-store-types.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 export async function revokeExactProviderSubject(
   client: PoolClient,
@@ -69,7 +69,11 @@ export async function revokeProviderAuthority(
     `);
     const current = await lockValidSession(client, input.token, input.csrfToken, input.now);
     if (current.provider !== 'discord' || current.provider_subject_id === null) {
-      throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'provider_not_active',
+        409,
+        'Provider is not active',
+      );
     }
     const provider = await client.query<{ subject_id: string; state: string }>(`
       SELECT subject_id, state
@@ -78,11 +82,19 @@ export async function revokeProviderAuthority(
       FOR UPDATE
     `, [current.principal_id, current.provider_subject_id]);
     if (provider.rowCount !== 1) {
-      throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'provider_not_active',
+        409,
+        'Provider is not active',
+      );
     }
     const subject = provider.rows[0];
     if (subject.state !== 'pending' && subject.state !== 'active') {
-      throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'provider_not_active',
+        409,
+        'Provider is not active',
+      );
     }
     // Publish the non-restored provider tombstone before any database mutation.
     // If reconciliation or later SQL fails, the durable floor remains advanced
@@ -201,7 +213,7 @@ export async function completeFirstOwnerAuthority(
     const current = await lockValidSession(client, input.token, input.csrfToken, input.now);
     if (current.principal_id !== input.principalId
       || current.principal_status !== 'pending') {
-      throw new FleetAuthBrokerError(
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'first_owner_binding_mismatch',
         403,
         'First-owner assurance does not match the pending login',
@@ -215,7 +227,7 @@ export async function completeFirstOwnerAuthority(
     `, [current.principal_id]);
     if (provider.rows.length !== 1
       || provider.rows[0]?.subject_id !== input.providerSubjectId) {
-      throw new FleetAuthBrokerError(
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'first_owner_binding_mismatch',
         403,
         'First-owner assurance does not match the pending provider',
@@ -327,7 +339,7 @@ export async function completeFirstOwnerAuthority(
         }),
       ]);
     } catch (auditError) {
-      const failure = new FleetAuthBrokerError(
+      const failure = new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'first_owner_denial_audit_failed',
         503,
         'First-owner denial audit could not be persisted',
@@ -335,9 +347,9 @@ export async function completeFirstOwnerAuthority(
       failure.cause = auditError;
       throw failure;
     }
-    if (!(error instanceof FleetAuthBrokerError)
+    if (!(error instanceof fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError)
       && isRecord(error) && error.code === '42501') {
-      throw new FleetAuthBrokerError(
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'first_owner_denied',
         403,
         'First-owner bootstrap was denied',

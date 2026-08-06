@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
+import type {
+  PrimaryEmbodimentAuthorityPort,
   PrimaryEmbodimentHandoffDeniedError,
-  type PrimaryEmbodimentAuthorityPort,
-  type PrimaryEmbodimentSnapshot,
+  PrimaryEmbodimentSnapshot,
 } from '../../../boundary/fleet-auth/primary-embodiment.js';
 import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
@@ -11,6 +11,7 @@ import {
   FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_NAME,
 } from './primary-embodiment-sql.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const AUDIT_DOMAIN = 'fleet-auth:primary-embodiment-audit:v1\0';
 
@@ -117,7 +118,9 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
       || input.expectedGeneration < 0
       || input.attachment.channel.companionId !== input.companionId
       || input.attachment.deviceActor.principal.companionId !== input.companionId) {
-      throw new PrimaryEmbodimentHandoffDeniedError('attachment_not_current');
+      throw new fleetAuthPersistenceBoundaryValues.PrimaryEmbodimentHandoffDeniedError(
+        'attachment_not_current',
+      );
     }
     const actorPrincipalId = input.attachment.actor.kind === 'human'
       ? input.attachment.actor.principalId
@@ -163,7 +166,7 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
         ].includes(row.reason_code)) {
           throw new Error('Primary embodiment handoff returned an unknown denial');
         }
-        throw new PrimaryEmbodimentHandoffDeniedError(
+        throw new fleetAuthPersistenceBoundaryValues.PrimaryEmbodimentHandoffDeniedError(
           row.reason_code as PrimaryEmbodimentHandoffDeniedError['code'],
         );
       }
@@ -177,7 +180,9 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
       // (portal-authorization-store.ts), rather than leaking a 40001 to
       // callers that only understand PrimaryEmbodimentHandoffDeniedError.
       if (isRecord(error) && error.code === '40001') {
-        throw new PrimaryEmbodimentHandoffDeniedError('stale_generation');
+        throw new fleetAuthPersistenceBoundaryValues.PrimaryEmbodimentHandoffDeniedError(
+          'stale_generation',
+        );
       }
       throw error;
     } finally {

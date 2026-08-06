@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  FleetAuthBrokerError,
-  type FleetAuthBrokerStore,
-  type FleetAuthSessionRecord,
-  type OAuthTransactionKind,
+import type {
+  FleetAuthBrokerStore,
+  FleetAuthSessionRecord,
+  OAuthTransactionKind,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthAccountRosterEntry } from '../../../system/config/fleet-auth-config.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
@@ -13,6 +12,7 @@ import type { PrincipalRow } from './oauth-session-store-types.js';
 import type { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import { activateRosteredFirstOwner } from './rostered-first-owner-activation.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 export interface SessionInsertInput {
   principal: PrincipalRow;
@@ -78,7 +78,11 @@ export async function createLoginSession(
       || transactionRow.completed_session_id !== null
       || transactionRow.lifecycle_ceremony_id !== null
       || transactionRow.global_auth_epoch !== authority.global_auth_epoch) {
-      throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'invalid_oauth_state',
+        400,
+        'OAuth transaction is not usable',
+      );
     }
 
     const authorityGeneration = requireFleetAuthInteger(

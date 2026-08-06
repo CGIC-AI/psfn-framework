@@ -164,6 +164,7 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
       if (this.current.state === 'available' && !(await this.options.store.hasPending())) return;
       await this.options.store.enqueue(message, this.now());
       queued = true;
+      if (this.current.state === 'available') this.scheduleDrain();
     });
     return queued;
   }

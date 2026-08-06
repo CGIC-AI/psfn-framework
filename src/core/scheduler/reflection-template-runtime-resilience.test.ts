@@ -82,12 +82,16 @@ describe('createReflectionTemplateRuntime failure resilience', () => {
       kind: 'reflection_run',
       templateId: 'daily-review',
       reflection: 'A bounded reflection still completed from the starter evidence.',
-      metacognitiveFlags: [
+      metacognitiveFlags: expect.arrayContaining([
         expect.objectContaining({
           flag: 'reflection_evidence_grounding_degraded',
           confidence: 1,
         }),
-      ],
+        expect.objectContaining({
+          flag: 'daily_review_evidence_degraded',
+          confidence: 1,
+        }),
+      ]),
     });
     const dailyEntries = new ReflectionDailyJournalStore(
       resolveReflectionDailyJournalsDir(tempDir),

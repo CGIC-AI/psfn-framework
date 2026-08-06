@@ -213,6 +213,7 @@ test('unified owner-config plan enforces write-surface == skip-set invariant', (
   );
   assert.deepEqual(plan.skippedOwnerFiles, []);
   assert.deepEqual(plan.skippedWithPendingChanges, []);
+  assert.deepEqual(plan.unavailableOwnerFiles, []);
 
   // Missing a write-surface key (drift) must fail closed.
   assert.throws(
@@ -247,6 +248,58 @@ test('unified owner-config plan enforces write-surface == skip-set invariant', (
     dirtyRawEditorKeys: [],
   });
   assert.deepEqual(withChanges.saves.map((entry) => entry.key), ['scheduler', 'backup']);
+});
+
+test('failed owner-file loads stay protected from unified writes with or without staged edits', () => {
+  const serverJsonByKey = buildRawEditorJsonMap((key) =>
+    JSON.stringify({ owner: key, revision: 1 }),
+  );
+  const stagedSchedulerJson = JSON.stringify({ owner: 'scheduler', handEdit: true });
+  const stagedJsonByKey = { ...serverJsonByKey, scheduler: stagedSchedulerJson };
+
+  // A reload failure preserves the staged text. Its real dirty state must still
+  // reach the planner even though the editor is temporarily disabled.
+  const dirtyAfterFailedReload = listDirtyRawEditorKeys(stagedJsonByKey, serverJsonByKey);
+  assert.deepEqual(dirtyAfterFailedReload, ['scheduler']);
+  const failedReloadPlan = planUnifiedOwnerConfigSaves({
+    entries: buildOwnerConfigEntries({
+      scheduler: { nextJson: '{"form":2}', currentJson: serverJsonByKey.scheduler },
+    }),
+    dirtyRawEditorKeys: dirtyAfterFailedReload,
+    unavailableRawEditorKeys: ['scheduler'],
+  });
+  assert.deepEqual(failedReloadPlan.skippedOwnerFiles, ['scheduler']);
+  assert.deepEqual(failedReloadPlan.unavailableOwnerFiles, ['scheduler']);
+  assert.ok(
+    failedReloadPlan.saves.every((entry) => entry.key !== 'scheduler'),
+    'a dirty editor whose reload failed must remain excluded from owner-file writes',
+  );
+
+  // An initial fetch failure has no dirty editor text, but the unavailable key
+  // is independently protected so the blank baseline cannot authorize a write.
+  const initialFailurePlan = planUnifiedOwnerConfigSaves({
+    entries: buildOwnerConfigEntries({
+      providers: { nextJson: '{"providers":[{"id":"stale"}]}', currentJson: '' },
+    }),
+    dirtyRawEditorKeys: [],
+    unavailableRawEditorKeys: ['providers'],
+  });
+  assert.deepEqual(initialFailurePlan.skippedOwnerFiles, ['providers']);
+  assert.deepEqual(initialFailurePlan.unavailableOwnerFiles, ['providers']);
+  assert.ok(
+    initialFailurePlan.saves.every((entry) => entry.key !== 'providers'),
+    'an initially unavailable owner file must not be written before a successful load',
+  );
+
+  const note = buildUnifiedSaveSkipNote({
+    skippedOwnerFiles: initialFailurePlan.skippedOwnerFiles,
+    skippedWithPendingChanges: initialFailurePlan.skippedWithPendingChanges,
+    unavailableOwnerFiles: initialFailurePlan.unavailableOwnerFiles,
+    ownerFileLabel: (key) => `${key}.json`,
+  });
+  assert.match(note, /providers\.json .*failed to load/);
+  assert.match(note, /no writes .* were attempted/);
+  assert.match(note, /Retry each load/);
 });
 
 // ── Blocker 2(b): a skipped owner file with pending FORM changes must be ──

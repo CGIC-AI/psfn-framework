@@ -856,8 +856,13 @@
 
   function dirtyRawEditorKeys(): RawEditorKey[] {
     const current = currentRawJsonByKey();
-    return listDirtyRawEditorKeys(current, initialRawJsonByKey)
-      .filter((key) => rawEditorLoadError(key) === undefined);
+    return listDirtyRawEditorKeys(current, initialRawJsonByKey);
+  }
+
+  function unavailableRawEditorKeys(): RawSettingsEditorKey[] {
+    return RAW_EDITORS
+      .filter(({ key }) => rawEditorLoadErrors[key] !== undefined)
+      .map(({ key }) => key);
   }
 
   function rawEditorLabel(key: RawEditorKey): string {
@@ -1136,6 +1141,7 @@
         },
       ],
       dirtyRawEditorKeys: dirtyKeys,
+      unavailableRawEditorKeys: unavailableRawEditorKeys(),
     });
 
     if (hasRuntimePayload) {
@@ -1173,6 +1179,7 @@
     const skippedNote = buildUnifiedSaveSkipNote({
       skippedOwnerFiles: ownerConfigPlan.skippedOwnerFiles,
       skippedWithPendingChanges: ownerConfigPlan.skippedWithPendingChanges,
+      unavailableOwnerFiles: ownerConfigPlan.unavailableOwnerFiles,
       ownerFileLabel: rawEditorOwnerFile,
     });
     return {

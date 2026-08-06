@@ -147,6 +147,7 @@ export interface UnifiedOwnerConfigSavePlan {
   saves: UnifiedOwnerConfigSaveEntry[];
   skippedOwnerFiles: UnifiedSaveOwnerFileKey[];
   skippedWithPendingChanges: UnifiedSaveOwnerFileKey[];
+  unavailableOwnerFiles: UnifiedSaveOwnerFileKey[];
 }
 
 // Single source of truth for the unified save's owner-file write surface. The
@@ -156,13 +157,18 @@ export interface UnifiedOwnerConfigSavePlan {
 // skipped), so we fail closed here rather than let them diverge unnoticed.
 //
 // - `saves`: entries to actually write (not skipped, and JSON changed).
-// - `skippedOwnerFiles`: files excluded because their raw editor is dirty.
+// - `skippedOwnerFiles`: files excluded because their raw editor is dirty or
+//   because the current owner-file contents failed to load.
 // - `skippedWithPendingChanges`: skipped files that ALSO had pending
 //   form-derived JSON changes — those changes were dropped by the skip and must
 //   be reported as not saved.
+// - `unavailableOwnerFiles`: skipped files whose current contents failed to
+//   load. These remain protected even when an initial failure left no dirty raw
+//   editor text to compare against a baseline.
 export function planUnifiedOwnerConfigSaves(input: {
   entries: readonly UnifiedOwnerConfigSaveEntry[];
   dirtyRawEditorKeys: readonly RawEditorKey[];
+  unavailableRawEditorKeys?: readonly RawEditorKey[];
 }): UnifiedOwnerConfigSavePlan {
   const entryKeys = input.entries.map((entry) => entry.key);
   const entryKeySet = new Set<UnifiedSaveOwnerFileKey>(entryKeys);
@@ -180,7 +186,16 @@ export function planUnifiedOwnerConfigSaves(input: {
     );
   }
 
-  const skippedOwnerFiles = listUnifiedSaveSkippedOwnerFiles(input.dirtyRawEditorKeys);
+  const unavailableOwnerFiles = listUnifiedSaveSkippedOwnerFiles(
+    input.unavailableRawEditorKeys ?? [],
+  );
+  const protectedRawEditorKeys = [
+    ...new Set<RawEditorKey>([
+      ...input.dirtyRawEditorKeys,
+      ...(input.unavailableRawEditorKeys ?? []),
+    ]),
+  ];
+  const skippedOwnerFiles = listUnifiedSaveSkippedOwnerFiles(protectedRawEditorKeys);
   const skipped = new Set<UnifiedSaveOwnerFileKey>(skippedOwnerFiles);
   const saves: UnifiedOwnerConfigSaveEntry[] = [];
   const skippedWithPendingChanges: UnifiedSaveOwnerFileKey[] = [];
@@ -196,7 +211,7 @@ export function planUnifiedOwnerConfigSaves(input: {
       saves.push(entry);
     }
   }
-  return { saves, skippedOwnerFiles, skippedWithPendingChanges };
+  return { saves, skippedOwnerFiles, skippedWithPendingChanges, unavailableOwnerFiles };
 }
 
 // Success-banner note for a unified save that skipped one or more owner files.
@@ -207,19 +222,30 @@ export function planUnifiedOwnerConfigSaves(input: {
 export function buildUnifiedSaveSkipNote(input: {
   skippedOwnerFiles: readonly UnifiedSaveOwnerFileKey[];
   skippedWithPendingChanges: readonly UnifiedSaveOwnerFileKey[];
+  unavailableOwnerFiles?: readonly UnifiedSaveOwnerFileKey[];
   ownerFileLabel: (key: UnifiedSaveOwnerFileKey) => string;
 }): string {
   if (input.skippedOwnerFiles.length === 0) {
     return '';
   }
   const droppedSet = new Set<UnifiedSaveOwnerFileKey>(input.skippedWithPendingChanges);
+  const unavailableSet = new Set<UnifiedSaveOwnerFileKey>(input.unavailableOwnerFiles ?? []);
+  const unavailableLabels = input.skippedOwnerFiles
+    .filter((key) => unavailableSet.has(key))
+    .map(input.ownerFileLabel);
   const droppedLabels = input.skippedOwnerFiles
-    .filter((key) => droppedSet.has(key))
+    .filter((key) => !unavailableSet.has(key) && droppedSet.has(key))
     .map(input.ownerFileLabel);
   const preservedLabels = input.skippedOwnerFiles
-    .filter((key) => !droppedSet.has(key))
+    .filter((key) => !unavailableSet.has(key) && !droppedSet.has(key))
     .map(input.ownerFileLabel);
   const parts: string[] = [];
+  if (unavailableLabels.length > 0) {
+    parts.push(
+      ` Skipped ${unavailableLabels.join(', ')} — current owner-file contents failed to load, `
+      + 'so no writes to those files were attempted. Retry each load on the Raw JSON tab before saving changes for them.',
+    );
+  }
   if (droppedLabels.length > 0) {
     parts.push(
       ` Form changes to ${droppedLabels.join(', ')} were NOT saved — that owner file `

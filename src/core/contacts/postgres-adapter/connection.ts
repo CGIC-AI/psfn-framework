@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from 'pg';
+import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 export async function withPostgresClient<T>(
   pool: Pool,
@@ -22,12 +22,20 @@ export async function withPostgresClient<T>(
   }
 }
 
-export async function queryRows<T>(pool: Pool, text: string, values: readonly unknown[] = []): Promise<T[]> {
-  const result = await pool.query(text, [...values]);
-  return result.rows as T[];
+export async function queryRows<T extends QueryResultRow>(
+  pool: Pool,
+  text: string,
+  values: readonly unknown[] = [],
+): Promise<T[]> {
+  const result = await pool.query<T>(text, [...values]);
+  return result.rows;
 }
 
-export async function queryOne<T>(pool: Pool, text: string, values: readonly unknown[] = []): Promise<T | undefined> {
+export async function queryOne<T extends QueryResultRow>(
+  pool: Pool,
+  text: string,
+  values: readonly unknown[] = [],
+): Promise<T | undefined> {
   const rows = await queryRows<T>(pool, text, values);
   return rows[0];
 }

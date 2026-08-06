@@ -104,10 +104,14 @@ async function fetchPostgresContactActivityRows(postgresUrl: string): Promise<Co
   const pool = createPostgresPool(url);
   try {
     // Read-only: a store without the table simply has no rows to enumerate.
-    const exists = await pool.query("SELECT to_regclass('contact_channel_activity') AS rel");
+    const exists = await pool.query<{ rel: string | null }>(
+      "SELECT to_regclass('contact_channel_activity') AS rel",
+    );
     if (!exists.rows[0]?.rel) return [];
-    const result = await pool.query('SELECT channel_id, privacy_level FROM contact_channel_activity');
-    return result.rows.map((row: { channel_id: unknown; privacy_level: unknown }) => ({
+    const result = await pool.query<{ channel_id: unknown; privacy_level: unknown }>(
+      'SELECT channel_id, privacy_level FROM contact_channel_activity',
+    );
+    return result.rows.map(row => ({
       channelId: row.channel_id,
       privacyLevel: row.privacy_level,
     }));

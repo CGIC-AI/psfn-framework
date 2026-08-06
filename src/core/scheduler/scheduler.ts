@@ -23,7 +23,7 @@ import type {
 
 const log = createComponentLogger('Scheduler');
 
-export type ScheduledTaskAvailability = 'idle' | 'do_not_disturb';
+type ScheduledTaskAvailability = 'idle' | 'do_not_disturb';
 
 export interface ProtectedScheduledTask extends ScheduledTask {
   /** Coarse channel availability projected for the full handler lifetime. */

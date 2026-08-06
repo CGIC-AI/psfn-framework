@@ -170,24 +170,24 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L692",
+      "name": "main.candidate.limit@L713",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidate.limit@L692; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidate.limit@L713; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L728",
+      "name": "main.candidate.limit@L749",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidate.limit@L728; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidate.limit@L749; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L768",
+      "name": "main.candidate.limit@L789",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidate.limit@L768; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidate.limit@L789; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
@@ -198,31 +198,31 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L520",
+      "name": "main.candidateIdsBefore.limit@L541",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L520; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L541; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L677",
+      "name": "main.candidateIdsBefore.limit@L698",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L677; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L698; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L709",
+      "name": "main.candidateIdsBefore.limit@L730",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L709; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L730; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L749",
+      "name": "main.candidateIdsBefore.limit@L770",
       "value": "50",
       "form": "object-member",
-      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L749; code-owned only for harness behavior and not used as an unowned production setting."
+      "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit@L770; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",

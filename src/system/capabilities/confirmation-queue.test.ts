@@ -42,6 +42,26 @@ describe('ConfirmationQueue', () => {
     });
   });
 
+  it.each([
+    ['string', 'literal-json-field'],
+    ['null', null],
+    ['number', 42],
+    ['object', { mode: 'data' }],
+  ])('preserves non-callable toJSON %s data', (_label, value) => {
+    const queue = new ConfirmationQueue({ now: () => 1, idFactory: () => 'to-json-data' });
+
+    const entry = queue.enqueue({
+      method: 'fs.write',
+      action: 'write',
+      scope: '/tmp/to-json-data',
+      params: { toJSON: value },
+      companionReason: 'Preserve ordinary data named toJSON',
+    }, async () => undefined);
+
+    expect(entry.params).toEqual({ toJSON: value });
+    expect(JSON.parse(JSON.stringify(entry.params))).toEqual({ toJSON: value });
+  });
+
   it('rejects wire-unrepresentable params before queue admission', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
@@ -66,10 +86,14 @@ describe('ConfirmationQueue', () => {
       enumerable: true,
       get: () => (++arrayAccessorReads === 1 ? 'visible' : new Map()),
     });
+    let customJsonProjectionCalls = 0;
     const customJsonProjection = { value: 'native' };
     Object.defineProperty(customJsonProjection, 'toJSON', {
       enumerable: false,
-      value: () => ({ value: 'wire' }),
+      value: () => {
+        customJsonProjectionCalls += 1;
+        return { value: 'wire' };
+      },
     });
     const unsupported = [
       { label: 'cyclic', params: cyclic },
@@ -101,6 +125,7 @@ describe('ConfirmationQueue', () => {
     }
     expect(objectAccessorReads).toBe(0);
     expect(arrayAccessorReads).toBe(0);
+    expect(customJsonProjectionCalls).toBe(0);
   });
 
   it('enqueues pending actions with timestamp and expiry metadata', () => {

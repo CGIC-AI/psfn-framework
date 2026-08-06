@@ -172,6 +172,10 @@ import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/op
 import { wireAgentVaultRuntime } from './vault-runtime.js';
 import { PostgresIcpLocalPolicyAuthority } from '../../persistence/postgres/icp-local-policy-authority.js';
 import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
+import {
+  startIcpRuntimeAvailability,
+  type AgentIcpRuntimeAvailability,
+} from './icp-runtime-availability.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -1144,6 +1148,7 @@ async function main(): Promise<void> {
     eventBus,
   );
   let icpLocalPolicyAuthority: PostgresIcpLocalPolicyAuthority | null = null;
+  let icpRuntimeAvailability: AgentIcpRuntimeAvailability | null = null;
   if (config.multiCompanion === true) {
     if (!config.chargePolicy) {
       throw new Error('Multi-companion fleet posture requires chargePolicy');
@@ -1191,11 +1196,19 @@ async function main(): Promise<void> {
       await icpLocalPolicyAuthority.close();
       throw error;
     }
-    await gateway.startFleetPostureReporting(createAgentFleetPostureProvider({
+    const fleetPostureProvider = createAgentFleetPostureProvider({
       companionId: resolveCoreCompanionIdFromConfig(config),
       chargePolicy: config.chargePolicy,
       fatigueHistory: coreRuntime.fatigueLedger,
-    }));
+    });
+    await gateway.startFleetPostureReporting(fleetPostureProvider);
+    icpRuntimeAvailability = await startIcpRuntimeAvailability({
+      eventBus,
+      gateway,
+      isEnabled: () => icpRuntimeEnablement.isEnabled()
+        && capabilityRuntime.has('external.companion'),
+      readFatigueState: () => fleetPostureProvider().fatigue.state,
+    });
   }
   agentLoop.setDurableChargeRecorder(
     event => chargeLedger.commitChargeEvent(event).outcome,
@@ -1375,6 +1388,7 @@ async function main(): Promise<void> {
     detachCompanionEventForwarder();
     unregisterIcpCoLocationThoughtAdapter();
     unregisterIcpFeltImpulseAdapter();
+    icpRuntimeAvailability?.stop();
     detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is

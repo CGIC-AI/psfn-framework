@@ -1071,9 +1071,10 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 
 ### Operating same-cluster autonomous initiation
 
-Autonomous initiation is disabled in the shipped seed. Enable it only after the
-cluster identities, canonical machine-intelligence contacts, bilateral trust,
-ordinary companion channels, and fatigue/charge policy are ready:
+Autonomous initiation is enabled in the shipped seed. Before operating a
+multi-companion cluster, confirm that canonical machine-intelligence contacts,
+bilateral trust, ordinary companion channels, and fatigue/charge policy are
+ready; set `scheduler.json > icpAutonomy.enabled=false` when they are not:
 
 1. Edit `scheduler.json > icpAutonomy` through the canonical Settings owner-file
    editor. `enabled`, candidate TTL/retry cadence/attempt limit, permit TTL, and
@@ -1093,6 +1094,15 @@ ordinary companion channels, and fatigue/charge policy are ready:
 
 Routine operation:
 
+- An enabled agent with `external.companion` publishes its coarse runtime
+  availability at startup and renews the lease on the normal health heartbeat.
+  Healthy posture is `available`; hard fatigue exhaustion is `resting` and the
+  gateway independently rejects initiation while its authenticated fatigue
+  posture remains exhausted. Companion-published state overrides the runtime
+  default and operator state overrides both. Disabling ICP or revoking the
+  capability immediately fences participation and suppresses a runtime-owned
+  lease to `resting`; an explicit higher-authority state is preserved but
+  cannot keep participation eligible while the runtime fence is closed.
 - Garden **Autonomy** (`GET /api/admin/icp-autonomy`) shows at most 50 recent
   records in each bounded lifecycle: the local coarse availability lease, local
   candidates, and local-participant content-free episodes/provenance, permit

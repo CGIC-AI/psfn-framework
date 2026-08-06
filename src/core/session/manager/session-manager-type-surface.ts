@@ -16,6 +16,7 @@ import type {
   ConversationScopeSpeaker,
 } from '../conversation-scope.js';
 import type { SessionEntry } from '../types.js';
+import type { PromptAssemblyGateSummary } from '../intake-sink-gating.js';
 
 export interface AutoCompactionBetweenTurnsParams {
   channelId: string;
@@ -84,7 +85,11 @@ export interface SessionManagerTypeSurface {
   getConversationEvidenceWindow(
     channelId: string,
     options: { fromMs: number; toMs: number; limit: number },
-  ): { entries: SessionEntry[]; saturated: boolean };
+  ): {
+    entries: SessionEntry[];
+    saturated: boolean;
+    promptAssemblyGate: PromptAssemblyGateSummary;
+  };
 
   getRecentMessagesAtOrBefore(
     channelId: string,

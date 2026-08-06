@@ -137,6 +137,18 @@ export class PostgresCompanionAvailabilityStore implements CompanionAvailability
     }));
   }
 
+  async hasPending(): Promise<boolean> {
+    const row = await queryOne<{ pending: boolean }>(this.pool, `
+      SELECT EXISTS (
+        SELECT 1 FROM companion_protected_message_queue
+      ) AS pending
+    `);
+    if (!row || typeof row.pending !== 'boolean') {
+      throw new Error('Companion availability queue status row is invalid');
+    }
+    return row.pending;
+  }
+
   async acknowledge(sequence: number): Promise<boolean> {
     const normalizedSequence = safeInteger(sequence, 'queue sequence');
     const result = await this.pool.query(

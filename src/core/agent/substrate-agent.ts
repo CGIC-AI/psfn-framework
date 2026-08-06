@@ -181,7 +181,10 @@ import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import type { ArtifactEgressDestination } from '../artifacts/sensitivity-egress.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
-import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
+import {
+  BackgroundWorkSupervisor,
+  type BackgroundWorkExecutionScope,
+} from './background-work/supervisor.js';
 import type {
   BackgroundWorkStorePort,
   BackgroundWorkWelfarePolicy,
@@ -1444,6 +1447,14 @@ export class SubstrateAgent {
       ),
       tick: () => supervisor.tick(),
     });
+  }
+
+  setBackgroundWorkExecutionScope(scope: BackgroundWorkExecutionScope): void {
+    const supervisor = this.backgroundWorkSupervisor;
+    if (!supervisor) {
+      throw new Error('Durable background work supervisor is not configured');
+    }
+    supervisor.setExecutionScope(scope);
   }
 
   async stopBackgroundWork(): Promise<void> {

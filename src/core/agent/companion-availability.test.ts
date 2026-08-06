@@ -11,6 +11,11 @@ import {
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { POSTGRES_COMPANION_AVAILABILITY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
+import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
+import type { BackgroundWorkStorePort } from './background-work/store-port.js';
+import type { ClaimedBackgroundWorkJob } from './background-work/types.js';
+
+const TEST_DRAIN_RETRY_DELAY_MS = 10;
 
 class MemoryAvailabilityStore implements CompanionAvailabilityStorePort {
   state: CompanionAvailabilitySnapshot = {
@@ -40,6 +45,10 @@ class MemoryAvailabilityStore implements CompanionAvailabilityStorePort {
     return this.queued.slice(0, limit);
   }
 
+  async hasPending(): Promise<boolean> {
+    return this.queued.length > 0;
+  }
+
   async acknowledge(sequence: number): Promise<boolean> {
     const index = this.queued.findIndex(entry => entry.sequence === sequence);
     if (index < 0) return false;
@@ -60,6 +69,12 @@ function message(id: string): SubstrateMessage {
   };
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(settle => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe('CompanionAvailabilityRuntime', () => {
   it('keeps nested protected activity unavailable until the final lease exits', async () => {
     const store = new MemoryAvailabilityStore();
@@ -72,6 +87,7 @@ describe('CompanionAvailabilityRuntime', () => {
         .mockReturnValueOnce(20)
         .mockReturnValueOnce(30),
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
 
     await runtime.initialize();
@@ -90,6 +106,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store: new MemoryAvailabilityStore(),
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     await runtime.initialize();
     const idle = await runtime.begin('idle');
@@ -106,6 +123,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store: new MemoryAvailabilityStore(),
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     await runtime.initialize();
 
@@ -126,6 +144,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store,
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     const delivered: string[] = [];
     runtime.setDeliverer(async queued => {
@@ -147,6 +166,45 @@ describe('CompanionAvailabilityRuntime', () => {
     expect(store.queued.map(entry => entry.message.id)).toEqual(['two', 'three']);
   });
 
+  it('retains FIFO admission and retries after a transient delivery failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MemoryAvailabilityStore();
+      const runtime = new CompanionAvailabilityRuntime({
+        store,
+        project: async () => 'applied',
+        queueReadBatchSize: 20,
+        drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
+      });
+      const delivered: string[] = [];
+      let failOnce = true;
+      runtime.setDeliverer(async queued => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('transient transport failure');
+        }
+        delivered.push(queued.message.id);
+      });
+      await runtime.initialize();
+      const lease = await runtime.begin('do_not_disturb');
+      await runtime.enqueueIfUnavailable(message('older'));
+      await lease.release();
+      await runtime.waitForDrain();
+
+      await expect(runtime.enqueueIfUnavailable(message('newer'))).resolves.toBe(true);
+      expect(store.queued.map(entry => entry.message.id)).toEqual(['older', 'newer']);
+
+      await vi.advanceTimersByTimeAsync(TEST_DRAIN_RETRY_DELAY_MS);
+      await runtime.waitForDrain();
+
+      expect(delivered).toEqual(['older', 'newer']);
+      expect(store.queued).toEqual([]);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('resets stale protected state on restart and drains durable messages', async () => {
     const store = new MemoryAvailabilityStore();
     store.state = { state: 'do_not_disturb', sinceMs: 5, revision: 4 };
@@ -156,6 +214,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store,
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
       now: () => 10,
     });
     runtime.setDeliverer(async queued => { delivered.push(queued.message.id); });
@@ -175,6 +234,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store,
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
       returnContextMaxChars: 12,
       now: vi.fn().mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValueOnce(3),
     });
@@ -201,6 +261,7 @@ describe('CompanionAvailabilityRuntime', () => {
       project: async () => 'unsupported',
       onProjectionDegraded: snapshot => { degraded.push(snapshot); },
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     await runtime.initialize();
     const lease = await runtime.begin('idle');
@@ -220,6 +281,7 @@ describe('CompanionAvailabilityRuntime', () => {
       },
       onProjectionError: error => { projectionErrors.push(error); },
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     await runtime.initialize();
 
@@ -235,6 +297,7 @@ describe('CompanionAvailabilityRuntime', () => {
       store: new MemoryAvailabilityStore(),
       project: async () => 'applied',
       queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
     });
     await runtime.initialize();
     const eventBus = new EventBus();
@@ -284,6 +347,66 @@ describe('CompanionAvailabilityRuntime', () => {
 
     await scheduler.tick();
     expect(order).toEqual(['begin:do_not_disturb', 'handler', 'end:do_not_disturb']);
+  });
+
+  it('keeps DND for a detached durable claim until its executor settles', async () => {
+    const availability = new CompanionAvailabilityRuntime({
+      store: new MemoryAvailabilityStore(),
+      project: async () => 'applied',
+      queueReadBatchSize: 20,
+      drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
+    });
+    await availability.initialize();
+    const executorStarted = deferred();
+    const executorFinished = deferred();
+    let claimed = false;
+    const claimedJob = {
+      jobId: 'job-1',
+      logicalSessionId: 'session-1',
+      kind: 'memory_extraction',
+    } as unknown as ClaimedBackgroundWorkJob;
+    const store = {
+      recoverExpired: vi.fn(async () => []),
+      purgeTerminal: vi.fn(async () => []),
+      claimNext: vi.fn(async () => {
+        if (claimed) return null;
+        claimed = true;
+        return claimedJob;
+      }),
+      requeuePreBoundaryClaims: vi.fn(async () => []),
+    } as unknown as BackgroundWorkStorePort;
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      executor: async () => {},
+      maxConcurrentSessions: 1,
+      leaseDurationMs: 300_000,
+      retryBaseDelayMs: 1_000,
+      retryMaxDelayMs: 300_000,
+      shutdownTimeoutMs: 5_000,
+      terminalRetentionMs: 604_800_000,
+      cleanupIntervalMs: 3_600_000,
+      welfare: { deferThreshold: 8, ageThresholdMs: 300_000, reserveSlots: 1 },
+    });
+    const execution = supervisor as unknown as {
+      executeClaim: (...args: unknown[]) => Promise<void>;
+    };
+    execution.executeClaim = vi.fn(async () => {
+      executorStarted.resolve();
+      await executorFinished.promise;
+    });
+    supervisor.setExecutionScope(handler => availability.run('do_not_disturb', handler));
+
+    const claimPass = supervisor.tick();
+    await executorStarted.promise;
+    await claimPass;
+    expect(availability.snapshot().state).toBe('do_not_disturb');
+
+    executorFinished.resolve();
+    await supervisor.waitForIdle();
+    expect(availability.snapshot().state).toBe('available');
+    await supervisor.stop();
+    await availability.stop();
   });
 
   it('defines a singleton coarse state and ordered idempotent Postgres queue', () => {

@@ -32,6 +32,10 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
   postgresScheduledPromptStore: { kind: 'postgres-scheduled-prompt-store' },
   connectPostgresScheduledPromptStore: vi.fn(async () => runtimeFactoryMocks.postgresScheduledPromptStore),
+  postgresCompanionAvailabilityStore: { kind: 'postgres-companion-availability-store' },
+  connectPostgresCompanionAvailabilityStore: vi.fn(
+    async () => runtimeFactoryMocks.postgresCompanionAvailabilityStore,
+  ),
   postgresBackgroundWorkStore: { kind: 'postgres-background-work-store' },
   connectPostgresBackgroundWorkStore: vi.fn(async () => runtimeFactoryMocks.postgresBackgroundWorkStore),
   postgresCompanionPresenceStore: { kind: 'postgres-companion-presence-store' },
@@ -107,6 +111,12 @@ vi.mock('./postgres/scheduled-prompt-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/companion-availability-store.js', () => ({
+  PostgresCompanionAvailabilityStore: {
+    connect: runtimeFactoryMocks.connectPostgresCompanionAvailabilityStore,
+  },
+}));
+
 vi.mock('./postgres/background-work-store.js', () => ({
   PostgresBackgroundWorkStore: {
     connect: runtimeFactoryMocks.connectPostgresBackgroundWorkStore,
@@ -160,6 +170,7 @@ beforeEach(() => {
   runtimeFactoryMocks.createPostgresIntentionPorts.mockClear();
   runtimeFactoryMocks.connectPostgresReflectionMirror.mockClear();
   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
+  runtimeFactoryMocks.connectPostgresCompanionAvailabilityStore.mockClear();
   runtimeFactoryMocks.connectPostgresBackgroundWorkStore.mockClear();
   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
   runtimeFactoryMocks.connectPostgresSocialPotStore.mockClear();
@@ -305,6 +316,7 @@ describe('createAgentPersistenceRuntime', () => {
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
+      companionAvailabilityStore: runtimeFactoryMocks.postgresCompanionAvailabilityStore,
       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
       partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
       introspectionLandmarkStore: expect.any(Object),
@@ -349,6 +361,10 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.connectPostgresScheduledPromptStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: undefined },
+    );
+    expect(runtimeFactoryMocks.connectPostgresCompanionAvailabilityStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: undefined, role: undefined },
     );
     expect(runtimeFactoryMocks.connectPostgresBackgroundWorkStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
@@ -502,6 +518,10 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.connectPostgresScheduledPromptStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresCompanionAvailabilityStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x', role: undefined },
     );
     expect(runtimeFactoryMocks.connectPostgresBackgroundWorkStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',

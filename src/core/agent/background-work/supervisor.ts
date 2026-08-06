@@ -51,6 +51,10 @@ export type BackgroundWorkExecutor = (
   input: BackgroundWorkExecutionInput,
 ) => Promise<void>;
 
+export type BackgroundWorkExecutionScope = (
+  handler: () => Promise<void>,
+) => Promise<void>;
+
 export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSupervisorTuning {
   store: BackgroundWorkStorePort;
   eventBus: EventBus;
@@ -201,6 +205,7 @@ export class BackgroundWorkSupervisor {
   private lastCleanupAtMs = Number.NEGATIVE_INFINITY;
   private heartbeatPromise: Promise<void> | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private executionScope: BackgroundWorkExecutionScope | null = null;
 
   constructor(options: BackgroundWorkSupervisorOptions) {
     this.store = options.store;
@@ -273,6 +278,16 @@ export class BackgroundWorkSupervisor {
     // a liveness backstop. Fire-and-forget: enqueue durability is already
     // committed, and a failed pass is retried by the next kick or tick.
     this.requestClaimPass();
+  }
+
+  setExecutionScope(scope: BackgroundWorkExecutionScope): void {
+    if (this.executionScope) {
+      throw new Error('Background work execution scope is already configured');
+    }
+    if (this.tickPromise || this.running.size > 0) {
+      throw new Error('Background work execution scope must be configured before claims begin');
+    }
+    this.executionScope = scope;
   }
 
   /** Fire-and-forget claim pass; failures are logged and retried by the next kick or scheduler tick. */
@@ -461,7 +476,10 @@ export class BackgroundWorkSupervisor {
       const fence = { lost: false };
       const controller = new AbortController();
       this.ensureHeartbeat();
-      const promise = Promise.resolve().then(() => this.executeClaim(job, fence, controller))
+      const execute = () => this.executeClaim(job, fence, controller);
+      const promise = Promise.resolve().then(() => (
+        this.executionScope ? this.executionScope(execute) : execute()
+      ))
         .catch((error) => {
           // A lease/CAS fence may have moved while the handler was running.
           // Leave the durable row for expiry recovery; never leak an unhandled

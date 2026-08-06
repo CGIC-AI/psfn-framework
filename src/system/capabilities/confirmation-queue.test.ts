@@ -45,12 +45,18 @@ describe('ConfirmationQueue', () => {
   it('rejects wire-unrepresentable params before queue admission', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
+    const augmentedArray: unknown[] = [];
+    Object.assign(augmentedArray, { hidden: 1n });
+    const symbolAugmentedArray: unknown[] = [];
+    Object.defineProperty(symbolAugmentedArray, Symbol('hidden'), { value: 'secret' });
     const unsupported = [
       { label: 'cyclic', params: cyclic },
       { label: 'BigInt', params: { value: 1n } },
       { label: 'function', params: { callback: () => undefined } },
       { label: 'Map', params: { values: new Map([['key', 'value']]) } },
       { label: 'non-finite number', params: { value: Number.NaN } },
+      { label: 'non-index array property', params: { rows: augmentedArray } },
+      { label: 'symbol array property', params: { rows: symbolAugmentedArray } },
     ];
 
     for (const testCase of unsupported) {

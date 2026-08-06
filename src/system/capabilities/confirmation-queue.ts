@@ -260,6 +260,21 @@ function assertConfirmationParamWireRepresentable(
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
+      if (Object.getOwnPropertySymbols(value).length > 0) {
+        throwUnrepresentableConfirmationParam(path, 'must not contain symbol keys');
+      }
+      for (const property of Object.getOwnPropertyNames(value)) {
+        if (property === 'length') continue;
+        const index = Number(property);
+        if (
+          !Number.isInteger(index)
+          || index < 0
+          || index >= value.length
+          || String(index) !== property
+        ) {
+          throwUnrepresentableConfirmationParam(path, 'must not contain non-index array properties');
+        }
+      }
       for (let index = 0; index < value.length; index += 1) {
         assertConfirmationParamWireRepresentable(value[index], `${path}[${String(index)}]`, ancestors);
       }

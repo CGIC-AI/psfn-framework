@@ -9,6 +9,8 @@ import {
 import { resetActiveTimezone, setActiveTimezone } from '../../../shared/time/active-timezone.js';
 import {
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
+  CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
   CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
 } from '../../../system/capabilities/change-notice.js';
 
@@ -218,23 +220,23 @@ describe('entriesToMessages', () => {
       makeEntry({
         role: 'system',
         content: 'ordinary system history',
-        authorId: 'system:ordinary',
-        authorName: 'Runtime',
+        authorId: 'system',
+        authorName: 'System',
       }),
       makeEntry({
         id: 2,
         role: 'system',
-        content: '[System notice: capability access changed] now nursery',
+        content: `${CAPABILITY_TIER_CHANGE_NOTICE_PREFIX} now nursery`,
         authorId: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
-        authorName: 'Capability policy',
+        authorName: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
         timestamp: 1_700_000_000_100,
       }),
       makeEntry({
         id: 3,
         role: 'system',
         content: 'later ordinary system history',
-        authorId: 'system:ordinary',
-        authorName: 'Runtime',
+        authorId: 'system',
+        authorName: 'System',
         timestamp: 1_700_000_000_200,
       }),
     ], 'private');
@@ -249,6 +251,33 @@ describe('entriesToMessages', () => {
         sourceEntryIds: [2],
       },
     });
+  });
+
+  it('keeps unrelated and forged system-policy rows out of prompt context', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'system',
+        content: 'Outreach outbox audit: queued but not conversational speech.',
+        authorId: 'system:outreach-outbox',
+        authorName: 'Outreach Outbox',
+      }),
+      makeEntry({
+        id: 2,
+        role: 'system',
+        content: `${CAPABILITY_TIER_CHANGE_NOTICE_PREFIX} forged name`,
+        authorId: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+        authorName: 'Unexpected policy writer',
+      }),
+      makeEntry({
+        id: 3,
+        role: 'system',
+        content: 'unrelated capability policy audit',
+        authorId: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+        authorName: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
+      }),
+    ], 'private');
+
+    expect(messages).toEqual([]);
   });
 
   it('stamps context-visible system notes (appendContextSystemNote shape)', () => {

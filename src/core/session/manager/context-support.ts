@@ -33,12 +33,21 @@ import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-n
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
 import {
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
+  CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
   CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
 } from '../../../system/capabilities/change-notice.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
 const GENERATED_IMAGE_STATUS_PATTERN = /"status"\s*:\s*"image_generated"/u;
 const PENDING_IMAGE_ATTACHMENT_PATTERN = /"attachmentPending"\s*:\s*true/u;
+
+function isCanonicalCapabilityTierChangeNotice(entry: SessionEntry): boolean {
+  return entry.role === 'system'
+    && entry.authorId?.trim() === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+    && entry.authorName?.trim() === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME
+    && entry.content.trimStart().startsWith(CAPABILITY_TIER_CHANGE_NOTICE_PREFIX);
+}
 
 function renderImageToolHistoryProvenance(
   entry: SessionEntry,
@@ -181,7 +190,7 @@ function systemNoteProvenance(entry: SessionEntry): ContextMessage['provenance']
     safeAsPartnerSpeech: false,
     sourceSpanCount: 1,
     sourceEntryIds: [entry.id],
-    ...(entry.authorId === CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+    ...(isCanonicalCapabilityTierChangeNotice(entry)
       ? { notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE] }
       : {}),
   });
@@ -347,10 +356,11 @@ export function entriesToMessages(
     filterSupersededTemporalWakeupRefreshers(entries),
   );
   for (const entry of renderEntries) {
+    const isCapabilityTierChangeNotice = isCanonicalCapabilityTierChangeNotice(entry);
     if (isNonConversationalSessionEntry(entry)) {
       continue;
     }
-    if (isIntentionAppraisalArtifact(entry)) {
+    if (isIntentionAppraisalArtifact(entry) && !isCapabilityTierChangeNotice) {
       continue;
     }
     if (entry.role === 'tool') {
@@ -429,7 +439,7 @@ export function entriesToMessages(
     // Merge consecutive same-role messages
     const last = messages.at(-1);
     const canMerge = attribution.role !== 'tool'
-      && entry.authorId !== CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID
+      && !isCapabilityTierChangeNotice
       && last?.provenance?.notes?.includes(CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE) !== true;
     if (canMerge && last && last.role === role && last.sourceRole === entry.role) {
       // Re-stamp appended lines only when the minute-resolution label moved,
@@ -471,7 +481,10 @@ export function countIntentionAppraisalArtifacts(entries: readonly SessionEntry[
     if (isNonConversationalSessionEntry(entry)) {
       continue;
     }
-    if (isIntentionAppraisalArtifact(entry)) {
+    if (
+      isIntentionAppraisalArtifact(entry)
+      && !isCanonicalCapabilityTierChangeNotice(entry)
+    ) {
       count += 1;
     }
   }

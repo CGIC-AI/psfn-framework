@@ -214,12 +214,13 @@ sink-gate reads; the envelope journal stays authoritative.
 
 `src/core/cogsec/intake/scanners/` — synchronous, in-process, microsecond
 cost, run on every screened item in both processes. Pipeline order is
-load-bearing: input capped at `MAX_SCAN_CHARS` before any regex; invisible /
+load-bearing: raw input capped at `MAX_SCAN_CHARS` before any regex; invisible /
 zero-width detection on the **raw** capped string, then strip; datamark
 marker detection/stripping on the stripped raw text; NFKC normalization
-(folds full-width homoglyphs onto ASCII); then the rule engine, encoding
+(folds full-width homoglyphs onto ASCII) and a second cap because compatibility
+normalization can expand UTF-16 length; then the rule engine, encoding
 smuggling, URL, and secrets/PII scanners on the normalized text; secrets
-redaction produces the final sanitized text.
+redaction produces a final capped sanitized text.
 
 Scanners: `invisible-text.ts`, `datamark.ts`, `rule-engine.ts` (hot-loadable
 plain-JSON rules, `config/intake-l1-rules.json` — rule name maps to a risk
@@ -1160,7 +1161,17 @@ PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
 
 Approvals page, per item: source class/tier, risk labels, scores, the
 envelope journal, the raw text, and the L3 safe representation when one
-exists. Decide with two clicks (confirm, then decide with a reason) —
+exists. Rule-driven L1 holds also show each durable owner-file rule ID,
+match kind, UTF-16 offsets into the capped security-normalized scan text,
+and a single-line secret-redacted excerpt capped at 160 UTF-16 units without
+splitting an astral code point. Older
+held items without this optional provenance remain reviewable. When more than
+32 rules match, the queue states the total and that only the bounded prefix is
+shown. Malformed optional provenance is isolated from its held item at both
+the durable-store and Garden-cache boundaries: no evidence bytes are trusted,
+the rest of the queue remains visible, and that item stays release-locked with
+discard available. Decide
+with two clicks (confirm, then decide with a reason) —
 release raw, release sanitized, or discard — and optionally
 always-allow/always-deny the source, which writes the source lists before
 the release applies. Releasing raw content is deliberately the

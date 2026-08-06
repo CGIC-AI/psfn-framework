@@ -11,7 +11,8 @@
 //   1. invisible/zero-width detection on the RAW capped string (NFKC can
 //      alter codepoints we need to see) → strip;
 //   2. datamark-marker detection/stripping on the stripped raw text;
-//   3. NFKC-normalize (folds full-width homoglyphs onto ASCII keywords);
+//   3. NFKC-normalize (folds full-width homoglyphs onto ASCII keywords), then
+//      cap again because compatibility normalization may expand UTF-16 length;
 //   4. build a detection-only Unicode projection for keyword probes;
 //   5. everything else — rule engine and encoding smuggling use that
 //      projection; URLs and secrets/PII use the content-preserving NFKC text;
@@ -188,7 +189,9 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     }
 
     // 0. Cap before ANY pattern work.
-    const { capped, truncated } = capScanText(text);
+    const rawCap = capScanText(text);
+    const { capped } = rawCap;
+    let truncated = rawCap.truncated;
 
     // 1. Invisible/zero-width detection on the RAW capped string.
     const invisibleResult = run('l1.invisible_text', () => scanInvisibleText(capped, scope));
@@ -208,7 +211,9 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     const afterDatamark = datamarkResult?.sanitized ?? afterInvisible;
 
     // 3. NFKC-normalize (AFTER raw invisible detection).
-    const normalized = afterDatamark.normalize('NFKC');
+    const normalizedCap = capScanText(afterDatamark.normalize('NFKC'));
+    const normalized = normalizedCap.capped;
+    truncated ||= normalizedCap.truncated;
     const securityNormalized = normalizeForIntakeSecurityProbe(normalized);
 
     // 4. Keyword probes use the security-only projection. Content-oriented
@@ -216,7 +221,7 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     run('l1.structure', () => scanStructure({
       originalLength: text.length,
       text: capped,
-      truncated,
+      truncated: rawCap.truncated,
       scope,
     }));
     const ruleResult = run(
@@ -252,7 +257,9 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     }
 
     // 5. Final sanitized text.
-    const sanitizedText = secretsResult?.sanitized ?? normalized;
+    const sanitizedCap = capScanText(secretsResult?.sanitized ?? normalized);
+    const sanitizedText = sanitizedCap.capped;
+    truncated ||= sanitizedCap.truncated;
 
     const riskLabels = [...new Set(results.flatMap((result) => result.labels))];
     const scores: Record<string, number> = {};

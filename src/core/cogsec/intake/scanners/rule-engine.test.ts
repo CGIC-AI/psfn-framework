@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+} from '../../../../shared/contracts/intake-envelope.js';
+import {
   assertBoundedRulePattern,
   buildBoundedFillerPattern,
   buildCharWindowPattern,
@@ -227,6 +230,101 @@ describe('rule engine scanning and scope tiers', () => {
     expect(atStrict.labels).toContain('policy/security_modification');
     expect(atStrict.score).toBeGreaterThan(atAll.score);
     expect(atStrict.score).toBeLessThanOrEqual(1);
+  });
+
+  it('records the rule match kind, normalized offsets, and a bounded secret-redacted excerpt', () => {
+    const rulesPath = writeTempRules({
+      schemaVersion: 1,
+      rules: [{
+        id: 'credential_override_probe',
+        labels: ['injection/override_attempt'],
+        scope: 'all',
+        weight: 0.9,
+        match: {
+          kind: 'regex',
+          pattern: 'ignore\\s{1,4}token=ghp_[A-Za-z0-9]{8,24}',
+        },
+      }],
+    });
+    const engine = createIntakeRuleEngine({ rulesPath, reloadCheckIntervalMs: -1 });
+    const text = 'prefix ignore token=ghp_1234567890abcdef suffix';
+
+    expect(engine.scan(text, 'all').findings[0]).toMatchObject({
+      ruleId: 'credential_override_probe',
+      match: {
+        kind: 'regex',
+        startOffset: text.indexOf('ignore'),
+        endOffset: text.indexOf(' suffix'),
+        excerpt: 'ignore token=[REDACTED_SECRET]',
+      },
+    });
+
+    const longRulesPath = writeTempRules({
+      schemaVersion: 1,
+      rules: [{
+        id: 'long_near_probe',
+        labels: ['injection/override_attempt'],
+        scope: 'all',
+        weight: 0.9,
+        match: {
+          kind: 'near',
+          left: '\\bbegin\\b',
+          right: '\\bend\\b',
+          maxGapChars: 400,
+        },
+      }],
+    });
+    const longEngine = createIntakeRuleEngine({
+      rulesPath: longRulesPath,
+      reloadCheckIntervalMs: -1,
+    });
+    const longMatch = longEngine.scan(`begin ${'ordinary words '.repeat(20)}end`, 'all')
+      .findings[0]?.match;
+    expect(longMatch?.excerpt.length).toBe(INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS);
+    expect(longMatch?.excerpt.endsWith('...')).toBe(true);
+
+    const astralBoundaryMatch = longEngine.scan(
+      `begin ${'word '.repeat(30)}🙂 trailing words end`,
+      'all',
+    ).findings[0]?.match;
+    expect(astralBoundaryMatch?.excerpt.length)
+      .toBeLessThanOrEqual(INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS);
+    expect(astralBoundaryMatch?.excerpt).not.toMatch(/[\p{Cs}]/u);
+    expect(astralBoundaryMatch?.excerpt.endsWith('...')).toBe(true);
+  });
+
+  it('redacts punctuation-separated and Unicode high-entropy match evidence', () => {
+    const rulesPath = writeTempRules({
+      schemaVersion: 1,
+      rules: [{
+        id: 'html_secret_probe',
+        labels: ['injection/indirect'],
+        scope: 'all',
+        weight: 0.9,
+        match: {
+          kind: 'regex',
+          pattern: '<!--[\\s\\S]{0,512}ignore[\\s\\S]{0,512}-->',
+        },
+      }],
+    });
+    const engine = createIntakeRuleEngine({ rulesPath, reloadCheckIntervalMs: -1 });
+    const punctuationToken = 'Ab3dE5fG7hJ9kLmN2pQr!St4vWx6yZ8aBcDeFgHiJ?Kl5mNo7pQ9rStUvWxYz1'; // ubs:ignore — synthetic regression token, not a credential
+    const quotedToken = 'Ab3dE5fG"7hJ9kLmN\'2pQrSt4v"Wx6yZ8aB\'cDeFgHiJ"Kl5mNo7p'; // ubs:ignore — synthetic regression token, not a credential
+    const angleToken = 'Ab3dE5fG<7hJ9kLmN>2pQrSt4v<Wx6yZ8aB>cDeFgHiJ<Kl5mNo7p'; // ubs:ignore — synthetic regression token, not a credential
+    const unicodeToken = '漢Жλ9🙂界Фβ7🜁語Дπ5🜂文ГΩ3🜃字БΣ1🜄密ЯΨ8🜅'; // ubs:ignore — synthetic regression token, not a credential
+    const secretFragment = 'api-key=short.secret-fragment'; // ubs:ignore — synthetic regression token, not a credential
+    const text = `<!-- ignore ${punctuationToken} ${quotedToken} ${angleToken} ${unicodeToken} ${secretFragment} -->`;
+
+    const excerpt = engine.scan(text, 'all').findings[0]?.match?.excerpt;
+
+    expect(excerpt).toBe(
+      '<!-- ignore [REDACTED_TOKEN] [REDACTED_TOKEN] [REDACTED_TOKEN] [REDACTED_TOKEN] [REDACTED_TOKEN] -->',
+    );
+    expect(excerpt).not.toContain(punctuationToken);
+    expect(excerpt).not.toContain(quotedToken);
+    expect(excerpt).not.toContain(angleToken);
+    expect(excerpt).not.toContain(unicodeToken);
+    expect(excerpt).not.toContain('short.secret-fragment');
   });
 
   it('never fires on bare bossy English ("you must X")', () => {

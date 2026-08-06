@@ -12,7 +12,12 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import type { AdminConcernService } from '../services/types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import {
+  ADMIN_DYNAMIC_JSON_HEADERS,
+  parsePositiveIntegerQueryNumber,
+  sendInternalError,
+  toSanitizedMessage,
+} from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 
 function parseBooleanQuery(value: string | null): boolean | undefined {
@@ -22,13 +27,6 @@ function parseBooleanQuery(value: string | null): boolean | undefined {
   if (normalized === 'true' || normalized === '1') return true;
   if (normalized === 'false' || normalized === '0') return false;
   return undefined;
-}
-
-function parsePositiveIntegerQuery(value: string | null): number | undefined {
-  if (value === null) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return undefined;
-  return parsed;
 }
 
 function parseOptionalText(value: unknown, field: string): string | undefined {
@@ -173,14 +171,15 @@ export function buildAdminConcernRoutes(options: {
           return;
         }
         const url = parseRequestUrl(req, `/api/admin/concerns/${concernId}/arcs`);
-        const limit = parsePositiveIntegerQuery(url.searchParams.get('limit'));
+        const parsedLimit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
+        const limit = parsedLimit.ok ? parsedLimit.value : undefined;
         const provenanceRef = url.searchParams.get('provenanceRef')?.trim() || undefined;
         concernService.listConcernArcs(concernId, {
           ...(limit ? { limit } : {}),
           ...(provenanceRef ? { provenanceRef } : {}),
         }).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list concern arcs') }),
+          error => sendInternalError(res, error, 'Failed to list concern arcs'),
         );
       },
     },
@@ -195,7 +194,8 @@ export function buildAdminConcernRoutes(options: {
         const url = parseRequestUrl(req, '/api/admin/concerns');
         const includeResolved = parseBooleanQuery(url.searchParams.get('includeResolved'));
         const includeExpired = parseBooleanQuery(url.searchParams.get('includeExpired'));
-        const limit = parsePositiveIntegerQuery(url.searchParams.get('limit'));
+        const parsedLimit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
+        const limit = parsedLimit.ok ? parsedLimit.value : undefined;
         concernService.listConcerns({
           ...(url.searchParams.get('contactId') ? { contactId: url.searchParams.get('contactId') ?? undefined } : {}),
           ...(includeResolved !== undefined ? { includeResolved } : {}),
@@ -203,7 +203,7 @@ export function buildAdminConcernRoutes(options: {
           ...(limit !== undefined ? { limit } : {}),
         }).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list concerns') }),
+          error => sendInternalError(res, error, 'Failed to list concerns'),
         );
       },
     },

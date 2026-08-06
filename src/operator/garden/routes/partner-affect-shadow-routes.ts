@@ -2,7 +2,7 @@ import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import type { AdminPartnerAffectShadowService } from '../services/partner-affect-shadow-service.js';
 import { exactPath } from '../route-matchers.js';
 import { parseRequestUrl } from '../request-url.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, parsePositiveIntegerQueryParam } from './shared.js';
 import type { AdminApiRoute } from './types.js';
 
 const SHADOW_PATH = '/api/admin/partner-affect/shadow';
@@ -45,17 +45,15 @@ export function buildAdminPartnerAffectShadowRoutes(options: {
           return;
         }
         const url = parseRequestUrl(req, OBSERVATIONS_PATH);
-        const rawLimit = url.searchParams.get('limit');
-        let limit: number | undefined;
-        if (rawLimit !== null) {
-          const parsed = Number(rawLimit);
-          if (!Number.isSafeInteger(parsed) || parsed < 1) {
-            sendJson(res, 400, { error: 'limit must be a positive integer' });
-            return;
-          }
-          limit = parsed;
+        const parsedLimit = parsePositiveIntegerQueryParam(url.searchParams, 'limit', {
+          syntax: 'number',
+          blank: 'invalid',
+        });
+        if (!parsedLimit.ok) {
+          sendJson(res, 400, { error: parsedLimit.error });
+          return;
         }
-        partnerAffectShadow.listObservations(limit).then(
+        partnerAffectShadow.listObservations(parsedLimit.value).then(
           page => sendJson(res, 200, page, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, error instanceof Error && error.message.includes('limit') ? 400 : 500, {
             error: error instanceof Error

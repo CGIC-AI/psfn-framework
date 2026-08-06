@@ -30,6 +30,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   participant_trend: { label: 'participant trend', requirement: 'required' },
   reflection: { label: 'reflection mirror', requirement: 'required' },
   scheduled_prompts: { label: 'scheduled prompts', requirement: 'required' },
+  companion_availability: { label: 'companion availability', requirement: 'required' },
   introspection: { label: 'introspection landmarks', requirement: 'required' },
   background_work: { label: 'background work', requirement: 'required' },
   partner_affect_shadow: { label: 'partner affect shadow', requirement: 'required' },

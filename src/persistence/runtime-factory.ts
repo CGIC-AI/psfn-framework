@@ -44,6 +44,8 @@ import { PostgresParticipantTrendStore } from './postgres/participant-trend-stor
 import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
 import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
 import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
+import { PostgresCompanionAvailabilityStore } from './postgres/companion-availability-store.js';
+import type { CompanionAvailabilityStorePort } from '../core/agent/companion-availability.js';
 import { PostgresCompanionPresenceStore } from './postgres/companion-presence-store.js';
 import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-candidate-store.js';
 import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
@@ -94,6 +96,7 @@ export interface AgentPersistenceRuntime {
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
+  companionAvailabilityStore: CompanionAvailabilityStorePort & { close(): Promise<void> };
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
   /**
@@ -332,6 +335,10 @@ export async function createAgentPersistenceRuntime(
     scheduledPromptStore: await awaitPostgresStoreReadiness(
       'scheduled_prompts',
       () => PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    companionAvailabilityStore: await awaitPostgresStoreReadiness(
+      'companion_availability',
+      () => PostgresCompanionAvailabilityStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     introspectionLandmarkStore: await awaitPostgresStoreReadiness(
       'introspection',

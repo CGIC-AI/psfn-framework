@@ -1425,6 +1425,37 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
   `,
 ];
 
+/** Companion-private availability projection and non-preempting inbound queue (a95pm). */
+export const POSTGRES_COMPANION_AVAILABILITY_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS companion_availability_state (
+    singleton_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (singleton_id = 1),
+    state TEXT NOT NULL CHECK (state IN ('available', 'idle', 'do_not_disturb')),
+    since_ms BIGINT NOT NULL CHECK (since_ms >= 0),
+    revision BIGINT NOT NULL CHECK (revision >= 0)
+  );
+  `,
+  `
+  INSERT INTO companion_availability_state (singleton_id, state, since_ms, revision)
+  VALUES (1, 'available', 0, 0)
+  ON CONFLICT (singleton_id) DO NOTHING;
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS companion_protected_message_queue (
+    sequence BIGSERIAL PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    enqueued_at_ms BIGINT NOT NULL CHECK (enqueued_at_ms >= 0),
+    message_json JSONB NOT NULL,
+    UNIQUE (channel_id, message_id)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_companion_protected_message_queue_fifo
+    ON companion_protected_message_queue (sequence ASC);
+  `,
+];
+
 /** Companion-private durable queue for optional post-turn work (mmo9.3). */
 export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
   `

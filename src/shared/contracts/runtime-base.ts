@@ -464,6 +464,27 @@ export interface ReflectionTurnProvenance {
   journalEntryId?: string;
 }
 
+export interface ProtectedTimeReturnContext {
+  schemaVersion: 1;
+  queuedCount: number;
+  unavailableSinceMs: number;
+  returnedAtMs: number;
+  messages: ReadonlyArray<{
+    authorName: string;
+    timestampMs: number;
+    excerpt: string;
+  }>;
+}
+
+/** Coarse, privacy-preserving state consumable by channels and operator UI. */
+export type CompanionAvailabilityState = 'available' | 'idle' | 'do_not_disturb';
+
+export interface CompanionAvailabilitySnapshot {
+  state: CompanionAvailabilityState;
+  sinceMs: number;
+  revision: number;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
   /**
@@ -471,6 +492,8 @@ export interface MessageRoutingMetadata {
    * context but must not trigger model response generation or channel egress.
    */
   responseMode?: 'respond' | 'observe';
+  /** Bounded, factual queue context attached once when protected time ends. */
+  protectedTimeReturn?: ProtectedTimeReturnContext;
   /** Channel-authoritative mentions, including mentions of other companions. */
   addressing?: MessageAddressingMetadata;
   /**

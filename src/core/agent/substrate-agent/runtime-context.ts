@@ -52,6 +52,7 @@ import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import { applyObservedMachineIntelligence } from '../../contacts/observed-machine-intelligence.js';
 import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
+import { sanitizePromptEmbeddedText } from '../../../shared/utils/escaping.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import {
@@ -486,6 +487,23 @@ export function buildRuntimeContext(input: {
     sections.push(wrapPromptSectionXml({
       id: 'companion_runtime_context',
       content: runtimeContextExtra,
+    }));
+  }
+  const protectedTimeReturn = input.message.routing?.protectedTimeReturn;
+  if (protectedTimeReturn) {
+    const queuedLabel = protectedTimeReturn.queuedCount === 1 ? 'message was' : 'messages were';
+    const lines = [
+      `${protectedTimeReturn.queuedCount} ${queuedLabel} queued while you were unavailable.`,
+      'This is factual continuity context, not a prescribed reply. Respond naturally to the messages and current conversation.',
+      ...protectedTimeReturn.messages.map(entry => {
+        const author = sanitizePromptEmbeddedText(entry.authorName) || 'Someone';
+        const excerpt = sanitizePromptEmbeddedText(entry.excerpt);
+        return `- ${new Date(entry.timestampMs).toISOString()} — ${author}: ${excerpt}`;
+      }),
+    ];
+    sections.push(wrapPromptSectionXml({
+      id: 'protected_time_return',
+      content: lines.join('\n'),
     }));
   }
   // The continuity-gap notice and the charge-budget block moved to the layer

@@ -137,7 +137,7 @@ function assertForegroundWorkOwned(lease: ForegroundWorkLease | null): void {
 }
 
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
-  return JSON.parse(JSON.stringify(internalState)) as InternalState;
+  return structuredClone(internalState);
 }
 
 /**

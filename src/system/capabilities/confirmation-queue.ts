@@ -221,12 +221,8 @@ function cloneApprovalOwner(input: ConfirmationApprovalOwner): ConfirmationAppro
   };
 }
 
-function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
-  try {
-    return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
-  } catch {
-    return { ...input };
-  }
+function cloneConfirmationParams(input: Record<string, unknown>): Record<string, unknown> {
+  return structuredClone(input);
 }
 
 function normalizePositiveInt(value: number | undefined, fallback: number): number {
@@ -284,7 +280,7 @@ export class ConfirmationQueue {
       method: request.method,
       action: request.action,
       scope: request.scope,
-      params: cloneRecord(request.params),
+      params: cloneConfirmationParams(request.params),
       companionReason: request.companionReason.trim() || 'No companion reason provided.',
       ...(request.resolutionAuthority
         ? { resolutionAuthority: request.resolutionAuthority }
@@ -548,8 +544,8 @@ export class ConfirmationQueue {
     }
 
     const nextParams = request.decision === 'modify'
-      ? cloneRecord(request.modifiedParams as Record<string, unknown>)
-      : cloneRecord(pending.entry.params);
+      ? cloneConfirmationParams(request.modifiedParams as Record<string, unknown>)
+      : cloneConfirmationParams(pending.entry.params);
     const runEntry = this.snapshot({
       ...pending.entry,
       params: nextParams,
@@ -682,7 +678,7 @@ export class ConfirmationQueue {
   private snapshot(entry: ConfirmationQueueEntry): ConfirmationQueueEntry {
     return {
       ...entry,
-      params: cloneRecord(entry.params),
+      params: cloneConfirmationParams(entry.params),
       ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
       ...(entry.approvalOwner
         ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }
@@ -693,8 +689,8 @@ export class ConfirmationQueue {
   private snapshotHistory(entry: ConfirmationQueueHistoryEntry): ConfirmationQueueHistoryEntry {
     return {
       ...entry,
-      ...(entry.params ? { params: cloneRecord(entry.params) } : {}),
-      ...(entry.appliedParams ? { appliedParams: cloneRecord(entry.appliedParams) } : {}),
+      ...(entry.params ? { params: cloneConfirmationParams(entry.params) } : {}),
+      ...(entry.appliedParams ? { appliedParams: cloneConfirmationParams(entry.appliedParams) } : {}),
       ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
       ...(entry.approvalOwner
         ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }

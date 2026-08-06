@@ -109,7 +109,7 @@ function clampLimit(value: unknown): number {
 }
 
 function cloneRecord<T>(record: T): T {
-  return JSON.parse(JSON.stringify(record)) as T;
+  return structuredClone(record);
 }
 
 type ToolCatalogSection = {

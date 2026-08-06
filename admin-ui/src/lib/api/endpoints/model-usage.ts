@@ -1,4 +1,5 @@
 import { apiDownload, apiGet, type ApiDownload } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   ModelUsageData,
   ModelUsageEvent,
@@ -7,8 +8,6 @@ import type {
   ModelUsageBreakdown,
   ModelUsageDimensionTimeBucket,
 } from '../../../../../src/shared/telemetry/model-usage.js';
-import { serializeModelUsageQuery } from './model-usage-query';
-
 export type AdminModelUsageData = ModelUsageData;
 export type AdminModelUsageQuery = ModelUsageQuery;
 export type {
@@ -45,8 +44,7 @@ export function getModelUsage(query: AdminModelUsageQuery = {}): Promise<AdminMo
 }
 
 export function buildModelUsagePath(query: AdminModelUsageQuery = {}): string {
-  const suffix = serializeModelUsageQuery(modelUsageSearchParams(query));
-  return `/api/admin/model-usage${suffix ? `?${suffix}` : ''}`;
+  return withQuery('/api/admin/model-usage', modelUsageSearchParams(query));
 }
 
 export function buildModelUsageExportPath(
@@ -55,7 +53,7 @@ export function buildModelUsageExportPath(
 ): string {
   const params = modelUsageSearchParams(query);
   params.set('format', format);
-  return `/api/admin/model-usage/export?${serializeModelUsageQuery(params)}`;
+  return withQuery('/api/admin/model-usage/export', params);
 }
 
 export const getModelUsageExportUrl = buildModelUsageExportPath;

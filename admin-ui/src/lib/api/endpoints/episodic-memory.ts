@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
@@ -29,8 +30,7 @@ function toQueryString(params: object): string {
     if (value === undefined || value === '') continue;
     search.set(key, String(value));
   }
-  const query = search.toString();
-  return query ? `?${query}` : '';
+  return withQuery('', search);
 }
 
 export function listEpisodicEpisodes(

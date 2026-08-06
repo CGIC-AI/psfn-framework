@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   ModelUsageBucket,
   ModelUsageRange,
@@ -7,7 +8,6 @@ import type { FleetModelUsageData } from '../../../../../src/operator/garden/ser
 import { parseCompanionGardenScope } from '$lib/fleet/companion-scope';
 import { parseFleetModelUsageData } from '$lib/fleet/model-usage-data';
 import { withFleetSessionRequestLock } from '$lib/api/fleet-session';
-import { serializeModelUsageQuery } from './model-usage-query';
 
 export interface FleetModelUsageQuery {
   range?: Exclude<ModelUsageRange, 'all'>;
@@ -31,8 +31,7 @@ export function buildFleetModelUsagePath(query: FleetModelUsageQuery = {}): stri
     const value = query[field];
     if (value !== undefined) params.set(field, String(value));
   }
-  const suffix = serializeModelUsageQuery(params);
-  return `/api/admin/fleet-model-usage${suffix ? `?${suffix}` : ''}`;
+  return withQuery('/api/admin/fleet-model-usage', params);
 }
 
 export function getFleetModelUsage(

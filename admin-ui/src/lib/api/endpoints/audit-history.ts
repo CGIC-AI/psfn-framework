@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   AuditFilters,
   AuditHistoryData,
@@ -14,7 +15,7 @@ export function getAuditHistory(filters: AuditFilters): Promise<AuditHistoryData
   if (filters.query?.trim()) params.set('query', filters.query.trim());
   if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.offset !== undefined) params.set('offset', String(filters.offset));
-  return apiGet<AuditHistoryData>(`/api/admin/audit/history?${params.toString()}`);
+  return apiGet<AuditHistoryData>(withQuery('/api/admin/audit/history', params));
 }
 
 export function buildAuditHistoryDetailPath(entryId: string): string {

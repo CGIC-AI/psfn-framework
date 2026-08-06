@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   WikiDocument,
   WikiDocumentListEntry,
@@ -67,5 +68,5 @@ export function searchWikiDocuments(query: string, limit = 20): Promise<WikiSear
     query,
     limit: String(limit),
   });
-  return apiGet<WikiSearchResult>(`/api/admin/wiki/search?${params.toString()}`);
+  return apiGet<WikiSearchResult>(withQuery('/api/admin/wiki/search', params));
 }

@@ -1,4 +1,5 @@
 import { apiGet, apiGetConditional, apiPost } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import { getGardenCacheStorage } from '$lib/cache/indexeddb';
 import {
   LocalFirstResource,
@@ -130,9 +131,8 @@ export function buildSessionMessagesPath(
   if (request.includeTurns === false) {
     params.set('includeTurns', 'false');
   }
-  const query = params.toString();
   const path = `/api/admin/sessions/${encodeURIComponent(sessionId)}`;
-  return query ? `${path}?${query}` : path;
+  return withQuery(path, params);
 }
 
 export function getSessionMessages(
@@ -216,9 +216,10 @@ export function searchSessionMessages(
   if (limit !== undefined) {
     params.set('limit', String(limit));
   }
-  return apiGet<AdminSessionSearchData>(
-    `/api/admin/sessions/${encodeURIComponent(sessionId)}/search?${params.toString()}`,
-  );
+  return apiGet<AdminSessionSearchData>(withQuery(
+    `/api/admin/sessions/${encodeURIComponent(sessionId)}/search`,
+    params,
+  ));
 }
 
 export function listSessionRoutes(): Promise<AdminSessionRouteListData> {

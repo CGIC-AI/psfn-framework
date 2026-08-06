@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   ChargeCostReconciliationData,
   ChargeCostReconciliationQuery,
@@ -24,8 +25,7 @@ export function buildChargeCostsPath(query: AdminChargeCostQuery = {}): string {
     const value = query[field];
     if (value !== undefined) params.set(field, String(value));
   }
-  const suffix = params.toString();
-  return `/api/admin/charge-costs${suffix ? `?${suffix}` : ''}`;
+  return withQuery('/api/admin/charge-costs', params);
 }
 
 export function getChargeCosts(query: AdminChargeCostQuery = {}): Promise<AdminChargeCostData> {

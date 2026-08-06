@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withQuery } from '../query';
 
 vi.mock('$lib/stores/auth.svelte', () => ({ getToken: () => '' }));
 
@@ -169,6 +170,9 @@ function staticString(
   }
   if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression)) {
     if (expression.expression.text === 'encodeURIComponent') return 'fixture-id';
+    if (expression.expression.text === 'withQuery' && expression.arguments[0]) {
+      return staticString(expression.arguments[0], constants, pathBuilders);
+    }
     return pathBuilders.get(expression.expression.text) ?? null;
   }
   return null;
@@ -517,6 +521,18 @@ afterEach(() => {
 });
 
 describe('Garden catalogue body-policy conformance', () => {
+  it('preserves endpoint query encoding, duplicate order, and empty paths', () => {
+    const params = new URLSearchParams();
+    params.append('timezone', 'America/New_York');
+    params.append('timezone', 'Europe/Paris');
+
+    expect(withQuery('/api/admin/model-usage', params)).toBe(
+      '/api/admin/model-usage?timezone=America%2FNew_York&timezone=Europe%2FParis',
+    );
+    expect(withQuery('/api/admin/model-usage', new URLSearchParams()))
+      .toBe('/api/admin/model-usage');
+  });
+
   it('admits a canonical representative request for every catalogue body policy', () => {
     for (const capability of GARDEN_ROUTE_CAPABILITIES) {
       const body = capability.body.mode === 'forbidden'

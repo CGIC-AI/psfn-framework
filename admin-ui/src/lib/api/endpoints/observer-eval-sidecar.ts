@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   ObserverEvalAgreementBand as CanonicalObserverEvalAgreementBand,
   ObserverEvalComparisonSummary as CanonicalObserverEvalComparisonSummary,
@@ -321,9 +322,8 @@ export function queryObserverEvalSidecarLeverEvents(
   appendNumber(params, 'sinceMs', filters.sinceMs);
   appendNumber(params, 'untilMs', filters.untilMs);
   appendNumber(params, 'limit', filters.limit);
-  const suffix = params.toString();
   return apiGet<AdminObserverEvalSidecarLeverEventListData>(
-    `${OBSERVER_EVAL_SIDECAR_BASE_PATH}/lever-events${suffix ? `?${suffix}` : ''}`,
+    withQuery(`${OBSERVER_EVAL_SIDECAR_BASE_PATH}/lever-events`, params),
   );
 }
 
@@ -354,8 +354,7 @@ export function buildObserverEvalSidecarObservationQuery(
   appendNumber(params, 'sinceMs', filters.sinceMs);
   appendNumber(params, 'untilMs', filters.untilMs);
   appendNumber(params, 'limit', filters.limit);
-  const suffix = params.toString();
-  return suffix ? `?${suffix}` : '';
+  return withQuery('', params);
 }
 
 export function buildObserverEvalSidecarRunQuery(
@@ -369,8 +368,7 @@ export function buildObserverEvalSidecarRunQuery(
   appendNumber(params, 'sinceMs', filters.sinceMs);
   appendNumber(params, 'untilMs', filters.untilMs);
   appendNumber(params, 'limit', filters.limit);
-  const suffix = params.toString();
-  return suffix ? `?${suffix}` : '';
+  return withQuery('', params);
 }
 
 function appendString(params: URLSearchParams, key: string, value: string | undefined): void {

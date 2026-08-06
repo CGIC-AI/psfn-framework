@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   RoomRosterMember as CanonicalRoomRosterMember,
   RoomSummary as CanonicalRoomSummary,
@@ -33,8 +34,7 @@ export function getRooms(options?: { limit?: number; offset?: number }): Promise
   const params = new URLSearchParams();
   if (options?.limit !== undefined) params.set('limit', String(options.limit));
   if (options?.offset !== undefined) params.set('offset', String(options.offset));
-  const query = params.toString();
-  return apiGet<RoomListData>(`/api/admin/rooms${query ? `?${query}` : ''}`);
+  return apiGet<RoomListData>(withQuery('/api/admin/rooms', params));
 }
 
 /**
@@ -49,8 +49,7 @@ export function getRoomRoster(
   if (options?.limit !== undefined) params.set('limit', String(options.limit));
   if (options?.offset !== undefined) params.set('offset', String(options.offset));
   if (options?.channel) params.set('channel', options.channel);
-  const query = params.toString();
   return apiGet<RoomRosterData>(
-    `/api/admin/rooms/${encodeURIComponent(channelId)}/roster${query ? `?${query}` : ''}`,
+    withQuery(`/api/admin/rooms/${encodeURIComponent(channelId)}/roster`, params),
   );
 }

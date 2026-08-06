@@ -14,6 +14,13 @@ import { POSTGRES_COMPANION_AVAILABILITY_MIGRATIONS } from '../../persistence/po
 import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
 import type { BackgroundWorkStorePort } from './background-work/store-port.js';
 import type { ClaimedBackgroundWorkJob } from './background-work/types.js';
+import {
+  registerGatewayMessageHandlers,
+  type GatewayMessageAgentLoop,
+  type GatewayMessageGateway,
+} from '../../app/agent/gateway-message-handlers.js';
+import { createNoopSatelliteRoutingPort } from './satellite-adapter-port.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const TEST_DRAIN_RETRY_DELAY_MS = 10;
 
@@ -260,6 +267,110 @@ describe('CompanionAvailabilityRuntime', () => {
       await runtime.stop();
     },
   );
+
+  it('retries a failed protected observation while live observation failures remain non-blocking', async () => {
+    vi.useFakeTimers();
+    let runtime: CompanionAvailabilityRuntime | undefined;
+    try {
+      const store = new MemoryAvailabilityStore();
+      runtime = new CompanionAvailabilityRuntime({
+        store,
+        project: async () => 'applied',
+        queueReadBatchSize: 20,
+        drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
+      });
+      await runtime.initialize();
+      let onDiscordMessage: ((message: SubstrateMessage) => void | Promise<void>) | undefined;
+      const gateway: GatewayMessageGateway = {
+        onHandleMessage: () => {},
+        onDiscordMessage: handler => { onDiscordMessage = handler; },
+        discordSend: async () => {},
+        discordSendMedia: async () => {},
+        onCompanionMessage: () => {},
+        companionSend: async channelId => ({
+          channelId,
+          messageId: 'unused-companion-reply',
+          deliveredTo: [],
+          skippedOffline: [],
+        }),
+        companionSendInitiation: async input => ({
+          channelId: input.channelId,
+          messageId: 'unused-companion-initiation',
+          deliveredTo: [],
+          skippedOffline: [],
+          permitOutcome: 'consumed',
+        }),
+        companionConsumeInitiationPermit: async () => ({ outcome: 'consumed' }),
+        companionReportFailure: async () => undefined,
+        onCompanionDeliveryFailure: () => {},
+      };
+      const observeMessage = vi.fn()
+        .mockRejectedValueOnce(new Error('live observation failure'))
+        .mockRejectedValueOnce(new Error('protected observation failure'))
+        .mockResolvedValueOnce(undefined);
+      const agentLoop: GatewayMessageAgentLoop = {
+        handleMessage: async () => { throw new Error('reply path is not used'); },
+        observeMessage,
+        waitForIdle: async () => {},
+        findRecordedIcpInitiation: async () => null,
+        findIcpDeliveryObservation: async () => null,
+        findRecordedCompanionSourceMessage: async () => null,
+        recordIcpDeliveryObservation: async () => {},
+      };
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      registerGatewayMessageHandlers({
+        eventBus: new EventBus(),
+        gateway,
+        agentLoop,
+        shardManager: { delegateSatelliteSession: async () => { throw new Error('unused'); } },
+        safeguardAuditTrail: { append: vi.fn() },
+        satelliteRouting: createNoopSatelliteRoutingPort(),
+        config: { companionId: '11111111-1111-4111-8111-111111111111' } as SubstrateConfig,
+        log,
+        trackSessionActivity: vi.fn(),
+        protectedMessageQueue: runtime,
+      });
+      expect(onDiscordMessage).toBeDefined();
+      const liveMessage = {
+        ...message('live-observation'),
+        routing: { source: 'discord' as const, responseMode: 'observe' as const },
+      };
+
+      await expect(onDiscordMessage!(liveMessage)).resolves.toBeUndefined();
+      expect(store.queued).toEqual([]);
+      expect(log.error).toHaveBeenCalledWith('Error handling message', {
+        channelId: 'discord-room',
+        messageId: 'live-observation',
+        error: 'live observation failure',
+      });
+
+      const lease = await runtime.begin('do_not_disturb');
+      const protectedMessage = {
+        ...message('protected-observation'),
+        routing: { source: 'discord' as const, responseMode: 'observe' as const },
+      };
+      await onDiscordMessage!(protectedMessage);
+      await lease.release();
+      await runtime.waitForDrain();
+
+      expect(observeMessage).toHaveBeenCalledTimes(2);
+      expect(store.queued.map(entry => entry.message.id)).toEqual(['protected-observation']);
+      expect(log.error).toHaveBeenCalledWith('Error handling message', {
+        channelId: 'discord-room',
+        messageId: 'protected-observation',
+        error: 'protected observation failure',
+      });
+
+      await vi.advanceTimersByTimeAsync(TEST_DRAIN_RETRY_DELAY_MS);
+      await runtime.waitForDrain();
+
+      expect(observeMessage).toHaveBeenCalledTimes(3);
+      expect(store.queued).toEqual([]);
+    } finally {
+      await runtime?.stop();
+      vi.useRealTimers();
+    }
+  });
 
   it('resets stale protected state on restart and drains durable messages', async () => {
     const store = new MemoryAvailabilityStore();

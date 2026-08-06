@@ -6,7 +6,8 @@ import type {
 import type { EventBus } from '../../shared/event-bus.js';
 
 export type { CompanionAvailabilitySnapshot, CompanionAvailabilityState } from '../../shared/contracts/runtime.js';
-export type CompanionAvailabilityProjectionResult = 'applied' | 'unsupported';
+
+type CompanionAvailabilityProjectionResult = 'applied' | 'unsupported';
 
 export interface QueuedCompanionMessage {
   sequence: number;

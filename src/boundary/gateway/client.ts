@@ -955,7 +955,7 @@ export class GatewayClient implements
   async discordSetAvailability(
     state: 'available' | 'idle' | 'do_not_disturb',
   ): Promise<'applied' | 'unsupported'> {
-    const result = (await this.rpcInstance.request('discord.availability', { state })) as DiscordAvailabilityResult;
+    const result = (await this.transportRuntime.request('discord.availability', { state })) as DiscordAvailabilityResult;
     return result.status;
   }
 

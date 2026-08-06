@@ -69,7 +69,7 @@ export class PostgresCompanionAvailabilityStore implements CompanionAvailability
     options: { schema?: string; role?: string } = {},
   ): Promise<PostgresCompanionAvailabilityStore> {
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-companion-availability',
+      applicationName: 'companion-availability',
       allowExitOnIdle: true,
       schema: options.schema,
       role: options.role,

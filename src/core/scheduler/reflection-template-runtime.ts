@@ -850,8 +850,8 @@ export function createReflectionTemplateRuntime(
             reflectionPrompt,
             '[Read-only Tool Grounding Task]\n'
               + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
-              + '- Use the core analysis_workbench only when deeper retrieval is useful.\n'
-              + '- Inside it, use only the read-only introspection helpers named in the policy above.\n'
+              + '- Use direct read-only session actions (list, search, or grep) when the provided evidence is insufficient.\n'
+              + '- Keep routine reflection recall in this turn; do not delegate it to another analysis loop.\n'
               + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
               + '- Return a concise evidence note, not the final reflection.',
           ),

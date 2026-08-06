@@ -137,7 +137,7 @@ const CANDIDATE_TOOL_MUTATION_DENIAL =
 //                   here. (free-time/outreach lanes already allow them: their
 //                   channels carry no maintenance-restricted taskKind.)
 //   - reflection -> NOT available. Silent introspection over memory/self-model;
-//                   no outward image expression.
+//                   no outward image expression or heavyweight analysis loop.
 //   - maintenance-> NOT available. Pure ops/housekeeping.
 const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
 
@@ -161,9 +161,6 @@ const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['system', {
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
-  }],
-  ['analysis_workbench', {
-    allowedTaskKinds: ['reflection'],
   }],
   ['generate_image', {
     allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,

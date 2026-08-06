@@ -21,10 +21,6 @@ import {
   type IcpLocalPolicyReleaseParams,
   type IcpLocalPolicyReleaseResult,
 } from '../../core/icp/local-policy-contract.js';
-import {
-  evaluateProactiveOutboundTimeGate,
-  type ProactiveQuietHoursConfig,
-} from '../../core/intention/proactive-time-gate.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { IcpAutonomyReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import { TRUST_LEVELS, trustAtLeast, type TrustLevel } from '../../system/trust/types.js';
@@ -96,7 +92,6 @@ export interface PostgresIcpLocalPolicyAuthorityOptions {
   postgresSchema: string;
   postgresRole?: string;
   companionDataDir: string;
-  quietHours: ProactiveQuietHoursConfig;
   policyHolds: {
     ttlMs: number;
     maxOutstanding: number;
@@ -260,10 +255,6 @@ export class PostgresIcpLocalPolicyAuthority {
       canonicalPeerContact: canonicalCandidate && relationship !== null,
       trustAllows: relationship !== null && trustAtLeast(relationship.trustLevel, 'regular'),
       blocksPeer: this.isBlocked(input.recipientCompanionId, input.channelId),
-      quietHours: !evaluateProactiveOutboundTimeGate({
-        nowMs: decisionNowMs,
-        quietHours: this.options.quietHours,
-      }).allowed,
       provenanceFresh: canonicalCandidate
         && candidateRow.status === 'pending'
         && createdAtMs !== null
@@ -442,10 +433,6 @@ export class PostgresIcpLocalPolicyAuthority {
     if (!trustAtLeast(relationship.trustLevel, 'regular')) return 'policy_denied';
     if (this.isBlocked(peerCompanionId, input.channelId)) return 'peer_blocked';
     if (input.role === 'recipient' || input.phase === 'consume') return null;
-    if (!evaluateProactiveOutboundTimeGate({
-      nowMs: decisionNowMs,
-      quietHours: this.options.quietHours,
-    }).allowed) return 'quiet_hours';
     const capacity = await this.options.capacityAuthority.resolve({
       senderCompanionId: input.senderCompanionId,
       candidate: input.candidate!,

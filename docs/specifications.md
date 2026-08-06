@@ -365,6 +365,10 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   and the ICP conversation cost breaker. Existing `trust-policy.json`,
   `channels.json`, capability tier, contact block/trust, and gateway policy
   remain independent mandatory gates.
+- Operator quiet hours govern unsolicited companion-to-human outreach only.
+  They do not silence companion-to-companion initiation or the companions'
+  self-directed time; ICP remains governed by its own availability, fatigue,
+  charge, trust/block, provenance, capability, and cost controls.
 - Candidate motivation and peer-contact binding stay companion-local. Shared
   arbitration stores only content-free availability, episode, provenance, and
   permit control state. Permits are short-lived, single-use, candidate-bound,

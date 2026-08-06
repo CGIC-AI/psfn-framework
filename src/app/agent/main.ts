@@ -1184,7 +1184,6 @@ async function main(): Promise<void> {
       postgresSchema,
       postgresRole,
       companionDataDir: pathSnapshot.companionDataDir,
-      quietHours: schedulerConfig.episodicProcessing,
       policyHolds: schedulerConfig.icpAutonomy.policyHolds,
       capacityAuthority,
     });

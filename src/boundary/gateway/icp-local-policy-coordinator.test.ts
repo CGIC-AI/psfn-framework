@@ -64,6 +64,7 @@ describe('GatewayIcpLocalPolicyCoordinator', () => {
             canonicalPeerContact: true,
             trustAllows: true,
             blocksPeer: false,
+            quietHours: true,
             provenanceFresh: true,
             socialPressureAllows: true,
             chargeAllows: true,

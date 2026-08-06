@@ -122,6 +122,7 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
       canonicalPeerContact: true,
       trustAllows: true,
       blocksPeer: false,
+      quietHours: false,
       provenanceFresh: true,
       socialPressureAllows: true,
       chargeAllows: true,

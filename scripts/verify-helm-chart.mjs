@@ -872,6 +872,75 @@ assertIncludes(
   '\\gexec',
   'Postgres restore-verify guarded command execution',
 );
+for (const expected of [
+  '\\connect "psfn_restore_verify"',
+  'CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION "psfn";',
+  'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;',
+  'ALTER SCHEMA extensions OWNER TO "psfn";',
+  'ALTER EXTENSION vector SET SCHEMA extensions;',
+  'REVOKE ALL ON SCHEMA extensions FROM PUBLIC;',
+]) {
+  assertIncludes(
+    postgresInit,
+    expected,
+    'Postgres restore-verify pgvector init SQL',
+  );
+}
+const restoreVerifyProvisioner = findDocumentByKindName(
+  rendered,
+  'Job',
+  'psfn-postgres-restore-verify',
+);
+assertIncludes(
+  restoreVerifyProvisioner,
+  'helm.sh/hook: post-install,post-upgrade',
+  'Postgres restore-verify upgrade hook',
+);
+assertIncludes(
+  restoreVerifyProvisioner,
+  '--file=/docker-entrypoint-initdb.d/00-pgvector.sql',
+  'Postgres restore-verify upgrade SQL execution',
+);
+assertIncludes(
+  restoreVerifyProvisioner,
+  "'GRANT USAGE ON SCHEMA extensions TO %I;',",
+  'Postgres restore-verify mirrored extension grants',
+);
+assertIncludes(
+  restoreVerifyProvisioner,
+  "extension_schema.nspname = 'extensions'",
+  'Postgres restore-verify source extension grant scope',
+);
+assertIncludes(
+  restoreVerifyProvisioner,
+  '--file=/scratch/extension-usage-grants.sql',
+  'Postgres restore-verify grant application',
+);
+const postgresNetworkPolicy = findDocumentByKindName(
+  rendered,
+  'NetworkPolicy',
+  'psfn-postgres',
+);
+assertIncludes(
+  postgresNetworkPolicy,
+  'app.kubernetes.io/component: postgres-restore-verify',
+  'Postgres restore-verify provisioner ingress',
+);
+const restoreVerifyNetworkPolicy = findDocumentByKindName(
+  rendered,
+  'NetworkPolicy',
+  'psfn-postgres-restore-verify',
+);
+assertIncludes(
+  restoreVerifyNetworkPolicy,
+  'app.kubernetes.io/component: postgres-restore-verify',
+  'Postgres restore-verify provisioner egress selector',
+);
+assertIncludes(
+  restoreVerifyNetworkPolicy,
+  'app.kubernetes.io/component: postgres',
+  'Postgres restore-verify provisioner database egress',
+);
 assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
 assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetch Job');
@@ -1014,6 +1083,16 @@ assertIncludes(
   customPostgresInit,
   "'CREATE DATABASE %I OWNER %I',\n      'companion_restore_verify',\n      'companion_owner'",
   'custom Postgres restore-verify database and owner init SQL',
+);
+assertIncludes(
+  customPostgresInit,
+  '\\connect "companion_restore_verify"',
+  'custom Postgres restore-verify database connection',
+);
+assertIncludes(
+  customPostgresInit,
+  'CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION "companion_owner";',
+  'custom Postgres restore-verify extension schema owner',
 );
 
 const appSecret = findDocument(rendered, 'psfn-app');

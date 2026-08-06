@@ -534,11 +534,25 @@ Default greenfield mode renders `pgvector/pgvector:0.8.1-pg17` pinned to:
 sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21
 ```
 
-The init SQL runs:
+The bundled Postgres init SQL installs pgvector in the primary database and
+creates the dedicated `<database>_restore_verify` database with an
+owner-controlled `extensions` schema:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
+\connect "psfn_restore_verify"
+CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION "psfn";
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 ```
+
+Because `/docker-entrypoint-initdb.d` runs only against an empty data directory,
+the chart also runs the same idempotent SQL from a bounded
+`post-install,post-upgrade` Job. Existing Postgres PVCs therefore receive new
+restore-verification prerequisites during an upgrade rather than only on a
+greenfield install. Deployments using distinct Fleet Auth, companion-schema,
+and shared-migration roles must grant those exact roles `CONNECT, CREATE` on the
+scratch database and `USAGE` on its `extensions` schema; the repo-owned local
+Artemis shakedown provisions those grants without rotating retained credentials.
 
 External Postgres mode:
 

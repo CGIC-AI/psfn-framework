@@ -19,6 +19,10 @@ const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.tar', '.woff', '.woff2',
 ]);
 
+const SOURCE_CODE_EXTENSIONS = new Set([
+  '.cjs', '.cts', '.js', '.jsx', '.mjs', '.mts', '.sh', '.ts', '.tsx',
+]);
+
 const FORBIDDEN_PATH_RULES = [
   {
     name: 'character-card-artifact',
@@ -117,6 +121,13 @@ export function shouldScanTextContent(file) {
   return !BINARY_EXTENSIONS.has(ext);
 }
 
+/** @param {string} file */
+export function shouldScanSourceForNulByte(file) {
+  const normalized = toPosixRelativePath(file);
+  if (normalized.startsWith('.beads/')) return false;
+  return SOURCE_CODE_EXTENSIONS.has(path.extname(normalized).toLowerCase());
+}
+
 /** @param {string} text @param {number} idx */
 function lineForIndex(text, idx) {
   let line = 1;
@@ -139,6 +150,23 @@ function collectTextViolations(file, text, rules) {
       violations.push({ file, line, rule: rule.name, snippet });
       if (regex.lastIndex === match.index) regex.lastIndex += 1;
     }
+  }
+  return violations;
+}
+
+/** @returns {Array<{file:string, line:number, rule:string, snippet:string}>} */
+function collectNulByteViolations(file, text) {
+  /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
+  const violations = [];
+  let index = text.indexOf('\0');
+  while (index !== -1) {
+    violations.push({
+      file,
+      line: lineForIndex(text, index),
+      rule: 'literal-nul-byte',
+      snippet: 'U+0000 (NUL)',
+    });
+    index = text.indexOf('\0', index + 1);
   }
   return violations;
 }
@@ -190,6 +218,15 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
   const violations = [];
 
   for (const trackedFile of trackedFiles.map((file) => toPosixRelativePath(file))) {
+    let sourceText;
+    if (
+      shouldScanSourceForNulByte(trackedFile)
+      && (!skipMissingWorkingTreeFiles || existsSync(trackedFile))
+    ) {
+      sourceText = readTextFile(trackedFile);
+      violations.push(...collectNulByteViolations(trackedFile, sourceText));
+    }
+
     if (shouldSkipTrackedFile(trackedFile)) {
       continue;
     }
@@ -212,7 +249,7 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
     if (skipMissingWorkingTreeFiles && !existsSync(trackedFile)) {
       continue;
     }
-    const text = readTextFile(trackedFile);
+    const text = sourceText ?? readTextFile(trackedFile);
     violations.push(...collectTextViolations(trackedFile, text, TEXT_RULES));
     violations.push(...collectTextViolations(trackedFile, text, localBlocklist.textRuleRegex));
   }

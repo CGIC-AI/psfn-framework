@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseTrackedFilesFromGitLsStage,
   scanPublicSanitizeTrackedFiles,
+  shouldScanSourceForNulByte,
   shouldScanTextContent,
 } from '../../../../scripts/public-sanitize-check.mjs';
 
@@ -21,6 +22,36 @@ describe('public-sanitize check', () => {
     expect(shouldScanTextContent('.beads/beads.left.jsonl')).toBe(false);
     expect(shouldScanTextContent('.beads/interactions.jsonl')).toBe(false);
     expect(shouldScanTextContent('docs/image.png')).toBe(false);
+  });
+
+  it('checks tracked source code for literal NUL bytes', () => {
+    expect(shouldScanSourceForNulByte('src/app/agent/main.ts')).toBe(true);
+    expect(shouldScanSourceForNulByte('scripts/check.mjs')).toBe(true);
+    expect(shouldScanSourceForNulByte('docs/README.md')).toBe(false);
+    expect(shouldScanSourceForNulByte('src/fixture.docx')).toBe(false);
+
+    const nul = String.fromCharCode(0);
+    const result = scanPublicSanitizeTrackedFiles(
+      ['src/example.ts'],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: () => `const safe = '\\x00';\nconst unsafe = 'before${nul}after';\n`,
+      },
+    );
+
+    expect(result.violations).toEqual([
+      {
+        file: 'src/example.ts',
+        line: 2,
+        rule: 'literal-nul-byte',
+        snippet: 'U+0000 (NUL)',
+      },
+    ]);
   });
 
   it('detects blocked token patterns in in-scope files', () => {

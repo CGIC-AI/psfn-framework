@@ -775,7 +775,7 @@ export function createPostgresObserverEvalSidecarStore(
   // sharing one databaseUrl must never resolve to the same pooled store, while
   // every caller inside one companion process (write path and advisory read)
   // shares a single memoized instance (psfn-framework-3ack).
-  const memoKey = tenant ? `${databaseUrl} ${tenant.schema}` : databaseUrl;
+  const memoKey = tenant ? `${databaseUrl}\x00${tenant.schema}` : databaseUrl;
   if (!options.nowMs) {
     const existing = storeByPoolKey.get(memoKey);
     if (existing) {

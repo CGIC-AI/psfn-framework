@@ -306,7 +306,7 @@ export class SharedWikiPgvectorProjectionStore implements SharedWikiSearchPort {
       const score = parseWikiChunkScore(row.score);
       // Document ids repeat across sites (every site has `site-overview`), so
       // per-document dedup keys on scope + id, never id alone.
-      const key = `${row.scope} ${row.document_id}`;
+      const key = `${row.scope}\x00${row.document_id}`;
       const existing = bestByDoc.get(key);
       if (existing && existing.score >= score) continue;
       bestByDoc.set(key, {

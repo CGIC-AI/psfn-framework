@@ -625,7 +625,7 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
     if (role === 'owner' && contactId === undefined) {
       fail(`${field}.contactId is required for an owner`);
     }
-    const identity = `${providerSubjectId} ${companionId}`;
+    const identity = `${providerSubjectId}\x00${companionId}`;
     if (seen.has(identity)) {
       fail(`duplicate accountRoster entry for subject and companion at ${field}`);
     }

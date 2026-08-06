@@ -121,13 +121,72 @@ const BEADS_ISSUE_PROSE_KEYS = [
   'title',
 ] as const;
 
-const BEADS_ISSUE_DEPENDENCY_KEYS = [
+const BEADS_ISSUE_DEPENDENCY_EDGE_KEYS = [
   'created_at',
   'created_by',
   'depends_on_id',
   'issue_id',
   'metadata',
   'type',
+] as const;
+
+const BEADS_ISSUE_DEPENDENCY_SUMMARY_KEYS = [
+  'acceptance_criteria',
+  'assignee',
+  'close_reason',
+  'closed_at',
+  'created_at',
+  'created_by',
+  'defer_until',
+  'dependency_type',
+  'description',
+  'design',
+  'external_ref',
+  'id',
+  'issue_type',
+  'labels',
+  'metadata',
+  'notes',
+  'owner',
+  'priority',
+  'spec_id',
+  'started_at',
+  'status',
+  'title',
+  'updated_at',
+] as const;
+
+const BEADS_ISSUE_DEPENDENCY_SUMMARY_STRING_KEYS = [
+  'acceptance_criteria',
+  'assignee',
+  'close_reason',
+  'closed_at',
+  'created_at',
+  'created_by',
+  'defer_until',
+  'dependency_type',
+  'description',
+  'design',
+  'external_ref',
+  'id',
+  'issue_type',
+  'notes',
+  'owner',
+  'spec_id',
+  'started_at',
+  'status',
+  'title',
+  'updated_at',
+] as const;
+
+const BEADS_ISSUE_DEPENDENCY_SUMMARY_REQUIRED_STRING_KEYS = [
+  'created_at',
+  'dependency_type',
+  'id',
+  'issue_type',
+  'status',
+  'title',
+  'updated_at',
 ] as const;
 
 function requestedBeadsReady(value: unknown): BeadsReadyRequestProof | undefined {
@@ -166,15 +225,47 @@ function requestedBeadsShow(value: unknown): BeadsShowRequestProof | undefined {
   return { id: value.id.trim(), ...(actor ? { actor } : {}) };
 }
 
-function isCanonicalBeadsIssueDependency(value: unknown): boolean {
+function isCanonicalBeadsIssueDependencyEdge(value: unknown): boolean {
   if (!isRecord(value)
-    || Object.keys(value).some((key) => !(BEADS_ISSUE_DEPENDENCY_KEYS as readonly string[]).includes(key))
-    || Object.keys(value).length !== BEADS_ISSUE_DEPENDENCY_KEYS.length) {
+    || Object.keys(value).some((key) => (
+      !(BEADS_ISSUE_DEPENDENCY_EDGE_KEYS as readonly string[]).includes(key)
+    ))
+    || Object.keys(value).length !== BEADS_ISSUE_DEPENDENCY_EDGE_KEYS.length) {
     return false;
   }
-  return BEADS_ISSUE_DEPENDENCY_KEYS.every((key) => (
+  return BEADS_ISSUE_DEPENDENCY_EDGE_KEYS.every((key) => (
     typeof value[key] === 'string'
   ));
+}
+
+function isCanonicalBeadsIssueDependencySummary(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (!isRecord(value)
+    || Object.keys(value).some((key) => (
+      !(BEADS_ISSUE_DEPENDENCY_SUMMARY_KEYS as readonly string[]).includes(key)
+    ))) {
+    return false;
+  }
+  for (const key of BEADS_ISSUE_DEPENDENCY_SUMMARY_STRING_KEYS) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') return false;
+  }
+  if (!BEADS_ISSUE_DEPENDENCY_SUMMARY_REQUIRED_STRING_KEYS.every((key) => (
+    typeof value[key] === 'string' && value[key].trim().length > 0
+  ))) {
+    return false;
+  }
+  if (typeof value.priority !== 'number' || !Number.isInteger(value.priority)) return false;
+  if (value.labels !== undefined
+    && (!Array.isArray(value.labels) || value.labels.some((label) => typeof label !== 'string'))) {
+    return false;
+  }
+  return value.metadata === undefined || isRecord(value.metadata);
+}
+
+function isCanonicalBeadsIssueDependency(value: unknown): boolean {
+  return isCanonicalBeadsIssueDependencyEdge(value)
+    || isCanonicalBeadsIssueDependencySummary(value);
 }
 
 function isCanonicalBeadsIssue(value: unknown): value is Record<string, unknown> {
@@ -324,12 +415,24 @@ function matchingBeadsShowResult(
   return parsed;
 }
 
-function neutralizeBeadsIssue(issue: Record<string, unknown>): Record<string, unknown> {
+function neutralizeBeadsIssueProse(issue: Record<string, unknown>): Record<string, unknown> {
   const neutralized = { ...issue };
   for (const key of BEADS_ISSUE_PROSE_KEYS) {
     if (Object.prototype.hasOwnProperty.call(issue, key)) {
       neutralized[key] = 'tracked database issue field';
     }
+  }
+  return neutralized;
+}
+
+function neutralizeBeadsIssue(issue: Record<string, unknown>): Record<string, unknown> {
+  const neutralized = neutralizeBeadsIssueProse(issue);
+  if (Array.isArray(issue.dependencies)) {
+    neutralized.dependencies = issue.dependencies.map((dependency) => (
+      isCanonicalBeadsIssueDependencySummary(dependency)
+        ? neutralizeBeadsIssueProse(dependency)
+        : dependency
+    ));
   }
   return neutralized;
 }

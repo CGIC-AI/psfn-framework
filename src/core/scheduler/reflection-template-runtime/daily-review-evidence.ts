@@ -44,9 +44,15 @@ export interface CollectDailyReviewEvidenceInput {
   nowMs: number;
   windowMs: number;
   scope: DailyReviewEvidenceScope;
-  sessionManager?: Pick<{ getRecentMessages(channelId: string, limit?: number): SessionEntry[] }, 'getRecentMessages'>;
+  sessionManager?: {
+    getRecentMessages(channelId: string, limit?: number): SessionEntry[];
+    getConversationEvidenceWindow?(
+      channelId: string,
+      options: { fromMs: number; toMs: number; limit: number },
+    ): { entries: SessionEntry[]; saturated: boolean };
+  };
   episodicStore?: Pick<EpisodicStorePort, 'searchByTime'> | null;
-  memoryStore?: Pick<MemoryStorePort, 'listActiveMemories'> | null;
+  memoryStore?: Pick<MemoryStorePort, 'listActiveMemories' | 'listActiveMemoriesInWindow'> | null;
   logger?: DailyReviewEvidenceLogger;
 }
 
@@ -75,12 +81,14 @@ function selectEvenlyDistributed<T>(values: readonly T[], limit: number): T[] {
 
 function normalizeConversationEntries(
   entries: readonly SessionEntry[],
+  expectedSessionId: string,
   windowStartMs: number,
   nowMs: number,
 ): SessionEntry[] {
   return entries
     .filter(entry => (
-      (entry.role === 'user' || entry.role === 'assistant')
+      entry.channelId === expectedSessionId
+      && (entry.role === 'user' || entry.role === 'assistant')
       && Number.isFinite(entry.timestamp)
       && entry.timestamp >= windowStartMs
       && entry.timestamp <= nowMs
@@ -124,6 +132,30 @@ function formatMemoryLine(value: PurrMemory): string {
   return truncateEvidenceLine(`[${value.type}] ${value.text}`);
 }
 
+function episodeMatchesScope(value: Episode, scope: DailyReviewEvidenceScope): boolean {
+  return scope.kind === 'companion'
+    || value.spanRefs.some(span => span.sessionId === scope.sessionId);
+}
+
+function episodeMatchesWindow(value: Episode, windowStartMs: number, nowMs: number): boolean {
+  const startedAt = Date.parse(value.startedAt);
+  const endedAt = Date.parse(value.endedAt);
+  return Number.isFinite(startedAt)
+    && Number.isFinite(endedAt)
+    && endedAt >= windowStartMs
+    && startedAt <= nowMs;
+}
+
+function memoryMatchesWindow(value: PurrMemory, windowStartMs: number, nowMs: number): boolean {
+  return Number.isFinite(value.extractedAt)
+    && value.extractedAt >= windowStartMs
+    && value.extractedAt <= nowMs;
+}
+
+function addDegradationReason(reasons: string[], reason: string): void {
+  if (!reasons.includes(reason)) reasons.push(reason);
+}
+
 function formatEvidenceCategory(
   heading: string,
   countSummary: string,
@@ -149,14 +181,37 @@ export async function collectDailyReviewEvidence(
   const degradationReasons: string[] = [];
 
   let scannedSessionEntries: SessionEntry[] = [];
+  let conversationCountIsLowerBound = false;
   if (input.scope.kind === 'companion' || !input.sessionManager) {
     degradationReasons.push('session_source_unavailable');
   } else {
     try {
-      scannedSessionEntries = input.sessionManager.getRecentMessages(
-        input.scope.sessionId,
-        REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
-      );
+      if (input.sessionManager.getConversationEvidenceWindow) {
+        const window = input.sessionManager.getConversationEvidenceWindow(
+          input.scope.sessionId,
+          {
+            fromMs: windowStartMs,
+            toMs: input.nowMs,
+            limit: REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
+          },
+        );
+        scannedSessionEntries = window.entries.slice(0, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT);
+        conversationCountIsLowerBound = window.saturated
+          || window.entries.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT;
+        if (window.entries.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT) {
+          addDegradationReason(degradationReasons, 'session_source_contract_violation');
+        }
+        if (conversationCountIsLowerBound) {
+          addDegradationReason(degradationReasons, 'session_scan_saturated');
+        }
+      } else {
+        scannedSessionEntries = input.sessionManager.getRecentMessages(
+          input.scope.sessionId,
+          REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
+        );
+        conversationCountIsLowerBound = true;
+        addDegradationReason(degradationReasons, 'session_coverage_unverified');
+      }
     } catch (error) {
       degradationReasons.push('session_read_failed');
       input.logger?.warn('Daily-review session evidence read failed', {
@@ -164,26 +219,42 @@ export async function collectDailyReviewEvidence(
       });
     }
   }
+  const expectedSessionId = input.scope.kind === 'companion' ? '' : input.scope.sessionId;
+  if (expectedSessionId
+    && scannedSessionEntries.some(entry => entry.channelId !== expectedSessionId)) {
+    addDegradationReason(degradationReasons, 'session_scope_violation');
+  }
   const conversationEntries = normalizeConversationEntries(
     scannedSessionEntries,
+    expectedSessionId,
     windowStartMs,
     input.nowMs,
   );
 
-  let episodes: Episode[] = [];
+  let scannedEpisodes: Episode[] = [];
+  let episodeCountIsLowerBound = false;
   if (!input.episodicStore) {
     degradationReasons.push('episode_source_unavailable');
   } else {
     try {
-      episodes = await input.episodicStore.searchByTime({
+      const returnedEpisodes = await input.episodicStore.searchByTime({
         from: windowFrom,
         to: windowTo,
-        limit: DAILY_REVIEW_EVIDENCE_SHAPE.episodeSamples,
+        limit: DAILY_REVIEW_EVIDENCE_SHAPE.episodeSamples + 1,
         order: 'desc',
         ...(input.scope.kind === 'companion'
           ? {}
           : { spanSessionId: input.scope.sessionId }),
       });
+      const episodeQueryLimit = DAILY_REVIEW_EVIDENCE_SHAPE.episodeSamples + 1;
+      scannedEpisodes = returnedEpisodes.slice(0, episodeQueryLimit);
+      if (returnedEpisodes.length > episodeQueryLimit) {
+        addDegradationReason(degradationReasons, 'episode_source_contract_violation');
+      }
+      episodeCountIsLowerBound = scannedEpisodes.length > DAILY_REVIEW_EVIDENCE_SHAPE.episodeSamples;
+      if (episodeCountIsLowerBound) {
+        addDegradationReason(degradationReasons, 'episode_scan_saturated');
+      }
     } catch (error) {
       degradationReasons.push('episode_read_failed');
       input.logger?.warn('Daily-review episode evidence read failed', {
@@ -192,21 +263,64 @@ export async function collectDailyReviewEvidence(
     }
   }
 
+  if (scannedEpisodes.some(value => !episodeMatchesScope(value, input.scope))) {
+    addDegradationReason(degradationReasons, 'episode_scope_violation');
+  }
+  if (scannedEpisodes.some(value => !episodeMatchesWindow(value, windowStartMs, input.nowMs))) {
+    addDegradationReason(degradationReasons, 'episode_window_violation');
+  }
+  const scopedEpisodes = scannedEpisodes
+    .filter(value => episodeMatchesScope(value, input.scope))
+    .filter(value => episodeMatchesWindow(value, windowStartMs, input.nowMs));
+  const episodes = scopedEpisodes.slice(0, DAILY_REVIEW_EVIDENCE_SHAPE.episodeSamples);
+
   let memoryDeltas: PurrMemory[] = [];
+  let memoryCountIsLowerBound = false;
   if (!input.memoryStore) {
     degradationReasons.push('memory_source_unavailable');
   } else {
     try {
-      const activeMemories = await input.memoryStore.listActiveMemories({
-        limit: REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
-      });
+      let activeMemories: PurrMemory[];
+      if (input.memoryStore.listActiveMemoriesInWindow) {
+        const window = await input.memoryStore.listActiveMemoriesInWindow({
+          fromMs: windowStartMs,
+          toMs: input.nowMs,
+          limit: REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
+          scope: input.scope.kind === 'companion'
+            ? { kind: 'companion' }
+            : input.scope.kind === 'group'
+              ? { kind: 'conversation', conversationId: input.scope.sessionId }
+              : {
+                kind: 'contact',
+                contactId: input.scope.canonicalContactId,
+                conversationId: input.scope.sessionId,
+              },
+        });
+        activeMemories = window.memories.slice(0, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT);
+        memoryCountIsLowerBound = window.saturated
+          || window.memories.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT;
+        if (window.memories.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT) {
+          addDegradationReason(degradationReasons, 'memory_source_contract_violation');
+        }
+        if (memoryCountIsLowerBound) {
+          addDegradationReason(degradationReasons, 'memory_scan_saturated');
+        }
+      } else {
+        activeMemories = await input.memoryStore.listActiveMemories({
+          limit: REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
+        });
+        memoryCountIsLowerBound = true;
+        addDegradationReason(degradationReasons, 'memory_coverage_unverified');
+      }
+      if (activeMemories.some(memory => (
+        !memoryMatchesWindow(memory, windowStartMs, input.nowMs)
+        || !memoryMatchesScope(memory, input.scope)
+      ))) {
+        addDegradationReason(degradationReasons, 'memory_scope_violation');
+      }
       memoryDeltas = activeMemories
-        .filter(memory => (
-          Number.isFinite(memory.extractedAt)
-          && memory.extractedAt >= windowStartMs
-          && memory.extractedAt <= input.nowMs
-          && memoryMatchesScope(memory, input.scope)
-        ))
+        .filter(memory => memoryMatchesWindow(memory, windowStartMs, input.nowMs))
+        .filter(memory => memoryMatchesScope(memory, input.scope))
         .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
     } catch (error) {
       degradationReasons.push('memory_read_failed');
@@ -225,11 +339,7 @@ export async function collectDailyReviewEvidence(
     degradationReasons.push('no_bounded_day_evidence');
   }
 
-  const conversationIsScanBounded = (
-    scannedSessionEntries.length === REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT
-    && conversationEntries.length === scannedSessionEntries.length
-  );
-  const conversationCount = `${String(conversationEntries.length)}${conversationIsScanBounded ? '+' : ''}`;
+  const conversationCount = `${String(conversationEntries.length)}${conversationCountIsLowerBound ? '+' : ''}`;
   const conversationLines = selectEvenlyDistributed(
     conversationEntries,
     DAILY_REVIEW_EVIDENCE_SHAPE.conversationSamples,
@@ -252,13 +362,13 @@ export async function collectDailyReviewEvidence(
     ),
     ...formatEvidenceCategory(
       '[Episodes]',
-      `${String(episodes.length)} episode records were found in the bounded window.`,
+      `${String(scopedEpisodes.length)}${episodeCountIsLowerBound ? '+' : ''} episode records were found in the bounded window.`,
       episodeLines,
       'No episode records were found in the bounded window.',
     ),
     ...formatEvidenceCategory(
       '[Memory Deltas]',
-      `${String(memoryDeltas.length)} memory changes were found in the bounded scan.`,
+      `${String(memoryDeltas.length)}${memoryCountIsLowerBound ? '+' : ''} memory changes were found in the bounded scan.`,
       memoryLines,
       'No memory changes were found in the bounded window.',
     ),

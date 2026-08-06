@@ -198,6 +198,30 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
         };
       }
 
+      if (property === 'findLatestEntries') {
+        return (
+          channelId: string,
+          predicate: (entry: SessionEntry) => boolean,
+          limit = 1,
+          options: { stopBeforeTimestamp?: number } = {},
+        ): SessionEntry[] => {
+          const statuses = new Map<string, IcpDeliveryStatus | null>();
+          const resolveStatus = (sourceMessageId: string): IcpDeliveryStatus | null => {
+            if (statuses.has(sourceMessageId)) return statuses.get(sourceMessageId) ?? null;
+            const status = findDeliveryStatus(target, channelId, sourceMessageId);
+            statuses.set(sourceMessageId, status);
+            return status;
+          };
+          return target.findLatestEntries(
+            channelId,
+            candidate => predicate(candidate)
+              && filterUndeliveredIcpAssistantEntries([candidate], resolveStatus).length === 1,
+            limit,
+            options,
+          );
+        };
+      }
+
       if (property === 'getCompactionBoundarySafePrefix') {
         return (
           channelId: string,

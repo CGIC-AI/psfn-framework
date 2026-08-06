@@ -15,6 +15,8 @@ import {
 import { startPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import type { MemoryJournal } from './journal.js';
 import type {
+  ActiveMemoryWindowOptions,
+  ActiveMemoryWindowResult,
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
@@ -1213,6 +1215,59 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       .filter(memory => !memory.supersededBy && !memory.deletedAt)
       .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
       .slice(offset, offset + limit);
+  }
+
+  async listActiveMemoriesInWindow(
+    options: ActiveMemoryWindowOptions,
+  ): Promise<ActiveMemoryWindowResult> {
+    if (!Number.isFinite(options.fromMs) || !Number.isFinite(options.toMs) || options.fromMs > options.toMs) {
+      throw new Error('Active memory window requires finite ordered bounds');
+    }
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
+      throw new Error('Active memory window limit must be a positive safe integer');
+    }
+    if (this.transactionContext.getStore()) {
+      throw new Error('Active memory window reads are unavailable inside a memory-store transaction');
+    }
+    await this.persistChain;
+
+    const limit = clampLimit(options.limit, 50, 1, 500);
+    const values: unknown[] = [options.fromMs, options.toMs];
+    const scopeConditions: string[] = [];
+    if (options.scope.kind !== 'companion') {
+      values.push(options.scope.conversationId);
+      const conversationParameter = `$${values.length}`;
+      scopeConditions.push(
+        `provenance_json ->> 'channelId' = ${conversationParameter}`,
+        `(scope_ref_kind = 'conversation' AND scope_ref_id = ${conversationParameter})`,
+      );
+      if (options.scope.kind === 'contact') {
+        values.push(options.scope.contactId);
+        scopeConditions.push(`contact_id = $${values.length}`);
+      }
+    }
+    values.push(limit + 1);
+    const rows = await queryRows<MemoryRow>(this.pool, `
+      SELECT
+        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
+        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+        delete_reason, NULL::text AS embedding
+      FROM l2_memories
+      WHERE superseded_by IS NULL
+        AND deleted_at IS NULL
+        AND extracted_at >= $1
+        AND extracted_at <= $2
+        ${scopeConditions.length > 0 ? `AND (${scopeConditions.join(' OR ')})` : ''}
+      ORDER BY extracted_at DESC, id DESC
+      LIMIT $${values.length}
+    `, values);
+    return {
+      memories: rows.slice(0, limit).map(fromMemoryRow),
+      saturated: rows.length > limit,
+    };
   }
 
   async listAdminMemories(options: MemoryAdminListOptions = {}): Promise<MemoryAdminListResult> {

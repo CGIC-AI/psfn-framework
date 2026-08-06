@@ -2060,6 +2060,53 @@ export class SessionManager implements SessionManagerTypeSurface {
     );
   }
 
+  /**
+   * Bounded, coverage-aware evidence read for time-window summaries.
+   *
+   * The journal predicate runs before the match limit, so tool/system rows
+   * cannot crowd conversational evidence out of the result. The backward scan
+   * stops at the requested time boundary, returns at most `limit` rows, and
+   * reports a sentinel match as saturation instead of implying an exact count.
+   */
+  getConversationEvidenceWindow(
+    channelId: string,
+    options: { fromMs: number; toMs: number; limit: number },
+  ): { entries: SessionEntry[]; saturated: boolean } {
+    this.assertMutableSessionReadAllowed('SessionManager.getConversationEvidenceWindow');
+    if (!Number.isFinite(options.fromMs) || !Number.isFinite(options.toMs)) {
+      throw new Error('Conversation evidence window bounds must be finite');
+    }
+    if (options.fromMs > options.toMs) {
+      throw new Error('Conversation evidence window start must not exceed its end');
+    }
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
+      throw new Error('Conversation evidence window limit must be a positive safe integer');
+    }
+
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const matched = this.deliveryProjectionStore.findLatestEntries(
+      resolvedChannelId,
+      entry => (
+        entry.channelId === resolvedChannelId
+        && (entry.role === 'user' || entry.role === 'assistant')
+        && !isNonConversationalSessionEntry(entry)
+        && Number.isFinite(entry.timestamp)
+        && entry.timestamp >= options.fromMs
+        && entry.timestamp <= options.toMs
+        && entry.content.trim().length > 0
+      ),
+      options.limit + 1,
+      { stopBeforeTimestamp: options.fromMs },
+    );
+    const saturated = matched.length > options.limit;
+    return {
+      entries: matched
+        .slice(0, options.limit)
+        .sort((left, right) => left.timestamp - right.timestamp || left.id - right.id),
+      saturated,
+    };
+  }
+
   private getRecentMessagesForResolvedChannel(
     resolvedChannelId: string,
     limit?: number,

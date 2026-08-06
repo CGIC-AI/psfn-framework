@@ -87,6 +87,29 @@ describe('daily-review deterministic evidence integration', () => {
               },
             ]
             : [],
+          getConversationEvidenceWindow: channelId => ({
+            entries: channelId === 'discord:primary'
+              ? [
+                {
+                  id: 41,
+                  channelId,
+                  role: 'user',
+                  authorName: 'Ari',
+                  content: 'We revisited the recovery plan and made the next step explicit.',
+                  timestamp: nowMs - 12 * 60 * 60 * 1000,
+                },
+                {
+                  id: 42,
+                  channelId,
+                  role: 'assistant',
+                  authorName: 'Purrsephone',
+                  content: 'Then we chose the shaded bed for the garden layout.',
+                  timestamp: nowMs - 2 * 60 * 60 * 1000,
+                },
+              ]
+              : [],
+            saturated: false,
+          }),
         },
         contactStore: {
           getById: async () => ({
@@ -143,6 +166,26 @@ describe('daily-review deterministic evidence integration', () => {
             contactId: 'contact-1',
             provenance: { channelId: 'discord:primary' },
           }],
+          listActiveMemoriesInWindow: async () => ({
+            memories: [{
+              id: 'memory-garden',
+              text: 'The garden layout starts with the shaded bed.',
+              type: 'semantic',
+              importance: 0.7,
+              confidence: 0.9,
+              emotionalValence: 0.1,
+              salience: 0.7,
+              sourceRef: 'source:turn',
+              extractedAt: nowMs - 60 * 60 * 1000,
+              lastAccessed: nowMs - 60 * 60 * 1000,
+              accessCount: 0,
+              tags: [],
+              sensitivity: 'personal',
+              contactId: 'contact-1',
+              provenance: { channelId: 'discord:primary' },
+            }],
+            saturated: false,
+          }),
           upsertMemoryMaintenanceReview: vi.fn(),
           getById: vi.fn(),
           getMemoryMaintenanceDiagnostics: vi.fn(),

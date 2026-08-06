@@ -240,6 +240,7 @@ export const MEMORY_STORE_METHOD_POLICY: Record<keyof MemoryStorePort, SubjectPr
   getAllActiveMemories: 'authorized',
   listMemories: 'authorized',
   listActiveMemories: 'authorized',
+  listActiveMemoriesInWindow: 'authorized',
   listAdminMemories: 'authorized',
   getAdminMemoryPrivacySummary: 'authorized',
   countActiveMemories: 'authorized',
@@ -527,6 +528,16 @@ export function createSubjectAuthorizedMemoryStore(
             authorization: auth,
             selector: { kind: 'list', limit: options.limit, offset: options.offset },
           })).memories;
+        };
+      }
+      if (property === 'listActiveMemoriesInWindow') {
+        // This window primitive is owned by companion-internal background
+        // reflection. Product/tool callers must not inherit its raw cross-subject
+        // scope through this proxy; no authorized projection exists here.
+        return async () => {
+          throw new Error(
+            'subject-authorized-memory-proxy: listActiveMemoriesInWindow is companion-internal only',
+          );
         };
       }
       if (property === 'listAdminMemories') {

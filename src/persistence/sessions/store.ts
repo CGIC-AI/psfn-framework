@@ -2045,14 +2045,24 @@ export class SessionStore implements TranscriptSearchPort {
     channelId: string,
     predicate: (entry: SessionEntry) => boolean,
     limit = 1,
+    options: { stopBeforeTimestamp?: number } = {},
   ): SessionEntry[] {
     const normalizedLimit = Math.max(0, Math.floor(limit));
     if (normalizedLimit <= 0) return [];
+    const stopBeforeTimestamp = options.stopBeforeTimestamp;
+    if (stopBeforeTimestamp !== undefined && !Number.isFinite(stopBeforeTimestamp)) {
+      throw new Error('stopBeforeTimestamp must be finite when provided');
+    }
+    const matchesWindow = stopBeforeTimestamp === undefined
+      ? predicate
+      : (entry: SessionEntry): boolean => (
+        entry.timestamp >= stopBeforeTimestamp && predicate(entry)
+      );
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     if (cached?.fullyLoaded || (cached?.activeTurnTombstoneCount ?? 0) > 0) {
       const full = cached?.fullyLoaded ? cached : this.ensureChannelFullyLoaded(channelId);
-      return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+      return full ? full.entries.filter(matchesWindow).slice(-normalizedLimit).reverse() : [];
     }
     const resolved = cached
       ? { channelId: cached.channelId, filePath: cached.resolvedPath }
@@ -2062,10 +2072,11 @@ export class SessionStore implements TranscriptSearchPort {
       this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
       predicate,
       normalizedLimit,
+      stopBeforeTimestamp,
     );
     if (found) return found;
     const full = this.ensureChannelFullyLoaded(channelId);
-    return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+    return full ? full.entries.filter(matchesWindow).slice(-normalizedLimit).reverse() : [];
   }
 
   private prepareEntriesBeforeRead(

@@ -4,6 +4,7 @@
   import AccountingCockpit from '$lib/components/accounting/AccountingCockpit.svelte';
   import HumanAttentionPressurePanel from './HumanAttentionPressurePanel.svelte';
   import { accountingSearchParamsForTab } from '$lib/accounting/query-state';
+  import { snapshotReactiveState } from '$lib/state/reactive-snapshot.svelte';
   import {
     getCharges,
     type AdminChargeLedgerData,
@@ -228,7 +229,7 @@
   }
 
   function clonePolicy(nextPolicy: ChargePolicyConfig): ChargePolicyConfig {
-    return structuredClone(nextPolicy);
+    return snapshotReactiveState(nextPolicy);
   }
 
   function parseNumber(value: string): number {

@@ -12,6 +12,8 @@ import {
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
   CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
   CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE,
+  partitionFreshCapabilityTierChangeNotices,
+  renderFreshCapabilityTierChangePromptBlock,
 } from '../../../system/capabilities/change-notice.js';
 
 function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
@@ -244,13 +246,24 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(3);
     expect(messages[1]).toMatchObject({
       role: 'system',
-      content: expect.stringContaining('[System notice: capability access changed] now nursery'),
+      content: expect.stringContaining(
+        `[SYSTEM: ${CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME}] `
+          + `${CAPABILITY_TIER_CHANGE_NOTICE_PREFIX} now nursery`,
+      ),
       provenance: {
         kind: 'system_note',
         notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE],
         sourceEntryIds: [2],
       },
     });
+
+    const { noticeContents } = partitionFreshCapabilityTierChangeNotices(messages);
+    const promptBlock = renderFreshCapabilityTierChangePromptBlock(noticeContents, 'nursery');
+    expect(promptBlock).toContain(
+      `[SYSTEM: ${CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME}] `
+        + `${CAPABILITY_TIER_CHANGE_NOTICE_PREFIX} now nursery`,
+    );
+    expect(promptBlock).not.toContain('Intention Appraisal');
   });
 
   it('keeps unrelated and forged system-policy rows out of prompt context', () => {

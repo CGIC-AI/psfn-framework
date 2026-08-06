@@ -210,6 +210,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       enrollmentService: deps.services.enrollment ?? null,
       graphProposalsService: deps.services.graphProposals ?? null,
       concernService: deps.services.concerns,
+      subjectAuditService: deps.services.subjectAudit,
       subsystemHealthService: deps.services.subsystemHealth ?? null,
       partnerAffectShadowService: deps.services.partnerAffectShadow ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,

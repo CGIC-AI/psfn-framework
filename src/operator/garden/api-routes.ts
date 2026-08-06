@@ -109,6 +109,7 @@ import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
 import { privacyBreakGlassResourceSelectorDigest } from '../../shared/contracts/privacy-break-glass.js';
 import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
@@ -310,6 +311,7 @@ export function buildAdminApiRoutes(options: {
   enrollmentService?: AdminEnrollmentService | null;
   graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
+  subjectAuditService?: AdminSubjectVisibleAuditService;
   subsystemHealthService?: AdminSubsystemHealthService | null;
   partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
   toolConformanceService?: AdminToolConformanceService | null;
@@ -369,6 +371,7 @@ export function buildAdminApiRoutes(options: {
     enrollmentService,
     graphProposalsService,
     concernService,
+    subjectAuditService,
     subsystemHealthService,
     partnerAffectShadowService,
     toolConformanceService,
@@ -1003,7 +1006,7 @@ export function buildAdminApiRoutes(options: {
     ...(graphProposalsService
       ? buildAdminGraphProposalRoutes({ graphProposalsService, withBody })
       : []),
-    ...buildAdminConcernRoutes({ concernService, withBody }),
+    ...buildAdminConcernRoutes({ concernService, subjectAuditService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminChannelEnvelopeRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminBearerCompanionRoutes({ settingsService, appendAuditTimelineEntry }),

@@ -7,10 +7,16 @@ import {
   type ActiveConcernStaleResolutionOptions,
   type ActiveConcernTransitionOptions,
 } from '../../../core/intention/concerns.js';
+import { checkedEscalationReason } from '../../../boundary/fleet-auth/escalation.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+import type {
+  AdminSubjectVisibleAuditService,
+  ProtectedConcernAction,
+} from '../services/subject-visible-audit-service.js';
 import type { AdminConcernService } from '../services/types.js';
 import {
   ADMIN_DYNAMIC_JSON_HEADERS,
@@ -67,20 +73,26 @@ function parseEvidenceRefs(value: unknown): ActiveConcernEvidenceRef[] | undefin
   return normalizeConcernEvidenceRefs(value as ActiveConcernEvidenceRef[]);
 }
 
-function parseResolveInput(value: unknown): { outcome?: string; evidenceRef?: string } {
+function parseResolveInput(value: unknown): {
+  reason?: string;
+  outcome?: string;
+  evidenceRef?: string;
+} {
   if (value === null || value === undefined) return {};
   if (!isRecord(value)) {
     throw new Error('Concern action payload must be a JSON object');
   }
   const outcome = parseOptionalText(value.outcome, 'outcome');
   const evidenceRef = parseOptionalText(value.evidenceRef, 'evidenceRef');
+  const reason = parseOptionalText(value.reason, 'reason');
   return {
+    ...(reason ? { reason } : {}),
     ...(outcome ? { outcome } : {}),
     ...(evidenceRef ? { evidenceRef } : {}),
   };
 }
 
-function parseTransitionInput(value: unknown): ActiveConcernTransitionOptions {
+function parseTransitionInput(value: unknown): ActiveConcernTransitionOptions & { reason?: string } {
   if (!isRecord(value)) {
     throw new Error('Concern transition payload must be a JSON object');
   }
@@ -95,8 +107,10 @@ function parseTransitionInput(value: unknown): ActiveConcernTransitionOptions {
   const salience = parseOptionalNumber(value.salience, 'salience');
   const evidenceRefs = parseEvidenceRefs(value.evidenceRefs);
   const resolutionEvidenceRefs = parseEvidenceRefs(value.resolutionEvidenceRefs);
+  const reason = parseOptionalText(value.reason, 'reason');
 
   return {
+    ...(reason ? { reason } : {}),
     status,
     ...(outcome ? { outcome } : {}),
     ...(transitionedAt ? { transitionedAt } : {}),
@@ -108,7 +122,7 @@ function parseTransitionInput(value: unknown): ActiveConcernTransitionOptions {
   };
 }
 
-function parseStaleInput(value: unknown): ActiveConcernStaleResolutionOptions {
+function parseStaleInput(value: unknown): ActiveConcernStaleResolutionOptions & { reason?: string } {
   if (value === null || value === undefined) return {};
   if (!isRecord(value)) {
     throw new Error('Concern stale-resolution payload must be a JSON object');
@@ -117,6 +131,7 @@ function parseStaleInput(value: unknown): ActiveConcernStaleResolutionOptions {
   const outcome = parseOptionalText(value.outcome, 'outcome');
   const limit = parseOptionalPositiveInteger(value.limit, 'limit');
   const evidenceRefs = parseEvidenceRefs(value.evidenceRefs);
+  const reason = parseOptionalText(value.reason, 'reason');
   let statuses: typeof ACTIVE_CONCERN_STATUSES[number][] | undefined;
   if (value.statuses !== undefined) {
     if (!Array.isArray(value.statuses)) {
@@ -126,12 +141,45 @@ function parseStaleInput(value: unknown): ActiveConcernStaleResolutionOptions {
   }
 
   return {
+    ...(reason ? { reason } : {}),
     ...(asOf ? { asOf } : {}),
     ...(outcome ? { outcome } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(statuses ? { statuses } : {}),
     ...(evidenceRefs ? { evidenceRefs } : {}),
   };
+}
+
+function recordSubjectVisibleConcernAction(input: {
+  res: Parameters<AdminApiRoute['handle']>[1];
+  context: GardenRequestContext | undefined;
+  subjectAuditService: AdminSubjectVisibleAuditService | undefined;
+  action: ProtectedConcernAction;
+  reason: string | undefined;
+}): boolean {
+  if (input.context?.kind !== 'fleet_principal') return true;
+  let reason: string;
+  try {
+    reason = checkedEscalationReason(input.reason ?? '');
+  } catch {
+    sendJson(input.res, 400, { error: 'A valid escalation reason is required' });
+    return false;
+  }
+  if (!input.subjectAuditService) {
+    sendJson(input.res, 503, { error: 'Subject-visible concern audit is unavailable' });
+    return false;
+  }
+  try {
+    input.subjectAuditService.recordConcernAction({
+      context: input.context,
+      action: input.action,
+      reason,
+    });
+  } catch {
+    sendJson(input.res, 503, { error: 'Subject-visible concern audit is unavailable' });
+    return false;
+  }
+  return true;
 }
 
 function withParsedBody<T>(
@@ -157,9 +205,10 @@ function withParsedBody<T>(
 
 export function buildAdminConcernRoutes(options: {
   concernService?: AdminConcernService | null;
+  subjectAuditService?: AdminSubjectVisibleAuditService;
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
-  const { concernService, withBody } = options;
+  const { concernService, subjectAuditService, withBody } = options;
 
   return [
     {
@@ -210,13 +259,17 @@ export function buildAdminConcernRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/concerns/resolve-stale'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
         }
         withParsedBody(withBody, req, res, parseStaleInput, (input) => {
-          concernService.resolveStaleConcerns(input).then(
+          const { reason, ...mutation } = input;
+          if (!recordSubjectVisibleConcernAction({
+            res, context, subjectAuditService, action: 'resolve_stale', reason,
+          })) return;
+          concernService.resolveStaleConcerns(mutation).then(
             payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
             error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to resolve stale concerns') }),
           );
@@ -226,13 +279,17 @@ export function buildAdminConcernRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/resolve'),
-      handle: (req, res, { concernId }) => {
+      handle: (req, res, { concernId }, context) => {
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
         }
         withParsedBody(withBody, req, res, parseResolveInput, (input) => {
-          concernService.resolveConcern(concernId, input).then(
+          const { reason, ...mutation } = input;
+          if (!recordSubjectVisibleConcernAction({
+            res, context, subjectAuditService, action: 'resolve', reason,
+          })) return;
+          concernService.resolveConcern(concernId, mutation).then(
             (payload) => {
               sendJson(res, payload.ok ? 200 : 404, payload, ADMIN_DYNAMIC_JSON_HEADERS);
             },
@@ -244,13 +301,17 @@ export function buildAdminConcernRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/suppress'),
-      handle: (req, res, { concernId }) => {
+      handle: (req, res, { concernId }, context) => {
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
         }
         withParsedBody(withBody, req, res, parseResolveInput, (input) => {
-          concernService.suppressConcern(concernId, input).then(
+          const { reason, ...mutation } = input;
+          if (!recordSubjectVisibleConcernAction({
+            res, context, subjectAuditService, action: 'suppress', reason,
+          })) return;
+          concernService.suppressConcern(concernId, mutation).then(
             (payload) => {
               sendJson(res, payload.ok ? 200 : 404, payload, ADMIN_DYNAMIC_JSON_HEADERS);
             },
@@ -262,13 +323,17 @@ export function buildAdminConcernRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/transition'),
-      handle: (req, res, { concernId }) => {
+      handle: (req, res, { concernId }, context) => {
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
         }
         withParsedBody(withBody, req, res, parseTransitionInput, (input) => {
-          concernService.transitionConcern(concernId, input).then(
+          const { reason, ...mutation } = input;
+          if (!recordSubjectVisibleConcernAction({
+            res, context, subjectAuditService, action: 'transition', reason,
+          })) return;
+          concernService.transitionConcern(concernId, mutation).then(
             (payload) => {
               sendJson(res, payload.ok ? 200 : 404, payload, ADMIN_DYNAMIC_JSON_HEADERS);
             },

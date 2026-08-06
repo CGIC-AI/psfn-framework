@@ -62,6 +62,7 @@ import type { AdminPartnerAffectShadowService } from './services/partner-affect-
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
+import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
 import type { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
@@ -194,6 +195,8 @@ export interface GardenAdminDomainServices {
   diagnostics: AdminDiagnosticsService;
   images: AdminImagesService;
   auditHistory: AdminAuditHistoryService;
+  /** Companion-facing, content-free records for protected operator actions. */
+  subjectAudit?: AdminSubjectVisibleAuditService;
   charges?: AdminChargeLedgerService | null;
   chargeCosts?: AdminChargeCostReconciliationService | null;
   modelUsage?: AdminModelUsageService | null;

@@ -8911,17 +8911,17 @@
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L187",
+      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L188",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L187; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L188; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
-      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L199",
+      "name": "buildEpisodicWatermarkLaneDefinitions.intervalMs@L200",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L199; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate buildEpisodicWatermarkLaneDefinitions.intervalMs@L200; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",

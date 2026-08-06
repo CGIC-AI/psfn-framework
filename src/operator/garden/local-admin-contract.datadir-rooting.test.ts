@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
@@ -22,6 +22,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import { createSessionActivityTracker } from '../../app/agent/session-activity.js';
+import type { FleetGardenRequestContext } from './garden-request-context.js';
 
 /**
  * Regression guard for psfn-framework-dnll.4: per-companion state files owned by
@@ -182,6 +183,67 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
     expect(existsSync(join(companionDataDir, 'garden-audit-history.jsonl'))).toBe(true);
     expect(existsSync(join(systemDataDir, 'garden-audit-history.jsonl'))).toBe(false);
+  });
+
+  it('persists a content-free protected-action audit in the companion history and context', () => {
+    const services = buildContract();
+    sessionManager.recordUserMessage(
+      'api:companion-home',
+      'Keep me informed about protected administration.',
+      'person-1',
+      'Person',
+    );
+    const context = {
+      kind: 'fleet_principal',
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      authorizationEventId: 'authorization-event-a',
+      resolvedAt: '2026-08-06T17:59:59.000Z',
+      versions: {
+        authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1,
+      },
+      issuedAt: 1,
+      expiresAt: 2,
+      actor: {
+        kind: 'fleet_principal', principalId: 'principal-owner-a', provider: 'discord',
+        providerSubjectId: 'provider-subject-must-not-persist', contactId: 'contact-owner-a',
+        contactBindingId: 'binding-owner-a', role: 'owner', operatorGrantId: 'grant-a',
+        sessionRecordId: 'session-a', sessionAssurance: 'escalated', accessMode: 'sole_admin',
+      },
+      action: 'cogsec.manage',
+      resource: {
+        routeId: 'POST /api/admin/concerns/:concernId/resolve',
+        scope: 'personal_workspace', area: 'cognitive_security',
+        companionId: '11111111-1111-4111-8111-111111111111',
+        pathParams: { concernId: 'protected-concern-id-must-not-persist' }, query: {},
+      },
+      subjectRelation: 'current_companion',
+      authorization: {
+        action: 'cogsec.manage', baseRole: 'admin',
+        resource: { scope: 'personal_workspace', area: 'cognitive_security' },
+        subjectRelation: 'current_companion',
+        requirements: { assurance: 'escalated', confirmation: 'explicit', approvals: ['cogsec'] },
+        publicAccess: 'never', recoveryAccess: 'forbidden',
+      },
+    } as FleetGardenRequestContext;
+
+    services.subjectAudit?.recordConcernAction({
+      context,
+      action: 'resolve',
+      reason: 'Verify the remediation after a policy incident',
+    });
+
+    const durableAudit = readFileSync(join(companionDataDir, 'garden-audit-history.jsonl'), 'utf8');
+    const contextNotices = sessionStore.getRecent('api:companion-home', 10)
+      .filter(entry => entry.role === 'system' && entry.content.includes('protected administration'));
+    const subjectVisibleRecord = `${durableAudit}\n${contextNotices.map(entry => entry.content).join('\n')}`;
+    expect(contextNotices).toHaveLength(1);
+    expect(subjectVisibleRecord).toContain('principal-owner-a');
+    expect(subjectVisibleRecord).toContain('Cognitive Security concern');
+    expect(subjectVisibleRecord).toContain('Verify the remediation after a policy incident');
+    expect(subjectVisibleRecord).not.toContain('protected-concern-id-must-not-persist');
+    expect(subjectVisibleRecord).not.toContain('provider-subject-must-not-persist');
   });
 
   it('uses nightly cadence rather than the wiki review window for watermark staleness', () => {

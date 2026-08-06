@@ -102,6 +102,7 @@ import { registerAuditTimelineSources } from './services/audit-event-collector.j
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminChargeCostReconciliationDataService } from './services/charge-cost-reconciliation-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
+import { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
 import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
@@ -365,6 +366,11 @@ export function createInProcessGardenAdminContract(
     chargeLedger,
     scopeId: options.config.companionId ?? companionDataDir,
     opaqueIdKeyring: auditOpaqueIdKeyring,
+  });
+  const subjectAudit = new AdminSubjectVisibleAuditService({
+    auditHistory,
+    sessionManager: options.sessionManager,
+    companionDataDir,
   });
   registerAuditTimelineSources({
     eventBus: options.eventBus,
@@ -695,6 +701,7 @@ export function createInProcessGardenAdminContract(
       companionDataDir,
     }),
     auditHistory,
+    subjectAudit,
     charges: new AdminChargeLedgerDataService(
       chargeLedger,
       fatigueLedger,

@@ -11,7 +11,7 @@ import {
   type FleetAuthConfig,
   type FleetAuthRole,
 } from '../../../system/config/fleet-auth-config.js';
-import { fleetAuthRoleAllowsAction } from '../../../boundary/fleet-auth/role-action-policy.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
@@ -116,7 +116,10 @@ export class PostgresChildAssertionAuthority implements GatewayChildAssertionAut
       const rosterAllowed = rosterEntry !== undefined
         && input.parent.companionId === input.childTarget.companionId
         && parentDecisionBound
-        && fleetAuthRoleAllowsAction(rosterEntry.role, input.childTarget.action)
+        && fleetAuthPersistenceBoundaryValues.fleetAuthRoleAllowsAction(
+          rosterEntry.role,
+          input.childTarget.action,
+        )
         && !this.disabledActionsByRole[rosterEntry.role].includes(input.childTarget.action);
       const decisionId = randomUUID();
       const externalAuthorityCurrent = this.providerRevocationAuthority

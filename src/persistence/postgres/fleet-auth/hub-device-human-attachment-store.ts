@@ -1,15 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  HubDeviceAttachmentRejectedError,
-  type HubDeviceHumanAttachment,
-  type HubDeviceHumanAttachmentPort,
-  type HubHumanActorContext,
+import type {
+  HubDeviceHumanAttachment,
+  HubDeviceHumanAttachmentPort,
+  HubHumanActorContext,
 } from '../../../boundary/fleet-auth/hub-device-ingress.js';
-import {
-  FleetAuthorizationDeniedError,
-  type FleetAuthorizationContext,
-} from '../../../boundary/gateway/fleet-authorization-context.js';
+import type { FleetAuthorizationContext } from '../../../boundary/gateway/fleet-authorization-context.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
@@ -20,6 +16,7 @@ import {
 } from './hub-device-human-attachment-sql.js';
 import { createPositiveIntegerCoercer } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const CHANNEL_DIGEST_DOMAIN = 'fleet-auth:hub-device-channel:v1\0';
 const AUDIT_DIGEST_DOMAIN = 'fleet-auth:hub-device-attachment-audit:v1\0';
@@ -133,7 +130,9 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
         assertDiscordHumanContext(resolvedHuman);
         human = resolvedHuman;
       } catch (error) {
-        if (!(error instanceof FleetAuthorizationDeniedError)) throw error;
+        if (!(error instanceof fleetAuthPersistenceBoundaryValues.FleetAuthorizationDeniedError)) {
+          throw error;
+        }
         humanInvalidated = true;
       }
     }
@@ -205,7 +204,9 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
           && row.reason_code !== 'human_binding_mismatch') {
           throw new Error('Hub device attachment procedure returned an unknown denial');
         }
-        throw new HubDeviceAttachmentRejectedError(row.reason_code);
+        throw new fleetAuthPersistenceBoundaryValues.HubDeviceAttachmentRejectedError(
+          row.reason_code,
+        );
       }
       if (!row.disposition) throw new Error('Hub device attachment allow omitted disposition');
 

@@ -7,12 +7,6 @@ import type {
   DiscordPositiveEvidenceLookup,
 } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import {
-  DISCORD_EVIDENCE_MUTATION_APPLIED,
-  DISCORD_EVIDENCE_MUTATION_RETIRED,
-  digestDiscordEvidence,
-  isUsablePositiveDiscordEvidence,
-} from '../../../boundary/fleet-auth/discord-evidence-types.js';
-import {
   isCanonicalIsoTimestamp,
   isRecord,
   isRfc4122Uuid,
@@ -23,6 +17,7 @@ import {
   parseDiscordEvidenceLifecycleGeneration,
 } from './discord-evidence-mutation.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 
@@ -73,7 +68,8 @@ function assertSnapshot(
   if (!SHA256_PATTERN.test(snapshot.inputDigest) || !SHA256_PATTERN.test(snapshot.configDigest)) {
     throw new Error('Discord evidence snapshot contains an invalid digest');
   }
-  if (snapshot.inputDigest !== digestDiscordEvidence(snapshot.permissionInputs)) {
+  if (snapshot.inputDigest
+    !== fleetAuthPersistenceBoundaryValues.digestDiscordEvidence(snapshot.permissionInputs)) {
     throw new Error('Discord evidence snapshot input digest does not match its permission inputs');
   }
   if (!Number.isSafeInteger(snapshot.mappingConfigVersion) || snapshot.mappingConfigVersion < 1) {
@@ -328,7 +324,7 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
         ]);
       }
       await client.query('COMMIT');
-      return DISCORD_EVIDENCE_MUTATION_APPLIED;
+      return fleetAuthPersistenceBoundaryValues.DISCORD_EVIDENCE_MUTATION_APPLIED;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -354,7 +350,7 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
       }
       await this.deleteEvidence(client, input);
       await client.query('COMMIT');
-      return DISCORD_EVIDENCE_MUTATION_APPLIED;
+      return fleetAuthPersistenceBoundaryValues.DISCORD_EVIDENCE_MUTATION_APPLIED;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -391,7 +387,9 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
       input.principalId,
       input.providerSubjectId,
     );
-    if (!authority.eligible) return DISCORD_EVIDENCE_MUTATION_RETIRED;
+    if (!authority.eligible) {
+      return fleetAuthPersistenceBoundaryValues.DISCORD_EVIDENCE_MUTATION_RETIRED;
+    }
     const fence = await client.query<{
       lifecycle_id: string;
       state: string;
@@ -410,7 +408,7 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
       || parseDiscordEvidenceLifecycleGeneration(current.mutation_generation)
         >= input.mutation.generation
       || Number(current.global_auth_epoch) !== authority.globalAuthEpoch) {
-      return DISCORD_EVIDENCE_MUTATION_RETIRED;
+      return fleetAuthPersistenceBoundaryValues.DISCORD_EVIDENCE_MUTATION_RETIRED;
     }
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
@@ -493,7 +491,9 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
       mappingConfigVersion(row.authority_generation),
     )) return undefined;
     const snapshot = rowToSnapshot(row);
-    return isUsablePositiveDiscordEvidence(snapshot, input) ? snapshot : undefined;
+    return fleetAuthPersistenceBoundaryValues.isUsablePositiveDiscordEvidence(snapshot, input)
+      ? snapshot
+      : undefined;
   }
 
   private async lockSubjectAuthority(

@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  FleetAuthBrokerError,
-  type FleetAuthBrokerStore,
-  type FleetAuthSessionRecord,
-  type OAuthTransactionKind,
+import type {
+  FleetAuthBrokerStore,
+  FleetAuthSessionRecord,
+  OAuthTransactionKind,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import {
   lifecycleOAuthKindFor,
@@ -34,6 +33,7 @@ import {
   createLoginSession,
   type SessionInsertInput,
 } from './login-session-creation.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 export interface PostgresFleetAuthBrokerStoreOptions {
   pool: Pool;
@@ -87,7 +87,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       input.lifecyclePurpose.proofRole,
     );
     if (input.kind !== expectedKind) {
-      throw new FleetAuthBrokerError(
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'oauth_transaction_kind_mismatch',
         400,
         'Lifecycle OAuth kind does not match its exact proof purpose',
@@ -182,7 +182,11 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         || !row.initiating_principal_id
         || !row.initiating_session_id
         || lifecycleOAuthKindFor(row.lifecycle_action, row.lifecycle_proof_role) !== row.kind) {
-        throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth lifecycle proof is not usable');
+        throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+          'invalid_oauth_state',
+          400,
+          'OAuth lifecycle proof is not usable',
+        );
       }
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
@@ -311,7 +315,11 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       `, [this.digest(input.token)]);
       const session = result.rows.at(0);
       if (!this.sessionAuthorityIsValid(session, input.now)) {
-        throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
+        throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+          'invalid_session',
+          401,
+          'Session is invalid or expired',
+        );
       }
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
@@ -444,7 +452,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         || existing.provider_state !== existing.principal_status
         || existing.provider_restore_state !== 'live'
         || existing.principal_restore_state !== 'live') {
-        throw new FleetAuthBrokerError(
+        throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
           'provider_subject_suspended',
           403,
           'Provider subject is not eligible for login',
@@ -477,7 +485,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       ) AS present
     `, [providerSubjectId]);
     if (priorIdentity.rows.at(0)?.present === true) {
-      throw new FleetAuthBrokerError(
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'provider_subject_tombstoned',
         403,
         'Provider subject is permanently unavailable',
@@ -554,7 +562,11 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     `, [this.digest(token), this.digest(csrfToken)]);
     const session = result.rows.at(0);
     if (!this.sessionAuthorityIsValid(session, now)) {
-      throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'invalid_session',
+        401,
+        'Session is invalid or expired',
+      );
     }
     return session;
   }

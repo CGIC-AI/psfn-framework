@@ -24,6 +24,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: resolveVitestInclude(),
+    setupFiles: ['./src/test-support/fleet-auth-persistence-boundary.ts'],
     testTimeout: 10_000,
   },
 });

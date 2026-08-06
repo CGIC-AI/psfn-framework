@@ -5,7 +5,7 @@ import {
   createHmac,
   randomBytes,
 } from 'node:crypto';
-import { FleetAuthBrokerError } from '../../../boundary/gateway/fleet-auth-broker.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const CIPHERTEXT_VERSION = 1;
 const AES_GCM_IV_BYTES = 12;
@@ -41,7 +41,11 @@ export class FleetAuthSecretCodec {
   decrypt(value: Buffer): string {
     const minimumLength = 1 + AES_GCM_IV_BYTES + AES_GCM_TAG_BYTES + 1;
     if (value.length < minimumLength || value[0] !== CIPHERTEXT_VERSION) {
-      throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'invalid_oauth_state',
+        400,
+        'OAuth transaction is not usable',
+      );
     }
     const ivStart = 1;
     const tagStart = ivStart + AES_GCM_IV_BYTES;
@@ -58,7 +62,11 @@ export class FleetAuthSecretCodec {
         decipher.final(),
       ]).toString('utf8');
     } catch {
-      throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
+        'invalid_oauth_state',
+        400,
+        'OAuth transaction is not usable',
+      );
     }
   }
 }

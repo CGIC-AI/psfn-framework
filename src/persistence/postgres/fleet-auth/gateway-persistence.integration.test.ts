@@ -14,9 +14,9 @@ import {
 import { createPostgresPool } from '../../postgres.js';
 import {
   initializeGatewayFleetAuthPersistence,
-  reconcileFleetAuthAuthorityState,
   type GatewayFleetAuthPersistence,
-} from './gateway-persistence.js';
+} from '../../../app/gateway/fleet-auth-persistence.js';
+import { reconcileFleetAuthAuthorityState } from './gateway-persistence.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import {
   GatewayHubDeviceIngressService,

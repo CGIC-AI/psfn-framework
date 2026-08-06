@@ -6,7 +6,9 @@ import {
   buildUnifiedSaveSkipNote,
   listDirtyRawEditorKeys,
   listUnifiedSaveSkippedOwnerFiles,
+  loadRawEditorConfigs,
   planUnifiedOwnerConfigSaves,
+  RAW_EDITORS,
   rebaselineRawJsonByKey,
   resolveReloadedRawJsonByKey,
   resolveUnifiedSaveSettingsJsonConflict,
@@ -14,6 +16,32 @@ import {
   UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
   type UnifiedOwnerConfigSaveEntry,
 } from './settings-page-helpers';
+
+test('owner-file fetch failure is retained as an error instead of an empty JSON document', async () => {
+  const requestedKeys: string[] = [];
+  const results = await loadRawEditorConfigs(async (key) => {
+    requestedKeys.push(key);
+    if (key === 'trust-policy') {
+      throw new Error('503 Service Unavailable');
+    }
+    return JSON.stringify({ owner: key });
+  });
+
+  assert.deepEqual(requestedKeys, RAW_EDITORS.map(({ key }) => key));
+  assert.deepEqual(results['trust-policy'], {
+    status: 'error',
+    message: '503 Service Unavailable',
+  });
+  assert.equal(
+    'json' in results['trust-policy'],
+    false,
+    'a failed fetch must not manufacture an editable empty-object document',
+  );
+  assert.deepEqual(results.channels, {
+    status: 'loaded',
+    json: '{"owner":"channels"}',
+  });
+});
 
 // The four owner-file save entries the unified save always constructs, keyed to
 // the real write surface. Tests build on this to exercise skip / drop behavior.

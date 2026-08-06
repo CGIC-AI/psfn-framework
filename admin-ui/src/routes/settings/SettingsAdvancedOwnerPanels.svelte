@@ -13,6 +13,7 @@
     CompositionalListKey,
     CompositionalPolicyFormValue,
     RawEditorKey,
+    RawSettingsEditorKey,
   } from './settings-page-helpers';
 
   let {
@@ -47,12 +48,14 @@
     settingsJson,
     rawEditorViews,
     rawSaveStatus,
+    retryingRawEditorKey,
     validationErrorsByField,
     setSettingsJson,
     getRawJson,
     setRawJson,
     saveRawSettings,
     saveRawConfig,
+    retryRawConfig,
   } = $props<{
     view: 'fields' | 'raw';
     data: AdminSettingsData | null;
@@ -83,14 +86,16 @@
     toggleCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => void;
     hasCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => boolean;
     settingsJson: string;
-    rawEditorViews: { key: RawEditorKey; ownerFile: string }[];
+    rawEditorViews: { key: RawSettingsEditorKey; ownerFile: string; loadError?: string }[];
     rawSaveStatus: Record<string, { ok: boolean; msg: string }>;
+    retryingRawEditorKey: RawSettingsEditorKey | null;
     validationErrorsByField: Record<string, string[]>;
     setSettingsJson: (value: string) => void;
     getRawJson: (key: string) => string;
     setRawJson: (key: string, value: string) => void;
     saveRawSettings: () => void | Promise<void>;
     saveRawConfig: (key: string, label: string) => void | Promise<void>;
+    retryRawConfig: (key: RawSettingsEditorKey) => void | Promise<void>;
   }>();
 </script>
 
@@ -158,12 +163,14 @@
               rawEditors={rawEditorViews}
               {rawSaveStatus}
               {saving}
+              {retryingRawEditorKey}
               {validationErrorsByField}
               {setSettingsJson}
               {getRawJson}
               {setRawJson}
               {saveRawSettings}
               {saveRawConfig}
+              {retryRawConfig}
             />
           </section>
 {/if}

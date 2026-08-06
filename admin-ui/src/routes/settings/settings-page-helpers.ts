@@ -44,7 +44,7 @@ const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
 };
 
 export type RawEditorKey = GardenSettingsRawEditorKey;
-type RawSettingsEditorKey = Exclude<RawEditorKey, 'settings' | 'models'>;
+export type RawSettingsEditorKey = Exclude<RawEditorKey, 'settings' | 'models'>;
 export type RawEditorSubsystemId =
   (typeof SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY)[RawEditorKey];
 
@@ -55,6 +55,33 @@ export const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
     ),
   )
   .map((key) => ({ key }));
+
+export type RawEditorLoadResult =
+  | { status: 'loaded'; json: string }
+  | { status: 'error'; message: string };
+
+export async function loadRawEditorConfig(
+  key: RawSettingsEditorKey,
+  fetchConfig: (key: string) => Promise<string>,
+): Promise<RawEditorLoadResult> {
+  try {
+    return { status: 'loaded', json: await fetchConfig(key) };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function loadRawEditorConfigs(
+  fetchConfig: (key: string) => Promise<string>,
+): Promise<Record<RawSettingsEditorKey, RawEditorLoadResult>> {
+  const entries = await Promise.all(RAW_EDITORS.map(async ({ key }) => (
+    [key, await loadRawEditorConfig(key, fetchConfig)] as const
+  )));
+  return Object.fromEntries(entries) as Record<RawSettingsEditorKey, RawEditorLoadResult>;
+}
 
 export function buildRawEditorJsonMap(
   resolveValue: (key: RawEditorKey) => string,

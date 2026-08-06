@@ -29,7 +29,6 @@ import type {
   MemoryDeletionResolveParams,
   MemoryDeletionResolveResult,
 } from './protocol.js';
-import { isRecord } from '../../shared/utils/types.js';
 import type {
   ContactAuthoritySnapshotRequest,
   VerifiedDiscordContactAuthoritySnapshot,
@@ -42,6 +41,14 @@ import type {
   IcpLocalPolicyReleaseParams,
   IcpLocalPolicyReleaseResult,
 } from '../../core/icp/local-policy-contract.js';
+import {
+  parseIcpLocalPolicyAcquireParams,
+  parseIcpLocalPolicyInspectParams,
+  parseIcpLocalPolicyReleaseParams,
+} from '../../core/icp/local-policy-contract.js';
+import { parseContactAuthoritySnapshotRequest } from '../../shared/contracts/contact-authority-snapshot.js';
+import { agentMethodParamDecoders } from './methods/params.js';
+import type { RpcParamsDecoder } from './rpc-param-decoder.js';
 
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -85,120 +92,148 @@ export interface ReverseGatewayMethodRuntime {
   ): Promise<IcpLocalPolicyReleaseResult>;
 }
 
-interface ReverseGatewayMethodDescriptor<P, R> {
+interface ReverseGatewayMethodDescriptor {
   names: readonly string[];
-  handler: (params: P, runtime: ReverseGatewayMethodRuntime) => Promise<R> | R;
+  handle: (params: unknown, runtime: ReverseGatewayMethodRuntime) => Promise<unknown> | unknown;
 }
 
-const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
-  {
+function defineReverseMethod<P, R>(definition: {
+  names: readonly string[];
+  decode: RpcParamsDecoder<P>;
+  handler: (params: P, runtime: ReverseGatewayMethodRuntime) => Promise<R> | R;
+}): ReverseGatewayMethodDescriptor {
+  return {
+    names: definition.names,
+    handle: (params, runtime) => definition.handler(definition.decode(params), runtime),
+  };
+}
+
+const reverseDescriptors = [
+  defineReverseMethod({
     names: ['icp.policy.inspect'],
+    decode: parseIcpLocalPolicyInspectParams,
     handler: (params: IcpLocalPolicyInspectParams, runtime) => (
       runtime.handleIcpLocalPolicyInspect(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['icp.policy.acquire'],
+    decode: parseIcpLocalPolicyAcquireParams,
     handler: (params: IcpLocalPolicyAcquireParams, runtime) => (
       runtime.handleIcpLocalPolicyAcquire(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['icp.policy.release'],
+    decode: parseIcpLocalPolicyReleaseParams,
     handler: (params: IcpLocalPolicyReleaseParams, runtime) => (
       runtime.handleIcpLocalPolicyRelease(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['memory.deletion.snapshot'],
+    decode: agentMethodParamDecoders['memory.deletion.snapshot'],
     handler: (params: MemoryDeletionProposalSnapshotParams, runtime) => (
       runtime.handleMemoryDeletionProposalSnapshot(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['memory.deletion.partner_alerted'],
+    decode: agentMethodParamDecoders['memory.deletion.partner_alerted'],
     handler: (params: MemoryDeletionPartnerAlertedParams, runtime) => (
       runtime.handleMemoryDeletionPartnerAlerted(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['memory.deletion.resolve'],
+    decode: agentMethodParamDecoders['memory.deletion.resolve'],
     handler: (params: MemoryDeletionResolveParams, runtime) => (
       runtime.handleMemoryDeletionResolve(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['contact.authority.snapshot'],
+    decode: parseContactAuthoritySnapshotRequest,
     handler: (params: ContactAuthoritySnapshotRequest, runtime) => (
       runtime.handleContactAuthoritySnapshot(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['voice.handleMessage'],
-    handler: (params: unknown, runtime) => {
-      if (!isRecord(params) || !Object.hasOwn(params, 'message')) {
-        throw new Error('voice.handleMessage requires an object params.message payload');
-      }
+    decode: agentMethodParamDecoders['voice.handleMessage'],
+    handler: (params, runtime) => {
       return runtime.dispatchHandleMessage(params.message);
     },
-  },
+  }),
   // mmo9.8.6: the inbound transcript-chunking RPC family was renamed
   // voice.stream.* -> voice.transcript.* (reserving the "reply stream" name for
   // the future OUTPUT stream, mmo9.8.4/.5). Each handler is registered under
   // BOTH the legacy and the transcript name so a gateway/agent version skew
   // during rollout keeps dispatching; the legacy names must NOT be removed.
-  {
+  defineReverseMethod({
     names: ['voice.stream.start', 'voice.transcript.begin'],
-    handler: (params: unknown, runtime) => runtime.handleVoiceStreamStart(params),
-  },
-  {
+    decode: agentMethodParamDecoders['voice.stream.start'],
+    handler: (params, runtime) => runtime.handleVoiceStreamStart(params),
+  }),
+  defineReverseMethod({
     names: ['voice.stream.chunk', 'voice.transcript.chunk'],
+    decode: agentMethodParamDecoders['voice.stream.chunk'],
     handler: (params: VoiceStreamChunkParams, runtime) => runtime.handleVoiceStreamChunk(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['voice.stream.end', 'voice.transcript.end'],
+    decode: agentMethodParamDecoders['voice.stream.end'],
     handler: (params: VoiceStreamEndParams, runtime) => runtime.handleVoiceStreamEnd(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['voice.stream.cancel', 'voice.transcript.cancel'],
+    decode: agentMethodParamDecoders['voice.stream.cancel'],
     handler: (params: VoiceStreamCancelParams, runtime) => runtime.handleVoiceStreamCancel(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['api.chat.completion'],
+    decode: agentMethodParamDecoders['api.chat.completion'],
     handler: (params: ApiChatCompletionRpcParams, runtime) => runtime.handleApiChatCompletion(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['api.chat.cancel'],
+    decode: agentMethodParamDecoders['api.chat.cancel'],
     handler: (params: ApiChatCompletionCancelRpcParams, runtime) => runtime.handleApiChatCancel(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['api.companion-ui.shard.action'],
+    decode: agentMethodParamDecoders['api.companion-ui.shard.action'],
     handler: (params: ApiCompanionUiShardActionRpcParams, runtime) => (
       runtime.handleCompanionUiShardAction(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['shard.directory.owner'],
+    decode: agentMethodParamDecoders['shard.directory.owner'],
     handler: (params: ApiShardOwnerRpcParams, runtime) => runtime.handleShardOwner(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['api.telemetry.ingest'],
+    decode: agentMethodParamDecoders['api.telemetry.ingest'],
     handler: (params: ApiTelemetryIngestRpcParams, runtime) => runtime.handleApiTelemetryIngest(params),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['api.health'],
+    decode: agentMethodParamDecoders['api.health'],
     handler: (_params: Record<string, never>, runtime) => runtime.handleApiHealth(),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['satellite.response.eligibility'],
+    decode: agentMethodParamDecoders['satellite.response.eligibility'],
     handler: (params: SatelliteResponseEligibilityRpcParams, runtime) => (
       runtime.handleSatelliteResponseEligibility(params)
     ),
-  },
-  {
+  }),
+  defineReverseMethod({
     names: ['telemetry.turn.performance'],
-    handler: (params: unknown, runtime) => runtime.handleTurnPerformance(params),
-  },
+    decode: agentMethodParamDecoders['telemetry.turn.performance'],
+    handler: (params, runtime) => runtime.handleTurnPerformance(params),
+  }),
 ];
 
 export function registerReverseGatewayMethods(runtime: ReverseGatewayMethodRuntime): void {
@@ -206,7 +241,7 @@ export function registerReverseGatewayMethods(runtime: ReverseGatewayMethodRunti
     for (const name of descriptor.names) {
       runtime.target.addMethod(
         name,
-        (params: unknown) => descriptor.handler(params as never, runtime),
+        (params: unknown) => descriptor.handle(params, runtime),
       );
     }
   }

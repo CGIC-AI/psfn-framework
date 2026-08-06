@@ -12,15 +12,19 @@ const imageTag = 'test-tag';
 // The live fleet topology: one UUID-suffixed agent Deployment per companions.json
 // entry. Three entries prove the gate covers the whole fleet, not a fixed
 // cluster-of-one agent name.
-const defaultFleetCompanionIds = [
-  '1b2f6c9e-0000-4000-8000-aaaaaaaaaaaa',
-  '2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb',
-  '3d4b8e1a-2222-4000-8000-cccccccccccc',
-];
-const defaultFleetPostgresSchemas = [
-  'companion_alpha',
-  'companion_beta',
-  'companion_gamma',
+const defaultFleetCompanions = [
+  {
+    companionId: '1b2f6c9e-0000-4000-8000-aaaaaaaaaaaa',
+    postgresSchema: 'companion_alpha',
+  },
+  {
+    companionId: '2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb',
+    postgresSchema: 'companion_beta',
+  },
+  {
+    companionId: '3d4b8e1a-2222-4000-8000-cccccccccccc',
+    postgresSchema: 'companion_gamma',
+  },
 ];
 
 /**
@@ -39,15 +43,11 @@ const joined = argv.join(' ');
 const namespace = ${JSON.stringify(namespace)};
 const companionId = ${JSON.stringify(companionId)};
 const imageTag = ${JSON.stringify(imageTag)};
-const defaultFleetCompanionIds = ${JSON.stringify(defaultFleetCompanionIds)};
-const defaultFleetPostgresSchemas = ${JSON.stringify(defaultFleetPostgresSchemas)};
-const fleetCompanionIds = fixture.fleetCompanionIds ?? defaultFleetCompanionIds;
-const fleetPostgresSchemas = fixture.fleetPostgresSchemas ?? defaultFleetPostgresSchemas;
+const defaultFleetCompanions = ${JSON.stringify(defaultFleetCompanions)};
+const fleetCompanions = fixture.fleetCompanions ?? defaultFleetCompanions;
+const fleetCompanionIds = fleetCompanions.map((entry) => entry.companionId);
+const fleetPostgresSchemas = fleetCompanions.map((entry) => entry.postgresSchema);
 const agentDeployments = fleetCompanionIds.map((id) => 'psfn-agent-' + id);
-
-if (fleetCompanionIds.length !== fleetPostgresSchemas.length) {
-  fail('fixture fleet companion/schema counts differ\n');
-}
 
 function out(text) {
   process.stdout.write(text);
@@ -117,7 +117,7 @@ if (joined.includes('cat /app/contract-hash.txt')) {
   out('contracthash01\n');
 }
 
-if (joined.includes('exec deploy/psfn-gateway') && joined.includes('companions.json')) {
+if (joined.includes('exec deploy/psfn-gateway') && joined.includes('resolve-model-usage-ledger-schema.js')) {
   out(fleetPostgresSchemas[0] + '\n');
 }
 
@@ -192,6 +192,9 @@ if (joined.includes('psql')) {
     if (!sql.includes('order by recorded_at_ms desc, id desc limit 1')) {
       fail('provider query did not select the latest chat row: ' + sql + '\n');
     }
+    if (!sql.includes("where call_kind='chat'")) {
+      fail('provider query did not restrict the latest row to chat calls: ' + sql + '\n');
+    }
     out(fixture.providerRoutingRow ?? 'OK|litellm|litellm|model-a|model-a|1700000000000\n');
   }
   // The bookkeeping check is a two-call contract. Call 1 discovers every schema
@@ -262,8 +265,7 @@ interface Fixture {
   expectedHarnessKey?: string;
   rawSecretTemplateOutput?: string;
   ownerPreflightFailure?: string;
-  fleetCompanionIds?: string[];
-  fleetPostgresSchemas?: string[];
+  fleetCompanions?: Array<{ companionId: string; postgresSchema: string }>;
   ledgerSchemas?: string[];
   providerRoutingRow?: string;
 }
@@ -329,7 +331,7 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     expect(result.stdout).toContain('PASS fleet owner-file preflight');
     // The three-companion fixture proves the in-gateway preflight covers every
     // UUID-suffixed companion root, not a single fixed agent.
-    for (const id of defaultFleetCompanionIds) {
+    for (const { companionId: id } of defaultFleetCompanions) {
       expect(result.stdout).toContain(`/runtime/companions/${id}`);
     }
     expect(result.stdout).toMatch(
@@ -359,18 +361,19 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
   });
 
   it('keeps a cluster-of-one on the same canonical ledger contract', () => {
-    const onlyCompanion = defaultFleetCompanionIds[0];
+    const onlyCompanion = defaultFleetCompanions[0];
     const result = runGate({
       secretData: { TESTING_HARNESS_API_KEY: base64('sk-harness-one') },
       expectedHarnessKey: 'sk-harness-one',
-      fleetCompanionIds: [onlyCompanion],
-      fleetPostgresSchemas: ['companion_default'],
+      fleetCompanions: [{ ...onlyCompanion, postgresSchema: 'companion_default' }],
       ledgerSchemas: ['companion_default'],
     });
 
     expect(result.stdout, result.stdout + result.stderr).toContain('PASS provider routing');
-    expect(result.stdout).toContain(`/runtime/companions/${onlyCompanion}`);
-    expect(result.stdout).not.toContain(`/runtime/companions/${defaultFleetCompanionIds[1]}`);
+    expect(result.stdout).toContain(`/runtime/companions/${onlyCompanion.companionId}`);
+    expect(result.stdout).not.toContain(
+      `/runtime/companions/${defaultFleetCompanions[1].companionId}`,
+    );
     expect(result.status).toBe(0);
   });
 

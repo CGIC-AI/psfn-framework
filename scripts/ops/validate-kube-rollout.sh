@@ -1166,34 +1166,8 @@ check_agent_logs() {
 
 resolve_model_usage_ledger_schema() {
   local output
-  if ! output="$(run_kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- node -e '
-const fs = require("node:fs");
-const path = require("node:path");
-
-try {
-  const systemDataDir = String(process.env.SYSTEM_DATA_DIR ?? "").trim();
-  if (!systemDataDir) throw new Error("gateway SYSTEM_DATA_DIR is empty");
-  const manifestPath = path.join(systemDataDir, "companions.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (!Array.isArray(manifest?.companions) || manifest.companions.length === 0) {
-    throw new Error(`${manifestPath} must enumerate at least one companion`);
-  }
-  const schemas = manifest.companions.map((entry, index) => {
-    const schema = typeof entry?.postgresSchema === "string" ? entry.postgresSchema.trim() : "";
-    if (schema.length === 0 || schema.length > 63 || !/^[a-z_][a-z0-9_]*$/.test(schema) || schema.startsWith("pg_")) {
-      throw new Error(`${manifestPath} companions[${index}].postgresSchema is not a canonical lowercase Postgres identifier`);
-    }
-    return schema;
-  });
-  if (new Set(schemas).size !== schemas.length) {
-    throw new Error(`${manifestPath} contains duplicate postgresSchema entries`);
-  }
-  process.stdout.write(schemas[0]);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-' 2>&1)"; then
+  if ! output="$(run_kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- \
+    node /app/dist/resolve-model-usage-ledger-schema.js 2>&1)"; then
     printf 'provider-routing topology resolution failed: %s\n' "$output"
     return 1
   fi

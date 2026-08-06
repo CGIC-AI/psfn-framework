@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import {
   FLEET_ESCALATION_GRANT_HEADER,
   withFleetEscalationGrant,
@@ -38,8 +39,7 @@ export function listConcerns(query: ConcernListQuery = {}): Promise<ConcernListD
   if (query.includeResolved !== undefined) params.set('includeResolved', String(query.includeResolved));
   if (query.includeExpired !== undefined) params.set('includeExpired', String(query.includeExpired));
   if (query.limit !== undefined) params.set('limit', String(query.limit));
-  const suffix = params.size > 0 ? `?${params.toString()}` : '';
-  return apiGet<ConcernListData>(`/api/admin/concerns${suffix}`);
+  return apiGet<ConcernListData>(withQuery('/api/admin/concerns', params));
 }
 
 async function postEscalatedConcernAction(

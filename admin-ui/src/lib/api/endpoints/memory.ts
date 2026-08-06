@@ -1,4 +1,5 @@
 import { apiDelete, apiFetch, apiGet, apiPost } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import {
   FLEET_ESCALATION_GRANT_HEADER,
   withFleetEscalationGrant,
@@ -40,8 +41,7 @@ export function listMemories(
   if (params?.endDate) search.set('endDate', params.endDate);
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
   if (params?.offset !== undefined) search.set('offset', String(params.offset));
-  const qs = search.toString();
-  return apiGet<AdminMemoryListData>(`/api/admin/memory${qs ? `?${qs}` : ''}`);
+  return apiGet<AdminMemoryListData>(withQuery('/api/admin/memory', search));
 }
 
 export function searchMemories(q: string): Promise<AdminMemorySearchResult> {
@@ -107,8 +107,7 @@ export function dropMemoryBodyElevation(): Promise<AdminMemoryElevationStatus> {
 export function listManagedMemoryScopes(kind?: 'project' | 'north_star'): Promise<AdminMemoryScopeListData> {
   const search = new URLSearchParams();
   if (kind) search.set('kind', kind);
-  const qs = search.toString();
-  return apiGet<AdminMemoryScopeListData>(`/api/admin/memory/scopes${qs ? `?${qs}` : ''}`);
+  return apiGet<AdminMemoryScopeListData>(withQuery('/api/admin/memory/scopes', search));
 }
 
 export function getManagedMemoryScopeDetail(

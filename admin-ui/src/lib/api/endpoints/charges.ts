@@ -1,4 +1,5 @@
 import { apiGet } from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   RunChargeLedgerData,
   RunChargeLedgerEntry,
@@ -34,6 +35,5 @@ export function getCharges(query: ChargeLedgerQuery = {}): Promise<AdminChargeLe
   if (query.sinceMs !== undefined) params.set('sinceMs', String(query.sinceMs));
   if (query.untilMs !== undefined) params.set('untilMs', String(query.untilMs));
   if (query.runId) params.set('runId', query.runId);
-  const suffix = params.toString();
-  return apiGet<AdminChargeLedgerData>(`/api/admin/charges${suffix ? `?${suffix}` : ''}`);
+  return apiGet<AdminChargeLedgerData>(withQuery('/api/admin/charges', params));
 }

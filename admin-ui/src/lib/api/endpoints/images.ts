@@ -1,4 +1,11 @@
-import { apiDelete, apiGet, apiPatch, apiPost, apiPostMultipart } from '$lib/api/client';
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  apiPostMultipart,
+} from '$lib/api/client';
+import { withQuery } from '$lib/api/query';
 import type {
   ImageReferencePhoto as CanonicalImageReferencePhoto,
 } from '../../../../../src/primitives/images/reference-store.js';
@@ -125,8 +132,7 @@ export function listGeneratedImages(input: {
   if (input.meaningful !== undefined) params.set('meaningful', String(input.meaningful));
   if (input.milestone !== undefined) params.set('milestone', String(input.milestone));
   if (input.q?.trim()) params.set('q', input.q.trim());
-  const query = params.toString();
-  return apiGet<GeneratedImagesResponse>(`/api/admin/images/generated${query ? `?${query}` : ''}`);
+  return apiGet<GeneratedImagesResponse>(withQuery('/api/admin/images/generated', params));
 }
 
 export function updateGeneratedImage(
@@ -174,9 +180,8 @@ export function uploadImageReference(
   if (input.setDefault) params.set('setDefault', 'true');
   const form = new FormData();
   form.append('file', file);
-  const query = params.toString();
   return apiPostMultipart<ImageReferenceMutationResponse>(
-    `/api/admin/image-references/upload${query ? `?${query}` : ''}`,
+    withQuery('/api/admin/image-references/upload', params),
     form
   );
 }

@@ -2,7 +2,7 @@
 // double-confirm token flow, the release/discard decisions, and the
 // always-allow/always-deny source-list flywheel.
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +52,8 @@ function makeQuarantinedEnvelope(input: {
   id?: string;
   originRef?: string;
   withL3Fields?: boolean;
+  withRuleMatch?: boolean;
+  ruleMatchTotalCount?: number;
 } = {}): IntakeEnvelope {
   const sha256 = 'b'.repeat(64);
   let envelope = createIntakeEnvelope({
@@ -72,6 +74,23 @@ function makeQuarantinedEnvelope(input: {
       reason: 'l1:injection/override_attempt',
       decidedBy: 'screening',
       decidedAtMs: NOW,
+      ...(input.withRuleMatch
+        ? {
+          ruleMatches: [{
+            ruleId: 'injection_ignore_instructions',
+            kind: 'phrase' as const,
+            startOffset: 0,
+            endOffset: 32,
+            excerpt: 'ignore all previous instructions',
+          }],
+          ...(input.ruleMatchTotalCount !== undefined
+            ? {
+              ruleMatchTotalCount: input.ruleMatchTotalCount,
+              ruleMatchesTruncated: input.ruleMatchTotalCount > 1,
+            }
+            : {}),
+        }
+        : {}),
     },
     riskLabels: ['injection/override_attempt'],
     scores: { 'l1-rule-engine': 1, 'l3-heavy-screener': 0.93 },
@@ -100,6 +119,7 @@ function emptyLists(): Lists {
 
 describe('admin intake quarantine service (htm9.11)', () => {
   let dir: string;
+  let quarantinePath: string;
   let clock: number;
   let store: IntakeQuarantineStore;
   let lists: Lists;
@@ -176,8 +196,9 @@ describe('admin intake quarantine service (htm9.11)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'intake-quarantine-service-'));
+    quarantinePath = join(dir, 'intake-quarantine.json');
     clock = NOW;
-    store = createIntakeQuarantineStore(join(dir, 'intake-quarantine.json'), {
+    store = createIntakeQuarantineStore(quarantinePath, {
       itemTtlHours: 168,
       maxHeldItems: 100,
       now: () => clock,
@@ -222,6 +243,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
     safeRepresentationText?: string;
     canonicalContactId?: string;
     withL3Fields?: boolean;
+    withRuleMatch?: boolean;
+    ruleMatchTotalCount?: number;
   } = {}): IntakeEnvelope {
     const envelope = makeQuarantinedEnvelope(input);
     store.hold({
@@ -257,6 +280,47 @@ describe('admin intake quarantine service (htm9.11)', () => {
     expect(item.safeRepresentationAvailable).toBe(true);
     expect(item.flywheelTarget).toEqual({ kind: 'site', pattern: 'suspect.example' });
     expect(item.contentSha256).toBe('b'.repeat(64));
+    expect(item.ruleMatches).toEqual([]);
+  });
+
+  it('surfaces L1 rule ids and safe match evidence while legacy envelopes remain empty', () => {
+    const envelope = holdItem({ withRuleMatch: true, ruleMatchTotalCount: 39 });
+    const item = service.listItems().items[0];
+
+    expect(item.id).toBe(envelope.id);
+    expect(item.ruleMatches).toEqual([{
+      ruleId: 'injection_ignore_instructions',
+      kind: 'phrase',
+      startOffset: 0,
+      endOffset: 32,
+      excerpt: 'ignore all previous instructions',
+    }]);
+    expect(item).toMatchObject({
+      ruleMatchTotalCount: 39,
+      ruleMatchesTruncated: true,
+    });
+  });
+
+  it('surfaces isolated provenance failure and refuses release while keeping discard available', () => {
+    const envelope = holdItem({ withRuleMatch: true });
+    const persisted = JSON.parse(readFileSync(quarantinePath, 'utf8')) as {
+      entries: Array<{ envelope: { decision: { ruleMatches?: Array<Record<string, unknown>> } } }>;
+    };
+    const ruleMatch = persisted.entries[0]?.envelope.decision.ruleMatches?.[0];
+    if (!ruleMatch) throw new Error('Malformed-rule fixture must include persisted provenance');
+    ruleMatch.kind = 'glob';
+    writeFileSync(quarantinePath, JSON.stringify(persisted), 'utf8');
+
+    expect(service.listItems().items[0]).toMatchObject({
+      id: envelope.id,
+      status: 'held',
+      ruleMatches: [],
+      ruleMatchProvenanceUnavailable: true,
+    });
+    expect(service.beginDecision({ id: envelope.id, action: 'release_raw' }))
+      .toMatchObject({ ok: false, status: 409 });
+    expect(service.beginDecision({ id: envelope.id, action: 'discard' }))
+      .toMatchObject({ ok: true });
   });
 
   // hrmrq.54: a containment-bypass attempt (reading the held item's on-disk

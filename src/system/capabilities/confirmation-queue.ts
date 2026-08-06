@@ -225,6 +225,65 @@ function throwUnrepresentableConfirmationParam(path: string, detail: string): ne
   throw new TypeError(`Confirmation params ${path} ${detail}`);
 }
 
+function assertConfirmationParamCloneShape(
+  value: unknown,
+  path: string,
+  ancestors: WeakSet<object>,
+): void {
+  if (value === null || typeof value !== 'object') return;
+  if (value instanceof Date) {
+    if (Reflect.ownKeys(value).length > 0) {
+      throwUnrepresentableConfirmationParam(path, 'must not contain custom Date properties');
+    }
+    return;
+  }
+  if (ancestors.has(value)) {
+    throwUnrepresentableConfirmationParam(path, 'must not contain a cycle');
+  }
+
+  const isArray = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  if (isArray && prototype !== Array.prototype) {
+    throwUnrepresentableConfirmationParam(path, 'must be an ordinary array');
+  }
+  if (!isArray && prototype !== Object.prototype && prototype !== null) {
+    throwUnrepresentableConfirmationParam(path, 'must be a plain object, array, or Date');
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throwUnrepresentableConfirmationParam(path, 'must not contain symbol keys');
+  }
+
+  ancestors.add(value);
+  try {
+    for (const [property, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+      if (isArray && property === 'length') continue;
+      if (property === 'toJSON') {
+        throwUnrepresentableConfirmationParam(`${path}.${property}`, 'must not override JSON projection');
+      }
+      if ('get' in descriptor || 'set' in descriptor) {
+        throwUnrepresentableConfirmationParam(`${path}.${property}`, 'must be a data property');
+      }
+      if (isArray) {
+        const index = Number(property);
+        if (
+          !descriptor.enumerable
+          || !Number.isInteger(index)
+          || index < 0
+          || index >= value.length
+          || String(index) !== property
+        ) {
+          throwUnrepresentableConfirmationParam(path, 'must contain only enumerable array indices');
+        }
+      }
+      if (descriptor.enumerable) {
+        assertConfirmationParamCloneShape(descriptor.value, `${path}.${property}`, ancestors);
+      }
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function assertConfirmationParamWireRepresentable(
   value: unknown,
   path: string,
@@ -297,8 +356,10 @@ function assertConfirmationParamWireRepresentable(
 }
 
 function cloneConfirmationParams(input: Record<string, unknown>): Record<string, unknown> {
-  assertConfirmationParamWireRepresentable(input, 'params', new WeakSet<object>());
-  return structuredClone(input);
+  assertConfirmationParamCloneShape(input, 'params', new WeakSet<object>());
+  const clone = structuredClone(input);
+  assertConfirmationParamWireRepresentable(clone, 'params', new WeakSet<object>());
+  return clone;
 }
 
 function normalizePositiveInt(value: number | undefined, fallback: number): number {

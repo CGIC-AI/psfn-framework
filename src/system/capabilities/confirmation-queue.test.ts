@@ -49,6 +49,28 @@ describe('ConfirmationQueue', () => {
     Object.assign(augmentedArray, { hidden: 1n });
     const symbolAugmentedArray: unknown[] = [];
     Object.defineProperty(symbolAugmentedArray, Symbol('hidden'), { value: 'secret' });
+    const nonEnumerableArrayIndex = new Array<unknown>(1);
+    Object.defineProperty(nonEnumerableArrayIndex, '0', {
+      enumerable: false,
+      value: 'JSON reads this index',
+    });
+    let objectAccessorReads = 0;
+    const objectAccessor: Record<string, unknown> = {};
+    Object.defineProperty(objectAccessor, 'unstable', {
+      enumerable: true,
+      get: () => (++objectAccessorReads === 1 ? 1 : 1n),
+    });
+    let arrayAccessorReads = 0;
+    const arrayAccessor = new Array<unknown>(1);
+    Object.defineProperty(arrayAccessor, '0', {
+      enumerable: true,
+      get: () => (++arrayAccessorReads === 1 ? 'visible' : new Map()),
+    });
+    const customJsonProjection = { value: 'native' };
+    Object.defineProperty(customJsonProjection, 'toJSON', {
+      enumerable: false,
+      value: () => ({ value: 'wire' }),
+    });
     const unsupported = [
       { label: 'cyclic', params: cyclic },
       { label: 'BigInt', params: { value: 1n } },
@@ -57,6 +79,10 @@ describe('ConfirmationQueue', () => {
       { label: 'non-finite number', params: { value: Number.NaN } },
       { label: 'non-index array property', params: { rows: augmentedArray } },
       { label: 'symbol array property', params: { rows: symbolAugmentedArray } },
+      { label: 'non-enumerable array index', params: { rows: nonEnumerableArrayIndex } },
+      { label: 'plain-object accessor', params: objectAccessor },
+      { label: 'array accessor', params: { rows: arrayAccessor } },
+      { label: 'custom JSON projection', params: customJsonProjection },
     ];
 
     for (const testCase of unsupported) {
@@ -73,6 +99,8 @@ describe('ConfirmationQueue', () => {
       }, async () => undefined), testCase.label).toThrow();
       expect(queue.listPending(), testCase.label).toEqual([]);
     }
+    expect(objectAccessorReads).toBe(0);
+    expect(arrayAccessorReads).toBe(0);
   });
 
   it('enqueues pending actions with timestamp and expiry metadata', () => {

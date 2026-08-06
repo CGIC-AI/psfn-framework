@@ -29,7 +29,7 @@ import {
 } from './oauth-transaction-store.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 import type { FleetAuthAccountRosterEntry } from '../../../system/config/fleet-auth-config.js';
-import { parseFleetAuthInteger as safeInteger } from './fleet-auth-integer.js';
+import { requireFleetAuthInteger as safeInteger } from '../row-guards.js';
 import {
   createLoginSession,
   type SessionInsertInput,

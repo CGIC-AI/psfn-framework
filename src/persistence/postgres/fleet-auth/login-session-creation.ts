@@ -8,7 +8,7 @@ import {
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthAccountRosterEntry } from '../../../system/config/fleet-auth-config.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
-import { parseFleetAuthInteger } from './fleet-auth-integer.js';
+import { requireFleetAuthInteger } from '../row-guards.js';
 import type { PrincipalRow } from './oauth-session-store-types.js';
 import type { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import { activateRosteredFirstOwner } from './rostered-first-owner-activation.js';
@@ -81,11 +81,11 @@ export async function createLoginSession(
       throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
     }
 
-    const authorityGeneration = parseFleetAuthInteger(
+    const authorityGeneration = requireFleetAuthInteger(
       authority.authority_generation,
       'authority_generation',
     );
-    const globalAuthEpoch = parseFleetAuthInteger(
+    const globalAuthEpoch = requireFleetAuthInteger(
       authority.global_auth_epoch,
       'global_auth_epoch',
     );

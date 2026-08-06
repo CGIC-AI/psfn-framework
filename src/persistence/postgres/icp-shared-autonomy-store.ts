@@ -24,7 +24,7 @@ import {
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
-import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   createPostgresPool,
   executeQuery,
@@ -33,6 +33,11 @@ import {
   withPostgresClient,
 } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import {
+  requirePositiveSafeInteger as requirePositiveInteger,
+  requireSafeInteger as safeInteger,
+  requireUuid,
+} from './row-guards.js';
 
 interface AvailabilityRow extends QueryResultRow {
   companion_id: string;
@@ -155,22 +160,6 @@ const CLEAR_AVAILABILITY_SQL = `
       OR expires_at_ms <= $4
     )
 `;
-
-function safeInteger(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) throw new Error(`${field} must be a safe integer`);
-  return parsed;
-}
-
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
-  return value;
-}
-
-function requirePositiveInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${field} must be a positive safe integer`);
-  return value;
-}
 
 function requireTimestamp(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${field} must be a non-negative safe integer timestamp`);

@@ -35,6 +35,7 @@ import {
 import { isBoundedString, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createPostgresPool, withPostgresClient } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { requireSafeInteger as safeInteger, requireUuid } from './row-guards.js';
 import { assertSharedSchemaReady } from './shared-schema.js';
 
 /**
@@ -120,13 +121,6 @@ function requireCompanionId(value: string, field: string): string {
   return value;
 }
 
-function requireUuid(value: string, field: string): string {
-  if (!isRfc4122Uuid(value)) {
-    throw new Error(`${field} must be an RFC 4122 UUID`);
-  }
-  return value;
-}
-
 function requireIdentifier(value: string, field: string): string {
   // Channel and trigger-event ids are opaque external identifiers; bound them so
   // a malformed value fails closed rather than reaching a query as unbounded text.
@@ -156,14 +150,6 @@ function requireNonNegativeFinite(value: number, field: string): number {
     throw new Error(`${field} must be a finite number >= 0`);
   }
   return value;
-}
-
-function safeInteger(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${field} must be a safe integer`);
-  }
-  return parsed;
 }
 
 function nullableSafeInteger(value: string | number | null, field: string): number | null {
@@ -367,7 +353,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
   }
 
   async reserve(input: ReserveInput): Promise<ReserveResult> {
-    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId');
+    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId', 'RFC 4122 UUID');
     const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
     const triggerEventId = requireIdentifier(input.triggerEventId, 'speakingArbiter.triggerEventId');
     const companionId = requireCompanionId(input.companionId, 'speakingArbiter.companionId');
@@ -423,7 +409,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
   }
 
   async releaseReservation(input: ReleaseReservationInput): Promise<SpeakingReservationSnapshot> {
-    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId');
+    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId', 'RFC 4122 UUID');
     const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
     const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');
     const reason = assertReason(input.reason);
@@ -472,8 +458,8 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
   }
 
   async acquireEgressLease(input: AcquireEgressLeaseInput): Promise<AcquireEgressLeaseResult> {
-    const leaseId = requireUuid(input.leaseId, 'speakingArbiter.leaseId');
-    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId');
+    const leaseId = requireUuid(input.leaseId, 'speakingArbiter.leaseId', 'RFC 4122 UUID');
+    const reservationId = requireUuid(input.reservationId, 'speakingArbiter.reservationId', 'RFC 4122 UUID');
     const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
     const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');
     const expiresAtMs = requireFutureDeadline(input.expiresAtMs, nowMs, 'speakingArbiter.lease.expiresAtMs');
@@ -628,7 +614,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
   }
 
   async completeEgressLease(input: CompleteEgressLeaseInput): Promise<SpeakingEgressLeaseSnapshot> {
-    const leaseId = requireUuid(input.leaseId, 'speakingArbiter.leaseId');
+    const leaseId = requireUuid(input.leaseId, 'speakingArbiter.leaseId', 'RFC 4122 UUID');
     const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
     const fencingToken = safeInteger(input.fencingToken, 'speakingArbiter.fencingToken');
     const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');

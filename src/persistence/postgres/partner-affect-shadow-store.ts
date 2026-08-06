@@ -25,6 +25,7 @@ import {
   type PartnerAffectSuppressionReason,
 } from '../../shared/contracts/partner-affect.js';
 import { normalizeEmotionTelemetryProvenance } from '../../core/emotion/telemetry-validation.js';
+import { requirePartnerAffectSafeInteger as safeInteger } from './row-guards.js';
 
 const MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT = 1_000;
 const DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT = 200;
@@ -62,14 +63,6 @@ interface SuppressionRow extends QueryResultRow {
   reasons_json: unknown;
   detail: string;
   received_at_ms: string | number;
-}
-
-function safeInteger(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`Persisted partner-affect shadow row has non-integer ${field}: ${String(value)}`);
-  }
-  return parsed;
 }
 
 function normalizeBoundedLimit(limit: number | undefined): number {

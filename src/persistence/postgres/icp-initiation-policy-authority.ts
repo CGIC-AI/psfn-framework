@@ -15,7 +15,7 @@ import { evaluateProactiveOutboundTimeGate, type ProactiveQuietHoursConfig } fro
 import { resolveContactBlockListPath } from '../layout.js';
 import {
   createPostgresPool,
-  assertValidPostgresSchemaName,
+  quotePostgresSchemaName,
   withPostgresClient,
 } from '../postgres.js';
 import { TRUST_LEVELS, trustAtLeast, type TrustLevel } from '../../system/trust/types.js';
@@ -24,6 +24,7 @@ import {
   type RelationshipType,
 } from '../../core/contacts/types.js';
 import { assertPostgresRelationColumns } from './relation-contract.js';
+import { parseSafeInteger as safeInteger } from './row-guards.js';
 
 interface FleetPolicyOwner {
   companionId: string;
@@ -64,15 +65,6 @@ export interface PostgresIcpInitiationPolicyAuthorityOptions {
   capacityAuthority?: IcpInitiationCapacityPolicyAuthority;
   causalityAuthority?: IcpInitiationCausalityAuthority;
   pool?: Pool;
-}
-
-function safeInteger(value: string | number): number | null {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function quoteSchema(value: string): string {
-  return `"${assertValidPostgresSchemaName(value)}"`;
 }
 
 function parseTrustLevel(value: string): TrustLevel {
@@ -125,7 +117,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       if (this.fleet.has(owner.companionId)) {
         throw new Error(`Duplicate ICP policy owner ${owner.companionId}`);
       }
-      quoteSchema(owner.postgresSchema);
+      quotePostgresSchemaName(owner.postgresSchema);
       this.fleet.set(owner.companionId, owner);
       this.blockLists.set(
         owner.companionId,
@@ -191,7 +183,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
         expires_at_ms, status, reason_code, revision
-      FROM ${quoteSchema(sender.postgresSchema)}.icp_initiation_candidates
+      FROM ${quotePostgresSchemaName(sender.postgresSchema)}.icp_initiation_candidates
       WHERE candidate_id = $1
     `, [input.candidate.candidateId]);
     const candidateRow = candidateResult.rows.at(0);
@@ -301,7 +293,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
         expires_at_ms, status, reason_code, revision
-      FROM ${quoteSchema(sender.postgresSchema)}.icp_initiation_candidates
+      FROM ${quotePostgresSchemaName(sender.postgresSchema)}.icp_initiation_candidates
       WHERE candidate_id = $1
       ${lockCanonicalRows ? 'FOR SHARE' : ''}
     `, [input.permit.candidateId]);
@@ -379,12 +371,12 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     // exact cardinality because ambiguity committed before the lock is valid.
     const contactResult = await query.query<ContactPolicyRow>(`
       SELECT c.id, c.trust_level, c.relationship_type, c.is_machine_intelligence
-      FROM ${quoteSchema(owner.postgresSchema)}.contacts AS c
+      FROM ${quotePostgresSchemaName(owner.postgresSchema)}.contacts AS c
       WHERE c.id = CASE
         WHEN $2::text IS NOT NULL THEN $2
         ELSE (
           SELECT identity.contact_id
-          FROM ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
+          FROM ${quotePostgresSchemaName(owner.postgresSchema)}.contact_channel_ids AS identity
           WHERE identity.channel = 'companion' AND identity.channel_user_id = $1
         )
       END
@@ -395,7 +387,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
 
     const identityResult = await query.query<ContactIdentityPolicyRow>(`
       SELECT identity.channel_user_id
-      FROM ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
+      FROM ${quotePostgresSchemaName(owner.postgresSchema)}.contact_channel_ids AS identity
       WHERE identity.contact_id = $1 AND identity.channel = 'companion'
       ORDER BY identity.channel_user_id
       ${lockCanonicalRows ? 'FOR SHARE OF identity' : ''}

@@ -836,6 +836,28 @@ describe('LLMClient import-processing routing policy', () => {
 });
 
 describe('LLMClient provider observability', () => {
+  const makeKimiConfig = () => {
+    const config = makeConfig({
+      primaryModel: 'moonshotai/kimi-k3',
+      primaryProvider: 'openrouter',
+      modelRoster: {
+        chat: {
+          model: 'moonshotai/kimi-k3',
+          provider: 'openrouter',
+          maxTokens: 8192,
+          contextWindow: 262_144,
+        },
+        background: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          maxTokens: 2048,
+        },
+      },
+    });
+    config.modelRegistry = buildRegistryFromConfig(config);
+    return config;
+  };
+
   beforeEach(() => {
     mocks.getModel.mockReset();
     mocks.getModels.mockReset();
@@ -873,25 +895,7 @@ describe('LLMClient provider observability', () => {
   });
 
   it('removes the recorded kimi-k3 end-message token from API-streamed and Discord-shared final text', async () => {
-    const config = makeConfig({
-      primaryModel: 'moonshotai/kimi-k3',
-      primaryProvider: 'openrouter',
-      modelRoster: {
-        chat: {
-          model: 'moonshotai/kimi-k3',
-          provider: 'openrouter',
-          maxTokens: 8192,
-          contextWindow: 262_144,
-        },
-        background: {
-          model: 'deepseek/deepseek-v3.2',
-          provider: 'openrouter',
-          maxTokens: 2048,
-        },
-      },
-    });
-    config.modelRegistry = buildRegistryFromConfig(config);
-    const client = new LLMClient(config, {
+    const client = new LLMClient(makeKimiConfig(), {
       litellmBaseUrl: 'http://litellm.test/v1',
     });
     const recordedDeltas = [
@@ -946,6 +950,40 @@ describe('LLMClient provider observability', () => {
     }, 'reasoning', { disableRetry: true });
 
     expect(nonStreamingResponse.content).toBe('A grounded reply.');
+  });
+
+  it.each([
+    {
+      caseName: 'a complete exact terminal marker',
+      deltas: ['A grounded reply.', '<|end_', 'message|>'],
+      expected: 'A grounded reply.',
+    },
+    {
+      caseName: 'a partial terminal-marker prefix',
+      deltas: ['A grounded reply.', '<|end_'],
+      expected: 'A grounded reply.<|end_',
+    },
+  ])('reconciles $caseName when a kimi-k3 stream ends without a done frame', async ({ deltas, expected }) => {
+    const client = new LLMClient(makeKimiConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+    mocks.streamSimple.mockImplementation(async function* kimiStreamWithoutDone() {
+      for (const delta of deltas) {
+        yield { type: 'text_delta', delta };
+      }
+    });
+
+    const streamedVisibleText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Reply normally' }],
+    }, {
+      onText: delta => streamedVisibleText.push(delta),
+    });
+
+    expect(streamedVisibleText.join('')).toBe(expected);
+    expect(response.content).toBe(expected);
+    expect(response.stopReason).toBe('unknown');
   });
 
   it('preserves end-message-looking text outside the proven kimi-k3 terminal position', () => {

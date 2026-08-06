@@ -1544,6 +1544,12 @@ export class LLMClient {
               return response;
             }
 
+            const visibleTail = responseTerminatorFilter.finish();
+            if (visibleTail) {
+              emittedData = true;
+              callbacks?.onText?.(visibleTail);
+            }
+            content = stripProviderResponseTerminatorArtifact(content, candidateTarget);
             log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
             const incompleteUsage = normalizeLLMUsageDetails(
               undefined,

@@ -13,7 +13,7 @@ import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../contacts/tracking-gate.js';
-import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { InternalStateContinuityGap } from '../../self-model/internal-state-persistence.js';
@@ -74,7 +74,7 @@ export interface PromptContextBuilderDeps {
   getScratchpadProvider: () => ScratchpadProvider | null;
   getContactStore: () => ContactStorePort | null;
   contactTrackingGate: ContactTrackingGate | null;
-  resolveCapabilityAccess: () => CapabilityAccess;
+  snapshotCapabilityGrant: () => Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'>;
   log: Log;
 }
 
@@ -174,10 +174,10 @@ export class PromptContextBuilder {
       this.deps.noteInternalStateContinuityGapRendered();
     }
 
-    // One access resolution feeds BOTH the advertised tier and the advertised
-    // token set (mus2.1): the prompt tool guide and the capability tool gates
-    // must agree on the same grant, including an injected custom shard access.
-    const capabilityAccess = this.deps.resolveCapabilityAccess();
+    // One owner snapshot feeds BOTH the advertised tier and the advertised
+    // token set. Disk-backed access must not refresh between separate getters;
+    // an injected immutable shard access is projected through the same seam.
+    const capabilityGrant = this.deps.snapshotCapabilityGrant();
 
     const skillsContext = await this.deps.getSkillsRuntime()?.getPromptXml() ?? '';
     return buildDynamicPromptTemplateVariablesForTurn({
@@ -197,8 +197,8 @@ export class PromptContextBuilder {
       metacognitiveFlags,
       emotionAppraisalChain,
       modelId: this.deps.getAgentModelId(),
-      capabilityTier: capabilityAccess.getTier(),
-      capabilityGrantedTokens: capabilityAccess.getGrantedTokens(),
+      capabilityTier: capabilityGrant.tier,
+      capabilityGrantedTokens: new Set(capabilityGrant.grantedTokens),
       activeToolCounts,
       extendedTools,
       coreToolNames,
@@ -281,7 +281,6 @@ export class PromptContextBuilder {
         this.deps.config,
         this.deps.getAgentModelContextWindow(),
       ),
-      capabilityTier: this.deps.resolveCapabilityAccess().getTier(),
       activeToolCounts,
       extendedTools: [...this.deps.toolRuntimeFacade.getExtendedTools()],
       coreToolNames: new Set(this.deps.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name)),

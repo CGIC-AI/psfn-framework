@@ -436,7 +436,6 @@ export function buildRuntimeContext(input: {
   emotionAppraisalChain?: readonly EmotionAppraisalEntry[];
   modelId: string;
   contextWindow: number;
-  capabilityTier: CapabilityTier;
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
   coreToolNames: ReadonlySet<string>;

@@ -38,9 +38,10 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
-import type { CapabilityAccess } from '../../system/capabilities/access.js';
+import type { CapabilityAccess, CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
+import { buildSelfStatusResult } from '../tools/self-status.js';
 import {
   ExternalCommunicationRateLimiter,
   LifecycleRestartSafeguard,
@@ -7236,6 +7237,113 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
   });
 });
 
+describe('atomic capability prompt snapshot (tqj9b)', () => {
+  it('renders one atomic owner snapshot that agrees with self_status at the same turn boundary', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-capability-prompt-snapshot-'));
+    const promptStoreDir = mkdtempSync(join(tmpdir(), 'psfn-capability-prompt-layers-'));
+    try {
+      saveCapabilityTierConfig(dataDir, { tier: 'nursery', customTokens: [] });
+      const capabilityRuntime = new CapabilityRuntime({ dataDir });
+      const readTier = capabilityRuntime.getTier.bind(capabilityRuntime);
+      const snapshotOwnerGrant = capabilityRuntime.snapshotOwnerGrant.bind(capabilityRuntime);
+
+      // Deterministically reproduce the legacy race: the owner changes after
+      // getTier() returns but before getGrantedTokens() refreshes the cache.
+      const legacyTierRead = vi.spyOn(capabilityRuntime, 'getTier').mockImplementation(() => {
+        const tier = readTier();
+        saveCapabilityTierConfig(dataDir, { tier: 'autonomous', customTokens: [] });
+        return tier;
+      });
+      const legacyTier = capabilityRuntime.getTier();
+      const legacyGrantedTokens = capabilityRuntime.getGrantedTokens();
+      expect(legacyTier).toBe('nursery');
+      expect(legacyGrantedTokens.has('external.web')).toBe(true);
+
+      saveCapabilityTierConfig(dataDir, { tier: 'nursery', customTokens: [] });
+      capabilityRuntime.refreshFromDisk();
+      legacyTierRead.mockClear();
+      const promptSnapshots: CapabilityGrantSnapshot[] = [];
+      const snapshotSpy = vi.spyOn(capabilityRuntime, 'snapshotOwnerGrant').mockImplementation(() => {
+        const snapshot = snapshotOwnerGrant();
+        promptSnapshots.push(snapshot);
+        return snapshot;
+      });
+
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'nursery',
+      });
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        sessionManager,
+        'Base prompt',
+        config,
+      );
+      agent.setCapabilityRuntime(capabilityRuntime);
+      agent.registerTool(
+        withCapabilityRequirement(makeExtendedProbeTool('capability_probe'), 'external.web'),
+        'extended',
+      );
+
+      const promptStore = new PromptLayerStore(
+        join(promptStoreDir, 'layers.json'),
+        join(promptStoreDir, 'history.jsonl'),
+      );
+      promptStore.create({
+        type: 'base',
+        name: 'Atomic capability prompt test',
+        identifier: 'main',
+        content: 'CAPABILITY_SNAPSHOT_TEST',
+      });
+      promptStore.create({
+        type: 'runtime',
+        name: 'Atomic capability turn block',
+        identifier: 'runtimeCapabilitySnapshotTest',
+        content: [
+          '<capability_snapshot>',
+          '<tier>{{runtime_capability_tier}}</tier>',
+          '{{runtime_extended_tool_directory_lines}}',
+          '</capability_snapshot>',
+        ].join('\n'),
+      });
+      agent.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
+        persistLastKnownGood: false,
+      });
+
+      await agent.handleMessage(makeMessage({ id: 'atomic-capability-turn' }));
+
+      expect(snapshotSpy).toHaveBeenCalledTimes(1);
+      expect(legacyTierRead).not.toHaveBeenCalled();
+      const promptSnapshot = promptSnapshots[0];
+      expect(promptSnapshot).toBeDefined();
+      const renderedPrompt = vi.mocked(sessionManager.buildContext).mock.calls[0]?.[1];
+      expect(renderedPrompt).toContain(`<tier>${promptSnapshot.tier}</tier>`);
+
+      const selfStatus = await buildSelfStatusResult({
+        config,
+        getCapabilityGrantSnapshot: () => promptSnapshot,
+      }, { action: 'capabilities' });
+      const selfStatusCapability = selfStatus.capability as {
+        tier: string;
+        grantedTokens: string[];
+      };
+      expect(selfStatusCapability.tier).toBe(promptSnapshot.tier);
+      expect(selfStatusCapability.grantedTokens).toEqual(promptSnapshot.grantedTokens);
+      expect(renderedPrompt).toContain(
+        selfStatusCapability.grantedTokens.includes('external.web')
+          ? '- capability_probe: capability_probe test probe (call directly; no activation step)'
+          : '- capability_probe: capability_probe test probe (present but blocked by current tier: external.web)',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(promptStoreDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('explicit capability access injection (mus2.1)', () => {
   it('injected immutable custom access governs the capability seam over the disk runtime and tier defaults', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-explicit-access-'));
@@ -7259,6 +7367,9 @@ describe('explicit capability access injection (mus2.1)', () => {
       const resolveAccess = () => (agent as unknown as {
         resolveCapabilityAccess(): CapabilityAccess;
       }).resolveCapabilityAccess();
+      const snapshotPromptGrant = () => (agent as unknown as {
+        snapshotCapabilityGrant(): Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'>;
+      }).snapshotCapabilityGrant();
       expect(resolveAccess()).toBe(capabilityRuntime);
 
       const derived = deriveShardCapabilityGrant({
@@ -7274,6 +7385,10 @@ describe('explicit capability access injection (mus2.1)', () => {
       expect(resolveAccess()).toBe(derived.access);
       expect(config.capabilityTier).toBe('custom');
       expect([...resolveAccess().getGrantedTokens()]).toEqual([...derived.tokens]);
+      expect(snapshotPromptGrant()).toEqual({
+        tier: 'custom',
+        grantedTokens: [...derived.tokens],
+      });
       expect(resolveAccess().has('shard.spawn')).toBe(true);
       // Masked though the autonomous parent holds it: the derived access is
       // the final authorization boundary, not the parent tier.

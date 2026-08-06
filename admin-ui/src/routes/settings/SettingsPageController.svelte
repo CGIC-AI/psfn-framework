@@ -78,6 +78,8 @@
     formatSettingOptionLabel,
     humanizeSettingValue,
     listDirtyRawEditorKeys,
+    loadRawEditorConfig,
+    loadRawEditorConfigs,
     planUnifiedOwnerConfigSaves,
     resolveUnifiedSaveSettingsJsonConflict,
     normalizeStringList,
@@ -96,6 +98,8 @@
     type CompositionalListKey,
     type CompositionalPolicyFormValue,
     type RawEditorKey,
+    type RawEditorLoadResult,
+    type RawSettingsEditorKey,
     type SaveFeedbackState,
     type SchedulerEditorConfig,
     type SettingsSimpleFormState,
@@ -263,6 +267,8 @@
   let chargePolicyJson = $state('');
   let backupJson = $state('');
   let settingsJson = $state('');
+  let rawEditorLoadErrors = $state<Partial<Record<RawSettingsEditorKey, string>>>({});
+  let retryingRawEditorKey = $state<RawSettingsEditorKey | null>(null);
 
   // ── Backup form fields ──
   let backupIntervalHours = $state(12);
@@ -843,9 +849,15 @@
     return buildRawEditorJsonMap((key) => getRawJson(key));
   }
 
+  function rawEditorLoadError(key: RawEditorKey): string | undefined {
+    if (key === 'settings' || key === 'models') return undefined;
+    return rawEditorLoadErrors[key];
+  }
+
   function dirtyRawEditorKeys(): RawEditorKey[] {
     const current = currentRawJsonByKey();
-    return listDirtyRawEditorKeys(current, initialRawJsonByKey);
+    return listDirtyRawEditorKeys(current, initialRawJsonByKey)
+      .filter((key) => rawEditorLoadError(key) === undefined);
   }
 
   function rawEditorLabel(key: RawEditorKey): string {
@@ -855,6 +867,7 @@
   let rawEditorViews = $derived.by(() => RAW_EDITORS.map((editor) => ({
     key: editor.key,
     ownerFile: rawEditorLabel(editor.key),
+    loadError: rawEditorLoadErrors[editor.key],
   })));
 
   function resetDirtyTracking(preserveRawKeys: readonly RawEditorKey[] = []): void {
@@ -874,6 +887,78 @@
       next[key] = current[key];
     }
     initialRawJsonByKey = next;
+  }
+
+  function formatRawEditorLoadError(key: RawSettingsEditorKey, result: RawEditorLoadResult): string {
+    const detail = result.status === 'error' ? result.message : 'Unknown owner-file load error';
+    return `Failed to load ${rawEditorLabel(key)}: ${detail}. Editing and saving are disabled until a reload succeeds.`;
+  }
+
+  function applyRawEditorLoadResults(input: {
+    results: Record<RawSettingsEditorKey, RawEditorLoadResult>;
+    settingsJson: string;
+    stagedJsonByKey: Record<RawEditorKey, string>;
+    preservedKeys: readonly RawEditorKey[];
+  }): void {
+    const serverJsonByKey = {
+      ...input.stagedJsonByKey,
+      settings: input.settingsJson,
+    };
+    const nextErrors: Partial<Record<RawSettingsEditorKey, string>> = {};
+    for (const { key } of RAW_EDITORS) {
+      const result = input.results[key];
+      if (result.status === 'loaded') {
+        serverJsonByKey[key] = tryPrettyPrint(result.json);
+      } else {
+        nextErrors[key] = formatRawEditorLoadError(key, result);
+      }
+    }
+    const reloadedRawJsonByKey = resolveReloadedRawJsonByKey({
+      serverJsonByKey,
+      stagedJsonByKey: input.stagedJsonByKey,
+      dirtyKeys: input.preservedKeys,
+    });
+    for (const key of Object.keys(reloadedRawJsonByKey) as RawEditorKey[]) {
+      setRawJson(key, reloadedRawJsonByKey[key]);
+    }
+    rawEditorLoadErrors = nextErrors;
+
+    const backupResult = input.results.backup;
+    if (backupResult.status === 'loaded') {
+      populateBackupFields(backupResult.json);
+    }
+  }
+
+  async function retryRawConfig(key: RawSettingsEditorKey): Promise<void> {
+    retryingRawEditorKey = key;
+    try {
+      const result = await loadRawEditorConfig(key, getSubConfig);
+      if (result.status === 'error') {
+        rawEditorLoadErrors = {
+          ...rawEditorLoadErrors,
+          [key]: formatRawEditorLoadError(key, result),
+        };
+        return;
+      }
+
+      const currentJsonByKey = currentRawJsonByKey();
+      const hadStagedEdit = listDirtyRawEditorKeys(currentJsonByKey, initialRawJsonByKey).includes(key);
+      const loadedJson = tryPrettyPrint(result.json);
+      if (hadStagedEdit) {
+        initialRawJsonByKey = { ...initialRawJsonByKey, [key]: loadedJson };
+      } else {
+        setRawJson(key, loadedJson);
+        markRawEditorsCommitted([key]);
+      }
+      if (key === 'backup' && !hadStagedEdit) {
+        populateBackupFields(result.json);
+      }
+      const nextErrors = { ...rawEditorLoadErrors };
+      delete nextErrors[key];
+      rawEditorLoadErrors = nextErrors;
+    } finally {
+      retryingRawEditorKey = null;
+    }
   }
 
   function collectSimplePayload(): Record<string, unknown> {
@@ -986,41 +1071,13 @@
     populateSimpleFields(nextSettingsData);
     setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
 
-    const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
-      getSubConfig('providers').catch(() => '{}'),
-      getSubConfig('channels').catch(() => '{}'),
-      getSubConfig('skills').catch(() => '{}'),
-      getSubConfig('scheduler').catch(() => '{}'),
-      getSubConfig('trust-policy').catch(() => '{}'),
-      getSubConfig('capabilities').catch(() => '{}'),
-      getSubConfig('charge-policy').catch(() => '{}'),
-      getSubConfig('backup').catch(() => '{}'),
-    ]);
-    const serverRawJsonByKey = buildRawEditorJsonMap((key) => {
-      if (key === 'settings') {
-        return JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
-      }
-      switch (key) {
-        case 'providers': return tryPrettyPrint(provConf);
-        case 'channels': return tryPrettyPrint(chanConf);
-        case 'skills': return tryPrettyPrint(skConf);
-        case 'scheduler': return tryPrettyPrint(schConf);
-        case 'trust-policy': return tryPrettyPrint(tpConf);
-        case 'capabilities': return tryPrettyPrint(capConf);
-        case 'charge-policy': return tryPrettyPrint(chargeConf);
-        case 'backup': return tryPrettyPrint(bakConf);
-        default: return '';
-      }
-    });
-    const reloadedRawJsonByKey = resolveReloadedRawJsonByKey({
-      serverJsonByKey: serverRawJsonByKey,
+    const results = await loadRawEditorConfigs(getSubConfig);
+    applyRawEditorLoadResults({
+      results,
+      settingsJson: JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2),
       stagedJsonByKey: stagedRawJsonByKey,
-      dirtyKeys: preservedRawKeys,
+      preservedKeys: preservedRawKeys,
     });
-    for (const key of Object.keys(reloadedRawJsonByKey) as RawEditorKey[]) {
-      setRawJson(key, reloadedRawJsonByKey[key]);
-    }
-    populateBackupFields(bakConf);
     resetDirtyTracking(preservedRawKeys);
   }
 
@@ -1207,6 +1264,11 @@
   }
 
   async function saveRawConfig(key: string, label: string) {
+    const loadError = rawEditorLoadError(key as RawEditorKey);
+    if (loadError) {
+      flashRaw(key, false, loadError);
+      return;
+    }
     saving = true;
     try {
       const json = getRawJson(key);
@@ -1246,26 +1308,13 @@
       settingsSchema = schemaData;
       populateSimpleFields(data);
       setProviderRegistryState(normalizeProvidersRuntimeConfig(settingsData.editors.providers).registry);
-      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
-
-      const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
-        getSubConfig('providers').catch(() => '{}'),
-        getSubConfig('channels').catch(() => '{}'),
-        getSubConfig('skills').catch(() => '{}'),
-        getSubConfig('scheduler').catch(() => '{}'),
-        getSubConfig('trust-policy').catch(() => '{}'),
-        getSubConfig('capabilities').catch(() => '{}'),
-        getSubConfig('charge-policy').catch(() => '{}'),
-        getSubConfig('backup').catch(() => '{}'),
-      ]);
-      providersJson = tryPrettyPrint(provConf);
-      channelsJson = tryPrettyPrint(chanConf);
-      skillsJson = tryPrettyPrint(skConf);
-      schedulerJson = tryPrettyPrint(schConf);
-      trustPolicyJson = tryPrettyPrint(tpConf);
-      capabilitiesJson = tryPrettyPrint(capConf);
-      chargePolicyJson = tryPrettyPrint(chargeConf);
-      backupJson = tryPrettyPrint(bakConf);
+      const results = await loadRawEditorConfigs(getSubConfig);
+      applyRawEditorLoadResults({
+        results,
+        settingsJson: JSON.stringify(data.config as Record<string, unknown>, null, 2),
+        stagedJsonByKey: currentRawJsonByKey(),
+        preservedKeys: [],
+      });
       resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
@@ -1417,8 +1466,8 @@
             {fieldMinimum} {fieldMaximum} {isDeprecatedField} {getSource} {hasFieldErrors} {fieldErrors}
             {formatSettingOptionLabel} {humanizeSettingValue} {getCompositionalPolicy} {setCompositionalPolicyEnabled}
             {toggleCompositionalPolicyValue} {hasCompositionalPolicyValue} {settingsJson}
-            {rawEditorViews} {rawSaveStatus} {validationErrorsByField} {setSettingsJson} {getRawJson} {setRawJson}
-            {saveRawSettings} {saveRawConfig}
+            {rawEditorViews} {rawSaveStatus} {retryingRawEditorKey} {validationErrorsByField}
+            {setSettingsJson} {getRawJson} {setRawJson} {saveRawSettings} {saveRawConfig} {retryRawConfig}
           />
         {/if}
 

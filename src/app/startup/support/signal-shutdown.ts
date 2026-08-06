@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { ShutdownLogger } from './shutdown-helpers.js';
+import { recordLifecycleDiagnosticEvent } from '../../../shared/diagnostics/runtime-diagnostics.js';
 
 export interface SignalShutdownHandlerOptions {
   logger: ShutdownLogger;
@@ -14,6 +16,26 @@ export interface ProcessErrorHandlerOptions {
   logger: ShutdownLogger;
   /** Best-effort graceful shutdown trigger for uncaught exceptions. */
   requestShutdown?: () => void;
+  /**
+   * Consecutive rejections from one content-free origin fingerprint before a
+   * bounded Garden runtime-diagnostics escalation is recorded. Must be greater
+   * than one so an isolated rejection remains log-only.
+   */
+  backgroundFailureEscalationThreshold: number | undefined;
+}
+
+function fingerprintUnhandledRejectionOrigin(reason: unknown): string {
+  let identity: string;
+  if (reason instanceof Error) {
+    const firstFrame = reason.stack
+      ?.split('\n')
+      .map(line => line.trim())
+      .find(line => line.startsWith('at '));
+    identity = `${reason.name}:${firstFrame ?? reason.message}`;
+  } else {
+    identity = `${typeof reason}:${String(reason)}`;
+  }
+  return createHash('sha256').update(identity).digest('hex');
 }
 
 /**
@@ -26,8 +48,52 @@ export interface ProcessErrorHandlerOptions {
  *   timer guarantees termination even if graceful shutdown hangs.
  */
 export function registerProcessErrorHandlers(options: ProcessErrorHandlerOptions): void {
+  const failureThreshold = options.backgroundFailureEscalationThreshold;
+  if (
+    typeof failureThreshold !== 'number'
+    || !Number.isInteger(failureThreshold)
+    || failureThreshold <= 1
+  ) {
+    throw new Error(
+      'backgroundFailureEscalationThreshold must be an integer greater than one, '
+      + `got ${String(failureThreshold)}`,
+    );
+  }
+
+  let activeOriginFingerprint: string | null = null;
+  let consecutiveFailures = 0;
+  let escalationRecorded = false;
+
   process.on('unhandledRejection', (reason) => {
     options.logger.error('Unhandled promise rejection', { reason: String(reason) });
+
+    const originFingerprint = fingerprintUnhandledRejectionOrigin(reason);
+    if (originFingerprint === activeOriginFingerprint) {
+      consecutiveFailures += 1;
+    } else {
+      activeOriginFingerprint = originFingerprint;
+      consecutiveFailures = 1;
+      escalationRecorded = false;
+    }
+
+    if (consecutiveFailures < failureThreshold || escalationRecorded) return;
+
+    escalationRecorded = true;
+    recordLifecycleDiagnosticEvent({
+      event: 'process.unhandled_rejection.escalated',
+      component: 'process',
+      message: 'Repeated unhandled promise rejections crossed the escalation threshold',
+      details: {
+        consecutiveFailures,
+        failureThreshold,
+        originFingerprint,
+      },
+    });
+    options.logger.error('Persistent background failure escalated to runtime diagnostics', {
+      consecutiveFailures,
+      failureThreshold,
+      originFingerprint,
+    });
   });
   process.on('uncaughtException', (error) => {
     options.logger.error('Uncaught exception', {

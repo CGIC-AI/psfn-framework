@@ -938,6 +938,7 @@ async function main(): Promise<void> {
 
   registerProcessErrorHandlers({
     logger: log,
+    backgroundFailureEscalationThreshold: config.backgroundFailureEscalationThreshold,
     requestShutdown: () => {
       void shutdown('uncaughtException').catch(() => process.exit(1));
     },

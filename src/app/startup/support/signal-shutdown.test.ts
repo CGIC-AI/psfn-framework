@@ -5,6 +5,10 @@ import {
   registerProcessErrorHandlers,
 } from './signal-shutdown.js';
 import type { ShutdownLogger } from './shutdown-helpers.js';
+import {
+  buildRuntimeDiagnosticsSnapshot,
+  resetRuntimeDiagnosticsForTests,
+} from '../../../shared/diagnostics/runtime-diagnostics.js';
 
 function createLogger(): ShutdownLogger {
   return {
@@ -138,12 +142,17 @@ describe('registerProcessErrorHandlers', () => {
   afterEach(() => {
     process.removeAllListeners('unhandledRejection');
     process.removeAllListeners('uncaughtException');
+    resetRuntimeDiagnosticsForTests();
   });
 
   it('logs unhandled rejections and keeps the process alive', () => {
     const logger = createLogger();
     const requestShutdown = vi.fn();
-    registerProcessErrorHandlers({ logger, requestShutdown });
+    registerProcessErrorHandlers({
+      logger,
+      requestShutdown,
+      backgroundFailureEscalationThreshold: 3,
+    });
 
     process.emit('unhandledRejection', new Error('async boom'), Promise.resolve());
 
@@ -151,13 +160,85 @@ describe('registerProcessErrorHandlers', () => {
       'Unhandled promise rejection',
       expect.objectContaining({ reason: expect.stringContaining('async boom') }),
     );
+    expect(logger.error).toHaveBeenCalledTimes(1);
     expect(requestShutdown).not.toHaveBeenCalled();
+    expect(buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false }).lifecycle.events).toEqual([]);
+  });
+
+  it('escalates a repeated same-origin background failure once at the configured threshold', () => {
+    const logger = createLogger();
+    const requestShutdown = vi.fn();
+    registerProcessErrorHandlers({
+      logger,
+      requestShutdown,
+      backgroundFailureEscalationThreshold: 3,
+    });
+    const recurringFailure = (message: string): Error => new Error(message);
+
+    process.emit('unhandledRejection', recurringFailure('private rejection content 1'), Promise.resolve());
+    process.emit('unhandledRejection', recurringFailure('private rejection content 2'), Promise.resolve());
+    expect(buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false }).lifecycle.events).toEqual([]);
+
+    process.emit('unhandledRejection', recurringFailure('private rejection content 3'), Promise.resolve());
+    process.emit('unhandledRejection', recurringFailure('private rejection content 4'), Promise.resolve());
+
+    const events = buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false }).lifecycle.events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: 'process.unhandled_rejection.escalated',
+      component: 'process',
+      details: {
+        consecutiveFailures: 3,
+        failureThreshold: 3,
+        originFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain('private rejection content');
+    expect(requestShutdown).not.toHaveBeenCalled();
+  });
+
+  it('resets the rejection streak when a different origin interrupts it', () => {
+    const logger = createLogger();
+    registerProcessErrorHandlers({
+      logger,
+      backgroundFailureEscalationThreshold: 3,
+    });
+    const originA = new Error('origin A private content');
+    const originB = new Error('origin B private content');
+
+    process.emit('unhandledRejection', originA, Promise.resolve());
+    process.emit('unhandledRejection', originA, Promise.resolve());
+    process.emit('unhandledRejection', originB, Promise.resolve());
+    process.emit('unhandledRejection', originA, Promise.resolve());
+    process.emit('unhandledRejection', originA, Promise.resolve());
+
+    expect(buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false }).lifecycle.events).toEqual([]);
+
+    process.emit('unhandledRejection', originA, Promise.resolve());
+    expect(buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false }).lifecycle.events).toHaveLength(1);
+  });
+
+  it('fails closed before registering listeners when the escalation threshold is invalid', () => {
+    const logger = createLogger();
+
+    for (const threshold of [undefined, 0, 1, 1.5, Number.NaN]) {
+      expect(() => registerProcessErrorHandlers({
+        logger,
+        backgroundFailureEscalationThreshold: threshold,
+      })).toThrow('backgroundFailureEscalationThreshold must be an integer greater than one');
+    }
+    expect(process.listeners('unhandledRejection')).toEqual([]);
+    expect(process.listeners('uncaughtException')).toEqual([]);
   });
 
   it('logs uncaught exceptions and requests graceful shutdown', () => {
     const logger = createLogger();
     const requestShutdown = vi.fn();
-    registerProcessErrorHandlers({ logger, requestShutdown });
+    registerProcessErrorHandlers({
+      logger,
+      requestShutdown,
+      backgroundFailureEscalationThreshold: 3,
+    });
 
     process.emit('uncaughtException', new Error('sync boom'));
 

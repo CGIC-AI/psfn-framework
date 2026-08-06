@@ -241,6 +241,11 @@ export interface SubstrateConfig {
   compactionThresholdPct: number;
   observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
+  /**
+   * Consecutive unhandled rejections from one origin before runtime
+   * diagnostics records an operator-visible escalation. Owned by settings.json.
+   */
+  backgroundFailureEscalationThreshold?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;

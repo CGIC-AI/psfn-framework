@@ -111,6 +111,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'compactionThresholdPct',
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
+  'backgroundFailureEscalationThreshold',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
@@ -222,6 +223,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     observationMaskingWindow: config.observationMaskingWindow ?? 1,
     compactionEmotionalSalienceThresholdPct:
       config.compactionEmotionalSalienceThresholdPct ?? 75,
+    backgroundFailureEscalationThreshold:
+      config.backgroundFailureEscalationThreshold ?? null,
     sessionTailCache: structuredClone(
       config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     ),
@@ -250,6 +253,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'compactionThresholdPct'
     | 'observationMaskingWindow'
     | 'compactionEmotionalSalienceThresholdPct'
+    | 'backgroundFailureEscalationThreshold'
     | 'sessionTailCache'
   >;
 }

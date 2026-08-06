@@ -211,6 +211,7 @@
       "safeNextActions": null
     }
   },
+  "backgroundFailureEscalationThreshold": 3,
   "memoryRefreshFailureAlertThreshold": 3,
   "intakeScreeningFailureAlertThreshold": 3,
   "groupMemory": {

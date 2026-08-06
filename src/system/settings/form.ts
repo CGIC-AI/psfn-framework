@@ -61,6 +61,7 @@ export const SETTINGS_VALIDATION = {
   },
   observationMaskingWindow: { min: 0, max: 200 },
   compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
+  backgroundFailureEscalationThreshold: { min: 2, max: 100 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },
   analysisWorkbenchMaxTokens: { min: 1000, max: 1000000 },

@@ -70,6 +70,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   compactionEmotionalSalienceThresholdPct: { sectionId: 'memory', surface: 'advanced' },
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
   observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
+  backgroundFailureEscalationThreshold: { sectionId: 'sessions', surface: 'advanced' },
   backgroundMaintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   // hrmrq.34: icpAutonomy.enabled is scheduler.json-owned and edited through
   // the Garden scheduler raw editor (restart applies it; the autonomy page

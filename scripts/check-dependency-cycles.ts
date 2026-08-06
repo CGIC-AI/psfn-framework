@@ -12,14 +12,13 @@ import {
 
 const SOURCE_ROOT = resolve(process.cwd(), 'src');
 const DEFAULT_BASELINE_PATH = resolve(process.cwd(), 'config/dependency-cycle-baseline.json');
-const PROJECT_PREFIX = ['P', 'S', 'F', 'N'].join('');
-const REMEDIATION_BEAD = `${PROJECT_PREFIX}-7hue`;
 
 function printUsage() {
   console.log('Usage: tsx scripts/check-dependency-cycles.ts [options]');
   console.log('');
   console.log('Checks src/ import graph for circular dependencies.');
   console.log('Fails on any cycle not present in the configured baseline file.');
+  console.log('Also fails on stale baseline entries that no longer match a detected cycle.');
   console.log('');
   console.log('Options:');
   console.log('  --baseline <path>   Override baseline JSON path');
@@ -191,7 +190,7 @@ function main() {
     );
     console.log(`Cycle baseline: ${toPosix(relative(process.cwd(), options.baselinePath))}`);
     console.log(
-      `Remediation tracker: ${baseline.remediationTracker} (full removal tracked by ${REMEDIATION_BEAD}).`,
+      `Remediation tracker: ${baseline.remediationTracker}.`,
     );
 
     const baselineSet = new Set(baseline.cycles);
@@ -209,23 +208,26 @@ function main() {
       console.log('Baseline-matched cycles (0).');
     }
 
-    if (baselineOnly.length > 0) {
-      console.log(
-        `Baseline entries not currently detected (${baselineOnly.length}) — consider pruning baseline after ${REMEDIATION_BEAD} work lands:`,
-      );
-      for (const cycle of baselineOnly) {
-        console.log(`- ${cycle}`);
-      }
-    }
-
     if (regressions.length > 0) {
       console.error(`Detected ${regressions.length} new circular import cycle(s) outside baseline:`);
       for (const cycle of regressions) {
         console.error(`- ${cycle}`);
       }
       console.error(
-        `Dependency-cycle regression check failed. Baseline debt is tracked by ${REMEDIATION_BEAD}.`,
+        `Dependency-cycle regression check failed. Baseline debt is tracked by ${baseline.remediationTracker}.`,
       );
+      process.exitCode = 1;
+      return;
+    }
+
+    if (baselineOnly.length > 0) {
+      console.error(
+        `Stale baseline entries not currently detected (${baselineOnly.length}) — prune them from the baseline so it cannot rot (tracked by ${baseline.remediationTracker}):`,
+      );
+      for (const cycle of baselineOnly) {
+        console.error(`- ${cycle}`);
+      }
+      console.error('Dependency-cycle check failed: stale baseline entries must be pruned.');
       process.exitCode = 1;
       return;
     }
@@ -234,7 +236,7 @@ function main() {
       console.log('No circular imports detected.');
     } else {
       console.log(
-        `Detected ${cycles.length} circular import cycle(s), all baseline-matched. No regressions against ${REMEDIATION_BEAD}.`,
+        `Detected ${cycles.length} circular import cycle(s), all baseline-matched. No regressions against ${baseline.remediationTracker}.`,
       );
     }
   } catch (error) {

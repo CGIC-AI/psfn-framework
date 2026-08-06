@@ -1,122 +1,23 @@
-import { Type, type TProperties, type TSchema } from '@sinclair/typebox';
-import { Value } from '@sinclair/typebox/value';
-import { JSONRPCErrorCode, JSONRPCErrorException } from 'json-rpc-2.0';
+import { Type } from '@sinclair/typebox';
 
-import type { AgentMethods, GatewayMethods } from '../protocol.js';
-import type { SatelliteResponseEligibilityRpcParams } from '../../../channels/api/types.js';
-import { CHANNEL_TYPES } from '../../../shared/contracts/channel-types.js';
-import type { RpcParamsDecoder } from '../rpc-param-decoder.js';
-
-type GatewayParams<K extends keyof GatewayMethods> = GatewayMethods[K][0];
-type AgentParams<K extends keyof AgentMethods> = AgentMethods[K][0];
-type NamedRpcParamsDecoder<K extends keyof GatewayMethods> =
-  RpcParamsDecoder<GatewayMethods[K][0]>;
-
-const stringArray = Type.Array(Type.String());
-const unknownRecord = Type.Record(Type.String(), Type.Unknown());
-const stringRecord = Type.Record(Type.String(), Type.String());
-const optionalString = Type.Optional(Type.String());
-const optionalNumber = Type.Optional(Type.Number());
-const optionalInteger = Type.Optional(Type.Integer());
-const optionalBoolean = Type.Optional(Type.Boolean());
-
-function strictObject(properties: TProperties): TSchema {
-  return Type.Object(properties, { additionalProperties: false });
-}
-
-function enumSchema<const T extends readonly string[]>(values: T): TSchema {
-  return Type.Union(values.map(value => Type.Literal(value)));
-}
-
-function checkedDecoder<P>(method: string, schema: TSchema): RpcParamsDecoder<P> {
-  return (params: unknown): P => {
-    if (!Value.Check(schema, params)) {
-      throw new JSONRPCErrorException(
-        `${method} received invalid params`,
-        JSONRPCErrorCode.InvalidParams,
-      );
-    }
-    return params as P;
-  };
-}
-
-function gatewayDecoder<K extends keyof GatewayMethods>(
-  method: K,
-  schema: TSchema,
-): RpcParamsDecoder<GatewayParams<K>> {
-  return checkedDecoder<GatewayParams<K>>(method, schema);
-}
-
-function agentDecoder<K extends keyof AgentMethods>(
-  method: K,
-  schema: TSchema,
-): RpcParamsDecoder<AgentParams<K>> {
-  return checkedDecoder<AgentParams<K>>(method, schema);
-}
-
-const emptyParams = strictObject({});
-const correlationProperties = {
-  companionId: optionalString,
-  sessionId: optionalString,
-  turnId: optionalString,
-  requestId: optionalString,
-  channelId: optionalString,
-  channelType: Type.Optional(enumSchema(CHANNEL_TYPES)),
-  callType: Type.Optional(enumSchema(['chat', 'tool', 'memory', 'summary', 'background', 'scheduled'])),
-  originType: Type.Optional(enumSchema(['chat', 'tool', 'memory', 'summary', 'background', 'scheduled'])),
-  originStage: optionalString,
-  toolName: optionalString,
-  toolCallId: optionalString,
-  purpose: optionalString,
-  telemetryVisibility: Type.Optional(enumSchema(['operator_visible', 'companion_private'])),
-  service: optionalString,
-  process: optionalString,
-  chargeLane: Type.Optional(enumSchema([
-    'interactive', 'companion_social', 'background', 'maintenance', 'subagent', 'shard',
-  ])),
-  chargeSurface: Type.Optional(enumSchema([
-    'localImageGeneration',
-    'paidImageGeneration',
-    'analysisWorkbenchExtensionBand',
-    'subagentLaunch',
-    'shardLaunch',
-    'externalModelConsult',
-    'moaRoundBase',
-    'companionSocialContinuation',
-  ])),
-  chargeEventId: optionalString,
-  chargeRunId: optionalString,
-  chargeRootRunId: optionalString,
-  chargeParentRunId: optionalString,
-  shardId: optionalString,
-  subagentId: optionalString,
-  conversationId: optionalString,
-  rootInitiationId: optionalString,
-  workloadType: optionalString,
-  workloadId: optionalString,
-  icpCorrelation: Type.Optional(strictObject({
-    conversationId: Type.String(),
-    rootInitiationId: Type.String(),
-    initiatedByCompanionId: Type.String(),
-    localCompanionId: Type.String(),
-    peerCompanionId: Type.String(),
-    peerContactId: Type.String(),
-    channelId: Type.String(),
-    turnId: Type.String(),
-    messageId: Type.String(),
-    requestId: Type.String(),
-    chargeLane: enumSchema(['interactive', 'companion_social']),
-    surface: enumSchema(['companion_dm', 'companion_room']),
-    costPurpose: enumSchema(['conversation_turn', 'tool', 'summary', 'extraction', 'sidecar']),
-    costOriginStage: enumSchema(['initiation', 'reply', 'post_turn', 'maintenance']),
-    fatigueDecision: enumSchema(['allow', 'allow_overcharge', 'suppress', 'not_evaluated']),
-    fatigueReasonCode: optionalString,
-  })),
-};
-
-function correlatedParams(properties: TProperties = {}): TSchema {
-  return strictObject({ ...correlationProperties, ...properties });
-}
+import {
+  attachment,
+  correlationProperties,
+  correlatedParams,
+  emptyParams,
+  enumSchema,
+  gatewayDecoder,
+  type NamedRpcParamsDecoder,
+  optionalBoolean,
+  optionalCanonicalUuid,
+  optionalInteger,
+  optionalNumber,
+  optionalString,
+  strictObject,
+  stringArray,
+  stringRecord,
+  unknownRecord,
+} from './params/schema.js';
 
 const gatewayLLMContentBlock = Type.Union([
   strictObject({
@@ -192,14 +93,7 @@ const llmCommon = {
   workSpec: Type.Optional(unknownRecord),
 };
 
-const attachment = strictObject({
-  url: Type.String(),
-  contentType: Type.String(),
-  name: Type.String(),
-  localPath: optionalString,
-  dataBase64: optionalString,
-  parsedTextPath: optionalString,
-});
+
 const notificationSender = strictObject({
   kind: enumSchema(['companion', 'system']),
   provenance: Type.String(),
@@ -448,78 +342,4 @@ export const gatewayMethodParamDecoders = {
   ])),
 } as const;
 
-const voiceFrame = {
-  correlationId: Type.String(),
-  streamId: Type.String(),
-  sequence: Type.Integer(),
-  metadata: Type.Optional(unknownRecord),
-};
-const substrateMessage = strictObject({
-  id: Type.String(),
-  channelId: Type.String(),
-  channelType: enumSchema(CHANNEL_TYPES),
-  authorId: Type.String(),
-  authorName: Type.String(),
-  content: Type.String(),
-  attachments: Type.Optional(Type.Array(attachment)),
-  timestamp: Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })]),
-  isDirectMessage: optionalBoolean,
-  replyToMessageId: optionalString,
-  routing: Type.Optional(unknownRecord),
-});
-const apiPrincipal = strictObject({
-  id: Type.String(),
-  mode: enumSchema(['api_key', 'insecure_local']),
-  scope: Type.Optional(enumSchema(['satellite', 'testing_harness'])),
-});
-
-export const agentMethodParamDecoders = {
-  'memory.deletion.snapshot': agentDecoder('memory.deletion.snapshot', strictObject({ proposalId: Type.String() })),
-  'memory.deletion.partner_alerted': agentDecoder('memory.deletion.partner_alerted', strictObject({ proposalId: Type.String() })),
-  'memory.deletion.resolve': agentDecoder('memory.deletion.resolve', strictObject({
-    proposalId: Type.String(), decision: enumSchema(['approve', 'deny']), operatorId: Type.String(),
-  })),
-  'contact.authority.snapshot': agentDecoder('contact.authority.snapshot', strictObject({
-    contactId: Type.String(), providerSubjectId: Type.String(),
-  })),
-  'voice.handleMessage': agentDecoder('voice.handleMessage', strictObject({ message: substrateMessage })),
-  'voice.stream.start': agentDecoder('voice.stream.start', strictObject({ ...voiceFrame, message: substrateMessage })),
-  'voice.stream.chunk': agentDecoder('voice.stream.chunk', strictObject({ ...voiceFrame, text: Type.String() })),
-  'voice.stream.end': agentDecoder('voice.stream.end', strictObject(voiceFrame)),
-  'voice.stream.cancel': agentDecoder('voice.stream.cancel', strictObject({ ...voiceFrame, reason: optionalString })),
-  'api.chat.completion': agentDecoder('api.chat.completion', strictObject({
-    requestId: Type.String(), request: unknownRecord, principal: apiPrincipal, headers: stringRecord,
-    clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: Type.Optional(unknownRecord),
-    hubDeviceAttachment: Type.Optional(unknownRecord), companionUiCapability: Type.Optional(unknownRecord),
-    timeoutMs: optionalNumber, performance: Type.Optional(strictObject({
-      receivedMonotonicAtMs: Type.Number(), receivedTimestampMs: Type.Number(),
-    })),
-  })),
-  'api.chat.cancel': agentDecoder('api.chat.cancel', strictObject({ requestId: Type.String() })),
-  'api.companion-ui.shard.action': agentDecoder('api.companion-ui.shard.action', strictObject({
-    requestId: Type.String(), principal: apiPrincipal, headers: stringRecord,
-    clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: unknownRecord,
-    hubDeviceAttachment: unknownRecord, companionUiCapability: unknownRecord,
-  })),
-  'shard.directory.owner': agentDecoder('shard.directory.owner', strictObject({ shardId: Type.String() })),
-  'api.telemetry.ingest': agentDecoder('api.telemetry.ingest', strictObject({ event: unknownRecord })),
-  'api.health': agentDecoder('api.health', emptyParams),
-  'satellite.response.eligibility': checkedDecoder<SatelliteResponseEligibilityRpcParams>(
-    'satellite.response.eligibility', strictObject({
-    canonicalContactId: Type.String(), channelId: Type.String(),
-    }),
-  ),
-  'telemetry.turn.performance': agentDecoder('telemetry.turn.performance', strictObject({
-    event: unknownRecord,
-  })),
-} as const;
-
-export function objectParamsDecoder(method: string): RpcParamsDecoder<Record<string, unknown>> {
-  return checkedDecoder<Record<string, unknown>>(method, unknownRecord);
-}
-
-function optionalCanonicalUuid(): TSchema {
-  return Type.Optional(Type.String({
-    pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-  }));
-}
+export { agentMethodParamDecoders } from './params/agent.js';

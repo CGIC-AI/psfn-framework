@@ -48,6 +48,27 @@
       "note": "Code-owned protocol and safety ceiling matching Discord's 2,000-character message limit; it bounds untrusted prompt input independently of operator tuning."
     },
     {
+      "file": "src/app/agent/gateway-message-handlers.ts",
+      "name": "registerGatewayMessageHandlers.$call:truncation:slice.arg1#1",
+      "value": "50",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/app/agent/gateway-message-handlers.ts",
+      "name": "registerGatewayMessageHandlers.$call:truncation:slice.arg1#2",
+      "value": "50",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/app/agent/gateway-message-handlers.ts",
+      "name": "registerGatewayMessageHandlers.processMessage.$call:truncation:slice.arg1#1",
+      "value": "50",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/app/agent/main.ts",
       "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
       "value": "15_000"
@@ -418,6 +439,27 @@
       "value": "240_000"
     },
     {
+      "file": "src/app/gateway/api-surface.ts",
+      "name": "screenCompanionStimulusMessage.$call:truncation:slice.arg1#1",
+      "value": "2048",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/app/gateway/api-surface.ts",
+      "name": "screenVoiceTranscriptMessage.$call:truncation:slice.arg1#1",
+      "value": "2048",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/app/maintenance/owner-upgrade-readiness-probe.ts",
+      "name": "companionProbe.$call:timer:setTimeout.arg1#1",
+      "value": "100",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/app/maintenance/purge-testing-session.ts",
       "name": "createConfiguredTailPurgePort.maxEntriesPerChannel",
       "value": "1",
@@ -513,6 +555,13 @@
       "note": "Immutable parser/wire/schema contract COMPANION_UI_PROTOCOL_LIMITS.maxTextCharacters; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/boundary/fleet-auth/escalation.ts",
+      "name": "checkedEscalationReason.$call:length-guard:GreaterThanToken#1",
+      "value": "512",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/boundary/fleet-auth/garden-route-capabilities.ts",
       "name": "CHAT_BODY.maxBytes",
       "value": "1_048_576",
@@ -560,6 +609,55 @@
       "value": "12 * 1_024 * 1_024",
       "form": "object-member",
       "note": "Code-owned safety/resource guard UPLOAD_BODY.maxBytes; this fixed bound protects untrusted input or resource use independently of operator tuning."
+    },
+    {
+      "file": "src/boundary/fleet-auth/hub-device-assertion.ts",
+      "name": "parseCompactToken.$call:length-guard:GreaterThanToken#1",
+      "value": "8192",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "name": "boundedReason.$call:length-guard:GreaterThanToken#1",
+      "value": "512",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "name": "parseFleetAuthLifecycleCeremonyRequest.$call:length-guard:GreaterThanToken#1",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/recovery-request-capability.ts",
+      "name": "compileTrustedHostRecoveryTarget.$call:length-guard:GreaterThanToken#1",
+      "value": "1_024",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/request-capability-replay.ts",
+      "name": "compileRequestCapabilityReplayConsumption.$call:length-guard:GreaterThanToken#1",
+      "value": "65_536",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/request-capability-replay.ts",
+      "name": "compileTrustedHostRecoveryReplayConsumption.$call:length-guard:GreaterThanToken#1",
+      "value": "65_536",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/fleet-auth/request-capability.ts",
+      "name": "parseCompactToken.$call:length-guard:GreaterThanToken#1",
+      "value": "65_536",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
@@ -630,6 +728,13 @@
       "file": "src/boundary/gateway/filesystem-paths.ts",
       "name": "MAX_FS_LIST_GLOB_LENGTH",
       "value": "512"
+    },
+    {
+      "file": "src/boundary/gateway/fleet-auth-broker.ts",
+      "name": "GatewayFleetAuthBroker.revokeProvider.$call:length-guard:GreaterThanToken#1",
+      "value": "512",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/fleet-auth-broker.ts",
@@ -748,6 +853,13 @@
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "applyL3ScreeningOutcome.$call:truncation:slice.arg1#1",
+      "value": "1024",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "DEFAULT_MAX_CONTENT_CHARS",
       "value": "48000"
     },
@@ -829,6 +941,20 @@
       "note": "Deterministic test/certification fixture createIntakeScreenerTestConfig.primaryMaxTokens; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
+      "file": "src/boundary/gateway/intake/screener-transport.ts",
+      "name": "callToolLessJsonScreener.$call:truncation:slice.arg1#1",
+      "value": "500",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/intake/vision-screener.ts",
+      "name": "failClosed.$call:truncation:slice.arg1#1",
+      "value": "4096",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/boundary/gateway/intake/vision-screener.ts",
       "name": "MAX_DESCRIPTION_CHARS",
       "value": "600"
@@ -840,9 +966,44 @@
     },
     {
       "file": "src/boundary/gateway/kubernetes-read-api.ts",
+      "name": "loadServiceAccountToken.$call:length-guard:GreaterThanToken#1",
+      "value": "16_384",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/kubernetes-read-api.ts",
       "name": "MAX_RESPONSE_BYTES",
       "value": "2 * 1024 * 1024",
       "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
+    },
+    {
+      "file": "src/boundary/gateway/kubernetes-rollout-api.ts",
+      "name": "loadServiceAccountToken.$call:length-guard:GreaterThanToken#1",
+      "value": "16_384",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/mcp/authentication.ts",
+      "name": "createOAuthClientCredentialsProvider.requestToken.$call:math-clamp:Math.max.arg0#1",
+      "value": "1_000",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/mcp/authentication.ts",
+      "name": "createOAuthClientCredentialsProvider.requestToken.$call:math-clamp:Math.min.arg0#1",
+      "value": "30_000",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/mcp/authentication.ts",
+      "name": "parseTokenResponse.$call:length-guard:GreaterThanToken#1",
+      "value": "65_536",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/mcp/invocation-authority.ts",
@@ -877,6 +1038,13 @@
       "value": "0",
       "form": "object-member",
       "note": "Code-owned SSRF and credential-custody boundary: MCP endpoints and OAuth token URLs are exact and never redirect."
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
+      "name": "createSpawnCommandRunner.run.$call:timer:setTimeout.arg1#1",
+      "value": "250",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
@@ -946,6 +1114,13 @@
       "value": "200"
     },
     {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "runBdCommand.$call:timer:setTimeout.arg1#1",
+      "value": "250",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/boundary/gateway/methods/home-assistant.ts",
       "name": "MAX_ENTITY_IDS",
       "value": "50"
@@ -961,14 +1136,35 @@
       "value": "1_000_000"
     },
     {
+      "file": "src/boundary/gateway/methods/home-assistant.ts",
+      "name": "parseToken.$call:length-guard:GreaterThanToken#1",
+      "value": "64",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/boundary/gateway/methods/intake-image.ts",
       "name": "INTAKE_SCREEN_IMAGE_MAX_BYTES",
       "value": "8 * 1024 * 1024"
     },
     {
       "file": "src/boundary/gateway/methods/openrouter-web.ts",
+      "name": "callOpenRouter.$call:truncation:slice.arg1#1",
+      "value": "500",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/methods/openrouter-web.ts",
       "name": "DEFAULT_SEARCH_MAX_RESULTS",
       "value": "5"
+    },
+    {
+      "file": "src/boundary/gateway/methods/shell.ts",
+      "name": "collectShellPathCandidates.$call:length-guard:GreaterThanToken#1",
+      "value": "4096",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/methods/shell.ts",
@@ -989,6 +1185,20 @@
       "value": "3",
       "form": "object-member",
       "note": "Existing mutable policy candidate shellCircuitBreaker.failureThreshold; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/methods/web.ts",
+      "name": "screenWebContent.$call:truncation:slice.arg1#1",
+      "value": "2048",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/methods/web.ts",
+      "name": "screenWebContent.$call:truncation:slice.arg1#2",
+      "value": "2048",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/methods/web.ts",
@@ -1528,6 +1738,27 @@
       "note": "Fixed diagnostic/protocol label TOOL_CALL_BUDGET_EXCEEDED_MESSAGE; code-owned because callers and tests consume its semantic value as part of the implementation contract, not operator tuning."
     },
     {
+      "file": "src/boundary/sandbox/capabilities/llm.ts",
+      "name": "createLLMCapabilities.llm_query_strict.$call:truncation:slice.arg1#1",
+      "value": "200",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/modules.ts",
+      "name": "normalizeInstallInput.$call:length-guard:GreaterThanToken#1",
+      "value": "100_000",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/repo.ts",
+      "name": "createRepoCapabilities.repo_apply_patch.$call:length-guard:GreaterThanToken#1",
+      "value": "200_000",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/boundary/sandbox/capabilities/scheduler.ts",
       "name": "createSchedulerCapabilities.schedule_add_once.options.scheduler.register.arg0.intervalMs",
       "value": "0",
@@ -1578,6 +1809,13 @@
       "file": "src/boundary/sandbox/capabilities/toolchain.ts",
       "name": "MAX_WRITE_FILE_CONTENT_CHARS",
       "value": "500_000"
+    },
+    {
+      "file": "src/boundary/sandbox/execution/analysis-workbench-child-source.ts",
+      "name": "executeSandbox.$call:timer:setInterval.arg1#1",
+      "value": "20",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/sandbox/execution/analysis-workbench-child-source.ts",
@@ -2401,6 +2639,34 @@
       "value": "5"
     },
     {
+      "file": "src/core/agent/substrate-agent.ts",
+      "name": "SubstrateAgent.trySteerActiveRun.$call:truncation:slice.arg1#1",
+      "value": "80",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/agent/substrate-agent/adaptive-tools-runtime.ts",
+      "name": "scoreToolSearchMatch.$call:math-clamp:Math.max.arg1#1",
+      "value": "60",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/agent/substrate-agent/adaptive-tools-runtime.ts",
+      "name": "scoreToolSearchMatch.$call:math-clamp:Math.max.arg1#2",
+      "value": "50",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/agent/substrate-agent/adaptive-tools-runtime.ts",
+      "name": "scoreToolSearchMatch.$call:math-clamp:Math.max.arg1#3",
+      "value": "45",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/agent/substrate-agent/bounded-subagent-contract.ts",
       "name": "DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL",
       "value": "5"
@@ -2558,6 +2824,13 @@
       "note": "Algorithm state initializer accumulateTurnUsage.maxInputTokens; the literal seeds a counter/sentinel and is not a mutable tuning or policy threshold."
     },
     {
+      "file": "src/core/agent/substrate-agent/turn-records.ts",
+      "name": "sanitizePersistedReasoningText.$call:length-guard:GreaterThanToken#1",
+      "value": "280",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/agent/substrate-agent/vision-attachments.ts",
       "name": "DEDICATED_VISION_REVIEW_MAX_ATTEMPTS",
       "value": "3"
@@ -2638,6 +2911,13 @@
       "file": "src/core/agent/tool-conformance/store.ts",
       "name": "TOOL_CONFORMANCE_HISTORY_LIMIT",
       "value": "20"
+    },
+    {
+      "file": "src/core/agent/tool-suggestion.ts",
+      "name": "confidenceFromScore.$call:return-arithmetic:SlashToken#1",
+      "value": "100",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/agent/tool-suggestion.ts",
@@ -2918,6 +3198,13 @@
       "note": "Code-owned safety bound for the CogSec store's cross-process persistence lock; failure must surface instead of allowing an unbounded synchronous wait."
     },
     {
+      "file": "src/core/cogsec/events.ts",
+      "name": "normalizeSafeText.$call:length-guard:GreaterThanToken#1",
+      "value": "600",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
@@ -2949,6 +3236,13 @@
       "file": "src/core/cogsec/intake/marking.ts",
       "name": "NOTED_SCORE_THRESHOLD",
       "value": "0.25"
+    },
+    {
+      "file": "src/core/cogsec/intake/marking.ts",
+      "name": "renderMarkedContent.$call:truncation:slice.arg1#1",
+      "value": "300",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/cogsec/intake/quarantine-store.ts",
@@ -3059,6 +3353,13 @@
       "value": "32"
     },
     {
+      "file": "src/core/cogsec/intake/screening.ts",
+      "name": "createIntakeScreeningService.escalateAndFinalize.$call:truncation:slice.arg1#1",
+      "value": "4096",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/cogsec/memory-candidacy.ts",
       "name": "UNSAFE_COGSEC_NOTICE_PATTERN",
       "value": "/\\b(?:cogsec-forensic:\\/\\/|sealed\\s+(?:payload|artifact)|payload\\s*:|exact\\s+(?:payload|text)|reproducer|bypass\\s+pattern|unicode\\s+trick)\\b/iu",
@@ -3098,6 +3399,13 @@
     },
     {
       "file": "src/core/contacts/postgres-adapter/contact-lifecycle-recovery.ts",
+      "name": "deferContactLifecycleRecovery.$call:length-guard:GreaterThanToken#1",
+      "value": "128",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/contacts/postgres-adapter/contact-lifecycle-recovery.ts",
       "name": "RECOVERY_POLICY.defaultLimit",
       "value": "25",
       "form": "object-member",
@@ -3124,6 +3432,13 @@
       "file": "src/core/contacts/store/emotional-baseline.ts",
       "name": "MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT",
       "value": "64"
+    },
+    {
+      "file": "src/core/contacts/store/identity-utils.ts",
+      "name": "normalizeVerificationTtlMs.$call:math-clamp:Math.min.arg1#1",
+      "value": "60 * 60_000",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/contacts/tools.ts",
@@ -3531,6 +3846,20 @@
     },
     {
       "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
+      "name": "compactBody.$call:length-guard:GreaterThanToken#1",
+      "value": "300",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
+      "name": "compactBody.$call:truncation:slice.arg1#1",
+      "value": "300",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
       "name": "EMOSIM_MAX_READ_CADENCE_MS",
       "value": "60_000",
       "note": "Code-owned safety ceiling prevents a misconfigured inter-read delay from stalling the observer evaluation pipeline."
@@ -3744,6 +4073,13 @@
       "value": "5"
     },
     {
+      "file": "src/core/identity/prompt-store.ts",
+      "name": "historyLinePreview.$call:truncation:slice.arg1#1",
+      "value": "117",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/identity/prompt-tools.ts",
       "name": "DEFAULT_CHANGELOG_LIMIT",
       "value": "20"
@@ -3880,6 +4216,13 @@
     },
     {
       "file": "src/core/intention/concern-candidates.ts",
+      "name": "buildCandidateTitle.$call:truncation:slice.arg1#1",
+      "value": "75",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
       "name": "CONCERN_REVIEW_PENDING_GATE.openWhenAny.threshold",
       "value": "1",
       "form": "object-member",
@@ -3901,6 +4244,13 @@
       "value": "'Retired from concerns for durable tracking review because the active concern cap was reached.'",
       "form": "string",
       "note": "Existing mutable policy candidate CAP_RESOLUTION_OUTCOME; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/intention/concern-grooming.ts",
+      "name": "deriveConcernTitle.$call:truncation:slice.arg1#1",
+      "value": "75",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/intention/concern-grooming.ts",
@@ -4186,6 +4536,27 @@
       "value": "128"
     },
     {
+      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
+      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#1",
+      "value": "48 * 60 * 60 * 1000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
+      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#2",
+      "value": "24 * 60 * 60 * 1000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
+      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#3",
+      "value": "8 * 60 * 60 * 1000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "CONCERN_DUPLICATE_SIMILARITY_THRESHOLD",
       "value": "0.72"
@@ -4356,10 +4727,45 @@
       "note": "Existing mutable policy candidate evaluateFreeTimeLaneEligibility.evaluateAmbientPresenceEligibility.arg0.minIdleMs; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/scheduler/free-time.ts",
+      "name": "registerFreeTimeTasks.$call:math-clamp:Math.max.arg0#1",
+      "value": "1_000",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/free-time.ts",
+      "name": "registerFreeTimeTasks.$call:math-clamp:Math.max.arg0#2",
+      "value": "1_000",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/core/scheduler/post-turn-outbound-gates.ts",
       "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
       "value": "5 * 60_000",
       "note": "Rate guard for follow-up activation (anti-spam); code-owned protocol constant moved verbatim from post-turn-runtime.ts in the emh3p.4 extraction."
+    },
+    {
+      "file": "src/core/scheduler/post-turn-runtime.ts",
+      "name": "wirePostTurnRuntime.buildConversationTrajectory.$call:truncation:slice.arg1#1",
+      "value": "180",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/post-turn-runtime.ts",
+      "name": "wirePostTurnRuntime.buildConversationTrajectory.$call:truncation:slice.arg1#2",
+      "value": "180",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/post-turn-runtime.ts",
+      "name": "wirePostTurnRuntime.buildConversationTrajectory.$call:truncation:slice.arg1#3",
+      "value": "180",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/post-turn-runtime.ts",
@@ -5259,6 +5665,13 @@
     },
     {
       "file": "src/core/session/manager/context-history-assembly.ts",
+      "name": "fitHistorySummaryTextToBudget.$call:length-guard:FirstBinaryOperator#1",
+      "value": "100",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/session/manager/context-history-assembly.ts",
       "name": "MIN_HISTORY_SUMMARY_TOKEN_BUDGET",
       "value": "32"
     },
@@ -5335,6 +5748,13 @@
       "file": "src/core/session/tool-observation.ts",
       "name": "MAX_TOOL_OBSERVATION_CONTENT_CHARS",
       "value": "4_000"
+    },
+    {
+      "file": "src/core/tools/analysis-workbench/loop.ts",
+      "name": "estimateIterationCostUsd.$call:return-arithmetic:SlashToken#1",
+      "value": "1_000_000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/tools/analysis-workbench/loop.ts",
@@ -5554,6 +5974,20 @@
     },
     {
       "file": "src/core/tools/lifecycle.ts",
+      "name": "completeDurableShutdownForRestart.$call:truncation:slice.arg1#1",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "completeDurableShutdownForRestart.$call:truncation:slice.arg1#2",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
       "name": "createSystemTool.parameters.reason.minLength",
       "value": "1",
       "form": "object-member",
@@ -5568,6 +6002,34 @@
       "file": "src/core/tools/lifecycle.ts",
       "name": "DEFAULT_REBUILD_TIMEOUT_MS",
       "value": "120_000"
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "executeDeferredRebuild.$call:truncation:slice.arg1#1",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "executeRebuildAction.$call:truncation:slice.arg1#1",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "runRepoLifecycleBuildCommand.$call:timer:setTimeout.arg1#1",
+      "value": "250",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "runRestartCommandIfRequired.$call:truncation:slice.arg1#1",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/tools/notify-companion-candidate.ts",
@@ -5817,6 +6279,13 @@
       "value": "/(password|passwd|secret|token|apikey|api[_-]?key|credential|hmac|authorization|bearer|private[_-]?key)/i",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract SECRET_KEY_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/core/tools/self-status.ts",
+      "name": "clampLimit.$call:math-clamp:Math.min.arg0#1",
+      "value": "20",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/tools/self-status.ts",
@@ -6104,6 +6573,27 @@
       "file": "src/faculties/file-ingest/document-ingest.ts",
       "name": "DOCUMENT_MAX_BYTES",
       "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/faculties/file-ingest/document-ingest.ts",
+      "name": "safeFileName.$call:truncation:slice.arg1#1",
+      "value": "160",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/file-ingest/document-ingest.ts",
+      "name": "screenDocumentIngestSummary.$call:truncation:slice.arg1#1",
+      "value": "2048",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/file-ingest/document-ingest.ts",
+      "name": "screenDocumentIngestSummary.$call:truncation:slice.arg1#2",
+      "value": "512",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/file-ingest/document-ingest.ts",
@@ -6405,6 +6895,13 @@
     },
     {
       "file": "src/faculties/memory/episodic/synthesis-lane.ts",
+      "name": "EpisodeSynthesisLane.timerIntervalMs.$call:return-arithmetic:AsteriskToken#1",
+      "value": "60_000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis-lane.ts",
       "name": "MAX_BEHAVIORAL_SUMMARY_WRITES",
       "value": "1"
     },
@@ -6436,6 +6933,13 @@
     },
     {
       "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "getEntryFingerprint.$call:truncation:slice.arg1#1",
+      "value": "240",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
       "name": "MAX_CONSOLIDATION_SEARCH_WINDOW_MS",
       "value": "24 * 60 * 60_000"
     },
@@ -6453,6 +6957,20 @@
       "file": "src/faculties/memory/episodic/synthesis.ts",
       "name": "MIN_SINGLE_ENTRY_CHARS",
       "value": "120"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "summarizeTitle.$call:length-guard:GreaterThanToken#1",
+      "value": "72",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "summarizeTitle.$call:truncation:slice.arg1#1",
+      "value": "69",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
@@ -6575,6 +7093,13 @@
       "file": "src/faculties/memory/extraction/signals.ts",
       "name": "MEANINGFUL_ENTRY_SCORE_THRESHOLD",
       "value": "1.25"
+    },
+    {
+      "file": "src/faculties/memory/extraction/signals.ts",
+      "name": "scoreTranscriptEmotionalValence.$call:math-clamp:Math.max.arg0#1",
+      "value": "2",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/memory/extraction/types.ts",
@@ -6812,6 +7337,13 @@
       "file": "src/faculties/memory/retrieval/social-context.ts",
       "name": "EVOLUTION_CHAIN_SELECTED_LIMIT",
       "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "countSupportingTranscriptEntries.$call:math-clamp:Math.min.arg0#1",
+      "value": "2",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",
@@ -7074,6 +7606,69 @@
       "note": "Existing mutable policy candidate MEMORY_CONFIG.sensitivityWriteThresholds.public.minSalience; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.upsert.$call:truncation:slice.arg1#1",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.upsert.$call:truncation:slice.arg1#2",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.upsert.$call:truncation:slice.arg1#3",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.upsert.$call:truncation:slice.arg1#4",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#1",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#2",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#3",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#4",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/writer.ts",
+      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#5",
+      "value": "60",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/faculties/north-star/store.ts",
       "name": "MAX_NORTH_STAR_ITEMS",
       "value": "3"
@@ -7151,6 +7746,13 @@
       "file": "src/faculties/shards/context-pack.ts",
       "name": "SHARD_SYNC_POLICY_VERSION",
       "value": "1"
+    },
+    {
+      "file": "src/faculties/shards/context-pack.ts",
+      "name": "ShardContextPackHelper.buildSyncIdempotencyKey.$call:truncation:slice.arg1#1",
+      "value": "200",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/shards/launch-capabilities.ts",
@@ -7460,6 +8062,13 @@
       "note": "Code-owned bound on the maintenance CLI quarantine report sample size; output-size guard, not runtime behavior policy."
     },
     {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "slugFromName.$call:truncation:slice.arg1#1",
+      "value": "64",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
       "name": "MAX_OPERATOR_RESPONSE_CHARS",
       "value": "4_000",
@@ -7556,6 +8165,13 @@
     },
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "SleeptimeWikiPass.run.$call:truncation:slice.arg1#1",
+      "value": "200",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "SleeptimeWikiPass.run.canonicalEpisodes.limit",
       "value": "100",
       "form": "object-member",
@@ -7597,6 +8213,13 @@
       "file": "src/faculties/wiki/store.ts",
       "name": "MAX_TITLE_CHARS",
       "value": "180"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "slugifyTitle.$call:truncation:slice.arg1#1",
+      "value": "96",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -7774,6 +8397,13 @@
       "note": "Existing mutable policy candidate buildAdminApiRoutes.entries.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/operator/garden/api-routes.ts",
+      "name": "buildAdminApiRoutes.resolveValuesTimelineLimit.$call:math-clamp:Math.min.arg1#1",
+      "value": "250",
+      "form": "math-clamp",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/operator/garden/audit-timeline.ts",
       "name": "MAX_AUDIT_TIMELINE_ENTRIES",
       "value": "500"
@@ -7784,6 +8414,20 @@
       "value": "5_000",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract CHILD_ASSERTION_PROTOCOL_BOUNDS.requestTimeoutMs; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/operator/garden/fleet-child-assertion-client.ts",
+      "name": "parseResponse.$call:length-guard:GreaterThanToken#1",
+      "value": "65_536",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/operator/garden/fleet-child-assertion-client.ts",
+      "name": "parseResponse.$call:length-guard:GreaterThanToken#2",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/operator/garden/local-admin-contract.ts",
@@ -7974,6 +8618,13 @@
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate buildUpstreamQuery.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/operator/garden/services/fleet-model-usage-service.ts",
+      "name": "parseModelUsageResponse.$call:length-guard:GreaterThanToken#1",
+      "value": "1_024",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/operator/garden/services/icp-autonomy-service.ts",
@@ -8171,6 +8822,13 @@
     },
     {
       "file": "src/operator/garden/transport-client.ts",
+      "name": "GardenAdminTransportProxy.probeHealth.$call:length-guard:GreaterThanToken#1",
+      "value": "4096",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/operator/garden/transport-client.ts",
       "name": "HEALTH_PROBE_TIMEOUT_MS",
       "value": "1_500"
     },
@@ -8257,6 +8915,13 @@
       "value": "0",
       "form": "object-member",
       "note": "Algorithm state initializer readKubernetesHelmChartMetadata.parsed.maxAliasCount; the literal seeds a counter/sentinel and is not a mutable tuning or policy threshold."
+    },
+    {
+      "file": "src/persistence/backups/kubernetes-helm-config.ts",
+      "name": "assertHelmMetadataToken.$call:length-guard:GreaterThanToken#1",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/persistence/backups/postgres-restore.ts",
@@ -8372,6 +9037,13 @@
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate normalizeWelfarePolicy.deferThreshold@L92; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "PostgresBackgroundWorkStore.completeEffect.$call:length-guard:GreaterThanToken#1",
+      "value": "128",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/persistence/postgres/companion-presence-store.ts",
@@ -8631,6 +9303,27 @@
       "note": "Existing mutable policy candidate readLastPreviewableMessageEntry.readJournalMatchingEntriesBackward.arg1.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/persistence/sessions/store/crash-recovery.ts",
+      "name": "applyJournalState.$call:length-guard:GreaterThanToken#1",
+      "value": "120",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/crash-recovery.ts",
+      "name": "applyJournalState.$call:truncation:slice.arg1#1",
+      "value": "120",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/journal-chain-runtime.ts",
+      "name": "loadJournalArchiveChainAttempt.$call:truncation:slice.arg1#1",
+      "value": "117",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/persistence/sessions/store/journal-chain-runtime.ts",
       "name": "loadJournalArchiveChainAttempt.maxId",
       "value": "0",
@@ -8669,6 +9362,13 @@
       "file": "src/persistence/sessions/store/session-journal-write-lock.ts",
       "name": "JOURNAL_WRITE_LOCK_TIMEOUT_MS",
       "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/turn-record-recovery.ts",
+      "name": "streamTurnRecordRecoverySnapshot.$call:timer:setTimeout.arg1#1",
+      "value": "250",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/persistence/sessions/turn-records.ts",
@@ -8779,6 +9479,13 @@
       "file": "src/primitives/images/remote-fetch.ts",
       "name": "DEFAULT_REMOTE_IMAGE_MAX_BYTES",
       "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/primitives/images/tools.ts",
+      "name": "buildSelfImageContentPolicyFallbackPrompt.$call:truncation:slice.arg1#1",
+      "value": "800",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/primitives/images/tools.ts",
@@ -8926,6 +9633,13 @@
     },
     {
       "file": "src/primitives/llm/deliberation.ts",
+      "name": "estimateCostUsd.$call:return-arithmetic:SlashToken#1",
+      "value": "1_000_000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/llm/deliberation.ts",
       "name": "noveltyAgainstHistory.maxSimilarity",
       "value": "0",
       "form": "number",
@@ -9026,6 +9740,13 @@
     },
     {
       "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
+      "name": "DeepgramStreamingSttConnector.startStream.cancel.$call:truncation:slice.arg1#1",
+      "value": "120",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
       "name": "DEFAULT_FINALIZE_TIMEOUT_MS",
       "value": "2_000"
     },
@@ -9045,6 +9766,27 @@
       "value": "'drop_oldest' as const",
       "form": "string",
       "note": "Existing mutable policy candidate DEFAULT_TRANSCRIPT_QUEUE_OVERFLOW_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/voice/connectors/tts/stream-helpers.ts",
+      "name": "responseError.$call:truncation:slice.arg1#1",
+      "value": "300",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/voice/deepgram.ts",
+      "name": "DeepgramSttClient.transcribeWav.$call:truncation:slice.arg1#1",
+      "value": "300",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/voice/elevenlabs.ts",
+      "name": "ElevenLabsTtsClient.synthesize.$call:truncation:slice.arg1#1",
+      "value": "300",
+      "form": "truncation",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/primitives/voice/policy/reliability.ts",
@@ -9483,6 +10225,13 @@
       "note": "Immutable parser/wire/schema contract FATIGUE_POLICY_STATE_VALUES; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/shared/contracts/contact-lifecycle-ledger.ts",
+      "name": "parseContactLifecyclePrepareOutcome.$call:length-guard:LessThanEqualsToken#1",
+      "value": "128",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/shared/contracts/filesystem.ts",
       "name": "FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes",
       "value": "100_000",
@@ -9556,6 +10305,13 @@
       "value": "/[\\u0000-\\u001f\\u007f]/u",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract CONTROL_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/shared/contracts/privacy-break-glass.ts",
+      "name": "reason.$call:length-guard:GreaterThanToken#1",
+      "value": "384",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/shared/contracts/satellite-registry.ts",
@@ -10006,6 +10762,13 @@
       "note": "Existing mutable policy candidate SHARD_DIRECTORY_LIMITS.maxPurposeCharacters; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/shared/contracts/subsystem-output-refs.ts",
+      "name": "parseSubsystemOutputRef.$call:length-guard:GreaterThanToken#1",
+      "value": "1024",
+      "form": "length-guard",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
       "file": "src/shared/contracts/tool-call-outcome.ts",
       "name": "createEmptyToolCallOutcomeCounts.policy_denial",
       "value": "0",
@@ -10154,6 +10917,20 @@
       "name": "POSTURE_PERCENT_MAX",
       "value": "100",
       "note": "Code-owned percentage invariant used to validate the redacted fleet posture wire contract."
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-accounting.ts",
+      "name": "ceilModelUsageUsd.$call:return-arithmetic:SlashToken#1",
+      "value": "1_000_000_000_000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-accounting.ts",
+      "name": "roundModelUsageUsd.$call:return-arithmetic:SlashToken#1",
+      "value": "1_000_000_000_000",
+      "form": "return-arithmetic",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/shared/telemetry/model-usage-attribution.ts",
@@ -11790,6 +12567,13 @@
       "name": "DEFAULT_MAX_OUTPUT_CHARS",
       "value": "10_000",
       "note": "Code-owned child-process diagnostic capture ceiling that bounds memory and error-message amplification."
+    },
+    {
+      "file": "src/system/lifecycle/command-runner.ts",
+      "name": "runConfiguredLifecycleCommand.$call:timer:setTimeout.arg1#1",
+      "value": "250",
+      "form": "timer",
+      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/system/security/policy-constants.ts",

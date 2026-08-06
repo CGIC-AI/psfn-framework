@@ -55,6 +55,9 @@ import {
 } from '../../../shared/contracts/icp-autonomy.js';
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import { createPersonaPreambleService } from '../../../core/identity/persona-preamble.js';
+import { resolveCoreCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
+import { createAgentFleetPostureProvider } from '../../agent/fleet-posture.js';
+import { startIcpRuntimeAvailability } from '../../agent/icp-runtime-availability.js';
 
 type AgentProcessCommand = {
   id: number;
@@ -430,6 +433,24 @@ async function main(): Promise<void> {
   let compactionMarkerIndex = 0;
   await startup.eventBus.emit('system.init', {});
   await startup.eventBus.emit('system.ready', {});
+  if (!startup.config.chargePolicy) {
+    throw new Error('ICP certification runtime requires chargePolicy');
+  }
+  const fleetPostureProvider = createAgentFleetPostureProvider({
+    companionId: resolveCoreCompanionIdFromConfig(startup.config),
+    chargePolicy: startup.config.chargePolicy,
+    fatigueHistory: fatigue.fatigueLedger,
+  });
+  await gateway.startFleetPostureReporting(fleetPostureProvider);
+  const icpRuntimeAvailability = startup.config.multiCompanion
+    ? await startIcpRuntimeAvailability({
+        eventBus: startup.eventBus,
+        gateway,
+        isEnabled: () => runtimeEnablement.isEnabled()
+          && startup.capabilityRuntime.has('external.companion'),
+        readFatigueState: () => fleetPostureProvider().fatigue.state,
+      })
+    : undefined;
   await gateway.declareRuntimeReady();
   backgroundScheduler.start();
   reply({
@@ -916,6 +937,7 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
+        icpRuntimeAvailability?.stop();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();
         await scheduler.stop();

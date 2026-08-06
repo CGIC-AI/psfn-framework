@@ -35,16 +35,15 @@ import type { StreamingSttConnector } from '../../primitives/voice/connectors/st
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type {
   ActiveVoiceTurn,
+  DiscordVoiceRuntimeContext,
   DiscordVoiceRuntimeConfig,
   StructuredVoiceError,
   VoiceConnectionRecoveryTrigger,
   VoiceConnectionStateChange,
-  VoiceRecoveryRuntimeContext,
   VoiceStreamDegradedPhase,
   VoiceStreamTranscription,
   VoiceTurnErrorStage,
   VoiceTurnObservationKind,
-  VoiceTurnRuntimeContext,
 } from './voice-types.js';
 import {
   buildConfiguredTtsConnectors,
@@ -113,6 +112,7 @@ export class DiscordVoiceRuntime {
   private readonly ttsConnectors: StreamingTtsConnector[];
   private readonly reliabilityBudgets: VoiceReliabilityBudgets;
   private readonly securityLimits: VoiceSecurityLimits;
+  private readonly runtimeContext: DiscordVoiceRuntimeContext;
 
   private connection: VoiceConnection | null = null;
   private player: AudioPlayer | null = null;
@@ -149,6 +149,7 @@ export class DiscordVoiceRuntime {
     this.intakeScreening = intakeScreening ?? null;
     this.reliabilityBudgets = resolveVoiceReliabilityBudgets();
     this.securityLimits = resolveVoiceSecurityLimits();
+    this.runtimeContext = this.createRuntimeContext();
 
     this.targetGuildId = config.voiceTargetGuildId ?? '';
     this.targetUserId = config.voiceTargetUserId ?? '';
@@ -239,6 +240,138 @@ export class DiscordVoiceRuntime {
     this.enabled = true;
   }
 
+  private createRuntimeContext(): DiscordVoiceRuntimeContext {
+    const runtime = this;
+    return {
+      get eventBus() {
+        return runtime.eventBus;
+      },
+      get targetUserId() {
+        return runtime.targetUserId;
+      },
+      get activeChannel() {
+        return runtime.activeChannel;
+      },
+      get activeTurnId() {
+        return runtime.activeTurnId;
+      },
+      set activeTurnId(activeTurnId) {
+        runtime.activeTurnId = activeTurnId;
+      },
+      get config() {
+        return runtime.config;
+      },
+      get activeTurn() {
+        return runtime.activeTurn;
+      },
+      set activeTurn(activeTurn) {
+        runtime.activeTurn = activeTurn;
+      },
+      get capturing() {
+        return runtime.capturing;
+      },
+      set capturing(capturing) {
+        runtime.capturing = capturing;
+      },
+      get connection() {
+        return runtime.connection;
+      },
+      get player() {
+        return runtime.player;
+      },
+      get sttConnector() {
+        return runtime.sttConnector;
+      },
+      get ttsConnectors() {
+        return runtime.ttsConnectors;
+      },
+      get reliabilityBudgets() {
+        return runtime.reliabilityBudgets;
+      },
+      get securityLimits() {
+        return runtime.securityLimits;
+      },
+      get lastAssistantUtterance() {
+        return runtime.lastAssistantUtterance;
+      },
+      set lastAssistantUtterance(lastAssistantUtterance) {
+        runtime.lastAssistantUtterance = lastAssistantUtterance;
+      },
+      get preferredTtsProviderId() {
+        return runtime.preferredTtsProviderId;
+      },
+      get intakeScreening() {
+        return runtime.intakeScreening;
+      },
+      get getHandler() {
+        return runtime.getHandler;
+      },
+      recordStreamError(userId) {
+        runtime.recordStreamError(userId);
+      },
+      async transcribeOpusStream(opusStream, turn) {
+        return await runtime.transcribeOpusStream(opusStream, turn);
+      },
+      async speakText(text, turn) {
+        await runtime.speakText(text, turn);
+      },
+      async playWithTtsConnector(connector, text, turn) {
+        await runtime.playWithTtsConnector(connector, text, turn);
+      },
+      async playReadableAudio(audio, turn) {
+        await runtime.playReadableAudio(audio, turn);
+      },
+      decodeOpusToPcmStream(opusStream, signal) {
+        return runtime.decodeOpusToPcmStream(opusStream, signal);
+      },
+      async cancelTurnResources(turn, reason) {
+        await runtime.cancelTurnResources(turn, reason);
+      },
+      async emitTurnObservation(params) {
+        await runtime.emitTurnObservation(params);
+      },
+      get connectionGeneration() {
+        return runtime.connectionGeneration;
+      },
+      get decryptFailureGeneration() {
+        return runtime.decryptFailureGeneration;
+      },
+      set decryptFailureGeneration(decryptFailureGeneration) {
+        runtime.decryptFailureGeneration = decryptFailureGeneration;
+      },
+      get decryptFailureCount() {
+        return runtime.decryptFailureCount;
+      },
+      set decryptFailureCount(decryptFailureCount) {
+        runtime.decryptFailureCount = decryptFailureCount;
+      },
+      get decryptRecoveryAttempts() {
+        return runtime.decryptRecoveryAttempts;
+      },
+      set decryptRecoveryAttempts(decryptRecoveryAttempts) {
+        runtime.decryptRecoveryAttempts = decryptRecoveryAttempts;
+      },
+      get decryptRecoveryInFlight() {
+        return runtime.decryptRecoveryInFlight;
+      },
+      set decryptRecoveryInFlight(decryptRecoveryInFlight) {
+        runtime.decryptRecoveryInFlight = decryptRecoveryInFlight;
+      },
+      get decryptionFailureTolerance() {
+        return runtime.decryptionFailureTolerance;
+      },
+      get streamErrorCounts() {
+        return runtime.streamErrorCounts;
+      },
+      async leaveChannel(reason) {
+        await runtime.leaveChannel(reason);
+      },
+      async joinChannel(channel) {
+        await runtime.joinChannel(channel);
+      },
+    } satisfies DiscordVoiceRuntimeContext;
+  }
+
   init(): void {
     if (!this.enabled) return;
 
@@ -251,10 +384,7 @@ export class DiscordVoiceRuntime {
       receiveEnabled: this.receiveEnabled,
     });
 
-    const isReady = typeof (this.client as { isReady?: () => boolean }).isReady === 'function'
-      ? (this.client as { isReady: () => boolean }).isReady()
-      : false;
-    if (isReady) {
+    if (this.client.isReady()) {
       void this.reconcileTargetVoiceChannel('init');
     }
   }
@@ -311,21 +441,10 @@ export class DiscordVoiceRuntime {
   };
 
   private async reconcileTargetVoiceChannel(trigger: 'init' | 'client-ready'): Promise<void> {
-    const guildFetcher = (this.client as unknown as {
-      guilds?: {
-        fetch?: (guildId: string) => Promise<{
-          members?: {
-            fetch?: (userId: string) => Promise<{ voice?: { channel?: VoiceBasedChannel | null } }>;
-          };
-        }>;
-      };
-    }).guilds?.fetch;
-    if (!guildFetcher) return;
-
     try {
-      const guild = await guildFetcher(this.targetGuildId);
-      const member = await guild.members?.fetch?.(this.targetUserId);
-      const targetChannel = member?.voice?.channel ?? null;
+      const guild = await this.client.guilds.fetch(this.targetGuildId);
+      const member = await guild.members.fetch(this.targetUserId);
+      const targetChannel = member.voice.channel;
 
       if (!targetChannel) {
         log.debug('Discord voice target user is not in a voice channel during reconciliation', {
@@ -572,33 +691,18 @@ export class DiscordVoiceRuntime {
   }
 
   private async handleUtterance(): Promise<void> {
-    await handleVoiceUtterance(this as unknown as VoiceTurnRuntimeContext & {
-      recordStreamError(userId: string): void;
-      transcribeOpusStream(opusStream: NodeJS.ReadableStream, turn: ActiveVoiceTurn): Promise<VoiceStreamTranscription>;
-      speakText(text: string, turn?: ActiveVoiceTurn): Promise<void>;
-      emitTurnObservation(params: {
-        turnId?: string;
-        stage: VoiceTurnErrorStage;
-        kind: VoiceTurnObservationKind;
-        detail?: Record<string, unknown>;
-      }): Promise<void>;
-      cancelTurnResources(turn: ActiveVoiceTurn, reason: string): Promise<void>;
-    });
+    await handleVoiceUtterance(this.runtimeContext);
   }
 
   private async transcribeOpusStream(
     opusStream: NodeJS.ReadableStream,
     turn: ActiveVoiceTurn,
   ): Promise<VoiceStreamTranscription> {
-    return await transcribeVoiceOpusStream(this as unknown as VoiceTurnRuntimeContext & {
-      decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream;
-    }, opusStream, turn);
+    return await transcribeVoiceOpusStream(this.runtimeContext, opusStream, turn);
   }
 
   private async speakText(text: string, turn?: ActiveVoiceTurn): Promise<void> {
-    await speakVoiceText(this as unknown as VoiceTurnRuntimeContext & {
-      playWithTtsConnector(connector: StreamingTtsConnector, text: string, turn?: ActiveVoiceTurn): Promise<void>;
-    }, text, turn);
+    await speakVoiceText(this.runtimeContext, text, turn);
   }
 
   private async playWithTtsConnector(
@@ -606,19 +710,15 @@ export class DiscordVoiceRuntime {
     text: string,
     turn?: ActiveVoiceTurn,
   ): Promise<void> {
-    await playVoiceWithTtsConnector(this as unknown as VoiceTurnRuntimeContext & {
-      playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
-    }, connector, text, turn);
+    await playVoiceWithTtsConnector(this.runtimeContext, connector, text, turn);
   }
 
   private async playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void> {
-    await playVoiceReadableAudio(this as unknown as VoiceTurnRuntimeContext, audio, turn);
+    await playVoiceReadableAudio(this.runtimeContext, audio, turn);
   }
 
   private decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream {
-    return decodeOpusToPcmStream(this as unknown as VoiceTurnRuntimeContext & {
-      recordStreamError(userId: string): void;
-    }, opusStream, signal);
+    return decodeOpusToPcmStream(this.runtimeContext, opusStream, signal);
   }
 
   /**
@@ -626,7 +726,7 @@ export class DiscordVoiceRuntime {
    * threshold, the stream is considered degraded and a warning is emitted.
    */
   private recordStreamError(userId: string): void {
-    recordVoiceStreamError(this as unknown as VoiceRecoveryRuntimeContext, userId);
+    recordVoiceStreamError(this.runtimeContext, userId);
   }
 
   private emitStreamDegradedTelemetry(params: {
@@ -638,14 +738,14 @@ export class DiscordVoiceRuntime {
     generation?: number;
     recoveryAttempt?: number;
   }): void {
-    emitVoiceStreamDegradedTelemetry(this as unknown as VoiceRecoveryRuntimeContext, params);
+    emitVoiceStreamDegradedTelemetry(this.runtimeContext, params);
   }
 
   /**
    * Reset stream error tracking, typically called when joining a new channel.
    */
   private resetStreamErrorCounts(): void {
-    resetVoiceStreamErrorCounts(this as unknown as VoiceRecoveryRuntimeContext);
+    resetVoiceStreamErrorCounts(this.runtimeContext);
   }
 
   private nonBotMemberCount(channel: VoiceBasedChannel): number {
@@ -653,11 +753,11 @@ export class DiscordVoiceRuntime {
   }
 
   private assertTurnActive(turn: ActiveVoiceTurn): void {
-    assertActiveVoiceTurn(this as unknown as VoiceTurnRuntimeContext, turn);
+    assertActiveVoiceTurn(this.runtimeContext, turn);
   }
 
   private resetTurnStateIfCurrent(turn: ActiveVoiceTurn): void {
-    resetActiveVoiceTurnState(this as unknown as VoiceTurnRuntimeContext, turn);
+    resetActiveVoiceTurnState(this.runtimeContext, turn);
   }
 
   private async cancelTurnResources(turn: ActiveVoiceTurn, reason: string): Promise<void> {
@@ -665,15 +765,15 @@ export class DiscordVoiceRuntime {
   }
 
   private async cancelActiveTurn(reason: string): Promise<void> {
-    await cancelActiveVoiceTurn(this as unknown as VoiceTurnRuntimeContext, reason);
+    await cancelActiveVoiceTurn(this.runtimeContext, reason);
   }
 
   private emitVoiceError(error: unknown): void {
-    emitRuntimeVoiceError(this as unknown as VoiceRecoveryRuntimeContext, error);
+    emitRuntimeVoiceError(this.runtimeContext, error);
   }
 
   private resetDecryptFailureTracking(generation: number): void {
-    resetVoiceDecryptFailureTracking(this as unknown as VoiceRecoveryRuntimeContext, generation);
+    resetVoiceDecryptFailureTracking(this.runtimeContext, generation);
   }
 
   private trackDecryptFailure(params: {
@@ -681,7 +781,7 @@ export class DiscordVoiceRuntime {
     code: string;
     errorText: string;
   }): void {
-    trackVoiceDecryptFailure(this as unknown as VoiceRecoveryRuntimeContext, params);
+    trackVoiceDecryptFailure(this.runtimeContext, params);
   }
 
   private isRecoverableDecryptFailure(stage: VoiceTurnErrorStage, code: string, errorText: string): boolean {
@@ -689,7 +789,7 @@ export class DiscordVoiceRuntime {
   }
 
   private pruneDecryptRecoveryAttempts(nowMs: number): void {
-    pruneVoiceDecryptRecoveryAttempts(this as unknown as VoiceRecoveryRuntimeContext, nowMs);
+    pruneVoiceDecryptRecoveryAttempts(this.runtimeContext, nowMs);
   }
 
   private async startDecryptRecovery(params: {
@@ -701,7 +801,7 @@ export class DiscordVoiceRuntime {
     degradedUserId?: string;
     degradedErrorCount?: number;
   }): Promise<void> {
-    await startVoiceDecryptRecovery(this as unknown as VoiceRecoveryRuntimeContext, params);
+    await startVoiceDecryptRecovery(this.runtimeContext, params);
   }
 
   private classifyTurnStatus(error: unknown): 'completed' | 'cancelled' | 'timeout' | 'error' {
@@ -730,6 +830,6 @@ export class DiscordVoiceRuntime {
     kind: VoiceTurnObservationKind;
     detail?: Record<string, unknown>;
   }): Promise<void> {
-    await emitVoiceTurnObservation(this as unknown as VoiceTurnRuntimeContext, params);
+    await emitVoiceTurnObservation(this.runtimeContext, params);
   }
 }

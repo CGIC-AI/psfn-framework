@@ -519,10 +519,14 @@ export class GatewayServer {
           companionChannels: options.companionChannels,
           isCompanionReady: companionId => this.resolveReadyCompanionConnection(companionId) !== null,
           readCompanionFatiguePosture: companionId => {
-            const connection = this.resolveReadyCompanionConnection(companionId);
+            const exactCompanionId = createCompanionId(
+              companionId,
+              'ICP fatigue posture companionId',
+            );
+            const connection = this.resolveReadyCompanionConnection(exactCompanionId);
             return connection === null
               ? null
-              : this.companionPostures.read(connection, companionId)?.fatigue.state ?? null;
+              : this.companionPostures.read(connection, exactCompanionId)?.fatigue.state ?? null;
           },
           policyAuthority: options.icpInitiationPolicyAuthority!,
           eventBus: options.eventBus,

@@ -1346,6 +1346,7 @@ export function createReflectionTemplateRuntime(
         type: 'one-shot',
         intervalMs: 0,
         runAt: Date.now() + 250,
+        availability: 'do_not_disturb',
         handler: async () => {
           try {
             await agentLoop.waitForIdle?.();
@@ -1478,6 +1479,7 @@ export function createReflectionTemplateRuntime(
           type: 'every',
           intervalMs: template.intervalMs,
           cadence: template.cadence,
+          availability: 'do_not_disturb',
           handler: () => executeScheduledTemplate(template),
           state: 'idle',
         },

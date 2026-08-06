@@ -230,6 +230,10 @@ function isWallClockTaskDue(
 export interface SchedulerRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
+  runProtectedTask?: (
+    state: 'idle' | 'do_not_disturb',
+    handler: () => void | Promise<void>,
+  ) => Promise<void>;
 }
 
 export class Scheduler {
@@ -237,6 +241,7 @@ export class Scheduler {
   private config: SchedulerConfig;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
+  private runProtectedTask?: SchedulerRuntimeOptions['runProtectedTask'];
   private tasks = new Map<string, RuntimeScheduledTask>();
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   /** Absolute epoch (ms) the currently armed wake will fire at, or null when disarmed. */
@@ -256,6 +261,7 @@ export class Scheduler {
     this.config = { ...DEFAULT_SCHEDULER_CONFIG, ...config };
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
+    this.runProtectedTask = runtimeOptions.runProtectedTask;
   }
 
   updateConfig(config: Partial<SchedulerConfig>): void {
@@ -591,7 +597,11 @@ export class Scheduler {
       delete entry.lastErrorAt;
       delete entry.lastDeniedReason;
       try {
-        await entry.handler();
+        if (entry.availability && this.runProtectedTask) {
+          await this.runProtectedTask(entry.availability, entry.handler);
+        } else {
+          await entry.handler();
+        }
         entry.lastFinishedAt = Date.now();
         entry.lastOutcome = 'succeeded';
         await this.eventBus.emit('schedule.task.run', {

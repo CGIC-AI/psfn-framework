@@ -42,6 +42,7 @@ import type {
 } from '../../faculties/memory/social-graph/proposals.js';
 import type { CompanionPresenceTurnPort } from '../../core/agent/companion-presence-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { CompanionAvailabilityRuntime } from '../../core/agent/companion-availability.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -104,6 +105,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
   socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
   /** Multi-companion-only operator-owned shared-world projection caretaker. */
   sharedWorldWikiCaretaker?: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'> | null;
+  companionAvailability?: Pick<CompanionAvailabilityRuntime, 'run'>;
 }
 
 export function registerSalienceDecayOperation(input: {
@@ -298,6 +300,12 @@ export function buildAgentSchedulerRuntime(
     },
     {
       eligibilityGate: options.eligibilityGate,
+      ...(options.companionAvailability
+        ? {
+            runProtectedTask: (state, handler) =>
+              options.companionAvailability!.run(state, handler),
+          }
+        : {}),
     },
   );
   registerDurableBackgroundWorkSupervisorTask({

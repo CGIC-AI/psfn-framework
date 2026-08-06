@@ -32,9 +32,9 @@ import {
   POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK,
   POSTGRES_BACKGROUND_WORK_MIGRATIONS,
 } from './migrations.js';
+import { requireBackgroundWorkSafeInteger as safeInteger } from './row-guards.js';
 import { parseSubsystemOutputRef } from '../../shared/contracts/subsystem-output-refs.js';
 import { createComponentLogger } from '../../shared/logger.js';
-
 const log = createComponentLogger('PostgresBackgroundWorkStore');
 
 interface BackgroundWorkRow extends QueryResultRow {
@@ -145,14 +145,6 @@ function requireText(value: unknown, field: string, maxLength = MAX_TEXT_LENGTH)
     throw new Error(`Background work ${field} must be ${maxLength} characters or fewer`);
   }
   return normalized;
-}
-
-function safeInteger(value: unknown, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(`Background work ${field} must be a non-negative safe integer`);
-  }
-  return parsed;
 }
 
 function positiveInteger(value: unknown, field: string): number {

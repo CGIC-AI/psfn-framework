@@ -42,6 +42,7 @@ import {
   createPostgresPool,
 } from '../postgres.js';
 import { assertPostgresRelationColumns } from './relation-contract.js';
+import { parseSafeInteger as safeInteger } from './row-guards.js';
 
 const log = createComponentLogger('IcpLocalPolicyAuthority');
 
@@ -104,11 +105,6 @@ export interface PostgresIcpLocalPolicyAuthorityOptions {
   pool?: Pool;
   now?: () => number;
   randomUuid?: () => string;
-}
-
-function safeInteger(value: string | number): number | null {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function parseTrustLevel(value: string): TrustLevel {

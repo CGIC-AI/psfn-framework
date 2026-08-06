@@ -13,6 +13,7 @@ import {
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createPostgresPool, withPostgresClient } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { requireSafeInteger as safeInteger } from './row-guards.js';
 import { assertSharedSchemaReady } from './shared-schema.js';
 
 interface SocialPotRow extends QueryResultRow {
@@ -60,14 +61,6 @@ function finiteNumber(value: string | number, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(parsed)) {
     throw new Error(`${field} must be a finite number`);
-  }
-  return parsed;
-}
-
-function safeInteger(value: string | number, field: string): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${field} must be a safe integer`);
   }
   return parsed;
 }

@@ -13,6 +13,10 @@ import type { FatigueEnforcementMetadata } from "../../shared/contracts/runtime.
 import { isRfc4122Uuid } from "../../shared/utils/types.js";
 import { createPostgresPool, withPostgresClient } from "../postgres.js";
 import { SHARED_SCHEMA_NAME } from "./migrations.js";
+import {
+  requirePositiveSafeInteger as requirePositiveInteger,
+  requireSafeInteger as safeInteger,
+} from "./row-guards.js";
 
 interface ReservationRow extends QueryResultRow {
   turn_id: string;
@@ -39,13 +43,6 @@ const FATIGUE_LEASE_LOCK_SEED = 1;
 const FATIGUE_LEASE_POOL_MAX = 8;
 const FATIGUE_LEASE_ACQUIRE_TIMEOUT_MS = 5_000;
 
-function requirePositiveInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${field} must be a positive safe integer`);
-  }
-  return value;
-}
-
 function requireNonNegativeFinite(value: number, field: string): number {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(`${field} must be a finite non-negative number`);
@@ -64,13 +61,6 @@ function requireTimestamp(value: number, field: string): number {
     throw new Error(`${field} must be a non-negative safe integer timestamp`);
   }
   return value;
-}
-
-function safeInteger(value: string | number, field: string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(parsed))
-    throw new Error(`${field} must be a safe integer`);
-  return parsed;
 }
 
 function canonicalPairKey(

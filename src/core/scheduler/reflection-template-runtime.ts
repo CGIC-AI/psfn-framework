@@ -107,6 +107,11 @@ import {
   isRecoverableEvidenceGroundingExhaustion,
   REFLECTION_EVIDENCE_GROUNDING_DEGRADATION,
 } from './reflection-template-runtime/evidence-grounding-recovery.js';
+import {
+  collectDailyReviewEvidence,
+  DAILY_REVIEW_EVIDENCE_DEGRADATION,
+  type DailyReviewEvidenceScope,
+} from './reflection-template-runtime/daily-review-evidence.js';
 
 const log = createComponentLogger('ReflectionTemplates');
 
@@ -767,6 +772,30 @@ export function createReflectionTemplateRuntime(
     const reflectionSubstrateResolution = resolveReflectionSubstratePromptContext(template);
     const reflectionSubstrateContext = reflectionSubstrateResolution.context;
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
+    let dailyReviewEvidenceScope: DailyReviewEvidenceScope = { kind: 'companion' };
+    if (reflectionGroupScope) {
+      dailyReviewEvidenceScope = { kind: 'group', sessionId: reflectionGroupScope.channelId };
+    } else if (
+      reflectionGroundingContactId
+      && reflectionContactResolution.diagnostics.primarySessionId
+    ) {
+      dailyReviewEvidenceScope = {
+        kind: 'contact',
+        sessionId: reflectionContactResolution.diagnostics.primarySessionId,
+        canonicalContactId: reflectionGroundingContactId,
+      };
+    }
+    const dailyReviewEvidence = template.id === 'daily-review'
+      ? await collectDailyReviewEvidence({
+        nowMs: Date.parse(reflectionCreatedAt),
+        windowMs: template.intervalMs,
+        scope: dailyReviewEvidenceScope,
+        sessionManager: runtimeOptions.sessionManager,
+        episodicStore: runtimeOptions.episodicReviewStore,
+        memoryStore: runtimeOptions.memoryMaintenanceStore,
+        logger: log,
+      })
+      : null;
     const collectedEvidenceBundle = mergeReflectionPromptBundles(
       reflectionContactContext,
       buildInternalStatePromptBundle(internalStateContext),
@@ -781,7 +810,13 @@ export function createReflectionTemplateRuntime(
         retrievedMemoryBlock: reflectionContactResolution.retrievedMemoryBlock,
         recentSessionMessages: reflectionContactResolution.recentSessionMessages,
         recentDailyJournalEntries: reflectionSubstrateResolution.recentDailyJournalEntries,
-        provenanceRefs: collectedEvidenceBundle?.provenanceRefs ?? [],
+        ...(dailyReviewEvidence
+          ? { dailyEvidencePromptSection: dailyReviewEvidence.promptSection }
+          : {}),
+        provenanceRefs: [
+          ...(collectedEvidenceBundle?.provenanceRefs ?? []),
+          ...(dailyReviewEvidence?.provenanceRefs ?? []),
+        ],
       })
       : collectedEvidenceBundle;
     let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
@@ -1040,6 +1075,9 @@ export function createReflectionTemplateRuntime(
       evidenceGroundingDegraded
         ? [REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.metacognitiveFlag]
         : [],
+      dailyReviewEvidence?.degraded
+        ? [DAILY_REVIEW_EVIDENCE_DEGRADATION.metacognitiveFlag]
+        : [],
     );
     const persistenceContextForJournal = persistenceContext
       ? {
@@ -1146,6 +1184,9 @@ export function createReflectionTemplateRuntime(
           reflectionMode,
           ...(evidenceGroundingDegraded
             ? REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.dailyJournalTags
+            : []),
+          ...(dailyReviewEvidence?.degraded
+            ? DAILY_REVIEW_EVIDENCE_DEGRADATION.dailyJournalTags
             : []),
         ],
       });

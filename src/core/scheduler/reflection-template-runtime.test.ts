@@ -803,6 +803,11 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           'I already resolved the recovery plan and closed the follow-up. :: '
           + 'The evidence marks the recovery timeline as unresolved and still active.',
       },
+      {
+        flag: 'daily_review_evidence_degraded',
+        confidence: 1,
+        evidence: 'The bounded daily evidence summary was empty, incomplete, or unavailable.',
+      },
     ]);
 
     const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();

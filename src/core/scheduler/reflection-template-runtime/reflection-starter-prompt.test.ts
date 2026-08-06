@@ -137,7 +137,7 @@ describe('buildReflectionStarterPromptBundle', () => {
       provenanceRefs: ['memory:event-1', 'internal_state_snapshot:snapshot-1'],
     });
 
-    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(2);
+    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(3);
     expect(bundle.self).toContain('[Day Events Starter]');
     expect(bundle.self).toContain('Day event one');
     expect(bundle.self).toContain('Day event three');

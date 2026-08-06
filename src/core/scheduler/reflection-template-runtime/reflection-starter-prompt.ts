@@ -36,7 +36,7 @@ const REFLECTION_STARTER_SHAPE = Object.freeze({
 
 // The starter block precedes every default daily/weekly self-elicitation and is
 // therefore part of the governed reflection instrument (R6).
-export const REFLECTION_STARTER_PROMPT_VERSION = 2;
+export const REFLECTION_STARTER_PROMPT_VERSION = 3;
 
 export interface ReflectionStarterPromptInput {
   templateId: string;
@@ -44,6 +44,7 @@ export interface ReflectionStarterPromptInput {
   retrievedMemoryBlock?: string;
   recentSessionMessages: readonly ReflectionContactRecentMessage[];
   recentDailyJournalEntries: ReadonlyArray<Pick<ReflectionDailyJournalEntry, 'date' | 'reflection'>>;
+  dailyEvidencePromptSection?: string;
   provenanceRefs: readonly string[];
 }
 
@@ -91,6 +92,27 @@ function formatWeeklyEventLines(
   return entries.slice(0, REFLECTION_STARTER_SHAPE.eventCount).map(entry => (
     truncateStarterLine(`${entry.date}: ${entry.reflection}`)
   ));
+}
+
+function buildEventStarterLines(
+  boundedDailyEvidence: string | undefined,
+  eventLines: readonly string[],
+): string[] {
+  if (boundedDailyEvidence) {
+    return [
+      boundedDailyEvidence,
+      ...(eventLines.length > 0
+        ? [
+          '[Additional Retrieved Event Clues]',
+          ...eventLines.map(line => `- ${line}`),
+        ]
+        : []),
+    ];
+  }
+  if (eventLines.length > 0) {
+    return eventLines.map(line => `- ${line}`);
+  }
+  return ['No event summary is present in the starter context; read-only introspection remains available if it would help.'];
 }
 
 function selectEventLines(input: ReflectionStarterPromptInput): string[] {
@@ -208,13 +230,14 @@ export function buildReflectionStarterPromptBundle(
   const eventHeading = input.templateId === 'weekly-review'
     ? '[Week Events Starter]'
     : '[Day Events Starter]';
+  const boundedDailyEvidence = input.templateId === 'daily-review'
+    ? input.dailyEvidencePromptSection?.trim()
+    : undefined;
   const sections = [
     [
       eventHeading,
       'This is a small, fallible starting point rather than a complete account.',
-      ...(eventLines.length > 0
-        ? eventLines.map(line => `- ${line}`)
-        : ['No event summary is present in the starter context; read-only introspection remains available if it would help.']),
+      ...buildEventStarterLines(boundedDailyEvidence, eventLines),
     ].join('\n'),
     ...(clueLines.length > 0
       ? [[

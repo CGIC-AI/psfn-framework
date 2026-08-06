@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import type { DnsResolver } from '../../boundary/gateway/url-policy.js';
 import { IMAGE_MODEL_CATALOG } from './model-catalog.js';
@@ -262,8 +263,8 @@ export interface ImageVisionReviewer {
 
 const WORKFLOW_TEMPLATE_KEYS = ['create', 'edit'] as const;
 
-function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+function normalizeWorkflowJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return normalizeJsonRecordForSerialization(value, 'image workflow');
 }
 
 function normalizeWorkflowTemplate(
@@ -285,7 +286,7 @@ function normalizeWorkflowTemplate(
 
   return {
     ...(description ? { description } : {}),
-    workflow: cloneJsonRecord(workflow),
+    workflow: normalizeWorkflowJsonRecord(workflow),
   };
 }
 

@@ -95,6 +95,27 @@ describe('CharacterCardVersionStore', () => {
     expect(entry.newCard.data.personality).toBe('Calmer and more reflective');
   });
 
+  it('keeps snapshots aligned with the persisted character-card JSON contract', () => {
+    const updated = store.update({
+      ...BASE_CARD,
+      data: {
+        ...BASE_CARD.data,
+        personality: 'Still friendly, with JSON-owned extensions',
+        extensions: {
+          observedAt: new Date('2026-08-06T12:00:00.000Z'),
+          omitted: undefined,
+          rows: [undefined, { label: 'kept' }],
+        },
+      },
+    }, 'admin');
+
+    expect(updated.card.data.extensions).toEqual({
+      observedAt: '2026-08-06T12:00:00.000Z',
+      rows: [null, { label: 'kept' }],
+    });
+    expect(JSON.parse(readFileSync(cardPath, 'utf-8'))).toEqual(updated.card);
+  });
+
   it('rolls back to any prior version from history', () => {
     store.updateData({ personality: 'Version 2 personality' }, 'admin');
     store.updateData({ personality: 'Version 3 personality' }, 'admin');

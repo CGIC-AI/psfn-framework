@@ -16,6 +16,7 @@ import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 import {
   parseIcpConversationCorrelation,
   type IcpConversationCorrelation,
@@ -156,8 +157,11 @@ export function normalizeContextFeedbackActionPayload(payload: unknown): Context
   };
 }
 
-function cloneContextManifest(manifest: ContextManifest): ContextManifest {
-  return JSON.parse(JSON.stringify(manifest)) as ContextManifest;
+function normalizeContextManifestForQueue(manifest: ContextManifest): ContextManifest {
+  return normalizeContextManifest(normalizeJsonRecordForSerialization(
+    manifest,
+    'context feedback manifest',
+  ));
 }
 
 function scoreBucket(score: number): 'low' | 'medium' | 'high' {
@@ -212,7 +216,7 @@ function buildContextFeedbackCandidate(context: Parameters<PostTurnActionInferer
       responseModel: context.response.metadata.model,
       responseInputTokens: context.response.metadata.inputTokens,
       responseOutputTokens: context.response.metadata.outputTokens,
-      contextManifest: cloneContextManifest(context.contextManifest),
+      contextManifest: normalizeContextManifestForQueue(context.contextManifest),
       ...(context.canonicalContactKey ? { canonicalContactKey: context.canonicalContactKey } : {}),
       ...(context.message.routing?.icpCorrelation
         ? { icpCorrelation: context.message.routing.icpCorrelation }

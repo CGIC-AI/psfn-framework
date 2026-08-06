@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 import { fetchRemoteImageBinary } from './remote-fetch.js';
 import { sleep } from '../../shared/utils/timing.js';
+import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 import {
   cloneImageWorkflowSettings,
   type ComfyWorkflowTemplate,
@@ -140,8 +141,8 @@ function renderTemplateValue(
   return value;
 }
 
-function cloneWorkflowTemplate(template: ComfyWorkflowTemplate): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(template.workflow)) as Record<string, unknown>;
+function cloneWorkflowForProviderRequest(template: ComfyWorkflowTemplate): Record<string, unknown> {
+  return normalizeJsonRecordForSerialization(template.workflow, 'ComfyUI workflow');
 }
 
 async function readJsonOrThrow(response: Response, label: string): Promise<unknown> {
@@ -228,7 +229,7 @@ export class ComfyUiImageClient {
     });
 
     const renderedPrompt = renderTemplateValue(
-      cloneWorkflowTemplate(template),
+      cloneWorkflowForProviderRequest(template),
       context,
     ) as Record<string, unknown>;
 

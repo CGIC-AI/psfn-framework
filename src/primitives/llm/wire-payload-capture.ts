@@ -1,5 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMCapturedProviderWirePayload } from '../../shared/contracts/runtime.js';
+import { normalizeJsonValueForSerialization } from '../../shared/utils/json-serialization.js';
 
 /**
  * Capture the true provider wire body as-sent (bead hgw3-80f6).
@@ -19,7 +20,7 @@ import type { LLMCapturedProviderWirePayload } from '../../shared/contracts/runt
  * on non-serializable input so callers fail loudly rather than persist a lie.
  */
 export function cloneWireBody(payload: unknown): unknown {
-  return JSON.parse(JSON.stringify(payload)) as unknown;
+  return normalizeJsonValueForSerialization(payload, 'provider wire payload');
 }
 
 /**

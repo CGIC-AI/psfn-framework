@@ -63,7 +63,7 @@ import {
 } from '../../persistence/layout.js';
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
-import type { EventBus } from '../../shared/event-bus.js';
+import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
@@ -446,7 +446,7 @@ export function createInProcessGardenAdminContract(
     config: options.config,
     configStore,
     ...(options.systemDataWriter ? { systemDataWriter: options.systemDataWriter } : {}),
-    onCapabilityTierChanged: (change) => {
+    onCapabilityTierChanged: async (change) => {
       const targetSessionId = readLastActiveSession(companionDataDir)?.sessionId
         ?? options.sessionManager.listRecentSessions(1).at(0)?.sessionId;
       if (targetSessionId) {
@@ -464,7 +464,7 @@ export function createInProcessGardenAdminContract(
       } else {
         enqueuePendingCapabilityTierChangeNotice(companionDataDir, change);
       }
-      void options.eventBus.emit('capability.tier.changed', {
+      const event: EventMap['capability.tier.changed'] = {
         companionId: options.config.companionId ?? 'single-companion',
         previousTier: change.previous.tier,
         currentTier: change.current.tier,
@@ -474,7 +474,12 @@ export function createInProcessGardenAdminContract(
         ...(targetSessionId ? { sessionId: targetSessionId } : {}),
         delivery: targetSessionId ? 'immediate' : 'pending',
         timestamp: Date.now(),
-      });
+      };
+      if (change.withdrawn.includes('external.companion')) {
+        await options.eventBus.emitRequired('capability.tier.changed', event);
+      } else {
+        await options.eventBus.emit('capability.tier.changed', event);
+      }
     },
     ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
     ...(options.effectiveSchedulerConfig

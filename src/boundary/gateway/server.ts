@@ -123,6 +123,7 @@ import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
+import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import {
   ShardApprovalGrantAuthority,
   type AuthenticatedShardWorkloadHandle,
@@ -527,6 +528,12 @@ export class GatewayServer {
             return connection === null
               ? null
               : this.companionPostures.read(connection, exactCompanionId)?.fatigue.state ?? null;
+          },
+          hasRuntimeAvailabilityCapability: companionId => {
+            const snapshot = options.capabilityGrantSnapshotProvider?.(companionId);
+            const grantedTokens = snapshot?.grantedTokens
+              ?? resolveTierCapabilityTokens(options.capabilityTierProvider?.(companionId) ?? 'nursery');
+            return grantedTokens.includes('external.companion');
           },
           policyAuthority: options.icpInitiationPolicyAuthority!,
           eventBus: options.eventBus,

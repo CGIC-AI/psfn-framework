@@ -54,7 +54,7 @@ describe('agent ICP runtime availability wiring', () => {
     });
 
     enabled = false;
-    await eventBus.emit('capability.tier.changed', {
+    await eventBus.emitRequired('capability.tier.changed', {
       companionId: '11111111-1111-4111-8111-111111111111',
       previousTier: 'autonomous',
       currentTier: 'interactive',
@@ -66,6 +66,41 @@ describe('agent ICP runtime availability wiring', () => {
     });
 
     expect(clearRuntimeAvailability).toHaveBeenCalledOnce();
+    runtime.stop();
+  });
+
+  it('propagates a failed required withdrawal fence to the capability owner', async () => {
+    const eventBus = new EventBus();
+    let enabled = true;
+    const runtime = await startIcpRuntimeAvailability({
+      eventBus,
+      gateway: {
+        refreshRuntimeAvailability: vi.fn(async () => ({
+          eligible: true,
+          control: 'runtime' as const,
+          mutableByCompanion: true,
+        })),
+        clearRuntimeAvailability: vi.fn(async () => {
+          throw new Error('gateway clear unavailable');
+        }),
+      },
+      isEnabled: () => enabled,
+      readFatigueState: () => 'clear',
+      now: () => 1_000,
+    });
+
+    enabled = false;
+    await expect(eventBus.emitRequired('capability.tier.changed', {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      previousTier: 'autonomous',
+      currentTier: 'interactive',
+      currentGrantedTokens: [],
+      grantedTokens: [],
+      withdrawnTokens: ['external.companion'],
+      delivery: 'pending',
+      timestamp: 2_000,
+    })).rejects.toThrow('gateway clear unavailable');
+
     runtime.stop();
   });
 });

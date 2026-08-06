@@ -158,6 +158,7 @@ function withSharedSatelliteEligibility(
 ): GatewayServerOptions {
   return {
     ...options,
+    capabilityTierProvider: () => 'autonomous',
     icpAutonomyStore: {
       getAvailability: vi.fn(async (companionId: string) => ({
         companionId,

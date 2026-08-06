@@ -29,6 +29,7 @@ interface GatewayIcpAutonomyRpcOptions {
   companionChannels?: GatewayCompanionChannelLane;
   isCompanionReady(companionId: string): boolean;
   readCompanionFatiguePosture(companionId: string): FleetFatiguePosture | null;
+  hasRuntimeAvailabilityCapability(companionId: string): boolean;
   policyAuthority: Pick<
     GatewayIcpInitiationPolicyAuthority,
     'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
@@ -56,6 +57,7 @@ export function createGatewayIcpAutonomyBroker(
     fleetCompanionIds: options.fleetCompanionIds,
     isCompanionReady: options.isCompanionReady,
     readCompanionFatiguePosture: options.readCompanionFatiguePosture,
+    hasRuntimeAvailabilityCapability: options.hasRuntimeAvailabilityCapability,
     policyAuthority: options.policyAuthority,
     resolveInitiationChannel: async (senderCompanionId, peerCompanionId, channelId) => {
       const lane = options.companionChannels;

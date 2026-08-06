@@ -517,7 +517,10 @@ function createMockAuditStore(): {
 
 async function setup(
   policy = OPEN_POLICY,
-  overrides: Pick<GatewayServerOptions, 'auditStore'> = {},
+  overrides: Pick<
+    GatewayServerOptions,
+    'auditStore' | 'capabilityTierProvider' | 'capabilityGrantSnapshotProvider'
+  > = {},
 ) {
   const eventBus = new EventBus();
   const store = new RpcMemoryStore();
@@ -549,6 +552,7 @@ async function setup(
         result: await operation(),
       }),
     },
+    capabilityTierProvider: () => 'autonomous',
     eventBus,
     ...overrides,
   };
@@ -628,6 +632,33 @@ async function setup(
 }
 
 describe('GatewayServer ICP autonomy RPC', () => {
+  it('fails closed against the current gateway-owned companion capability authority', async () => {
+    let capabilityTier: 'autonomous' | 'apprentice' = 'autonomous';
+    const { connect } = await setup(OPEN_POLICY, {
+      capabilityTierProvider: () => capabilityTier,
+    });
+    const a = connect();
+    await identifyTransport(a, A, 900);
+
+    const available = await invoke(a, 901, 'companion.availability.refresh_runtime', {
+      state: 'available',
+      expiresAtMs: Date.now() + 120_000,
+    });
+    expect(available.result).toMatchObject({ eligible: true, control: 'runtime' });
+
+    capabilityTier = 'apprentice';
+    const withdrawn = await invoke(a, 902, 'companion.availability.refresh_runtime', {
+      state: 'available',
+      expiresAtMs: Date.now() + 120_000,
+    });
+    expect(withdrawn.result).toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_resting',
+      control: 'runtime',
+      lease: { state: 'resting', revision: 2 },
+    });
+  });
+
   it('binds runtime availability refresh and clear to the authenticated companion source', async () => {
     const { connect, store } = await setup();
     const a = connect();

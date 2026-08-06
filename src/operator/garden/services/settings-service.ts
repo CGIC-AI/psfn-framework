@@ -138,7 +138,9 @@ type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
 
-export type CapabilityTierChangeHandler = (change: CapabilityTierChange) => void;
+export type CapabilityTierChangeHandler = (
+  change: CapabilityTierChange,
+) => void | Promise<void>;
 
 function toCapabilityGrantSnapshot(input: {
   tier: CapabilityGrantSnapshot['tier'];
@@ -270,12 +272,12 @@ export function reloadOwnerModelsFromDisk(options: {
   }
 }
 
-export function applyAdminCapabilityTierMutation(options: {
+export async function applyAdminCapabilityTierMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
   payload: unknown;
   onCapabilityTierChanged?: CapabilityTierChangeHandler;
-}): SettingsMutationResult {
+}): Promise<SettingsMutationResult> {
   const { config, configStore, payload } = options;
   try {
     const previous = toCapabilityGrantSnapshot(configStore.loadCapabilityTier());
@@ -289,7 +291,7 @@ export function applyAdminCapabilityTierMutation(options: {
     const change = buildCapabilityTierChange(previous, current);
     if (change && options.onCapabilityTierChanged) {
       try {
-        options.onCapabilityTierChanged(change);
+        await options.onCapabilityTierChanged(change);
       } catch (error) {
         const message = toErrorMessage(error);
         log.warn('Companion capability-tier change notice failed after owner mutation', {
@@ -475,7 +477,7 @@ export async function applyAdminSettingsMutation(options: {
   if (domainSplit.capabilityTier !== undefined) {
     try {
       const currentCapabilities = configStore.loadCapabilityTier();
-      const capabilityMutation = applyAdminCapabilityTierMutation({
+      const capabilityMutation = await applyAdminCapabilityTierMutation({
         config,
         configStore,
         payload: {
@@ -1796,7 +1798,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
           };
         }
         case 'capabilities': {
-          const result = applyAdminCapabilityTierMutation({
+          const result = await applyAdminCapabilityTierMutation({
             config: this.deps.config,
             configStore: this.deps.configStore,
             payload: parsed,

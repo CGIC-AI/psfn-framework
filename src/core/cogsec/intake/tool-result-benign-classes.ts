@@ -59,6 +59,8 @@ const BEADS_SHOW_REQUEST_KEYS = ['action', 'actor', 'id'] as const;
 const BEADS_ISSUE_KEYS = [
   'acceptance_criteria',
   'assignee',
+  'close_reason',
+  'closed_at',
   'created_at',
   'created_by',
   'dependency_count',
@@ -85,6 +87,8 @@ const BEADS_ISSUE_KEYS = [
 const BEADS_ISSUE_STRING_KEYS = [
   'acceptance_criteria',
   'assignee',
+  'close_reason',
+  'closed_at',
   'created_at',
   'created_by',
   'description',
@@ -110,6 +114,7 @@ const BEADS_ISSUE_INTEGER_KEYS = [
 
 const BEADS_ISSUE_PROSE_KEYS = [
   'acceptance_criteria',
+  'close_reason',
   'description',
   'design',
   'notes',

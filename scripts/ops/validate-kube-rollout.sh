@@ -1164,9 +1164,92 @@ check_agent_logs() {
   fi
 }
 
+resolve_model_usage_ledger_schema() {
+  local output
+  if ! output="$(run_kubectl -n "$NAMESPACE" exec deploy/psfn-gateway -c gateway -- node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+
+try {
+  const systemDataDir = String(process.env.SYSTEM_DATA_DIR ?? "").trim();
+  if (!systemDataDir) throw new Error("gateway SYSTEM_DATA_DIR is empty");
+  const manifestPath = path.join(systemDataDir, "companions.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (!Array.isArray(manifest?.companions) || manifest.companions.length === 0) {
+    throw new Error(`${manifestPath} must enumerate at least one companion`);
+  }
+  const schemas = manifest.companions.map((entry, index) => {
+    const schema = typeof entry?.postgresSchema === "string" ? entry.postgresSchema.trim() : "";
+    if (schema.length === 0 || schema.length > 63 || !/^[a-z_][a-z0-9_]*$/.test(schema) || schema.startsWith("pg_")) {
+      throw new Error(`${manifestPath} companions[${index}].postgresSchema is not a canonical lowercase Postgres identifier`);
+    }
+    return schema;
+  });
+  if (new Set(schemas).size !== schemas.length) {
+    throw new Error(`${manifestPath} contains duplicate postgresSchema entries`);
+  }
+  process.stdout.write(schemas[0]);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+' 2>&1)"; then
+    printf 'provider-routing topology resolution failed: %s\n' "$output"
+    return 1
+  fi
+  output="$(printf '%s' "$output" | trim_text)"
+  if [[ -z "$output" ]]; then
+    printf 'provider-routing topology resolution returned an empty primary schema\n'
+    return 1
+  fi
+  printf '%s' "$output"
+}
+
 check_provider_routing() {
+  local ledger_schema
+  if ! ledger_schema="$(resolve_model_usage_ledger_schema 2>&1)"; then
+    printf '%s\n' "$ledger_schema"
+    return 1
+  fi
+
+  local ledger_schemas_output
+  if ! ledger_schemas_output="$(run_postgres_sql \
+    "select schemaname from pg_catalog.pg_tables where tablename = 'model_usage_events' order by schemaname;" \
+    2>&1)"; then
+    printf 'provider-routing ledger discovery failed: %s\n' "$ledger_schemas_output"
+    return 1
+  fi
+  ledger_schemas_output="$(printf '%s' "$ledger_schemas_output" | trim_text)"
+  if [[ -z "$ledger_schemas_output" ]]; then
+    printf 'provider-routing ledger missing: expected %s.model_usage_events from the primary companions.json entry; found none\n' \
+      "$ledger_schema"
+    return 1
+  fi
+
+  local -a ledger_schemas=()
+  local discovered_schema
+  while IFS= read -r discovered_schema; do
+    [[ -n "$discovered_schema" ]] || continue
+    ledger_schemas+=("$discovered_schema")
+  done <<<"$ledger_schemas_output"
+  if ((${#ledger_schemas[@]} > 1)); then
+    local relations=""
+    for discovered_schema in "${ledger_schemas[@]}"; do
+      [[ -z "$relations" ]] || relations+=", "
+      relations+="${discovered_schema}.model_usage_events"
+    done
+    printf 'provider-routing ledger ambiguous: expected only %s.model_usage_events from the primary companions.json entry; found %s\n' \
+      "$ledger_schema" "$relations"
+    return 1
+  fi
+  if [[ "${ledger_schemas[0]}" != "$ledger_schema" ]]; then
+    printf 'provider-routing ledger authority mismatch: companions.json expects %s.model_usage_events; catalog found %s.model_usage_events\n' \
+      "$ledger_schema" "${ledger_schemas[0]}"
+    return 1
+  fi
+
   local sql
-  sql="select concat_ws('|', case when requested_provider = provider then 'OK' else 'FAIL' end, coalesce(requested_provider, ''), provider, coalesce(requested_model, ''), model, recorded_at_ms::text) from model_usage_events where call_kind='chat' order by recorded_at_ms desc, id desc limit 1;"
+  sql="select concat_ws('|', case when requested_provider = provider then 'OK' else 'FAIL' end, coalesce(requested_provider, ''), provider, coalesce(requested_model, ''), model, recorded_at_ms::text) from ${ledger_schema}.model_usage_events where call_kind='chat' order by recorded_at_ms desc, id desc limit 1;"
 
   local output
   if ! output="$(run_postgres_sql "$sql" 2>&1)"; then

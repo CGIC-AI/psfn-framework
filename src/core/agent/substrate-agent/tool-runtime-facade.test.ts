@@ -856,7 +856,6 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'contact',
       'session',
       'identity',
-      'analysis_workbench',
       'self_status',
       'system',
     ]);
@@ -868,10 +867,18 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
-  it('keeps analysis_workbench available to bounded whisper workers on reflection turns', () => {
+  it('keeps daily-reflection evidence recall on direct session tools without invoking analysis_workbench', async () => {
+    const sessionExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'same-day session evidence' }],
+      details: {},
+    }));
+    const workbenchExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'workbench result' }],
+      details: {},
+    }));
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection', ['repl.execute']);
-    facade.registerTool(makeTool('session'), 'core');
-    facade.registerTool(makeTool('analysis_workbench'), 'core');
+    facade.registerTool(makeTool('session', sessionExecute), 'core');
+    facade.registerTool(makeTool('analysis_workbench', workbenchExecute), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
       id: 'msg-reflection-worker-1',
@@ -879,19 +886,32 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       channelType: 'api',
       authorId: 'scheduler',
       authorName: 'Daily Reflection',
-      content: 'Use analysis_workbench for bounded read-only introspection over this evidence set.',
+      content: 'I need to gather evidence about today. Use analysis_workbench before reflecting.',
       routing: {
         workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+        reflectionTurn: {
+          schemaVersion: 1,
+          stage: 'tool_grounding',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        },
       },
       timestamp: new Date('2026-04-23T12:00:00Z'),
     }, 'reflection', 'background', correlation, { intent: 'reflection' });
 
     const tools = agent.state.tools;
-    expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
-    expect(emitTelemetry).not.toHaveBeenCalledWith(
+    expect(tools.map(tool => tool.name)).toEqual(['session']);
+    await tools[0]?.execute('session-recall-1', {
+      action: 'search',
+      query: 'today',
+    });
+    expect(sessionExecute).toHaveBeenCalledOnce();
+    expect(workbenchExecute).not.toHaveBeenCalled();
+    expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
         toolName: 'analysis_workbench',
+        taskKind: 'reflection',
         reason: 'maintenance_turn_allowlist',
       }),
     );

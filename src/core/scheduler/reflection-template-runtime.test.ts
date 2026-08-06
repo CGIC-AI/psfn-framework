@@ -715,8 +715,8 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       mode: 'deliberation',
       journalEntryId: expect.stringMatching(/^reflection-/),
     }));
-    expect(toolGroundingPrompts[0]).toContain('analysis_workbench');
-    expect(toolGroundingPrompts[0]).toContain('read-only introspection helpers');
+    expect(toolGroundingPrompts[0]).not.toContain('analysis_workbench');
+    expect(toolGroundingPrompts[0]).toContain('direct read-only session actions');
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
@@ -1203,8 +1203,9 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       expect(introspectionPolicySection).toContain('memory_retrieval_modes: default, temporal');
       expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
-      expect(introspectionPolicySection).toContain('core analysis_workbench tool');
-      expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
+      expect(introspectionPolicySection).not.toContain('analysis_workbench');
+      expect(introspectionPolicySection).toContain('session tool directly');
+      expect(introspectionPolicySection).toContain('list, search, or grep');
       expectCuratedReflectionStarter(prompt, templateId === 'weekly-review' ? 'Week' : 'Day');
       expect(prompt).toContain('trust-filtered contact memory');
       expect(prompt).toContain('[High-Signal Starter Clues]');

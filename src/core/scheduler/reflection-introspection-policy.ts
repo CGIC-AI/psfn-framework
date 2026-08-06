@@ -12,7 +12,6 @@ export interface ReflectionIntrospectionPolicy {
   toolUseMode: ReflectionIntrospectionToolUseMode;
   memoryRetrievalModes: readonly RetrievalMode[];
   memoryAccessScope: Extract<RetrievalAccessScope, 'companion_self_reflection'>;
-  thinkHelpers: readonly string[];
   allowOverlayToolActivation: false;
 }
 
@@ -31,7 +30,6 @@ export function resolveReflectionIntrospectionPolicy(input: {
     toolUseMode,
     memoryRetrievalModes,
     memoryAccessScope: 'companion_self_reflection',
-    thinkHelpers: ['memory_search', 'session_messages', 'session_search'],
     allowOverlayToolActivation: false,
   };
 }
@@ -46,7 +44,10 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // bounded read-only tool-grounding pass before synthesis.
 // v4 (rqn1.3): companion-register wording — "foreground user turn" reads as
 // "foreground conversation turn" (charter 6.28/8.12); no semantic change.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 4;
+// v5 (kvd1g): routine reflection recall stays on the direct, read-only session
+// surface instead of delegating same-day evidence gathering to a heavyweight
+// analysis loop.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 5;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -65,11 +66,11 @@ export function formatReflectionIntrospectionPolicyBlock(
   if (policy.toolUseMode === 'bounded_read_only_introspection') {
     lines.push(
       '- This is a maintenance reflection turn, not a foreground conversation turn.',
-      '- If deeper synthesis is necessary, you may use the core analysis_workbench tool.',
-      `- Inside analysis_workbench, restrict evidence gathering to read-only introspection helpers: ${policy.thinkHelpers.join(', ')}.`,
+      '- Gather additional evidence with the read-only session tool directly: use list, search, or grep for the relevant conversation window.',
+      '- Keep routine recall inside this reflection turn instead of delegating it to another analysis loop.',
       '- Do not call tool_search or toolset, and do not activate overlay or extended tools.',
       '- Do not call mutating, runtime-management, scheduling, repo-write, or external-communication tools.',
-      '- If evidence is incomplete, say so explicitly and stay within the provided context.',
+      '- If the provided context and direct session recall are incomplete, say so explicitly instead of escalating to a heavier tool.',
       NULL_REPORT_GUIDANCE_LINE,
     );
     return lines.join('\n');

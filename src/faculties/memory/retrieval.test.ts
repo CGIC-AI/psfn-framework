@@ -2730,7 +2730,6 @@ describe('MemoryRetriever basic behavior', () => {
         toolUseMode: 'bounded_read_only_introspection',
         memoryRetrievalModes: ['default', 'temporal'],
         memoryAccessScope: 'companion_self_reflection',
-        thinkHelpers: [],
         allowOverlayToolActivation: false,
       },
       runtimeOptions: {},

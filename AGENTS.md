@@ -275,6 +275,17 @@ as direct values, except for policy-shaped `RegExp` constructors; mixed objects
 are traversed so their literal policy members remain visible. Extended-form
 baseline entries require a non-empty review note.
 
+The gate also recognizes low-noise literal policy shapes at call sites: nontrivial
+timer delays, content truncation, `Math.min`/`Math.max` clamps, retry/options
+call-object members, nontrivial `.length` guards, and policy-context return
+arithmetic. These entries use stable scope/shape/occurrence identities rather
+than line numbers. Test/E2E support, 0/1 structural guards, array indices,
+hash/UUID/date protocol slices, ordinary arithmetic, and identifier-derived
+values are excluded. `--update` may write the mechanical inventory, but exits
+nonzero until every new extended-form entry has a reviewed justification note;
+it never invents or silently accepts code ownership. Run
+`npm run verify:hardcoded-settings -- --help` for the compact scanner contract.
+
 ## Validation and publication
 
 During implementation, run targeted tests and changed-file lint. Do not run the

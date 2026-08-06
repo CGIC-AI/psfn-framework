@@ -23,6 +23,12 @@
 //   reference identifiers or call functions are ignored as derived, except that
 //   policy-shaped RegExp constructors are unambiguously regex values; mixed
 //   objects are traversed so their literal policy members remain visible.
+//   Syntax-aware call-site forms additionally cover non-trivial timer delays,
+//   content truncation, Math clamps, retry/options call objects, length guards,
+//   and policy-context return arithmetic. Their identities use lexical scope,
+//   operation shape, and occurrence rather than line numbers. Test/e2e support,
+//   0/1 structural guards, hash/UUID/date slices, ordinary arithmetic, and
+//   identifier-derived values remain excluded to keep the signal reviewable.
 //
 // Baseline maintenance:
 //   npm run verify:hardcoded-settings -- --update
@@ -44,14 +50,29 @@ export { scanHardcodedSettings } from './lib/hardcoded-settings-scanner.mjs';
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_ROOT = resolve(dirname(SCRIPT_PATH), '..');
 const BASELINE_RELATIVE_PATH = 'scripts/hardcoded-settings-baseline.json';
+const HELP_TEXT = [
+  'Usage: npm run verify:hardcoded-settings -- [--update] [--root PATH]',
+  '',
+  'Scans production TypeScript for policy-shaped declarations and these call-site forms:',
+  '  timer, truncation, math-clamp, call-object-member, length-guard, return-arithmetic',
+  'Call-site identities are scope/shape/occurrence based and do not contain line numbers.',
+  'Excluded: test/e2e support, 0/1 structural guards, hash/UUID/date slices, ordinary',
+  'arithmetic, array indices, and identifier-derived values.',
+  '',
+  '--update rewrites the baseline but exits nonzero while any extended-form entry lacks',
+  'a reviewed note; it never invents or silently accepts a code-ownership justification.',
+].join('\n');
 
 function parseArgs(argv) {
   let root = DEFAULT_ROOT;
   let update = false;
+  let help = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--update') {
       update = true;
+    } else if (arg === '--help' || arg === '-h') {
+      help = true;
     } else if (arg === '--root') {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) {
@@ -63,7 +84,7 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { root, update };
+  return { root, update, help };
 }
 
 function entryKey(entry) {
@@ -202,7 +223,7 @@ function runUpdate(root, output) {
   const added = scanned.filter(entry => !previousByKey.has(entryKey(entry)));
   const removed = [...previousByKey.keys()].filter(key => !scannedKeys.has(key));
 
-  writeBaseline(root, scanned, previousByKey);
+  const written = writeBaseline(root, scanned, previousByKey);
 
   output.log(`[verify-hardcoded-settings] baseline written: ${scanned.length} values`);
   if (added.length > 0) {
@@ -213,6 +234,9 @@ function runUpdate(root, output) {
     output.log(`[verify-hardcoded-settings] removed ${removed.length}:`);
     for (const key of removed) output.log(`  - ${key}`);
   }
+  return written.filter(entry => (
+    entry.form && (typeof entry.note !== 'string' || !entry.note.trim())
+  ));
 }
 
 export function runHardcodedSettingsCommand(argv, output = console) {
@@ -228,9 +252,19 @@ export function runHardcodedSettingsCommand(argv, output = console) {
 
   let errors;
   try {
-    if (args.update) {
-      runUpdate(args.root, output);
+    if (args.help) {
+      output.log(HELP_TEXT);
       return 0;
+    }
+    if (args.update) {
+      const unreviewed = runUpdate(args.root, output);
+      if (unreviewed.length === 0) return 0;
+      output.error(
+        `[verify-hardcoded-settings] baseline updated but ${unreviewed.length} `
+        + 'extended-form entries still require reviewed notes:',
+      );
+      for (const entry of unreviewed) output.error(`  - ${entryKey(entry)} (${entry.form})`);
+      return 1;
     }
     errors = verifyHardcodedSettings(args.root);
   } catch (error) {

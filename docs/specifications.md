@@ -356,7 +356,7 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 
 ## Same-Cluster Inter-Companion Autonomy
 
-- Autonomous initiation is same-cluster only, disabled by default, and started
+- Autonomous initiation is same-cluster only, enabled by default, and started
   only when `scheduler.json > icpAutonomy.enabled` is true. Its strict owner
   block also owns candidate TTL/retry, permit TTL, and operator availability
   lease TTL. There is no env shadow or compatibility reader.
@@ -370,6 +370,14 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   permit control state. Permits are short-lived, single-use, candidate-bound,
   recovery-safe, and invalidated when operator DND or emergency disable fences a
   participant.
+- When ICP is enabled and `external.companion` is granted, each agent publishes
+  a coarse runtime availability lease at startup and renews it on the health
+  heartbeat. Healthy agents default to `available`; hard fatigue exhaustion
+  defaults to `resting` and remains an independent broker gate. Source authority
+  is `operator > companion > runtime`, so lifecycle renewal cannot erase an
+  explicit state. Disabling ICP or revoking the capability immediately fences
+  participation and suppresses a runtime-owned lease to `resting`; a preserved
+  higher-authority lease cannot reopen the closed runtime fence.
 - Peer-visible content is authored by the target ordinary channel turn. The
   source handoff never accepts message content, and ICP-correlated turns cannot
   recursively initiate another channel.

@@ -22,6 +22,7 @@ import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/s
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   deriveIcpTransportMessageId,
+  MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpConversationCorrelation,
@@ -29,6 +30,7 @@ import {
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { FLEET_POSTURE_EXPIRY_TIMEOUT_MS } from '../../shared/telemetry/fleet-posture.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { GatewayCompanionChannelLane } from './companion-channels.js';
@@ -430,7 +432,7 @@ async function invoke(conn: MockConnection, id: number, method: string, params: 
   throw new Error(`No response for ${method}`);
 }
 
-async function identify(conn: MockConnection, companionId: string, id: number): Promise<void> {
+async function identifyTransport(conn: MockConnection, companionId: string, id: number): Promise<void> {
   const response = await invoke(conn, id, 'gateway.client.identify', {
     role: 'agent',
     companionId,
@@ -439,6 +441,26 @@ async function identify(conn: MockConnection, companionId: string, id: number): 
   expect(response.result).toMatchObject({ success: true, companionId });
   const ready = await invoke(conn, id + 10_000, 'gateway.client.ready', {});
   expect(ready.result).toEqual({ success: true });
+  const nowMs = Date.now();
+  const health = await invoke(conn, id + 20_000, 'gateway.client.health', {
+    posture: {
+      schemaVersion: 1,
+      updatedAt: nowMs,
+      charge: { state: 'clear', utilizationPercent: 0 },
+      fatigue: { state: 'clear', utilizationPercent: 0 },
+    },
+  });
+  expect(health.result).toEqual({ success: true });
+}
+
+async function identify(conn: MockConnection, companionId: string, id: number): Promise<void> {
+  await identifyTransport(conn, companionId, id);
+  const refreshed = await invoke(conn, id + 30_000, 'companion.availability.refresh_runtime', {
+    companionId,
+    state: 'available',
+    expiresAtMs: Date.now() + MAX_ICP_AVAILABILITY_LEASE_TTL_MS - 1,
+  });
+  expect(refreshed.result).toMatchObject({ eligible: true });
 }
 
 function candidate(candidateId: string, localCompanionId = A, peerCompanionId = B) {
@@ -590,12 +612,178 @@ async function setup(
     });
     await client.identifyAsAgent();
     await client.declareRuntimeReady();
+    await client.startFleetPostureReporting(() => ({
+      schemaVersion: 1,
+      updatedAt: Date.now(),
+      charge: { state: 'clear', utilizationPercent: 0 },
+      fatigue: { state: 'clear', utilizationPercent: 0 },
+    }));
+    await client.refreshRuntimeAvailability({
+      state: 'available',
+      expiresAtMs: Date.now() + MAX_ICP_AVAILABILITY_LEASE_TTL_MS - 1,
+    });
     return client;
   };
   return { server, connect, connectClient, store, llmProvider, eventBus };
 }
 
 describe('GatewayServer ICP autonomy RPC', () => {
+  it('binds runtime availability refresh and clear to the authenticated companion source', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    await identifyTransport(a, A, 1_000);
+
+    const refreshed = await invoke(a, 1_001, 'companion.availability.refresh_runtime', {
+      companionId: A,
+      state: 'available',
+      expiresAtMs: Date.now() + 120_000,
+    });
+    expect(refreshed.result).toMatchObject({
+      eligible: true,
+      control: 'runtime',
+      lease: { companionId: A, state: 'available', source: 'runtime', revision: 1 },
+    });
+
+    await invoke(a, 1_002, 'companion.availability.publish', {
+      companionId: A,
+      state: 'busy',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 2,
+    });
+    const preserved = await invoke(a, 1_003, 'companion.availability.refresh_runtime', {
+      companionId: A,
+      state: 'available',
+      expiresAtMs: Date.now() + 120_000,
+    });
+    expect(preserved.result).toMatchObject({
+      eligible: false,
+      control: 'companion',
+      lease: { state: 'busy', source: 'companion', revision: 2 },
+    });
+
+    const cleared = await invoke(a, 1_004, 'companion.availability.clear_runtime', {
+      companionId: A,
+    });
+    expect(cleared.result).toMatchObject({ control: 'companion' });
+    expect(store.availability.get(A)).toMatchObject({ state: 'busy', source: 'companion' });
+  });
+
+  it('rejects restrictive or unbounded runtime availability input', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    await identifyTransport(a, A, 1_050);
+
+    const restrictive = await invoke(a, 1_051, 'companion.availability.refresh_runtime', {
+      companionId: A,
+      state: 'busy',
+      expiresAtMs: Date.now() + 120_000,
+    });
+    expect(restrictive.error?.message).toMatch(/available or resting/i);
+
+    const unbounded = await invoke(a, 1_052, 'companion.availability.refresh_runtime', {
+      companionId: A,
+      state: 'available',
+      expiresAtMs: Date.now() + MAX_ICP_AVAILABILITY_LEASE_TTL_MS + 1,
+    });
+    expect(unbounded.error?.message).toMatch(/maximum TTL/i);
+    expect(store.availability.has(A)).toBe(false);
+  });
+
+  it('uses authenticated fleet posture to suppress an available exhausted peer', async () => {
+    const { connect, llmProvider } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 1_100);
+    await identify(b, B, 1_200);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    const nowMs = Date.now();
+    await invoke(b, 1_201, 'gateway.client.health', {
+      posture: {
+        schemaVersion: 1,
+        updatedAt: nowMs,
+        charge: { state: 'clear', utilizationPercent: 0 },
+        fatigue: { state: 'exhausted', utilizationPercent: 100 },
+      },
+    });
+    await invoke(b, 1_202, 'companion.availability.refresh_runtime', {
+      companionId: B,
+      state: 'available',
+      expiresAtMs: nowMs + 120_000,
+    });
+
+    const peer = await invoke(a, 1_203, 'companion.availability.read_peer', {
+      companionId: A,
+      peerCompanionId: B,
+    });
+    expect(peer.result).toMatchObject({
+      connectionState: 'online',
+      eligible: false,
+      reasonCode: 'fatigue_exhausted',
+      lease: { state: 'available', source: 'runtime' },
+    });
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(llmProvider.stream).not.toHaveBeenCalled();
+  });
+
+  it('revokes an issued permit when authenticated recipient fatigue becomes exhausted', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 1_210);
+    await identify(b, B, 1_220);
+    const issued = await invoke(a, 1_221, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate('12121212-1212-4212-8212-121212121212'),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    expect(issued.result.decision).toEqual({ eligible: true });
+    const permitId = issued.result.permit.permitId as string;
+
+    await new Promise(resolve => setTimeout(resolve, 2));
+    const nowMs = Date.now();
+    const health = await invoke(b, 1_222, 'gateway.client.health', {
+      posture: {
+        schemaVersion: 1,
+        updatedAt: nowMs,
+        charge: { state: 'clear', utilizationPercent: 0 },
+        fatigue: { state: 'exhausted', utilizationPercent: 100 },
+      },
+    });
+    expect(health.result).toEqual({ success: true });
+    expect(store.permits.get(permitId)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'fatigue_exhausted',
+    });
+  });
+
+  it('fails closed after an authenticated fleet posture expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const nowMs = Date.parse('2027-02-01T12:00:00.000Z');
+      vi.setSystemTime(nowMs);
+      const { connect } = await setup();
+      const a = connect();
+      const b = connect();
+      await identify(a, A, 1_300);
+      await identify(b, B, 1_400);
+
+      vi.setSystemTime(nowMs + FLEET_POSTURE_EXPIRY_TIMEOUT_MS + 1);
+      const peer = await invoke(a, 1_401, 'companion.availability.read_peer', {
+        companionId: A,
+        peerCompanionId: B,
+      });
+      expect(peer.result).toMatchObject({
+        connectionState: 'online',
+        eligible: false,
+        reasonCode: 'policy_denied',
+        lease: { state: 'available', source: 'runtime' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('runs initiator → gateway → concrete client → recipient with durable restart truth', async () => {
     const { connectClient, store } = await setup();
     const clientA = await connectClient(A);
@@ -671,7 +859,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       await clientB.companionPublishAvailability({
         state: 'open_to_chat',
         expiresAtMs: Date.now() + 120_000,
-        revision: 1,
+        revision: 2,
       });
       const issue = await clientA.companionIssueInitiationPermit({
         candidate: candidate(candidateId),
@@ -881,7 +1069,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       await clientB.companionPublishAvailability({
         state: 'open_to_chat',
         expiresAtMs: Date.now() + 120_000,
-        revision: 1,
+        revision: 2,
       });
       const issue = await clientA.companionIssueInitiationPermit({
         candidate: candidate(candidateId),
@@ -957,7 +1145,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     expect(published.result).toMatchObject({ companionId: B, state: 'open_to_chat', source: 'companion' });
     const own = await invoke(b, 31, 'companion.availability.read_self', { companionId: B });
@@ -1002,7 +1190,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const candidateId = '20202020-2020-4020-8020-202020202020';
     const issue = await invoke(a, 203, 'companion.initiation.permit.issue', {
@@ -1111,7 +1299,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
 
     const substituted = await invoke(a, 13, 'companion.initiation.preflight', {
@@ -1145,7 +1333,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const issue = await invoke(a, 23, 'companion.initiation.permit.issue', {
       companionId: A,
@@ -1160,7 +1348,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'do_not_disturb',
       expiresAtMs: Date.now() + 120_000,
-      revision: 2,
+      revision: 3,
     });
     expect(store.permits.get(firstPermitId)).toMatchObject({
       status: 'revoked',
@@ -1171,7 +1359,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 3,
+      revision: 4,
     });
     const second = await invoke(a, 26, 'companion.initiation.permit.issue', {
       companionId: A,
@@ -1221,7 +1409,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
         companionId: B,
         state: 'open_to_chat',
         expiresAtMs: Date.now() + 120_000,
-        revision: 1,
+        revision: 2,
       });
       const issue = await invoke(a, 123, 'companion.initiation.permit.issue', {
         companionId: A,
@@ -1321,7 +1509,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const issue = await invoke(a, 133, 'companion.initiation.permit.issue', {
       companionId: A,
@@ -1357,7 +1545,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const issue = await invoke(a, 33, 'companion.initiation.permit.issue', {
       companionId: A,
@@ -1396,7 +1584,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const issue = await invoke(a, 38, 'companion.initiation.permit.issue', {
       companionId: A,
@@ -1441,7 +1629,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: B,
       state: 'open_to_chat',
       expiresAtMs: Date.now() + 120_000,
-      revision: 1,
+      revision: 2,
     });
     const issue = await invoke(a, 43, 'companion.initiation.permit.issue', {
       companionId: A,

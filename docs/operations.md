@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-08-01.
+Last updated: 2026-08-06.
 
 Before touching a Helm release, follow the canonical
 [Helm Cluster Upgrade Guide](./helm-upgrades.md). It is the detailed, mandatory
@@ -111,6 +111,15 @@ The plan derives one canonical Personal Workspace per companion beneath
 before process startup and refuses missing, overlapping, symlink-escaping, or
 tuple-mismatched roots. The shared root is Garden-governed and is never exported
 as `WORKSPACE_PATH`.
+
+In the Kubernetes topology, the chart mounts every canonical companion root
+read-only into the shared gateway and overlays only that companion's `state`
+subPath writable at `<runtime-root>/companions/<uuid>/state`. CogSec event and
+quarantine stores are gateway-owned and need that narrow write surface for every
+routed companion; making only the primary state writable causes sibling writes
+and lock creation to fail closed with `EROFS`. Do not make a whole companion PVC
+writable to the gateway or replace the per-companion state overlays with one
+shared store.
 
 The local cluster Garden uses socket admin transport only; network
 admin-transport mode is rejected fail-closed under the supervisor.

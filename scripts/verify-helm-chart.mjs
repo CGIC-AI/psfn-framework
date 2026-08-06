@@ -1575,6 +1575,18 @@ const fleetGardenDeployment = renderedGardens[0];
 const fleetGardenYaml = findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-garden');
 const fleetGatewayDeployment = fleetGardenDeployments
   .find(document => document.metadata?.name === 'psfn-gateway');
+const fleetOfOneRendered = render(fleetGardenRenderArgs([fleetGardenCompanions[0]]));
+const fleetOfOneGatewayDeployment = findParsedDocumentByKindName(
+  fleetOfOneRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+verifyFleetGatewayCompanionMountContract({
+  deployment: fleetOfOneGatewayDeployment,
+  companions: [fleetGardenCompanions[0]],
+  assertRenderFails,
+  renderArgs: fleetGardenRenderArgs,
+});
 verifyFleetGatewayCompanionMountContract({
   deployment: fleetGatewayDeployment,
   companions: fleetGardenCompanions,

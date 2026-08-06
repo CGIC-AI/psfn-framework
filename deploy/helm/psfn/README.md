@@ -168,9 +168,14 @@ Per registered companion the chart renders:
   `ports.agentAdmin` targets every registered companion pod
 
 The shared gateway mounts every companion's owner root read-only at
-`<runtimeRoot>/companions/<companionId>` and every companion's Personal
-Workspace writable at `<runtimeRoot>/workspaces/personal/<companionId>` (the
-gateway executes the workspace-scoped boundary tools for all companions).
+`<runtimeRoot>/companions/<companionId>`, overlays only that companion's
+`state` subPath writable for the gateway-owned CogSec event and quarantine
+stores, and mounts every companion's Personal Workspace writable at
+`<runtimeRoot>/workspaces/personal/<companionId>` (the gateway executes the
+workspace-scoped boundary tools for all companions). The chart derives both
+companion-data mounts from the same roster entry and rejects duplicate
+companion PVC claims, so no companion receives a writable owner root or another
+companion's state mount.
 
 Fleet Auth credential env: `fleet-auth.json` names every credential as an
 env reference (`{ "kind": "env", "envName": "FLEET_AUTH_*" }`) and the

@@ -9,6 +9,10 @@
 // validation and a bounded readiness wait.
 
 import type { KubeDeploymentDiagnostic } from './kube-diagnostics.js';
+import {
+  defaultSleep,
+  waitForDeploymentsReady,
+} from './kube-readiness-wait.js';
 import type {
   KubeSelfManagementAction,
   KubeSelfManagementExecutionResult,
@@ -40,24 +44,7 @@ export interface KubeRolloutRestartExecutorOptions {
 
 const MANAGED_COMPONENTS = ['agent', 'gateway', 'garden'] as const;
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
-}
-
-/**
- * A Deployment has completed its rollout when the controller has observed the
- * latest generation and every desired replica is updated, ready, and available.
- */
-export function isDeploymentRolloutComplete(deployment: KubeDeploymentDiagnostic): boolean {
-  return deployment.desiredReplicas > 0
-    && deployment.observedGeneration >= deployment.generation
-    && deployment.updatedReplicas === deployment.desiredReplicas
-    && deployment.readyReplicas === deployment.desiredReplicas
-    && deployment.availableReplicas === deployment.desiredReplicas;
-}
+export { isDeploymentRolloutComplete } from './kube-readiness-wait.js';
 
 export function createKubeRolloutRestartExecutor(
   options: KubeRolloutRestartExecutorOptions,
@@ -67,32 +54,6 @@ export function createKubeRolloutRestartExecutor(
   const pollIntervalMs = options.pollIntervalMs;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
-
-  async function waitForReadiness(): Promise<KubeDeploymentDiagnostic[]> {
-    const deadline = now() + waitTimeoutMs;
-    for (;;) {
-      const deployments = await Promise.all(
-        deploymentNames.map(name => options.api.getDeployment(options.namespace, name)),
-      );
-      if (deployments.every(isDeploymentRolloutComplete)) {
-        return deployments;
-      }
-      if (now() >= deadline) {
-        const pending = deployments
-          .filter(deployment => !isDeploymentRolloutComplete(deployment))
-          .map(deployment => (
-            `${deployment.name} (ready ${deployment.readyReplicas}/${deployment.desiredReplicas},`
-            + ` updated ${deployment.updatedReplicas}/${deployment.desiredReplicas},`
-            + ` observedGeneration ${deployment.observedGeneration}/${deployment.generation})`
-          ))
-          .join('; ');
-        throw new Error(
-          `Kubernetes rollout restart did not become ready within ${waitTimeoutMs}ms: ${pending}`,
-        );
-      }
-      await sleep(pollIntervalMs);
-    }
-  }
 
   return {
     supports: (action: KubeSelfManagementAction): boolean => action === 'restart',
@@ -109,7 +70,20 @@ export function createKubeRolloutRestartExecutor(
       for (const name of deploymentNames) {
         await options.api.restartDeployment(options.namespace, name);
       }
-      const deployments = await waitForReadiness();
+      const wait = await waitForDeploymentsReady({
+        namespace: options.namespace,
+        deploymentNames,
+        api: options.api,
+        waitTimeoutMs,
+        pollIntervalMs,
+        now,
+        sleep,
+      });
+      if (!wait.ready) {
+        throw new Error(
+          `Kubernetes rollout restart did not become ready within ${waitTimeoutMs}ms: ${wait.pending}`,
+        );
+      }
       return {
         validationResult: 'passed',
         rollbackStatus: 'not_requested',
@@ -117,7 +91,7 @@ export function createKubeRolloutRestartExecutor(
           namespace: options.namespace,
           release: options.release,
           restartedDeployments: deploymentNames,
-          deployments,
+          deployments: wait.deployments,
         },
       };
     },

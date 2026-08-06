@@ -41,9 +41,12 @@ import {
 } from './kube-rollback-store.js';
 import {
   managedRollbackDeploymentNames,
-  waitForDeploymentsReady,
   type KubeHelmRollbackApiPort,
 } from './kube-helm-rollback.js';
+import {
+  defaultSleep,
+  waitForDeploymentsReady,
+} from './kube-readiness-wait.js';
 
 /** The rollout currently live, whose health the verdict must describe to be trusted. */
 export interface CurrentRolloutBinding {
@@ -220,13 +223,6 @@ export interface ExecuteAutoRollbackOptions {
   rollbackHistoryLimit: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
 }
 
 /**

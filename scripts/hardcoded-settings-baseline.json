@@ -3517,11 +3517,6 @@
       "value": "600"
     },
     {
-      "file": "src/core/cogsec/intake/scanners/rule-engine.ts",
-      "name": "MAX_RULES",
-      "value": "512"
-    },
-    {
       "file": "src/core/cogsec/intake/scanners/secrets-pii.ts",
       "name": "MAX_MATCHES_PER_DETECTOR",
       "value": "16"
@@ -3539,11 +3534,6 @@
       "value": "10_000",
       "form": "return-arithmetic",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/cogsec/intake/scanners/types.ts",
-      "name": "MAX_SCAN_CHARS",
-      "value": "65_536"
     },
     {
       "file": "src/core/cogsec/intake/scanners/urls.ts",
@@ -10879,6 +10869,27 @@
       "file": "src/shared/contracts/intake-envelope.ts",
       "name": "MAX_REASON_CHARS",
       "value": "1024"
+    },
+    {
+      "file": "src/shared/contracts/intake-rule-match.ts",
+      "name": "INTAKE_L1_RULE_MATCH_TOTAL_MAX",
+      "value": "512",
+      "note": "Code-owned protocol bound shared by owner-file compilation and persisted overflow validation."
+    },
+    {
+      "file": "src/shared/contracts/intake-rule-match.ts",
+      "name": "INTAKE_L1_SCAN_MAX_CHARS",
+      "value": "65_536"
+    },
+    {
+      "file": "src/shared/contracts/intake-rule-match.ts",
+      "name": "INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/shared/contracts/intake-rule-match.ts",
+      "name": "MAX_DECISION_RULE_MATCHES",
+      "value": "32"
     },
     {
       "file": "src/shared/contracts/model-budget.ts",

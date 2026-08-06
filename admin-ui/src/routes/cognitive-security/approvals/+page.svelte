@@ -13,6 +13,7 @@
     AdminIntakeQuarantineSourceListAction,
   } from '$lib/types';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
+  import RuleMatchProvenance from '$lib/components/cognitive-security/RuleMatchProvenance.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
 
@@ -327,6 +328,12 @@
             <span class="font-medium text-shadow-700">Screening decision:</span>
             <span class="font-mono text-xs">{item.screeningDecisionReason ?? 'n/a'}</span>
           </p>
+          <RuleMatchProvenance
+            matches={item.ruleMatches}
+            unavailable={item.ruleMatchProvenanceUnavailable}
+            totalCount={item.ruleMatchTotalCount}
+            truncated={item.ruleMatchesTruncated}
+          />
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
             <div><span class="text-shadow-600">Held:</span> <span class="ml-1 text-shadow-800">{formatTimestamp(item.heldAt)}</span></div>
@@ -493,15 +500,19 @@
                       <button
                         type="button"
                         onclick={() => beginDecision(item, 'release_raw')}
-                        class="px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200"
+                        disabled={item.ruleMatchProvenanceUnavailable}
+                        title={item.ruleMatchProvenanceUnavailable ? 'Rule-match provenance is unavailable; release is disabled' : ''}
+                        class="px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Release raw
                       </button>
                       <button
                         type="button"
                         onclick={() => beginDecision(item, 'release_sanitized')}
-                        disabled={!item.safeRepresentationAvailable}
-                        title={item.safeRepresentationAvailable ? '' : 'No safe representation exists for this item'}
+                        disabled={!item.safeRepresentationAvailable || item.ruleMatchProvenanceUnavailable}
+                        title={item.ruleMatchProvenanceUnavailable
+                          ? 'Rule-match provenance is unavailable; release is disabled'
+                          : item.safeRepresentationAvailable ? '' : 'No safe representation exists for this item'}
                         class="px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Release sanitized

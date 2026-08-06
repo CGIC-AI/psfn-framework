@@ -5,6 +5,7 @@ import {
   ExternalCommunicationRateLimiter,
   IdentityCoolingOffManager,
   LifecycleRestartSafeguard,
+  SafeguardAuditTrail,
   getToolReversibility,
   hasExplicitToolReversibility,
   resolveToolReversibility,
@@ -57,6 +58,35 @@ describe('tool reversibility tagging', () => {
     const explicit = mockTool('custom_explicit');
     tagToolWithReversibility(explicit, 'irreversible');
     expect(getToolReversibility(explicit)).toBe('irreversible');
+  });
+});
+
+describe('SafeguardAuditTrail', () => {
+  it('records the same detached JSON projection in memory that persistence receives', () => {
+    const details = {
+      observedAt: new Date('2026-08-06T12:00:00.000Z'),
+      omitted: undefined,
+      rows: [undefined, { label: 'kept' }],
+      nested: { enabled: true },
+    };
+    const trail = new SafeguardAuditTrail({ now: () => 42 });
+
+    const entry = trail.append('checked', details);
+
+    expect(entry.details).toEqual({
+      observedAt: '2026-08-06T12:00:00.000Z',
+      rows: [null, { label: 'kept' }],
+      nested: { enabled: true },
+    });
+    expect(entry.details).not.toBe(details);
+    expect(entry.details.nested).not.toBe(details.nested);
+  });
+
+  it('rejects unsupported audit details instead of retaining a shallow alias', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => new SafeguardAuditTrail().append('invalid', circular)).toThrow();
   });
 });
 

@@ -15,6 +15,7 @@ import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { detectDestructiveTextReplace } from '../../shared/utils/destructive-replace.js';
+import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 
 const MUTABLE_CARD_FIELDS = [
   'name',
@@ -105,8 +106,8 @@ export interface CharacterCardSnapshot {
   card: CharacterCardV2;
 }
 
-function cloneCard(card: CharacterCardV2): CharacterCardV2 {
-  return JSON.parse(JSON.stringify(card)) as CharacterCardV2;
+function normalizeCardForPersistence(card: CharacterCardV2): CharacterCardV2 {
+  return normalizeJsonRecordForSerialization(card, 'character card') as unknown as CharacterCardV2;
 }
 
 function cardChecksum(card: CharacterCardV2): string {
@@ -298,7 +299,7 @@ export class CharacterCardVersionStore {
       checksum: this.checksum,
       updatedAt: this.updatedAt,
       updatedBy: this.updatedBy,
-      card: cloneCard(this.card),
+      card: normalizeCardForPersistence(this.card),
     };
   }
 
@@ -313,8 +314,8 @@ export class CharacterCardVersionStore {
   update(nextCard: CharacterCardV2, updatedBy: string, reason?: string): CharacterCardSnapshot {
     assertValidCharacterCard(nextCard, this.cardPath);
 
-    const previousCard = cloneCard(this.card);
-    const normalizedNext = cloneCard(nextCard);
+    const previousCard = normalizeCardForPersistence(this.card);
+    const normalizedNext = normalizeCardForPersistence(nextCard);
     const previousChecksum = this.checksum;
     const newChecksum = cardChecksum(normalizedNext);
 
@@ -331,7 +332,7 @@ export class CharacterCardVersionStore {
       previousChecksum,
       newChecksum,
       previousCard,
-      newCard: cloneCard(normalizedNext),
+      newCard: normalizeCardForPersistence(normalizedNext),
     });
 
     this.persistCard(normalizedNext);

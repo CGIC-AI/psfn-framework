@@ -1,4 +1,5 @@
 import { isRecord } from '../../../shared/utils/types.js';
+import { normalizeJsonRecordForSerialization } from '../../../shared/utils/json-serialization.js';
 // ── Admin Scheduler Service ──
 // Wraps Scheduler + ReflectionPolicyStore for the admin JSON API.
 // Provides task CRUD and reflection template management.
@@ -83,7 +84,10 @@ function cloneReflectionTemplate(template: ReflectionTemplate): ReflectionTempla
 }
 
 function toReflectionMutationSnapshot(template: ReflectionTemplate): ReflectionMutationSnapshot {
-  return JSON.parse(JSON.stringify(cloneReflectionTemplate(template))) as ReflectionMutationSnapshot;
+  return normalizeJsonRecordForSerialization(
+    cloneReflectionTemplate(template),
+    'reflection mutation snapshot',
+  );
 }
 
 function clonePolicy(policy: ReflectionPolicy): ReflectionPolicy {

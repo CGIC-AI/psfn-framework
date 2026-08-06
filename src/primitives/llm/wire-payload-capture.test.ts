@@ -41,6 +41,21 @@ describe('wire-payload-capture (bead hgw3-80f6)', () => {
     expect(cloned.tools).toHaveLength(1);
   });
 
+  it('captures the exact Date, undefined, array, and plain-object JSON projection', () => {
+    const body = cloneWireBody({
+      observedAt: new Date('2026-08-06T12:00:00.000Z'),
+      omitted: undefined,
+      rows: [undefined, { label: 'kept' }],
+      nested: { enabled: true },
+    });
+
+    expect(body).toEqual({
+      observedAt: '2026-08-06T12:00:00.000Z',
+      rows: [null, { label: 'kept' }],
+      nested: { enabled: true },
+    });
+  });
+
   it('captures the summary with tools counted once, byte length, and preserved body', () => {
     const captured = captureProviderWirePayload(anthropicBody, {
       id: 'claude-sonnet-4.5',

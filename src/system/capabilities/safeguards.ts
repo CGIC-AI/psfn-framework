@@ -6,6 +6,7 @@ import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { resolveSafeguardAuditTrailPath } from '../../persistence/layout.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
+import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 
 export type ToolReversibility = 'reversible' | 'irreversible';
 export type ExternalCommunicationChannel = 'discord' | 'email';
@@ -75,12 +76,8 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
   return normalized > 0 ? normalized : fallback;
 }
 
-function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
-  try {
-    return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
-  } catch {
-    return { ...input };
-  }
+function normalizeAuditDetails(input: Record<string, unknown>): Record<string, unknown> {
+  return normalizeJsonRecordForSerialization(input, 'safeguard audit details');
 }
 
 export interface SafeguardAuditEntry {
@@ -108,7 +105,7 @@ export class SafeguardAuditTrail {
     const entry: SafeguardAuditEntry = {
       timestamp: this.now(),
       event,
-      details: cloneRecord(details),
+      details: normalizeAuditDetails(details),
     };
     this.memoryLog.push(entry);
     if (this.filePath) {
@@ -121,7 +118,7 @@ export class SafeguardAuditTrail {
     return this.memoryLog.map((entry) => ({
       timestamp: entry.timestamp,
       event: entry.event,
-      details: cloneRecord(entry.details),
+      details: normalizeAuditDetails(entry.details),
     }));
   }
 }

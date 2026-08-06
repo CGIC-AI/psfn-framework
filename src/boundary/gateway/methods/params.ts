@@ -337,10 +337,6 @@ export const gatewayMethodParamDecoders = {
   'shard.backend.request': gatewayDecoder('shard.backend.request', strictObject({
     backend: enumSchema(['container', 'orchestrated']),
     shardId: Type.String(), name: Type.String(), ownerVersion: Type.String(), grantDigest: Type.String(),
-    // Legacy/spoofed authority assertions are admitted only so the existing
-    // handler can ignore them and produce its capability-specific denial.
-    capabilityTier: optionalString,
-    customTokens: Type.Optional(stringArray),
   })),
   'vault.write': gatewayDecoder('vault.write', correlatedParams({
     name: Type.String(), content: Type.String(), folder: optionalString,

@@ -17,6 +17,8 @@ import type { CapabilityTier } from './tier-types.js';
 import { isCapabilityTier } from './tiers.js';
 
 export const CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID = 'system:capability-policy';
+export const CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME = 'Capability policy';
+export const CAPABILITY_TIER_CHANGE_NOTICE_PREFIX = '[System notice: capability access changed]';
 export const CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE = 'capability-tier-change-notice';
 
 export interface FreshCapabilityTierChangeNotices {
@@ -137,7 +139,7 @@ function formatTokenList(tokens: readonly CapabilityToken[]): string {
 
 export function formatCapabilityTierChangeNotice(change: CapabilityTierChange): string {
   return [
-    '[System notice: capability access changed]',
+    CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
     `The Operator changed your capability tier from "${change.previous.tier}" to "${change.current.tier}".`,
     `Current granted capabilities: ${formatTokenList(change.current.grantedTokens)}.`,
     `Newly granted: ${formatTokenList(change.granted)}.`,

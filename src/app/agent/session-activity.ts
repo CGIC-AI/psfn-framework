@@ -9,6 +9,7 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import {
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
+  CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
   deliverPendingCapabilityTierChangeNotices,
 } from '../../system/capabilities/change-notice.js';
 
@@ -75,7 +76,7 @@ export function createSessionActivityTracker(
           sessionId,
           notice,
           CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
-          'Capability policy',
+          CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
         );
         if (entryId === null) {
           throw new Error(

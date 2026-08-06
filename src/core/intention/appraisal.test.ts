@@ -1153,6 +1153,37 @@ describe('sessionEntriesToIntentionMessages', () => {
       timestamp: 1_700_000_000_100,
     }]);
   });
+
+  it('drops internal system audit and capability-notice rows from appraisal history', () => {
+    const messages = sessionEntriesToIntentionMessages([{
+      role: 'system',
+      content: 'Outreach outbox audit: blocked as stale.',
+      timestamp: 1_700_000_000_000,
+      authorId: 'system:outreach-outbox',
+      authorName: 'Outreach Outbox',
+      channelId: 'discord:test',
+    }, {
+      role: 'system',
+      content: '[System notice: capability access changed] now nursery',
+      timestamp: 1_700_000_000_050,
+      authorId: 'system:capability-policy',
+      authorName: 'Capability policy',
+      channelId: 'discord:test',
+    }, {
+      role: 'user',
+      content: 'This is the real partner message.',
+      timestamp: 1_700_000_000_100,
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      channelId: 'discord:test',
+    }]);
+
+    expect(messages).toEqual([{
+      role: 'user',
+      content: 'This is the real partner message.',
+      timestamp: 1_700_000_000_100,
+    }]);
+  });
 });
 
 describe('buildPostTurnAppraisalTranscript', () => {

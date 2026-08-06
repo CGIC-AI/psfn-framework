@@ -1,27 +1,18 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  createImmutableFleetAuthorizationContext,
-  evaluateAccountRosterAuthorization,
-  evaluateFleetAuthorizationSnapshot,
-  type FleetAuthorizationContextStore,
-  type FleetAuthorizationDenialReason,
-  type FleetAuthorizationRequest,
-  type FleetAuthorizationRequestParseResult,
-  type FleetAuthorizationSnapshot,
-  type FleetAuthorizationStoreDecision,
+import type {
+  FleetAuthorizationContextStore,
+  FleetAuthorizationDenialReason,
+  FleetAuthorizationRequest,
+  FleetAuthorizationRequestParseResult,
+  FleetAuthorizationSnapshot,
+  FleetAuthorizationStoreDecision,
 } from '../../../boundary/gateway/fleet-authorization-context.js';
 import type {
   FleetAuthAccountRosterEntry,
   FleetAuthConfig,
   FleetAuthRole,
 } from '../../../system/config/fleet-auth-config.js';
-import {
-  digestDiscordEvidence,
-} from '../../../boundary/fleet-auth/discord-evidence-types.js';
-import {
-  digestDiscordEvidenceConfig,
-} from '../../../boundary/fleet-auth/discord-evidence-runtime.js';
 import {
   isCanonicalIsoTimestamp,
   isRecord,
@@ -36,6 +27,7 @@ import {
   type FleetAuthSessionRow,
 } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const AUTHORIZATION_CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
 const positiveInteger = createPositiveIntegerCoercer('authorization-context');
@@ -172,7 +164,8 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       (options.config.accountRoster ?? []).map(entry => Object.freeze({ ...entry })),
     );
     this.providerRevocationAuthority = options.providerRevocationAuthority;
-    this.evidenceConfigDigest = digestDiscordEvidenceConfig(options.config);
+    this.evidenceConfigDigest = fleetAuthPersistenceBoundaryValues
+      .digestDiscordEvidenceConfig(options.config);
     this.evidenceMappingVersion = options.config.activationGeneration;
     this.now = options.now ?? (() => new Date());
   }
@@ -218,14 +211,15 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       // Roster allows are admin-unconditional: they deliberately skip the
       // authority-generation staleness gate that has locked the operator out.
       // Non-rostered subjects keep the unchanged full evaluation below.
-      const rosterEvaluation = evaluateAccountRosterAuthorization({
+      const rosterEvaluation = fleetAuthPersistenceBoundaryValues.evaluateAccountRosterAuthorization({
         request,
         snapshot,
         accountRoster: this.accountRoster,
         disabledActionsByRole: this.disabledActionsByRole,
         now: resolvedAt,
       });
-      let evaluation = rosterEvaluation ?? evaluateFleetAuthorizationSnapshot({
+      let evaluation = rosterEvaluation
+        ?? fleetAuthPersistenceBoundaryValues.evaluateFleetAuthorizationSnapshot({
         request,
         snapshot,
         disabledActionsByRole: this.disabledActionsByRole,
@@ -261,7 +255,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       });
       await client.query('COMMIT');
       if (evaluation.decision === 'deny') return evaluation;
-      const context = createImmutableFleetAuthorizationContext({
+      const context = fleetAuthPersistenceBoundaryValues.createImmutableFleetAuthorizationContext({
         request,
         facts: evaluation.facts,
         authorizationEventId,
@@ -572,7 +566,8 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   private evidenceIntegrityIsValid(row: EvidenceRow, providerSubjectId: string): boolean {
     if (!isRecord(row.permission_inputs) || !isRecord(row.provenance)) return false;
     try {
-      return digestDiscordEvidence(row.permission_inputs) === row.input_digest
+      return fleetAuthPersistenceBoundaryValues.digestDiscordEvidence(row.permission_inputs)
+        === row.input_digest
         && row.provenance.source === 'discord_oauth_and_bot_observation'
         && row.provenance.provider === 'discord'
         && row.provenance.providerSubjectId === providerSubjectId

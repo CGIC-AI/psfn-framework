@@ -1,9 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  ContactLifecycleAuthorityDeniedError,
-  type GatewayContactLifecycleAuthorityPort,
-} from '../../../boundary/gateway/contact-lifecycle-authority.js';
+import type { GatewayContactLifecycleAuthorityPort } from '../../../boundary/gateway/contact-lifecycle-authority.js';
 import {
   contactAuthorityLifecycleIntentDigest,
   contactAuthorityLifecycleRequestDigest,
@@ -23,6 +20,7 @@ import {
   contactLifecycleFloorResources,
   lockContactLifecycleAffectedAuthority,
 } from './contact-lifecycle-authority-mutations.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 interface AuthorityRow {
   authority_generation: string;
@@ -87,13 +85,18 @@ implements GatewayContactLifecycleAuthorityPort {
     input: unknown,
   ): Promise<ContactAuthorityLifecycleResult> {
     if (!isRfc4122Uuid(authenticatedCompanionId)) {
-      throw new ContactLifecycleAuthorityDeniedError('invalid_authenticated_companion');
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'invalid_authenticated_companion',
+      );
     }
     let request: ContactAuthorityLifecycleRequest;
     try {
       request = parseContactAuthorityLifecycleRequest(input);
     } catch (error) {
-      throw new ContactLifecycleAuthorityDeniedError('invalid_v1_request', { cause: error });
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'invalid_v1_request',
+        { cause: error },
+      );
     }
     await this.reconcileIfExternalFloorIsAhead();
     const client = await this.pool.connect();
@@ -108,14 +111,20 @@ implements GatewayContactLifecycleAuthorityPort {
       const existing = await this.readIntent(client, request.intentId);
       if (existing) {
         if (existing.companion_id !== authenticatedCompanionId) {
-          throw new ContactLifecycleAuthorityDeniedError('cross_companion_intent_reuse');
+          throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+            'cross_companion_intent_reuse',
+          );
         }
         if (!timingSafeStringEqual(existing.intent_digest, intentDigest)
           || existing.action !== request.action) {
-          throw new ContactLifecycleAuthorityDeniedError('changed_intent_reuse');
+          throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+            'changed_intent_reuse',
+          );
         }
         if (existing.restore_state !== 'live' || existing.state === 'quarantined') {
-          throw new ContactLifecycleAuthorityDeniedError('restored_intent_quarantined');
+          throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+            'restored_intent_quarantined',
+          );
         }
         const replay = await this.readReceipt(
           client,
@@ -126,13 +135,17 @@ implements GatewayContactLifecycleAuthorityPort {
         if (replay) {
           if (replay.restore_state !== 'live'
             || !timingSafeStringEqual(replay.request_digest, requestDigest)) {
-            throw new ContactLifecycleAuthorityDeniedError('changed_phase_reuse');
+            throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+              'changed_phase_reuse',
+            );
           }
           await client.query('COMMIT');
           return parseContactAuthorityLifecycleResult(replay.result);
         }
       } else if (request.phase === 'finalize') {
-        throw new ContactLifecycleAuthorityDeniedError('prepare_receipt_required');
+        throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+          'prepare_receipt_required',
+        );
       } else {
         await this.createIntent(client, authenticatedCompanionId, request, intentDigest, authority);
       }
@@ -145,8 +158,13 @@ implements GatewayContactLifecycleAuthorityPort {
       return result;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
-      if (error instanceof ContactLifecycleAuthorityDeniedError) throw error;
-      throw new ContactLifecycleAuthorityDeniedError('contact_authority_failed', { cause: error });
+      if (error instanceof fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError) {
+        throw error;
+      }
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'contact_authority_failed',
+        { cause: error },
+      );
     } finally {
       client.release();
     }
@@ -177,7 +195,9 @@ implements GatewayContactLifecycleAuthorityPort {
     if (!this.accountAuthority.sessionAuthorityGenerationIsCurrent(
       integer(row.authority_generation, 'authority_generation'),
     )) {
-      throw new ContactLifecycleAuthorityDeniedError('external_floor_pending_reconciliation');
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'external_floor_pending_reconciliation',
+      );
     }
     return row;
   }
@@ -218,7 +238,9 @@ implements GatewayContactLifecycleAuthorityPort {
       FOR UPDATE
     `, [companionId]);
     if (companion.rowCount !== 1) {
-      throw new ContactLifecycleAuthorityDeniedError('companion_authority_inactive');
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'companion_authority_inactive',
+      );
     }
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
@@ -267,7 +289,9 @@ implements GatewayContactLifecycleAuthorityPort {
         LIMIT 1
       `, [companionId, resource.kind, resource.id]);
       if ((conflict.rowCount ?? 0) > 0) {
-        throw new ContactLifecycleAuthorityDeniedError('contact_resource_fenced');
+        throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+          'contact_resource_fenced',
+        );
       }
       await client.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
@@ -308,7 +332,9 @@ implements GatewayContactLifecycleAuthorityPort {
         });
         nextAuthority = fenced.authorityGeneration;
         if (nextAuthority !== integer(authority.authority_generation, 'authority_generation') + 1) {
-          throw new ContactLifecycleAuthorityDeniedError('non_restored_authority_race');
+          throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+            'non_restored_authority_race',
+          );
         }
         // Project immediately on a separate committed connection. If the
         // enclosing mutation later rolls back, every SQL activation path still
@@ -375,11 +401,15 @@ implements GatewayContactLifecycleAuthorityPort {
     existing: IntentRow | undefined,
   ): Promise<ContactAuthorityLifecycleResult> {
     if (!existing || existing.state !== 'active') {
-      throw new ContactLifecycleAuthorityDeniedError('intent_not_active');
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'intent_not_active',
+      );
     }
     const prepared = await this.readReceipt(client, companionId, request.intentId, 'prepare');
     if (!prepared || prepared.restore_state !== 'live') {
-      throw new ContactLifecycleAuthorityDeniedError('prepare_receipt_required');
+      throw new fleetAuthPersistenceBoundaryValues.ContactLifecycleAuthorityDeniedError(
+        'prepare_receipt_required',
+      );
     }
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents

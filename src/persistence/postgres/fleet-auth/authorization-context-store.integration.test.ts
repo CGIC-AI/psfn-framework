@@ -17,9 +17,9 @@ import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import {
   createPostgresFleetAuthorizationContextResolver,
-} from './authorization-context.js';
+  createPostgresFleetPortalAuthorization,
+} from '../../../app/gateway/fleet-auth-persistence.js';
 import { PostgresFleetAuthorizationContextStore } from './authorization-context-store.js';
-import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import {
   createGatewayProviderRevocationAuthorityPort,
   reconcileFleetAuthAuthorityState,

@@ -20,7 +20,10 @@
 
 import type { KubeDeploymentDiagnostic } from './kube-diagnostics.js';
 import { resolveCurrentHelmRevision } from './kube-helm-revision.js';
-import { isDeploymentRolloutComplete } from './kube-rollout-restart.js';
+import {
+  defaultSleep,
+  waitForDeploymentsReady,
+} from './kube-readiness-wait.js';
 import type {
   KubeSelfManagementAction,
   KubeSelfManagementExecutionResult,
@@ -55,62 +58,11 @@ export interface KubeHelmRollbackApiPort {
 /** The three Deployments a rollback must bring back to ready. */
 export const MANAGED_ROLLBACK_COMPONENTS = ['agent', 'gateway', 'garden'] as const;
 
-export interface KubeReadinessWaitOptions {
-  namespace: string;
-  deploymentNames: readonly string[];
-  api: Pick<KubeHelmRollbackApiPort, 'getDeployment'>;
-  waitTimeoutMs: number;
-  pollIntervalMs: number;
-  now: () => number;
-  sleep: (ms: number) => Promise<void>;
-}
-
-export type KubeReadinessWaitResult =
-  | { ready: true; deployments: KubeDeploymentDiagnostic[] }
-  | { ready: false; pending: string };
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
-}
-
-function describePending(deployments: readonly KubeDeploymentDiagnostic[]): string {
-  return deployments
-    .filter(deployment => !isDeploymentRolloutComplete(deployment))
-    .map(deployment => (
-      `${deployment.name} (ready ${deployment.readyReplicas}/${deployment.desiredReplicas},`
-      + ` updated ${deployment.updatedReplicas}/${deployment.desiredReplicas},`
-      + ` observedGeneration ${deployment.observedGeneration}/${deployment.generation})`
-    ))
-    .join('; ');
-}
-
-/**
- * Poll the managed Deployments until all report a complete rollout or the
- * deadline passes. Returns a discriminated result instead of throwing so the
- * caller can turn "did not converge" into an explicit FAILED rollback escalation
- * (the rollback command ran, the release did not recover). Probe errors from the
- * API still propagate — an unreadable cluster is not proof of readiness.
- */
-export async function waitForDeploymentsReady(
-  options: KubeReadinessWaitOptions,
-): Promise<KubeReadinessWaitResult> {
-  const deadline = options.now() + options.waitTimeoutMs;
-  for (;;) {
-    const deployments = await Promise.all(
-      options.deploymentNames.map(name => options.api.getDeployment(options.namespace, name)),
-    );
-    if (deployments.every(isDeploymentRolloutComplete)) {
-      return { ready: true, deployments };
-    }
-    if (options.now() >= deadline) {
-      return { ready: false, pending: describePending(deployments) };
-    }
-    await options.sleep(options.pollIntervalMs);
-  }
-}
+export { waitForDeploymentsReady } from './kube-readiness-wait.js';
+export type {
+  KubeReadinessWaitOptions,
+  KubeReadinessWaitResult,
+} from './kube-readiness-wait.js';
 
 export interface KubeHelmRollbackExecutorOptions {
   namespace: string;

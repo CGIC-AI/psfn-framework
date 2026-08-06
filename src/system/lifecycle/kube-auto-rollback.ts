@@ -286,9 +286,9 @@ export async function executeAutoRollback(
   }
 
   // Target-revision safety invariant. `resolveRollbackTarget` is an injected
-  // (currently unimplemented) seam; the rollback surface must defend its own
-  // invariant rather than trust the target it is handed. Only ever roll back to
-  // a strictly-earlier, positive integer revision — a roll-forward, same-revision,
+  // seam; the rollback surface must defend its own invariant rather than trust
+  // the target it is handed. Only ever roll back to a strictly-earlier,
+  // positive integer revision — a roll-forward, same-revision,
   // or non-integer/zero/negative "rollback" is a catastrophic failure mode.
   // Fail closed: throw before calling api.rollback (a thrown error propagates as
   // an operator escalation, never a silent proceed), so the unsafe target is

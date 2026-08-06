@@ -288,6 +288,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
     case 'discord.send':
     case 'discord.sendMedia':
     case 'discord.typing':
+    case 'discord.availability':
     case 'notify.ntfy':
     case 'notify.operator':
     case 'clarify.deliver':

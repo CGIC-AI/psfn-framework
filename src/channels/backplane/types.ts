@@ -1,4 +1,10 @@
-import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type {
+  AgentResponse,
+  Attachment,
+  CompanionAvailabilityState,
+  Lifecycle,
+  SubstrateMessage,
+} from '../../shared/contracts/runtime.js';
 import type { ClarifyDeliverResult, PendingClarification } from '../../boundary/gateway/protocol.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
@@ -101,6 +107,12 @@ export interface ChannelStreamingAdapter {
   sendTyping(channelId: string): Promise<void>;
 }
 
+export interface ChannelAvailabilityAdapter {
+  setAvailability(
+    state: CompanionAvailabilityState,
+  ): Promise<'applied' | 'unsupported'>;
+}
+
 export interface ChannelThreadingAdapter {
   toThreadChannelId(channelId: string, threadId: string): string;
   fromThreadChannelId(channelId: string): string | null;
@@ -129,6 +141,7 @@ export interface ChannelAdapterPort extends Lifecycle {
   gateway: ChannelGatewayAdapter;
   security?: ChannelSecurityAdapter;
   streaming?: ChannelStreamingAdapter;
+  availability?: ChannelAvailabilityAdapter;
   threading?: ChannelThreadingAdapter;
   prompt?: ChannelPromptAdapter;
 
@@ -161,6 +174,7 @@ export interface ChannelOutboundDock {
     ChannelOutboundAdapter,
     'textChunkLimit' | 'sendText' | 'sendMedia' | 'sendReaction' | 'deliverClarification'
   >;
+  availability?: Pick<ChannelAvailabilityAdapter, 'setAvailability'>;
 }
 
 export interface ChannelPromptDock {

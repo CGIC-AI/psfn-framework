@@ -526,6 +526,26 @@ describe('DiscordAdapter startup backfill', () => {
   });
 });
 
+describe('DiscordAdapter availability projection', () => {
+  it('maps only coarse availability to Discord presence and reapplies it on reconnect', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const client = discordMock.createdClients.at(-1);
+    const setPresence = vi.fn();
+    client.user = { id: 'bot', tag: 'Bot#0001', setPresence };
+
+    await adapter.availability.setAvailability('do_not_disturb');
+    expect(setPresence).toHaveBeenLastCalledWith({ status: 'dnd' });
+
+    await adapter.init();
+    const readyHandler = client.on.mock.calls.find(
+      ([event]: [string]) => event === 'ready',
+    )?.[1];
+    await readyHandler(client);
+    expect(setPresence).toHaveBeenLastCalledWith({ status: 'dnd' });
+    expect(JSON.stringify(setPresence.mock.calls)).not.toContain('protected');
+  });
+});
+
 interface MockSentMessage {
   content: string;
   edit: (next: string) => Promise<MockSentMessage>;
@@ -726,7 +746,7 @@ describe('DiscordAdapter DM routing', () => {
     expect(client).toBeDefined();
     expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageCreate')).toHaveLength(1);
     expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageReactionAdd')).toHaveLength(1);
-    expect(client.once.mock.calls.filter((call: unknown[]) => call[0] === 'ready')).toHaveLength(1);
+    expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'ready')).toHaveLength(1);
     expect(voiceMock.init).toHaveBeenCalledTimes(1);
   });
 
@@ -2653,17 +2673,17 @@ describe('DiscordAdapter status visibility', () => {
       makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'msg-2', content: 'second' }),
     );
 
-    expect(steerSpy).toHaveBeenCalledTimes(1);
+    expect(steerSpy).not.toHaveBeenCalled();
     expect(queueEvents.some(event =>
       event.phase === 'acquired'
       && event.queueDepth === 0
-      && event.policy === 'steer'
+      && event.policy === 'queue'
       && event.source === 'discord'
     )).toBe(true);
     expect(queueEvents.some(event =>
       event.phase === 'contended'
       && event.queueDepth === 1
-      && event.policy === 'steer'
+      && event.policy === 'queue'
       && event.source === 'discord'
     )).toBe(true);
 
@@ -2673,7 +2693,7 @@ describe('DiscordAdapter status visibility', () => {
     expect(queueEvents.some(event =>
       event.phase === 'released'
       && event.waitMs >= 0
-      && event.policy === 'steer'
+      && event.policy === 'queue'
       && event.source === 'discord'
     )).toBe(true);
   });

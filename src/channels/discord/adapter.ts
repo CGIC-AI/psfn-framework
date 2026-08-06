@@ -35,6 +35,7 @@ import {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ChannelAdapterPort,
+  ChannelAvailabilityAdapter,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -224,6 +225,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   readonly gateway: ChannelGatewayAdapter;
   readonly security: ChannelSecurityAdapter;
   readonly streaming: ChannelStreamingAdapter;
+  readonly availability: ChannelAvailabilityAdapter;
   readonly threading: ChannelThreadingAdapter;
   readonly prompt: ChannelPromptAdapter;
   readonly discordEvidence: DiscordEvidenceAdapterSurface;
@@ -234,7 +236,6 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private sessionStore: SessionStore | null;
   private handler: MessageHandler | null = null;
   private voiceHandler: MessageHandler | null = null;
-  private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
   private pendingByChannel = new Map<string, PendingDiscordTurn[]>();
   private lockStartedAt = new Map<string, number>();
@@ -253,6 +254,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private initialized = false;
   private readonly account: DiscordAdapterAccountBinding | null;
   private readonly intakeScreening: IntakeScreeningService | null;
+  private desiredAvailability: 'available' | 'idle' | 'do_not_disturb' = 'available';
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
@@ -312,6 +314,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
         await this.sendTypingToChannel(channelId);
       },
     };
+    this.availability = {
+      setAvailability: async state => {
+        this.desiredAvailability = state;
+        this.applyAvailabilityPresence();
+        return 'applied';
+      },
+    };
     this.longRunningToolStatus = new LongRunningToolStatusTracker({
       isProcessing: channelId => this.processing.has(channelId),
       sendStatus: async (channelId, text) => {
@@ -364,9 +373,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
     this.voiceHandler = handler;
   }
 
-  /** Set direct agent reference for steering support */
+  /** Bind the direct in-process agent handler. */
   setAgent(agent: SubstrateAgent): void {
-    this.agent = agent;
     this.handler = async (msg) => {
       if (msg.routing?.responseMode === 'observe') {
         await agent.observeMessage(msg);
@@ -392,8 +400,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
       });
     });
 
-    this.client.once(Events.ClientReady, (c) => {
+    this.client.on(Events.ClientReady, (c) => {
       log.info(`Logged in as ${c.user.tag}`);
+      this.applyAvailabilityPresence();
     });
 
     this.voice.init();
@@ -422,6 +431,15 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private resolveLoginToken(): string {
     if (this.account) return this.account.token;
     return this.runtimeConfig.discordToken ?? '';
+  }
+
+  private applyAvailabilityPresence(): void {
+    const status = this.desiredAvailability === 'do_not_disturb'
+      ? 'dnd'
+      : this.desiredAvailability === 'idle'
+        ? 'idle'
+        : 'online';
+    this.client.user?.setPresence({ status });
   }
 
   /** Live bot user id once logged in (used for sibling-account recognition). */
@@ -850,35 +868,25 @@ export class DiscordAdapter implements ChannelAdapterPort {
       return;
     }
 
-    // If already processing this channel, steer (interrupt) instead of dropping.
+    // Preserve contended input for the next ordinary turn. Human ingress never
+    // steers or interrupts an active autonomous/protected run.
     if (this.processing.has(channelId)) {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
       const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
       this.lockContention.set(channelId, queueDepth);
-      const lockPolicy = this.lockPolicy.get(channelId) ?? (this.agent ? 'steer' : 'defer-latest');
+      const lockPolicy = this.lockPolicy.get(channelId) ?? this.resolveTurnContentionPolicy();
       const waitMs = Math.max(0, Date.now() - lockStartMs);
-      if (lockPolicy === 'steer' && this.agent) {
-        this.emitQueueTelemetry(channelId, 'contended', lockPolicy, {
-          queueDepth,
-          waitMs,
-        });
-        log.debug('Steering message into active stream', { channelId });
-        void this.agent.steer(substrateMsg);
-      } else {
-        // Gateway mode has no direct agent instance to steer, so preserve all
-        // contended messages for the agent-side queue to bundle or process.
-        const pending = this.pendingByChannel.get(channelId) ?? [];
-        pending.push(turn);
-        this.pendingByChannel.set(channelId, pending);
-        this.emitQueueTelemetry(channelId, 'contended', 'queue', {
-          queueDepth: pending.length,
-          waitMs,
-        });
-        log.debug('Queueing contended Discord message for deferred processing', {
-          channelId,
-          queueDepth: pending.length,
-        });
-      }
+      const pending = this.pendingByChannel.get(channelId) ?? [];
+      pending.push(turn);
+      this.pendingByChannel.set(channelId, pending);
+      this.emitQueueTelemetry(channelId, 'contended', lockPolicy, {
+        queueDepth: pending.length,
+        waitMs,
+      });
+      log.debug('Queueing contended Discord message for deferred processing', {
+        channelId,
+        queueDepth: pending.length,
+      });
       return;
     }
 
@@ -886,7 +894,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const lockStartMs = Date.now();
     this.lockStartedAt.set(channelId, lockStartMs);
     this.lockContention.set(channelId, 0);
-    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'queue';
+    const lockPolicy = this.resolveTurnContentionPolicy();
     this.lockPolicy.set(channelId, lockPolicy);
     this.emitQueueTelemetry(channelId, 'acquired', lockPolicy, {
       queueDepth: 0,
@@ -1017,6 +1025,10 @@ export class DiscordAdapter implements ChannelAdapterPort {
         });
       }
     }
+  }
+
+  private resolveTurnContentionPolicy(): TurnContentionPolicy {
+    return 'queue';
   }
 
   private async processObservedMessage(turn: PendingDiscordTurn): Promise<void> {

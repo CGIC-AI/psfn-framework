@@ -47,6 +47,7 @@ import type { RecordedCompanionSourceMessage } from '../../core/session/icp-deli
 import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { ParentTurnContinuationBudgetExceededError } from '../../core/agent/turn-limits.js';
+import type { CompanionProtectedMessageQueuePort } from '../../core/agent/companion-availability.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -157,6 +158,7 @@ function createHarness(overrides?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
   };
+  protectedMessageQueue?: CompanionProtectedMessageQueuePort;
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -275,6 +277,9 @@ function createHarness(overrides?: {
       : {}),
     companionAuthorName: 'Selene',
     ...(overrides?.nowMonotonicMs ? { nowMonotonicMs: overrides.nowMonotonicMs } : {}),
+    ...(overrides?.protectedMessageQueue
+      ? { protectedMessageQueue: overrides.protectedMessageQueue }
+      : {}),
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -299,6 +304,32 @@ function createHarness(overrides?: {
 }
 
 describe('registerGatewayMessageHandlers', () => {
+  it('durably defers Discord ingress during protected time and delivers it through the normal pump on return', async () => {
+    let deliverer: Parameters<CompanionProtectedMessageQueuePort['setDeliverer']>[0] | undefined;
+    const protectedMessageQueue: CompanionProtectedMessageQueuePort = {
+      enqueueIfUnavailable: vi.fn(async () => true),
+      setDeliverer: vi.fn(handler => { deliverer = handler; }),
+      waitForDrain: vi.fn(async () => {}),
+    };
+    const harness = createHarness({ protectedMessageQueue });
+    const incoming = makeMessage({
+      id: 'protected-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: { source: 'discord' },
+    });
+
+    await harness.onDiscordMessage(incoming);
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(protectedMessageQueue.enqueueIfUnavailable).toHaveBeenCalledWith(incoming);
+
+    if (!deliverer) throw new Error('Expected protected queue deliverer registration');
+    await deliverer({ sequence: 1, enqueuedAtMs: Date.now(), message: incoming });
+
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(incoming);
+    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'primary response');
+  });
+
   it('normalizes discord timestamp strings and sends the primary response', async () => {
     const harness = createHarness({
       handleMessage: async () => makeResponse('discord response'),

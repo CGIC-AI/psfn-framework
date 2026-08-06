@@ -96,6 +96,7 @@ import type {
   LLMInvalidateModelDiscoveryResult,
   DiscordSendResult,
   DiscordSendMediaResult,
+  DiscordAvailabilityResult,
   WebFetchResult,
   WebFetchBinaryResult,
   WebRequestBinaryResult,
@@ -949,6 +950,13 @@ export class GatewayClient implements
 
   async discordTyping(channelId: string): Promise<void> {
     await this.transportRuntime.request('discord.typing', { channelId });
+  }
+
+  async discordSetAvailability(
+    state: 'available' | 'idle' | 'do_not_disturb',
+  ): Promise<'applied' | 'unsupported'> {
+    const result = (await this.rpcInstance.request('discord.availability', { state })) as DiscordAvailabilityResult;
+    return result.status;
   }
 
   /** Contact authority executes in the companion domain bound to this connection. */

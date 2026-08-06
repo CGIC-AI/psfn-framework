@@ -285,6 +285,10 @@ export interface DiscordTypingParams {
   channelId: string;
 }
 
+export interface DiscordAvailabilityParams {
+  state: 'available' | 'idle' | 'do_not_disturb';
+}
+
 export type WebFetchLane = 'default' | 'local_crawler' | 'discovery';
 
 export interface WebFetchParams {
@@ -798,6 +802,10 @@ export interface DiscordTypingResult {
   success: boolean;
 }
 
+export interface DiscordAvailabilityResult {
+  status: 'applied' | 'unsupported';
+}
+
 /**
  * Cognition intake firewall (htm9.2): screening outcome attached to web
  * content results. Absent when intake-policy mode is 'off'. In shadow mode
@@ -1183,6 +1191,7 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
+  'discord.availability': [DiscordAvailabilityParams, DiscordAvailabilityResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
   'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];

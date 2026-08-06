@@ -4225,6 +4225,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
         providerOutputKind: 'text',
         durationMs: expect.any(Number),
       }),
+      expect.objectContaining({
+        stage: 'provider_complete',
+        model: 'test-model',
+        provider: 'test',
+        durationMs: expect.any(Number),
+      }),
       expect.objectContaining({ stage: 'turn_complete', toolUse: false, cacheState: 'miss' }),
     ]));
   });

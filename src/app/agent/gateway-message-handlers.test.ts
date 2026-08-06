@@ -964,6 +964,46 @@ describe('registerGatewayMessageHandlers', () => {
     expect((handleMessage.mock.calls[1]?.[0] as SubstrateMessage).id).toBe('msg-c');
   });
 
+  it('records outbound Discord delivery duration on the exact message trace', async () => {
+    let monotonicNow = 10;
+    const eventBus = new EventBus();
+    const performanceEvents: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.turn.performance', event => {
+      performanceEvents.push(event as unknown as Record<string, unknown>);
+    });
+    const harness = createHarness({
+      eventBus,
+      nowMonotonicMs: () => monotonicNow,
+      handleMessage: async () => {
+        monotonicNow = 40;
+        return makeResponse('delivered reply');
+      },
+      discordSend: async () => {
+        monotonicNow = 55;
+      },
+    });
+
+    await harness.onDiscordMessage(makeMessage({
+      id: 'delivery-trace',
+      channelId: 'discord:shared-room',
+      channelType: 'discord',
+    }));
+
+    await vi.waitFor(() => {
+      expect(performanceEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          traceId: 'delivery-trace',
+          requestId: 'delivery-trace',
+          companionId: '11111111-1111-4111-8111-111111111111',
+          channelId: 'discord:shared-room',
+          stage: 'outbound_delivery',
+          monotonicAtMs: 55,
+          durationMs: 15,
+        }),
+      ]));
+    });
+  });
+
   it('does not bundle messages from different authors into one user turn', async () => {
     let releaseFirstTurn: (response: AgentResponse) => void = () => {};
     const firstTurn = new Promise<AgentResponse>((resolve) => {

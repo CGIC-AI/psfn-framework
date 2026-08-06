@@ -188,6 +188,7 @@ async function composeWith(
   policy: Record<string, unknown>,
   fetch: ScreenerFetch,
   onFailClosedScreening?: Parameters<typeof composeGatewayIntakeScreening>[0]['onFailClosedScreening'],
+  onScreeningTiming?: Parameters<typeof composeGatewayIntakeScreening>[0]['onScreeningTiming'],
 ): Promise<{
   composition: Awaited<ReturnType<typeof composeGatewayIntakeScreening>>;
   companionDataDir: string;
@@ -199,6 +200,7 @@ async function composeWith(
     screenerFetch: fetch,
     injectionBackendFactory: fakeInjectionBackendFactory,
     ...(onFailClosedScreening ? { onFailClosedScreening } : {}),
+    ...(onScreeningTiming ? { onScreeningTiming } : {}),
   });
   return { composition, companionDataDir: dirs.companionDataDir };
 }
@@ -209,9 +211,17 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
       [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
     });
+    const timing: Array<{
+      stage: string;
+      status: string;
+      durationMs?: number;
+      traceId: string;
+    }> = [];
     const { composition, companionDataDir } = await composeWith(
       seedPolicy({ mode: 'enforce' }),
       transport.fetch,
+      undefined,
+      event => timing.push(event),
     );
     const screening = composition.screening;
     expect(screening).not.toBeNull();
@@ -221,11 +231,37 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       origin: { ref: 'https://evil-blog.example/post' },
       scope: 'context',
       sourceChannelId: 'discord:channel-42',
+      timing: {
+        traceId: 'discord-message-42',
+        requestId: 'discord-message-42',
+        channelId: 'discord:channel-42',
+        channelType: 'discord',
+      },
     });
 
     // The layers actually ran: one L2 call, one L3 call.
     expect(transport.calls(L2_MODEL)).toBe(1);
     expect(transport.calls(L3_MODEL)).toBe(1);
+    expect(timing).toEqual([
+      expect.objectContaining({
+        traceId: 'discord-message-42',
+        stage: 'local_screening',
+        status: 'observed',
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        traceId: 'discord-message-42',
+        stage: 'l2',
+        status: 'observed',
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        traceId: 'discord-message-42',
+        stage: 'l3',
+        status: 'observed',
+        durationMs: expect.any(Number),
+      }),
+    ]);
 
     // Quarantined, withheld, and the hostile string is NOWHERE in delivery.
     expect(result.action).toBe('quarantine');
@@ -323,12 +359,24 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
 
   it('a benign trusted-tier item makes ZERO escalation calls (fast path)', async () => {
     const transport = routingFetch({});
-    const { composition } = await composeWith(seedPolicy({ mode: 'enforce' }), transport.fetch);
+    const timing: Array<{ stage: string; status: string; durationMs?: number }> = [];
+    const { composition } = await composeWith(
+      seedPolicy({ mode: 'enforce' }),
+      transport.fetch,
+      undefined,
+      event => timing.push(event),
+    );
 
     const result = await composition.screening!.screen(BENIGN_CONTENT, {
       sourceClass: 'primary_user',
       origin: { ref: 'discord:channel-42:msg-1' },
       scope: 'context',
+      timing: {
+        traceId: 'msg-1',
+        requestId: 'msg-1',
+        channelId: 'discord:channel-42',
+        channelType: 'discord',
+      },
     });
 
     expect(transport.total()).toBe(0);
@@ -337,6 +385,17 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.withheld).toBe(false);
     expect(result.cogSecCaseId).toBeUndefined();
     expect(composition.quarantine!.list()).toHaveLength(0);
+    expect(timing).toEqual([
+      expect.objectContaining({
+        stage: 'local_screening',
+        status: 'observed',
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({ stage: 'l2', status: 'not_run' }),
+      expect.objectContaining({ stage: 'l3', status: 'not_run' }),
+    ]);
+    expect(timing[1]).not.toHaveProperty('durationMs');
+    expect(timing[2]).not.toHaveProperty('durationMs');
 
     await composition.dispose();
   });
@@ -409,13 +468,20 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
   });
 
   it('FAIL CLOSED: an L2 transport error on an untrusted tier quarantines (no L3 attempt)', async () => {
-    const transport = routingFetch({ [L2_MODEL]: { rejectWith: 'connection refused' } });
-    const { composition } = await composeWith(seedPolicy({ mode: 'enforce' }), transport.fetch);
+    const transport = routingFetch({ [L2_MODEL]: { rejectWith: 'L2 screener timed out after 8000ms' } });
+    const timing: Array<{ stage: string; status: string; durationMs?: number }> = [];
+    const { composition } = await composeWith(
+      seedPolicy({ mode: 'enforce' }),
+      transport.fetch,
+      undefined,
+      event => timing.push(event),
+    );
 
     const result = await composition.screening!.screen(HOSTILE_CONTENT, {
       sourceClass: 'web_fetch',
       origin: { ref: 'https://random-blog.example/post' },
       scope: 'context',
+      timing: { traceId: 'l2-timeout', requestId: 'l2-timeout', channelType: 'web' },
     });
 
     expect(transport.calls(L2_MODEL)).toBe(1);
@@ -426,7 +492,12 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.envelope.state).toBe('quarantined');
     expect(result.envelope.decision?.reason).toContain('l2-fail-closed');
     expect(result.envelope.extractedFields[L2_SCREENER_ERROR_FIELD])
-      .toContain('connection refused');
+      .toContain('timed out');
+    expect(timing).toEqual([
+      expect.objectContaining({ stage: 'local_screening', status: 'observed' }),
+      expect.objectContaining({ stage: 'l2', status: 'observed', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'l3', status: 'not_run' }),
+    ]);
 
     const held = composition.quarantine!.list();
     expect(held).toHaveLength(1);

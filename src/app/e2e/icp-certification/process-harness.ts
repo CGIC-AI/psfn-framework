@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { GatewayServer } from '../../../boundary/gateway/server.js';
+import { GatewayCapabilityTierResolver } from '../../../boundary/gateway/capability-tier-resolver.js';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
 import { createSocketClient, type GatewayRpcConnection } from '../../../boundary/gateway/transport.js';
 import { GatewayCompanionChannelLane } from '../../../boundary/gateway/companion-channels.js';
@@ -30,6 +31,7 @@ import {
 } from '../../../persistence/postgres/tenancy.js';
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
+import { CapabilityRuntime } from '../../../system/capabilities/runtime.js';
 import { loadPlacesRegistryConfig } from '../../../channels/backplane/places-registry.js';
 import { LLMClient } from '../../../primitives/llm/client.js';
 import {
@@ -583,6 +585,11 @@ export async function startIcpCertificationProcessHarness(input: {
   if (!companionFleet || !primary || !ownerDatabaseUrl) {
     throw new Error('ICP certification requires canonical fleet model-usage authority');
   }
+  const capabilityTierResolver = new GatewayCapabilityTierResolver({
+    baseRuntime: new CapabilityRuntime({ dataDir: primary.companionDataDir }),
+    multiCompanion: true,
+    companionFleet,
+  });
   const fleet = input.fixture.companions.map(companion => ({
     companionId: companion.companionId,
     postgresSchema: companion.postgresSchema,
@@ -705,6 +712,9 @@ export async function startIcpCertificationProcessHarness(input: {
     companionChannels: lane,
     icpAutonomyStore: autonomy,
     icpInitiationPolicyAuthority: authority,
+    capabilityTierProvider: companionId => capabilityTierResolver.resolveTier(companionId),
+    capabilityGrantSnapshotProvider: companionId =>
+      capabilityTierResolver.snapshotOwnerGrantStrict(companionId),
     eventBus,
     modelUsageRecorder: modelUsage,
   });

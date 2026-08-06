@@ -145,6 +145,7 @@ describe('ICP autonomy Postgres persistence', () => {
       fleetCompanionIds: new Set([A, B]),
       isCompanionReady: () => true,
       readCompanionFatiguePosture: () => 'clear',
+      hasRuntimeAvailabilityCapability: () => true,
       resolveInitiationChannel: async () => ({ ok: true }),
       policyAuthority: {
         resolve: async () => ({
@@ -174,6 +175,11 @@ describe('ICP autonomy Postgres persistence', () => {
       await broker.refreshRuntimeAvailability(A, {
         state: 'available',
         expiresAtMs: 61_000,
+      });
+      await expect(runtimeStore.getAvailability(A)).resolves.toMatchObject({
+        source: 'runtime',
+        state: 'available',
+        revision: 1,
       });
 
       const [suppressed, chosen] = await Promise.all([
@@ -262,6 +268,7 @@ describe('ICP autonomy Postgres persistence', () => {
         fleetCompanionIds: new Set(knownCompanionIds),
         isCompanionReady: () => true,
         readCompanionFatiguePosture: () => 'clear',
+        hasRuntimeAvailabilityCapability: () => true,
         resolveInitiationChannel: async () => ({ ok: true }),
         policyAuthority: openPolicy,
         eventBus,

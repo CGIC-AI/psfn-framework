@@ -21,6 +21,32 @@ COPY companion-ui/package.json companion-ui/package-lock.json ./
 RUN npm ci
 
 COPY companion-ui/ ./
+
+# Preserve the repository layout expected by Companion UI's framework imports.
+# Keep this list to the exact transitive TypeScript closure; the focused build-
+# context test rejects both missing imports and broad source-tree copies.
+COPY src/core/agent/tool-surface/registry.ts \
+     src/core/agent/tool-surface/descriptions.ts \
+     /build/src/core/agent/tool-surface/
+COPY src/core/agent/tool-surface/descriptions/agency-contracts.ts \
+     src/core/agent/tool-surface/descriptions/catalog-boundary-contracts.ts \
+     src/core/agent/tool-surface/descriptions/continuity-contracts.ts \
+     src/core/agent/tool-surface/descriptions/contracts.ts \
+     src/core/agent/tool-surface/descriptions/operations-contracts.ts \
+     /build/src/core/agent/tool-surface/descriptions/
+COPY src/shared/contracts/approval-envelope.ts \
+     src/shared/contracts/companion-relay.ts \
+     src/shared/contracts/emotion-contracts.ts \
+     src/shared/contracts/filesystem.ts \
+     src/shared/contracts/hub-device-ingress.ts \
+     src/shared/contracts/satellite-registry.ts \
+     src/shared/contracts/shard-directory.ts \
+     src/shared/contracts/tool-call-outcome.ts \
+     src/shared/contracts/trust-contracts.ts \
+     /build/src/shared/contracts/
+COPY src/shared/routing/companion-id.ts /build/src/shared/routing/
+COPY src/shared/utils/types.ts /build/src/shared/utils/
+COPY src/system/trust/context-envelope.ts /build/src/system/trust/
 RUN npm run build
 
 # nginx-unprivileged is designed to run as a non-root uid and listens on 8080.

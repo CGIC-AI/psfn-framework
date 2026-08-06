@@ -228,7 +228,7 @@
   }
 
   function clonePolicy(nextPolicy: ChargePolicyConfig): ChargePolicyConfig {
-    return JSON.parse(JSON.stringify(nextPolicy)) as ChargePolicyConfig;
+    return structuredClone(nextPolicy);
   }
 
   function parseNumber(value: string): number {

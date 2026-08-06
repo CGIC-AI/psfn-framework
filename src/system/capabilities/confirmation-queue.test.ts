@@ -7,6 +7,40 @@ import {
 } from './confirmation-queue.js';
 
 describe('ConfirmationQueue', () => {
+  it('uses native defensive-copy semantics for in-memory params', () => {
+    const observedAt = new Date('2026-08-06T12:00:00.000Z');
+    const params: Record<string, unknown> = {
+      observedAt,
+      optional: undefined,
+      rows: [{ label: 'kept' }],
+      nested: { enabled: true },
+    };
+    const queue = new ConfirmationQueue({ now: () => 1, idFactory: () => 'native-clone' });
+
+    const entry = queue.enqueue({
+      method: 'fs.write',
+      action: 'write',
+      scope: '/tmp/native-clone',
+      params,
+      companionReason: 'Verify native clone semantics',
+    }, async () => undefined);
+
+    expect(entry.params.observedAt).toBeInstanceOf(Date);
+    expect(entry.params.observedAt).not.toBe(observedAt);
+    expect(Object.hasOwn(entry.params, 'optional')).toBe(true);
+    expect(entry.params.rows).toEqual([{ label: 'kept' }]);
+    expect(entry.params.rows).not.toBe(params.rows);
+    expect(entry.params.nested).not.toBe(params.nested);
+
+    expect(() => queue.enqueue({
+      method: 'fs.write',
+      action: 'write',
+      scope: '/tmp/unsupported',
+      params: { callback: () => undefined },
+      companionReason: 'Reject unsupported native clone values',
+    }, async () => undefined)).toThrow();
+  });
+
   it('enqueues pending actions with timestamp and expiry metadata', () => {
     let now = 10_000;
     let sequence = 0;

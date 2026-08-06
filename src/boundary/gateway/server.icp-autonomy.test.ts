@@ -66,7 +66,6 @@ const OPEN_POLICY = {
   trustAllows: true,
   senderBlocksPeer: false,
   peerBlocksSender: false,
-  quietHours: false,
   provenanceFresh: true,
   recursiveMiOnlyRoot: false,
   socialPressureAllows: true,
@@ -1167,7 +1166,10 @@ describe('GatewayServer ICP autonomy RPC', () => {
   });
 
   it('authenticates coarse availability and closes deterministic gates with zero LLM calls', async () => {
-    const { connect, llmProvider, eventBus } = await setup({ ...OPEN_POLICY, quietHours: true });
+    const { connect, llmProvider, eventBus } = await setup({
+      ...OPEN_POLICY,
+      socialPressureAllows: false,
+    });
     const a = connect();
     const b = connect();
     await identify(a, A, 1);
@@ -1201,13 +1203,13 @@ describe('GatewayServer ICP autonomy RPC', () => {
     });
     expect(closed.result).toEqual({
       eligible: false,
-      reasonCode: 'quiet_hours',
+      reasonCode: 'charge_pressure',
       reasonClass: 'deferrable',
     });
     expect(llmProvider.stream).not.toHaveBeenCalled();
     expect(llmProvider.complete).not.toHaveBeenCalled();
     expect(gates).toEqual([
-      expect.objectContaining({ outcome: 'closed', reasonCode: 'quiet_hours' }),
+      expect.objectContaining({ outcome: 'closed', reasonCode: 'charge_pressure' }),
     ]);
   });
 

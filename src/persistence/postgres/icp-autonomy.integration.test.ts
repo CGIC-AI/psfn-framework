@@ -153,7 +153,6 @@ describe('ICP autonomy Postgres persistence', () => {
           trustAllows: true,
           senderBlocksPeer: false,
           peerBlocksSender: false,
-          quietHours: false,
           provenanceFresh: true,
           recursiveMiOnlyRoot: false,
           socialPressureAllows: true,
@@ -245,7 +244,6 @@ describe('ICP autonomy Postgres persistence', () => {
         trustAllows: true,
         senderBlocksPeer: false,
         peerBlocksSender: false,
-        quietHours: false,
         provenanceFresh: true,
         recursiveMiOnlyRoot: false,
         socialPressureAllows: true,
@@ -617,12 +615,6 @@ describe('ICP autonomy Postgres persistence', () => {
         { companionId: A, postgresSchema: 'companion_a', companionDataDir: companionADataDir },
         { companionId: B, postgresSchema: 'companion_b', companionDataDir: companionBDataDir },
       ],
-      quietHours: {
-        enabled: false,
-        startLocalTime: '22:00',
-        endLocalTime: '07:00',
-        timeZone: 'UTC',
-      },
       capacityAuthority: {
         resolve: async () => ({
           socialPressureAllows: true,
@@ -683,7 +675,6 @@ describe('ICP autonomy Postgres persistence', () => {
         trustAllows: true,
         senderBlocksPeer: false,
         peerBlocksSender: false,
-        quietHours: false,
         provenanceFresh: true,
         recursiveMiOnlyRoot: false,
         socialPressureAllows: true,
@@ -890,12 +881,6 @@ describe('ICP autonomy Postgres persistence', () => {
           { companionId: A, postgresSchema: 'companion_a', companionDataDir: companionADataDir },
           { companionId: B, postgresSchema: 'companion_b', companionDataDir: companionBDataDir },
         ],
-        quietHours: {
-          enabled: false,
-          startLocalTime: '22:00',
-          endLocalTime: '07:00',
-          timeZone: 'UTC',
-        },
       });
       try {
         await expect(denyMissingOwners.resolve({

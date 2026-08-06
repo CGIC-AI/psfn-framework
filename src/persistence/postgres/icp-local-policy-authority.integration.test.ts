@@ -93,12 +93,6 @@ describe('companion-local ICP retained lock integration', () => {
         companionId: SENDER_ID,
         postgresSchema: SCHEMA,
         companionDataDir: dataDir,
-        quietHours: {
-          enabled: false,
-          startLocalTime: '22:00',
-          endLocalTime: '07:00',
-          timeZone: 'UTC',
-        },
         policyHolds: { ttlMs: 10_000, maxOutstanding: 2 },
         capacityAuthority: {
           resolve: async () => ({

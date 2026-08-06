@@ -299,6 +299,12 @@ async function screenVoiceTranscriptMessage(
     sourceClass: 'audio_transcript',
     origin: { ref: `api-voice:${message.channelId}:${message.id}`.slice(0, 2048) },
     scope: 'context',
+    timing: {
+      traceId: message.id,
+      requestId: message.id,
+      channelId: message.channelId,
+      channelType: message.channelType,
+    },
   });
   return {
     ...message,
@@ -323,6 +329,12 @@ async function screenCompanionStimulusMessage(
       ? { canonicalContactId: message.routing.canonicalContactId }
       : {}),
     sourceChannelId: message.channelId,
+    timing: {
+      traceId: message.id,
+      requestId: message.id,
+      channelId: message.channelId,
+      channelType: message.channelType,
+    },
   });
   return {
     ...message,

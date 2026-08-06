@@ -506,6 +506,19 @@ export async function invokeAgentForTurn(input: {
       warmState: providerWarmState,
     });
   };
+  let providerCompleteEmitted = false;
+  const markProviderComplete = (model: string): void => {
+    if (providerCompleteEmitted || providerRequestAt === null) return;
+    providerCompleteEmitted = true;
+    const completedAt = monotonicEpochNowMs();
+    observability.emitPerformanceStage('provider_complete', {
+      monotonicAtMs: completedAt,
+      durationMs: Math.max(0, completedAt - providerRequestAt),
+      model,
+      provider: runtime.agent.state.model.provider,
+      warmState: providerWarmState,
+    });
+  };
 
   const moaSettings = resolveMoaSettings(runtime.config, log);
   if (moaSettings) {
@@ -547,6 +560,7 @@ export async function invokeAgentForTurn(input: {
     turnUsage = moaResult.turnUsage;
     responseModel = moaResult.model;
     responseText = moaResult.output;
+    markProviderComplete(responseModel);
     if (turnSnapshot.promptContext) {
       turnSnapshot.promptContext.currentTurnInput = moaCurrentTurn.content;
       if (turnSnapshot.promptContext.providerObservability) {
@@ -1097,6 +1111,8 @@ export async function invokeAgentForTurn(input: {
     turnSnapshot.capturedAt = Date.now();
     await observability.emitTurnSnapshot(turnSnapshot);
   }
+
+  markProviderComplete(responseModel);
 
   return {
     firstTokenAt,

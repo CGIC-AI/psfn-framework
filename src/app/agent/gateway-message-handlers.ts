@@ -795,6 +795,7 @@ export function registerGatewayMessageHandlers(
         }
         let completed = false;
         let checkpoint = entries[0].retryDelivery;
+        let deliveryStartedAt: number | null = null;
         const dedupeKeys = checkpoint?.dedupeKeys
           ?? entries.flatMap((entry) => entry.dedupeKey ? [entry.dedupeKey] : []);
         try {
@@ -802,6 +803,7 @@ export function registerGatewayMessageHandlers(
             const response = await promptWhenIdle(message);
             checkpoint = createDiscordDeliveryCheckpoint(response, dedupeKeys);
           }
+          deliveryStartedAt = nowMonotonicMs();
           await deliverDiscordReply(message.channelId, checkpoint, {
             sendText: (channelId, content) => gateway.discordSend(channelId, content),
             sendMedia: (channelId, attachment) => gateway.discordSendMedia(channelId, attachment),
@@ -831,6 +833,23 @@ export function registerGatewayMessageHandlers(
             },
           });
         } finally {
+          if (deliveryStartedAt !== null) {
+            const deliveryCompletedAt = nowMonotonicMs();
+            void emitTurnPerformance(eventBus, {
+              traceId: message.id,
+              turnId: message.id,
+              requestId: message.id,
+              companionId,
+              channelId: message.channelId,
+              channelType: message.channelType,
+              stage: 'outbound_delivery',
+              monotonicAtMs: deliveryCompletedAt,
+              durationMs: Math.max(0, deliveryCompletedAt - deliveryStartedAt),
+            }).catch(error => log.warn('Discord delivery performance telemetry emit failed', {
+              messageId: message.id,
+              error: toErrorMessage(error),
+            }));
+          }
           finalizeDiscordDelivery({
             dedupeKeys,
             completed,

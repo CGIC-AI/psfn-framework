@@ -33,6 +33,7 @@
 // without invoking the slower escalation layers.
 
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   createIntakeEnvelope,
@@ -143,6 +144,12 @@ export interface IntakeEscalationRequest {
    * the artifacts and fs/shell reads of the quarantined bytes go unaudited.
    */
   artifactPaths?: readonly string[];
+  /** Content-free observer bound to this one screening correlation. */
+  emitTiming?: (
+    stage: IntakeScreeningTimingStage,
+    status: IntakeScreeningTimingStatus,
+    durationMs?: number,
+  ) => void;
   atMs: number;
 }
 
@@ -248,7 +255,26 @@ export interface IntakeScreeningInput {
    * attempt for the operator (hrmrq.54).
    */
   artifactPaths?: readonly string[];
+  /** Content-free message correlation for bounded live latency telemetry. */
+  timing?: IntakeScreeningTimingContext;
   atMs?: number;
+}
+
+export type IntakeScreeningTimingStage = 'local_screening' | 'l2' | 'l3';
+export type IntakeScreeningTimingStatus = 'observed' | 'not_run';
+
+export interface IntakeScreeningTimingContext {
+  traceId: string;
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  channelType?: string;
+}
+
+export interface IntakeScreeningTimingEvent extends IntakeScreeningTimingContext {
+  stage: IntakeScreeningTimingStage;
+  status: IntakeScreeningTimingStatus;
+  durationMs?: number;
 }
 
 export interface IntakeScreeningResult {
@@ -332,6 +358,8 @@ export interface IntakeScreeningServiceOptions {
     error: string;
     timestamp: number;
   }) => void;
+  /** Content-free, telemetry-only observer. A throwing observer is isolated from screening. */
+  onTiming?: (event: IntakeScreeningTimingEvent) => void;
 }
 
 /** The fixed, operator-reviewed in-place placeholder for withheld content. */
@@ -546,6 +574,34 @@ export function createIntakeScreeningService(
   }
   const mode = policy.mode;
   const now = options.now ?? Date.now;
+
+  function emitTiming(
+    input: IntakeScreeningInput,
+    stage: IntakeScreeningTimingStage,
+    status: IntakeScreeningTimingStatus,
+    durationMs?: number,
+  ): void {
+    if (!options.onTiming || !input.timing) return;
+    try {
+      options.onTiming({
+        ...input.timing,
+        stage,
+        status,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
+    } catch (error) {
+      log.warn('Intake screening timing observer failed', {
+        traceId: input.timing.traceId,
+        stage,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  function emitDeepScreeningNotRun(input: IntakeScreeningInput): void {
+    emitTiming(input, 'l2', 'not_run');
+    emitTiming(input, 'l3', 'not_run');
+  }
 
   // htm9.13: scrutiny scales with SOURCE risk. The operator-curated source
   // lists adjust the policy tier — a trusted-site/person hit lowers it ONE
@@ -851,6 +907,7 @@ export function createIntakeScreeningService(
       priorSignals,
     });
     if (preliminary.action === 'quarantine' || preliminary.action === 'block') {
+      emitDeepScreeningNotRun(timedInput);
       return finalize(text, timedInput, report, scorerOutcome);
     }
 
@@ -880,6 +937,16 @@ export function createIntakeScreeningService(
           ? { artifactPaths: input.artifactPaths }
           : {}),
         priorContribution: prior,
+        ...(input.timing
+          ? {
+            emitTiming: (stage, status, durationMs) => emitTiming(
+              timedInput,
+              stage,
+              status,
+              durationMs,
+            ),
+          }
+          : {}),
         atMs,
       });
     } catch (error) {
@@ -966,6 +1033,7 @@ export function createIntakeScreeningService(
   }
 
   async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
+    const localScreeningStartedAt = performance.now();
     const report = scanL1(text, input);
     let scorerOutcome: ScorerOutcome = { labels: [] };
     if (injectionScorer && text.trim()) {
@@ -987,6 +1055,12 @@ export function createIntakeScreeningService(
         };
       }
     }
+    emitTiming(
+      input,
+      'local_screening',
+      'observed',
+      Math.max(0, performance.now() - localScreeningStartedAt),
+    );
     const adjustedTier = resolveTier(input).tier;
     const aboveSemanticThreshold = scorerOutcome.score !== undefined
       && scorerOutcome.score >= injectionScoreThresholdForTier(policy, adjustedTier);
@@ -1012,11 +1086,13 @@ export function createIntakeScreeningService(
       // conversation in a closed channel. Deterministic findings still take
       // their ordinary fail-closed path before this narrow optimization, and
       // operator-mandated L2/L3 tiers retain their configured deep screening.
+      emitDeepScreeningNotRun(input);
       return finalize(text, input, report, scorerOutcome, {
         observeUncorroboratedSemanticScore: true,
       });
     }
     if (!escalation || !text.trim()) {
+      emitDeepScreeningNotRun(input);
       return finalize(text, input, report, scorerOutcome);
     }
     return escalateAndFinalize(text, input, report, scorerOutcome, escalation);
@@ -1030,7 +1106,15 @@ export function createIntakeScreeningService(
         + 'configured — use screen()',
       );
     }
+    const localScreeningStartedAt = performance.now();
     const report = scanL1(text, input);
+    emitTiming(
+      input,
+      'local_screening',
+      'observed',
+      Math.max(0, performance.now() - localScreeningStartedAt),
+    );
+    emitDeepScreeningNotRun(input);
     return finalize(text, input, report, { labels: [] });
   }
 

@@ -41,6 +41,7 @@ import { createOwnerFileConfigStore } from '../../system/config/config-store.js'
 import { GatewaySystemDataWriter } from './system-data-writer.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
+import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -228,6 +229,31 @@ export async function buildGatewayPrivilegedCore(
         input.logger.error('Failed to emit fail-closed intake screening alert event', {
           stage: event.stage,
           error: String(error),
+        });
+      });
+    },
+    onScreeningTiming: (companionId, event) => {
+      const ownerCompanionId = companionId ?? resolveCoreCompanionIdFromConfig(input.config);
+      const stage = event.stage === 'local_screening'
+        ? 'cogsec_local_screening'
+        : event.stage === 'l2'
+          ? 'cogsec_l2_screening'
+          : 'cogsec_l3_screening';
+      void emitTurnPerformance(eventBus, {
+        traceId: event.traceId,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+        ...(event.requestId ? { requestId: event.requestId } : {}),
+        companionId: ownerCompanionId,
+        ...(event.channelId ? { channelId: event.channelId } : {}),
+        ...(event.channelType ? { channelType: event.channelType } : {}),
+        stage,
+        stageStatus: event.status,
+        ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+      }).catch((error: unknown) => {
+        input.logger.error('Failed to emit intake screening timing telemetry', {
+          traceId: event.traceId,
+          stage: event.stage,
+          error: error instanceof Error ? error.message : String(error),
         });
       });
     },

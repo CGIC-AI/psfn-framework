@@ -249,11 +249,6 @@ spec:
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
             {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
-            # Gateway owns CogSec quarantine/event writes under state while
-            # the rest of companion-data remains read-only.
-            - name: companion-data
-              mountPath: {{ printf "%s/state" .Values.runtime.companionDataDir }}
-              subPath: state
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
             {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}

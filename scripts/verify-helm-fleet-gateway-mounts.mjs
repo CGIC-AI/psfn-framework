@@ -6,10 +6,45 @@ export function verifyFleetGatewayCompanionMountContract({
 }) {
   const gatewayContainer = deployment?.spec?.template?.spec?.containers
     ?.find(container => container.name === 'gateway');
+  if (!gatewayContainer) {
+    throw new Error('fleet gateway Deployment must render a gateway container');
+  }
+  const gatewayVolumeMounts = gatewayContainer.volumeMounts ?? [];
+  const duplicateMountPaths = gatewayVolumeMounts
+    .map(mount => mount.mountPath)
+    .filter((mountPath, index, mountPaths) => mountPaths.indexOf(mountPath) !== index);
+  if (duplicateMountPaths.length > 0) {
+    throw new Error(
+      `fleet gateway volume mount paths must be unique: ${duplicateMountPaths.join(', ')}`,
+    );
+  }
+
+  const gatewayVolumeList = deployment?.spec?.template?.spec?.volumes ?? [];
+  const duplicateVolumeNames = gatewayVolumeList
+    .map(volume => volume.name)
+    .filter((volumeName, index, volumeNames) => volumeNames.indexOf(volumeName) !== index);
+  if (duplicateVolumeNames.length > 0) {
+    throw new Error(
+      `fleet gateway volume names must be unique: ${duplicateVolumeNames.join(', ')}`,
+    );
+  }
   const gatewayVolumes = new Map(
-    (deployment?.spec?.template?.spec?.volumes ?? [])
-      .map(volume => [volume.name, volume]),
+    gatewayVolumeList.map(volume => [volume.name, volume]),
   );
+
+  const companionRootPaths = companions.map(
+    companion => `/runtime/companions/${companion.companionId}`,
+  );
+  for (const [index, rootPath] of companionRootPaths.entries()) {
+    for (const [otherIndex, otherRootPath] of companionRootPaths.entries()) {
+      if (index !== otherIndex
+        && (rootPath === otherRootPath || rootPath.startsWith(`${otherRootPath}/`))) {
+        throw new Error(
+          `fleet gateway companion[${index}] root collides with companion[${otherIndex}]`,
+        );
+      }
+    }
+  }
 
   for (const [index, companion] of companions.entries()) {
     const volumeName = index === 0 ? 'companion-data' : `gateway-companion-data-${index}`;
@@ -19,12 +54,29 @@ export function verifyFleetGatewayCompanionMountContract({
         `fleet gateway ${volumeName} must bind companion claim ${companion.companionDataClaim}`,
       );
     }
-    const rootMountPath = `/runtime/companions/${companion.companionId}`;
-    const rootMount = (gatewayContainer?.volumeMounts ?? [])
-      .find(mount => mount.name === volumeName && mount.mountPath === rootMountPath);
-    if (rootMount?.readOnly !== true) {
+    const rootMountPath = companionRootPaths[index];
+    const stateMountPath = `${rootMountPath}/state`;
+    const companionMounts = gatewayVolumeMounts.filter(mount => mount.name === volumeName);
+    if (companionMounts.length !== 2) {
+      throw new Error(
+        `fleet gateway companion[${index}] must render exactly one owner-root mount and one state subPath mount`,
+      );
+    }
+    const rootMount = companionMounts.find(mount => mount.mountPath === rootMountPath);
+    if (rootMount?.readOnly !== true || Object.hasOwn(rootMount ?? {}, 'subPath')) {
       throw new Error(
         `fleet gateway companion[${index}] owner root must mount read-only at ${rootMountPath}`,
+      );
+    }
+    const stateMount = companionMounts.find(mount => mount.mountPath === stateMountPath);
+    if (stateMount?.subPath !== 'state' || stateMount.readOnly !== false) {
+      throw new Error(
+        `fleet gateway companion[${index}] state must mount writable at ${stateMountPath} with subPath state`,
+      );
+    }
+    if (gatewayVolumeMounts.indexOf(rootMount) >= gatewayVolumeMounts.indexOf(stateMount)) {
+      throw new Error(
+        `fleet gateway companion[${index}] owner-root mount must precede its state subPath mount`,
       );
     }
 
@@ -39,7 +91,7 @@ export function verifyFleetGatewayCompanionMountContract({
       );
     }
     const workspaceMountPath = `/runtime/workspaces/personal/${companion.companionId}`;
-    const workspaceMount = (gatewayContainer?.volumeMounts ?? [])
+    const workspaceMount = gatewayVolumeMounts
       .find(mount => mount.name === workspaceVolumeName && mount.mountPath === workspaceMountPath);
     if (!workspaceMount || workspaceMount.readOnly === true) {
       throw new Error(
@@ -47,6 +99,8 @@ export function verifyFleetGatewayCompanionMountContract({
       );
     }
   }
+
+  if (companions.length < 2) return;
 
   assertRenderFails(
     renderArgs([

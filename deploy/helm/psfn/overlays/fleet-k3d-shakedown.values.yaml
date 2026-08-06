@@ -3,8 +3,9 @@
 # primary/canonical companion, the second is a follower). Rendering this file
 # is the chart-owned equivalent of the previously hand-drifted multi-companion
 # topology: follower agent Deployment + NetworkPolicy admits, per-companion
-# admin Services and certificates, gateway per-companion companion-data and
-# workspace mounts, and the FLEET_AUTH_* gateway credential env.
+# admin Services and certificates, gateway per-companion read-only data roots
+# with writable state subPaths, writable workspace mounts, and the FLEET_AUTH_*
+# gateway credential env.
 #
 # Prerequisites this file cannot create (fail-closed by design):
 #   - the system-data PVC already contains the canonical companions.json and

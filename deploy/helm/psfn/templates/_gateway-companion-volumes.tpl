@@ -4,7 +4,9 @@ Gateway companion owner-root mounts.
 Fleet mode binds every registered companion PVC at the canonical path that
 resolveCompanionFleetPaths derives beneath PSFN_RUNTIME_ROOT. The first claim
 retains the common "companion-data" volume name because the seed init container
-and writable CogSec state submount share it.
+and writable CogSec state submount share it. Each companion root stays
+read-only; only its nested state subPath is writable for gateway-owned CogSec
+event and quarantine stores.
 */}}
 {{- define "psfn.gatewayCompanionDataVolumeMounts" -}}
 {{- if .Values.fleet.enabled }}
@@ -12,21 +14,23 @@ and writable CogSec state submount share it.
 - name: {{ ternary "companion-data" (printf "gateway-companion-data-%d" $index) (eq $index 0) }}
   mountPath: {{ printf "%s/companions/%s" $.Values.fleet.runtimeRoot $companion.companionId }}
   readOnly: true
-{{- if gt $index 0 }}
 # The union quarantined-artifact guard audits every companion's store on each
-# fs.read/fs.search/shell.exec, so each follower companion also needs its
-# writable CogSec state submount. Without it the store's write-lock fails
-# EROFS against the read-only parent mount and every boundary read fails
-# closed. The first companion's state submount lives in workloads.yaml.
-- name: {{ printf "gateway-companion-data-%d" $index }}
+# fs.read/fs.search/shell.exec. Mount each companion's state subPath explicitly
+# so its write-lock and durable review records do not fall through to the
+# read-only owner root and fail closed with EROFS.
+- name: {{ ternary "companion-data" (printf "gateway-companion-data-%d" $index) (eq $index 0) }}
   mountPath: {{ printf "%s/companions/%s/state" $.Values.fleet.runtimeRoot $companion.companionId }}
   subPath: state
-{{- end }}
+  readOnly: false
 {{- end }}
 {{- else }}
 - name: companion-data
   mountPath: {{ .Values.runtime.companionDataDir }}
   readOnly: true
+- name: companion-data
+  mountPath: {{ printf "%s/state" .Values.runtime.companionDataDir }}
+  subPath: state
+  readOnly: false
 {{- end }}
 {{- end -}}
 

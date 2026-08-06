@@ -116,6 +116,8 @@ fleet:
   # Paths and network identities are deliberately not configurable per entry.
   # They are derived exactly as the runtime does:
   #   companion data: <runtimeRoot>/companions/<companionId>
+  #   gateway state:  <runtimeRoot>/companions/<companionId>/state (writable subPath;
+  #                   the surrounding companion root remains read-only)
   #   character card: <companion data>/companion.json
   #   workspace:      <runtimeRoot>/workspaces/personal/<companionId>
   #   admin Service:  <release>-agent-admin-<companionId>

@@ -47,6 +47,10 @@ import {
   LLMClient,
   SensitiveImportRoutePolicyError,
 } from './client.js';
+import {
+  createProviderResponseTerminatorFilter,
+  stripProviderResponseTerminatorArtifact,
+} from './client-response-helpers.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from './work-spec.js';
 import {
   CircuitOpenError,
@@ -866,6 +870,94 @@ describe('LLMClient provider observability', () => {
       },
     ]);
     mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('removes the recorded kimi-k3 end-message token from API-streamed and Discord-shared final text', async () => {
+    const config = makeConfig({
+      primaryModel: 'moonshotai/kimi-k3',
+      primaryProvider: 'openrouter',
+      modelRoster: {
+        chat: {
+          model: 'moonshotai/kimi-k3',
+          provider: 'openrouter',
+          maxTokens: 8192,
+          contextWindow: 262_144,
+        },
+        background: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          maxTokens: 2048,
+        },
+      },
+    });
+    config.modelRegistry = buildRegistryFromConfig(config);
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+    const recordedDeltas = [
+      'A grounded reply.',
+      '<|end_',
+      'message|>',
+    ];
+    const recordedContent = recordedDeltas.join('');
+    mocks.streamSimple.mockImplementation(async function* recordedKimiStream() {
+      for (const delta of recordedDeltas) {
+        yield { type: 'text_delta', delta };
+      }
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          model: 'openrouter/moonshotai/kimi-k3',
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: recordedContent }],
+        },
+      };
+    });
+
+    const streamedVisibleText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Reply normally' }],
+    }, {
+      onText: delta => streamedVisibleText.push(delta),
+    });
+
+    // API streaming consumes onText; Discord and non-streaming API replies use
+    // the final response content. Both public views must share the same clean
+    // provider-boundary result even when the terminator spans wire deltas.
+    expect(streamedVisibleText.join('')).toBe('A grounded reply.');
+    expect(response.content).toBe('A grounded reply.');
+
+    mocks.completeSimple.mockResolvedValue({
+      model: 'openrouter/moonshotai/kimi-k3',
+      usage: { input: 8, output: 4 },
+      content: [{ type: 'text', text: recordedContent }],
+      stopReason: 'stop',
+    });
+    const nonStreamingResponse = await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Reply normally' }],
+      modelHint: {
+        model: 'moonshotai/kimi-k3',
+        provider: 'openrouter',
+        pin: true,
+      },
+    }, 'reasoning', { disableRetry: true });
+
+    expect(nonStreamingResponse.content).toBe('A grounded reply.');
+  });
+
+  it('preserves end-message-looking text outside the proven kimi-k3 terminal position', () => {
+    const filter = createProviderResponseTerminatorFilter({ model: 'moonshotai/kimi-k3' });
+
+    expect(filter.push('The literal <|end_message|>')).toBe('The literal ');
+    expect(filter.push(' belongs in this explanation.')).toBe('<|end_message|> belongs in this explanation.');
+    expect(filter.finish()).toBe('');
+    expect(stripProviderResponseTerminatorArtifact(
+      'A non-Kimi reply.<|end_message|>',
+      { model: 'z-ai/glm-5.2' },
+    )).toBe('A non-Kimi reply.<|end_message|>');
   });
 
   it('attaches provider observability and reasoning to streaming responses', async () => {

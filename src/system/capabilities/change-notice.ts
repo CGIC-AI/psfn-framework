@@ -9,11 +9,84 @@ import {
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { resolvePendingCapabilityNoticesPath } from '../../persistence/layout.js';
+import type { ContextMessage } from '../../shared/contracts/runtime-base.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { CapabilityGrantSnapshot } from './access.js';
 import { isCapabilityToken, type CapabilityToken } from './tokens.js';
 import type { CapabilityTier } from './tier-types.js';
 import { isCapabilityTier } from './tiers.js';
+
+export const CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID = 'system:capability-policy';
+export const CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE = 'capability-tier-change-notice';
+
+export interface FreshCapabilityTierChangeNotices {
+  historicalMessages: ContextMessage[];
+  noticeContents: string[];
+}
+
+function isCapabilityTierChangeNoticeMessage(message: ContextMessage): boolean {
+  return message.role === 'system'
+    && message.provenance?.notes?.includes(CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE) === true;
+}
+
+/**
+ * Pull capability notices delivered immediately before the current user turn
+ * out of ordinary session history. The current user entry is deliberately
+ * excluded from prompt history, so a notice is fresh only while no later user
+ * or assistant entry exists. On the following turn it naturally falls back to
+ * historical session context and is not re-announced.
+ */
+export function partitionFreshCapabilityTierChangeNotices(
+  messages: readonly ContextMessage[],
+): FreshCapabilityTierChangeNotices {
+  let lastConversationIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const role = messages[index]?.role;
+    if (role === 'user' || role === 'assistant') {
+      lastConversationIndex = index;
+      break;
+    }
+  }
+
+  const freshIndexes = new Set<number>();
+  const noticeContents: string[] = [];
+  for (let index = lastConversationIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (!isCapabilityTierChangeNoticeMessage(message)) continue;
+    freshIndexes.add(index);
+    noticeContents.push(message.content);
+  }
+
+  return {
+    historicalMessages: messages.filter((_message, index) => !freshIndexes.has(index)),
+    noticeContents,
+  };
+}
+
+export function renderFreshCapabilityTierChangePromptBlock(
+  noticeContents: readonly string[],
+  liveTier: unknown,
+): string {
+  if (noticeContents.length === 0) return '';
+  if (!isCapabilityTier(liveTier)) {
+    throw new Error('Fresh capability-tier notice requires the current live capability tier');
+  }
+
+  return [
+    '<recent_capability_change>',
+    '<status>fresh_runtime_event</status>',
+    `<current_live_tier>${liveTier}</current_live_tier>`,
+    '<instruction>This operator-authored access change happened immediately before this turn. '
+      + 'Treat it as a fresh event, not old session history. If the Partner asks an open-ended '
+      + 'question about what changed, mention the capability change directly without requiring '
+      + 'a self_status check. When several notices are present, the current_live_tier above is '
+      + 'authoritative for this turn.</instruction>',
+    '<notices>',
+    ...noticeContents,
+    '</notices>',
+    '</recent_capability_change>',
+  ].join('\n');
+}
 
 export interface CapabilityTierChange {
   previous: {

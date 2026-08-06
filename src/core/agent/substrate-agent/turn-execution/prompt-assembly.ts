@@ -62,6 +62,10 @@ import { renderCanaryPromptMarker } from '../../../cogsec/canary/canary-token.js
 import type { TurnExecutionObservability } from './observability.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
+import {
+  partitionFreshCapabilityTierChangeNotices,
+  renderFreshCapabilityTierChangePromptBlock,
+} from '../../../../system/capabilities/change-notice.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -559,7 +563,11 @@ export async function assembleTurnPrompt(input: {
       renderedText: wikiContextBlock,
     }));
   }
-  const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);
+  const {
+    historicalMessages,
+    noticeContents: freshCapabilityTierChangeNotices,
+  } = partitionFreshCapabilityTierChangeNotices(context.messages);
+  const systemContextPromptBlock = buildSystemContextPromptBlock(historicalMessages);
   let systemContextPromptBlockTokens: number | undefined;
   if (systemContextPromptBlock) {
     const sessionContextScope = resolveSectionScope('session_context');
@@ -573,6 +581,20 @@ export async function assembleTurnPrompt(input: {
     });
     systemContextPromptBlockTokens = sessionContextBlock.tokensEst;
     planBlocks.push(sessionContextBlock);
+  }
+  const freshCapabilityTierChangeBlock = renderFreshCapabilityTierChangePromptBlock(
+    freshCapabilityTierChangeNotices,
+    promptRuntimeVariables.runtime_capability_tier,
+  );
+  if (freshCapabilityTierChangeBlock) {
+    planBlocks.push(createPromptPlanBlock({
+      id: 'recent_capability_change',
+      layer: 'provider',
+      volatility: 'turn',
+      producer: 'capabilities.change-notice',
+      scopeKey: 'global',
+      renderedText: freshCapabilityTierChangeBlock,
+    }));
   }
   // Ephemeral background-completion notices: compact, render-once, and placed
   // in the system prompt (never among the recent chat messages). Draining here

@@ -91,6 +91,8 @@ import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-a
 import { makeContextManifestFixture } from '../../../test-support/context-manifest.js';
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import { buildTurnRecord } from './turn-records.js';
+import { buildAuthenticityProvenance } from '../../../shared/authenticity-provenance.js';
+import { CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE } from '../../../system/capabilities/change-notice.js';
 
 const TEST_FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -5643,6 +5645,77 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]);
     expect(providerWireMessages?.some(message => message.role === 'assistant'
       && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
+  it('promotes a just-delivered capability change out of history with the live turn tier', async () => {
+    const eventBus = new EventBus();
+    const noticeContent = '[SYSTEM: Capability policy] [System notice: capability access changed] '
+      + 'The Operator changed your capability tier from "autonomous" to "nursery".';
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [
+        { role: 'user' as const, content: 'Did anything change?' },
+        { role: 'assistant' as const, content: 'Nothing I noticed yet.' },
+        {
+          role: 'system' as const,
+          content: noticeContent,
+          provenance: buildAuthenticityProvenance({
+            kind: 'system_note',
+            sourceAuthor: 'system',
+            transformedBy: 'system',
+            wording: 'direct',
+            directSpeech: false,
+            detailLoss: 'none',
+            emotionalTexture: 'unknown',
+            safeAsPartnerSpeech: false,
+            sourceSpanCount: 1,
+            sourceEntryIds: [41],
+            notes: [CAPABILITY_TIER_CHANGE_NOTICE_PROVENANCE_NOTE],
+          }),
+        },
+      ],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 42),
+      recordAssistantMessage: vi.fn(() => 43),
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => 'Rendered static prefix');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(async () => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
+      runtime_capability_tier: 'nursery',
+    }));
+
+    await handleMessageForTurn(runtime, createMessage('msg-fresh-capability-change', {
+      content: 'Did anything change?',
+    }));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
+    const freshBlock = getPromptPlanBlockText(plan, 'recent_capability_change');
+    const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
+
+    expect(freshBlock).toContain('<status>fresh_runtime_event</status>');
+    expect(freshBlock).toContain('<current_live_tier>nursery</current_live_tier>');
+    expect(freshBlock).toContain('mention the capability change directly');
+    expect(freshBlock).toContain(noticeContent);
+    expect(getPromptPlanBlockText(plan, 'session_context')).not.toContain(noticeContent);
+    expect(finalSystemPrompt.match(/\[System notice: capability access changed\]/gu)).toHaveLength(1);
   });
 
   it('appends the current datetime anchor at the end of the provider system prompt', async () => {

@@ -1,13 +1,18 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolvePersonalWikiDir, resolveSharedWorldWikiSiteDir } from '../../persistence/layout.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 import { SharedWorldWikiStore, WikiStore, normalizeWikiDocumentId } from './store.js';
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearDiagnosticLogRingBufferForTests();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -20,6 +25,35 @@ function makeWorkspace(): string {
 }
 
 describe('WikiStore', () => {
+  it.each([
+    ['synchronous', () => { throw new Error('prompt: "private wiki text"'); }],
+    ['asynchronous', async () => { throw new Error('prompt: "private wiki text"'); }],
+  ])('keeps canonical writes and surfaces %s projection-hook failures in diagnostics', async (_kind, onUpsert) => {
+    const store = new WikiStore(makeWorkspace(), { onUpsert });
+
+    const created = store.upsert({
+      id: 'projection-diagnostic-test',
+      title: 'Projection Diagnostic Test',
+      body: 'This body must not enter diagnostics.',
+    });
+    await vi.waitFor(() => {
+      expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        component: 'WikiStore',
+        message: 'Wiki search projection hook failed; canonical write retained and semantic search may be stale',
+        context: expect.objectContaining({
+          digest: created.bodySha256,
+          error: 'Error: prompt=[REDACTED_CONTENT]',
+          phase: 'search_projection_hook',
+          status: 'failed',
+        }),
+      }));
+    });
+
+    expect(store.get(created.id)).toEqual(created);
+    expect(JSON.stringify(getRecentDiagnosticLogRecords())).not.toContain(created.body);
+  });
+
   it('persists workspace-backed wiki documents with metadata and checksum validation', () => {
     const workspace = makeWorkspace();
     const store = new WikiStore(workspace, {

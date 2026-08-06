@@ -547,6 +547,7 @@ export function isIntakeUnscreenedDenyRequiredSink(sink: IntakeSink): boolean {
 export const INTAKE_BENIGN_CLASSES = [
   'beads_database_create',
   'beads_database_ready',
+  'beads_database_show',
 ] as const;
 export type IntakeBenignClass = typeof INTAKE_BENIGN_CLASSES[number];
 
@@ -569,6 +570,10 @@ const INTAKE_BENIGN_CLASS_SUPPRESSIONS: Readonly<Record<
     riskLabels: ['persona/mutation_attempt'],
   }],
   beads_database_ready: [{
+    ruleId: 'persona_mutation_request',
+    riskLabels: ['persona/mutation_attempt'],
+  }],
+  beads_database_show: [{
     ruleId: 'persona_mutation_request',
     riskLabels: ['persona/mutation_attempt'],
   }],

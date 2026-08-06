@@ -73,7 +73,7 @@ admin-ui/.svelte-kit/
 worktrees/
 
 # Provisioned ML model weights (never committed; see npm run provision:injection-model)
-models/
+/models/
 working_docs/review/
 
 # Beads / Dolt files (added by bd init)

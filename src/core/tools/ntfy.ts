@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Type } from '@sinclair/typebox';
+import { Type, type Static } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
@@ -217,30 +217,6 @@ export interface NotifyDispatcherOptions {
    * it (sibling channel-rendering work); clarify fails closed without it.
    */
   clarificationPort?: ClarificationDeliveryPort;
-}
-
-interface NotifyToolParams {
-  action: NotifyAction | 'consider';
-  target_kind?: 'external' | 'companion';
-  contact_id?: string;
-  initiation_permit?: string;
-  reason_summary?: string;
-  message?: string;
-  title?: string;
-  priority?: number;
-  topic?: string;
-  budget_channel?: ExternalCommunicationChannel;
-  delivery_channel?: NotifyDeliveryChannel;
-  delivery_target?: string;
-  approval_id?: string;
-  approval_method?: string;
-  approval_action?: string;
-  approval_scope?: string;
-  approval_reason?: string;
-  approval_expires_at?: number;
-  review_path?: string;
-  question?: string;
-  choices?: string[];
 }
 
 class HttpNtfyNotifier implements NotificationPort {
@@ -571,28 +547,31 @@ function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
     case 'brief':
       return {
         action: 'brief',
-        message: params.message ?? '',
+        message: (params.message as string | undefined) ?? '',
         title: params.title,
         priority: params.priority,
         topic: params.topic,
         budgetChannel: params.budget_channel,
       };
     case 'send':
+      if (params.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+        throw new Error('companion notify requests must use the companion handoff');
+      }
       return {
         action: 'send',
-        message: params.message ?? '',
-        deliveryChannel: params.delivery_channel ?? '',
-        deliveryTarget: params.delivery_target ?? '',
+        message: (params.message as string | undefined) ?? '',
+        deliveryChannel: (params.delivery_channel as NotifyDeliveryChannel | undefined) ?? '',
+        deliveryTarget: (params.delivery_target as string | undefined) ?? '',
       };
     case 'approval_request':
       return {
         action: 'approval_request',
         request: {
-          id: params.approval_id ?? '',
-          method: params.approval_method ?? '',
-          approvalAction: params.approval_action ?? '',
-          scope: params.approval_scope ?? '',
-          reason: params.approval_reason ?? '',
+          id: (params.approval_id as string | undefined) ?? '',
+          method: (params.approval_method as string | undefined) ?? '',
+          approvalAction: (params.approval_action as string | undefined) ?? '',
+          scope: (params.approval_scope as string | undefined) ?? '',
+          reason: (params.approval_reason as string | undefined) ?? '',
           expiresAt: params.approval_expires_at,
           reviewPath: params.review_path,
         },
@@ -600,8 +579,8 @@ function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
     case 'clarify':
       return {
         action: 'clarify',
-        question: params.question ?? '',
-        choices: params.choices ?? [],
+        question: (params.question as string | undefined) ?? '',
+        choices: (params.choices as string[] | undefined) ?? [],
       };
     default:
       throw new Error(`unsupported notify action: ${String(params.action)}`);
@@ -1054,6 +1033,8 @@ const notifyToolParameters = Type.Union([
   }, { additionalProperties: false }),
 ]);
 
+type NotifyToolParams = Static<typeof notifyToolParameters>;
+
 export function createNotifyTool(
   dispatcher: NotifyDispatcher,
   options: NotifyToolOptions = {},
@@ -1092,7 +1073,11 @@ export function createNotifyTool(
         }
       }
 
-      if (action === 'send' && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+      if (
+        action === 'send'
+        && 'target_kind' in rawParams
+        && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND
+      ) {
         if (!options.companionOutreach) {
           return textResultWithError('notify: companion outreach is not wired in this runtime.', true);
         }
@@ -1113,10 +1098,11 @@ export function createNotifyTool(
       }
 
       try {
-        const result = await dispatcher.dispatch(buildNotifyToolRequest({
+        const normalizedParams = {
           ...rawParams,
           action,
-        }));
+        } as NotifyToolParams;
+        const result = await dispatcher.dispatch(buildNotifyToolRequest(normalizedParams));
         return textResult(formatNotifyToolSuccess(result));
       } catch (error) {
         return textResultWithError(`notify: failure (${toErrorMessage(error)}).`, true);

@@ -1,4 +1,4 @@
-import { Type } from '@sinclair/typebox';
+import { Type, type Static } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
@@ -80,7 +80,6 @@ const SCHEDULE_TOOL_ACTIONS = [
   'schedule_prompt',
 ] as const;
 
-type ScheduleToolActionName = (typeof SCHEDULE_TOOL_ACTIONS)[number];
 type ScheduleToolAction =
   | 'list'
   | 'create_follow_up'
@@ -116,44 +115,6 @@ interface ReflectionRunTemplateResult {
 interface ScheduleToolResultDetails {
   isError?: boolean;
   deferredAction?: PostTurnActionCandidate;
-}
-
-interface ScheduleToolParams {
-  action?: ScheduleToolActionName;
-  limit?: number;
-  contact_id?: string;
-  include_activated?: boolean;
-  include_completed?: boolean;
-  include_dismissed?: boolean;
-  content?: string;
-  priority?: PendingFollowUpPriority;
-  timing?: PendingFollowUpTiming;
-  channel_id?: string;
-  channel_type?: ChannelType;
-  due_at?: string;
-  source_message_id?: string;
-  context_summary?: string;
-  wake_conditions?: PendingFollowUpWakeCondition[];
-  follow_up_id?: string;
-  activation_reason?: string;
-  title?: string;
-  kind?: CareReminderKind;
-  classification?: CareReminderClassification;
-  reminder_schedule?: CareReminderSchedule;
-  reason?: string;
-  reminder_id?: string;
-  template_id?: string;
-  defer_if_busy?: boolean;
-  name?: string;
-  prompt?: string;
-  delay_minutes?: number;
-  run_at?: string;
-  id?: string;
-  interval_ms?: number;
-  enabled?: boolean;
-  internal_state_input?: boolean;
-  mode?: 'standard' | 'deliberation';
-  deliberation?: ReflectionDeliberationConfig;
 }
 
 export interface ScheduleToolOptions {
@@ -291,7 +252,7 @@ function normalizeOptionalIsoTimestamp(value: unknown, fieldName: string): strin
 }
 
 function resolveScheduledPromptRunAt(
-  params: Pick<ScheduleToolParams, 'delay_minutes' | 'run_at'>,
+  params: { delay_minutes?: number; run_at?: string },
   nowMs: number,
 ): { runAt: number; description: string } {
   const hasDelay = params.delay_minutes !== undefined;
@@ -520,11 +481,7 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
 }
 
 export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgentTool<ScheduleToolResultDetails> {
-  const tool: SubstrateAgentTool<ScheduleToolResultDetails> = {
-    name: 'schedule',
-    label: 'schedule',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
-    parameters: Type.Object({
+  const parameters = Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),
         { description: 'Schedule action. Defaults to list.' },
@@ -607,7 +564,14 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
         inputUsdPerMillionTokens: Type.Optional(Type.Number()),
         outputUsdPerMillionTokens: Type.Optional(Type.Number()),
       })),
-    }),
+  });
+  type ScheduleToolParams = Static<typeof parameters>;
+
+  const tool: SubstrateAgentTool<ScheduleToolResultDetails> = {
+    name: 'schedule',
+    label: 'schedule',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
+    parameters,
     execute: async (
       _toolCallId: string,
       params: ScheduleToolParams = {},

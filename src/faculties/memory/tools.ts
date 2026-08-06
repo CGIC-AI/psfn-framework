@@ -1,7 +1,7 @@
 // ── Memory Write/Import Tools ──
 // Agent-accessible tools for intentional memory creation.
 
-import { Type } from '@sinclair/typebox';
+import { Type, type Static } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
@@ -390,65 +390,6 @@ export interface MemoryToolOptions extends MemoryWriteToolOptions {
   memoryDeletionProposalStore?: MemoryDeletionProposalStorePort | null;
   memoryDeletionApprovalPort?: MemoryDeletionApprovalPort | null;
   memoryDeletionPolicy?: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
-}
-
-interface MemoryToolParams {
-  action: MemoryToolAction;
-  text?: string;
-  type?: MemoryType;
-  importance?: number;
-  emotional_valence?: number;
-  confidence?: number;
-  tags?: string;
-  sensitivity?: SensitivityLevel;
-  query?: string;
-  episode_id?: string;
-  limit?: number;
-  contact_id?: string;
-  contactId?: string;
-  scope_kind?: MemoryScopeKind;
-  scopeKind?: MemoryScopeKind;
-  scope_id?: string;
-  scopeId?: string;
-  scope_tag?: string;
-  scopeTag?: string;
-  include_archived?: boolean;
-  includeArchived?: boolean;
-  records?: Array<{
-    text: string;
-    type: MemoryType;
-    importance?: number;
-    emotional_valence?: number;
-    confidence?: number;
-    tags?: string;
-    sensitivity?: SensitivityLevel;
-    occurred_at?: string;
-  }>;
-  source?: string;
-  memory_id?: string;
-  operation?: MemoryRedactionOperation;
-  reason?: string;
-  justification_category?: string;
-  explanation?: string;
-  delete_id?: string;
-  date?: string;
-  after?: string;
-  before?: string;
-  channel_id?: string;
-  channelId?: string;
-  trust_level?: TrustLevel;
-  trustLevel?: TrustLevel;
-  channel_visibility?: ChannelPrivacy;
-  channelVisibility?: ChannelPrivacy;
-  canonical_contact_id?: string;
-  canonicalContactId?: string;
-  contact_a?: string;
-  contactA?: string;
-  contact_b?: string;
-  contactB?: string;
-  formation_vad?: MemoryFormationVAD;
-  clear_formation_vad?: boolean;
-  append_tags?: string;
 }
 
 export function createMemoryWriteTool(
@@ -869,11 +810,7 @@ export function createMemoryTool(
   memoryStore: MemoryStorePort,
   options: MemoryToolOptions = {},
 ): SubstrateAgentTool {
-  return {
-    name: 'memory',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory,
-    label: 'memory',
-    parameters: Type.Object({
+  const parameters = Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
@@ -1023,7 +960,14 @@ export function createMemoryTool(
         dominance: Type.Number(),
       })),
       clear_formation_vad: Type.Optional(Type.Boolean({ description: 'Clear existing formation VAD metadata for action=patch.' })),
-    }),
+  });
+  type MemoryToolParams = Static<typeof parameters>;
+
+  return {
+    name: 'memory',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory,
+    label: 'memory',
+    parameters,
     execute: async (
       toolCallId: string,
       params: MemoryToolParams,
@@ -1034,7 +978,8 @@ export function createMemoryTool(
           'memory',
           params as unknown as Record<string, unknown>,
         ) ?? params) as MemoryToolParams;
-        const internalSource = extractInternalSource(normalizedParams as unknown as Record<string, unknown>);
+        const normalizedRecord = normalizedParams as unknown as Record<string, unknown>;
+        const internalSource = extractInternalSource(normalizedRecord);
         const action = normalizedParams.action;
 
         if (!MEMORY_TOOL_ACTIONS.includes(action)) {
@@ -1170,9 +1115,9 @@ export function createMemoryTool(
               );
             }
             const contactAId = normalizeOptionalToolString(normalizedParams.contact_a)
-              ?? normalizeOptionalToolString(normalizedParams.contactA);
+              ?? normalizeOptionalToolString(normalizedRecord.contactA);
             const contactBId = normalizeOptionalToolString(normalizedParams.contact_b)
-              ?? normalizeOptionalToolString(normalizedParams.contactB);
+              ?? normalizeOptionalToolString(normalizedRecord.contactB);
             if (!contactAId || !contactBId) {
               return textResultWithError(
                 'Error: contact_a and contact_b are both required for action=shared_background',

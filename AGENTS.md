@@ -286,6 +286,17 @@ nonzero until every new extended-form entry has a reviewed justification note;
 it never invents or silently accepts code ownership. Run
 `npm run verify:hardcoded-settings -- --help` for the compact scanner contract.
 
+Structural hygiene gates under `verify:repository-hygiene` include:
+
+- `verify:knip`, which rejects new unused files, exports, and types. Regenerate
+  a reviewed reduction with `npm run verify:knip -- --update`.
+- `verify:duplicate-type-names`, which rejects new exported
+  `interface`/`type`/`enum` duplicates or shape collisions. Existing debt is
+  recorded in `config/duplicate-type-baseline.json` with mandatory review notes.
+
+These baselines are reduction-only. Fix the source or remove resolved entries;
+do not grow a baseline to silence a gate.
+
 ## Validation and publication
 
 During implementation, run targeted tests and changed-file lint. Do not run the

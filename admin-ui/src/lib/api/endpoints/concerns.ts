@@ -64,6 +64,7 @@ export function resolveConcern(
   const target = `/api/admin/concerns/${encodeURIComponent(id)}/resolve`;
   return postEscalatedConcernAction(target, reason, (headers, signal) => (
     apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/resolve`, {
+      reason,
       ...(outcome ? { outcome } : {}),
     }, { headers, signal })
   ));
@@ -77,6 +78,7 @@ export function suppressConcern(
   const target = `/api/admin/concerns/${encodeURIComponent(id)}/suppress`;
   return postEscalatedConcernAction(target, reason, (headers, signal) => (
     apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/suppress`, {
+      reason,
       ...(outcome ? { outcome } : {}),
     }, { headers, signal })
   ));
@@ -91,6 +93,7 @@ export function transitionConcern(
   const target = `/api/admin/concerns/${encodeURIComponent(id)}/transition`;
   return postEscalatedConcernAction(target, reason, (headers, signal) => (
     apiPost<ConcernActionResult>(`/api/admin/concerns/${encodeURIComponent(id)}/transition`, {
+      reason,
       status,
       ...(options.outcome ? { outcome: options.outcome } : {}),
       ...(options.nextReviewAt ? { nextReviewAt: options.nextReviewAt } : {}),
@@ -101,6 +104,7 @@ export function transitionConcern(
 export function resolveStaleConcerns(reason: string, outcome?: string): Promise<ConcernActionResult> {
   return postEscalatedConcernAction('/api/admin/concerns/resolve-stale', reason, (headers, signal) => (
     apiPost<ConcernActionResult>('/api/admin/concerns/resolve-stale', {
+      reason,
       ...(outcome ? { outcome } : {}),
     }, { headers, signal })
   ));

@@ -34,13 +34,13 @@ describe('audited concern mutations', () => {
       act: () => resolveConcern('concern/a', 'Investigate a reported policy conflict', 'resolved safely'),
       target: '/api/admin/concerns/concern%2Fa/resolve',
       reason: 'Investigate a reported policy conflict',
-      body: { outcome: 'resolved safely' },
+      body: { reason: 'Investigate a reported policy conflict', outcome: 'resolved safely' },
     },
     {
       act: () => suppressConcern('concern/a', 'Suppress a confirmed duplicate', 'duplicate'),
       target: '/api/admin/concerns/concern%2Fa/suppress',
       reason: 'Suppress a confirmed duplicate',
-      body: { outcome: 'duplicate' },
+      body: { reason: 'Suppress a confirmed duplicate', outcome: 'duplicate' },
     },
     {
       act: () => transitionConcern(
@@ -51,13 +51,17 @@ describe('audited concern mutations', () => {
       ),
       target: '/api/admin/concerns/concern%2Fa/transition',
       reason: 'Monitor the concern while evidence develops',
-      body: { status: 'watching', outcome: 'monitoring' },
+      body: {
+        reason: 'Monitor the concern while evidence develops',
+        status: 'watching',
+        outcome: 'monitoring',
+      },
     },
     {
       act: () => resolveStaleConcerns('Clear stale concern projections after review'),
       target: '/api/admin/concerns/resolve-stale',
       reason: 'Clear stale concern projections after review',
-      body: {},
+      body: { reason: 'Clear stale concern projections after review' },
     },
   ])('mints and immediately spends one grant for $target', async ({ act, target, reason, body }) => {
     await expect(act()).resolves.toEqual({ ok: true });

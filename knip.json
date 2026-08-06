@@ -33,8 +33,7 @@
     },
     "admin-ui": {
       "entry": [
-        "src/hooks.ts",
-        "src/routes/models/+page.svelte"
+        "src/hooks.ts"
       ],
       "project": [
         "src/**/*.{ts,svelte}"

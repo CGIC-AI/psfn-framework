@@ -52,12 +52,12 @@ export function toNonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export function toFiniteNumber(value: unknown): number | undefined {
+function toFiniteNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   return undefined;
 }
 
-export function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
+function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
   if (!isRecord(value)) {
     return { ...DEFAULT_BUDGET_POLICY };
   }
@@ -80,7 +80,7 @@ export function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy
   };
 }
 
-export function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
+function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<CanonicalModelPurpose>();
   const normalized: ModelRegistryPurposeTag[] = [];
@@ -100,7 +100,7 @@ export function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
   return normalized;
 }
 
-export function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
+function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
   const raw = isRecord(value) ? value : {};
   const restRaw = { ...raw };
   delete restRaw.enabled;
@@ -150,7 +150,7 @@ function unwrapModelRegistryPayload(value: unknown): unknown {
   return value;
 }
 
-export function normalizeModelRegistryPayload(value: unknown): CanonicalModelRegistry {
+function normalizeModelRegistryPayload(value: unknown): CanonicalModelRegistry {
   const parsed = unwrapModelRegistryPayload(value);
   if (!isRecord(parsed)) {
     throw new Error('models.json must be a JSON object');

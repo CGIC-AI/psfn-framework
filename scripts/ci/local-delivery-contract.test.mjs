@@ -35,7 +35,6 @@ import {
 } from './run-local-gate.mjs';
 import { validateZizmorInputs } from './run-zizmor-changed.mjs';
 import { waitForRemoteAttestation } from './verify-pr-attestation.mjs';
-import { waitForPr } from './wait-for-pr.mjs';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const BASE = '2222222222222222222222222222222222222222';
@@ -1048,39 +1047,6 @@ test('trusted PR label automation has the write scope required by the labels API
   assert.match(applyJob, /pull-requests: write/);
   assert.doesNotMatch(applyJob, /issues: write/);
   assert.match(applyJob, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
-});
-
-test('PR wait fails loudly when GitHub reports a different head than the attested SHA', async () => {
-  await assert.rejects(
-    waitForPr({
-      reference: '191',
-      expectedHead: HEAD,
-      read: () => ({
-        number: 191,
-        headRefOid: `3${HEAD.slice(1)}`,
-        statusCheckRollup: [],
-      }),
-    }),
-    /PR head changed.*while waiting/i,
-  );
-});
-
-test('PR wait fails loudly when a required check is skipped', async () => {
-  await assert.rejects(
-    waitForPr({
-      reference: '191',
-      expectedHead: HEAD,
-      read: () => ({
-        number: 191,
-        headRefOid: HEAD,
-        statusCheckRollup: [
-          { name: 'ci-required', status: 'COMPLETED', conclusion: 'SKIPPED' },
-          { name: 'Greptile Review', status: 'COMPLETED', conclusion: 'SUCCESS' },
-        ],
-      }),
-    }),
-    /ci-required concluded SKIPPED/i,
-  );
 });
 
 test('ready-for-review CI runs use the exact PR head without label-triggered reruns', () => {

@@ -9,7 +9,7 @@
     type ConcernView,
   } from '$lib/api/endpoints/concerns';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
-  import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
+  import ConcernActionEscalationModal from '$lib/components/ConcernActionEscalationModal.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
   const TRANSITION_STATUSES = ['candidate', 'active', 'watching', 'deferred', 'blocked'] as const;
@@ -107,23 +107,28 @@
   }
 
   function requestAction(action: PendingConcernAction): void {
-    if (!escalationReason.trim()) {
-      pushToast('State an audited reason before changing a concern', 'error');
-      return;
-    }
+    escalationReason = '';
     pendingAction = action;
   }
 
   async function confirmAction(): Promise<void> {
     const action = pendingAction;
     if (!action) return;
-    const reason = escalationReason;
-    // Drop the local confirmation before network I/O. A retry always starts a
-    // fresh ceremony and therefore can never replay the spent grant.
-    pendingAction = null;
+    const reason = escalationReason.trim();
+    if (!reason) {
+      pushToast('State an audited reason before changing a concern', 'error');
+      return;
+    }
     if (await runAction(action.key, () => action.run(reason), action.done)) {
       escalationReason = '';
+      pendingAction = null;
     }
+  }
+
+  function cancelAction(): void {
+    if (actionBusyId) return;
+    escalationReason = '';
+    pendingAction = null;
   }
 
   function draft(id: string): string {
@@ -169,7 +174,7 @@
           done: 'Stale concerns resolved',
           run: (reason) => resolveStaleConcerns(reason),
         })}
-        disabled={actionBusyId !== '' || !escalationReason.trim()}
+        disabled={actionBusyId !== '' || pendingAction !== null}
         class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
       >
         Resolve stale
@@ -186,30 +191,13 @@
   </div>
 
   <section class="card-garden border-l-4 border-l-gold-400 p-4" aria-labelledby="concern-escalation-title">
-    <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(18rem,2fr)] md:items-end">
-      <div>
-        <h2 id="concern-escalation-title" class="font-serif font-semibold text-shadow-900">
-          Audited concern action
-        </h2>
-        <p class="mt-1 text-sm text-shadow-700">
-          Each change mints one single-use grant for the exact concern action. A failed retry
-          requires a fresh grant; ordinary sign-in never bypasses CogSec policy.
-        </p>
-      </div>
-      <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-shadow-600" for="concern-escalation-reason">
-        Audited reason
-        <textarea
-          id="concern-escalation-reason"
-          bind:value={escalationReason}
-          maxlength="512"
-          rows="2"
-          required
-          disabled={actionBusyId !== '' || pendingAction !== null}
-          placeholder="State why this exact concern change is necessary."
-          class="resize-y rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm normal-case tracking-normal text-shadow-800 disabled:opacity-60"
-        ></textarea>
-      </label>
-    </div>
+    <h2 id="concern-escalation-title" class="font-serif font-semibold text-shadow-900">
+      Protected concern actions
+    </h2>
+    <p class="mt-1 text-sm text-shadow-700">
+      Click an action to provide its mandatory justification. One submission mints and spends
+      a single-use grant for that exact target, then records a content-free notice for the companion.
+    </p>
   </section>
 
   {#if error}
@@ -269,7 +257,7 @@
                 />
                 <select
                   aria-label="Transition status"
-                  disabled={actionBusyId !== ''}
+                  disabled={actionBusyId !== '' || pendingAction !== null}
                   onchange={(event) => {
                     const status = (event.currentTarget as HTMLSelectElement).value;
                     if (!status) return;
@@ -298,7 +286,7 @@
                 </select>
                 <button
                   type="button"
-                  disabled={actionBusyId !== '' || !escalationReason.trim()}
+                  disabled={actionBusyId !== '' || pendingAction !== null}
                   onclick={() => requestAction({
                     key: concern.id,
                     title: 'Resolve this concern?',
@@ -312,7 +300,7 @@
                 </button>
                 <button
                   type="button"
-                  disabled={actionBusyId !== '' || !escalationReason.trim()}
+                  disabled={actionBusyId !== '' || pendingAction !== null}
                   onclick={() => requestAction({
                     key: concern.id,
                     title: 'Suppress this concern?',
@@ -333,15 +321,13 @@
   {/if}
 </div>
 
-<ConfirmationModal
+<ConcernActionEscalationModal
   open={pendingAction !== null}
   title={pendingAction?.title ?? 'Confirm concern action?'}
-  body="This spends one audited grant on only the named CogSec concern mutation. It creates no standing access or policy bypass."
   context={pendingAction?.context ?? ''}
-  confirmLabel="Run exact action"
-  cancelLabel="Keep unchanged"
-  tone="danger"
+  reason={escalationReason}
   busy={actionBusyId !== ''}
+  onReasonChange={(reason) => { escalationReason = reason; }}
   onConfirm={() => void confirmAction()}
-  onCancel={() => { pendingAction = null; }}
+  onCancel={cancelAction}
 />

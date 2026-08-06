@@ -1282,6 +1282,14 @@ export class GatewayServer {
           await dock.outbound.sendMedia(ctx, media);
         },
       },
+      availability: {
+        setAvailability: async state => {
+          const dock = requireDock();
+          return dock.availability
+            ? dock.availability.setAvailability(state)
+            : 'unsupported';
+        },
+      },
     };
   }
 

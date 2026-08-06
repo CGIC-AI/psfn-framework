@@ -62,6 +62,7 @@ import {
   emitTurnPerformance,
   monotonicEpochNowMs,
 } from '../../shared/telemetry/turn-performance.js';
+import type { CompanionProtectedMessageQueuePort } from '../../core/agent/companion-availability.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -78,6 +79,10 @@ interface QueuedDiscordMessage {
   dedupeKey: string | null;
   enqueuedMonotonicAtMs: number;
   retryDelivery?: DiscordDeliveryCheckpoint;
+  completion?: {
+    resolve(): void;
+    reject(error: unknown): void;
+  };
 }
 
 interface RecentHandleMessageResult {
@@ -355,6 +360,8 @@ export interface GatewayMessageHandlersDeps {
   companionAuthorName?: string;
   /** Deterministic clock seam for queue-wait contract tests. */
   nowMonotonicMs?: () => number;
+  /** Durable non-preempting ingress used while protected autonomous work owns availability. */
+  protectedMessageQueue?: CompanionProtectedMessageQueuePort;
 }
 
 export interface RegisteredGatewayMessageHandlers {
@@ -820,18 +827,22 @@ export function registerGatewayMessageHandlers(
           });
           completed = true;
         } catch (err) {
-          await handleDiscordTurnFailure({
-            error: err,
-            channelId: message.channelId,
-            messageId: message.id,
-            checkpoint,
-            failedDeliveries: failedDiscordDeliveries,
-            ports: {
-              discordSend: (channelId, content) => gateway.discordSend(channelId, content),
-              audit: safeguardAuditTrail,
-              log,
-            },
-          });
+          try {
+            await handleDiscordTurnFailure({
+              error: err,
+              channelId: message.channelId,
+              messageId: message.id,
+              checkpoint,
+              failedDeliveries: failedDiscordDeliveries,
+              ports: {
+                discordSend: (channelId, content) => gateway.discordSend(channelId, content),
+                audit: safeguardAuditTrail,
+                log,
+              },
+            });
+          } finally {
+            for (const entry of entries) entry.completion?.reject(err);
+          }
         } finally {
           if (deliveryStartedAt !== null) {
             const deliveryCompletedAt = nowMonotonicMs();
@@ -858,6 +869,9 @@ export function registerGatewayMessageHandlers(
             recent: recentDiscordMessages,
             finishedAt: Date.now(),
           });
+          if (completed) {
+            for (const entry of entries) entry.completion?.resolve();
+          }
         }
       }
     } finally {
@@ -1025,7 +1039,18 @@ export function registerGatewayMessageHandlers(
     }
   });
 
-  gateway.onDiscordMessage(async (message: SubstrateMessage) => {
+  const handleDiscordMessage = async (
+    message: SubstrateMessage,
+    options: { bypassProtectedQueue?: boolean; awaitDelivery?: boolean } = {},
+  ): Promise<void> => {
+    if (!options.bypassProtectedQueue
+      && await deps.protectedMessageQueue?.enqueueIfUnavailable(message)) {
+      log.info('Durably queued Discord message during protected companion time', {
+        channelId: message.channelId,
+        messageId: message.id,
+      });
+      return;
+    }
     const dedupeKey = buildMessageDedupKey('discord', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
@@ -1070,15 +1095,7 @@ export function registerGatewayMessageHandlers(
       message.timestamp = new Date(message.timestamp);
     }
 
-    const attachments = message.attachments ?? [];
     const isObservationOnly = message.routing?.responseMode === 'observe';
-    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
-      channelId: message.channelId,
-      attachmentCount: attachments.length,
-      attachmentTypes: attachments.map((attachment) => attachment.contentType),
-      attachmentNames: attachments.map((attachment) => attachment.name),
-      responseMode: message.routing?.responseMode ?? 'respond',
-    });
 
     if (isObservationOnly) {
       let completed = false;
@@ -1239,23 +1256,53 @@ export function registerGatewayMessageHandlers(
       messageId: message.id,
       error: toErrorMessage(error),
     }));
+    let resolveCompletion: (() => void) | undefined;
+    let rejectCompletion: ((error: unknown) => void) | undefined;
+    const completion = options.awaitDelivery
+      ? new Promise<void>((resolve, reject) => {
+          resolveCompletion = resolve;
+          rejectCompletion = reject;
+        })
+      : undefined;
     discordPromptQueue.push({
       message,
       dedupeKey,
       enqueuedMonotonicAtMs,
       ...(retryDelivery ? { retryDelivery } : {}),
+      ...(resolveCompletion && rejectCompletion
+        ? { completion: { resolve: resolveCompletion, reject: rejectCompletion } }
+        : {}),
     });
     // The pump owns reply delivery, error reporting, and dedupe bookkeeping
     // for everything queued. Notification receipt must not await backend turn
     // work such as memory retrieval or model generation.
     void pumpDiscordQueue().catch((err: unknown) => {
+      rejectCompletion?.(err);
       log.error('Discord message pump failed', {
         channelId: message.channelId,
         messageId: message.id,
         error: toErrorMessage(err),
       });
     });
+    await completion;
+  };
+  gateway.onDiscordMessage(message => {
+    const attachments = message.attachments ?? [];
+    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
+      channelId: message.channelId,
+      attachmentCount: attachments.length,
+      attachmentTypes: attachments.map((attachment) => attachment.contentType),
+      attachmentNames: attachments.map((attachment) => attachment.name),
+      responseMode: message.routing?.responseMode ?? 'respond',
+    });
+    return handleDiscordMessage(message);
   });
+  deps.protectedMessageQueue?.setDeliverer(
+    queued => handleDiscordMessage(queued.message, {
+      bypassProtectedQueue: true,
+      awaitDelivery: true,
+    }),
+  );
 
   // ── Inter-companion channel lane (sprint 10, W6) ──
   // Inbound peer messages run the NORMAL turn pipeline (fatigue, trust,

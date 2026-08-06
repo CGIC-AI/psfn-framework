@@ -91,6 +91,10 @@ import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
+  CompanionAvailabilityRuntime,
+  attachToolAvailability,
+} from '../../core/agent/companion-availability.js';
+import {
   resolveChargeLedgerPath,
   resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
@@ -333,6 +337,48 @@ async function main(): Promise<void> {
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
+  const companionAvailability = new CompanionAvailabilityRuntime({
+    store: persistenceRuntime.companionAvailabilityStore,
+    project: snapshot => gateway.discordSetAvailability(snapshot.state),
+    queueReadBatchSize: schedulerConfig.backgroundWork.supervisor.maxConcurrentSessions,
+    returnContextMaxChars: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
+    onProjectionDegraded: snapshot => {
+      log.warn('Channel does not support companion availability projection', {
+        state: snapshot.state,
+        revision: snapshot.revision,
+      });
+    },
+    onProjectionError: (error, snapshot) => {
+      log.error('Channel availability projection failed; durable state remains authoritative', {
+        state: snapshot.state,
+        revision: snapshot.revision,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onDrainError: (error, queued) => {
+      log.error('Protected message queue drain paused after delivery failure', {
+        channelId: queued.message.channelId,
+        messageId: queued.message.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onDrainRuntimeError: error => {
+      log.error('Protected message queue persistence failure paused draining', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+  await companionAvailability.initialize();
+  const detachToolAvailability = attachToolAvailability({
+    eventBus,
+    runtime: companionAvailability,
+    isLongRunningTool: toolName => toolName === 'analysis_workbench',
+    onError: error => {
+      log.error('Long-running tool availability projection failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
   gateway.onMemoryDeletionProposalSnapshot(async ({ proposalId }) => {
     const proposal = await memoryDeletionProposalStore.getMemoryDeletionProposal(proposalId);
     if (!proposal) throw new Error(`Memory deletion proposal not found: ${proposalId}`);
@@ -678,6 +724,7 @@ async function main(): Promise<void> {
     socialGraphProposalStore,
     socialGraphWatermarkStore,
     sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
+    companionAvailability,
   });
   const {
     runtimeEnablement: icpRuntimeEnablement,
@@ -1345,6 +1392,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      await detachToolAvailability();
       partnerAffectShadowBridge.unsubscribe();
       await icpLocalPolicyAuthority?.close();
       await persistenceRuntime.contactLifecycleRecovery?.stop();
@@ -1355,6 +1403,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
+      await persistenceRuntime.companionAvailabilityStore.close();
     },
     scheduler,
     moduleLoader,
@@ -1655,6 +1704,7 @@ async function main(): Promise<void> {
     ...(egressLeasePhase ? { egressLeasePhase } : {}),
     outboundReplyGuard,
     companionAuthorName: card.data.name,
+    protectedMessageQueue: companionAvailability,
   });
   const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
     registeredGatewayMessageHandlers.icpTargetChannelInitiator,

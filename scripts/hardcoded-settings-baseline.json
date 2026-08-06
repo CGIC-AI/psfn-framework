@@ -6506,17 +6506,17 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L1003",
+      "name": "notifyToolParameters.contact_id.minLength@L982",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L1003; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L982; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L1015",
+      "name": "notifyToolParameters.contact_id.minLength@L994",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L1015; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L994; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",

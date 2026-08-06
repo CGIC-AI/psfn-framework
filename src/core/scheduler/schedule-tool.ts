@@ -481,7 +481,11 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
 }
 
 export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgentTool<ScheduleToolResultDetails> {
-  const parameters = Type.Object({
+  const tool = {
+    name: 'schedule',
+    label: 'schedule',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
+    parameters: Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),
         { description: 'Schedule action. Defaults to list.' },
@@ -564,14 +568,12 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
         inputUsdPerMillionTokens: Type.Optional(Type.Number()),
         outputUsdPerMillionTokens: Type.Optional(Type.Number()),
       })),
-  });
-  type ScheduleToolParams = Static<typeof parameters>;
+    }),
+  };
+  type ScheduleToolParams = Static<typeof tool.parameters>;
 
-  const tool: SubstrateAgentTool<ScheduleToolResultDetails> = {
-    name: 'schedule',
-    label: 'schedule',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
-    parameters,
+  const executableTool: SubstrateAgentTool<ScheduleToolResultDetails> = {
+    ...tool,
     execute: async (
       _toolCallId: string,
       params: ScheduleToolParams = {},
@@ -949,5 +951,8 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
     },
   };
 
-  return tagToolWithReversibility(withCapabilityRequirement(tool, resolveScheduleRequirement), 'irreversible');
+  return tagToolWithReversibility(
+    withCapabilityRequirement(executableTool, resolveScheduleRequirement),
+    'irreversible',
+  );
 }

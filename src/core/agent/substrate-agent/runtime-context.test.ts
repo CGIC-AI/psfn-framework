@@ -353,7 +353,6 @@ function buildMinimalRuntimeContextInput() {
     templateVariables: {},
     modelId: 'test-model',
     contextWindow: 4096,
-    capabilityTier: 'nursery' as const,
     activeToolCounts: {
       core: 0,
       extended: 0,
@@ -644,7 +643,6 @@ describe('runtime subject identity', () => {
       templateVariables,
       modelId: 'test-model',
       contextWindow: 4096,
-      capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
         extended: 0,
@@ -940,7 +938,6 @@ describe('runtime subject identity', () => {
       now: new Date('2026-03-17T12:00:00Z'),
       modelId: 'test-model',
       contextWindow: 4096,
-      capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
         extended: 0,
@@ -1667,7 +1664,6 @@ describe('runtime subject identity', () => {
       },
       modelId: 'test-model',
       contextWindow: 4096,
-      capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
         extended: 0,

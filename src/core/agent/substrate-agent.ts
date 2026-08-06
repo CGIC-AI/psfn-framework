@@ -80,6 +80,7 @@ import {
 } from '../cogsec/intake/sink-gates.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -813,7 +814,7 @@ export class SubstrateAgent {
       getScratchpadProvider: () => this.scratchpadProvider,
       getContactStore: () => this.contactStore,
       contactTrackingGate: this.contactTrackingGate,
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      snapshotCapabilityGrant: () => this.snapshotCapabilityGrant(),
       log,
     });
     // Queued follow-up ingress + completion-notice routing (emh3p.2).
@@ -897,6 +898,24 @@ export class SubstrateAgent {
       getGrantedTokens: () => grantedTokens,
       has: (token: CapabilityToken) => grantedTokens.has(token),
     };
+  }
+
+  /**
+   * Capture the tier and effective grant once for prompt assembly. The mutable
+   * disk-backed runtime uses its authoritative atomic snapshot; the other
+   * access variants are immutable for their lifetime, so copying their one
+   * resolved grant preserves the same prompt/tool-gate semantics.
+   */
+  private snapshotCapabilityGrant(): Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'> {
+    if (!this.explicitCapabilityAccess && this.capabilityRuntime) {
+      return this.capabilityRuntime.snapshotOwnerGrant();
+    }
+
+    const access = this.resolveCapabilityAccess();
+    return Object.freeze({
+      tier: access.getTier(),
+      grantedTokens: Object.freeze([...access.getGrantedTokens()]),
+    });
   }
 
   /**

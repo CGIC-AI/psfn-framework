@@ -12,7 +12,7 @@ describe('ConfirmationQueue', () => {
     const params: Record<string, unknown> = {
       observedAt,
       optional: undefined,
-      rows: [{ label: 'kept' }],
+      rows: [undefined, { label: 'kept' }],
       nested: { enabled: true },
     };
     const queue = new ConfirmationQueue({ now: () => 1, idFactory: () => 'native-clone' });
@@ -28,17 +28,45 @@ describe('ConfirmationQueue', () => {
     expect(entry.params.observedAt).toBeInstanceOf(Date);
     expect(entry.params.observedAt).not.toBe(observedAt);
     expect(Object.hasOwn(entry.params, 'optional')).toBe(true);
-    expect(entry.params.rows).toEqual([{ label: 'kept' }]);
+    expect(entry.params.rows).toEqual([undefined, { label: 'kept' }]);
     expect(entry.params.rows).not.toBe(params.rows);
     expect(entry.params.nested).not.toBe(params.nested);
 
-    expect(() => queue.enqueue({
-      method: 'fs.write',
-      action: 'write',
-      scope: '/tmp/unsupported',
-      params: { callback: () => undefined },
-      companionReason: 'Reject unsupported native clone values',
-    }, async () => undefined)).toThrow();
+    const wireProjection = JSON.parse(JSON.stringify({ entries: queue.listPending() })) as {
+      entries: Array<{ params: Record<string, unknown> }>;
+    };
+    expect(wireProjection.entries[0]?.params).toEqual({
+      observedAt: '2026-08-06T12:00:00.000Z',
+      rows: [null, { label: 'kept' }],
+      nested: { enabled: true },
+    });
+  });
+
+  it('rejects wire-unrepresentable params before queue admission', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const unsupported = [
+      { label: 'cyclic', params: cyclic },
+      { label: 'BigInt', params: { value: 1n } },
+      { label: 'function', params: { callback: () => undefined } },
+      { label: 'Map', params: { values: new Map([['key', 'value']]) } },
+      { label: 'non-finite number', params: { value: Number.NaN } },
+    ];
+
+    for (const testCase of unsupported) {
+      const queue = new ConfirmationQueue({
+        now: () => 1,
+        idFactory: () => `unsupported-${testCase.label}`,
+      });
+      expect(() => queue.enqueue({
+        method: 'fs.write',
+        action: 'write',
+        scope: '/tmp/unsupported',
+        params: testCase.params,
+        companionReason: `Reject unsupported ${testCase.label} values`,
+      }, async () => undefined), testCase.label).toThrow();
+      expect(queue.listPending(), testCase.label).toEqual([]);
+    }
   });
 
   it('enqueues pending actions with timestamp and expiry metadata', () => {

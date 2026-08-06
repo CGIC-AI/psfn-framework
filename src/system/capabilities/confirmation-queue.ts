@@ -221,7 +221,68 @@ function cloneApprovalOwner(input: ConfirmationApprovalOwner): ConfirmationAppro
   };
 }
 
+function throwUnrepresentableConfirmationParam(path: string, detail: string): never {
+  throw new TypeError(`Confirmation params ${path} ${detail}`);
+}
+
+function assertConfirmationParamWireRepresentable(
+  value: unknown,
+  path: string,
+  ancestors: WeakSet<object>,
+): void {
+  if (
+    value === null
+    || value === undefined
+    || typeof value === 'string'
+    || typeof value === 'boolean'
+  ) {
+    return;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throwUnrepresentableConfirmationParam(path, 'must be a finite JSON number');
+    }
+    return;
+  }
+  if (typeof value !== 'object') {
+    throwUnrepresentableConfirmationParam(path, 'is not JSON wire-representable');
+  }
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) {
+      throwUnrepresentableConfirmationParam(path, 'must be a valid Date');
+    }
+    return;
+  }
+  if (ancestors.has(value)) {
+    throwUnrepresentableConfirmationParam(path, 'must not contain a cycle');
+  }
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        assertConfirmationParamWireRepresentable(value[index], `${path}[${String(index)}]`, ancestors);
+      }
+      return;
+    }
+
+    const prototype = Object.getPrototypeOf(value) as object | null;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throwUnrepresentableConfirmationParam(path, 'must be a plain object, array, or Date');
+    }
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throwUnrepresentableConfirmationParam(path, 'must not contain symbol keys');
+    }
+    for (const [key, child] of Object.entries(value)) {
+      assertConfirmationParamWireRepresentable(child, `${path}.${key}`, ancestors);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function cloneConfirmationParams(input: Record<string, unknown>): Record<string, unknown> {
+  assertConfirmationParamWireRepresentable(input, 'params', new WeakSet<object>());
   return structuredClone(input);
 }
 

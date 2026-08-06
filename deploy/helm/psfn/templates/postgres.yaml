@@ -21,6 +21,130 @@ data:
       WHERE datname = '{{ $restoreVerifyDatabase | replace "'" "''" }}'
     )
     \gexec
+    \connect {{ $restoreVerifyDatabase | quote }}
+    CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION {{ $restoreVerifyOwner | quote }};
+    ALTER SCHEMA extensions OWNER TO {{ $restoreVerifyOwner | quote }};
+    CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
+    ALTER EXTENSION vector SET SCHEMA extensions;
+    REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres-restore-verify
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres-restore-verify
+  annotations:
+    # docker-entrypoint-initdb.d only covers an empty PGDATA. This hook replays
+    # the same idempotent SQL on install and every upgrade so an existing PVC
+    # receives new restore-verification prerequisites before Helm succeeds.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "postgres-restore-verify") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: provision
+          image: {{ include "psfn.postgresImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              until pg_isready --host="$POSTGRES_HOST" --port="$POSTGRES_PORT" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"; do
+                sleep 2
+              done
+              psql --no-password --set=ON_ERROR_STOP=1 \
+                --host="$POSTGRES_HOST" \
+                --port="$POSTGRES_PORT" \
+                --username="$POSTGRES_USER" \
+                --dbname="$POSTGRES_DB" \
+                --file=/docker-entrypoint-initdb.d/00-pgvector.sql
+              psql --no-password --set=ON_ERROR_STOP=1 \
+                --host="$POSTGRES_HOST" \
+                --port="$POSTGRES_PORT" \
+                --username="$POSTGRES_USER" \
+                --dbname="$POSTGRES_DB" \
+                --tuples-only \
+                --no-align \
+                --command="
+                  SELECT format(
+                    'GRANT USAGE ON SCHEMA extensions TO %I;',
+                    grantee.rolname
+                  )
+                  FROM pg_namespace AS extension_schema
+                  JOIN pg_roles AS schema_owner
+                    ON schema_owner.oid = extension_schema.nspowner
+                  CROSS JOIN LATERAL aclexplode(
+                    COALESCE(
+                      extension_schema.nspacl,
+                      acldefault('n', extension_schema.nspowner)
+                    )
+                  ) AS privilege
+                  JOIN pg_roles AS grantee ON grantee.oid = privilege.grantee
+                  WHERE extension_schema.nspname = 'extensions'
+                    AND privilege.privilege_type = 'USAGE'
+                    AND grantee.oid <> schema_owner.oid
+                  ORDER BY grantee.rolname
+                " > /scratch/extension-usage-grants.sql
+              psql --no-password --set=ON_ERROR_STOP=1 \
+                --host="$POSTGRES_HOST" \
+                --port="$POSTGRES_PORT" \
+                --username="$POSTGRES_USER" \
+                --dbname="$POSTGRES_RESTORE_VERIFY_DB" \
+                --file=/scratch/extension-usage-grants.sql
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: POSTGRES_HOST
+              value: {{ include "psfn.postgresServiceName" . | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.ports.postgres | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_RESTORE_VERIFY_DB
+              value: {{ $restoreVerifyDatabase | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.postgresSecretName" . }}
+                  key: {{ .Values.postgres.auth.keys.password }}
+            - name: PGCONNECT_TIMEOUT
+              value: "5"
+          resources:
+            {{- toYaml .Values.postgres.primary.resources | nindent 12 }}
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/00-pgvector.sql
+              subPath: 00-pgvector.sql
+              readOnly: true
+            - name: scratch
+              mountPath: /scratch
+      volumes:
+        - name: init-sql
+          configMap:
+            name: {{ include "psfn.fullname" . }}-postgres-init
+        - name: scratch
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

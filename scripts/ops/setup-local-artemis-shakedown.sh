@@ -1186,25 +1186,26 @@ migrate_missing_owner_files() {
 }
 
 provision_fleet_auth_database_roles() {
+  local postgres_pod="${RELEASE}-postgres-0"
   if ((RETAINED_FLEET_AUTH_OWNER)); then
     echo "    retaining existing fleet-auth database roles and credentials"
-    return
+  else
+    for password in \
+      "$FLEET_AUTH_RUNTIME_PASSWORD" \
+      "$FLEET_AUTH_MIGRATION_PASSWORD" \
+      "$FLEET_AUTH_BACKUP_PASSWORD" \
+      "$COMPANION_DATABASE_PASSWORD" \
+      "$SHARED_SCHEMA_MIGRATION_PASSWORD"; do
+      if [[ ! "$password" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "generated fleet-auth database password is not canonical 32-byte hex" >&2
+        exit 1
+      fi
+    done
   fi
-  local postgres_pod="${RELEASE}-postgres-0"
-  for password in \
-    "$FLEET_AUTH_RUNTIME_PASSWORD" \
-    "$FLEET_AUTH_MIGRATION_PASSWORD" \
-    "$FLEET_AUTH_BACKUP_PASSWORD" \
-    "$COMPANION_DATABASE_PASSWORD" \
-    "$SHARED_SCHEMA_MIGRATION_PASSWORD"; do
-    if [[ ! "$password" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "generated fleet-auth database password is not canonical 32-byte hex" >&2
-      exit 1
-    fi
-  done
   kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${postgres_pod}" --timeout=180s
   {
-    cat <<'SQL'
+    if ((! RETAINED_FLEET_AUTH_OWNER)); then
+      cat <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN NOINHERIT', role_name)
 FROM unnest(ARRAY[
   'fleet_auth_runtime',
@@ -1220,30 +1221,38 @@ WHERE NOT EXISTS (
 )
 \gexec
 SQL
-    printf "ALTER ROLE fleet_auth_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
-      "$FLEET_AUTH_RUNTIME_PASSWORD"
-    printf "ALTER ROLE fleet_auth_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
-      "$FLEET_AUTH_MIGRATION_PASSWORD"
-    printf "ALTER ROLE fleet_auth_backup WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
-      "$FLEET_AUTH_BACKUP_PASSWORD"
-    printf "ALTER ROLE companion_default_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
-      "$COMPANION_DATABASE_PASSWORD"
-    printf "ALTER ROLE shared_schema_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
-      "$SHARED_SCHEMA_MIGRATION_PASSWORD"
+      printf "ALTER ROLE fleet_auth_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+        "$FLEET_AUTH_RUNTIME_PASSWORD"
+      printf "ALTER ROLE fleet_auth_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+        "$FLEET_AUTH_MIGRATION_PASSWORD"
+      printf "ALTER ROLE fleet_auth_backup WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+        "$FLEET_AUTH_BACKUP_PASSWORD"
+      printf "ALTER ROLE companion_default_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+        "$COMPANION_DATABASE_PASSWORD"
+      printf "ALTER ROLE shared_schema_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+        "$SHARED_SCHEMA_MIGRATION_PASSWORD"
+    fi
     cat <<'SQL'
 GRANT CONNECT ON DATABASE psfn TO fleet_auth_runtime, fleet_auth_migration, fleet_auth_backup, companion_default_runtime, shared_schema_migration;
 GRANT CREATE ON DATABASE psfn TO fleet_auth_migration, companion_default_runtime, shared_schema_migration;
-GRANT CONNECT ON DATABASE psfn_restore_verify TO fleet_auth_migration, fleet_auth_backup;
-GRANT CREATE ON DATABASE psfn_restore_verify TO fleet_auth_migration;
+GRANT CONNECT, CREATE ON DATABASE psfn_restore_verify TO fleet_auth_migration, fleet_auth_backup, companion_default_runtime, shared_schema_migration;
 \connect psfn
 CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION psfn;
 ALTER EXTENSION vector SET SCHEMA extensions;
 REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
-GRANT USAGE ON SCHEMA extensions TO companion_default_runtime, shared_schema_migration;
+GRANT USAGE ON SCHEMA extensions TO fleet_auth_backup, companion_default_runtime, shared_schema_migration;
 CREATE SCHEMA companion_default AUTHORIZATION companion_default_runtime;
 REVOKE ALL ON SCHEMA companion_default FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA companion_default TO companion_default_runtime;
 ALTER ROLE companion_default_runtime IN DATABASE psfn SET search_path TO companion_default, extensions;
+\connect psfn_restore_verify
+CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION psfn;
+ALTER SCHEMA extensions OWNER TO psfn;
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
+ALTER EXTENSION vector SET SCHEMA extensions;
+REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+GRANT USAGE ON SCHEMA extensions TO fleet_auth_backup, companion_default_runtime, shared_schema_migration;
+ALTER ROLE companion_default_runtime IN DATABASE psfn_restore_verify SET search_path TO companion_default, extensions;
 SQL
   } | kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
     psql --set=ON_ERROR_STOP=1 --username=psfn --dbname=postgres

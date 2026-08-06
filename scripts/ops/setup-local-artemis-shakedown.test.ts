@@ -380,12 +380,99 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(script).toContain('\\connect psfn\nCREATE SCHEMA IF NOT EXISTS extensions');
     expect(script).toContain('ALTER EXTENSION vector SET SCHEMA extensions');
     expect(script).toContain('CREATE SCHEMA companion_default AUTHORIZATION companion_default_runtime');
+    expect(script).toContain(
+      'GRANT CONNECT, CREATE ON DATABASE psfn_restore_verify TO fleet_auth_migration, fleet_auth_backup, companion_default_runtime, shared_schema_migration',
+    );
+    expect(script).toContain('\\connect psfn_restore_verify');
+    expect(script).toContain('CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION psfn');
+    expect(script).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions');
+    expect(script).toContain('ALTER SCHEMA extensions OWNER TO psfn');
+    expect(script).toContain('ALTER EXTENSION vector SET SCHEMA extensions');
+    expect(script).toContain('REVOKE ALL ON SCHEMA extensions FROM PUBLIC');
+    expect(script).toContain(
+      'GRANT USAGE ON SCHEMA extensions TO fleet_auth_backup, companion_default_runtime, shared_schema_migration',
+    );
+    expect(script).toContain(
+      'ALTER ROLE companion_default_runtime IN DATABASE psfn_restore_verify SET search_path TO companion_default, extensions',
+    );
+    const provisioningStart = script.indexOf('provision_fleet_auth_database_roles() {');
+    const provisioningEnd = script.indexOf('\n}\n\nstart_port_forward()', provisioningStart);
+    expect(provisioningStart).toBeGreaterThanOrEqual(0);
+    expect(provisioningEnd).toBeGreaterThan(provisioningStart);
+    expect(script.slice(provisioningStart, provisioningEnd)).not.toMatch(
+      /if \(\(RETAINED_FLEET_AUTH_OWNER\)\); then[\s\S]*?\breturn\b/u,
+    );
     expect(script).not.toMatch(/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public/i);
     expect(script).toContain(
       'provision_fleet_auth_database_roles\nreplace_postgres_runtime_database_url\ncreate_local_app_secret',
     );
     expect(script).toContain('kind: Certificate');
     expect(script).not.toContain('PSFN_MULTI_COMPANION');
+  });
+
+  it('repairs restore-verify prerequisites without rotating retained role credentials', () => {
+    const root = temporaryRoot();
+    const binRoot = join(root, 'bin');
+    const capturedSql = join(root, 'postgres-provisioning.sql');
+    mkdirSync(binRoot);
+
+    const script = readFileSync(scriptPath, 'utf8');
+    const functionStart = script.indexOf('provision_fleet_auth_database_roles() {');
+    const functionEnd = script.indexOf('\n}\n\nstart_port_forward()', functionStart);
+    expect(functionStart).toBeGreaterThanOrEqual(0);
+    expect(functionEnd).toBeGreaterThan(functionStart);
+    const functionSource = script.slice(functionStart, functionEnd + 2);
+
+    const kubectl = join(binRoot, 'kubectl');
+    writeFileSync(kubectl, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" wait "* ]]; then
+  exit 0
+fi
+if [[ " $* " == *" exec -i "* ]]; then
+  cat >"$POSTGRES_PROVISIONING_CAPTURE"
+  exit 0
+fi
+echo "unexpected kubectl arguments: $*" >&2
+exit 64
+`);
+    chmodSync(kubectl, 0o755);
+
+    const harness = join(root, 'run-retained-postgres-provisioning.sh');
+    writeFileSync(harness, `#!/usr/bin/env bash
+set -euo pipefail
+NAMESPACE=psfn-test
+RELEASE=psfn
+RETAINED_FLEET_AUTH_OWNER=1
+FLEET_AUTH_RUNTIME_PASSWORD=
+FLEET_AUTH_MIGRATION_PASSWORD=
+FLEET_AUTH_BACKUP_PASSWORD=
+COMPANION_DATABASE_PASSWORD=
+SHARED_SCHEMA_MIGRATION_PASSWORD=
+${functionSource}
+provision_fleet_auth_database_roles
+`);
+    chmodSync(harness, 0o755);
+
+    const result = spawnSync('bash', [harness], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binRoot}:${process.env.PATH}`,
+        POSTGRES_PROVISIONING_CAPTURE: capturedSql,
+      },
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('retaining existing fleet-auth database roles and credentials');
+    const sql = readFileSync(capturedSql, 'utf8');
+    expect(sql).not.toContain('PASSWORD');
+    expect(sql).toContain('GRANT CONNECT, CREATE ON DATABASE psfn_restore_verify');
+    expect(sql).toContain('\\connect psfn_restore_verify');
+    expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions');
+    expect(sql).toContain(
+      'GRANT USAGE ON SCHEMA extensions TO fleet_auth_backup, companion_default_runtime, shared_schema_migration',
+    );
   });
 
   it('builds the app Secret without mixing incompatible kubectl input modes', () => {

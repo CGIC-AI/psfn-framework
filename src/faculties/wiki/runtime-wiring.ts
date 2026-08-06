@@ -234,11 +234,10 @@ export async function wireWikiRuntime(
 
   const store = new WikiStore(workspacePath, projection
     ? {
-      onUpsert: (document: WikiDocument) => {
-        void projection!.syncDocument(document).catch((error: unknown) => {
-          log.debug('Wiki projection sync hook failed', { documentId: document.id, error: String(error) });
-        });
-      },
+      // Return the promise so WikiStore's canonical hook boundary reports any
+      // unexpected rejection through the Garden-visible diagnostic log ring.
+      // Expected projection failures still emit wiki.projection.sync outcomes.
+      onUpsert: (document: WikiDocument) => projection!.syncDocument(document),
     }
     : {});
 

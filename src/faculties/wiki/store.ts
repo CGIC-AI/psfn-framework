@@ -20,6 +20,8 @@ import {
   type SensitivityLevel,
 } from '../../system/trust/types.js';
 import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import { sanitizeDiagnosticText } from '../../shared/diagnostics/redaction.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   isPersonalScope,
   normalizeWikiScope,
@@ -40,6 +42,8 @@ import {
   type WikiSourceClass,
   type WikiStorePort,
 } from './types.js';
+
+const log = createComponentLogger('WikiStore');
 
 const WIKI_DOCUMENTS_DIRNAME = 'documents';
 const WIKI_METADATA_DIRNAME = 'metadata';
@@ -69,7 +73,7 @@ interface WikiStoreOptions {
    * (projection failures fail closed for search, never block wiki writes). It
    * tolerates concurrent writers because it only projects the committed doc.
    */
-  onUpsert?: (document: WikiDocument) => void;
+  onUpsert?: (document: WikiDocument) => void | Promise<unknown>;
 }
 
 function toPosix(path: string): string {
@@ -332,7 +336,7 @@ export class WikiDocumentStore {
   private readonly documentsDir: string;
   private readonly metadataDir: string;
   private readonly now: () => Date;
-  private readonly onUpsert?: (document: WikiDocument) => void;
+  private readonly onUpsert?: (document: WikiDocument) => void | Promise<unknown>;
   private readonly writeGuard: WikiScopeWriteGuard;
 
   constructor(wikiRoot: string, config: WikiDocumentStoreConfig) {
@@ -437,13 +441,18 @@ export class WikiDocumentStore {
     writeJsonAtomic(this.metadataPath(id), metadata);
     const document: WikiDocument = { ...metadata, body };
     if (this.onUpsert) {
-      // Projection is a best-effort mirror: never let a projection error escape
-      // into the write path. The canonical workspace document is already
-      // committed above.
+      // The canonical workspace document is already durable and is the source
+      // of truth. Rejecting it now would falsely report a failed write and make
+      // retries mutate its version, so this rebuildable search mirror remains
+      // fail-open relative to the write. Hook failures are nevertheless loud:
+      // WARN records feed Garden runtime diagnostics without wiki content.
       try {
-        this.onUpsert(document);
-      } catch {
-        // Fail closed for search only; the write itself has succeeded.
+        const result = this.onUpsert(document);
+        void Promise.resolve(result).catch((error: unknown) => {
+          this.reportSearchProjectionFailure(document, error);
+        });
+      } catch (error) {
+        this.reportSearchProjectionFailure(document, error);
       }
     }
     return document;
@@ -481,6 +490,18 @@ export class WikiDocumentStore {
   private metadataFromDocument(document: WikiDocument): WikiDocumentMetadata {
     const { body: _body, ...metadata } = document;
     return metadata;
+  }
+
+  private reportSearchProjectionFailure(document: WikiDocument, error: unknown): void {
+    log.warn(
+      'Wiki search projection hook failed; canonical write retained and semantic search may be stale',
+      {
+        digest: document.bodySha256,
+        error: sanitizeDiagnosticText(error),
+        phase: 'search_projection_hook',
+        status: 'failed',
+      },
+    );
   }
 
   private ensureDirs(): void {

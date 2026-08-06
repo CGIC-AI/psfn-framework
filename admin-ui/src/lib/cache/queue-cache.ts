@@ -3,6 +3,17 @@ import type { AdminConfirmationsData } from '$lib/types';
 import type { ContactApprovalListData } from '$lib/api/endpoints/contact-approvals';
 import type { GraphProposalListData } from '$lib/api/endpoints/graph-proposals';
 import type { IntakeQuarantineListData } from '$lib/api/endpoints/intake';
+import {
+  INTAKE_L1_RULE_ID_PATTERN,
+  INTAKE_L1_RULE_MATCH_KINDS,
+  INTAKE_L1_RULE_MATCH_TOTAL_MAX,
+  INTAKE_L1_SCAN_MAX_CHARS,
+  INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+  MAX_DECISION_RULE_MATCHES,
+  hasUnsafeIntakeRuleMatchExcerptCharacters,
+  hasUniqueIntakeRuleMatchRuleIds,
+  type IntakeL1RuleMatchProvenance,
+} from '../../../../src/shared/contracts/intake-rule-match.js';
 import { getGardenCacheStorage } from './indexeddb';
 import {
   LocalFirstResource,
@@ -31,11 +42,13 @@ export function createQueuePageCache<T>(options: {
   key: string;
   path: string;
   validate(value: unknown): value is T;
+  normalize?(value: unknown): unknown;
 }): QueuePageCache<T> {
   const resource = new LocalFirstResource({
     key: `queue:${options.key}`,
     storage: getGardenCacheStorage(),
     validate: options.validate,
+    ...(options.normalize ? { normalize: options.normalize } : {}),
     fetch: async (request): Promise<ConditionalFetchResponse> => {
       const response = await apiGetConditional(
         options.path,
@@ -164,6 +177,89 @@ function isOperatorDecision(value: unknown): boolean {
   );
 }
 
+function isRuleMatch(value: unknown): value is IntakeL1RuleMatchProvenance {
+  return isRecord(value)
+    && Object.keys(value).every(key => (
+      key === 'ruleId'
+      || key === 'kind'
+      || key === 'startOffset'
+      || key === 'endOffset'
+      || key === 'excerpt'
+    ))
+    && typeof value.ruleId === 'string'
+    && INTAKE_L1_RULE_ID_PATTERN.test(value.ruleId)
+    && typeof value.kind === 'string'
+    && (INTAKE_L1_RULE_MATCH_KINDS as readonly string[]).includes(value.kind)
+    && isNonNegativeInteger(value.startOffset)
+    && isNonNegativeInteger(value.endOffset)
+    && value.endOffset > value.startOffset
+    && value.endOffset <= INTAKE_L1_SCAN_MAX_CHARS
+    && typeof value.excerpt === 'string'
+    && value.excerpt.length > 0
+    && value.excerpt.length <= INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS
+    && !hasUnsafeIntakeRuleMatchExcerptCharacters(value.excerpt);
+}
+
+function isOptionalRuleMatches(value: unknown): boolean {
+  return value === undefined || (
+    Array.isArray(value)
+    && value.length <= MAX_DECISION_RULE_MATCHES
+    && value.every(isRuleMatch)
+    && hasUniqueIntakeRuleMatchRuleIds(value)
+  );
+}
+
+function isOptionalRuleMatchSummary(value: Record<string, unknown>): boolean {
+  const hasTotalCount = value.ruleMatchTotalCount !== undefined;
+  const hasTruncated = value.ruleMatchesTruncated !== undefined;
+  if (!hasTotalCount && !hasTruncated) return true;
+  if (!hasTotalCount || !hasTruncated || !Array.isArray(value.ruleMatches)) return false;
+  const storedCount = value.ruleMatches.length;
+  return isNonNegativeInteger(value.ruleMatchTotalCount)
+    && value.ruleMatchTotalCount >= storedCount
+    && value.ruleMatchTotalCount <= INTAKE_L1_RULE_MATCH_TOTAL_MAX
+    && typeof value.ruleMatchesTruncated === 'boolean'
+    && value.ruleMatchesTruncated === (value.ruleMatchTotalCount > storedCount);
+}
+
+const RULE_MATCH_PROVENANCE_KEYS = [
+  'ruleMatches',
+  'ruleMatchTotalCount',
+  'ruleMatchesTruncated',
+  'ruleMatchProvenanceUnavailable',
+] as const;
+
+/**
+ * Isolate only malformed optional L1 provenance. Other malformed queue data
+ * still rejects the complete response, while this item remains visible and
+ * release-disabled without retaining any untrusted evidence bytes.
+ */
+export function normalizeIntakeQuarantineListData(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.items)) return value;
+  let changed = false;
+  const items = value.items.map((candidate) => {
+    if (!isRecord(candidate)) return candidate;
+    const carriesProvenance = RULE_MATCH_PROVENANCE_KEYS.some((key) => (
+      Object.prototype.hasOwnProperty.call(candidate, key)
+    ));
+    if (!carriesProvenance) return candidate;
+    const markerValid = candidate.ruleMatchProvenanceUnavailable === undefined
+      || typeof candidate.ruleMatchProvenanceUnavailable === 'boolean';
+    if (isOptionalRuleMatches(candidate.ruleMatches)
+      && isOptionalRuleMatchSummary(candidate)
+      && markerValid) return candidate;
+    changed = true;
+    return {
+      ...candidate,
+      ruleMatches: [],
+      ruleMatchTotalCount: 0,
+      ruleMatchesTruncated: false,
+      ruleMatchProvenanceUnavailable: true,
+    };
+  });
+  return changed ? { ...value, items } : value;
+}
+
 function isIntakeQuarantineItem(value: unknown): boolean {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -177,6 +273,10 @@ function isIntakeQuarantineItem(value: unknown): boolean {
     && isStringArray(value.riskLabels)
     && isNumberRecord(value.scores)
     && isOptionalString(value.screeningDecisionReason)
+    && isOptionalRuleMatches(value.ruleMatches)
+    && isOptionalRuleMatchSummary(value)
+    && (value.ruleMatchProvenanceUnavailable === undefined
+      || typeof value.ruleMatchProvenanceUnavailable === 'boolean')
     && typeof value.heldAt === 'string'
     && typeof value.expiresAt === 'string'
     && isNonNegativeInteger(value.ttlRemainingMs)

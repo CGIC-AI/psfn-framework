@@ -40,6 +40,8 @@ interface LocalFirstResourceOptions<T> {
   key: string;
   storage: GardenCacheStorage;
   validate(value: unknown): value is T;
+  /** Fail-closed boundary normalization before validation and persistence. */
+  normalize?(value: unknown): unknown;
   fetch(request: ConditionalFetchRequest): Promise<ConditionalFetchResponse>;
   cursor?(data: T): string | null;
   merge?(cached: T, fresh: T, cursor: string | null): LocalFirstMergeResult<T>;
@@ -72,14 +74,22 @@ export class LocalFirstResource<T> {
       || !nonEmptyString(raw.etag)
       || typeof raw.savedAt !== 'number'
       || !Number.isFinite(raw.savedAt)
-      || !(raw.cursor === null || typeof raw.cursor === 'string')
-      || !this.options.validate(raw.data)) {
+      || !(raw.cursor === null || typeof raw.cursor === 'string')) {
       await this.options.storage.remove(key);
       this.assertScope(companionScope);
       return null;
     }
+    const normalizedData = this.normalize(raw.data);
+    if (!this.options.validate(normalizedData)) {
+      await this.options.storage.remove(key);
+      this.assertScope(companionScope);
+      return null;
+    }
+    if (normalizedData !== raw.data) {
+      await this.write(companionScope, normalizedData, raw.etag, raw.cursor);
+    }
     return {
-      data: raw.data,
+      data: normalizedData,
       etag: raw.etag,
       cursor: raw.cursor,
       savedAt: raw.savedAt,
@@ -152,14 +162,15 @@ export class LocalFirstResource<T> {
       if (merged.kind === 'stale_cursor') {
         return await this.fullRefetch(companionScope);
       }
-      if (!this.options.validate(merged.data)) {
+      const normalizedMerged = this.normalize(merged.data);
+      if (!this.options.validate(normalizedMerged)) {
         throw new Error(`Garden cache ${this.options.key} produced an invalid delta merge`);
       }
       const cursor = merged.cursor === undefined
-        ? this.options.cursor?.(merged.data) ?? null
+        ? this.options.cursor?.(normalizedMerged) ?? null
         : merged.cursor;
-      await this.write(companionScope, merged.data, fresh.etag, cursor);
-      return { data: merged.data, source: 'network', etag: fresh.etag, cursor };
+      await this.write(companionScope, normalizedMerged, fresh.etag, cursor);
+      return { data: normalizedMerged, source: 'network', etag: fresh.etag, cursor };
     }
 
     const cursor = this.options.cursor?.(fresh.data) ?? null;
@@ -185,10 +196,15 @@ export class LocalFirstResource<T> {
     if (!nonEmptyString(response.etag)) {
       throw new Error(`Garden cache ${this.options.key} requires an ETag on refreshed data`);
     }
-    if (!this.options.validate(response.data)) {
+    const normalizedData = this.normalize(response.data);
+    if (!this.options.validate(normalizedData)) {
       throw new Error(`Garden cache ${this.options.key} rejected malformed server data`);
     }
-    return { data: response.data, etag: response.etag };
+    return { data: normalizedData, etag: response.etag };
+  }
+
+  private normalize(value: unknown): unknown {
+    return this.options.normalize?.(value) ?? value;
   }
 
   private async write(

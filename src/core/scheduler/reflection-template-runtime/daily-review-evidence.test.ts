@@ -1,6 +1,16 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
+import { SessionStore } from '../../../persistence/sessions/store.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
+import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
+import { createIntakeSinkGate } from '../../cogsec/intake/sink-gates.js';
+import { buildSessionMetadataWithIntakeScreening } from '../../session/intake-screening-metadata.js';
+import { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import {
   collectDailyReviewEvidence,
@@ -9,11 +19,37 @@ import {
 
 const NOW_MS = Date.parse('2026-08-04T10:00:00.000Z');
 const WINDOW_MS = 24 * 60 * 60 * 1000;
+const DENIED_INTAKE_SENTINEL = 'HOSTILE_DENIED_DAILY_EVIDENCE_SENTINEL';
+const MALFORMED_INTAKE_SENTINEL = 'HOSTILE_MALFORMED_DAILY_EVIDENCE_SENTINEL';
 const SCOPE: DailyReviewEvidenceScope = {
   kind: 'contact',
   sessionId: 'discord:primary',
   canonicalContactId: 'contact-1',
 };
+
+function createEnforceIntakeSinkGate() {
+  const seed = JSON.parse(
+    readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  return createIntakeSinkGate({
+    policy: validateIntakePolicy(
+      { ...seed, mode: 'enforce' },
+      'intake-policy.daily-review-evidence-test',
+    ),
+    actor: 'test:daily-review-evidence-sink-gate',
+  });
+}
+
+function quarantinedIntakeSnapshot(): IntakeEnvelopeSnapshot {
+  return {
+    envelopeId: 'daily-review-hostile-envelope',
+    sourceClass: 'document',
+    sourceRiskTier: 'untrusted',
+    state: 'quarantined',
+    riskLabels: ['injection/override_attempt'],
+    subject: { kind: 'body' },
+  };
+}
 
 function sessionEntry(input: Partial<SessionEntry> & Pick<SessionEntry, 'id' | 'content'>): SessionEntry {
   return {
@@ -141,6 +177,83 @@ describe('collectDailyReviewEvidence', () => {
         conversationId: 'discord:primary',
       },
     }));
+  });
+
+  it('applies the canonical enforce-mode intake sink gate before session evidence reaches a reflection', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'daily-review-intake-gate-'));
+    try {
+      const sessionStore = new SessionStore(dataDir);
+      const sessionManager = new SessionManager(sessionStore, {} as never);
+      sessionManager.intakeSinkGate = createEnforceIntakeSinkGate();
+      const safeEntryId = sessionStore.append({
+        channelId: SCOPE.sessionId,
+        role: 'user',
+        content: 'Safe same-day conversation evidence',
+        timestamp: NOW_MS - 3_000,
+      });
+      const deniedEntryId = sessionStore.append({
+        channelId: SCOPE.sessionId,
+        role: 'user',
+        content: DENIED_INTAKE_SENTINEL,
+        timestamp: NOW_MS - 2_000,
+        metadata: buildSessionMetadataWithIntakeScreening(undefined, {
+          mode: 'shadow',
+          withheld: false,
+          envelopes: [quarantinedIntakeSnapshot()],
+        }),
+      });
+      const malformedEntryId = sessionStore.append({
+        channelId: SCOPE.sessionId,
+        role: 'user',
+        content: MALFORMED_INTAKE_SENTINEL,
+        timestamp: NOW_MS - 1_000,
+        metadata: '{"intakeScreening":{"schemaVersion":999}}',
+      });
+
+      const window = sessionManager.getConversationEvidenceWindow(SCOPE.sessionId, {
+        fromMs: NOW_MS - WINDOW_MS,
+        toMs: NOW_MS,
+        limit: 50,
+      });
+      expect(window.entries.map(entry => entry.content)).toEqual([
+        'Safe same-day conversation evidence',
+        INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+        INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+      ]);
+      expect(window.promptAssemblyGate.withheldEntryIds).toEqual([
+        deniedEntryId,
+        malformedEntryId,
+      ]);
+
+      const result = await collectDailyReviewEvidence({
+        nowMs: NOW_MS,
+        windowMs: WINDOW_MS,
+        scope: SCOPE,
+        sessionManager,
+        episodicStore: { searchByTime: async () => [] },
+        memoryStore: {
+          listActiveMemories: async () => [],
+          listActiveMemoriesInWindow: async () => ({ memories: [], saturated: false }),
+        },
+      });
+
+      expect(result.promptSection).toContain('Safe same-day conversation evidence');
+      expect(result.promptSection).toContain(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
+      expect(result.promptSection).toContain('2 conversation messages were withheld by intake policy');
+      expect(result.promptSection).not.toContain(DENIED_INTAKE_SENTINEL);
+      expect(result.promptSection).not.toContain(MALFORMED_INTAKE_SENTINEL);
+      expect(result.degraded).toBe(true);
+      expect(result.degradationReasons).toContain('session_intake_withheld');
+      expect(result.provenanceRefs).toEqual(expect.arrayContaining([
+        `session_message:${SCOPE.sessionId}|entry:${String(safeEntryId)}`,
+        `session_message_withheld:${SCOPE.sessionId}|entry:${String(deniedEntryId)}`,
+        `session_message_withheld:${SCOPE.sessionId}|entry:${String(malformedEntryId)}`,
+      ]));
+      expect(result.provenanceRefs.join('\n')).not.toContain(DENIED_INTAKE_SENTINEL);
+      expect(result.provenanceRefs.join('\n')).not.toContain(MALFORMED_INTAKE_SENTINEL);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('emits explicit degradation when no day evidence is available', async () => {

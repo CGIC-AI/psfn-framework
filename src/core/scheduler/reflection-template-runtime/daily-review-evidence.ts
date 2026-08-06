@@ -3,6 +3,7 @@ import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { EpisodicStorePort } from '../../../faculties/memory/episodic/store-port.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { PromptAssemblyGateSummary } from '../../session/intake-sink-gating.js';
 import { REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT } from './runtime-helpers.js';
 
 const DAILY_REVIEW_EVIDENCE_SHAPE = Object.freeze({
@@ -49,7 +50,11 @@ export interface CollectDailyReviewEvidenceInput {
     getConversationEvidenceWindow?(
       channelId: string,
       options: { fromMs: number; toMs: number; limit: number },
-    ): { entries: SessionEntry[]; saturated: boolean };
+    ): {
+      entries: SessionEntry[];
+      saturated: boolean;
+      promptAssemblyGate?: PromptAssemblyGateSummary;
+    };
   };
   episodicStore?: Pick<EpisodicStorePort, 'searchByTime'> | null;
   memoryStore?: Pick<MemoryStorePort, 'listActiveMemories' | 'listActiveMemoriesInWindow'> | null;
@@ -181,6 +186,7 @@ export async function collectDailyReviewEvidence(
   const degradationReasons: string[] = [];
 
   let scannedSessionEntries: SessionEntry[] = [];
+  let reportedWithheldSessionEntryIds: readonly number[] = [];
   let conversationCountIsLowerBound = false;
   if (input.scope.kind === 'companion' || !input.sessionManager) {
     degradationReasons.push('session_source_unavailable');
@@ -196,6 +202,7 @@ export async function collectDailyReviewEvidence(
           },
         );
         scannedSessionEntries = window.entries.slice(0, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT);
+        reportedWithheldSessionEntryIds = window.promptAssemblyGate?.withheldEntryIds ?? [];
         conversationCountIsLowerBound = window.saturated
           || window.entries.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT;
         if (window.entries.length > REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT) {
@@ -230,6 +237,16 @@ export async function collectDailyReviewEvidence(
     windowStartMs,
     input.nowMs,
   );
+  const conversationEntryIds = new Set(conversationEntries.map(entry => entry.id));
+  const withheldConversationEntryIds = new Set(
+    reportedWithheldSessionEntryIds.filter(entryId => conversationEntryIds.has(entryId)),
+  );
+  if (withheldConversationEntryIds.size !== reportedWithheldSessionEntryIds.length) {
+    addDegradationReason(degradationReasons, 'session_source_contract_violation');
+  }
+  if (withheldConversationEntryIds.size > 0) {
+    addDegradationReason(degradationReasons, 'session_intake_withheld');
+  }
 
   let scannedEpisodes: Episode[] = [];
   let episodeCountIsLowerBound = false;
@@ -360,6 +377,9 @@ export async function collectDailyReviewEvidence(
       conversationLines,
       'No conversation messages were found in the bounded window.',
     ),
+    ...(withheldConversationEntryIds.size > 0
+      ? [`- ${String(withheldConversationEntryIds.size)} conversation messages were withheld by intake policy.`]
+      : []),
     ...formatEvidenceCategory(
       '[Episodes]',
       `${String(scopedEpisodes.length)}${episodeCountIsLowerBound ? '+' : ''} episode records were found in the bounded window.`,
@@ -384,7 +404,11 @@ export async function collectDailyReviewEvidence(
   return {
     promptSection: sections.join('\n'),
     provenanceRefs: [...new Set([
-      ...conversationEntries.map(entry => `session_message:${entry.channelId}|entry:${String(entry.id)}`),
+      ...conversationEntries.map(entry => (
+        withheldConversationEntryIds.has(entry.id)
+          ? `session_message_withheld:${entry.channelId}|entry:${String(entry.id)}`
+          : `session_message:${entry.channelId}|entry:${String(entry.id)}`
+      )),
       ...episodes.map(value => `episode:${value.id}`),
       ...memoryDeltas.map(value => `memory:${value.id}`),
     ])],

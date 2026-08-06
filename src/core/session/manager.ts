@@ -107,6 +107,10 @@ import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envel
 // Type-only structural port: the session layer never imports cogsec runtime code.
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import {
+  applyPromptAssemblySinkGate,
+  type PromptAssemblyGateSummary,
+} from './intake-sink-gating.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   FocusKnowledgeStore,
@@ -2071,7 +2075,11 @@ export class SessionManager implements SessionManagerTypeSurface {
   getConversationEvidenceWindow(
     channelId: string,
     options: { fromMs: number; toMs: number; limit: number },
-  ): { entries: SessionEntry[]; saturated: boolean } {
+  ): {
+    entries: SessionEntry[];
+    saturated: boolean;
+    promptAssemblyGate: PromptAssemblyGateSummary;
+  } {
     this.assertMutableSessionReadAllowed('SessionManager.getConversationEvidenceWindow');
     if (!Number.isFinite(options.fromMs) || !Number.isFinite(options.toMs)) {
       throw new Error('Conversation evidence window bounds must be finite');
@@ -2099,11 +2107,18 @@ export class SessionManager implements SessionManagerTypeSurface {
       { stopBeforeTimestamp: options.fromMs },
     );
     const saturated = matched.length > options.limit;
+    const boundedEntries = matched
+      .slice(0, options.limit)
+      .sort((left, right) => left.timestamp - right.timestamp || left.id - right.id);
+    const promptAssemblyGate = applyPromptAssemblySinkGate(
+      boundedEntries,
+      this.intakeSinkGate,
+      { channelId: resolvedChannelId },
+    );
     return {
-      entries: matched
-        .slice(0, options.limit)
-        .sort((left, right) => left.timestamp - right.timestamp || left.id - right.id),
+      entries: promptAssemblyGate.entries,
       saturated,
+      promptAssemblyGate: promptAssemblyGate.summary,
     };
   }
 

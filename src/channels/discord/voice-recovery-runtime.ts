@@ -106,7 +106,7 @@ export function recordVoiceStreamError(runtime: VoiceRecoveryRuntimeContext, use
 }
 
 export function emitRuntimeVoiceError(runtime: VoiceRecoveryRuntimeContext, error: unknown): void {
-  void cancelActiveVoiceTurn(runtime as never, 'voice-error');
+  void cancelActiveVoiceTurn(runtime, 'voice-error');
 
   const stage = resolveVoiceErrorStage(error);
   const code = resolveVoiceErrorCode(error);

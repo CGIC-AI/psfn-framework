@@ -39,6 +39,7 @@ import {
   type VoiceTurnErrorStage,
   type VoiceTurnObservationKind,
   type VoiceTurnRuntimeContext,
+  type VoiceTurnStateContext,
 } from './voice-types.js';
 import {
   classifyVoiceTurnStatus,
@@ -50,7 +51,7 @@ import {
 const log = createComponentLogger('DiscordVoice');
 
 function emitVoicePerformance(
-  runtime: VoiceTurnRuntimeContext,
+  runtime: VoiceTurnStateContext,
   turn: ActiveVoiceTurn,
   stage: TurnPerformanceStage,
   details: Omit<TurnPerformanceEventInput, 'traceId' | 'stage' | 'turnId' | 'requestId' | 'channelId' | 'channelType'> = {},
@@ -79,7 +80,7 @@ export function assertActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, turn: Ac
   }
 }
 
-export function resetActiveVoiceTurnState(runtime: VoiceTurnRuntimeContext, turn: ActiveVoiceTurn): void {
+export function resetActiveVoiceTurnState(runtime: VoiceTurnStateContext, turn: ActiveVoiceTurn): void {
   if (runtime.activeTurn?.token !== turn.token) return;
   runtime.activeTurn = null;
   runtime.activeTurnId = null;
@@ -112,7 +113,7 @@ export async function cancelVoiceTurnResources(turn: ActiveVoiceTurn, reason: st
   }
 }
 
-export async function cancelActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, reason: string): Promise<void> {
+export async function cancelActiveVoiceTurn(runtime: VoiceTurnStateContext, reason: string): Promise<void> {
   const turn = runtime.activeTurn;
   if (!turn) return;
   try {
@@ -165,18 +166,7 @@ export async function emitVoiceTurnObservation(runtime: VoiceTurnRuntimeContext,
 }
 
 export async function handleVoiceUtterance(
-  runtime: VoiceTurnRuntimeContext & {
-    recordStreamError(userId: string): void;
-    transcribeOpusStream(opusStream: NodeJS.ReadableStream, turn: ActiveVoiceTurn): Promise<VoiceStreamTranscription>;
-    speakText(text: string, turn?: ActiveVoiceTurn): Promise<void>;
-    emitTurnObservation(params: {
-      turnId?: string;
-      stage: VoiceTurnErrorStage;
-      kind: VoiceTurnObservationKind;
-      detail?: Record<string, unknown>;
-    }): Promise<void>;
-    cancelTurnResources(turn: ActiveVoiceTurn, reason: string): Promise<void>;
-  },
+  runtime: VoiceTurnRuntimeContext,
 ): Promise<void> {
   if (runtime.activeTurn) return;
   if (!runtime.connection || !runtime.player || !runtime.activeChannel || !runtime.sttConnector || runtime.ttsConnectors.length === 0) {
@@ -459,9 +449,7 @@ export async function handleVoiceUtterance(
  * total via `validatePcmAudioChunk`, failing closed the instant it is exceeded.
  */
 export async function transcribeOpusStream(
-  runtime: VoiceTurnRuntimeContext & {
-    decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream;
-  },
+  runtime: VoiceTurnRuntimeContext,
   opusStream: NodeJS.ReadableStream,
   turn: ActiveVoiceTurn,
 ): Promise<VoiceStreamTranscription> {
@@ -632,9 +620,7 @@ interface AcquiredTtsAudio {
 }
 
 export async function speakVoiceText(
-  runtime: VoiceTurnRuntimeContext & {
-    playWithTtsConnector(connector: NonNullable<VoiceTurnRuntimeContext['ttsConnectors'][number]>, text: string, turn?: ActiveVoiceTurn): Promise<void>;
-  },
+  runtime: VoiceTurnRuntimeContext,
   text: string,
   turn?: ActiveVoiceTurn,
 ): Promise<void> {
@@ -742,9 +728,7 @@ export async function acquireTtsFirstByte(
 }
 
 export async function playWithTtsConnector(
-  runtime: VoiceTurnRuntimeContext & {
-    playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
-  },
+  runtime: VoiceTurnRuntimeContext,
   connector: NonNullable<VoiceTurnRuntimeContext['ttsConnectors'][number]>,
   text: string,
   turn?: ActiveVoiceTurn,
@@ -802,9 +786,7 @@ export async function playWithTtsConnector(
  * during first-byte acquisition; playback resumes from it.
  */
 export async function playAcquiredTtsAudio(
-  runtime: VoiceTurnRuntimeContext & {
-    playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
-  },
+  runtime: VoiceTurnRuntimeContext,
   acquired: AcquiredTtsAudio,
   turn?: ActiveVoiceTurn,
 ): Promise<void> {
@@ -915,7 +897,7 @@ export async function playReadableAudio(
  * surfaced to the consumer by destroying the output stream — never swallowed.
  */
 export function decodeOpusToPcmStream(
-  runtime: VoiceTurnRuntimeContext & { recordStreamError(userId: string): void },
+  runtime: VoiceTurnRuntimeContext,
   opusStream: NodeJS.ReadableStream,
   signal?: AbortSignal,
 ): NodeJS.ReadableStream {

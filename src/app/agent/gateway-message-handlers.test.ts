@@ -47,6 +47,12 @@ import type { RecordedCompanionSourceMessage } from '../../core/session/icp-deli
 import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { ParentTurnContinuationBudgetExceededError } from '../../core/agent/turn-limits.js';
+import {
+  CompanionAvailabilityRuntime,
+  type CompanionAvailabilityStorePort,
+  type CompanionProtectedMessageQueuePort,
+  type QueuedCompanionMessage,
+} from '../../core/agent/companion-availability.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -157,6 +163,7 @@ function createHarness(overrides?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
   };
+  protectedMessageQueue?: CompanionProtectedMessageQueuePort;
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -275,6 +282,9 @@ function createHarness(overrides?: {
       : {}),
     companionAuthorName: 'Selene',
     ...(overrides?.nowMonotonicMs ? { nowMonotonicMs: overrides.nowMonotonicMs } : {}),
+    ...(overrides?.protectedMessageQueue
+      ? { protectedMessageQueue: overrides.protectedMessageQueue }
+      : {}),
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -450,6 +460,92 @@ describe('registerGatewayMessageHandlers', () => {
       messageId: 'discord-observe-1',
       authorId: 'user-1',
     });
+  });
+
+  it('logs and continues when a live passive observation fails', async () => {
+    const harness = createHarness({
+      observeMessage: async () => { throw new Error('live observation failure'); },
+    });
+    const message = makeMessage({
+      id: 'discord-observe-failed-live',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: { source: 'discord', responseMode: 'observe' },
+    });
+
+    await expect(harness.onDiscordMessage(message)).resolves.toBeUndefined();
+
+    expect(harness.log.error).toHaveBeenCalledWith('Error handling message', {
+      channelId: 'discord:general',
+      messageId: 'discord-observe-failed-live',
+      error: 'live observation failure',
+    });
+  });
+
+  it('retains a protected passive observation until observation processing succeeds', async () => {
+    vi.useFakeTimers();
+    let availability: CompanionAvailabilityRuntime | undefined;
+    try {
+      const queued: QueuedCompanionMessage[] = [];
+      let nextSequence = 1;
+      const store: CompanionAvailabilityStorePort = {
+        readState: async () => ({ state: 'available', sinceMs: 1, revision: 1 }),
+        writeState: async () => {},
+        enqueue: async (message, enqueuedAtMs) => {
+          if (queued.some(entry => (
+            entry.message.channelId === message.channelId && entry.message.id === message.id
+          ))) return 'duplicate';
+          queued.push({ sequence: nextSequence, enqueuedAtMs, message });
+          nextSequence += 1;
+          return 'enqueued';
+        },
+        hasPending: async () => queued.length > 0,
+        listPending: async limit => queued.slice(0, limit),
+        acknowledge: async sequence => {
+          const index = queued.findIndex(entry => entry.sequence === sequence);
+          if (index < 0) return false;
+          queued.splice(index, 1);
+          return true;
+        },
+      };
+      availability = new CompanionAvailabilityRuntime({
+        store,
+        project: async () => 'applied',
+        queueReadBatchSize: 20,
+        drainRetryDelayMs: 10,
+      });
+      await availability.initialize();
+      const observeMessage = vi.fn()
+        .mockRejectedValueOnce(new Error('transient observation failure'))
+        .mockResolvedValueOnce(undefined);
+      const harness = createHarness({
+        observeMessage,
+        protectedMessageQueue: availability,
+      });
+      const message = makeMessage({
+        id: 'discord-protected-observe-1',
+        channelId: 'discord:general',
+        channelType: 'discord',
+        routing: { source: 'discord', responseMode: 'observe' },
+      });
+      const lease = await availability.begin('do_not_disturb');
+
+      await harness.onDiscordMessage(message);
+      await lease.release();
+      await availability.waitForDrain();
+
+      expect(observeMessage).toHaveBeenCalledTimes(1);
+      expect(queued.map(entry => entry.message.id)).toEqual(['discord-protected-observe-1']);
+
+      await vi.advanceTimersByTimeAsync(10);
+      await availability.waitForDrain();
+
+      expect(observeMessage).toHaveBeenCalledTimes(2);
+      expect(queued).toEqual([]);
+    } finally {
+      await availability?.stop();
+      vi.useRealTimers();
+    }
   });
 
   it('can schedule observed group memory from passive discord observations without replying', async () => {

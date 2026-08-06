@@ -1230,6 +1230,7 @@ export function registerGatewayMessageHandlers(
           messageId: message.id,
           error: errorText,
         });
+        if (options.awaitDelivery) throw err;
       } finally {
         if (dedupeKey) {
           inFlightDiscordMessages.delete(dedupeKey);

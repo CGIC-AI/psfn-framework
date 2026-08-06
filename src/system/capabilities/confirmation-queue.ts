@@ -257,11 +257,11 @@ function assertConfirmationParamCloneShape(
   try {
     for (const [property, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
       if (isArray && property === 'length') continue;
-      if (property === 'toJSON') {
-        throwUnrepresentableConfirmationParam(`${path}.${property}`, 'must not override JSON projection');
-      }
       if ('get' in descriptor || 'set' in descriptor) {
         throwUnrepresentableConfirmationParam(`${path}.${property}`, 'must be a data property');
+      }
+      if (property === 'toJSON' && typeof descriptor.value === 'function') {
+        throwUnrepresentableConfirmationParam(`${path}.${property}`, 'must not override JSON projection');
       }
       if (isArray) {
         const index = Number(property);

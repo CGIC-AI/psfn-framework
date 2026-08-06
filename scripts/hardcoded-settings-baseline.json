@@ -10970,6 +10970,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.backgroundFailureEscalationThreshold",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned background failure escalation threshold; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.backgroundMaintenanceIntervalMs",
       "value": "{ sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' }",
       "form": "object-member",
@@ -13262,6 +13269,13 @@
       "value": "{ min: 5000, max: 600000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.analysisWorkbenchMaxWallTimeMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.backgroundFailureEscalationThreshold",
+      "value": "{ min: 2, max: 100 }",
+      "form": "object-member",
+      "note": "Canonical validation bounds for the settings.json-owned background failure escalation threshold; this metadata constrains Garden edits and is not runtime policy."
     },
     {
       "file": "src/system/settings/form.ts",

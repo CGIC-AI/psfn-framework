@@ -292,6 +292,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'compactionThresholdPct',
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
+  'backgroundFailureEscalationThreshold',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
   'intakeScreeningFailureAlertThreshold',

@@ -165,6 +165,7 @@ export interface EditableSettings {
   compactionThresholdPct?: number;
   observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
+  backgroundFailureEscalationThreshold?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -338,6 +339,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'compactionThresholdPct',
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
+  'backgroundFailureEscalationThreshold',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',

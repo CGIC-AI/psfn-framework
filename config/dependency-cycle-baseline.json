@@ -1,10 +1,5 @@
 {
   "schemaVersion": 1,
-  "remediationTracker": "PSFN-7hue",
-  "cycles": [
-    "boundary/sandbox/capabilities/contracts.ts -> core/tools/analysis-workbench/types.ts",
-    "core/agent/active-emanation-state.ts -> core/agent/presence-metadata.ts",
-    "core/session/context-manifest.ts -> faculties/memory/withheld-summary.ts -> system/trust/policy.ts -> shared/contracts/runtime.ts",
-    "faculties/shards/manager.ts -> faculties/shards/port.ts"
-  ]
+  "remediationTracker": "psfn-framework-683cc",
+  "cycles": []
 }

@@ -131,6 +131,15 @@ describe('gateway RPC parameter decoder catalog', () => {
     expectInvalid(agentMethodParamDecoders['api.health'], {
       unrecognizedAuthority: true,
     });
+    expectInvalid(gatewayMethodParamDecoders['shard.backend.request'], {
+      backend: 'container',
+      shardId: 'shard-1',
+      name: 'worker',
+      ownerVersion: 'a'.repeat(64),
+      grantDigest: 'b'.repeat(64),
+      capabilityTier: 'autonomous',
+      customTokens: ['shard.spawn'],
+    });
   });
 
   it('returns valid params by identity', () => {

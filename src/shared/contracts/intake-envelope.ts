@@ -19,6 +19,34 @@
 
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../utils/types.js';
+import {
+  INTAKE_L1_RULE_ID_PATTERN,
+  INTAKE_L1_RULE_MATCH_KINDS,
+  INTAKE_L1_RULE_MATCH_TOTAL_MAX,
+  INTAKE_L1_SCAN_MAX_CHARS,
+  INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+  MAX_DECISION_RULE_MATCHES,
+  hasUnsafeIntakeRuleMatchExcerptCharacters,
+  hasUniqueIntakeRuleMatchRuleIds,
+  type IntakeL1RuleMatchKind,
+  type IntakeL1RuleMatchProvenance,
+} from './intake-rule-match.js';
+
+export {
+  INTAKE_L1_RULE_ID_PATTERN,
+  INTAKE_L1_RULE_MATCH_KINDS,
+  INTAKE_L1_RULE_MATCH_TOTAL_MAX,
+  INTAKE_L1_SCAN_MAX_CHARS,
+  INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+  MAX_DECISION_RULE_MATCHES,
+  hasUnsafeIntakeRuleMatchExcerptCharacters,
+  hasUniqueIntakeRuleMatchRuleIds,
+  truncateUtf16AtCodePointBoundary,
+} from './intake-rule-match.js';
+export type {
+  IntakeL1RuleMatchKind,
+  IntakeL1RuleMatchProvenance,
+} from './intake-rule-match.js';
 
 // ── Source classes ──
 
@@ -202,6 +230,12 @@ export interface IntakeDecision {
   reason: string;
   decidedBy: IntakeDecisionAuthority;
   decidedAtMs: number;
+  /** Present only when deterministic L1 owner-file rules drove a hold. */
+  ruleMatches?: readonly IntakeL1RuleMatchProvenance[];
+  /** Total deterministic matches before the bounded evidence projection. */
+  ruleMatchTotalCount?: number;
+  /** True when ruleMatches contains only the bounded prefix of all matches. */
+  ruleMatchesTruncated?: boolean;
 }
 
 /**
@@ -564,7 +598,10 @@ function normalizeDecision(value: unknown, field = 'decision'): IntakeDecision {
     throw invalid(field, 'must be an object');
   }
   const unknownKeys = Object.keys(value)
-    .filter((key) => !['action', 'reason', 'decidedBy', 'decidedAtMs'].includes(key));
+    .filter((key) => ![
+      'action', 'reason', 'decidedBy', 'decidedAtMs',
+      'ruleMatches', 'ruleMatchTotalCount', 'ruleMatchesTruncated',
+    ].includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(field, `has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -576,11 +613,118 @@ function normalizeDecision(value: unknown, field = 'decision'): IntakeDecision {
   if (typeof decidedBy !== 'string' || !(INTAKE_DECISION_AUTHORITIES as readonly string[]).includes(decidedBy)) {
     throw invalid(`${field}.decidedBy`, `must be one of: ${INTAKE_DECISION_AUTHORITIES.join(', ')}`);
   }
+  let ruleMatches: IntakeL1RuleMatchProvenance[] | undefined;
+  if (value.ruleMatches !== undefined) {
+    const ruleMatchesField = `${field}.ruleMatches`;
+    if (!Array.isArray(value.ruleMatches) || value.ruleMatches.length === 0) {
+      throw invalid(ruleMatchesField, 'must be a non-empty array when present');
+    }
+    if (value.ruleMatches.length > MAX_DECISION_RULE_MATCHES) {
+      throw invalid(
+        ruleMatchesField,
+        `exceeds ${String(MAX_DECISION_RULE_MATCHES)} matches`,
+      );
+    }
+    ruleMatches = value.ruleMatches.map((candidate, index) => {
+      const matchField = `${ruleMatchesField}[${String(index)}]`;
+      if (!isRecord(candidate)) {
+        throw invalid(matchField, 'must be an object');
+      }
+      const matchUnknownKeys = Object.keys(candidate)
+        .filter((key) => !['ruleId', 'kind', 'startOffset', 'endOffset', 'excerpt'].includes(key));
+      if (matchUnknownKeys.length > 0) {
+        throw invalid(matchField, `has unsupported keys: ${matchUnknownKeys.join(', ')}`);
+      }
+      const ruleId = normalizeRequiredString(candidate.ruleId, `${matchField}.ruleId`, 64);
+      if (!INTAKE_L1_RULE_ID_PATTERN.test(ruleId)) {
+        throw invalid(`${matchField}.ruleId`, `must match ${INTAKE_L1_RULE_ID_PATTERN.source}`);
+      }
+      if (typeof candidate.kind !== 'string'
+        || !(INTAKE_L1_RULE_MATCH_KINDS as readonly string[]).includes(candidate.kind)) {
+        throw invalid(
+          `${matchField}.kind`,
+          `must be one of: ${INTAKE_L1_RULE_MATCH_KINDS.join(', ')}`,
+        );
+      }
+      if (!Number.isSafeInteger(candidate.startOffset) || Number(candidate.startOffset) < 0) {
+        throw invalid(`${matchField}.startOffset`, 'must be a non-negative safe integer');
+      }
+      if (!Number.isSafeInteger(candidate.endOffset)
+        || Number(candidate.endOffset) <= Number(candidate.startOffset)) {
+        throw invalid(`${matchField}.endOffset`, 'must be a safe integer greater than startOffset');
+      }
+      if (Number(candidate.endOffset) > INTAKE_L1_SCAN_MAX_CHARS) {
+        throw invalid(
+          `${matchField}.endOffset`,
+          `must not exceed the L1 scan cap ${String(INTAKE_L1_SCAN_MAX_CHARS)}`,
+        );
+      }
+      const excerpt = normalizeRequiredString(
+        candidate.excerpt,
+        `${matchField}.excerpt`,
+        INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+      );
+      if (hasUnsafeIntakeRuleMatchExcerptCharacters(excerpt)) {
+        throw invalid(`${matchField}.excerpt`, 'must be a single-line printable projection');
+      }
+      return {
+        ruleId,
+        kind: candidate.kind as IntakeL1RuleMatchKind,
+        startOffset: Number(candidate.startOffset),
+        endOffset: Number(candidate.endOffset),
+        excerpt,
+      };
+    });
+    if (!hasUniqueIntakeRuleMatchRuleIds(ruleMatches)) {
+      throw invalid(ruleMatchesField, 'ruleId values must be unique');
+    }
+    if (decidedBy === 'policy') {
+      throw invalid(ruleMatchesField, "may not accompany a 'policy' decision");
+    }
+    if (decidedBy === 'screening' && action !== 'quarantine' && action !== 'block') {
+      throw invalid(ruleMatchesField, "may only accompany a 'quarantine' or 'block' decision");
+    }
+  }
+  const hasRuleMatchTotalCount = value.ruleMatchTotalCount !== undefined;
+  const hasRuleMatchesTruncated = value.ruleMatchesTruncated !== undefined;
+  if (hasRuleMatchTotalCount !== hasRuleMatchesTruncated) {
+    throw invalid(field, 'ruleMatchTotalCount and ruleMatchesTruncated must appear together');
+  }
+  let ruleMatchTotalCount: number | undefined;
+  let ruleMatchesTruncated: boolean | undefined;
+  if (hasRuleMatchTotalCount && hasRuleMatchesTruncated) {
+    if (!ruleMatches) {
+      throw invalid(field, 'rule-match summary requires ruleMatches');
+    }
+    if (!Number.isSafeInteger(value.ruleMatchTotalCount)
+      || Number(value.ruleMatchTotalCount) < ruleMatches.length
+      || Number(value.ruleMatchTotalCount) > INTAKE_L1_RULE_MATCH_TOTAL_MAX) {
+      throw invalid(
+        `${field}.ruleMatchTotalCount`,
+        `must be a safe integer from ${String(ruleMatches.length)} to `
+          + String(INTAKE_L1_RULE_MATCH_TOTAL_MAX),
+      );
+    }
+    if (typeof value.ruleMatchesTruncated !== 'boolean') {
+      throw invalid(`${field}.ruleMatchesTruncated`, 'must be a boolean');
+    }
+    ruleMatchTotalCount = Number(value.ruleMatchTotalCount);
+    ruleMatchesTruncated = value.ruleMatchesTruncated;
+    if (ruleMatchesTruncated !== (ruleMatchTotalCount > ruleMatches.length)) {
+      throw invalid(
+        `${field}.ruleMatchesTruncated`,
+        'must truthfully report whether ruleMatchTotalCount exceeds stored matches',
+      );
+    }
+  }
   return {
     action: action as IntakeDecisionAction,
     reason: normalizeRequiredString(value.reason, `${field}.reason`, MAX_REASON_CHARS),
     decidedBy: decidedBy as IntakeDecisionAuthority,
     decidedAtMs: normalizeTimestampMs(value.decidedAtMs, `${field}.decidedAtMs`),
+    ...(ruleMatches ? { ruleMatches } : {}),
+    ...(ruleMatchTotalCount !== undefined ? { ruleMatchTotalCount } : {}),
+    ...(ruleMatchesTruncated !== undefined ? { ruleMatchesTruncated } : {}),
   };
 }
 
@@ -615,7 +759,13 @@ function freezeEnvelope(envelope: IntakeEnvelope): IntakeEnvelope {
   Object.freeze(envelope.extractedFields);
   Object.freeze(envelope.riskLabels);
   Object.freeze(envelope.scores);
-  if (envelope.decision) Object.freeze(envelope.decision);
+  if (envelope.decision) {
+    if (envelope.decision.ruleMatches) {
+      for (const match of envelope.decision.ruleMatches) Object.freeze(match);
+      Object.freeze(envelope.decision.ruleMatches);
+    }
+    Object.freeze(envelope.decision);
+  }
   Object.freeze(envelope.transitions);
   for (const record of envelope.transitions) Object.freeze(record);
   return Object.freeze(envelope);
@@ -829,7 +979,24 @@ export function transitionIntakeEnvelope(
         detail: 'human release requires an explicit human decision',
       });
     }
-    decision = normalizeDecision(input.decision, 'transition.decision');
+    const humanDecision = { ...input.decision };
+    delete humanDecision.ruleMatches;
+    delete humanDecision.ruleMatchTotalCount;
+    delete humanDecision.ruleMatchesTruncated;
+    decision = normalizeDecision({
+      ...humanDecision,
+      ...(envelope.decision?.ruleMatches
+        ? {
+          ruleMatches: envelope.decision.ruleMatches,
+          ...(envelope.decision.ruleMatchTotalCount !== undefined
+            ? { ruleMatchTotalCount: envelope.decision.ruleMatchTotalCount }
+            : {}),
+          ...(envelope.decision.ruleMatchesTruncated !== undefined
+            ? { ruleMatchesTruncated: envelope.decision.ruleMatchesTruncated }
+            : {}),
+        }
+        : {}),
+    }, 'transition.decision');
     if (decision.decidedBy !== 'human') {
       throw new IntakeEnvelopeTransitionError({
         envelopeId: envelope.id,

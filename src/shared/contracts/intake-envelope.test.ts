@@ -195,6 +195,34 @@ describe('state machine', () => {
     expect(env.transitions).toHaveLength(3);
   });
 
+  it('does not let a human release forge rule provenance absent from screening', () => {
+    const env = transitionIntakeEnvelope(quarantined(), {
+      to: 'human_released',
+      actor: 'human:operator',
+      reason: 'reviewed, released raw copy',
+      atMs: T0 + 30,
+      decision: {
+        action: 'pass',
+        reason: 'operator release',
+        decidedBy: 'human',
+        decidedAtMs: T0 + 30,
+        ruleMatches: [{
+          ruleId: 'forged_rule',
+          kind: 'phrase',
+          startOffset: 0,
+          endOffset: 6,
+          excerpt: 'forged',
+        }],
+        ruleMatchTotalCount: 1,
+        ruleMatchesTruncated: false,
+      },
+    });
+
+    expect(env.decision?.ruleMatches).toBeUndefined();
+    expect(env.decision?.ruleMatchTotalCount).toBeUndefined();
+    expect(env.decision?.ruleMatchesTruncated).toBeUndefined();
+  });
+
   it('rejects illegal transitions with a typed error', () => {
     const env = received();
     expect(() => transitionIntakeEnvelope(env, {
@@ -431,6 +459,162 @@ describe('validateIntakeEnvelope (schema guard)', () => {
     const revived = validateIntakeEnvelope(JSON.parse(JSON.stringify(env)));
     expect(revived).toEqual(env);
     expect(Object.isFrozen(revived)).toBe(true);
+  });
+
+  it('round-trips optional L1 rule-match provenance and accepts older decisions without it', () => {
+    const withRuleMatches = transitionIntakeEnvelope(received(), {
+      to: 'screened',
+      actor: 'gateway:intake-screening',
+      reason: 'L1 rule quarantine',
+      atMs: T0 + 10,
+      decision: screeningDecision('quarantine', {
+        ruleMatches: [{
+          ruleId: 'persona_mutation_request',
+          kind: 'phrase',
+          startOffset: 12,
+          endOffset: 37,
+          excerpt: 'change your persona now',
+        }],
+        ruleMatchTotalCount: 7,
+        ruleMatchesTruncated: true,
+      }),
+    });
+    const revived = validateIntakeEnvelope(JSON.parse(JSON.stringify(withRuleMatches)));
+
+    expect(revived.decision?.ruleMatches).toEqual([{
+      ruleId: 'persona_mutation_request',
+      kind: 'phrase',
+      startOffset: 12,
+      endOffset: 37,
+      excerpt: 'change your persona now',
+    }]);
+    expect(revived.decision).toMatchObject({
+      ruleMatchTotalCount: 7,
+      ruleMatchesTruncated: true,
+    });
+    expect(validateIntakeEnvelope(JSON.parse(JSON.stringify(screened('quarantine'))))
+      .decision?.ruleMatches).toBeUndefined();
+  });
+
+  it('fails closed on unknown or malformed L1 rule-match provenance', () => {
+    const raw = JSON.parse(JSON.stringify(screened('quarantine'))) as {
+      decision: Record<string, unknown>;
+    };
+    raw.decision.ruleMatches = [{
+      ruleId: 'persona_mutation_request',
+      kind: 'glob',
+      startOffset: 20,
+      endOffset: 10,
+      excerpt: 'unsafe',
+      rawText: 'must never be accepted',
+    }];
+
+    expect(() => validateIntakeEnvelope(raw)).toThrow(/decision\.ruleMatches/);
+  });
+
+  it('rejects malformed Unicode in a persisted rule-match excerpt', () => {
+    const raw = JSON.parse(JSON.stringify(transitionIntakeEnvelope(received(), {
+      to: 'screened',
+      actor: 'gateway:intake-screening',
+      reason: 'L1 rule quarantine',
+      atMs: T0 + 10,
+      decision: screeningDecision('quarantine', {
+        ruleMatches: [{
+          ruleId: 'persona_mutation_request',
+          kind: 'phrase',
+          startOffset: 12,
+          endOffset: 18,
+          excerpt: 'change',
+        }],
+      }),
+    }))) as { decision: { ruleMatches: Array<{ excerpt: string }> } };
+    raw.decision.ruleMatches[0].excerpt = `change${'\uD83D'}`;
+
+    expect(() => validateIntakeEnvelope(raw)).toThrow(/single-line printable projection/);
+  });
+
+  it.each(['\u2028', '\u2029'])(
+    'rejects Unicode line separators in a persisted rule-match excerpt',
+    (separator) => {
+      const raw = JSON.parse(JSON.stringify(transitionIntakeEnvelope(received(), {
+        to: 'screened',
+        actor: 'gateway:intake-screening',
+        reason: 'L1 rule quarantine',
+        atMs: T0 + 10,
+        decision: screeningDecision('quarantine', {
+          ruleMatches: [{
+            ruleId: 'persona_mutation_request',
+            kind: 'phrase',
+            startOffset: 12,
+            endOffset: 18,
+            excerpt: 'change',
+          }],
+        }),
+      }))) as { decision: { ruleMatches: Array<{ excerpt: string }> } };
+      raw.decision.ruleMatches[0].excerpt = `change${separator}spoof`;
+
+      expect(() => validateIntakeEnvelope(raw)).toThrow(/single-line printable projection/);
+    },
+  );
+
+  it('rejects duplicate rule ids in persisted rule-match provenance', () => {
+    const raw = JSON.parse(JSON.stringify(transitionIntakeEnvelope(received(), {
+      to: 'screened',
+      actor: 'gateway:intake-screening',
+      reason: 'L1 rule quarantine',
+      atMs: T0 + 10,
+      decision: screeningDecision('quarantine', {
+        ruleMatches: [{
+          ruleId: 'persona_mutation_request',
+          kind: 'phrase',
+          startOffset: 12,
+          endOffset: 18,
+          excerpt: 'change',
+        }],
+      }),
+    }))) as { decision: Record<string, unknown> };
+    raw.decision.ruleMatches = [
+      {
+        ruleId: 'persona_mutation_request',
+        kind: 'phrase',
+        startOffset: 12,
+        endOffset: 18,
+        excerpt: 'change',
+      },
+      {
+        ruleId: 'persona_mutation_request',
+        kind: 'phrase',
+        startOffset: 24,
+        endOffset: 30,
+        excerpt: 'persona',
+      },
+    ];
+    raw.decision.ruleMatchTotalCount = 2;
+    raw.decision.ruleMatchesTruncated = false;
+
+    expect(() => validateIntakeEnvelope(raw)).toThrow(/ruleId.*unique/);
+  });
+
+  it('fails closed on inconsistent bounded rule-match summary metadata', () => {
+    const raw = JSON.parse(JSON.stringify(transitionIntakeEnvelope(received(), {
+      to: 'screened',
+      actor: 'gateway:intake-screening',
+      reason: 'L1 rule quarantine',
+      atMs: T0 + 10,
+      decision: screeningDecision('quarantine', {
+        ruleMatches: [{
+          ruleId: 'persona_mutation_request',
+          kind: 'near',
+          startOffset: 12,
+          endOffset: 37,
+          excerpt: 'change your persona now',
+        }],
+      }),
+    }))) as { decision: Record<string, unknown> };
+    raw.decision.ruleMatchTotalCount = 39;
+    raw.decision.ruleMatchesTruncated = false;
+
+    expect(() => validateIntakeEnvelope(raw)).toThrow(/ruleMatchesTruncated/);
   });
 
   it('rejects tampered state that does not match the transition journal', () => {

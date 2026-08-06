@@ -418,6 +418,29 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
       expect(ids).toEqual([1, 2]);
       expect(surviving.some((entry) => entry.content === INTAKE_FIREWALL_NOTICE_TEMPLATES.one)).toBe(false);
     });
+
+    it('INVERSE GUARD: internal system audit and capability-notice rows stay out of emotion appraisal', () => {
+      const partner: SessionEntry = {
+        id: 1, channelId: 'discord:room', role: 'user',
+        content: GOLDEN_PARTNER_LINE, authorId: 'u1', authorName: 'Alice', timestamp: NOW,
+      };
+      const outreachAudit: SessionEntry = {
+        id: 2, channelId: 'discord:room', role: 'system',
+        content: 'Outreach outbox audit: queued but not conversational speech.',
+        authorId: 'system:outreach-outbox', authorName: 'Outreach Outbox', timestamp: NOW,
+      };
+      const capabilityNotice: SessionEntry = {
+        id: 3, channelId: 'discord:room', role: 'system',
+        content: '[System notice: capability access changed] now nursery',
+        authorId: 'system:capability-policy', authorName: 'Capability policy', timestamp: NOW,
+      };
+
+      expect(selectEmotionAppraisalSourceEntries([
+        partner,
+        outreachAudit,
+        capabilityNotice,
+      ])).toEqual([partner]);
+    });
   });
 
   describe('extraction-facing surface (formatExtractionTranscript)', () => {

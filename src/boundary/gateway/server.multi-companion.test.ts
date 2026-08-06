@@ -322,6 +322,28 @@ async function identifyAgent(
   return identified;
 }
 
+async function activateIcpRuntimeAvailability(
+  conn: MockConnection,
+  companionId: string,
+  rpcId: number,
+): Promise<void> {
+  const health = await invokeRpc(conn, rpcId, 'gateway.client.health', {
+    posture: fleetPosture(Date.now(), 0),
+  });
+  expect(health.result).toEqual({ success: true });
+  const availability = await invokeRpc(
+    conn,
+    rpcId + 1,
+    'companion.availability.refresh_runtime',
+    {
+      companionId,
+      state: 'available',
+      expiresAtMs: Date.now() + 60_000,
+    },
+  );
+  expect(availability.result).toMatchObject({ eligible: true });
+}
+
 async function identifySessionIntegrityWorker(
   conn: MockConnection,
   companionId: string,
@@ -2124,6 +2146,11 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const connB = await connect(voiceStreamResponder(routed));
     await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
     await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
+    await activateIcpRuntimeAvailability(
+      connB,
+      '22222222-2222-4222-8222-222222222222',
+      20_002,
+    );
     const result = await server.requestAgentVoiceStream(
       makeSatelliteVoiceMessage('sat-app', '22222222-2222-4222-8222-222222222222'),
       { screenMessageForCompanion },
@@ -2197,6 +2224,8 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const activeConnection = await connect(activeResponder);
     await identifyAgent(primaryConnection, primaryCompanionId, 1);
     await identifyAgent(activeConnection, activeCompanionId, 2);
+    await activateIcpRuntimeAvailability(primaryConnection, primaryCompanionId, 20_001);
+    await activateIcpRuntimeAvailability(activeConnection, activeCompanionId, 20_002);
     const makeTurn = (addressActive: boolean) => {
       const message = makeSatelliteVoiceMessage('sat-app', primaryCompanionId);
       message.routing.satellite.sharedDevice.emanationMemberIds = [
@@ -2308,6 +2337,8 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
     await identifyAgent(primaryConnection, primaryCompanionId, 1);
     await identifyAgent(activeConnection, activeCompanionId, 2);
+    await activateIcpRuntimeAvailability(primaryConnection, primaryCompanionId, 20_001);
+    await activateIcpRuntimeAvailability(activeConnection, activeCompanionId, 20_002);
     const satellite = makeSatelliteVoiceMessage('sat-app', primaryCompanionId)
       .routing.satellite;
     satellite.sharedDevice.emanationMemberIds = [primaryCompanionId, activeCompanionId];
@@ -2381,6 +2412,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       }
     });
     await identifyAgent(conn, primaryCompanionId, 1);
+    await activateIcpRuntimeAvailability(conn, primaryCompanionId, 20_001);
     const satellite = makeSatelliteVoiceMessage('sat-app', primaryCompanionId)
       .routing.satellite;
     const timeoutProbe = setTimeout(() => undefined, 1);

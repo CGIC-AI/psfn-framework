@@ -166,7 +166,7 @@ describe('CompanionAvailabilityRuntime', () => {
     expect(store.queued.map(entry => entry.message.id)).toEqual(['two', 'three']);
   });
 
-  it('retains FIFO admission and retries after a transient delivery failure', async () => {
+  it('retries a retained row after a transient delivery failure', async () => {
     vi.useFakeTimers();
     try {
       const store = new MemoryAvailabilityStore();
@@ -191,19 +191,75 @@ describe('CompanionAvailabilityRuntime', () => {
       await lease.release();
       await runtime.waitForDrain();
 
-      await expect(runtime.enqueueIfUnavailable(message('newer'))).resolves.toBe(true);
-      expect(store.queued.map(entry => entry.message.id)).toEqual(['older', 'newer']);
+      expect(store.queued.map(entry => entry.message.id)).toEqual(['older']);
 
       await vi.advanceTimersByTimeAsync(TEST_DRAIN_RETRY_DELAY_MS);
       await runtime.waitForDrain();
 
-      expect(delivered).toEqual(['older', 'newer']);
+      expect(delivered).toEqual(['older']);
       expect(store.queued).toEqual([]);
       await runtime.stop();
     } finally {
       vi.useRealTimers();
     }
   });
+
+  it.each(['enqueued', 'duplicate'] as const)(
+    'drains a newer row after %s admission while the successful older drain finishes',
+    async (outcome) => {
+      const store = new MemoryAvailabilityStore();
+      await store.enqueue(message('older'), 1);
+      const admissionReachedEnqueue = deferred();
+      const allowAdmissionCommit = deferred();
+      const originalEnqueue = store.enqueue.bind(store);
+      store.enqueue = vi.fn(async (queuedMessage, enqueuedAtMs) => {
+        admissionReachedEnqueue.resolve();
+        await allowAdmissionCommit.promise;
+        const inserted = await originalEnqueue(queuedMessage, enqueuedAtMs);
+        return outcome === 'duplicate' ? 'duplicate' : inserted;
+      });
+      const olderDeliveryStarted = deferred();
+      const allowOlderDelivery = deferred();
+      const drainObservedEmpty = deferred();
+      const originalListPending = store.listPending.bind(store);
+      let listCalls = 0;
+      store.listPending = vi.fn(async (limit) => {
+        const pending = await originalListPending(limit);
+        listCalls += 1;
+        if (listCalls === 2 && pending.length === 0) drainObservedEmpty.resolve();
+        return pending;
+      });
+      const delivered: string[] = [];
+      const runtime = new CompanionAvailabilityRuntime({
+        store,
+        project: async () => 'applied',
+        queueReadBatchSize: 20,
+        drainRetryDelayMs: TEST_DRAIN_RETRY_DELAY_MS,
+      });
+      runtime.setDeliverer(async queued => {
+        delivered.push(queued.message.id);
+        if (queued.message.id === 'older') {
+          olderDeliveryStarted.resolve();
+          await allowOlderDelivery.promise;
+        }
+      });
+
+      await runtime.initialize();
+      await olderDeliveryStarted.promise;
+      const admission = runtime.enqueueIfUnavailable(message('newer'));
+      await admissionReachedEnqueue.promise;
+
+      allowOlderDelivery.resolve();
+      await drainObservedEmpty.promise;
+      allowAdmissionCommit.resolve();
+      await expect(admission).resolves.toBe(true);
+      await runtime.waitForDrain();
+
+      expect(delivered).toEqual(['older', 'newer']);
+      expect(store.queued).toEqual([]);
+      await runtime.stop();
+    },
+  );
 
   it('resets stale protected state on restart and drains durable messages', async () => {
     const store = new MemoryAvailabilityStore();

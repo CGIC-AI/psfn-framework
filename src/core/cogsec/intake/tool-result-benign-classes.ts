@@ -161,6 +161,7 @@ function requestedBeadsShow(value: unknown): BeadsShowRequestProof | undefined {
     return undefined;
   }
   if (typeof value.id !== 'string' || value.id.trim().length === 0) return undefined;
+  if (value.actor !== undefined && typeof value.actor !== 'string') return undefined;
   const actor = typeof value.actor === 'string' ? value.actor.trim() : '';
   return { id: value.id.trim(), ...(actor ? { actor } : {}) };
 }

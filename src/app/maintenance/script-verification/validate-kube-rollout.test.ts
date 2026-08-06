@@ -12,12 +12,16 @@ const imageTag = 'test-tag';
 // The live fleet topology: one UUID-suffixed agent Deployment per companions.json
 // entry. Three entries prove the gate covers the whole fleet, not a fixed
 // cluster-of-one agent name.
-const fleetCompanionIds = [
+const defaultFleetCompanionIds = [
   '1b2f6c9e-0000-4000-8000-aaaaaaaaaaaa',
   '2c3a7d0f-1111-4000-8000-bbbbbbbbbbbb',
   '3d4b8e1a-2222-4000-8000-cccccccccccc',
 ];
-const agentDeployments = fleetCompanionIds.map((id) => `psfn-agent-${id}`);
+const defaultFleetPostgresSchemas = [
+  'companion_alpha',
+  'companion_beta',
+  'companion_gamma',
+];
 
 /**
  * The gate is a bash script whose real inputs are kubectl responses, so the
@@ -35,8 +39,15 @@ const joined = argv.join(' ');
 const namespace = ${JSON.stringify(namespace)};
 const companionId = ${JSON.stringify(companionId)};
 const imageTag = ${JSON.stringify(imageTag)};
-const fleetCompanionIds = ${JSON.stringify(fleetCompanionIds)};
-const agentDeployments = ${JSON.stringify(agentDeployments)};
+const defaultFleetCompanionIds = ${JSON.stringify(defaultFleetCompanionIds)};
+const defaultFleetPostgresSchemas = ${JSON.stringify(defaultFleetPostgresSchemas)};
+const fleetCompanionIds = fixture.fleetCompanionIds ?? defaultFleetCompanionIds;
+const fleetPostgresSchemas = fixture.fleetPostgresSchemas ?? defaultFleetPostgresSchemas;
+const agentDeployments = fleetCompanionIds.map((id) => 'psfn-agent-' + id);
+
+if (fleetCompanionIds.length !== fleetPostgresSchemas.length) {
+  fail('fixture fleet companion/schema counts differ\n');
+}
 
 function out(text) {
   process.stdout.write(text);
@@ -106,6 +117,10 @@ if (joined.includes('cat /app/contract-hash.txt')) {
   out('contracthash01\n');
 }
 
+if (joined.includes('exec deploy/psfn-gateway') && joined.includes('companions.json')) {
+  out(fleetPostgresSchemas[0] + '\n');
+}
+
 // The full-fleet owner preflight runs inside the gateway, the rollout target
 // that mounts every system and companion owner root at its canonical path and
 // holds the direct database wiring.
@@ -166,7 +181,19 @@ if (joined.includes('get secret')) {
 if (joined.includes('psql')) {
   const sql = argv[argv.length - 1];
   if (sql.includes('pg_extension')) out('vector\n');
-  if (sql.includes('model_usage_events')) out('OK|litellm|litellm|model-a|model-a|1700000000000\n');
+  if (sql.includes('pg_catalog.pg_tables') && sql.includes("tablename = 'model_usage_events'")) {
+    out((fixture.ledgerSchemas ?? [fleetPostgresSchemas[0]]).join('\n') + '\n');
+  }
+  if (sql.includes('model_usage_events')) {
+    const expectedRelation = fleetPostgresSchemas[0] + '.model_usage_events';
+    if (!sql.includes('from ' + expectedRelation)) {
+      fail('provider query did not use canonical relation ' + expectedRelation + ': ' + sql + '\n');
+    }
+    if (!sql.includes('order by recorded_at_ms desc, id desc limit 1')) {
+      fail('provider query did not select the latest chat row: ' + sql + '\n');
+    }
+    out(fixture.providerRoutingRow ?? 'OK|litellm|litellm|model-a|model-a|1700000000000\n');
+  }
   // The bookkeeping check is a two-call contract. Call 1 discovers every schema
   // holding the projection and returns the generated per-schema UNION ALL as
   // text; call 2 runs that generated SQL. The discovery statement also mentions
@@ -235,6 +262,10 @@ interface Fixture {
   expectedHarnessKey?: string;
   rawSecretTemplateOutput?: string;
   ownerPreflightFailure?: string;
+  fleetCompanionIds?: string[];
+  fleetPostgresSchemas?: string[];
+  ledgerSchemas?: string[];
+  providerRoutingRow?: string;
 }
 
 describe('validate-kube-rollout.sh coverage accounting', () => {
@@ -298,7 +329,7 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     expect(result.stdout).toContain('PASS fleet owner-file preflight');
     // The three-companion fixture proves the in-gateway preflight covers every
     // UUID-suffixed companion root, not a single fixed agent.
-    for (const id of fleetCompanionIds) {
+    for (const id of defaultFleetCompanionIds) {
       expect(result.stdout).toContain(`/runtime/companions/${id}`);
     }
     expect(result.stdout).toMatch(
@@ -306,6 +337,82 @@ describe('validate-kube-rollout.sh coverage accounting', () => {
     );
     expect(result.stdout).not.toContain('COVERAGE INCOMPLETE');
     expect(result.status).toBe(0);
+  });
+
+  it('fails a three-companion fleet from the latest canonical chat row', () => {
+    const result = runGate(
+      {
+        secretData: { TESTING_HARNESS_API_KEY: base64('sk-harness-provider-mismatch') },
+        expectedHarnessKey: 'sk-harness-provider-mismatch',
+        providerRoutingRow: 'FAIL|openai|litellm|requested-model|actual-model|1700000000001\n',
+      },
+      ['--soft'],
+    );
+
+    expect(result.stdout, result.stdout + result.stderr).toContain('FAIL provider routing');
+    expect(result.stdout).toContain(
+      'last chat row provider mismatch: requested_provider=openai provider=litellm ' +
+        'requested_model=requested-model model=actual-model recorded_at_ms=1700000000001',
+    );
+    expect(result.stdout).toContain('PASS zero bookkeeping writes');
+    expect(result.status).toBe(1);
+  });
+
+  it('keeps a cluster-of-one on the same canonical ledger contract', () => {
+    const onlyCompanion = defaultFleetCompanionIds[0];
+    const result = runGate({
+      secretData: { TESTING_HARNESS_API_KEY: base64('sk-harness-one') },
+      expectedHarnessKey: 'sk-harness-one',
+      fleetCompanionIds: [onlyCompanion],
+      fleetPostgresSchemas: ['companion_default'],
+      ledgerSchemas: ['companion_default'],
+    });
+
+    expect(result.stdout, result.stdout + result.stderr).toContain('PASS provider routing');
+    expect(result.stdout).toContain(`/runtime/companions/${onlyCompanion}`);
+    expect(result.stdout).not.toContain(`/runtime/companions/${defaultFleetCompanionIds[1]}`);
+    expect(result.status).toBe(0);
+  });
+
+  it.each([
+    {
+      name: 'missing',
+      ledgerSchemas: [] as string[],
+      diagnostic:
+        'provider-routing ledger missing: expected companion_alpha.model_usage_events ' +
+        'from the primary companions.json entry; found none',
+    },
+    {
+      name: 'ambiguous',
+      ledgerSchemas: ['companion_alpha', 'companion_beta'],
+      diagnostic:
+        'provider-routing ledger ambiguous: expected only companion_alpha.model_usage_events ' +
+        'from the primary companions.json entry; found ' +
+        'companion_alpha.model_usage_events, companion_beta.model_usage_events',
+    },
+    {
+      name: 'owned by a non-primary schema',
+      ledgerSchemas: ['companion_beta'],
+      diagnostic:
+        'provider-routing ledger authority mismatch: companions.json expects ' +
+        'companion_alpha.model_usage_events; catalog found companion_beta.model_usage_events',
+    },
+  ])('fails closed with a precise diagnostic when the ledger is $name', ({
+    ledgerSchemas,
+    diagnostic,
+  }) => {
+    const result = runGate(
+      {
+        secretData: { TESTING_HARNESS_API_KEY: base64('sk-harness-ledger') },
+        expectedHarnessKey: 'sk-harness-ledger',
+        ledgerSchemas,
+      },
+      ['--soft'],
+    );
+
+    expect(result.stdout, result.stdout + result.stderr).toContain('FAIL provider routing');
+    expect(result.stdout).toContain(diagnostic);
+    expect(result.status).toBe(1);
   });
 
   it('strips a CRLF tail from a secret written on Windows line endings', () => {

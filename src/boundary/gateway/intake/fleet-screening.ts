@@ -18,6 +18,9 @@ type QuarantineExpiredEvent = Parameters<
 type FailClosedScreeningEvent = Parameters<
   NonNullable<BaseCompositionInput['onFailClosedScreening']>
 >[0];
+type ScreeningTimingEvent = Parameters<
+  NonNullable<BaseCompositionInput['onScreeningTiming']>
+>[0];
 
 export interface GatewayFleetScreeningCompanion {
   companionId: CompanionId;
@@ -26,7 +29,11 @@ export interface GatewayFleetScreeningCompanion {
 
 export type GatewayIntakeScreeningRuntimeInput = Omit<
   BaseCompositionInput,
-  'companionDataDir' | 'onQuarantineHeld' | 'onQuarantineExpired' | 'onFailClosedScreening'
+  | 'companionDataDir'
+  | 'onQuarantineHeld'
+  | 'onQuarantineExpired'
+  | 'onFailClosedScreening'
+  | 'onScreeningTiming'
 > & {
   /** Existing single-companion root; used byte-for-byte when fleet mode is disabled. */
   companionDataDir: string;
@@ -41,6 +48,10 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   onFailClosedScreening?: (
     companionId: CompanionId | undefined,
     event: FailClosedScreeningEvent,
+  ) => void;
+  onScreeningTiming?: (
+    companionId: CompanionId | undefined,
+    event: ScreeningTimingEvent,
   ) => void;
 };
 
@@ -104,6 +115,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     onQuarantineHeld,
     onQuarantineExpired,
     onFailClosedScreening,
+    onScreeningTiming,
     ...baseInput
   } = input;
   const compositions: GatewayIntakeScreeningComposition[] = [];
@@ -124,6 +136,9 @@ export async function composeGatewayIntakeScreeningRuntime(
         : {}),
       ...(onFailClosedScreening
         ? { onFailClosedScreening: event => onFailClosedScreening(companionId, event) }
+        : {}),
+      ...(onScreeningTiming
+        ? { onScreeningTiming: event => onScreeningTiming(companionId, event) }
         : {}),
     });
     compositions.push(composition);

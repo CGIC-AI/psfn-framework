@@ -183,6 +183,7 @@
     {@const modelUsageCostTrend = stats.modelUsage.sparkline.map((point) => point.effectiveCostUsd)}
     {@const modelUsageFreshness = stats.modelUsage.freshness}
     {@const transientSessionTelemetry = stats.transientSessionTelemetry}
+    {@const recentLatencyWaterfalls = transientSessionTelemetry.recentLatencyWaterfalls}
     {@const llmTtftPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'llm_ttft' && Object.keys(series.dimensions).length === 0)?.percentiles}
     {@const ttfaPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'ttfa' && Object.keys(series.dimensions).length === 0)?.percentiles}
     {@const sessionContextPressure = resolveSessionContextPressureView(transientSessionTelemetry.activeSessionContextPressure)}
@@ -406,6 +407,49 @@
           </div>
         {/if}
       </div>
+    </div>
+
+    <div class="card-garden p-5">
+      <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 class="font-serif text-lg text-shadow-900">Recent Turn Latency</h2>
+          <p class="text-sm text-shadow-600">Content-free timing for each correlated message on this companion.</p>
+        </div>
+        <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs text-shadow-600">
+          live since operator start
+        </span>
+      </div>
+      {#if recentLatencyWaterfalls.length > 0}
+        <div class="space-y-4">
+          {#each recentLatencyWaterfalls.slice(0, 5) as waterfall (`${waterfall.companionId ?? 'local'}:${waterfall.traceId}`)}
+            <section class="rounded-lg border border-bark-300 bg-bark-50 p-4" aria-label={`Latency for message ${waterfall.traceId}`}>
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <p class="font-mono text-xs text-shadow-700">{waterfall.traceId}</p>
+                  <p class="mt-1 text-xs text-shadow-500">
+                    {waterfall.channelType ?? 'unknown channel'} · {formatFreshnessTimestamp(waterfall.observedAtMs)}
+                  </p>
+                </div>
+                <p class="font-serif text-xl text-shadow-900">{formatDuration(Math.round(waterfall.totalObservedMs))} total</p>
+              </div>
+              <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
+                {#each waterfall.stages as stage (stage.stage)}
+                  <div class="rounded-md border border-bark-200 bg-white px-3 py-2">
+                    <p class="text-xs font-medium text-shadow-700">{stage.label}</p>
+                    {#if stage.status === 'observed' && stage.durationMs !== null}
+                      <p class="mt-1 font-mono text-sm text-shadow-900">{formatDuration(Math.round(stage.durationMs))}</p>
+                    {:else}
+                      <p class="mt-1 text-xs text-shadow-500">not run</p>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </section>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-sm text-shadow-600">No correlated turn timing has arrived yet.</p>
+      {/if}
     </div>
 
     <!-- Recent Analysis Workbench Traces -->

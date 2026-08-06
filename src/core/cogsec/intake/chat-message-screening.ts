@@ -44,6 +44,12 @@ export async function screenChatMessageBody(
       ? { canonicalContactId: input.canonicalContactId }
       : {}),
     ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
+    timing: {
+      traceId: input.messageId,
+      requestId: input.messageId,
+      channelId: input.channelId,
+      channelType: input.surface,
+    },
   });
 
   return {

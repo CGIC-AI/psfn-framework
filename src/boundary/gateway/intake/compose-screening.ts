@@ -156,6 +156,8 @@ export async function composeGatewayIntakeScreening(input: {
   onQuarantineExpired?: IntakeQuarantineStoreOptions['onExpired'];
   /** Called for structural fail-closed screening telemetry. */
   onFailClosedScreening?: IntakeScreeningServiceOptions['onFailClosed'];
+  /** Content-free per-stage latency observer; never receives screened text. */
+  onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   env?: NodeJS.ProcessEnv;
   /**
    * Test seam for the L1.5 injection classifier backend. When provided the
@@ -330,6 +332,7 @@ export async function composeGatewayIntakeScreening(input: {
     quarantine,
     actor: 'gateway:intake-screening',
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
+    ...(input.onScreeningTiming ? { onTiming: input.onScreeningTiming } : {}),
   });
   // ── Vision intake screener (htm9.8) ──
   // enabled + backend        → wired.

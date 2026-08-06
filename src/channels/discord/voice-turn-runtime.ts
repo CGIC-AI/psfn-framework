@@ -320,6 +320,13 @@ export async function handleVoiceUtterance(
           detail: `speaker:${runtime.targetUserId}`.slice(0, 512),
         },
         scope: 'context',
+        timing: {
+          traceId: turnId,
+          turnId,
+          requestId: turnId,
+          channelId: turn.channel.id,
+          channelType: 'discord',
+        },
       });
       effectiveTranscript = screened.effectiveText;
       intakeEnvelopes = [screened.snapshot];

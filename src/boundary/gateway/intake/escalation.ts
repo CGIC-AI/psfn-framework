@@ -27,6 +27,8 @@
 //   quarantine hold THROWS out of this port; the screening service catches
 //   that and quarantines (an unauditable L3 result is never delivered).
 
+import { performance } from 'node:perf_hooks';
+
 import type {
   IntakeEscalationContribution,
   IntakeEscalationDecision,
@@ -94,21 +96,35 @@ export function createGatewayIntakeEscalationPort(
       sourceRiskTier: request.sourceRiskTier,
     };
 
-    const l2Outcome = await evaluateL2({
-      text: request.text,
-      context,
-      priorScore: request.priorScore,
-      config: deps.policy,
-      model: deps.l2Model,
-      backend: deps.backend,
-      ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    });
+    const l2StartedAt = performance.now();
+    let l2Outcome: Awaited<ReturnType<typeof evaluateL2>>;
+    try {
+      l2Outcome = await evaluateL2({
+        text: request.text,
+        context,
+        priorScore: request.priorScore,
+        config: deps.policy,
+        model: deps.l2Model,
+        backend: deps.backend,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      });
+    } catch (error) {
+      request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));
+      request.emitTiming?.('l3', 'not_run');
+      throw error;
+    }
+    if (l2Outcome.kind === 'skipped') {
+      request.emitTiming?.('l2', 'not_run');
+    } else {
+      request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));
+    }
 
     let l2ForL3: { labels: readonly IntakeRiskLabel[]; injectionConfidence: number } | undefined;
     let l2Contribution: IntakeEscalationContribution | undefined;
     if (l2Outcome.kind === 'failed_closed') {
       if (l2Outcome.action === 'quarantine') {
         // High-risk tier: an unscreenable item is held, never passed.
+        request.emitTiming?.('l3', 'not_run');
         return {
           kind: 'quarantine',
           reason: `l2-fail-closed:${l2Outcome.error}`,
@@ -142,15 +158,27 @@ export function createGatewayIntakeEscalationPort(
     // the tier threshold, or an L3-mandatory tier). It returns 'skipped' with
     // zero API calls when nothing triggers — including after a skipped or
     // failed L2, where only the mandatory-tier route can still escalate.
-    const l3Outcome = await evaluateL3({
-      text: request.text,
-      context,
-      ...(l2ForL3 ? { l2: l2ForL3 } : {}),
-      config: deps.policy,
-      models: deps.l3Models,
-      backend: deps.backend,
-      ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    });
+    const l3StartedAt = performance.now();
+    let l3Outcome: Awaited<ReturnType<typeof evaluateL3>>;
+    try {
+      l3Outcome = await evaluateL3({
+        text: request.text,
+        context,
+        ...(l2ForL3 ? { l2: l2ForL3 } : {}),
+        config: deps.policy,
+        models: deps.l3Models,
+        backend: deps.backend,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      });
+    } catch (error) {
+      request.emitTiming?.('l3', 'observed', Math.max(0, performance.now() - l3StartedAt));
+      throw error;
+    }
+    if (l3Outcome.kind === 'skipped') {
+      request.emitTiming?.('l3', 'not_run');
+    } else {
+      request.emitTiming?.('l3', 'observed', Math.max(0, performance.now() - l3StartedAt));
+    }
 
     if (l3Outcome.kind === 'skipped') {
       if (l2Contribution) {

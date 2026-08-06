@@ -2,6 +2,9 @@ import type { LLMStreamOutputKind } from '../contracts/runtime-base.js';
 import { isRecord } from '../utils/types.js';
 
 export const TURN_PERFORMANCE_STAGES = [
+  'cogsec_local_screening',
+  'cogsec_l2_screening',
+  'cogsec_l3_screening',
   'transport_received',
   'speech_end',
   'stt_final',
@@ -14,6 +17,7 @@ export const TURN_PERFORMANCE_STAGES = [
   'prompt_assembly',
   'provider_request',
   'provider_first_token',
+  'provider_complete',
   'first_text_committed',
   'tts_request',
   'tts_first_byte',
@@ -21,10 +25,43 @@ export const TURN_PERFORMANCE_STAGES = [
   'cancellation_ack',
   'background_job_state',
   'visible_turn_complete',
+  'outbound_delivery',
   'turn_complete',
 ] as const;
 
 export type TurnPerformanceStage = typeof TURN_PERFORMANCE_STAGES[number];
+export type TurnPerformanceStageStatus = 'observed' | 'not_run';
+
+export const TURN_LATENCY_WATERFALL_STAGES = [
+  'local_screening',
+  'l2',
+  'l3',
+  'channel_queue',
+  'prompt_assembly',
+  'model_provider',
+  'outbound_delivery',
+] as const;
+
+export type TurnLatencyWaterfallStage = typeof TURN_LATENCY_WATERFALL_STAGES[number];
+
+export interface TurnLatencyWaterfallStageView {
+  stage: TurnLatencyWaterfallStage;
+  label: string;
+  status: TurnPerformanceStageStatus;
+  durationMs: number | null;
+}
+
+export interface TurnLatencyWaterfall {
+  traceId: string;
+  turnId?: string;
+  requestId?: string;
+  companionId?: string;
+  channelId?: string;
+  channelType?: string;
+  observedAtMs: number;
+  totalObservedMs: number;
+  stages: TurnLatencyWaterfallStageView[];
+}
 
 export type TurnPerformanceWarmState = 'warm' | 'cold' | 'unknown';
 export type TurnPerformanceCacheState = 'hit' | 'miss' | 'mixed' | 'unknown';
@@ -53,6 +90,7 @@ export interface TurnPerformanceEvent {
   schemaVersion: 1;
   traceId: string;
   stage: TurnPerformanceStage;
+  stageStatus?: TurnPerformanceStageStatus;
   monotonicAtMs: number;
   timestampMs: number;
   turnId?: string;
@@ -153,6 +191,7 @@ export interface TurnPerformanceSnapshot {
 }
 
 interface TurnTimeline {
+  key: string;
   traceId: string;
   stages: Partial<Record<TurnPerformanceStage, TurnPerformanceEvent>>;
   dimensions: TurnPerformanceDimensions;
@@ -160,6 +199,7 @@ interface TurnTimeline {
 }
 
 interface DurationSample {
+  timelineKey: string;
   traceId: string;
   metric: TurnPerformanceMetric;
   durationMs: number;
@@ -195,6 +235,7 @@ const TURN_PERFORMANCE_EVENT_KEYS = new Set<keyof TurnPerformanceEvent>([
   'schemaVersion',
   'traceId',
   'stage',
+  'stageStatus',
   'monotonicAtMs',
   'timestampMs',
   'turnId',
@@ -227,6 +268,7 @@ const TURN_PERFORMANCE_EVENT_KEYS = new Set<keyof TurnPerformanceEvent>([
 ]);
 
 const TURN_PERFORMANCE_STAGE_SET = new Set<string>(TURN_PERFORMANCE_STAGES);
+const TURN_PERFORMANCE_STAGE_STATUS_SET = new Set<string>(['observed', 'not_run']);
 const TURN_PERFORMANCE_WARM_STATE_SET = new Set<string>(['warm', 'cold', 'unknown']);
 const TURN_PERFORMANCE_CACHE_STATE_SET = new Set<string>(['hit', 'miss', 'mixed', 'unknown']);
 const TURN_PERFORMANCE_PROVIDER_OUTPUT_KIND_SET = new Set<string>(['text', 'thinking', 'tool']);
@@ -304,6 +346,9 @@ export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent 
   }
   requireNonEmptyString(value.traceId, 'traceId');
   requireEnum(value.stage, TURN_PERFORMANCE_STAGE_SET, 'stage');
+  if (value.stageStatus !== undefined) {
+    requireEnum(value.stageStatus, TURN_PERFORMANCE_STAGE_STATUS_SET, 'stageStatus');
+  }
   requireFiniteNonNegative(value.monotonicAtMs, 'monotonicAtMs');
   requireFiniteNonNegative(value.timestampMs, 'timestampMs');
   for (const key of [
@@ -360,6 +405,9 @@ export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent 
   ] as const) {
     if (value[key] !== undefined) requireFiniteNonNegative(value[key], key);
   }
+  if (value.stageStatus === 'not_run' && value.durationMs !== undefined) {
+    throw new Error('Turn performance not_run stage must not carry durationMs');
+  }
   if (value.backgroundJobAttemptCount !== undefined
     && !Number.isSafeInteger(value.backgroundJobAttemptCount)) {
     throw new Error('Turn performance event backgroundJobAttemptCount must be a safe integer');
@@ -415,28 +463,62 @@ export class TurnPerformanceTracker {
 
   observe(event: TurnPerformanceEvent): void {
     if (!Number.isFinite(event.monotonicAtMs)) return;
-    let timeline = this.timelines.get(event.traceId);
+    const timelineKey = this.resolveTimelineKey(event);
+    let timeline = this.timelines.get(timelineKey);
     if (!timeline) {
-      timeline = { traceId: event.traceId, stages: {}, dimensions: {}, derivedMetrics: new Set() };
-      this.timelines.set(event.traceId, timeline);
+      timeline = {
+        key: timelineKey,
+        traceId: event.traceId,
+        stages: {},
+        dimensions: {},
+        derivedMetrics: new Set(),
+      };
+      this.timelines.set(timelineKey, timeline);
       this.trimTimelines();
     }
     timeline.dimensions = mergeDimensions(timeline.dimensions, event);
     for (const sample of this.samples) {
-      if (sample.traceId === event.traceId) {
+      if (sample.timelineKey === timelineKey) {
         sample.dimensions = { ...timeline.dimensions };
       }
     }
     const existingStage = timeline.stages[event.stage];
-    if (!existingStage || event.monotonicAtMs < existingStage.monotonicAtMs) {
+    const replacesNotRun = existingStage?.stageStatus === 'not_run'
+      && event.stageStatus !== 'not_run';
+    const sameRunStatus = (existingStage?.stageStatus === 'not_run')
+      === (event.stageStatus === 'not_run');
+    if (!existingStage
+      || replacesNotRun
+      || (sameRunStatus && event.monotonicAtMs < existingStage.monotonicAtMs)) {
       timeline.stages[event.stage] = event;
     }
 
     if (isNonNegativeDuration(event.durationMs)) {
-      this.addSample(event.traceId, event.stage, event.durationMs, timeline.dimensions);
+      this.addSample(timeline.key, event.traceId, event.stage, event.durationMs, timeline.dimensions);
     }
     this.addDerivedSample(timeline, 'llm_ttft', 'provider_request', 'provider_first_token');
     this.addDerivedSample(timeline, 'ttfa', 'speech_end', 'first_audible_playback');
+  }
+
+  private resolveTimelineKey(event: TurnPerformanceEvent): string {
+    const exactKey = buildTimelineKey(event.companionId, event.traceId);
+    if (this.timelines.has(exactKey)) return exactKey;
+    const sameTrace = [...this.timelines.values()]
+      .filter(timeline => timeline.traceId === event.traceId);
+    if (event.companionId === undefined) {
+      return sameTrace.length === 1 ? sameTrace[0]!.key : exactKey;
+    }
+    const unscoped = sameTrace.find(timeline => timeline.dimensions.companionId === undefined);
+    if (sameTrace.length === 1 && unscoped) {
+      this.timelines.delete(unscoped.key);
+      const priorKey = unscoped.key;
+      unscoped.key = exactKey;
+      this.timelines.set(exactKey, unscoped);
+      for (const sample of this.samples) {
+        if (sample.timelineKey === priorKey) sample.timelineKey = exactKey;
+      }
+    }
+    return exactKey;
   }
 
   snapshot(): TurnPerformanceSnapshot {
@@ -465,6 +547,26 @@ export class TurnPerformanceTracker {
     };
   }
 
+  recentWaterfalls(
+    options: { companionId?: string; limit?: number } = {},
+  ): TurnLatencyWaterfall[] {
+    const limit = options.limit ?? this.windowSize;
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('Turn latency waterfall limit must be a positive safe integer');
+    }
+    return [...this.timelines.values()]
+      .filter(timeline => (
+        (options.companionId === undefined
+          || timeline.dimensions.companionId === options.companionId)
+        && Object.keys(timeline.stages).some(stage => WATERFALL_SOURCE_STAGES.has(
+          stage as TurnPerformanceStage,
+        ))
+      ))
+      .map(projectWaterfall)
+      .sort((left, right) => right.observedAtMs - left.observedAtMs)
+      .slice(0, limit);
+  }
+
   private addDerivedSample(
     timeline: TurnTimeline,
     metric: 'llm_ttft' | 'ttfa',
@@ -478,16 +580,17 @@ export class TurnPerformanceTracker {
     const durationMs = end.monotonicAtMs - start.monotonicAtMs;
     if (!isNonNegativeDuration(durationMs)) return;
     timeline.derivedMetrics.add(metric);
-    this.addSample(timeline.traceId, metric, durationMs, timeline.dimensions);
+    this.addSample(timeline.key, timeline.traceId, metric, durationMs, timeline.dimensions);
   }
 
   private addSample(
+    timelineKey: string,
     traceId: string,
     metric: TurnPerformanceMetric,
     durationMs: number,
     dimensions: TurnPerformanceDimensions,
   ): void {
-    this.samples.push({ traceId, metric, durationMs, dimensions: { ...dimensions } });
+    this.samples.push({ timelineKey, traceId, metric, durationMs, dimensions: { ...dimensions } });
     let metricSamples = 0;
     for (let index = this.samples.length - 1; index >= 0; index -= 1) {
       if (this.samples[index]?.metric !== metric) continue;
@@ -526,6 +629,87 @@ export class TurnPerformanceTracker {
       this.timelines.delete(oldest);
     }
   }
+}
+
+const WATERFALL_STAGE_DEFINITIONS = [
+  {
+    stage: 'local_screening',
+    label: 'Local screening',
+    sources: ['cogsec_local_screening'],
+  },
+  { stage: 'l2', label: 'L2', sources: ['cogsec_l2_screening'] },
+  { stage: 'l3', label: 'L3', sources: ['cogsec_l3_screening'] },
+  { stage: 'channel_queue', label: 'Channel queue', sources: ['channel_queue_wait'] },
+  { stage: 'prompt_assembly', label: 'Prompt assembly', sources: ['prompt_assembly'] },
+  { stage: 'model_provider', label: 'Model / provider', sources: ['provider_complete'] },
+  { stage: 'outbound_delivery', label: 'Outbound delivery', sources: ['outbound_delivery'] },
+] as const satisfies readonly {
+  stage: TurnLatencyWaterfallStage;
+  label: string;
+  sources: readonly TurnPerformanceStage[];
+}[];
+
+const WATERFALL_SOURCE_STAGES = new Set<TurnPerformanceStage>(
+  WATERFALL_STAGE_DEFINITIONS.flatMap(definition => definition.sources),
+);
+
+function buildTimelineKey(companionId: string | undefined, traceId: string): string {
+  return `${companionId ?? ''}\u0000${traceId}`;
+}
+
+function lastEventString(
+  events: readonly TurnPerformanceEvent[],
+  key: 'turnId' | 'requestId',
+): string | undefined {
+  const newestFirst = [...events]
+    .sort((left, right) => right.monotonicAtMs - left.monotonicAtMs);
+  for (const event of newestFirst) {
+    const value = event[key];
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function projectWaterfall(timeline: TurnTimeline): TurnLatencyWaterfall {
+  const events = Object.values(timeline.stages);
+  const observedAtMs = Math.max(...events.map(event => event.timestampMs));
+  const firstObservedAtMs = Math.min(...events.map(event => (
+    event.stageStatus !== 'not_run' && isNonNegativeDuration(event.durationMs)
+      ? event.monotonicAtMs - event.durationMs
+      : event.monotonicAtMs
+  )));
+  const lastObservedAtMs = Math.max(...events.map(event => event.monotonicAtMs));
+  const turnId = lastEventString(events, 'turnId');
+  const requestId = lastEventString(events, 'requestId');
+  return {
+    traceId: timeline.traceId,
+    ...(turnId ? { turnId } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(timeline.dimensions.companionId
+      ? { companionId: timeline.dimensions.companionId }
+      : {}),
+    ...(timeline.dimensions.channelId ? { channelId: timeline.dimensions.channelId } : {}),
+    ...(timeline.dimensions.channelType ? { channelType: timeline.dimensions.channelType } : {}),
+    observedAtMs,
+    totalObservedMs: Math.max(0, lastObservedAtMs - firstObservedAtMs),
+    stages: WATERFALL_STAGE_DEFINITIONS.map((definition) => {
+      const stageEvents = events.filter(event => (
+        (definition.sources as readonly TurnPerformanceStage[]).includes(event.stage)
+      ));
+      const observed = stageEvents.filter(event => event.stageStatus !== 'not_run');
+      const durations = observed
+        .map(event => event.durationMs)
+        .filter(isNonNegativeDuration);
+      return {
+        stage: definition.stage,
+        label: definition.label,
+        status: observed.length > 0 ? 'observed' : 'not_run',
+        durationMs: durations.length > 0
+          ? durations.reduce((total, durationMs) => total + durationMs, 0)
+          : null,
+      };
+    }),
+  };
 }
 
 function mergeDimensions(

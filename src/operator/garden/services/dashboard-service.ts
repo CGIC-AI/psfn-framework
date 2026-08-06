@@ -366,6 +366,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
             ? this.ttftTotalMs / this.ttftSampleCount
             : null,
           latencyPercentiles: this.turnPerformance.snapshot(),
+          recentLatencyWaterfalls: this.turnPerformance.recentWaterfalls(),
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
         },
         toolStatus,

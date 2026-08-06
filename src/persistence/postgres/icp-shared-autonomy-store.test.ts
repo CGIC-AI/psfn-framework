@@ -142,8 +142,11 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(sql).toContain('ON CONFLICT (companion_id) DO UPDATE');
     expect(sql).toContain('WHERE $6::bigint = 1 OR EXISTS');
     expect(sql).toContain('icp_availability_leases.revision + 1 = EXCLUDED.revision');
-    expect(sql).toContain("EXCLUDED.source = 'operator'");
-    expect(sql).toContain("icp_availability_leases.source <> 'operator'");
+    expect(sql).toContain("WHEN 'runtime' THEN 1");
+    expect(sql).toContain("WHEN 'companion' THEN 2");
+    expect(sql).toContain("WHEN 'operator' THEN 3");
+    expect(sql).toMatch(/END\s+>=\s+CASE icp_availability_leases\.source/u);
+    expect(sql).toMatch(/END\s+>\s+CASE icp_availability_leases\.source/u);
     expect(sql).toContain('icp_availability_leases.revision = EXCLUDED.revision');
     expect(sql).toContain('THEN icp_availability_leases.revision + 1');
     expect(lease.revision).toBe(1);
@@ -170,8 +173,11 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       nowMs: 2_000,
     })).resolves.toBe(true);
     const [, sql, values] = mocks.executeQuery.mock.calls[0] as [unknown, string, unknown[]];
-    expect(sql).toContain("$3::text = 'operator'");
-    expect(sql).toContain("source <> 'operator'");
+    expect(sql).toContain('CASE $3::text');
+    expect(sql).toContain("WHEN 'runtime' THEN 1");
+    expect(sql).toContain("WHEN 'companion' THEN 2");
+    expect(sql).toContain("WHEN 'operator' THEN 3");
+    expect(sql).toContain('END >= CASE source');
     expect(sql).toContain('expires_at_ms <= $4');
     expect(values).toEqual([A, 2, 'companion', 2_000]);
   });

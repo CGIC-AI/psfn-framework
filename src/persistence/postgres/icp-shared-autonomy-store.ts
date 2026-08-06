@@ -102,6 +102,24 @@ const PERMIT_COLUMNS = `
 const INVALIDATION_FENCE_COLUMNS = `
   companion_id, generation, invalidated_at_ms, last_reason_code
 `;
+
+function availabilitySourcePrioritySql(expression: string, unknownPriority: 0 | 4): string {
+  return `CASE ${expression}
+    WHEN 'runtime' THEN 1
+    WHEN 'companion' THEN 2
+    WHEN 'operator' THEN 3
+    ELSE ${unknownPriority}
+  END`;
+}
+
+const REQUESTED_AVAILABILITY_SOURCE_PRIORITY = availabilitySourcePrioritySql('$5::text', 0);
+const CURRENT_AVAILABILITY_SOURCE_PRIORITY = availabilitySourcePrioritySql('source', 4);
+const EXCLUDED_AVAILABILITY_SOURCE_PRIORITY = availabilitySourcePrioritySql('EXCLUDED.source', 0);
+const CONFLICT_AVAILABILITY_SOURCE_PRIORITY = availabilitySourcePrioritySql(
+  'icp_availability_leases.source',
+  4,
+);
+const CLEAR_REQUEST_SOURCE_PRIORITY = availabilitySourcePrioritySql('$3::text', 0);
 const PUBLISH_AVAILABILITY_SQL = `
   INSERT INTO icp_availability_leases (
     companion_id, state, issued_at_ms, expires_at_ms, source, revision
@@ -114,15 +132,15 @@ const PUBLISH_AVAILABILITY_SQL = `
         (
           revision + 1 = $6
           AND (
-            $5::text = 'operator'
-            OR source <> 'operator'
-            OR expires_at_ms <= $3
+            expires_at_ms <= $3
+            OR ${REQUESTED_AVAILABILITY_SOURCE_PRIORITY}
+              >= ${CURRENT_AVAILABILITY_SOURCE_PRIORITY}
           )
         )
         OR (
-          $5::text = 'operator'
-          AND source <> 'operator'
-          AND revision = $6
+          revision = $6
+          AND ${REQUESTED_AVAILABILITY_SOURCE_PRIORITY}
+            > ${CURRENT_AVAILABILITY_SOURCE_PRIORITY}
         )
       )
   )
@@ -139,15 +157,15 @@ const PUBLISH_AVAILABILITY_SQL = `
   WHERE (
       icp_availability_leases.revision + 1 = EXCLUDED.revision
       AND (
-        EXCLUDED.source = 'operator'
-        OR icp_availability_leases.source <> 'operator'
-        OR icp_availability_leases.expires_at_ms <= EXCLUDED.issued_at_ms
+        icp_availability_leases.expires_at_ms <= EXCLUDED.issued_at_ms
+        OR ${EXCLUDED_AVAILABILITY_SOURCE_PRIORITY}
+          >= ${CONFLICT_AVAILABILITY_SOURCE_PRIORITY}
       )
     )
     OR (
-      EXCLUDED.source = 'operator'
-      AND icp_availability_leases.source <> 'operator'
-      AND icp_availability_leases.revision = EXCLUDED.revision
+      icp_availability_leases.revision = EXCLUDED.revision
+      AND ${EXCLUDED_AVAILABILITY_SOURCE_PRIORITY}
+        > ${CONFLICT_AVAILABILITY_SOURCE_PRIORITY}
     )
   RETURNING ${AVAILABILITY_COLUMNS}
 `;
@@ -155,9 +173,8 @@ const CLEAR_AVAILABILITY_SQL = `
   DELETE FROM icp_availability_leases
   WHERE companion_id = $1 AND revision = $2
     AND (
-      $3::text = 'operator'
-      OR source <> 'operator'
-      OR expires_at_ms <= $4
+      expires_at_ms <= $4
+      OR ${CLEAR_REQUEST_SOURCE_PRIORITY} >= ${CURRENT_AVAILABILITY_SOURCE_PRIORITY}
     )
 `;
 

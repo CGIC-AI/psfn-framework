@@ -83,8 +83,14 @@ import type {
   IcpOwnAvailabilityResult,
   IcpPermitConsumeResult,
   IcpPeerAvailabilityResult,
+  IcpRuntimeAvailabilityClearParams,
+  IcpRuntimeAvailabilityRefreshParams,
 } from './icp-autonomy-contract.js';
-export type { IcpPermitConsumeResult } from './icp-autonomy-contract.js';
+export type {
+  IcpPermitConsumeResult,
+  IcpRuntimeAvailabilityClearParams,
+  IcpRuntimeAvailabilityRefreshParams,
+} from './icp-autonomy-contract.js';
 import type {
   IcpAvailabilityLease,
   IcpAvailabilityState,
@@ -1180,6 +1186,8 @@ export interface GatewayMethods {
   'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
   'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
   'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
+  'companion.availability.refresh_runtime': [IcpRuntimeAvailabilityRefreshParams, IcpOwnAvailabilityResult];
+  'companion.availability.clear_runtime': [IcpRuntimeAvailabilityClearParams, IcpOwnAvailabilityResult];
   'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
   'companion.availability.read_self': [IcpOwnAvailabilityReadParams, IcpOwnAvailabilityResult];
   'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];

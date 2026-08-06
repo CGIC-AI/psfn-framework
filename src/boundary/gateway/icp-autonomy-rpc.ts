@@ -8,6 +8,8 @@ import {
 import {
   parseIcpAvailabilityClearParams,
   parseIcpAvailabilityPublishParams,
+  parseIcpRuntimeAvailabilityClearParams,
+  parseIcpRuntimeAvailabilityRefreshParams,
   parseIcpInitiationHandoffPrepareParams,
   parseIcpInitiationPermitIssueInput,
   parseIcpInitiationPreflightInput,
@@ -18,6 +20,7 @@ import {
   parseIcpPermitRevokeParams,
 } from './icp-autonomy-contract.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { FleetFatiguePosture } from '../../shared/telemetry/fleet-posture.js';
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 
 interface GatewayIcpAutonomyRpcOptions {
@@ -25,6 +28,7 @@ interface GatewayIcpAutonomyRpcOptions {
   fleetCompanionIds: ReadonlySet<string>;
   companionChannels?: GatewayCompanionChannelLane;
   isCompanionReady(companionId: string): boolean;
+  readCompanionFatiguePosture(companionId: string): FleetFatiguePosture | null;
   policyAuthority: Pick<
     GatewayIcpInitiationPolicyAuthority,
     'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
@@ -51,6 +55,7 @@ export function createGatewayIcpAutonomyBroker(
     store: options.store,
     fleetCompanionIds: options.fleetCompanionIds,
     isCompanionReady: options.isCompanionReady,
+    readCompanionFatiguePosture: options.readCompanionFatiguePosture,
     policyAuthority: options.policyAuthority,
     resolveInitiationChannel: async (senderCompanionId, peerCompanionId, channelId) => {
       const lane = options.companionChannels;
@@ -96,6 +101,27 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
       const companionId = input.requireAuthenticatedCompanionId();
       const parsed = parseIcpAvailabilityClearParams(params);
       return { cleared: await requireBroker().clearAvailability(companionId, parsed.expectedRevision) };
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.availability.refresh_runtime', input.audited(
+    'companion.availability.refresh_runtime',
+    async (params: unknown) => {
+      const companionId = input.requireAuthenticatedCompanionId();
+      return await requireBroker().refreshRuntimeAvailability(
+        companionId,
+        parseIcpRuntimeAvailabilityRefreshParams(params, Date.now()),
+      );
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.availability.clear_runtime', input.audited(
+    'companion.availability.clear_runtime',
+    async (params: unknown) => {
+      parseIcpRuntimeAvailabilityClearParams(params);
+      return await requireBroker().clearRuntimeAvailability(
+        input.requireAuthenticatedCompanionId(),
+      );
     },
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),
   ));

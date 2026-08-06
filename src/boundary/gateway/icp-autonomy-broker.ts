@@ -16,6 +16,7 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { FleetFatiguePosture } from '../../shared/telemetry/fleet-posture.js';
 import type {
   IcpGateReasonClass,
   IcpInitiationGateDecision,
@@ -37,6 +38,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
   store: IcpSharedAutonomyStorePort;
   fleetCompanionIds: ReadonlySet<string>;
   isCompanionReady(companionId: string): boolean;
+  readCompanionFatiguePosture(companionId: string): FleetFatiguePosture | null;
   resolveInitiationChannel(
     senderCompanionId: string,
     peerCompanionId: string,
@@ -55,6 +57,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
 export class GatewayIcpAutonomyBroker {
   private readonly now: () => number;
   private readonly randomUuid: () => string;
+  private readonly runtimeAvailabilityActiveCompanionIds = new Set<string>();
 
   constructor(private readonly options: GatewayIcpAutonomyBrokerOptions) {
     this.now = options.now ?? (() => Date.now());
@@ -96,6 +99,58 @@ export class GatewayIcpAutonomyBroker {
     return published.lease;
   }
 
+  async refreshRuntimeAvailability(
+    companionId: string,
+    input: {
+      state: Extract<IcpAvailabilityState, 'available' | 'resting'>;
+      expiresAtMs: number;
+    },
+  ): Promise<IcpOwnAvailabilityResult> {
+    this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    this.markRuntimeAvailabilityActive(companionId);
+    const nowMs = this.now();
+    const current = await this.options.store.getAvailability(companionId);
+    if (current && current.expiresAtMs > nowMs && current.source !== 'runtime') {
+      return await this.readOwnAvailability(companionId);
+    }
+    const lease = parseIcpAvailabilityLease({
+      companionId,
+      state: input.state,
+      issuedAtMs: nowMs,
+      expiresAtMs: input.expiresAtMs,
+      source: 'runtime',
+      revision: (current?.revision ?? 0) + 1,
+    }, { nowMs, requireCurrent: true });
+    const reasonCode = availabilityReason(lease.state);
+    let published: { lease: IcpAvailabilityLease; revokedPermits: IcpInitiationPermit[] };
+    try {
+      published = reasonCode
+        ? await this.options.store.publishAvailabilityAndInvalidate(lease, reasonCode)
+        : { lease: await this.options.store.publishAvailability(lease), revokedPermits: [] };
+    } catch (error) {
+      const winner = await this.options.store.getAvailability(companionId);
+      if (winner && winner.expiresAtMs > nowMs && winner.source !== 'runtime') {
+        return await this.readOwnAvailability(companionId);
+      }
+      throw error;
+    }
+    if (reasonCode) {
+      for (const permit of published.revokedPermits) {
+        await this.emitPermitRevoked(permit, reasonCode);
+      }
+    }
+    await this.options.eventBus.emit('icp.availability.changed', {
+      companionId,
+      action: 'published',
+      state: published.lease.state,
+      source: published.lease.source,
+      revision: published.lease.revision,
+      expiresAtMs: published.lease.expiresAtMs,
+      timestamp: nowMs,
+    });
+    return await this.readOwnAvailability(companionId);
+  }
+
   async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
     this.requireFleetCompanion(companionId, 'availability publisher');
     const nowMs = this.now();
@@ -117,6 +172,65 @@ export class GatewayIcpAutonomyBroker {
       });
     }
     return result.cleared;
+  }
+
+  async clearRuntimeAvailability(companionId: string): Promise<IcpOwnAvailabilityResult> {
+    this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    this.runtimeAvailabilityActiveCompanionIds.delete(companionId);
+    const current = await this.options.store.getAvailability(companionId);
+    if (!current || current.source !== 'runtime') {
+      await this.invalidateForCompanion(companionId, 'policy_denied');
+      return await this.readOwnAvailability(companionId);
+    }
+    const nowMs = this.now();
+    if (current.expiresAtMs <= nowMs) {
+      await this.invalidateForCompanion(companionId, 'policy_denied');
+      return await this.readOwnAvailability(companionId);
+    }
+    const lease = parseIcpAvailabilityLease({
+      companionId,
+      state: 'resting',
+      issuedAtMs: nowMs,
+      expiresAtMs: current.expiresAtMs,
+      source: 'runtime',
+      revision: current.revision + 1,
+    }, { nowMs, requireCurrent: true });
+    let result: { lease: IcpAvailabilityLease; revokedPermits: IcpInitiationPermit[] };
+    try {
+      result = await this.options.store.publishAvailabilityAndInvalidate(
+        lease,
+        'policy_denied',
+      );
+    } catch (error) {
+      const winner = await this.options.store.getAvailability(companionId);
+      if (winner && winner.expiresAtMs > nowMs && winner.source !== 'runtime') {
+        await this.invalidateForCompanion(companionId, 'policy_denied');
+        return await this.readOwnAvailability(companionId);
+      }
+      throw error;
+    }
+    for (const permit of result.revokedPermits) {
+      await this.emitPermitRevoked(permit, 'policy_denied');
+    }
+    await this.options.eventBus.emit('icp.availability.changed', {
+      companionId,
+      action: 'published',
+      state: result.lease.state,
+      source: result.lease.source,
+      revision: result.lease.revision,
+      expiresAtMs: result.lease.expiresAtMs,
+      timestamp: nowMs,
+    });
+    return await this.readOwnAvailability(companionId);
+  }
+
+  markRuntimeAvailabilityInactive(companionId: string): void {
+    this.runtimeAvailabilityActiveCompanionIds.delete(companionId);
+  }
+
+  markRuntimeAvailabilityActive(companionId: string): void {
+    this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    this.runtimeAvailabilityActiveCompanionIds.add(companionId);
   }
 
   async readPeerAvailability(
@@ -151,7 +265,8 @@ export class GatewayIcpAutonomyBroker {
         lease,
       };
     }
-    const reasonCode = availabilityReason(lease.state);
+    const reasonCode = availabilityReason(lease.state)
+      ?? this.runtimeParticipationReason(peerCompanionId);
     return {
       peerCompanionId,
       connectionState: 'online',
@@ -181,7 +296,8 @@ export class GatewayIcpAutonomyBroker {
         mutableByCompanion: true,
       };
     }
-    const reasonCode = availabilityReason(lease.state);
+    const reasonCode = availabilityReason(lease.state)
+      ?? this.runtimeParticipationReason(companionId);
     return {
       eligible: reasonCode === undefined,
       ...(reasonCode ? { reasonCode } : {}),
@@ -270,6 +386,10 @@ export class GatewayIcpAutonomyBroker {
     if (!this.options.isCompanionReady(senderCompanionId)
       || !this.options.isCompanionReady(permit.recipientCompanionId)) {
       return { authorized: false, reasonCode: 'peer_offline' };
+    }
+    const senderRuntimeReason = this.runtimeParticipationReason(senderCompanionId);
+    if (senderRuntimeReason) {
+      return { authorized: false, reasonCode: senderRuntimeReason };
     }
     const availability = await this.readPeerAvailability(
       senderCompanionId,
@@ -495,6 +615,16 @@ export class GatewayIcpAutonomyBroker {
         ? input.recipientCompanionId
         : senderCompanionId;
       await this.invalidateForCompanion(unavailableCompanionId, 'peer_offline');
+    } else {
+      const senderRuntimeReason = this.runtimeParticipationReason(senderCompanionId);
+      const recipientRuntimeReason = this.runtimeParticipationReason(input.recipientCompanionId);
+      const runtimeReason = senderRuntimeReason ?? recipientRuntimeReason;
+      if (runtimeReason) {
+        await this.invalidateForCompanion(
+          senderRuntimeReason ? senderCompanionId : input.recipientCompanionId,
+          runtimeReason,
+        );
+      }
     }
     const consumedAtMs = this.now();
     const guarded = await this.options.policyAuthority.runAuthorizedHandoff({
@@ -650,6 +780,8 @@ export class GatewayIcpAutonomyBroker {
     }
     if (candidate.status !== 'pending') return closedDecision('candidate_cancelled', 'terminal');
     if (candidate.expiresAtMs <= this.now()) return closedDecision('candidate_expired', 'terminal');
+    const senderRuntimeReason = this.runtimeParticipationReason(senderCompanionId);
+    if (senderRuntimeReason) return closedDecision(senderRuntimeReason, 'terminal');
     const policy = await this.options.policyAuthority.resolve({
       senderCompanionId,
       candidate,
@@ -720,6 +852,15 @@ export class GatewayIcpAutonomyBroker {
     if (!this.options.fleetCompanionIds.has(companionId)) {
       throw new Error(`Unknown ${label} ${companionId}`);
     }
+  }
+
+  private runtimeParticipationReason(companionId: string): IcpAutonomyReasonCode | undefined {
+    if (!this.runtimeAvailabilityActiveCompanionIds.has(companionId)) {
+      return 'policy_denied';
+    }
+    const fatigue = this.options.readCompanionFatiguePosture(companionId);
+    if (fatigue === null) return 'policy_denied';
+    return fatigue === 'exhausted' ? 'fatigue_exhausted' : undefined;
   }
 
   private requireDistinctFleetPair(senderCompanionId: string, peerCompanionId: string): void {

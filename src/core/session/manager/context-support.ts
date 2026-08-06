@@ -379,7 +379,12 @@ export function entriesToMessages(
       }
       continue;
     }
-    const attribution = normalizeSessionEntryAttribution(entry);
+    const attribution = isCapabilityTierChangeNotice
+      ? {
+          role: 'system' as const,
+          authorName: CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
+        }
+      : normalizeSessionEntryAttribution(entry);
     const role = attribution.role === 'tool'
       ? 'system'
       : attribution.role;

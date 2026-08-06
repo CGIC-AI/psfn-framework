@@ -2,8 +2,8 @@ import { parseCompanionChannelId } from './companion-channels.js';
 import {
   assertNoUnknownKeys,
   isRecord,
-  isRfc4122Uuid,
 } from '../utils/types.js';
+import { requireUuid } from '../utils/uuid.js';
 
 // Content-free cross-companion control-plane vocabulary. Private motivation
 // stays in core/icp/initiation-candidate.ts and never enters these contracts.
@@ -250,13 +250,6 @@ const CONVERSATION_TRANSITIONS: Readonly<Record<IcpConversationStatus, readonly 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`${label} must be an object`);
-  }
-  return value;
-}
-
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) {
-    throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
   }
   return value;
 }

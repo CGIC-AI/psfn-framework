@@ -13,8 +13,8 @@ export type { IcpInitiationCandidateStatus } from '../../shared/contracts/icp-au
 import {
   assertNoUnknownKeys,
   isRecord,
-  isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { requireUuid } from '../../shared/utils/uuid.js';
 import {
   isIcpContinuationTaskKind,
   type IcpContinuationTaskKind,
@@ -100,11 +100,6 @@ function requireString(value: unknown, field: string, maxLength = 1_024): string
   if (value.length > maxLength) {
     throw new Error(`${field} must be ${maxLength} characters or fewer`);
   }
-  return value;
-}
-
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
   return value;
 }
 

@@ -12,7 +12,8 @@ import {
   type IcpInitiationPermit,
   type IcpPermitStatus,
 } from '../../shared/contracts/icp-autonomy.js';
-import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import { requireUuid } from '../../shared/utils/uuid.js';
 
 export type IcpGateReasonClass = 'deferrable' | 'terminal';
 
@@ -121,11 +122,6 @@ function requireTrimmedString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) {
     throw new Error(`${field} must be a non-empty trimmed string`);
   }
-  return value;
-}
-
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
   return value;
 }
 

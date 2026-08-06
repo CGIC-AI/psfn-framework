@@ -138,6 +138,17 @@ function parentFrom(token: string): RequestCapabilityParentBinding {
 }
 
 describe('Ed25519 hop request capabilities', () => {
+  it('rejects malformed UUIDs with the request-specific class and exact diagnostic', () => {
+    const invalid = () => signer().signOperator({
+      ...binding(),
+      requestId: 'not-a-uuid',
+    });
+    expect(invalid).toThrow(RequestCapabilityRejectedError);
+    expect(invalid).toThrow(
+      'Request capability rejected: requestId must be a lowercase RFC-4122 UUID',
+    );
+  });
+
   it('round-trips a canonical operator golden and binds every authority field', () => {
     const compiled = target();
     const token = signer().signOperator(binding(compiled));

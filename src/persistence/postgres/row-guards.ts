@@ -1,7 +1,6 @@
-import { isRfc4122Uuid } from '../../shared/utils/types.js';
+export { requireUuid } from '../../shared/utils/uuid.js';
 
 type PostgresInteger = string | number;
-type UuidExpectation = 'lowercase RFC-4122 UUID' | 'RFC 4122 UUID';
 
 function coerceSafeInteger(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -47,16 +46,4 @@ export function requireFleetAuthInteger(value: string, field: string): number {
     throw new Error(`Invalid fleet_auth ${field}`);
   }
   return parsed;
-}
-
-export function requireUuid(
-  value: unknown,
-  field: string,
-  expectation: UuidExpectation = 'lowercase RFC-4122 UUID',
-): string {
-  if (!isRfc4122Uuid(value)) {
-    const article = expectation === 'RFC 4122 UUID' ? 'an' : 'a';
-    throw new Error(`${field} must be ${article} ${expectation}`);
-  }
-  return value;
 }

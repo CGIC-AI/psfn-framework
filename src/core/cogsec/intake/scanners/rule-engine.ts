@@ -21,10 +21,15 @@
 import * as fs from 'node:fs';
 import { isRecord } from '../../../../shared/utils/types.js';
 import {
+  INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS,
+  INTAKE_L1_RULE_MATCH_TOTAL_MAX,
   isIntakeRiskLabel,
   INTAKE_RISK_LABELS,
+  truncateUtf16AtCodePointBoundary,
+  type IntakeL1RuleMatchKind,
   type IntakeRiskLabel,
 } from '../../../../shared/contracts/intake-envelope.js';
+import { redactSecretsInText } from '../../../../shared/diagnostics/redaction.js';
 import {
   buildBoundedFillerPattern,
   buildCharWindowPattern,
@@ -50,7 +55,6 @@ import {
 export const INTAKE_L1_RULES_FILE_NAME = 'intake-l1-rules.json';
 export const INTAKE_RULE_ENGINE_SCANNER_ID = 'l1.rules';
 
-const MAX_RULES = 512;
 const RULE_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
 
 // ── Rule file schema ──
@@ -108,6 +112,7 @@ interface CompiledIntakeRule {
   labels: readonly IntakeRiskLabel[];
   scope: IntakeScanScope;
   weight: number;
+  matchKind: IntakeL1RuleMatchKind;
   regex: RegExp;
 }
 
@@ -199,8 +204,11 @@ function compileIntakeL1Rules(
   if (rawRules.length === 0) {
     throw invalid(sourcePath, 'rules must not be empty');
   }
-  if (rawRules.length > MAX_RULES) {
-    throw invalid(sourcePath, `rules exceed the ${String(MAX_RULES)}-rule cap`);
+  if (rawRules.length > INTAKE_L1_RULE_MATCH_TOTAL_MAX) {
+    throw invalid(
+      sourcePath,
+      `rules exceed the ${String(INTAKE_L1_RULE_MATCH_TOTAL_MAX)}-rule cap`,
+    );
   }
 
   const seenIds = new Set<string>();
@@ -247,12 +255,17 @@ function compileIntakeL1Rules(
     if (ruleValue.note !== undefined && typeof ruleValue.note !== 'string') {
       throw invalid(sourcePath, `rule '${id}' note must be a string`);
     }
+    const regex = compileMatch(ruleValue.match, id, sourcePath);
+    if (regex.exec('')?.[0] === '') {
+      throw invalid(sourcePath, `rule '${id}' match must not match an empty span`);
+    }
     compiled.push({
       id,
       labels,
       scope: ruleValue.scope,
       weight,
-      regex: compileMatch(ruleValue.match, id, sourcePath),
+      matchKind: (ruleValue.match as IntakeL1RuleMatch).kind,
+      regex,
     });
   }
   return compiled;
@@ -325,6 +338,24 @@ function readFingerprint(rulesPath: string): string {
   return `${String(stats.mtimeNs)}:${String(stats.size)}:${String(stats.ino)}`;
 }
 
+function renderRuleMatchExcerpt(matchedText: string): string {
+  const singleLine = redactSecretsInText(matchedText)
+    .replace(
+      /\S{24,}/gu,
+      '[REDACTED_TOKEN]',
+    )
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (singleLine.length === 0) return '[REDACTED_MATCH]';
+  if (singleLine.length <= INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS) return singleLine;
+  const excerptBody = truncateUtf16AtCodePointBoundary(
+    singleLine,
+    INTAKE_RULE_MATCH_EXCERPT_MAX_CHARS - 3,
+  );
+  return `${excerptBody}...`;
+}
+
 export function createIntakeRuleEngine(options: IntakeRuleEngineOptions): IntakeRuleEngine {
   const rulesPath = options.rulesPath;
   const reloadCheckIntervalMs = options.reloadCheckIntervalMs ?? 5_000;
@@ -379,12 +410,25 @@ export function createIntakeRuleEngine(options: IntakeRuleEngineOptions): Intake
       const findings: IntakeScannerFinding[] = [];
       for (const rule of rules) {
         if (!scanScopeIncludes(scope, rule.scope)) continue;
-        if (!rule.regex.test(normalizedText)) continue;
+        rule.regex.lastIndex = 0;
+        const matched = rule.regex.exec(normalizedText);
+        if (!matched) continue;
+        const matchedText = matched[0];
+        if (!matchedText) {
+          throw new Error(`Intake L1 rule '${rule.id}' produced an empty match span`);
+        }
         findings.push({
           ruleId: rule.id,
           labels: rule.labels,
           weight: rule.weight,
           scope: rule.scope,
+          match: {
+            ruleId: rule.id,
+            kind: rule.matchKind,
+            startOffset: matched.index,
+            endOffset: matched.index + matchedText.length,
+            excerpt: renderRuleMatchExcerpt(matchedText),
+          },
         });
       }
       return buildScannerResult({ scannerId: INTAKE_RULE_ENGINE_SCANNER_ID, findings });

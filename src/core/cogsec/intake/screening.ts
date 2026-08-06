@@ -45,6 +45,8 @@ import {
   type IntakeEnvelopeSnapshot,
   type IntakeEnvelopeSubject,
   type IntakeRiskLabel,
+  type IntakeL1RuleMatchProvenance,
+  MAX_DECISION_RULE_MATCHES,
   type IntakeSourceClass,
   type IntakeSourceRiskTier,
 } from '../../../shared/contracts/intake-envelope.js';
@@ -466,6 +468,31 @@ function decideAction(signals: ScreeningSignals): { action: IntakeDecisionAction
   return { action: 'pass', reason: `no-findings${scoreNote}${truncationNote}` };
 }
 
+function ruleMatchesForDecision(
+  report: IntakeL1ScanReport,
+  decision: { action: IntakeDecisionAction; reason: string },
+): Pick<
+  IntakeDecision,
+  'ruleMatches' | 'ruleMatchTotalCount' | 'ruleMatchesTruncated'
+> | undefined {
+  if (decision.action !== 'quarantine' && decision.action !== 'block') return undefined;
+  if (!decision.reason.startsWith('l1:') && !decision.reason.startsWith('onnx-threshold+l1:')) {
+    return undefined;
+  }
+  const allMatches = report.results
+    .filter((result) => result.scannerId === INTAKE_RULE_ENGINE_SCANNER_ID)
+    .flatMap((result) => result.findings)
+    .map((finding) => finding.match)
+    .filter((match): match is IntakeL1RuleMatchProvenance => match !== undefined);
+  if (allMatches.length === 0) return undefined;
+  const ruleMatches = allMatches.slice(0, MAX_DECISION_RULE_MATCHES);
+  return {
+    ruleMatches,
+    ruleMatchTotalCount: allMatches.length,
+    ruleMatchesTruncated: allMatches.length > ruleMatches.length,
+  };
+}
+
 // ── Service ──
 
 function buildContentRef(text: string, store: string): {
@@ -610,11 +637,13 @@ export function createIntakeScreeningService(
         injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
         priorSignals,
       });
+    const ruleMatchEvidence = ruleMatchesForDecision(report, decision);
     const intakeDecision: IntakeDecision = {
       action: decision.action,
       reason: decision.reason.slice(0, 1024),
       decidedBy: 'screening',
       decidedAtMs: atMs,
+      ...(ruleMatchEvidence ?? {}),
     };
 
     const collected = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);

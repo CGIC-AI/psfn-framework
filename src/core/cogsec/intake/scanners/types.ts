@@ -15,16 +15,22 @@
 // score }. Labels come exclusively from the closed taxonomy in
 // src/shared/contracts/intake-envelope.ts — scanners never invent labels.
 
-import type { IntakeRiskLabel } from '../../../../shared/contracts/intake-envelope.js';
+import {
+  INTAKE_L1_SCAN_MAX_CHARS,
+  truncateUtf16AtCodePointBoundary,
+  type IntakeL1RuleMatchProvenance,
+  type IntakeRiskLabel,
+} from '../../../../shared/contracts/intake-envelope.js';
 
 /**
  * Hard cap on characters scanned by any regex or per-codepoint pass.
  * Context/tool-result strings can be arbitrarily large and L1 is an advisory
  * guard, not archival search; bounding input keeps worst-case runtime
  * predictable while preserving detections near the beginning of injected
- * content. Applied BEFORE any pattern work (Hermes MAX_SCAN_CHARS).
+ * content. Applied before raw pattern work and again after any transform that
+ * may expand UTF-16 length (Hermes MAX_SCAN_CHARS).
  */
-export const MAX_SCAN_CHARS = 65_536;
+export const MAX_SCAN_CHARS = INTAKE_L1_SCAN_MAX_CHARS;
 
 // ── Scope tiers ──
 //
@@ -72,6 +78,8 @@ export interface IntakeScannerFinding {
   scope: IntakeScanScope;
   /** Human-auditable detail. Must never carry raw payload bytes. */
   detail?: string;
+  /** Bounded evidence for an owner-file rule match; absent for other detectors. */
+  match?: IntakeL1RuleMatchProvenance;
 }
 
 export interface IntakeScannerResult {
@@ -125,5 +133,8 @@ export function capScanText(text: string): { capped: string; truncated: boolean 
   if (text.length <= MAX_SCAN_CHARS) {
     return { capped: text, truncated: false };
   }
-  return { capped: text.slice(0, MAX_SCAN_CHARS), truncated: true };
+  return {
+    capped: truncateUtf16AtCodePointBoundary(text, MAX_SCAN_CHARS),
+    truncated: true,
+  };
 }

@@ -21,6 +21,95 @@ const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
 ] as const;
 const PROVIDER_RESPONSE_HEADER_ARTIFACT_PATTERN = /^#{1,6}\s+(?:(?:assistant|model|bot|character|companion|[^#\r\n]{1,80}'s)\s+)?response\s*:?(?:\r?\n|$)/iu;
 const PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS = 120;
+const KIMI_K3_MODEL_ID = 'moonshotai/kimi-k3';
+const KIMI_K3_END_MESSAGE_ARTIFACT = '<|end_message|>';
+
+export interface ProviderResponseTerminatorFilter {
+  /** Return only text that can no longer be part of a trailing terminator. */
+  push(delta: string): string;
+  /** Strip a complete terminal artifact and return any ordinary withheld text. */
+  finish(): string;
+  /** Return all withheld text when the provider stream fails before completion. */
+  flush(): string;
+}
+
+/**
+ * Resolve a provider-template terminator only where live evidence proves that
+ * model emits it as visible text. This is intentionally model-specific: a
+ * participant may legitimately discuss the same literal token in other model
+ * rooms, and broad output stripping would silently rewrite their response.
+ */
+function resolveProviderResponseTerminatorArtifact(
+  candidate: Pick<RoutingCandidate, 'model'>,
+): string | null {
+  const normalizedModel = candidate.model.trim().toLowerCase().replace(/^openrouter\//u, '');
+  return normalizedModel === KIMI_K3_MODEL_ID
+    ? KIMI_K3_END_MESSAGE_ARTIFACT
+    : null;
+}
+
+/**
+ * Hold only the suffix that could still become a known terminal artifact. The
+ * filter therefore works when the provider splits the marker across arbitrary
+ * SSE deltas without delaying the rest of the visible reply.
+ */
+export function createProviderResponseTerminatorFilter(
+  candidate: Pick<RoutingCandidate, 'model'>,
+): ProviderResponseTerminatorFilter {
+  const artifact = resolveProviderResponseTerminatorArtifact(candidate);
+  let withheld = '';
+
+  const drain = (): string => {
+    if (!artifact || withheld.length === 0) {
+      const visible = withheld;
+      withheld = '';
+      return visible;
+    }
+
+    let possibleSuffixLength = Math.min(withheld.length, artifact.length);
+    while (
+      possibleSuffixLength > 0
+      && !artifact.startsWith(withheld.slice(-possibleSuffixLength))
+    ) {
+      possibleSuffixLength -= 1;
+    }
+    const visibleLength = withheld.length - possibleSuffixLength;
+    const visible = withheld.slice(0, visibleLength);
+    withheld = withheld.slice(visibleLength);
+    return visible;
+  };
+
+  return {
+    push(delta) {
+      withheld += delta;
+      return drain();
+    },
+    finish() {
+      if (artifact && withheld === artifact) {
+        withheld = '';
+        return '';
+      }
+      const visible = withheld;
+      withheld = '';
+      return visible;
+    },
+    flush() {
+      const visible = withheld;
+      withheld = '';
+      return visible;
+    },
+  };
+}
+
+export function stripProviderResponseTerminatorArtifact(
+  content: string,
+  candidate: Pick<RoutingCandidate, 'model'>,
+): string {
+  const artifact = resolveProviderResponseTerminatorArtifact(candidate);
+  return artifact && content.endsWith(artifact)
+    ? content.slice(0, -artifact.length)
+    : content;
+}
 
 export function normalizeUsageCount(value: unknown): number {
   const numeric = toFiniteNumber(value);
@@ -405,7 +494,10 @@ export function assertUsableProviderResponse(
   const content = typeof response.content === 'string'
     ? response.content
     : extractTextContent(contentBlocks);
-  const normalizedContent = normalizeContent(content);
+  const normalizedContent = stripProviderResponseTerminatorArtifact(
+    normalizeContent(content),
+    candidate,
+  );
   assertNoProviderResponsePrefixArtifact(normalizedContent, candidate);
   const directToolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
   const blockToolCalls = extractToolCallsFromContentBlocks(contentBlocks);

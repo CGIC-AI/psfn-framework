@@ -104,6 +104,7 @@ import { classifyLLMError } from './error-classify.js';
 import {
   assertNoProviderResponsePrefixArtifact,
   assertUsableProviderResponse,
+  createProviderResponseTerminatorFilter,
   extractCompletionToolCalls,
   extractToolCallsFromContentBlocks,
   isPotentialProviderResponsePrefixArtifact,
@@ -111,6 +112,7 @@ import {
   normalizeLLMUsageDetails,
   normalizeProxyModelId,
   normalizeSharedRouteKey,
+  stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
 import {
   mergeModelHints,
@@ -1276,10 +1278,11 @@ export class LLMClient {
             const toolCalls: ToolCall[] = [];
             let response: LLMResponse | null = null;
             let emittedData = false;
-            let emittedTextLength = 0;
+            let processedTextLength = 0;
             let sawTextDelta = false;
             let providerCompleted = false;
             let rawUsageEvidence: unknown;
+            const responseTerminatorFilter = createProviderResponseTerminatorFilter(candidateTarget);
             // gu8m: total raw tool-argument-fragment bytes observed across the whole
             // stream. Lets us classify empty final tool arguments as provider_emitted_empty
             // (no fragments ever arrived) vs stream_parse_dropped (fragments arrived but the
@@ -1299,11 +1302,12 @@ export class LLMClient {
                       break;
                     }
                     {
-                      const unEmitted = content.slice(emittedTextLength);
-                      emittedTextLength = content.length;
-                      if (unEmitted) {
+                      const unprocessed = content.slice(processedTextLength);
+                      processedTextLength = content.length;
+                      const visibleDelta = responseTerminatorFilter.push(unprocessed);
+                      if (visibleDelta) {
                         emittedData = true;
-                        callbacks?.onText?.(unEmitted);
+                        callbacks?.onText?.(visibleDelta);
                       }
                     }
                     break;
@@ -1363,14 +1367,23 @@ export class LLMClient {
                     // Normalize away stringified content block arrays from streaming
                     content = normalizeContent(content);
                     assertNoProviderResponsePrefixArtifact(content, candidateTarget);
-                    if (sawTextDelta && content.length > emittedTextLength) {
-                      const unEmitted = content.slice(emittedTextLength);
-                      emittedTextLength = content.length;
-                      if (unEmitted) {
+                    if (sawTextDelta && content.length > processedTextLength) {
+                      const unprocessed = content.slice(processedTextLength);
+                      processedTextLength = content.length;
+                      const visibleDelta = responseTerminatorFilter.push(unprocessed);
+                      if (visibleDelta) {
                         emittedData = true;
-                        callbacks?.onText?.(unEmitted);
+                        callbacks?.onText?.(visibleDelta);
                       }
                     }
+                    if (sawTextDelta) {
+                      const visibleTail = responseTerminatorFilter.finish();
+                      if (visibleTail) {
+                        emittedData = true;
+                        callbacks?.onText?.(visibleTail);
+                      }
+                    }
+                    content = stripProviderResponseTerminatorArtifact(content, candidateTarget);
                     const usageDetails = normalizeLLMUsageDetails(
                       event.message.usage,
                       event.message.usage.input,
@@ -1400,6 +1413,11 @@ export class LLMClient {
                 }
               }
             } catch (error) {
+              const withheldText = responseTerminatorFilter.flush();
+              if (withheldText) {
+                emittedData = true;
+                callbacks?.onText?.(withheldText);
+              }
               const err = error instanceof Error ? error : new Error(String(error));
               if (emittedData) {
                 markErrorAsNonRetryable(err);
@@ -2014,9 +2032,13 @@ export class LLMClient {
     );
     const inputTokens = usageDetails.input;
     const outputTokens = usageDetails.output;
+    const visibleContent = stripProviderResponseTerminatorArtifact(
+      normalizeContent(content),
+      candidate,
+    );
 
     return {
-      content: normalizeContent(content),
+      content: visibleContent,
       ...(reasoning ? { reasoning } : {}),
       ...(
         providerObservability

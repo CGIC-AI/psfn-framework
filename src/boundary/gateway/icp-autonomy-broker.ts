@@ -822,7 +822,6 @@ export class GatewayIcpAutonomyBroker {
     if (!policy.trustAllows) return closedDecision('policy_denied', 'terminal');
     if (!policy.provenanceFresh) return closedDecision('stale_provenance', 'terminal');
     if (policy.recursiveMiOnlyRoot) return closedDecision('recursive_trigger', 'terminal');
-    if (policy.quietHours) return closedDecision('quiet_hours', 'deferrable');
     if (!policy.socialPressureAllows || !policy.chargeAllows) {
       return closedDecision('charge_pressure', 'deferrable');
     }

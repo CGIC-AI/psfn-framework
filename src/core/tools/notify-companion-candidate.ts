@@ -16,7 +16,8 @@ import {
   type DeferredCompanionOutreachAuthorizationEvidence,
 } from './notify-companion-handoff.js';
 
-export const COMPANION_CANDIDATE_QUEUED_TEXT = 'notify: private companion initiation candidate queued.';
+export const COMPANION_CANDIDATE_QUEUED_TEXT =
+  'notify: private companion initiation candidate queued for post-turn evaluation; no permit or delivery outcome is available yet.';
 export const ICP_INITIATION_CANDIDATE_ACTION_KIND = 'notify.companion_candidate' as const;
 
 export interface CompanionCandidateParams {

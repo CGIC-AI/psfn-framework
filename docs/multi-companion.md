@@ -474,11 +474,21 @@ Multi-companion layers on top of the single-companion locations/world surface
   source runtime may turn a bounded weighted-thought, intention, or co-location
   signal into a private local candidate. The gateway broker then applies
   canonical contact identity, bilateral trust/block, channel, provenance,
-  availability, quiet-hours, fatigue, charge, cost-breaker, capability, and
+  availability, fatigue, charge, cost-breaker, capability, and
   outstanding-invitation gates before issuing a short-lived single-use permit.
+  Operator quiet hours protect the human from unsolicited outreach; they do not
+  gate companion-to-companion initiation or self-directed companion time.
   The target ordinary channel turn authors the peer-visible message; the source
   cannot provide a message body or impersonate the peer. Candidates, permits,
   and conversation episodes are recovery-safe Postgres state.
+- **Availability follows the runtime lifecycle.** An enabled source with the
+  `external.companion` capability publishes a coarse `runtime` availability
+  lease during agent startup and renews it on the existing health heartbeat.
+  Healthy posture publishes `available`; hard fatigue exhaustion publishes
+  `resting`. Explicit companion or operator leases take precedence over this
+  default. Disabling ICP or revoking the capability immediately fences
+  participation and suppresses a runtime-owned lease to `resting` without
+  overwriting a higher-authority explicit state.
 - **Owner state and live state are distinct.** ICP enablement/candidate retry/
   permit/availability cadence live only in `scheduler.json`; social quota,
   continuation cost, fatigue/overcharge reserve, structured continuation

@@ -24,7 +24,6 @@ export interface IcpInitiationPolicySnapshot {
   trustAllows: boolean;
   senderBlocksPeer: boolean;
   peerBlocksSender: boolean;
-  quietHours: boolean;
   provenanceFresh: boolean;
   recursiveMiOnlyRoot: boolean;
   socialPressureAllows: boolean;
@@ -103,7 +102,7 @@ export interface IcpPermitConsumeResult {
 
 const POLICY_KEYS = [
   'canonicalPeerContact', 'trustAllows', 'senderBlocksPeer', 'peerBlocksSender',
-  'quietHours', 'provenanceFresh', 'recursiveMiOnlyRoot', 'socialPressureAllows',
+  'provenanceFresh', 'recursiveMiOnlyRoot', 'socialPressureAllows',
   'chargeAllows', 'fatigueAllows', 'costAllows',
 ] as const;
 
@@ -144,7 +143,6 @@ export function parseIcpInitiationPolicySnapshot(value: unknown): IcpInitiationP
     trustAllows: requireBoolean(value.trustAllows, 'policy.trustAllows'),
     senderBlocksPeer: requireBoolean(value.senderBlocksPeer, 'policy.senderBlocksPeer'),
     peerBlocksSender: requireBoolean(value.peerBlocksSender, 'policy.peerBlocksSender'),
-    quietHours: requireBoolean(value.quietHours, 'policy.quietHours'),
     provenanceFresh: requireBoolean(value.provenanceFresh, 'policy.provenanceFresh'),
     recursiveMiOnlyRoot: requireBoolean(value.recursiveMiOnlyRoot, 'policy.recursiveMiOnlyRoot'),
     socialPressureAllows: requireBoolean(value.socialPressureAllows, 'policy.socialPressureAllows'),

@@ -11,7 +11,6 @@ import type {
 } from '../../boundary/gateway/icp-initiation-policy-authority.js';
 import type { IcpInitiationPolicySnapshot } from '../../boundary/gateway/icp-autonomy-contract.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
-import { evaluateProactiveOutboundTimeGate, type ProactiveQuietHoursConfig } from '../../core/intention/proactive-time-gate.js';
 import { resolveContactBlockListPath } from '../layout.js';
 import {
   createPostgresPool,
@@ -61,7 +60,6 @@ interface ContactIdentityPolicyRow extends QueryResultRow {
 
 export interface PostgresIcpInitiationPolicyAuthorityOptions {
   fleet: readonly FleetPolicyOwner[];
-  quietHours: ProactiveQuietHoursConfig;
   capacityAuthority?: IcpInitiationCapacityPolicyAuthority;
   causalityAuthority?: IcpInitiationCausalityAuthority;
   pool?: Pool;
@@ -217,10 +215,6 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       input.senderCompanionId,
       isDirectMessage,
     );
-    const quietHours = !evaluateProactiveOutboundTimeGate({
-      nowMs: input.nowMs,
-      quietHours: this.options.quietHours,
-    }).allowed;
     const candidateCreatedAtMs = candidateRow ? safeInteger(candidateRow.created_at_ms) : null;
     const candidateExpiresAtMs = candidateRow ? safeInteger(candidateRow.expires_at_ms) : null;
     const provenanceFresh = canonicalCandidate
@@ -250,7 +244,6 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       trustAllows,
       senderBlocksPeer,
       peerBlocksSender,
-      quietHours,
       provenanceFresh,
       recursiveMiOnlyRoot: !independentRoot,
       ...capacity,

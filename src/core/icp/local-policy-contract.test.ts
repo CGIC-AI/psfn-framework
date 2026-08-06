@@ -99,7 +99,6 @@ describe('companion-local ICP policy wire contract', () => {
       canonicalPeerContact: true,
       trustAllows: true,
       blocksPeer: false,
-      quietHours: false,
       provenanceFresh: true,
       socialPressureAllows: true,
       chargeAllows: true,

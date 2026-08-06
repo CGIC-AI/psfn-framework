@@ -92,7 +92,6 @@ async function readyAuthority(
     companionId: SENDER_ID,
     postgresSchema: 'tenant_a',
     companionDataDir: '/tmp/psfn-local-policy-authority-test',
-    quietHours: { enabled: false, startLocalTime: '22:00', endLocalTime: '07:00', timeZone: 'UTC' },
     policyHolds: { ttlMs: 10_000, maxOutstanding: 2 },
     capacityAuthority: capacity,
     pool: poolFixture.pool,
@@ -123,7 +122,6 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
       canonicalPeerContact: true,
       trustAllows: true,
       blocksPeer: false,
-      quietHours: false,
       provenanceFresh: true,
       socialPressureAllows: true,
       chargeAllows: true,
@@ -195,12 +193,6 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
     const fixture = fakePool(policyQuery('consumed'));
     const { authority, capacity } = await readyAuthority(fixture, {
       now: () => 30_000,
-      quietHours: {
-        enabled: true,
-        startLocalTime: '22:00',
-        endLocalTime: '07:00',
-        timeZone: 'UTC',
-      },
     });
     capacity.resolve.mockResolvedValue({
       socialPressureAllows: false,
@@ -302,17 +294,11 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
     expect(fixture.query).toHaveBeenCalledWith('ROLLBACK');
   });
 
-  it('uses the local clock for inspection time gates and capacity policy', async () => {
-    const localNowMs = 23 * 60 * 60 * 1_000;
-    const callerNowMs = 12 * 60 * 60 * 1_000;
+  it('does not apply operator quiet hours to companion initiation policy', async () => {
+    const localNowMs = 2_000;
+    const callerNowMs = 1_000;
     const { authority, capacity } = await readyAuthority(fakePool(), {
       now: () => localNowMs,
-      quietHours: {
-        enabled: true,
-        startLocalTime: '22:00',
-        endLocalTime: '07:00',
-        timeZone: 'UTC',
-      },
     });
 
     await expect(authority.inspect({
@@ -324,10 +310,26 @@ describe('PostgresIcpLocalPolicyAuthority', () => {
       nowMs: callerNowMs,
       relationshipPressure: 0,
     })).resolves.toMatchObject({
-      quietHours: true,
-      provenanceFresh: false,
+      provenanceFresh: true,
     });
     expect(capacity.resolve).toHaveBeenCalledWith(expect.objectContaining({ nowMs: localNowMs }));
+
+    const request = {
+      role: 'sender',
+      phase: 'issue',
+      senderCompanionId: SENDER_ID,
+      recipientCompanionId: RECIPIENT_ID,
+      candidate,
+      channelId: `companion-dm:${SENDER_ID}:${RECIPIENT_ID}`,
+      nonce: NONCE,
+      nowMs: callerNowMs,
+      expiresAtMs: localNowMs + 1_000,
+      relationshipPressure: 0,
+    } as const;
+    await expect(authority.acquire({
+      ...request,
+      payloadDigest: deriveIcpLocalPolicyAcquirePayloadDigest(request),
+    })).resolves.toMatchObject({ acquired: true });
   });
 
   it('rolls back every retained client on hard expiry despite wall-clock regression and cleanup', async () => {

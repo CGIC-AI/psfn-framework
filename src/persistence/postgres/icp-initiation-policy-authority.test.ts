@@ -3,13 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 
-const quietHours = {
-  enabled: false,
-  startLocalTime: '22:00',
-  endLocalTime: '07:00',
-  timeZone: 'UTC',
-} as const;
-
 function createAuthority(query: Pool['query']): PostgresIcpInitiationPolicyAuthority {
   return new PostgresIcpInitiationPolicyAuthority('postgres://test', {
     fleet: [
@@ -24,7 +17,6 @@ function createAuthority(query: Pool['query']): PostgresIcpInitiationPolicyAutho
         companionDataDir: '/tmp/psfn-icp-readiness-b',
       },
     ],
-    quietHours,
     pool: { query } as unknown as Pool,
   });
 }

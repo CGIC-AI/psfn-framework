@@ -1,7 +1,7 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { exactPath } from '../route-matchers.js';
 import type { AdminRoomArbiterService } from '../services/types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError } from './shared.js';
 import type { AdminApiRoute } from './types.js';
 
 const ROOM_ARBITER_PATH = '/api/admin/room-arbiter';
@@ -23,9 +23,7 @@ export function buildAdminRoomArbiterRoutes(options: {
       handle: (_req, res) => {
         service.getData().then(
           data => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load room arbiter telemetry'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load room arbiter telemetry'),
         );
       },
     },

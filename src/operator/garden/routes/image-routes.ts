@@ -14,7 +14,7 @@ import type {
   AdminImagesService,
 } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 import { isSensitivityLevel } from '../../../shared/contracts/artifact-sensitivity.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -222,7 +222,7 @@ export function buildAdminImageRoutes(options: {
       handle: (req, res) => {
         imagesService.listGeneratedImages(parseGeneratedImagesQuery(req)).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list generated images') }),
+          error => sendInternalError(res, error, 'Failed to list generated images'),
         );
       },
     },
@@ -238,7 +238,7 @@ export function buildAdminImageRoutes(options: {
             }
             sendImageBlob(res, blob);
           },
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load generated image') }),
+          error => sendInternalError(res, error, 'Failed to load generated image'),
         );
       },
     },
@@ -332,7 +332,7 @@ export function buildAdminImageRoutes(options: {
       handle: (_req, res) => {
         imagesService.listReferencePhotos().then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list reference photos') }),
+          error => sendInternalError(res, error, 'Failed to list reference photos'),
         );
       },
     },
@@ -451,7 +451,7 @@ export function buildAdminImageRoutes(options: {
             }
             sendImageBlob(res, blob);
           },
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load reference photo') }),
+          error => sendInternalError(res, error, 'Failed to load reference photo'),
         );
       },
     },

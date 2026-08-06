@@ -26,7 +26,7 @@ import {
   type DriftReviewCardResolution,
 } from '../services/drift-review-service.js';
 import type { AdminAuditDecision } from '../types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_DRIFT_REVIEWS_API_PATH = '/api/admin/intake/drift-reviews';
@@ -95,9 +95,7 @@ export function buildAdminDriftReviewRoutes(options: {
         try {
           sendJson(res, 200, driftReviewService.listCards(), ADMIN_DYNAMIC_JSON_HEADERS);
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load drift review cards'),
-          });
+          sendInternalError(res, error, 'Failed to load drift review cards');
         }
       },
     },
@@ -115,9 +113,7 @@ export function buildAdminDriftReviewRoutes(options: {
           }
           sendJson(res, 200, { card }, ADMIN_DYNAMIC_JSON_HEADERS);
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load drift review card'),
-          });
+          sendInternalError(res, error, 'Failed to load drift review card');
         }
       },
     },
@@ -198,9 +194,7 @@ export function buildAdminDriftReviewRoutes(options: {
               'Operator drift review resolution failed with a server error.',
               [`cardId=${id}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to resolve drift review card'),
-            });
+            sendInternalError(res, error, 'Failed to resolve drift review card');
           });
         });
       },

@@ -19,7 +19,7 @@ import type {
   AdminSettingsService,
 } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { toSanitizedMessage } from './shared.js';
+import { sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_INTAKE_SOURCE_LISTS_API_PATH = '/api/admin/intake/source-lists';
@@ -84,9 +84,7 @@ export function buildAdminIntakeSourceListRoutes(options: {
         try {
           sendJson(res, 200, { lists: settingsService.getIntakeSourceLists() });
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load intake source lists'),
-          });
+          sendInternalError(res, error, 'Failed to load intake source lists');
         }
       },
     },
@@ -156,9 +154,7 @@ export function buildAdminIntakeSourceListRoutes(options: {
                   `error=${toSanitizedMessage(error, 'server error')}`,
                 ],
               );
-              sendJson(res, 500, {
-                error: toSanitizedMessage(error, 'Failed to mutate the intake source list'),
-              });
+              sendInternalError(res, error, 'Failed to mutate the intake source list');
             });
         });
       },

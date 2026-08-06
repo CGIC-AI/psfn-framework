@@ -30,7 +30,12 @@ import {
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import {
+  ADMIN_DYNAMIC_JSON_HEADERS,
+  ADMIN_POLLED_QUEUE_JSON_HEADERS,
+  sendInternalError,
+  toSanitizedMessage,
+} from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
@@ -113,9 +118,7 @@ export function buildAdminIntakeQuarantineReadRoutes(options: {
         try {
           sendJson(res, 200, quarantineService.listItems(context), ADMIN_POLLED_QUEUE_JSON_HEADERS);
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load quarantine queue'),
-          });
+          sendInternalError(res, error, 'Failed to load quarantine queue');
         }
       },
     },
@@ -133,9 +136,7 @@ export function buildAdminIntakeQuarantineReadRoutes(options: {
           }
           sendJson(res, 200, { item }, ADMIN_DYNAMIC_JSON_HEADERS);
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load quarantine item'),
-          });
+          sendInternalError(res, error, 'Failed to load quarantine item');
         }
       },
     },
@@ -172,9 +173,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
             ADMIN_DYNAMIC_JSON_HEADERS,
           );
         } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load intake policy'),
-          });
+          sendInternalError(res, error, 'Failed to load intake policy');
         }
       },
     },
@@ -247,9 +246,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
               'Operator quarantine confirmation failed with a server error.',
               [`envelopeId=${id}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to issue quarantine confirmation'),
-            });
+            sendInternalError(res, error, 'Failed to issue quarantine confirmation');
           }
         });
       },
@@ -325,9 +322,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
               'Operator quarantine decision failed with a server error.',
               [`envelopeId=${id}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to apply quarantine decision'),
-            });
+            sendInternalError(res, error, 'Failed to apply quarantine decision');
           });
         });
       },

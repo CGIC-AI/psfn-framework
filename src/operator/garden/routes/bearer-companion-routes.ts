@@ -9,7 +9,7 @@ import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { exactPath } from '../route-matchers.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { toSanitizedMessage } from './shared.js';
+import { sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender } from './types.js';
 
 const ADMIN_BEARER_COMPANION_API_PATH = '/api/admin/channels/bearer-companion';
@@ -87,9 +87,7 @@ export function buildAdminBearerCompanionRoutes(options: {
               'Operator Bearer API companion pin update failed with a server error.',
               [`companionId=${companionId}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to update the Bearer API companion pin'),
-            });
+            sendInternalError(res, error, 'Failed to update the Bearer API companion pin');
           });
       },
     },

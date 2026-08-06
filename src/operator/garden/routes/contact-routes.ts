@@ -3,7 +3,7 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
 import type { AdminContactsService } from '../services/types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 
 export function buildAdminContactRoutes(options: {
@@ -37,7 +37,7 @@ export function buildAdminContactRoutes(options: {
           sendJson(res, 200, result);
         },
         (error) => {
-          sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to update contact') });
+          sendInternalError(res, error, 'Failed to update contact');
         },
       );
     });
@@ -65,7 +65,7 @@ export function buildAdminContactRoutes(options: {
             );
           },
           (error) => {
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list contacts') });
+            sendInternalError(res, error, 'Failed to list contacts');
           },
         );
       },
@@ -89,7 +89,7 @@ export function buildAdminContactRoutes(options: {
               sendJson(res, 201, result);
             },
             (error) => {
-              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to create contact') });
+              sendInternalError(res, error, 'Failed to create contact');
             },
           );
         });
@@ -114,7 +114,7 @@ export function buildAdminContactRoutes(options: {
               sendJson(res, 200, result);
             },
             (error) => {
-              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to merge contacts') });
+              sendInternalError(res, error, 'Failed to merge contacts');
             },
           );
         });
@@ -139,7 +139,7 @@ export function buildAdminContactRoutes(options: {
               sendJson(res, 200, result);
             },
             (error) => {
-              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to unlink contact identity') });
+              sendInternalError(res, error, 'Failed to unlink contact identity');
             },
           );
         });
@@ -164,7 +164,7 @@ export function buildAdminContactRoutes(options: {
               sendJson(res, 200, result);
             },
             (error) => {
-              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to delete conversation channel') });
+              sendInternalError(res, error, 'Failed to delete conversation channel');
             },
           );
         });
@@ -183,7 +183,7 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
           },
           (error) => {
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load contact detail') });
+            sendInternalError(res, error, 'Failed to load contact detail');
           },
         );
       },
@@ -201,7 +201,7 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 200, result);
           },
           (error) => {
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to archive contact') });
+            sendInternalError(res, error, 'Failed to archive contact');
           },
         );
       },

@@ -7,7 +7,7 @@ import type {
   AdminWishlistConvertInput,
   AdminWishlistService,
 } from '../services/types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type {
   AdminApiRoute,
   AdminAuditTimelineAppender,
@@ -122,7 +122,7 @@ export function buildAdminWishlistRoutes(options: {
         }
         wishlistService.listWishes().then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list wishes') }),
+          error => sendInternalError(res, error, 'Failed to list wishes'),
         );
       },
     },

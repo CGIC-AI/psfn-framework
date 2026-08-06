@@ -3,7 +3,7 @@ import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import type { AdminIcpAutonomyService } from '../services/types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ICP_AUTONOMY_PATH = '/api/admin/icp-autonomy';
@@ -76,9 +76,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
       handle: (_req, res) => {
         service.getData().then(
           data => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load ICP autonomy state'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load ICP autonomy state'),
         );
       },
     },
@@ -141,7 +139,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
             audit('denied', 'Operator ICP do-not-disturb failed.', [
               `error=${toSanitizedMessage(error, 'mutation failed')}`,
             ]);
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to set ICP do-not-disturb') });
+            sendInternalError(res, error, 'Failed to set ICP do-not-disturb');
           });
         });
       },
@@ -166,7 +164,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
             audit('denied', 'Operator ICP emergency disable failed.', [
               `error=${toSanitizedMessage(error, 'mutation failed')}`,
             ]);
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to emergency-disable ICP autonomy') });
+            sendInternalError(res, error, 'Failed to emergency-disable ICP autonomy');
           });
         });
       },

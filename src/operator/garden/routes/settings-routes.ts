@@ -4,7 +4,7 @@ import { exactPath, prefixedParamPath } from '../route-matchers.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
-import { toSanitizedMessage } from './shared.js';
+import { sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_SETTINGS_API_PATH = '/api/admin/settings';
@@ -127,9 +127,7 @@ export function buildAdminSettingsRoutes(options: {
               [`error=${toSanitizedMessage(error, 'server error')}`],
               context,
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to update models.json'),
-            });
+            sendInternalError(res, error, 'Failed to update models.json');
           });
         });
       },
@@ -186,9 +184,7 @@ export function buildAdminSettingsRoutes(options: {
               ],
               context,
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to update runtime settings'),
-            });
+            sendInternalError(res, error, 'Failed to update runtime settings');
           });
         });
       },
@@ -244,9 +240,7 @@ export function buildAdminSettingsRoutes(options: {
               [`error=${toSanitizedMessage(error, 'server error')}`],
               context,
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, `Failed to update ${params.key} owner file`),
-            });
+            sendInternalError(res, error, `Failed to update ${params.key} owner file`);
           });
         });
       },
@@ -302,9 +296,7 @@ export function buildAdminSettingsRoutes(options: {
               [`error=${toSanitizedMessage(error, 'server error')}`],
               context,
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, `Failed to update ${params.key} owner file`),
-            });
+            sendInternalError(res, error, `Failed to update ${params.key} owner file`);
           });
         });
       },

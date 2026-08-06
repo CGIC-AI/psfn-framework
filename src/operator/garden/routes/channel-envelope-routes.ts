@@ -11,7 +11,7 @@ import { exactPath } from '../route-matchers.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { toSanitizedMessage } from './shared.js';
+import { sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_CHANNEL_ENVELOPE_API_PATH = '/api/admin/channels/context-envelope';
@@ -106,9 +106,7 @@ export function buildAdminChannelEnvelopeRoutes(options: {
                 'Operator channel envelope label update failed with a server error.',
                 [`channelId=${channelId}`, `error=${toSanitizedMessage(error, 'server error')}`],
               );
-              sendJson(res, 500, {
-                error: toSanitizedMessage(error, 'Failed to update the channel envelope label'),
-              });
+              sendInternalError(res, error, 'Failed to update the channel envelope label');
             });
         });
       },
@@ -191,9 +189,7 @@ export function buildAdminChannelEnvelopeRoutes(options: {
               'Operator channel demotion failed with a server error.',
               [`channelId=${channelId}`, `error=${toSanitizedMessage(error, 'server error')}`],
             );
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to accept channel demotion'),
-            });
+            sendInternalError(res, error, 'Failed to accept channel demotion');
           });
         });
       },

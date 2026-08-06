@@ -224,8 +224,11 @@ function assertContainerVolumeMount(deployment, containerField, containerName, e
   if (!mount
     || mount.mountPath !== expected.mountPath
     || mount.subPath !== expected.subPath) {
+    const subPathDescription = expected.subPath === undefined
+      ? ''
+      : ` with subPath ${expected.subPath}`;
     throw new Error(
-      `${label} must mount ${expected.name} at ${expected.mountPath} with subPath ${expected.subPath}`,
+      `${label} must mount ${expected.name} at ${expected.mountPath}${subPathDescription}`,
     );
   }
 }
@@ -525,11 +528,13 @@ if (defaultEmosimContainer.securityContext?.readOnlyRootFilesystem !== true) {
 if (!defaultEmosimContainer.args?.includes('--pidfile=/state/server.pid')) {
   throw new Error('psfn-emosim must write its PID file to the state volume');
 }
-const defaultEmosimStateMount = defaultEmosimContainer.volumeMounts
-  ?.find(mount => mount.name === 'state' && mount.mountPath === '/state');
-if (!defaultEmosimStateMount) {
-  throw new Error('psfn-emosim must mount its writable state volume at /state');
-}
+assertContainerVolumeMount(
+  defaultEmosim,
+  'containers',
+  'emosim',
+  { name: 'state', mountPath: '/state', subPath: undefined },
+  'psfn-emosim writable state volume',
+);
 const defaultFleetRendered = renderHelm();
 const defaultFleetDocuments = parseRenderedDocuments(defaultFleetRendered, 'default fleet render');
 const defaultFleetCertificates = defaultFleetDocuments.filter(document => (

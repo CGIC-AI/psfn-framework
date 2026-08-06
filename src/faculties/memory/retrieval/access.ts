@@ -50,9 +50,8 @@ export interface RetrievalRoomVisibilityContext {
   canonicalContactRoomIds?: ReadonlySet<string>;
   /**
    * Turn ConversationScope, plumbed as an available input (E1 epic).
-   * Room-visibility gating still derives from the loose fields above; a
-   * dependent bead flips the gate to consume the scope directly. Do not
-   * change gating here as part of the threading bead.
+   * It does not currently drive room-visibility gating; the explicit channel
+   * and canonical-contact fields above remain authoritative for that decision.
    */
   conversationScope?: ConversationScope;
 }

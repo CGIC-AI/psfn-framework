@@ -41,10 +41,8 @@ function buildRoomVisibilityContext(
     if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
   }
 
-  // The turn ConversationScope is plumbed through as an available input
-  // (E1 epic); the gating fields below intentionally keep deriving from
-  // channelMeta and the canonical contact until a dependent bead flips the
-  // room-visibility gate to consume the scope.
+  // The turn ConversationScope remains available as context (E1 epic), while
+  // room-visibility gating derives from channelMeta and the canonical contact.
   return {
     currentChannelId: channelId,
     ...(channelMeta?.isDirectMessage !== undefined

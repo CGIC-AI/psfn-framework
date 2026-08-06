@@ -23,7 +23,17 @@ import type {
 
 const log = createComponentLogger('Scheduler');
 
-type RuntimeScheduledTask = ScheduledTask & { lastRun: number };
+export type ScheduledTaskAvailability = 'idle' | 'do_not_disturb';
+
+export interface ProtectedScheduledTask extends ScheduledTask {
+  /** Coarse channel availability projected for the full handler lifetime. */
+  availability: ScheduledTaskAvailability;
+}
+
+type RuntimeScheduledTask = ScheduledTask & {
+  lastRun: number;
+  availability?: ScheduledTaskAvailability;
+};
 
 function isWallClockCadence(
   cadence: RecurringCadence | undefined,
@@ -231,7 +241,7 @@ export interface SchedulerRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   runProtectedTask?: (
-    state: 'idle' | 'do_not_disturb',
+    state: ScheduledTaskAvailability,
     handler: () => void | Promise<void>,
   ) => Promise<void>;
 }
@@ -289,7 +299,10 @@ export class Scheduler {
    * ran" — the task is then due on the first tick. It is mutually exclusive with
    * `skipFirstRun`, which is the in-memory-only "start the interval now" seed.
    */
-  register(task: ScheduledTask, opts?: { skipFirstRun?: boolean; lastRunAt?: number }): void {
+  register(
+    task: ScheduledTask | ProtectedScheduledTask,
+    opts?: { skipFirstRun?: boolean; lastRunAt?: number },
+  ): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
     }

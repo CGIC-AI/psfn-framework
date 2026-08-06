@@ -63,8 +63,6 @@ export interface ScheduledTask {
   runAt?: number;
   /** Handler called when the task fires */
   handler: () => void | Promise<void>;
-  /** Coarse channel availability projected for the full handler lifetime. */
-  availability?: 'idle' | 'do_not_disturb';
   /** Optional runtime eligibility requirements evaluated before handler execution. */
   eligibility?: EligibilityRequirements;
   state: TaskState;

@@ -21,6 +21,7 @@ export interface CompanionAvailabilityStorePort {
     message: SubstrateMessage,
     enqueuedAtMs: number,
   ): Promise<'enqueued' | 'duplicate'>;
+  hasPending(): Promise<boolean>;
   listPending(limit: number): Promise<QueuedCompanionMessage[]>;
   acknowledge(sequence: number): Promise<boolean>;
 }
@@ -41,6 +42,8 @@ export interface CompanionAvailabilityRuntimeOptions {
     snapshot: CompanionAvailabilitySnapshot,
   ): Promise<CompanionAvailabilityProjectionResult>;
   queueReadBatchSize: number;
+  /** Owner-backed fixed delay between durable delivery attempts. */
+  drainRetryDelayMs: number;
   returnContextMaxChars?: number;
   now?: () => number;
   onProjectionDegraded?: (snapshot: CompanionAvailabilitySnapshot) => void;
@@ -68,12 +71,17 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
   private transitionTail: Promise<void> = Promise.resolve();
   private deliverer?: (message: QueuedCompanionMessage) => Promise<void>;
   private drainPromise: Promise<void> = Promise.resolve();
+  private drainRetryTimer: NodeJS.Timeout | null = null;
   private initialized = false;
+  private stopping = false;
   private lastUnavailableSinceMs = 0;
 
   constructor(private readonly options: CompanionAvailabilityRuntimeOptions) {
     if (!Number.isInteger(options.queueReadBatchSize) || options.queueReadBatchSize < 1) {
       throw new Error('Companion availability queueReadBatchSize must be a positive integer');
+    }
+    if (!Number.isInteger(options.drainRetryDelayMs) || options.drainRetryDelayMs < 1) {
+      throw new Error('Companion availability drainRetryDelayMs must be a positive integer');
     }
     if (options.returnContextMaxChars !== undefined
       && (!Number.isInteger(options.returnContextMaxChars) || options.returnContextMaxChars < 1)) {
@@ -153,7 +161,7 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
     this.assertInitialized();
     let queued = false;
     await this.serializeTransition(async () => {
-      if (this.current.state === 'available') return;
+      if (this.current.state === 'available' && !(await this.options.store.hasPending())) return;
       await this.options.store.enqueue(message, this.now());
       queued = true;
     });
@@ -166,6 +174,12 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
   }
 
   async waitForDrain(): Promise<void> {
+    await this.drainPromise;
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.clearDrainRetry();
     await this.drainPromise;
   }
 
@@ -225,11 +239,30 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
   }
 
   private scheduleDrain(): void {
-    if (!this.deliverer) return;
+    if (!this.deliverer || this.stopping) return;
+    this.clearDrainRetry();
     const previous = this.drainPromise;
     this.drainPromise = previous.then(() => this.drain()).catch(error => {
       this.options.onDrainRuntimeError?.(error);
+      this.scheduleDrainRetry();
     });
+  }
+
+  private scheduleDrainRetry(): void {
+    if (this.drainRetryTimer
+      || this.stopping
+      || this.current.state !== 'available') return;
+    this.drainRetryTimer = setTimeout(() => {
+      this.drainRetryTimer = null;
+      this.scheduleDrain();
+    }, this.options.drainRetryDelayMs);
+    this.drainRetryTimer.unref();
+  }
+
+  private clearDrainRetry(): void {
+    if (!this.drainRetryTimer) return;
+    clearTimeout(this.drainRetryTimer);
+    this.drainRetryTimer = null;
   }
 
   private async drain(): Promise<void> {
@@ -248,9 +281,13 @@ export class CompanionAvailabilityRuntime implements CompanionProtectedMessageQu
           await this.deliverer(delivery);
         } catch (error) {
           this.options.onDrainError?.(error, queued);
+          this.scheduleDrainRetry();
           return;
         }
-        await this.options.store.acknowledge(queued.sequence);
+        const acknowledged = await this.options.store.acknowledge(queued.sequence);
+        if (!acknowledged) {
+          throw new Error('Companion protected message acknowledgement failed');
+        }
       }
     }
   }

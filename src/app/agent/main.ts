@@ -341,6 +341,7 @@ async function main(): Promise<void> {
     store: persistenceRuntime.companionAvailabilityStore,
     project: snapshot => gateway.discordSetAvailability(snapshot.state),
     queueReadBatchSize: schedulerConfig.backgroundWork.supervisor.maxConcurrentSessions,
+    drainRetryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
     returnContextMaxChars: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
     onProjectionDegraded: snapshot => {
       log.warn('Channel does not support companion availability projection', {
@@ -541,6 +542,9 @@ async function main(): Promise<void> {
     toolConformanceRunner,
     personalProjects,
   } = coreRuntime;
+  agentLoop.setBackgroundWorkExecutionScope(
+    handler => companionAvailability.run('do_not_disturb', handler),
+  );
 
   gateway.onContactAuthoritySnapshot(async ({ contactId, providerSubjectId }) => (
     await contactStore.readVerifiedDiscordContactAuthority(contactId, providerSubjectId)
@@ -1393,6 +1397,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       await detachToolAvailability();
+      await companionAvailability.stop();
       partnerAffectShadowBridge.unsubscribe();
       await icpLocalPolicyAuthority?.close();
       await persistenceRuntime.contactLifecycleRecovery?.stop();

@@ -20,7 +20,6 @@ export function registerDurableBackgroundWorkSupervisorTask(input: {
     name: 'Durable Background Work Supervisor',
     type: 'every',
     intervalMs: input.intervalMs,
-    availability: 'do_not_disturb',
     handler: () => input.agentLoop.tickBackgroundWork(),
     state: 'idle',
   });

@@ -38,6 +38,7 @@ import type {
   IntakeQuarantineEntry,
   IntakeQuarantineStore,
 } from '../../../core/cogsec/intake/quarantine-store.js';
+import type { IntakeL1RuleMatchProvenance } from '../../../shared/contracts/intake-envelope.js';
 import { extractHostFromOriginRef } from '../../../core/cogsec/intake/source-lists.js';
 import type { IntakeSourceListName } from '../../../system/config/intake-policy-config.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
@@ -77,6 +78,14 @@ export interface AdminIntakeQuarantineItemView {
   scores: Record<string, number>;
   /** Screening decision that quarantined the item, verbatim. */
   screeningDecisionReason?: string;
+  /** Deterministic L1 owner-file rules that drove the hold; empty for legacy rows. */
+  ruleMatches: IntakeL1RuleMatchProvenance[];
+  /** Total rule matches before bounded projection; 0 for legacy rows. */
+  ruleMatchTotalCount: number;
+  /** True when only the bounded prefix is present in ruleMatches. */
+  ruleMatchesTruncated: boolean;
+  /** Malformed optional rule evidence was isolated; release must remain fail closed. */
+  ruleMatchProvenanceUnavailable: boolean;
   heldAt: string;
   expiresAt: string;
   /** Milliseconds until TTL expiry; 0 for non-held entries. */
@@ -283,6 +292,7 @@ function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQua
   );
   const l3Summary = extractedField('l3_summary');
   const l3WhyFlagged = extractedField('l3_why_flagged');
+  const ruleMatches = entry.envelope.decision?.ruleMatches?.map((match) => ({ ...match })) ?? [];
   return {
     id: entry.id,
     status: entry.status,
@@ -297,6 +307,10 @@ function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQua
     riskLabels: [...entry.envelope.riskLabels],
     scores: { ...entry.envelope.scores },
     ...(entry.envelope.decision ? { screeningDecisionReason: entry.envelope.decision.reason } : {}),
+    ruleMatches,
+    ruleMatchTotalCount: entry.envelope.decision?.ruleMatchTotalCount ?? ruleMatches.length,
+    ruleMatchesTruncated: entry.envelope.decision?.ruleMatchesTruncated ?? false,
+    ruleMatchProvenanceUnavailable: entry.ruleMatchProvenanceUnavailable === true,
     heldAt: toIso(entry.heldAtMs),
     expiresAt: toIso(entry.expiresAtMs),
     ttlRemainingMs: entry.status === 'held' ? Math.max(0, entry.expiresAtMs - nowMs) : 0,
@@ -404,6 +418,14 @@ export function createAdminIntakeQuarantineService(
         ok: false,
         status: 409,
         message: `Quarantine item is '${entry.status}', not held; no decision can be taken`,
+      };
+    }
+    if (entry.ruleMatchProvenanceUnavailable && request.action !== 'discard') {
+      return {
+        ok: false,
+        status: 409,
+        message: 'L1 rule-match provenance is unavailable for this item; '
+          + 'release fails closed and only discard is permitted',
       };
     }
     if (request.action === 'release_sanitized' && !entry.safeRepresentationText) {

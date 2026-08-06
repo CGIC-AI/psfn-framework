@@ -87,6 +87,12 @@ export interface IntakeQuarantineEntry {
   id: string;
   /** The envelope journal; authoritative state, validated fail-closed on load. */
   envelope: IntakeEnvelope;
+  /**
+   * True when malformed optional L1 rule evidence was isolated while loading.
+   * The item remains held and visible, but may only be discarded until the
+   * missing audit evidence is repaired.
+   */
+  ruleMatchProvenanceUnavailable?: true;
   /** Firewall mode at hold time ('shadow' items were delivered, not withheld). */
   mode: 'shadow' | 'enforce';
   /** Raw held content. Scrubbed to '' on discard/expire (audit keeps the hash). */
@@ -384,7 +390,7 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
   }
   const entry = value as Record<string, unknown>;
   const knownKeys = [
-    'id', 'envelope', 'mode', 'rawText', 'rawTextTruncated', 'safeRepresentationText',
+    'id', 'envelope', 'ruleMatchProvenanceUnavailable', 'mode', 'rawText', 'rawTextTruncated', 'safeRepresentationText',
     'canonicalContactId', 'sourceChannelId', 'cogSecCaseId', 'heldAtMs', 'expiresAtMs',
     'status', 'decision', 'artifactPaths', 'artifactIdentities', 'accessAttempts',
   ];
@@ -395,7 +401,41 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
   if (typeof entry.id !== 'string' || !entry.id.trim()) {
     throw invalidEntry(filePath, 'missing id');
   }
-  const envelope = validateIntakeEnvelope(entry.envelope);
+  let envelope: IntakeEnvelope;
+  let isolatedRuleMatchProvenance = false;
+  try {
+    envelope = validateIntakeEnvelope(entry.envelope);
+  } catch (error) {
+    const rawEnvelope = entry.envelope;
+    const rawDecision = typeof rawEnvelope === 'object' && rawEnvelope !== null
+      && !Array.isArray(rawEnvelope)
+      ? (rawEnvelope as Record<string, unknown>).decision
+      : undefined;
+    const ruleProvenanceKeys = [
+      'ruleMatches',
+      'ruleMatchTotalCount',
+      'ruleMatchesTruncated',
+    ] as const;
+    if (typeof rawDecision !== 'object' || rawDecision === null || Array.isArray(rawDecision)
+      || !ruleProvenanceKeys.some((key) => Object.prototype.hasOwnProperty.call(rawDecision, key))) {
+      throw error;
+    }
+    const decisionWithoutRuleMatches = { ...(rawDecision as Record<string, unknown>) };
+    for (const key of ruleProvenanceKeys) delete decisionWithoutRuleMatches[key];
+    try {
+      envelope = validateIntakeEnvelope({
+        ...(rawEnvelope as Record<string, unknown>),
+        decision: decisionWithoutRuleMatches,
+      });
+      isolatedRuleMatchProvenance = true;
+    } catch {
+      throw error;
+    }
+  }
+  if (entry.ruleMatchProvenanceUnavailable !== undefined
+    && entry.ruleMatchProvenanceUnavailable !== true) {
+    throw invalidEntry(filePath, 'ruleMatchProvenanceUnavailable must be true when present');
+  }
   if (envelope.id !== entry.id) {
     throw invalidEntry(filePath, `entry id '${entry.id}' does not match envelope id '${envelope.id}'`);
   }
@@ -497,7 +537,11 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
       throw invalidEntry(filePath, 'decision.atMs must be a finite number');
     }
   }
-  return { ...(entry as unknown as IntakeQuarantineEntry), envelope };
+  return {
+    ...(entry as unknown as IntakeQuarantineEntry),
+    envelope,
+    ...(isolatedRuleMatchProvenance ? { ruleMatchProvenanceUnavailable: true } : {}),
+  };
 }
 
 const DECISION_TO_ENVELOPE_STATE = {
@@ -1041,6 +1085,12 @@ function createIntakeQuarantineStoreInternal(
         if (entry.status !== 'held') {
           throw new Error(
             `Intake quarantine entry '${input.id}' is '${entry.status}', not 'held'; only held items take decisions`,
+          );
+        }
+        if (entry.ruleMatchProvenanceUnavailable && input.action !== 'discard') {
+          throw new Error(
+            `Intake quarantine entry '${input.id}' rule-match provenance is unavailable; `
+            + 'only discard is permitted (release fails closed)',
           );
         }
         if (input.action === 'release_sanitized' && !entry.safeRepresentationText) {

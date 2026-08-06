@@ -395,7 +395,8 @@ deferred handoff. It must not broadcast intimate state to another companion.
 An affect advisory is not permission to interrupt companion rest.
 
 Urgent direct human communication follows existing safety and channel policy.
-A background estimate uses ICP availability, fatigue, and quiet-hour gates.
+A background estimate uses ICP availability and fatigue gates. Operator quiet
+hours apply only if a companion later decides to contact the human.
 
 ## 12. Environmental Support
 

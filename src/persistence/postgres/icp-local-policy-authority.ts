@@ -255,6 +255,9 @@ export class PostgresIcpLocalPolicyAuthority {
       canonicalPeerContact: canonicalCandidate && relationship !== null,
       trustAllows: relationship !== null && trustAtLeast(relationship.trustLevel, 'regular'),
       blocksPeer: this.isBlocked(input.recipientCompanionId, input.channelId),
+      // Retained only for mixed-version RPC compatibility. Operator quiet
+      // hours never gate companion-to-companion initiation.
+      quietHours: false,
       provenanceFresh: canonicalCandidate
         && candidateRow.status === 'pending'
         && createdAtMs !== null

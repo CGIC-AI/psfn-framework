@@ -51,6 +51,8 @@ export type IcpLocalPolicyInspectResult =
       canonicalPeerContact: boolean;
       trustAllows: boolean;
       blocksPeer: boolean;
+      /** @deprecated Accepted for mixed-version RPC compatibility and ignored by the gateway. */
+      quietHours: boolean;
       provenanceFresh: boolean;
       socialPressureAllows: boolean;
       chargeAllows: boolean;
@@ -120,7 +122,7 @@ const COMMON_RESULT_KEYS = [
   'role', 'ready', 'canonicalPeerContact', 'trustAllows', 'blocksPeer',
 ] as const;
 const SENDER_RESULT_KEYS = [
-  ...COMMON_RESULT_KEYS, 'provenanceFresh', 'socialPressureAllows',
+  ...COMMON_RESULT_KEYS, 'quietHours', 'provenanceFresh', 'socialPressureAllows',
   'chargeAllows', 'fatigueAllows', 'costAllows',
 ] as const;
 
@@ -232,6 +234,7 @@ export function parseIcpLocalPolicyInspectResult(value: unknown): IcpLocalPolicy
     role,
     ready: true,
     ...common,
+    quietHours: requireBoolean(value.quietHours, 'quietHours'),
     provenanceFresh: requireBoolean(value.provenanceFresh, 'provenanceFresh'),
     socialPressureAllows: requireBoolean(value.socialPressureAllows, 'socialPressureAllows'),
     chargeAllows: requireBoolean(value.chargeAllows, 'chargeAllows'),

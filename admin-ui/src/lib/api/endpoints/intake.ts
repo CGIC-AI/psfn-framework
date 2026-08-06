@@ -6,6 +6,7 @@ import { apiGet, apiPost } from '$lib/api/client';
 import {
   createQueuePageCache,
   isIntakeQuarantineListData,
+  normalizeIntakeQuarantineListData,
 } from '$lib/cache/queue-cache';
 import type { LocalFirstDataSource, LocalFirstResult } from '$lib/cache/local-first';
 import type {
@@ -61,6 +62,7 @@ const intakeQuarantineCache = createQueuePageCache({
   key: 'intake-quarantine',
   path: '/api/admin/intake/quarantine',
   validate: isIntakeQuarantineListData,
+  normalize: normalizeIntakeQuarantineListData,
 });
 
 /** Read-only intake-policy view (mode, tiers, thresholds, quarantine limits). */

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   runHardcodedSettingsCommand,
+  scanHardcodedSettings,
 } from '../../../../scripts/verify-hardcoded-settings.mjs';
 
 const BASELINE_RELATIVE_PATH = 'scripts/hardcoded-settings-baseline.json';
@@ -97,6 +98,19 @@ describe('Hardcoded-settings repository gate', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('baseline file is missing');
+  });
+
+  it('documents scanned call-site forms, exclusions, and update review behavior', () => {
+    const root = makeFixture();
+
+    const result = run(root, '--help');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('timer, truncation, math-clamp');
+    expect(result.stdout).toContain('length-guard, return-arithmetic');
+    expect(result.stdout).toContain('scope/shape/occurrence');
+    expect(result.stdout).toContain('0/1 structural guards');
+    expect(result.stdout).toContain('never invents or silently accepts');
   });
 
   it('fails closed on malformed baseline JSON', () => {
@@ -329,6 +343,79 @@ describe('Hardcoded-settings repository gate', () => {
     expect(result.stderr).not.toContain('sendRequest.port');
   });
 
+  it('detects policy literals in low-noise call-site and operation shapes', () => {
+    const root = makeFixture();
+    writeSource(
+      root,
+      'src/policy.ts',
+      [
+        'function schedule(fn: () => void) { setTimeout(fn, 250); }',
+        'function truncate(value: string) { return value.slice(0, 4_096); }',
+        'function clamp(value: number) { return Math.min(value, 60 * 60_000); }',
+        'function guard(input: string) { return input.length > 512; }',
+        'function expires(baseMs: number) { return baseMs + 7 * 24 * 60 * 60 * 1_000; }',
+        "function request(task: () => void) { return withRetry(task, { attempts: 3, factor: 2, jitter: 'full', port: 443 }); }",
+      ].join('\n') + '\n',
+    );
+    writeBaseline(root, []);
+
+    const result = run(root);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('schedule.$call:timer:setTimeout.arg1#1 = 250');
+    expect(result.stderr).toContain('truncate.$call:truncation:slice.arg1#1 = 4_096');
+    expect(result.stderr).toContain(
+      'clamp.$call:math-clamp:Math.min.arg1#1 = 60 * 60_000',
+    );
+    expect(result.stderr).toContain(
+      'guard.$call:length-guard:GreaterThanToken#1 = 512',
+    );
+    expect(result.stderr).toContain(
+      'expires.$call:return-arithmetic:PlusToken#1 = 7 * 24 * 60 * 60 * 1_000',
+    );
+    expect(result.stderr).toContain(
+      'request.$call:call-object-member:withRetry.arg1.attempts#1 = 3',
+    );
+    expect(result.stderr).toContain(
+      'request.$call:call-object-member:withRetry.arg1.factor#1 = 2',
+    );
+    expect(result.stderr).toContain(
+      "request.$call:call-object-member:withRetry.arg1.jitter#1 = 'full'",
+    );
+    expect(result.stderr).not.toContain('port');
+  });
+
+  it('uses line-independent call-site identities and excludes benign structural forms', () => {
+    const source = [
+      'function schedule(fn: () => void) { setTimeout(fn, 250); }',
+      'function truncate(value: string) { return value.slice(0, 4_096); }',
+      'function expires(baseMs: number) { return baseMs + 7 * 24 * 60 * 60 * 1_000; }',
+      'function benign(fn: () => void, hash: Buffer, input: string, index: number) {',
+      '  setTimeout(fn, 0);',
+      "  hash.toString('hex').slice(0, 16);",
+      '  input.slice(1);',
+      '  Math.max(0, Math.min(1, index));',
+      '  if (input.length > 0) return index + 2;',
+      '  return withRetry(fn, { port: 443 });',
+      '}',
+    ].join('\n') + '\n';
+    const firstRoot = makeFixture();
+    const shiftedRoot = makeFixture();
+    writeSource(firstRoot, 'src/policy.ts', source);
+    writeSource(shiftedRoot, 'src/policy.ts', `\n\n\n${source}`);
+
+    const first = scanHardcodedSettings(firstRoot);
+    const shifted = scanHardcodedSettings(shiftedRoot);
+
+    expect(first.map(entry => entry.name)).toEqual(shifted.map(entry => entry.name));
+    expect(first.map(entry => entry.name)).toEqual([
+      'expires.$call:return-arithmetic:PlusToken#1',
+      'schedule.$call:timer:setTimeout.arg1#1',
+      'truncate.$call:truncation:slice.arg1#1',
+    ]);
+    expect(first.map(entry => entry.line)).not.toEqual(shifted.map(entry => entry.line));
+  });
+
   it('keeps migrated persona-conformance marker policy out of source', () => {
     const root = makeFixture();
     const source = readFileSync(resolve('src/core/cogsec/persona-conformance.ts'), 'utf8');
@@ -363,7 +450,10 @@ describe('Hardcoded-settings repository gate', () => {
 
     const updateResult = run(root, '--update');
 
-    expect(updateResult.status, updateResult.stderr).toBe(0);
+    expect(updateResult.status).toBe(1);
+    expect(updateResult.stderr).toContain(
+      'executeSandbox.$call:timer:setInterval.arg1#1 (timer)',
+    );
     const baseline = JSON.parse(readFileSync(join(root, BASELINE_RELATIVE_PATH), 'utf8')) as {
       entries: Array<{ name: string }>;
     };
@@ -413,7 +503,10 @@ describe('Hardcoded-settings repository gate', () => {
     ]);
 
     const updateResult = run(root, '--update');
-    expect(updateResult.status, updateResult.stderr).toBe(0);
+    expect(updateResult.status).toBe(1);
+    expect(updateResult.stderr).toContain(
+      'baseline updated but 1 extended-form entries still require reviewed notes',
+    );
 
     const baseline = JSON.parse(readFileSync(join(root, BASELINE_RELATIVE_PATH), 'utf8')) as {
       entries: Array<{ file: string; name: string; value: string; form?: string; note?: string }>;
@@ -446,5 +539,8 @@ describe('Hardcoded-settings repository gate', () => {
     // Verification passes once the new extended-form entry is justified.
     const verifyResult = run(root);
     expect(verifyResult.status, verifyResult.stderr).toBe(0);
+
+    const reviewedUpdateResult = run(root, '--update');
+    expect(reviewedUpdateResult.status, reviewedUpdateResult.stderr).toBe(0);
   });
 });

@@ -98,6 +98,42 @@ const ARITHMETIC_OPERATORS = new Set([
   ts.SyntaxKind.AsteriskAsteriskToken,
 ]);
 
+const TIMER_CALLEES = new Set(['setInterval', 'setTimeout']);
+const TRUNCATION_METHODS = new Set(['slice', 'substr', 'substring']);
+const COMPARISON_OPERATORS = new Set([
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+]);
+const CALL_POLICY_CONTEXT_TOKENS = new Set(['BACKOFF', 'OPTIONS', 'POLICY', 'RETRY', 'RETRIES']);
+const CALL_POLICY_MEMBER_TOKENS = new Set([
+  'ATTEMPT', 'ATTEMPTS', 'FACTOR', 'JITTER', 'MODE', 'WINDOW', 'WINDOWS',
+]);
+const RETURN_POLICY_CONTEXT_TOKENS = new Set([
+  'AGE', 'BACKOFF', 'BUDGET', 'BYTE', 'BYTES', 'CAP', 'CHAR', 'CHARS', 'COST',
+  'COUNT', 'DAY', 'DAYS', 'DEADLINE', 'DELAY', 'EXPIRY', 'EXPIRATION', 'HOUR',
+  'HOURS', 'INTERVAL', 'LENGTH', 'LIMIT', 'MILLISECOND', 'MILLISECONDS', 'MINUTE',
+  'MINUTES', 'MS', 'PERCENT', 'RATE', 'RETRY', 'SCORE', 'SECOND', 'SECONDS', 'SIZE',
+  'THRESHOLD', 'TIME', 'TOKEN', 'TOKENS', 'TTL', 'USD', 'WINDOW',
+]);
+const PROTOCOL_SLICE_TOKENS = new Set(['DIGEST', 'HASH', 'HEX', 'ID', 'IDENTIFIER', 'UUID']);
+const TRUNCATION_CONTEXT_TOKENS = new Set([
+  'BODY', 'CHAR', 'CHARS', 'CLIP', 'CONTENT', 'CONTEXT', 'DESCRIPTION', 'DETAIL',
+  'ERROR', 'LABEL', 'MESSAGE', 'NAME', 'OUTPUT', 'PREVIEW', 'PROMPT', 'QUERY',
+  'REASON', 'RESPONSE', 'SHORTEN', 'SUMMARY', 'TEXT', 'TITLE', 'TRUNCATE',
+  'TRUNCATED', 'TRUNCATION',
+]);
+const LENGTH_GUARD_CONTEXT_TOKENS = new Set([
+  'BODY', 'BOUND', 'BUFFER', 'BYTE', 'BYTES', 'CAP', 'CHAR', 'CHARS', 'CONTENT',
+  'GUARD', 'INPUT', 'LIMIT', 'MAX', 'MESSAGE', 'OUTPUT', 'PAYLOAD', 'REASON',
+  'RESPONSE', 'TEXT', 'TOKEN',
+]);
+const MATH_CLAMP_CONTEXT_TOKENS = new Set([
+  ...RETURN_POLICY_CONTEXT_TOKENS,
+  'BOUND', 'CLAMP', 'DEFAULT', 'MAXIMUM', 'MINIMUM',
+]);
+
 function normalizePath(root, path) {
   return relative(root, path).split('\\').join('/');
 }
@@ -181,6 +217,62 @@ function isNumericExpression(node) {
     && isNumericExpression(expression.right);
 }
 
+function numericExpressionValue(node) {
+  const expression = unwrapExpression(node);
+  if (ts.isNumericLiteral(expression)) {
+    const value = Number(expression.text.replaceAll('_', ''));
+    return Number.isFinite(value) ? value : null;
+  }
+  if (ts.isPrefixUnaryExpression(expression)) {
+    const operand = numericExpressionValue(expression.operand);
+    if (operand === null) return null;
+    if (expression.operator === ts.SyntaxKind.PlusToken) return operand;
+    if (expression.operator === ts.SyntaxKind.MinusToken) return -operand;
+    return null;
+  }
+  if (!ts.isBinaryExpression(expression) || !ARITHMETIC_OPERATORS.has(expression.operatorToken.kind)) {
+    return null;
+  }
+  const left = numericExpressionValue(expression.left);
+  const right = numericExpressionValue(expression.right);
+  if (left === null || right === null) return null;
+  let value;
+  switch (expression.operatorToken.kind) {
+    case ts.SyntaxKind.PlusToken: value = left + right; break;
+    case ts.SyntaxKind.MinusToken: value = left - right; break;
+    case ts.SyntaxKind.AsteriskToken: value = left * right; break;
+    case ts.SyntaxKind.SlashToken: value = right === 0 ? Number.NaN : left / right; break;
+    case ts.SyntaxKind.PercentToken: value = right === 0 ? Number.NaN : left % right; break;
+    case ts.SyntaxKind.AsteriskAsteriskToken: value = left ** right; break;
+    default: return null;
+  }
+  return Number.isFinite(value) ? value : null;
+}
+
+function hasMinimumMagnitude(node, minimum) {
+  const value = numericExpressionValue(node);
+  return value !== null && Math.abs(value) >= minimum;
+}
+
+function collectExpressionTokens(node, tokens = new Set()) {
+  const expression = unwrapExpression(node);
+  if (ts.isIdentifier(expression) || ts.isPrivateIdentifier(expression)) {
+    for (const token of segmentTokens(expression.text)) tokens.add(token);
+  }
+  ts.forEachChild(expression, child => collectExpressionTokens(child, tokens));
+  return tokens;
+}
+
+function containsAnyToken(tokens, expected) {
+  return [...tokens].some(token => expected.has(token));
+}
+
+function hasContextToken(scope, node, expected) {
+  const tokens = tokensForNames(scope);
+  for (const token of collectExpressionTokens(node)) tokens.add(token);
+  return containsAnyToken(tokens, expected);
+}
+
 function isStringExpression(node) {
   const expression = unwrapExpression(node);
   return ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression);
@@ -249,6 +341,36 @@ function sourceValue(node, sourceFile) {
 
 function sourceLine(node, sourceFile) {
   return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+}
+
+function callTargetText(node, sourceFile) {
+  return sourceValue(unwrapExpression(node), sourceFile);
+}
+
+function callArgumentContext(node, sourceFile) {
+  let contextualNode = node;
+  let parent = contextualNode.parent;
+  while (
+    parent
+    && (
+      ts.isParenthesizedExpression(parent)
+      || ts.isAsExpression(parent)
+      || ts.isTypeAssertionExpression(parent)
+      || ts.isSatisfiesExpression(parent)
+    )
+    && parent.expression === contextualNode
+  ) {
+    contextualNode = parent;
+    parent = contextualNode.parent;
+  }
+  if (!ts.isCallExpression(parent)) return null;
+  const argumentIndex = parent.arguments.indexOf(contextualNode);
+  if (argumentIndex < 0) return null;
+  return {
+    call: parent,
+    argumentIndex,
+    target: callTargetText(parent.expression, sourceFile),
+  };
 }
 
 function isModuleConstNumber(node, valueKind) {
@@ -321,6 +443,10 @@ function objectContainsTuningMember(initializer) {
 }
 
 function anonymousObjectRootName(node, sourceFile, scope) {
+  const callContext = callArgumentContext(node, sourceFile);
+  if (callContext) {
+    return [...scope, `${callContext.target}.arg${callContext.argumentIndex}`].join('.');
+  }
   let contextualNode = node;
   let parent = contextualNode.parent;
   while (
@@ -335,10 +461,6 @@ function anonymousObjectRootName(node, sourceFile, scope) {
   ) {
     contextualNode = parent;
     parent = contextualNode.parent;
-  }
-  if (ts.isCallExpression(parent)) {
-    const argumentIndex = parent.arguments.indexOf(contextualNode);
-    return [...scope, `${sourceValue(parent.expression, sourceFile)}.arg${argumentIndex}`].join('.');
   }
   if (ts.isBinaryExpression(parent) && parent.right === contextualNode) {
     return [...scope, sourceValue(parent.left, sourceFile)].join('.');
@@ -370,6 +492,72 @@ function embeddedExecutableSource(node, sourceFile) {
   };
 }
 
+function tokensForNames(names) {
+  const tokens = new Set();
+  for (const name of names) {
+    for (const part of name.split(/[^A-Za-z0-9_]+/u).filter(Boolean)) {
+      for (const token of segmentTokens(part)) tokens.add(token);
+    }
+  }
+  return tokens;
+}
+
+function hasReturnPolicyContext(scope, expression) {
+  const tokens = tokensForNames(scope);
+  for (const token of collectExpressionTokens(expression)) tokens.add(token);
+  return containsAnyToken(tokens, RETURN_POLICY_CONTEXT_TOKENS);
+}
+
+function returnArithmeticLiteral(node, scope) {
+  const expression = unwrapExpression(node);
+  if (!ts.isBinaryExpression(expression) || !ARITHMETIC_OPERATORS.has(expression.operatorToken.kind)) {
+    return null;
+  }
+  const leftIsNumeric = isNumericExpression(expression.left);
+  const rightIsNumeric = isNumericExpression(expression.right);
+  if (leftIsNumeric && !rightIsNumeric) {
+    return hasMinimumMagnitude(expression.left, 2)
+      && hasReturnPolicyContext(scope, expression.right) ? expression.left : null;
+  }
+  if (rightIsNumeric && !leftIsNumeric) {
+    return hasMinimumMagnitude(expression.right, 2)
+      && hasReturnPolicyContext(scope, expression.left) ? expression.right : null;
+  }
+  return leftIsNumeric && rightIsNumeric
+    && hasMinimumMagnitude(expression, 2)
+    && containsAnyToken(tokensForNames(scope), RETURN_POLICY_CONTEXT_TOKENS)
+    ? expression
+    : null;
+}
+
+function isLengthAccess(node) {
+  const expression = unwrapExpression(node);
+  return ts.isPropertyAccessExpression(expression) && expression.name.text === 'length';
+}
+
+function isProtocolSliceReceiver(node, sourceFile) {
+  const text = sourceValue(node, sourceFile);
+  if (/\b(?:digest|randomUUID|toISOString|toString)\s*\(/u.test(text)) return true;
+  return containsAnyToken(collectExpressionTokens(node), PROTOCOL_SLICE_TOKENS);
+}
+
+function isPolicyCallObject(node, sourceFile) {
+  const context = callArgumentContext(node, sourceFile);
+  if (!context) return null;
+  const callee = unwrapExpression(context.call.expression);
+  const calleeName = ts.isIdentifier(callee)
+    ? callee.text
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : '';
+  const tokens = tokensForNames([calleeName]);
+  return containsAnyToken(tokens, CALL_POLICY_CONTEXT_TOKENS) ? context : null;
+}
+
+function isCallPolicyMemberName(name) {
+  return containsAnyToken(tokensForNames([name]), CALL_POLICY_MEMBER_TOKENS);
+}
+
 function scanSourceFile(sourceFile, file) {
   if (sourceFile.parseDiagnostics.length > 0) {
     const diagnostic = sourceFile.parseDiagnostics[0];
@@ -381,6 +569,93 @@ function scanSourceFile(sourceFile, file) {
   }
 
   const found = [];
+  const callSiteOccurrences = new Map();
+  const scanCallSites = !file.startsWith('src/app/e2e/') && !file.startsWith('src/test-support/');
+
+  function addCallSiteEntry(node, valueNode, scope, form, anchor) {
+    const root = [...scope, `$call:${form}:${anchor}`].join('.');
+    const occurrence = (callSiteOccurrences.get(root) ?? 0) + 1;
+    callSiteOccurrences.set(root, occurrence);
+    addEntry(
+      found,
+      sourceFile,
+      file,
+      node,
+      `${root}#${occurrence}`,
+      valueNode,
+      form,
+    );
+  }
+
+  function scanCallSite(node, scope) {
+    const callee = unwrapExpression(node.expression);
+    const target = callTargetText(callee, sourceFile);
+    const timerName = ts.isIdentifier(callee)
+      ? callee.text
+      : ts.isPropertyAccessExpression(callee)
+        && (sourceValue(callee.expression, sourceFile) === 'globalThis'
+          || sourceValue(callee.expression, sourceFile) === 'window')
+        ? callee.name.text
+        : null;
+    if (timerName && TIMER_CALLEES.has(timerName)) {
+      const delay = node.arguments[1];
+      if (delay && hasMinimumMagnitude(delay, 2)) {
+        addCallSiteEntry(node, delay, scope, 'timer', `${timerName}.arg1`);
+      }
+    }
+
+    if (!ts.isPropertyAccessExpression(callee)) return;
+    const method = callee.name.text;
+    if (
+      TRUNCATION_METHODS.has(method)
+      && !isProtocolSliceReceiver(callee.expression, sourceFile)
+      && hasContextToken(scope, callee.expression, TRUNCATION_CONTEXT_TOKENS)
+    ) {
+      const bound = node.arguments[1];
+      if (bound && hasMinimumMagnitude(bound, 32)) {
+        addCallSiteEntry(node, bound, scope, 'truncation', `${method}.arg1`);
+      }
+    }
+    if (
+      ts.isIdentifier(callee.expression)
+      && callee.expression.text === 'Math'
+      && (method === 'min' || method === 'max')
+    ) {
+      for (let index = 0; index < node.arguments.length; index += 1) {
+        const argument = node.arguments[index];
+        if (
+          hasMinimumMagnitude(argument, 2)
+          && hasContextToken(scope, node, MATH_CLAMP_CONTEXT_TOKENS)
+        ) {
+          addCallSiteEntry(node, argument, scope, 'math-clamp', `${target}.arg${index}`);
+        }
+      }
+    }
+  }
+
+  function scanLengthGuard(node, scope) {
+    if (!COMPARISON_OPERATORS.has(node.operatorToken.kind)) return;
+    const leftIsLength = isLengthAccess(node.left);
+    const rightIsLength = isLengthAccess(node.right);
+    const valueNode = leftIsLength && !rightIsLength
+      ? node.right
+      : rightIsLength && !leftIsLength
+        ? node.left
+        : null;
+    const lengthNode = leftIsLength ? node.left : node.right;
+    if (
+      !valueNode
+      || !hasMinimumMagnitude(valueNode, 16)
+      || !hasContextToken(scope, lengthNode, LENGTH_GUARD_CONTEXT_TOKENS)
+    ) return;
+    addCallSiteEntry(
+      node,
+      valueNode,
+      scope,
+      'length-guard',
+      ts.SyntaxKind[node.operatorToken.kind],
+    );
+  }
 
   function visit(node, scope, objectRootName) {
     if (ts.isFunctionDeclaration(node)) {
@@ -483,6 +758,7 @@ function scanSourceFile(sourceFile, file) {
 
     if (ts.isObjectLiteralExpression(node)) {
       const rootName = objectRootName ?? anonymousObjectRootName(node, sourceFile, scope);
+      const policyCall = scanCallSites ? isPolicyCallObject(node, sourceFile) : null;
       for (const property of node.properties) {
         if (!ts.isPropertyAssignment(property)) {
           visit(property, scope);
@@ -495,6 +771,19 @@ function scanSourceFile(sourceFile, file) {
         }
         const qualifiedName = `${rootName}.${propertyName}`;
         const valueKind = policyValueKind(property.initializer);
+        const callPolicyOnly = Boolean(policyCall)
+          && valueKind !== null
+          && !isObjectMemberTuningName(propertyName)
+          && isCallPolicyMemberName(propertyName);
+        if (callPolicyOnly) {
+          addCallSiteEntry(
+            property,
+            property.initializer,
+            scope,
+            'call-object-member',
+            `${policyCall.target}.arg${policyCall.argumentIndex}.${propertyName}`,
+          );
+        }
         if (
           valueKind !== null
           && isObjectMemberTuningName(propertyName)
@@ -513,6 +802,26 @@ function scanSourceFile(sourceFile, file) {
         visit(property.initializer, scope, qualifiedName);
       }
       return;
+    }
+
+    if (scanCallSites && ts.isCallExpression(node)) {
+      scanCallSite(node, scope);
+    } else if (scanCallSites && ts.isBinaryExpression(node)) {
+      scanLengthGuard(node, scope);
+    } else if (scanCallSites && ts.isReturnStatement(node) && node.expression) {
+      const valueNode = returnArithmeticLiteral(node.expression, scope);
+      if (valueNode) {
+        const expression = unwrapExpression(node.expression);
+        addCallSiteEntry(
+          node,
+          valueNode,
+          scope,
+          'return-arithmetic',
+          ts.isBinaryExpression(expression)
+            ? ts.SyntaxKind[expression.operatorToken.kind]
+            : 'expression',
+        );
+      }
     }
 
     ts.forEachChild(node, child => visit(child, scope, objectRootName));

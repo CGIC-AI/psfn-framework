@@ -208,6 +208,11 @@ describe('classifyToolResultBenignClass', () => {
       text: beadsShowResult(issue),
     })).toBeUndefined();
     expect(classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id, actor: 42 },
+      text: beadsShowResult(issue),
+    })).toBeUndefined();
+    expect(classifyToolResultBenignClass({
       toolName: 'shell',
       arguments: { action: 'show', id: issue.id },
       text: beadsShowResult(issue),

@@ -297,6 +297,12 @@ Structural hygiene gates under `verify:repository-hygiene` include:
 These baselines are reduction-only. Fix the source or remove resolved entries;
 do not grow a baseline to silence a gate.
 
+Structural hygiene under `verify:repository-hygiene` also includes
+`verify:todo-bead-links`. Every `TODO`, `FIXME`, `HACK`, or `XXX` source comment
+must name its owning Bead in parentheses. Its reviewed baseline is
+reduction-only: `npm run verify:todo-bead-links -- --update` may prune stale
+entries, but it refuses additions.
+
 ## Validation and publication
 
 During implementation, run targeted tests and changed-file lint. Do not run the

@@ -280,7 +280,7 @@ function main() {
       process.exit(1);
     }
 
-    console.log('Public-sanitize check passed. No blocked PII/story/token patterns found.');
+    console.log('Public-sanitize check passed. No blocked patterns found.');
     if (result.localBlocklist.loaded) {
       console.log(`Local blocklist loaded from ${result.localBlocklist.localPath}`);
     } else {

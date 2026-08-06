@@ -95,7 +95,7 @@ describe('wireReflectionRuntime reflection metacognition journal', () => {
       channelId: string;
       mode: string;
       internalStateSnapshotRef?: string;
-      metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
+      metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
       reflectionJournalEntryId?: string;
       substrateProvenanceRefs?: string[];
     };
@@ -108,7 +108,14 @@ describe('wireReflectionRuntime reflection metacognition journal', () => {
     expect(entry.channelId).toBe('internal:reflection:daily-review');
     expect(entry.mode).toBe('agent');
     expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
-    expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
+    expect(entry.metacognitiveFlags).toEqual([
+      ...metacognitiveFlags,
+      {
+        flag: 'daily_review_evidence_degraded',
+        confidence: 1,
+        evidence: 'The bounded daily evidence summary was empty, incomplete, or unavailable.',
+      },
+    ]);
     expect(entry.reflectionJournalEntryId).toBeDefined();
     expect(entry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
       `internal_state_snapshot:${snapshotRef}`,

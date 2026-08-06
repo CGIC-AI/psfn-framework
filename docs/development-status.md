@@ -1,10 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-12
+Last updated: 2026-08-06
 Package version: `0.1.0`
 Code audit anchor: `sprint_9_final` at `1956b844`; this document may be updated by later doc-only commits. Foundation-branch delta through `82b66467` (2026-07-07) is summarized in [`CHANGELOG.md`](../CHANGELOG.md).
 
-This document summarizes where PSFN stands today. It is not the issue tracker. The live task graph is `bd`; use `bd ready --json`, `bd show <id> --json`, and `bd list --status=open --json` for executable work.
+This document summarizes where PSFN stands today. It is not the issue tracker. The live task graph is `bd`; use `bd ready --json` for executable work, `bd show <id> --json` for one Bead, and `bd list --status=open,in_progress,blocked,deferred --limit 0 --json` for all unfinished work.
 
 ## Current State
 
@@ -46,31 +46,17 @@ Current operational shape:
 
 ## Active Risks And Near-Term Work
 
-These are representative open beads from the current graph, not a replacement for `bd`.
-
-| Priority | Bead | Area | Current need |
-| --- | --- | --- | --- |
-| P1 | `psfn-framework-zet.1` | Garden/privacy | Add sensitivity-gating to Garden admin memory API. |
-| P1 | `PSFNLIVE-70nb` | Chat/Garden | Fix Atrium direct-model chat loading. |
-| P1 | `psfn-framework-b30` | Deployment | Preserve `WORKSPACE_PATH` in production systemd installs. |
-| P2 | `psfn-framework-z6z` | Memory retrieval | Implement controlled `recall_expand`/projection expansion work from the memory projection spec. |
-| P2 | `psfn-framework-3eh` | Satellite Hub | Continue satellite protocol compatibility and remote shard/channel work. |
-| P2 | `psfn-framework-57m` | Reasoning/model control | Extend reasoning-parameter support and model invocation knobs. |
-| P2 | `psfn-framework-1xb.4` | Proactivity | Add weighted-thought lifecycle and contextual decay. |
-| P2 | `psfn-framework-m58.*` | Memory schema | Continue episodic consolidation, projection, and arc work. |
-| P2 | `psfn-framework-w9hj` | Companion client | Build the companion PWA/runtime client path. |
+Every bead in the former July snapshot is now closed. The snapshot was removed
+instead of replacing it with another static copy of the task graph. Use
+`bd ready --json` for executable work and
+`bd list --status=open,in_progress,blocked,deferred --limit 0 --json` for all
+unfinished work.
 
 ## Development Sequence
 
-The project does not currently publish calendar deadlines. The practical timeline is priority-ordered:
-
-| Wave | Focus | Exit condition |
-| --- | --- | --- |
-| Stabilization | P1 Garden privacy/loading and production service wiring. | Human-facing admin/chat flows and live service install paths are reliable. |
-| Memory continuation | Projection profiles, motif/occasion/callback schema work, and controlled recall expansion. | Landmark-first recall can expand evidence in bounded, trust-gated steps. |
-| Proactivity and self-state | Weighted thoughts, durable outbox provenance, personal-time work, and companion-readable internal-state rendering. | The companion can safely initiate and explain selected actions from internal state. |
-| Shard/satellite maturation | Remote shard compatibility, ARM64/K3s work, lifecycle visibility, and fold-back review polish. | Long-horizon/distributed work can run and return artifacts without confusing bounded subagents. |
-| Beta cleanup | Remove remaining alpha migration boundary paths, close stale epics, and tighten docs/tests around final contracts. | Production has no silent legacy fallbacks and docs match code without caveats. |
+The project does not currently publish calendar deadlines. Execution order is
+owned by Bead priorities and dependencies rather than a second static roadmap;
+use `bd ready --json` to inspect the current sequence.
 
 ## Validation Baseline
 

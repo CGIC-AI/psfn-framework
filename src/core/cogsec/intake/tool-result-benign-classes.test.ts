@@ -168,6 +168,20 @@ describe('classifyToolResultBenignClass', () => {
       arguments: { id: issue.id },
       text: result,
     })?.benignClass).toBe('beads_database_show');
+
+    const closedResult = beadsShowResult({
+      ...issue,
+      status: 'closed',
+      closed_at: '2026-08-06T00:00:00Z',
+      close_reason: design,
+    });
+    const closedClassification = classifyToolResultBenignClass({
+      toolName: 'beads',
+      arguments: { action: 'show', id: issue.id },
+      text: closedResult,
+    });
+    expect(closedClassification?.benignClass).toBe('beads_database_show');
+    expect(closedClassification?.controlText).not.toContain(design);
   });
 
   it('fails closed for mismatched, plural, drifted, or non-native show results', () => {

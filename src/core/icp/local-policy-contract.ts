@@ -9,8 +9,8 @@ import {
 import {
   assertNoUnknownKeys,
   isRecord,
-  isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { requireUuid } from '../../shared/utils/uuid.js';
 import {
   parseIcpInitiationCandidateSharedMetadata,
   type IcpInitiationCandidateSharedMetadata,
@@ -129,11 +129,6 @@ function requireRole(value: unknown, field: string): IcpLocalPolicyRole {
   if (value !== 'sender' && value !== 'recipient') {
     throw new Error(`${field} must be sender or recipient`);
   }
-  return value;
-}
-
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
   return value;
 }
 

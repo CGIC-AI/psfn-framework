@@ -12,8 +12,8 @@ import {
   assertNoUnknownKeys,
   isCanonicalIsoTimestamp,
   isRecord,
-  isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { requireUuid } from '../../shared/utils/uuid.js';
 
 const HEADER_KEYS = ['alg', 'typ', 'v', 'kid'] as const;
 const CLAIM_KEYS = [
@@ -282,11 +282,6 @@ function requireInteger(value: unknown, field: string, minimum: number): number 
   return Number(value);
 }
 
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) reject(`${field} must be a lowercase RFC-4122 UUID`);
-  return value;
-}
-
 function canonicalResource(companionId: string): TrustedHostRecoveryResource {
   return Object.freeze({
     schemaVersion: 1,
@@ -354,7 +349,7 @@ export function compileTrustedHostRecoveryTarget(input: {
   readonly credentialId: string;
   readonly authorityFloor: TrustedHostRecoveryAuthorityFloor;
 }): TrustedHostRecoveryTarget {
-  const companionId = requireUuid(input.companionId, 'companionId');
+  const companionId = requireUuid(input.companionId, 'companionId', reject);
   if (String(input.action) !== TRUSTED_HOST_RECOVERY_ACTION) reject('action is not recoverable');
   const expectedResource = assertDedicatedResource(input.resource, companionId);
   if (!input.reason || input.reason.length > 1_024 || input.reason.trim() !== input.reason) {
@@ -392,7 +387,7 @@ export function compileTrustedHostRecoveryTarget(input: {
 }
 
 export function trustedHostRecoveryResource(companionId: string): TrustedHostRecoveryResource {
-  return canonicalResource(requireUuid(companionId, 'companionId'));
+  return canonicalResource(requireUuid(companionId, 'companionId', reject));
 }
 
 function toResourceClaims(resource: TrustedHostRecoveryResource): RecoveryResourceClaims {
@@ -460,7 +455,7 @@ function parseClaims(encoded: string): RecoveryClaims {
   const raw = parseCanonicalSegment(encoded, 'claims');
   requireExactKeys(raw, CLAIM_KEYS, 'claims');
   if (raw.kind !== 'trusted_host_garden_recovery') reject('kind is invalid');
-  const companionId = requireUuid(raw.companion_id, 'claims.companion_id');
+  const companionId = requireUuid(raw.companion_id, 'claims.companion_id', reject);
   const audience = requireString(raw.aud, 'claims.aud');
   if (audience !== `recovery:${companionId}`) reject('audience is invalid');
   if (raw.action !== TRUSTED_HOST_RECOVERY_ACTION) reject('action is invalid');
@@ -520,8 +515,8 @@ function parseClaims(encoded: string): RecoveryClaims {
       raw.authority_floor_digest,
       'claims.authority_floor_digest',
     ),
-    request_id: requireUuid(raw.request_id, 'claims.request_id'),
-    decision_id: requireUuid(raw.decision_id, 'claims.decision_id'),
+    request_id: requireUuid(raw.request_id, 'claims.request_id', reject),
+    decision_id: requireUuid(raw.decision_id, 'claims.decision_id', reject),
     jti: requireTokenId(raw.jti, 'claims.jti'),
     iat: requireInteger(raw.iat, 'claims.iat', 1),
     nbf: requireInteger(raw.nbf, 'claims.nbf', 1),
@@ -538,7 +533,7 @@ function assertTarget(target: TrustedHostRecoveryTarget): void {
   const raw = requireRecord(target, 'target');
   requireExactKeys(raw, TARGET_KEYS, 'target');
   if (Number(target.schemaVersion) !== 1) reject('target schema version is invalid');
-  const companionId = requireUuid(target.companionId, 'target.companionId');
+  const companionId = requireUuid(target.companionId, 'target.companionId', reject);
   if (target.audience !== `recovery:${companionId}`) reject('target audience is invalid');
   if (String(target.action) !== TRUSTED_HOST_RECOVERY_ACTION) reject('target action is invalid');
   const resource = assertDedicatedResource(target.resource, companionId);
@@ -592,8 +587,8 @@ export function createGatewayTrustedHostRecoveryCapabilitySigner(input: {
   return Object.freeze({
     signRecovery: (signInput: TrustedHostRecoveryCapabilitySignInput): string => {
       assertTarget(signInput.target);
-      const requestId = requireUuid(signInput.requestId, 'requestId');
-      const decisionId = requireUuid(signInput.decisionId, 'decisionId');
+      const requestId = requireUuid(signInput.requestId, 'requestId', reject);
+      const decisionId = requireUuid(signInput.decisionId, 'decisionId', reject);
       const issuedAt = input.nowSeconds?.() ?? Math.floor(Date.now() / 1_000);
       requireInteger(issuedAt, 'signing time', 1);
       const jti = requireTokenId(input.generateJti?.() ?? randomUUID(), 'generated jti');

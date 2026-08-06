@@ -15,6 +15,7 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { requireUuid } from '../../shared/utils/uuid.js';
 import {
   parseFleetModelUsageInternalRequestTarget,
   parseFleetModelUsageResourceQuery,
@@ -420,11 +421,6 @@ function requireBoundedString(value: unknown, field: string, maximumLength: numb
   return text;
 }
 
-function requireUuid(value: unknown, field: string): string {
-  if (!isRfc4122Uuid(value)) return reject(`${field} must be a lowercase RFC-4122 UUID`);
-  return value;
-}
-
 function requireInteger(value: unknown, field: string, minimum = 0): number {
   if (!Number.isSafeInteger(value) || Number(value) < minimum) return reject(`${field} is invalid`);
   return Number(value);
@@ -707,8 +703,8 @@ function assertParent(
   expectedAudience: RequestCapabilityParentAudience = `operator:${companionId}`,
 ): void {
   if (parent.audience !== expectedAudience) reject('parent audience does not match');
-  requireUuid(parent.requestId, 'parent.requestId');
-  requireUuid(parent.decisionId, 'parent.decisionId');
+  requireUuid(parent.requestId, 'parent.requestId', reject);
+  requireUuid(parent.decisionId, 'parent.decisionId', reject);
   requireTokenId(parent.jti, 'parent.jti');
   requireDigest(parent.targetDigest, 'parent.targetDigest');
 }
@@ -717,7 +713,7 @@ function assertTarget(target: CompiledGardenRequestTarget): void {
   const targetSchemaVersion: unknown = target.schemaVersion;
   if (targetSchemaVersion !== 1) reject('target schema is invalid');
   if (!METHODS.has(target.method)) reject('target method is invalid');
-  requireUuid(target.companionId, 'target.companionId');
+  requireUuid(target.companionId, 'target.companionId', reject);
   if (!ACTIONS.has(target.action)) reject('target action is invalid');
   const gardenResolved = resolveGardenRouteCapability(target.method, target.canonicalPath);
   const companionUiResolved = resolveCompanionUiActionClassification(target.method, target.canonicalPath);
@@ -834,8 +830,8 @@ function buildClaims(input: RequestCapabilitySignInput & {
 
 function validateSignInput(input: RequestCapabilitySignInput): void {
   assertTarget(input.target);
-  requireUuid(input.requestId, 'requestId');
-  requireUuid(input.decisionId, 'decisionId');
+  requireUuid(input.requestId, 'requestId', reject);
+  requireUuid(input.decisionId, 'decisionId', reject);
   assertAuthContext(input.authContext, input.target);
   assertVersions(input.versions);
 }
@@ -1028,7 +1024,7 @@ function parseResource(value: unknown): RequestCapabilityResourceClaims {
     route_id: requireBoundedString(record.route_id, 'claims.resource.route_id', 1024),
     scope: scope as GardenWorkspaceScope,
     area: area as GardenResourceArea,
-    companion_id: requireUuid(record.companion_id, 'claims.resource.companion_id'),
+    companion_id: requireUuid(record.companion_id, 'claims.resource.companion_id', reject),
     path_params: freezeStringRecord(record.path_params, 'claims.resource.path_params'),
     query: freezeQueryRecord(record.query, 'claims.resource.query'),
     body_digest: requireDigest(record.body_digest, 'claims.resource.body_digest'),
@@ -1077,7 +1073,7 @@ function parseAuthContext(
       record.provider_subject_id,
       'claims.auth_context.provider_subject_id',
     ),
-    companion_id: requireUuid(record.companion_id, 'claims.auth_context.companion_id'),
+    companion_id: requireUuid(record.companion_id, 'claims.auth_context.companion_id', reject),
     contact_binding_id: requireStableId(
       record.contact_binding_id,
       'claims.auth_context.contact_binding_id',
@@ -1144,8 +1140,8 @@ function parseParent(
   if (aud !== expectedAudience) reject('claims.parent audience does not match');
   return {
     aud: aud as RequestCapabilityParentAudience,
-    request_id: requireUuid(record.request_id, 'claims.parent.request_id'),
-    decision_id: requireUuid(record.decision_id, 'claims.parent.decision_id'),
+    request_id: requireUuid(record.request_id, 'claims.parent.request_id', reject),
+    decision_id: requireUuid(record.decision_id, 'claims.parent.decision_id', reject),
     jti: requireTokenId(record.jti, 'claims.parent.jti'),
     target_digest: requireDigest(record.target_digest, 'claims.parent.target_digest'),
   };
@@ -1198,7 +1194,7 @@ function parseClaims(
 ): RequestCapabilityClaims {
   const record = parseJsonSegment(encoded, 'claims');
   requireExactKeys(record, audienceKind === 'agent' ? AGENT_CLAIM_KEYS : OPERATOR_CLAIM_KEYS, 'claims');
-  const companionId = requireUuid(record.companion_id, 'claims.companion_id');
+  const companionId = requireUuid(record.companion_id, 'claims.companion_id', reject);
   const audience = requireString(record.aud, 'claims.aud');
   const expectedAudience = audienceKind === 'testing_harness'
     ? TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
@@ -1232,8 +1228,8 @@ function parseClaims(
     body_digest: requireDigest(record.body_digest, 'claims.body_digest'),
     body_length: requireInteger(record.body_length, 'claims.body_length'),
     resource_digest: requireDigest(record.resource_digest, 'claims.resource_digest'),
-    request_id: requireUuid(record.request_id, 'claims.request_id'),
-    decision_id: requireUuid(record.decision_id, 'claims.decision_id'),
+    request_id: requireUuid(record.request_id, 'claims.request_id', reject),
+    decision_id: requireUuid(record.decision_id, 'claims.decision_id', reject),
     auth_context: authContext,
     ...(audienceKind === 'agent'
       ? {
@@ -1287,8 +1283,8 @@ function assertClaimsBinding(
   expected: Omit<RequestCapabilitySignInput, 'authContext'>,
 ): void {
   assertTarget(expected.target);
-  requireUuid(expected.requestId, 'expected requestId');
-  requireUuid(expected.decisionId, 'expected decisionId');
+  requireUuid(expected.requestId, 'expected requestId', reject);
+  requireUuid(expected.decisionId, 'expected decisionId', reject);
   assertVersions(expected.versions);
   const target = expected.target;
   if (claims.companion_id !== target.companionId

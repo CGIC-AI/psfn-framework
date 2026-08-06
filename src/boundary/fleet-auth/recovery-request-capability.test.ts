@@ -4,6 +4,7 @@ import {
   compileTrustedHostRecoveryTarget,
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
+  TrustedHostRecoveryCapabilityRejectedError,
   trustedHostRecoveryResource,
 } from './request-capability.js';
 
@@ -51,6 +52,14 @@ function fixture() {
 }
 
 describe('trusted-host recovery request capabilities', () => {
+  it('rejects malformed UUIDs with the recovery-specific class and exact diagnostic', () => {
+    const invalid = () => trustedHostRecoveryResource('not-a-uuid');
+    expect(invalid).toThrow(TrustedHostRecoveryCapabilityRejectedError);
+    expect(invalid).toThrow(
+      'Trusted-host recovery capability rejected: companionId must be a lowercase RFC-4122 UUID',
+    );
+  });
+
   it('round-trips only the distinct exact recovery target', () => {
     const { signer, verifier, target } = fixture();
     const requestId = randomUUID();

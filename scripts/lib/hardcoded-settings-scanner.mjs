@@ -259,7 +259,9 @@ function collectExpressionTokens(node, tokens = new Set()) {
   if (ts.isIdentifier(expression) || ts.isPrivateIdentifier(expression)) {
     for (const token of segmentTokens(expression.text)) tokens.add(token);
   }
-  ts.forEachChild(expression, child => collectExpressionTokens(child, tokens));
+  ts.forEachChild(expression, (child) => {
+    collectExpressionTokens(child, tokens);
+  });
   return tokens;
 }
 

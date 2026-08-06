@@ -416,6 +416,28 @@ describe('Hardcoded-settings repository gate', () => {
     expect(first.map(entry => entry.line)).not.toEqual(shifted.map(entry => entry.line));
   });
 
+  it('walks nested property names for policy context and protocol slice exclusions', () => {
+    const root = makeFixture();
+    writeSource(
+      root,
+      'src/policy.ts',
+      [
+        'function render(record: { text: string }) { return record.text.slice(0, 512); }',
+        'function summarize(restartPlan: { reason: string }) { return restartPlan.reason.slice(0, 160); }',
+        'function truncateProtocol(record: { hash: string; uuid: string }) {',
+        "  return `${record.hash.slice(0, 64)}:${record.uuid.slice(0, 36)}`;",
+        '}',
+      ].join('\n') + '\n',
+    );
+
+    const findings = scanHardcodedSettings(root);
+
+    expect(findings.map(entry => entry.name)).toEqual([
+      'render.$call:truncation:slice.arg1#1',
+      'summarize.$call:truncation:slice.arg1#1',
+    ]);
+  });
+
   it('keeps migrated persona-conformance marker policy out of source', () => {
     const root = makeFixture();
     const source = readFileSync(resolve('src/core/cogsec/persona-conformance.ts'), 'utf8');

@@ -377,6 +377,7 @@ function makeBroker(input: {
   ready?: boolean;
   fatigueExhausted?: boolean;
   readFatiguePosture?: (companionId: string) => 'clear' | 'pressured' | 'exhausted' | null;
+  hasRuntimeAvailabilityCapability?: (companionId: string) => boolean;
   channelOk?: boolean;
   policy?: IcpInitiationPolicySnapshot;
   alarm?: ReturnType<typeof vi.fn>;
@@ -392,6 +393,7 @@ function makeBroker(input: {
     isCompanionReady: () => input.ready ?? true,
     readCompanionFatiguePosture: input.readFatiguePosture
       ?? (() => input.fatigueExhausted ? 'exhausted' : 'clear'),
+    hasRuntimeAvailabilityCapability: input.hasRuntimeAvailabilityCapability ?? (() => true),
     resolveInitiationChannel: async () => input.channelOk === false
       ? { ok: false, reasonCode: 'channel_mismatch' }
       : { ok: true },
@@ -726,6 +728,81 @@ describe('GatewayIcpAutonomyBroker', () => {
       reasonCode: 'peer_busy',
       control: 'companion',
       lease: { state: 'busy', source: 'companion', revision: 2 },
+    });
+  });
+
+  it('serializes runtime renewal before withdrawal so the resting fence wins', async () => {
+    const { broker, store } = makeBroker();
+    store.availability.set(A, {
+      companionId: A,
+      state: 'available',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'runtime',
+      revision: 1,
+    });
+    const publishGate = deferred();
+    store.beforeAvailabilityPublish = async () => {
+      store.beforeAvailabilityPublish = undefined;
+      await publishGate.wait();
+    };
+
+    const renewal = broker.refreshRuntimeAvailability(A, {
+      state: 'available',
+      expiresAtMs: NOW + 60_000,
+    });
+    await publishGate.reached;
+    let withdrawalSettled = false;
+    const withdrawal = broker.clearRuntimeAvailability(A).finally(() => {
+      withdrawalSettled = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const settledBeforeRenewal = withdrawalSettled;
+
+    publishGate.release();
+    const operations = await Promise.allSettled([renewal, withdrawal]);
+
+    expect(settledBeforeRenewal).toBe(false);
+    expect(operations.map(operation => operation.status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(store.availability.get(A)).toMatchObject({
+      state: 'resting',
+      source: 'runtime',
+      revision: 3,
+    });
+    await expect(broker.readPeerAvailability(B, A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_resting',
+    });
+  });
+
+  it('rejects a delayed runtime refresh after owner capability withdrawal', async () => {
+    let capabilityGranted = true;
+    const { broker, store } = makeBroker({
+      hasRuntimeAvailabilityCapability: () => capabilityGranted,
+    });
+    await broker.refreshRuntimeAvailability(A, {
+      state: 'available',
+      expiresAtMs: NOW + 60_000,
+    });
+
+    capabilityGranted = false;
+    await expect(broker.refreshRuntimeAvailability(A, {
+      state: 'available',
+      expiresAtMs: NOW + 60_000,
+    })).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_resting',
+      control: 'runtime',
+    });
+
+    expect(store.availability.get(A)).toMatchObject({
+      state: 'resting',
+      source: 'runtime',
+      revision: 2,
+    });
+    await expect(broker.readPeerAvailability(B, A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_resting',
     });
   });
 

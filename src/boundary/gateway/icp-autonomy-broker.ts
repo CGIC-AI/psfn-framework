@@ -39,6 +39,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
   fleetCompanionIds: ReadonlySet<string>;
   isCompanionReady(companionId: string): boolean;
   readCompanionFatiguePosture(companionId: string): FleetFatiguePosture | null;
+  hasRuntimeAvailabilityCapability(companionId: string): boolean;
   resolveInitiationChannel(
     senderCompanionId: string,
     peerCompanionId: string,
@@ -58,6 +59,7 @@ export class GatewayIcpAutonomyBroker {
   private readonly now: () => number;
   private readonly randomUuid: () => string;
   private readonly runtimeAvailabilityActiveCompanionIds = new Set<string>();
+  private readonly runtimeAvailabilityOperationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: GatewayIcpAutonomyBrokerOptions) {
     this.now = options.now ?? (() => Date.now());
@@ -107,6 +109,22 @@ export class GatewayIcpAutonomyBroker {
     },
   ): Promise<IcpOwnAvailabilityResult> {
     this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    return await this.runRuntimeAvailabilityOperation(
+      companionId,
+      async () => await this.refreshRuntimeAvailabilityNow(companionId, input),
+    );
+  }
+
+  private async refreshRuntimeAvailabilityNow(
+    companionId: string,
+    input: {
+      state: Extract<IcpAvailabilityState, 'available' | 'resting'>;
+      expiresAtMs: number;
+    },
+  ): Promise<IcpOwnAvailabilityResult> {
+    if (!this.runtimeAvailabilityCapabilityGranted(companionId)) {
+      return await this.clearRuntimeAvailabilityNow(companionId);
+    }
     this.markRuntimeAvailabilityActive(companionId);
     const nowMs = this.now();
     const current = await this.options.store.getAvailability(companionId);
@@ -176,6 +194,13 @@ export class GatewayIcpAutonomyBroker {
 
   async clearRuntimeAvailability(companionId: string): Promise<IcpOwnAvailabilityResult> {
     this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    return await this.runRuntimeAvailabilityOperation(
+      companionId,
+      async () => await this.clearRuntimeAvailabilityNow(companionId),
+    );
+  }
+
+  private async clearRuntimeAvailabilityNow(companionId: string): Promise<IcpOwnAvailabilityResult> {
     this.runtimeAvailabilityActiveCompanionIds.delete(companionId);
     const current = await this.options.store.getAvailability(companionId);
     if (!current || current.source !== 'runtime') {
@@ -230,6 +255,10 @@ export class GatewayIcpAutonomyBroker {
 
   markRuntimeAvailabilityActive(companionId: string): void {
     this.requireFleetCompanion(companionId, 'runtime availability publisher');
+    if (!this.runtimeAvailabilityCapabilityGranted(companionId)) {
+      this.runtimeAvailabilityActiveCompanionIds.delete(companionId);
+      return;
+    }
     this.runtimeAvailabilityActiveCompanionIds.add(companionId);
   }
 
@@ -855,12 +884,55 @@ export class GatewayIcpAutonomyBroker {
   }
 
   private runtimeParticipationReason(companionId: string): IcpAutonomyReasonCode | undefined {
+    if (!this.runtimeAvailabilityCapabilityGranted(companionId)) {
+      this.runtimeAvailabilityActiveCompanionIds.delete(companionId);
+      return 'policy_denied';
+    }
     if (!this.runtimeAvailabilityActiveCompanionIds.has(companionId)) {
       return 'policy_denied';
     }
     const fatigue = this.options.readCompanionFatiguePosture(companionId);
     if (fatigue === null) return 'policy_denied';
     return fatigue === 'exhausted' ? 'fatigue_exhausted' : undefined;
+  }
+
+  private runtimeAvailabilityCapabilityGranted(companionId: string): boolean {
+    try {
+      return this.options.hasRuntimeAvailabilityCapability(companionId);
+    } catch (error) {
+      this.options.alarm(
+        'icp_capability_authority_unavailable',
+        'ICP runtime availability capability authority failed closed',
+        {
+          companionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      return false;
+    }
+  }
+
+  private async runRuntimeAvailabilityOperation<T>(
+    companionId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.runtimeAvailabilityOperationTails.get(companionId)
+      ?? Promise.resolve();
+    const result = previous.then(operation);
+    // The original caller still receives `result` rejection; only the queue
+    // tail settles so a failed refresh cannot prevent a later fail-closed clear.
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.runtimeAvailabilityOperationTails.set(companionId, tail);
+    try {
+      return await result;
+    } finally {
+      if (this.runtimeAvailabilityOperationTails.get(companionId) === tail) {
+        this.runtimeAvailabilityOperationTails.delete(companionId);
+      }
+    }
   }
 
   private requireDistinctFleetPair(senderCompanionId: string, peerCompanionId: string): void {

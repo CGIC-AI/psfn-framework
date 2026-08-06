@@ -80,7 +80,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  function buildContract() {
+  function buildContract(configureEventBus?: (eventBus: EventBus) => void) {
     // Distinct roots: dataDir is the shared system-data root; companionDataDir
     // is this companion's private root — exactly the single-release fleet shape.
     const config: SubstrateConfig = {
@@ -113,6 +113,7 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     };
 
     const eventBus = new EventBus();
+    configureEventBus?.(eventBus);
     const memoryStore = new InMemoryMemoryStore().asPort();
     sessionStore = new SessionStore(sessionsDir);
     sessionManager = new SessionManager(sessionStore, config, eventBus);
@@ -281,6 +282,51 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
       'Withdrawn: identity.write.runtime, memory.write, git.read, issue.read, repl.execute.',
     );
     expect(notices[0]?.content).toContain('not a fault in you');
+  });
+
+  it('reports failure when the required companion-capability withdrawal fence rejects', async () => {
+    writeFileSync(
+      join(companionDataDir, 'capability-tier.json'),
+      `${JSON.stringify({ tier: 'autonomous', customTokens: [] }, null, 2)}\n`,
+      'utf-8',
+    );
+    let markFenceReached!: () => void;
+    let rejectFence!: (reason: Error) => void;
+    const fenceReached = new Promise<void>(resolve => {
+      markFenceReached = resolve;
+    });
+    const services = buildContract((eventBus) => {
+      eventBus.on('capability.tier.changed', async () => await new Promise<void>((_resolve, reject) => {
+        rejectFence = reject;
+        markFenceReached();
+      }));
+    });
+
+    let saveSettled = false;
+    const save = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'apprentice',
+      customTokens: [],
+    }));
+    void save.finally(() => {
+      saveSettled = true;
+    });
+
+    await fenceReached;
+    expect(saveSettled).toBe(false);
+    rejectFence(new Error('runtime availability clear rejected'));
+    const result = await save;
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: {
+        status: 'degraded',
+        divergences: [{ key: 'capabilities', state: 'diverged' }],
+      },
+    });
+    if (!result.ok || !result.status) {
+      throw new Error('expected a degraded capability-withdrawal result');
+    }
+    expect(result.status.detail).toContain('runtime availability clear rejected');
   });
 
   it('delivers a pre-conversation tier notice into the next conversation on any channel', async () => {

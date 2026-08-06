@@ -388,6 +388,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
 
 type IcpQueuedInvalidationReason =
   | 'peer_offline'
+  | 'fatigue_exhausted'
   | 'operator_cancelled'
   | 'unknown_participant';
 
@@ -449,6 +450,7 @@ export class GatewayServer {
   private readonly inboundChannelReplay: GatewayInboundChannelReplay;
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
+  private readonly fatigueFencedCompanionIds = new Set<string>();
   /**
    * Same-process retry accelerator only. This map deliberately is not the
    * durable exactly-once boundary: an RPC acknowledgement can be lost across
@@ -516,6 +518,12 @@ export class GatewayServer {
           fleetCompanionIds: this.fleetCompanionIds,
           companionChannels: options.companionChannels,
           isCompanionReady: companionId => this.resolveReadyCompanionConnection(companionId) !== null,
+          readCompanionFatiguePosture: companionId => {
+            const connection = this.resolveReadyCompanionConnection(companionId);
+            return connection === null
+              ? null
+              : this.companionPostures.read(connection, companionId)?.fatigue.state ?? null;
+          },
           policyAuthority: options.icpInitiationPolicyAuthority!,
           eventBus: options.eventBus,
           alarm: (event, message, details) => this.alarmCompanionViolation(event, message, details),
@@ -2499,6 +2507,8 @@ export class GatewayServer {
     }
     if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
       this.companionConnections.delete(status.companionId);
+      this.icpAutonomyBroker?.markRuntimeAvailabilityInactive(status.companionId);
+      this.fatigueFencedCompanionIds.delete(status.companionId);
       log.info(`${this.companionDisplayLabel(status.companionId)} connection unbound`, {
         companionId: status.companionId,
       });
@@ -3348,10 +3358,10 @@ export class GatewayServer {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary(), companionId);
   }
 
-  private recordConnectionPosture(
+  private async recordConnectionPosture(
     conn: GatewayRpcConnection,
     params: unknown,
-  ): { success: true } {
+  ): Promise<{ success: true }> {
     const status = this.connectionStatuses.get(conn);
     if (status?.role !== 'agent' || !status.companionId) {
       throw new Error('gateway.client.health requires an authenticated companion agent');
@@ -3361,11 +3371,18 @@ export class GatewayServer {
       || Object.keys(params).length !== 1) {
       throw new Error('gateway.client.health accepts only the bounded posture envelope');
     }
-    this.companionPostures.record(
+    const posture = this.companionPostures.record(
       conn,
       status.companionId,
       params.posture,
     );
+    if (posture.fatigue.state === 'exhausted'
+      && !this.fatigueFencedCompanionIds.has(status.companionId)) {
+      await this.queueIcpInvalidation(status.companionId, 'fatigue_exhausted');
+      this.fatigueFencedCompanionIds.add(status.companionId);
+    } else if (posture.fatigue.state !== 'exhausted') {
+      this.fatigueFencedCompanionIds.delete(status.companionId);
+    }
     return { success: true };
   }
 

@@ -200,6 +200,8 @@ import type {
   ImageGenerationRpcResult,
   IcpAvailabilityPublishParams,
   IcpAvailabilityClearParams,
+  IcpRuntimeAvailabilityClearParams,
+  IcpRuntimeAvailabilityRefreshParams,
   IcpPeerAvailabilityReadParams,
   IcpInitiationPreflightParams,
   IcpInitiationPermitIssueParams,
@@ -1239,6 +1241,25 @@ export class GatewayClient implements
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as { cleared: boolean };
+  }
+
+  async refreshRuntimeAvailability(
+    params: Omit<IcpRuntimeAvailabilityRefreshParams, 'companionId'>,
+  ): Promise<IcpOwnAvailabilityResult> {
+    return await this.rpcInstance.request('companion.availability.refresh_runtime', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpOwnAvailabilityResult;
+  }
+
+  async clearRuntimeAvailability(): Promise<IcpOwnAvailabilityResult> {
+    const params: IcpRuntimeAvailabilityClearParams = {
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    };
+    return await this.rpcInstance.request(
+      'companion.availability.clear_runtime',
+      params,
+    ) as IcpOwnAvailabilityResult;
   }
 
   async companionReadPeerAvailability(

@@ -79,9 +79,11 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
   beforeCreateEpisodeAndIssuePermit?: () => Promise<void>;
   beforeConsumePermit?: () => Promise<void>;
+  beforeAvailabilityPublish?: () => Promise<void>;
   beforeAvailabilityInvalidationCommit?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
+    await this.beforeAvailabilityPublish?.();
     return this.publishAvailabilityNow(lease);
   }
 
@@ -373,6 +375,8 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
 function makeBroker(input: {
   store?: MemoryStore;
   ready?: boolean;
+  fatigueExhausted?: boolean;
+  readFatiguePosture?: (companionId: string) => 'clear' | 'pressured' | 'exhausted' | null;
   channelOk?: boolean;
   policy?: IcpInitiationPolicySnapshot;
   alarm?: ReturnType<typeof vi.fn>;
@@ -386,6 +390,8 @@ function makeBroker(input: {
     store,
     fleetCompanionIds: new Set([A, B, C]),
     isCompanionReady: () => input.ready ?? true,
+    readCompanionFatiguePosture: input.readFatiguePosture
+      ?? (() => input.fatigueExhausted ? 'exhausted' : 'clear'),
     resolveInitiationChannel: async () => input.channelOk === false
       ? { ok: false, reasonCode: 'channel_mismatch' }
       : { ok: true },
@@ -429,6 +435,7 @@ function makeBroker(input: {
     now: () => NOW,
     randomUuid: () => ids.shift() ?? C,
   });
+  for (const companionId of [A, B, C]) broker.markRuntimeAvailabilityActive(companionId);
   return { broker, store, alarm, eventBus };
 }
 
@@ -616,6 +623,30 @@ describe('GatewayIcpAutonomyBroker', () => {
     });
   });
 
+  it('suppresses an otherwise available peer at maximum fatigue', async () => {
+    const { broker, store } = makeBroker({ fatigueExhausted: true });
+    await makeAvailable(store);
+
+    await expect(broker.readPeerAvailability(A, B)).resolves.toMatchObject({
+      connectionState: 'online',
+      eligible: false,
+      reasonCode: 'fatigue_exhausted',
+      lease: { state: 'open_to_chat' },
+    });
+  });
+
+  it('fails closed when an available peer has no current authenticated fatigue posture', async () => {
+    const { broker, store } = makeBroker({ readFatiguePosture: () => null });
+    await makeAvailable(store);
+
+    await expect(broker.readPeerAvailability(A, B)).resolves.toMatchObject({
+      connectionState: 'online',
+      eligible: false,
+      reasonCode: 'policy_denied',
+      lease: { state: 'open_to_chat' },
+    });
+  });
+
   it('reads own effective availability and explains operator control without peer lookup', async () => {
     const { broker, store } = makeBroker();
     await expect(broker.readOwnAvailability(A)).resolves.toEqual({
@@ -638,6 +669,126 @@ describe('GatewayIcpAutonomyBroker', () => {
       control: 'operator_override',
       mutableByCompanion: false,
       lease: { source: 'operator', revision: 4 },
+    });
+  });
+
+  it('publishes the authenticated runtime default without fabricating a companion choice', async () => {
+    const { broker, store } = makeBroker();
+
+    await expect(broker.refreshRuntimeAvailability(A, {
+      state: 'available',
+      expiresAtMs: NOW + 60_000,
+    })).resolves.toMatchObject({
+      eligible: true,
+      control: 'runtime',
+      mutableByCompanion: true,
+      lease: {
+        companionId: A,
+        state: 'available',
+        source: 'runtime',
+        revision: 1,
+      },
+    });
+    expect(store.availability.get(A)).toMatchObject({
+      state: 'available',
+      source: 'runtime',
+      revision: 1,
+    });
+  });
+
+  it('preserves a companion state that wins the race against runtime renewal', async () => {
+    const { broker, store } = makeBroker();
+    store.availability.set(A, {
+      companionId: A,
+      state: 'available',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'runtime',
+      revision: 1,
+    });
+    store.beforeAvailabilityPublish = async () => {
+      store.beforeAvailabilityPublish = undefined;
+      store.availability.set(A, {
+        companionId: A,
+        state: 'busy',
+        issuedAtMs: NOW,
+        expiresAtMs: NOW + 60_000,
+        source: 'companion',
+        revision: 2,
+      });
+    };
+
+    await expect(broker.refreshRuntimeAvailability(A, {
+      state: 'available',
+      expiresAtMs: NOW + 60_000,
+    })).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_busy',
+      control: 'companion',
+      lease: { state: 'busy', source: 'companion', revision: 2 },
+    });
+  });
+
+  it('suppresses runtime-owned availability when autonomy is turned off', async () => {
+    const { broker, store } = makeBroker();
+    store.availability.set(A, {
+      companionId: A,
+      state: 'available',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'runtime',
+      revision: 1,
+    });
+
+    await expect(broker.clearRuntimeAvailability(A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_resting',
+      control: 'runtime',
+      lease: { state: 'resting', source: 'runtime', revision: 2 },
+    });
+    expect(store.availability.get(A)).toMatchObject({
+      state: 'resting',
+      source: 'runtime',
+      revision: 2,
+    });
+
+    store.availability.set(A, {
+      companionId: A,
+      state: 'busy',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'companion',
+      revision: 2,
+    });
+    await expect(broker.clearRuntimeAvailability(A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_busy',
+      control: 'companion',
+      lease: { source: 'companion', state: 'busy', revision: 2 },
+    });
+  });
+
+  it('keeps an explicit open lease ineligible after autonomy is turned off', async () => {
+    const { broker, store } = makeBroker();
+    store.availability.set(A, {
+      companionId: A,
+      state: 'open_to_chat',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'companion',
+      revision: 1,
+    });
+
+    await expect(broker.clearRuntimeAvailability(A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'policy_denied',
+      control: 'companion',
+      lease: { state: 'open_to_chat', source: 'companion' },
+    });
+    await expect(broker.readPeerAvailability(B, A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'policy_denied',
+      lease: { state: 'open_to_chat', source: 'companion' },
     });
   });
 
@@ -809,6 +960,33 @@ describe('GatewayIcpAutonomyBroker', () => {
       expect.any(String),
       expect.objectContaining({ senderCompanionId: A }),
     );
+  });
+
+  it('revokes an issued permit when the recipient reaches maximum fatigue before consumption', async () => {
+    const fatigue = new Map([[A, 'clear' as const], [B, 'clear' as const]]);
+    const { broker, store } = makeBroker({
+      readFatiguePosture: companionId => fatigue.get(companionId) ?? null,
+    });
+    await makeAvailable(store);
+    const issued = await broker.issuePermit(A, {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    });
+    expect(issued.decision).toEqual({ eligible: true });
+    fatigue.set(B, 'exhausted');
+
+    await expect(broker.consumePermit(A, {
+      permitId: PERMIT_ID,
+      conversationId: CONVERSATION_ID,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      rootInitiationId: ROOT_ID,
+      peerContactId: 'contact-b',
+    })).resolves.toMatchObject({
+      outcome: 'revoked',
+      permit: { status: 'revoked', reasonCode: 'fatigue_exhausted' },
+    });
   });
 
   it('revalidates canonical handoff policy while the final permit operation is guarded', async () => {

@@ -80,6 +80,126 @@ function deferred(): { reached: Promise<void>; release: () => void; wait: () => 
 }
 
 describe('ICP autonomy Postgres persistence', () => {
+  it('enforces operator over companion over runtime availability precedence', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const store = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    try {
+      await store.publishAvailability({
+        companionId: A,
+        state: 'available',
+        issuedAtMs: 1_000,
+        expiresAtMs: 61_000,
+        source: 'runtime',
+        revision: 1,
+      });
+      await expect(store.publishAvailability({
+        companionId: A,
+        state: 'busy',
+        issuedAtMs: 2_000,
+        expiresAtMs: 62_000,
+        source: 'companion',
+        revision: 2,
+      })).resolves.toMatchObject({ source: 'companion', state: 'busy', revision: 2 });
+      await expect(store.publishAvailability({
+        companionId: A,
+        state: 'available',
+        issuedAtMs: 3_000,
+        expiresAtMs: 63_000,
+        source: 'runtime',
+        revision: 3,
+      })).rejects.toThrow(/availability revision conflict/i);
+
+      await expect(store.publishAvailability({
+        companionId: A,
+        state: 'do_not_disturb',
+        issuedAtMs: 4_000,
+        expiresAtMs: 64_000,
+        source: 'operator',
+        revision: 3,
+      })).resolves.toMatchObject({ source: 'operator', state: 'do_not_disturb', revision: 3 });
+      await expect(store.publishAvailability({
+        companionId: A,
+        state: 'open_to_chat',
+        issuedAtMs: 5_000,
+        expiresAtMs: 65_000,
+        source: 'companion',
+        revision: 4,
+      })).rejects.toThrow(/availability revision conflict/i);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('preserves a concurrent higher-authority choice while runtime availability is suppressed', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const runtimeStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    const companionStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
+    const broker = new GatewayIcpAutonomyBroker({
+      store: runtimeStore,
+      fleetCompanionIds: new Set([A, B]),
+      isCompanionReady: () => true,
+      readCompanionFatiguePosture: () => 'clear',
+      resolveInitiationChannel: async () => ({ ok: true }),
+      policyAuthority: {
+        resolve: async () => ({
+          canonicalPeerContact: true,
+          trustAllows: true,
+          senderBlocksPeer: false,
+          peerBlocksSender: false,
+          quietHours: false,
+          provenanceFresh: true,
+          recursiveMiOnlyRoot: false,
+          socialPressureAllows: true,
+          chargeAllows: true,
+          fatigueAllows: true,
+          costAllows: true,
+        }),
+        authorizeHandoff: async () => ({ eligible: true }),
+        runAuthorizedHandoff: async <T>(_input: unknown, operation: () => Promise<T>) => ({
+          decision: { eligible: true as const },
+          result: await operation(),
+        }),
+      },
+      eventBus: new EventBus(),
+      alarm: () => undefined,
+      now: () => 1_000,
+    });
+    try {
+      await broker.refreshRuntimeAvailability(A, {
+        state: 'available',
+        expiresAtMs: 61_000,
+      });
+
+      const [suppressed, chosen] = await Promise.all([
+        broker.clearRuntimeAvailability(A),
+        companionStore.publishAvailability({
+          companionId: A,
+          state: 'open_to_chat',
+          issuedAtMs: 2_000,
+          expiresAtMs: 62_000,
+          source: 'companion',
+          revision: 2,
+        }),
+      ]);
+
+      expect(suppressed).toMatchObject({ eligible: false });
+      expect(chosen).toMatchObject({ source: 'companion', state: 'open_to_chat' });
+      await expect(runtimeStore.getAvailability(A)).resolves.toMatchObject({
+        source: 'companion',
+        state: 'open_to_chat',
+      });
+    } finally {
+      await runtimeStore.close();
+      await companionStore.close();
+    }
+  });
+
   it('reconciles simultaneous identical-candidate permit issuance to one durable permit', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const knownCompanionIds = [A, B];
@@ -136,17 +256,24 @@ describe('ICP autonomy Postgres persistence', () => {
     const makeBroker = (
       store: PostgresIcpSharedAutonomyStore,
       ids: string[],
-    ): GatewayIcpAutonomyBroker => new GatewayIcpAutonomyBroker({
-      store: gatedStore(store),
-      fleetCompanionIds: new Set(knownCompanionIds),
-      isCompanionReady: () => true,
-      resolveInitiationChannel: async () => ({ ok: true }),
-      policyAuthority: openPolicy,
-      eventBus,
-      alarm: () => undefined,
-      now: () => 10_000,
-      randomUuid: () => ids.shift()!,
-    });
+    ): GatewayIcpAutonomyBroker => {
+      const broker = new GatewayIcpAutonomyBroker({
+        store: gatedStore(store),
+        fleetCompanionIds: new Set(knownCompanionIds),
+        isCompanionReady: () => true,
+        readCompanionFatiguePosture: () => 'clear',
+        resolveInitiationChannel: async () => ({ ok: true }),
+        policyAuthority: openPolicy,
+        eventBus,
+        alarm: () => undefined,
+        now: () => 10_000,
+        randomUuid: () => ids.shift()!,
+      });
+      for (const companionId of knownCompanionIds) {
+        broker.markRuntimeAvailabilityActive(companionId);
+      }
+      return broker;
+    };
     const brokerA = makeBroker(storeA, [RACE_CONVERSATION_A, RACE_PERMIT_A]);
     const brokerB = makeBroker(storeB, [RACE_CONVERSATION_B, RACE_PERMIT_B]);
     const input = {

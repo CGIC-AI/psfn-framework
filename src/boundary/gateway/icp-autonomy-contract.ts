@@ -5,6 +5,7 @@ import {
 } from '../../core/icp/initiation-candidate.js';
 import {
   ICP_AVAILABILITY_STATES,
+  MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   MAX_ICP_PERMIT_TTL_MS,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
@@ -69,6 +70,16 @@ export interface IcpOwnAvailabilityResult {
 }
 
 export interface IcpOwnAvailabilityReadParams {
+  companionId?: string;
+}
+
+export interface IcpRuntimeAvailabilityRefreshParams {
+  state: Extract<IcpAvailabilityState, 'available' | 'resting'>;
+  expiresAtMs: number;
+  companionId?: string;
+}
+
+export interface IcpRuntimeAvailabilityClearParams {
   companionId?: string;
 }
 
@@ -199,6 +210,40 @@ export function parseIcpAvailabilityClearParams(value: unknown): { expectedRevis
   if (!isRecord(value)) throw new Error('ICP availability clear params must be an object');
   assertNoUnknownKeys(value, ['expectedRevision', 'companionId'], 'ICP availability clear params');
   return { expectedRevision: requirePositiveRevision(value.expectedRevision, 'expectedRevision') };
+}
+
+export function parseIcpRuntimeAvailabilityRefreshParams(
+  value: unknown,
+  nowMs: number,
+): Omit<IcpRuntimeAvailabilityRefreshParams, 'companionId'> {
+  if (!isRecord(value)) throw new Error('ICP runtime availability refresh params must be an object');
+  assertNoUnknownKeys(
+    value,
+    ['state', 'expiresAtMs', 'companionId'],
+    'ICP runtime availability refresh params',
+  );
+  if (value.state !== 'available' && value.state !== 'resting') {
+    throw new Error('ICP runtime availability state must be available or resting');
+  }
+  const expiresAtMs = requireTimestamp(value.expiresAtMs, 'expiresAtMs');
+  if (expiresAtMs <= nowMs) throw new Error('expiresAtMs must be in the future');
+  if (expiresAtMs - nowMs > MAX_ICP_AVAILABILITY_LEASE_TTL_MS) {
+    throw new Error(
+      `ICP runtime availability exceeds maximum TTL ${MAX_ICP_AVAILABILITY_LEASE_TTL_MS}ms`,
+    );
+  }
+  return { state: value.state, expiresAtMs };
+}
+
+export function parseIcpRuntimeAvailabilityClearParams(
+  value: unknown,
+): IcpRuntimeAvailabilityClearParams {
+  if (!isRecord(value)) throw new Error('ICP runtime availability clear params must be an object');
+  assertNoUnknownKeys(value, ['companionId'], 'ICP runtime availability clear params');
+  const companionId = value.companionId === undefined
+    ? undefined
+    : requireUuid(value.companionId, 'companionId');
+  return companionId === undefined ? {} : { companionId };
 }
 
 export function parseIcpPeerAvailabilityReadParams(value: unknown): { peerCompanionId: string } {

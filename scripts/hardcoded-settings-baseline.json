@@ -820,7 +820,7 @@
     {
       "file": "src/boundary/gateway/icp-autonomy-contract.ts",
       "name": "POLICY_KEYS",
-      "value": "[ 'canonicalPeerContact', 'trustAllows', 'senderBlocksPeer', 'peerBlocksSender', 'quietHours', 'provenanceFresh', 'recursiveMiOnlyRoot', 'socialPressureAllows', 'chargeAllows', 'fatigueAllows', 'costAllows', ] as const",
+      "value": "[ 'canonicalPeerContact', 'trustAllows', 'senderBlocksPeer', 'peerBlocksSender', 'provenanceFresh', 'recursiveMiOnlyRoot', 'socialPressureAllows', 'chargeAllows', 'fatigueAllows', 'costAllows', ] as const",
       "form": "array",
       "note": "Immutable parser/wire/schema contract POLICY_KEYS; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },

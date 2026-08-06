@@ -644,12 +644,6 @@ export async function startIcpCertificationProcessHarness(input: {
   const fatigue = await PostgresIcpFatigueRegulationReservationStore.connect(input.databaseUrl);
   const authority = new PostgresIcpInitiationPolicyAuthority(input.databaseUrl, {
     fleet,
-    quietHours: {
-      enabled: false,
-      startLocalTime: '00:00',
-      endLocalTime: '23:59',
-      timeZone: 'UTC',
-    },
     capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
       fatigue,
       {

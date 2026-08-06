@@ -1,19 +1,14 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  evaluateAccountRosterAuthorization,
-  evaluateFleetAuthorizationSessionSnapshot,
-  evaluateFleetAuthorizationSnapshot,
-  type FleetAuthorizationDenialReason,
-  type FleetAuthorizationSnapshot,
+import type {
+  FleetAuthorizationDenialReason,
+  FleetAuthorizationSnapshot,
 } from '../../../boundary/gateway/fleet-authorization-context.js';
-import {
-  GatewayFleetPortalAuthorizationBatchResolver,
-  type FleetPortalAuthorizationBatchRequest,
-  type FleetPortalAuthorizationBatchStore,
-  type FleetPortalAuthorizationBatchStoreDecision,
+import type {
+  FleetPortalAuthorizationBatchRequest,
+  FleetPortalAuthorizationBatchStore,
+  FleetPortalAuthorizationBatchStoreDecision,
 } from '../../../boundary/gateway/fleet-portal-authorization.js';
-import { fleetAuthRoleAllowsAction } from '../../../boundary/fleet-auth/role-action-policy.js';
 import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import type {
   FleetAuthAccountRosterEntry,
@@ -30,6 +25,7 @@ import {
   type FleetAuthSessionRow,
 } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const positiveInteger = createPositiveIntegerCoercer('portal-authorization');
 
@@ -152,7 +148,8 @@ implements FleetPortalAuthorizationBatchStore {
       const snapshots = await this.loadSnapshots(client, request.sessionToken);
       const resolvedAt = this.now();
       const representative = snapshots[0]!;
-      const sessionEvaluation = evaluateFleetAuthorizationSessionSnapshot({
+      const sessionEvaluation = fleetAuthPersistenceBoundaryValues
+        .evaluateFleetAuthorizationSessionSnapshot({
         snapshot: representative.snapshot,
         now: resolvedAt,
       });
@@ -261,7 +258,7 @@ implements FleetPortalAuthorizationBatchStore {
     resolvedAt: Date,
   ): Extract<FleetPortalAuthorizationBatchStoreDecision, { decision: 'allow' }>['companions'] {
     return snapshots.flatMap(({ companionId, snapshot }) => {
-      const evaluation = evaluateFleetAuthorizationSnapshot({
+      const evaluation = fleetAuthPersistenceBoundaryValues.evaluateFleetAuthorizationSnapshot({
         request: {
           sessionToken,
           audience: 'fleet',
@@ -292,7 +289,7 @@ implements FleetPortalAuthorizationBatchStore {
   ): Extract<FleetPortalAuthorizationBatchStoreDecision, { decision: 'allow' }>['companions'] {
     if (this.accountRoster.length === 0) return [];
     return snapshots.flatMap(({ companionId, snapshot }) => {
-      const evaluation = evaluateAccountRosterAuthorization({
+      const evaluation = fleetAuthPersistenceBoundaryValues.evaluateAccountRosterAuthorization({
         request: {
           sessionToken,
           audience: 'fleet',
@@ -315,7 +312,8 @@ implements FleetPortalAuthorizationBatchStore {
   ): { companionId: string; gardenLinkEligible: boolean } {
     return {
       companionId,
-      gardenLinkEligible: fleetAuthRoleAllowsAction(role, 'garden.read')
+      gardenLinkEligible: fleetAuthPersistenceBoundaryValues
+        .fleetAuthRoleAllowsAction(role, 'garden.read')
         && !this.disabledActionsByRole[role].includes('garden.read'),
     };
   }
@@ -597,13 +595,4 @@ implements FleetPortalAuthorizationBatchStore {
   private digest(value: string): string {
     return createHmac('sha256', this.sessionPepper).update(value).digest('hex');
   }
-}
-
-export function createPostgresFleetPortalAuthorization(
-  options: PostgresFleetPortalAuthorizationStoreOptions,
-): GatewayFleetPortalAuthorizationBatchResolver {
-  return new GatewayFleetPortalAuthorizationBatchResolver(
-    new PostgresFleetPortalAuthorizationStore(options),
-    options.knownCompanionIds,
-  );
 }

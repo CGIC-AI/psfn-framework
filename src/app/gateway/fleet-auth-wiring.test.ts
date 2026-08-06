@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import {
   assertGatewayApiIntakeScreeningOwnership,
@@ -97,9 +98,9 @@ describe('gateway fleet authorization context wiring', () => {
     }
   });
 
-  it('constructs the private request-capability signer only inside gateway persistence', () => {
-    const persistenceSource = readFileSync(
-      new URL('../../persistence/postgres/fleet-auth/gateway-persistence.ts', import.meta.url),
+  it('constructs private gateway services only inside gateway composition', () => {
+    const compositionSource = readFileSync(
+      new URL('./fleet-auth-persistence.ts', import.meta.url),
       'utf8',
     );
     const configSource = readFileSync(
@@ -107,11 +108,46 @@ describe('gateway fleet authorization context wiring', () => {
       'utf8',
     );
 
-    expect(persistenceSource).toContain('createGatewayRequestCapabilitySigner({');
-    expect(persistenceSource).toContain('privateKeyPem: secrets.assertionPrivateKeyPem,');
-    expect(persistenceSource).toContain('requestCapabilities,');
+    expect(compositionSource).toContain('createGatewayRequestCapabilitySigner({');
+    expect(compositionSource).toContain('privateKeyPem: secrets.assertionPrivateKeyPem,');
+    expect(compositionSource).toContain('new GatewayFleetAuthBroker({');
+    expect(compositionSource).toContain('new FleetEscalationCoordinator({');
+    expect(compositionSource).toContain('requestCapabilities,');
     expect(configSource).toContain('requestCapabilities: {');
     expect(configSource).toContain('keys: config.verifierKeys.map(key => ({ ...key })),');
+  });
+
+  it('keeps production fleet-auth persistence free of boundary runtime imports', () => {
+    const persistenceDirectory = new URL(
+      '../../persistence/postgres/fleet-auth/',
+      import.meta.url,
+    );
+    const violations: string[] = [];
+    for (const name of readdirSync(persistenceDirectory)) {
+      if (!name.endsWith('.ts')
+        || name.includes('.test.')
+        || name.includes('.integration.')
+        || name.endsWith('.test-support.ts')) {
+        continue;
+      }
+      const source = readFileSync(new URL(name, persistenceDirectory), 'utf8');
+      const sourceFile = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
+      for (const statement of sourceFile.statements) {
+        if (!ts.isImportDeclaration(statement)
+          || !statement.moduleSpecifier.text.includes('boundary/')) {
+          continue;
+        }
+        const clause = statement.importClause;
+        const hasRuntimeBinding = clause === undefined
+          || (!clause.isTypeOnly
+          && (clause.name !== undefined
+            || clause.namedBindings === undefined
+            || ts.isNamespaceImport(clause.namedBindings)
+            || clause.namedBindings.elements.some(element => !element.isTypeOnly)));
+        if (hasRuntimeBinding) violations.push(name);
+      }
+    }
+    expect(violations).toEqual([]);
   });
 
   it('fails before listen when fleet auth is enabled with partial principal composition', async () => {

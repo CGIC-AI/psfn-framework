@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import {
-  FleetEscalationError,
-  type FleetEscalationGrantBinding,
-  type FleetEscalationGrantStore,
+import type {
+  FleetEscalationGrantBinding,
+  FleetEscalationGrantStore,
 } from '../../../boundary/fleet-auth/escalation.js';
 import {
   FLEET_AUTH_ACTIONS,
@@ -16,6 +15,7 @@ import { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 import { createPositiveIntegerCoercer } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthPersistenceBoundaryValues } from './boundary-values-port.js';
 
 const ACTIONS = new Set<string>(FLEET_AUTH_ACTIONS);
 const ASSURANCE_REQUIREMENTS = new Set(['escalated', 'privacy_break_glass']);
@@ -113,7 +113,10 @@ export class PostgresFleetEscalationGrantStore implements FleetEscalationGrantSt
           AND created_at > $2::timestamptz - interval '10 minutes'
       `, [session.record_id, input.now]);
       if (positiveInteger(recent.rows.at(0)?.count ?? '0', 'grant rate count', true) >= 20) {
-        throw new FleetEscalationError('grant_unavailable', 'Escalation grant rate limit exceeded');
+        throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+          'grant_unavailable',
+          'Escalation grant rate limit exceeded',
+        );
       }
       const inserted = await client.query<GrantRow>(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.escalation_grants (
@@ -147,7 +150,12 @@ export class PostgresFleetEscalationGrantStore implements FleetEscalationGrantSt
         input.expiresAt,
       ]);
       const row = inserted.rows.at(0);
-      if (!row) throw new FleetEscalationError('grant_unavailable', 'Escalation grant was not recorded');
+      if (!row) {
+        throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+          'grant_unavailable',
+          'Escalation grant was not recorded',
+        );
+      }
       await this.audit(client, {
         action: 'escalation.grant.issue',
         resource: `scope:${input.binding.scopeDigest} route:${input.binding.routeId}`,
@@ -212,7 +220,10 @@ export class PostgresFleetEscalationGrantStore implements FleetEscalationGrantSt
       ]);
       const row = result.rows.at(0);
       if (!row) {
-        throw new FleetEscalationError('grant_unavailable', 'Escalation grant is unavailable');
+        throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+          'grant_unavailable',
+          'Escalation grant is unavailable',
+        );
       }
       await this.audit(client, {
         action: 'escalation.grant.consume',
@@ -307,11 +318,17 @@ export class PostgresFleetEscalationGrantStore implements FleetEscalationGrantSt
       || !this.options.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
         positiveInteger(row.authority_generation, 'authority_generation'),
       )) {
-      throw new FleetEscalationError('session_unavailable', 'Fleet session is unavailable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+        'session_unavailable',
+        'Fleet session is unavailable',
+      );
     }
     if (row.principal_status !== 'active'
       && !this.rosteredSubject(row.provider_subject_id)) {
-      throw new FleetEscalationError('session_unavailable', 'Fleet session is unavailable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+        'session_unavailable',
+        'Fleet session is unavailable',
+      );
     }
     return row;
   }
@@ -356,7 +373,10 @@ export class PostgresFleetEscalationGrantStore implements FleetEscalationGrantSt
       FOR SHARE OF binding, role, companion
     `, [session.principal_id, companionId]);
     if (result.rowCount !== 1) {
-      throw new FleetEscalationError('grant_unavailable', 'Companion authority is unavailable');
+      throw new fleetAuthPersistenceBoundaryValues.FleetEscalationError(
+        'grant_unavailable',
+        'Companion authority is unavailable',
+      );
     }
   }
 

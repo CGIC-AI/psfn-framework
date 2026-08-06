@@ -17,6 +17,7 @@ describe('GardenAdminTransportServer route service wiring', () => {
       auditHistory: { appendGardenEntry: vi.fn() },
       wishlist: { name: 'wishlist' },
       concerns: { name: 'concerns' },
+      subjectAudit: { name: 'subject-audit' },
       settings: { name: 'settings' },
       intakeQuarantine: { name: 'intake-quarantine' },
       driftReviews: { name: 'drift-reviews' },
@@ -37,6 +38,7 @@ describe('GardenAdminTransportServer route service wiring', () => {
     expect(buildAdminApiRoutes).toHaveBeenCalledWith(expect.objectContaining({
       wishlistService: services.wishlist,
       concernService: services.concerns,
+      subjectAuditService: services.subjectAudit,
       settingsService: services.settings,
       intakeQuarantineService: services.intakeQuarantine,
       driftReviewService: services.driftReviews,

@@ -418,6 +418,35 @@ class FakeMemoryPool {
       return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.includes('from l2_memories')
+      && normalized.includes('extracted_at >=')
+      && normalized.includes('extracted_at <=')
+      && normalized.includes('order by extracted_at desc, id desc')) {
+      const fromMs = Number(values[0] ?? 0);
+      const toMs = Number(values[1] ?? 0);
+      const limit = Number(values.at(-1) ?? 0);
+      const conversationId = normalized.includes("provenance_json ->> 'channelid'")
+        ? String(values[2] ?? '')
+        : null;
+      const contactId = normalized.includes('contact_id =')
+        ? String(values[3] ?? '')
+        : null;
+      const rows = [...this.memories.values()]
+        .filter(row => !row.superseded_by && row.deleted_at === null)
+        .filter(row => Number(row.extracted_at) >= fromMs && Number(row.extracted_at) <= toMs)
+        .filter((row) => {
+          if (conversationId === null) return true;
+          const provenance = row.provenance_json as { channelId?: unknown };
+          const conversationMatches = provenance.channelId === conversationId
+            || (row.scope_ref_kind === 'conversation' && row.scope_ref_id === conversationId);
+          return conversationMatches || (contactId !== null && row.contact_id === contactId);
+        })
+        .sort((left, right) => Number(right.extracted_at) - Number(left.extracted_at)
+          || right.id.localeCompare(left.id))
+        .slice(0, limit);
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.includes('from l2_memories')) {
       return {
         rows: [...this.memories.values()],
@@ -890,6 +919,62 @@ describe('postgres memory store unit coverage', () => {
       { limit: 50, offset: 50 },
       { limit: 20, offset: 100 },
     ]);
+  });
+
+  it('filters active memory windows by scope before the bounded result limit', async () => {
+    const pool = new FakeMemoryPool();
+    const nowMs = 1_800_000_000_000;
+    const relevant = makeMemory('daily-relevant', 'Relevant daily memory', {
+      extractedAt: nowMs - 100,
+      lastAccessed: nowMs - 100,
+      contactId: 'contact-a',
+      provenance: { channelId: 'discord:primary' },
+    });
+    pool.memories.set(relevant.id, makeMemoryRow(relevant));
+    for (let index = 0; index < 50; index += 1) {
+      const foreign = makeMemory(`daily-foreign-${index}`, `Foreign ${index}`, {
+        extractedAt: nowMs - index,
+        lastAccessed: nowMs - index,
+        contactId: 'contact-b',
+        provenance: { channelId: 'discord:foreign' },
+      });
+      pool.memories.set(foreign.id, makeMemoryRow(foreign));
+    }
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    const result = await store.listActiveMemoriesInWindow!({
+      fromMs: nowMs - 1_000,
+      toMs: nowMs,
+      limit: 50,
+      scope: {
+        kind: 'contact',
+        contactId: 'contact-a',
+        conversationId: 'discord:primary',
+      },
+    });
+
+    expect(result.memories.map(memory => memory.id)).toEqual(['daily-relevant']);
+    expect(result.saturated).toBe(false);
+
+    const secondRelevant = makeMemory('daily-relevant-newer', 'Another relevant daily memory', {
+      extractedAt: nowMs - 50,
+      lastAccessed: nowMs - 50,
+      contactId: 'contact-a',
+    });
+    pool.memories.set(secondRelevant.id, makeMemoryRow(secondRelevant));
+    const saturated = await store.listActiveMemoriesInWindow!({
+      fromMs: nowMs - 1_000,
+      toMs: nowMs,
+      limit: 1,
+      scope: {
+        kind: 'contact',
+        contactId: 'contact-a',
+        conversationId: 'discord:primary',
+      },
+    });
+    expect(saturated.memories.map(memory => memory.id)).toEqual(['daily-relevant-newer']);
+    expect(saturated.saturated).toBe(true);
   });
 
   it('does no Postgres or store scan work on idle decay cycles before the next exp-curve threshold', async () => {

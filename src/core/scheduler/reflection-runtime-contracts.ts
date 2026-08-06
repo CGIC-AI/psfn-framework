@@ -98,7 +98,10 @@ export interface ReflectionRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage' | 'recordAssistantMessage'>>;
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<
+    SessionManager,
+    'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
+  >>;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
     & Partial<Pick<
@@ -249,7 +252,11 @@ export interface ReflectionRuntimeOptions {
   verifyPersonalProjectLive?: ((projectId: string) => Promise<boolean>) | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
-    'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
+    | 'upsertMemoryMaintenanceReview'
+    | 'listActiveMemories'
+    | 'listActiveMemoriesInWindow'
+    | 'getById'
+    | 'getMemoryMaintenanceDiagnostics'
   > | null;
   episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;

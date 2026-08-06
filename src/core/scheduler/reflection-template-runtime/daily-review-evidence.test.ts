@@ -80,22 +80,29 @@ describe('collectDailyReviewEvidence', () => {
     const searchByTime = vi.fn(async () => [
       episode({ id: 'episode-1', title: 'Recovery handoff', landmark: 'We made the next step explicit.' }),
       episode({ id: 'episode-2', title: 'Garden planning', landmark: 'We chose the first layout.' }),
-      episode({ id: 'episode-3', title: 'Cut episode', landmark: 'This exceeds the rendered bound.' }),
     ]);
-    const listActiveMemories = vi.fn(async () => [
+    const activeMemories = [
       memory({ id: 'memory-1', type: 'episodic', text: 'The recovery plan still needs a follow-up.' }),
       memory({ id: 'memory-2', type: 'semantic', text: 'The garden layout should start with the shaded bed.' }),
       memory({ id: 'memory-foreign', type: 'semantic', text: 'Foreign contact detail', contactId: 'contact-2', provenance: { channelId: 'discord:foreign' } }),
       memory({ id: 'memory-old', type: 'semantic', text: 'Old detail', extractedAt: NOW_MS - WINDOW_MS - 1 }),
-    ]);
+    ];
+    const listActiveMemories = vi.fn(async () => activeMemories);
+    const listActiveMemoriesInWindow = vi.fn(async () => ({
+      memories: activeMemories.slice(0, 2),
+      saturated: false,
+    }));
 
     const result = await collectDailyReviewEvidence({
       nowMs: NOW_MS,
       windowMs: WINDOW_MS,
       scope: SCOPE,
-      sessionManager: { getRecentMessages: () => sessionEntries },
+      sessionManager: {
+        getRecentMessages: () => sessionEntries,
+        getConversationEvidenceWindow: () => ({ entries: sessionEntries, saturated: false }),
+      },
       episodicStore: { searchByTime },
-      memoryStore: { listActiveMemories },
+      memoryStore: { listActiveMemories, listActiveMemoriesInWindow },
     });
 
     expect(result.degraded).toBe(false);
@@ -123,7 +130,17 @@ describe('collectDailyReviewEvidence', () => {
       spanSessionId: 'discord:primary',
       order: 'desc',
     }));
-    expect(listActiveMemories).toHaveBeenCalledWith({ limit: 50 });
+    expect(listActiveMemories).not.toHaveBeenCalled();
+    expect(listActiveMemoriesInWindow).toHaveBeenCalledWith(expect.objectContaining({
+      fromMs: NOW_MS - WINDOW_MS,
+      toMs: NOW_MS,
+      limit: 50,
+      scope: {
+        kind: 'contact',
+        contactId: 'contact-1',
+        conversationId: 'discord:primary',
+      },
+    }));
   });
 
   it('emits explicit degradation when no day evidence is available', async () => {
@@ -131,9 +148,15 @@ describe('collectDailyReviewEvidence', () => {
       nowMs: NOW_MS,
       windowMs: WINDOW_MS,
       scope: SCOPE,
-      sessionManager: { getRecentMessages: () => [] },
+      sessionManager: {
+        getRecentMessages: () => [],
+        getConversationEvidenceWindow: () => ({ entries: [], saturated: false }),
+      },
       episodicStore: { searchByTime: async () => [] },
-      memoryStore: { listActiveMemories: async () => [] },
+      memoryStore: {
+        listActiveMemories: async () => [],
+        listActiveMemoriesInWindow: async () => ({ memories: [], saturated: false }),
+      },
     });
 
     expect(result.degraded).toBe(true);
@@ -151,9 +174,16 @@ describe('collectDailyReviewEvidence', () => {
       scope: SCOPE,
       sessionManager: {
         getRecentMessages: () => [sessionEntry({ id: 9, content: 'A grounded conversation marker' })],
+        getConversationEvidenceWindow: () => ({
+          entries: [sessionEntry({ id: 9, content: 'A grounded conversation marker' })],
+          saturated: false,
+        }),
       },
       episodicStore: { searchByTime: async () => { throw new Error('episode store unavailable'); } },
-      memoryStore: { listActiveMemories: async () => [] },
+      memoryStore: {
+        listActiveMemories: async () => [],
+        listActiveMemoriesInWindow: async () => ({ memories: [], saturated: false }),
+      },
       logger: { warn },
     });
 
@@ -165,5 +195,104 @@ describe('collectDailyReviewEvidence', () => {
       'Daily-review episode evidence read failed',
       expect.objectContaining({ error: 'Error: episode store unavailable' }),
     );
+  });
+
+  it('rejects foreign session and episode rows returned by scoped source ports', async () => {
+    const result = await collectDailyReviewEvidence({
+      nowMs: NOW_MS,
+      windowMs: WINDOW_MS,
+      scope: SCOPE,
+      sessionManager: {
+        getRecentMessages: () => [sessionEntry({
+          id: 10,
+          channelId: 'discord:foreign',
+          content: 'FOREIGN_SESSION_CONTENT',
+        })],
+        getConversationEvidenceWindow: () => ({
+          entries: [sessionEntry({
+            id: 10,
+            channelId: 'discord:foreign',
+            content: 'FOREIGN_SESSION_CONTENT',
+          })],
+          saturated: false,
+        }),
+      },
+      episodicStore: {
+        searchByTime: async () => [episode({
+          id: 'foreign-episode',
+          title: 'FOREIGN_EPISODE',
+          landmark: 'Foreign episode landmark',
+          spanRefs: [{ spanId: 'foreign-span', sessionId: 'discord:foreign' }],
+        })],
+      },
+      memoryStore: {
+        listActiveMemories: async () => [],
+        listActiveMemoriesInWindow: async () => ({
+          memories: [memory({
+            id: 'foreign-memory',
+            type: 'semantic',
+            text: 'FOREIGN_MEMORY_CONTENT',
+            contactId: 'contact-2',
+            provenance: { channelId: 'discord:foreign' },
+          })],
+          saturated: false,
+        }),
+      },
+    });
+
+    expect(result.promptSection).not.toContain('FOREIGN_SESSION_CONTENT');
+    expect(result.promptSection).not.toContain('FOREIGN_EPISODE');
+    expect(result.promptSection).not.toContain('FOREIGN_MEMORY_CONTENT');
+    expect(result.provenanceRefs).not.toEqual(expect.arrayContaining([
+      'session_message:discord:foreign|entry:10',
+      'episode:foreign-episode',
+    ]));
+    expect(result.degraded).toBe(true);
+    expect(result.degradationReasons).toEqual(expect.arrayContaining([
+      'session_scope_violation',
+      'episode_scope_violation',
+      'memory_scope_violation',
+    ]));
+  });
+
+  it('marks bounded source saturation as incomplete and uses lower-bound counts', async () => {
+    const result = await collectDailyReviewEvidence({
+      nowMs: NOW_MS,
+      windowMs: WINDOW_MS,
+      scope: SCOPE,
+      sessionManager: {
+        getRecentMessages: () => [],
+        getConversationEvidenceWindow: () => ({
+          entries: [sessionEntry({ id: 11, content: 'Conversation inside a saturated source' })],
+          saturated: true,
+        }),
+      },
+      episodicStore: {
+        searchByTime: async () => [
+          episode({ id: 'episode-1', title: 'First episode', landmark: 'First landmark' }),
+          episode({ id: 'episode-2', title: 'Second episode', landmark: 'Second landmark' }),
+          episode({ id: 'episode-sentinel', title: 'Sentinel episode', landmark: 'Unrendered landmark' }),
+        ],
+      },
+      memoryStore: {
+        listActiveMemories: async () => [],
+        listActiveMemoriesInWindow: async () => ({
+          memories: [memory({ id: 'memory-1', type: 'semantic', text: 'Memory inside a saturated source' })],
+          saturated: true,
+        }),
+      },
+    });
+
+    expect(result.degraded).toBe(true);
+    expect(result.degradationReasons).toEqual(expect.arrayContaining([
+      'session_scan_saturated',
+      'episode_scan_saturated',
+      'memory_scan_saturated',
+    ]));
+    expect(result.promptSection).toContain('1+ recorded conversation messages');
+    expect(result.promptSection).toContain('3+ episode records');
+    expect(result.promptSection).toContain('1+ memory changes');
+    expect(result.promptSection).not.toContain('Sentinel episode');
+    expect(result.provenanceRefs).not.toContain('episode:episode-sentinel');
   });
 });

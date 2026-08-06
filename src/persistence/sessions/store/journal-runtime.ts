@@ -606,9 +606,13 @@ export class SessionJournalRuntime {
     archive: SessionArchiveHandle,
     predicate: (entry: SessionEntry) => boolean,
     limit: number,
+    stopBeforeTimestamp?: number,
   ): SessionEntry[] | null {
     const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
       limit,
+      ...(stopBeforeTimestamp !== undefined
+        ? { stopAfter: entry => entry.timestamp < stopBeforeTimestamp }
+        : {}),
       matches: (entry) => {
         const message = journalToSessionEntry(entry);
         return message !== null && predicate(message);

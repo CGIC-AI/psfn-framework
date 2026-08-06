@@ -81,6 +81,11 @@ export interface SessionManagerTypeSurface {
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
 
+  getConversationEvidenceWindow(
+    channelId: string,
+    options: { fromMs: number; toMs: number; limit: number },
+  ): { entries: SessionEntry[]; saturated: boolean };
+
   getRecentMessagesAtOrBefore(
     channelId: string,
     maxEntryId: number,

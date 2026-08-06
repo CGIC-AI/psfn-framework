@@ -385,6 +385,24 @@ export interface MemoryListOptions {
   offset?: number;
 }
 
+export type ActiveMemoryWindowScope =
+  | { kind: 'companion' }
+  | { kind: 'conversation'; conversationId: string }
+  | { kind: 'contact'; contactId: string; conversationId: string };
+
+export interface ActiveMemoryWindowOptions {
+  fromMs: number;
+  toMs: number;
+  limit: number;
+  scope: ActiveMemoryWindowScope;
+}
+
+export interface ActiveMemoryWindowResult {
+  memories: PurrMemory[];
+  /** True when one sentinel row proved that more matching rows exist. */
+  saturated: boolean;
+}
+
 export interface MemoryAdminListOptions extends MemoryListOptions {
   type?: PurrMemory['type'];
   sensitivity?: PurrMemory['sensitivity'];
@@ -530,6 +548,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
+  listActiveMemoriesInWindow?(options: ActiveMemoryWindowOptions): Awaitable<ActiveMemoryWindowResult>;
   listAdminMemories(options?: MemoryAdminListOptions): Awaitable<MemoryAdminListResult>;
   getAdminMemoryPrivacySummary(): Awaitable<MemoryAdminPrivacySummary>;
   countActiveMemories(): Awaitable<number>;
@@ -649,6 +668,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
+  listActiveMemoriesInWindow?(options: ActiveMemoryWindowOptions): Promise<ActiveMemoryWindowResult>;
   listAdminMemories(options?: MemoryAdminListOptions): Promise<MemoryAdminListResult>;
   getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary>;
   countActiveMemories(): Promise<number>;
@@ -771,6 +791,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
     listMemories: async (options) => await store.listMemories(options),
     listActiveMemories: async (options) => await store.listActiveMemories(options),
+    ...(store.listActiveMemoriesInWindow
+      ? {
+        listActiveMemoriesInWindow: async (options) => (
+          await store.listActiveMemoriesInWindow!(options)
+        ),
+      }
+      : {}),
     listAdminMemories: async (options) => await store.listAdminMemories(options),
     getAdminMemoryPrivacySummary: async () => await store.getAdminMemoryPrivacySummary(),
     countActiveMemories: async () => await store.countActiveMemories(),

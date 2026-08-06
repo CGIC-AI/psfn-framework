@@ -291,6 +291,48 @@ describe('SessionManager', () => {
     expect(boundedStore.getLoadedChannelCount()).toBeLessThanOrEqual(3);
   });
 
+  it('collects bounded conversation evidence after filtering tool rows and reports saturation', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const nowMs = 1_800_000_000_000;
+    mgr.recordUserMessage('api:daily-evidence', 'Recorded conversation marker', 'partner', 'Partner');
+    for (let index = 0; index < 50; index += 1) {
+      store.append({
+        channelId: 'api:daily-evidence',
+        role: 'tool',
+        content: `tool observation ${index}`,
+        timestamp: nowMs - 50 + index,
+      });
+    }
+
+    for (let index = 0; index < 51; index += 1) {
+      store.append({
+        channelId: 'api:daily-evidence-saturated',
+        role: 'user',
+        content: `conversation ${index}`,
+        timestamp: nowMs - 51 + index,
+      });
+    }
+    const reloaded = new SessionManager(new SessionStore(dir), makeConfig());
+    const evidence = reloaded.getConversationEvidenceWindow('api:daily-evidence', {
+      fromMs: 0,
+      toMs: nowMs,
+      limit: 50,
+    });
+
+    expect(evidence.entries.map(entry => entry.content)).toEqual(['Recorded conversation marker']);
+    expect(evidence.saturated).toBe(false);
+
+    const saturated = reloaded.getConversationEvidenceWindow('api:daily-evidence-saturated', {
+      fromMs: 0,
+      toMs: nowMs,
+      limit: 50,
+    });
+
+    expect(saturated.entries).toHaveLength(50);
+    expect(saturated.entries[0]?.content).toBe('conversation 1');
+    expect(saturated.saturated).toBe(true);
+  });
+
   it('retries deferred record-first handoffs in bounded same-process batches', async () => {
     const fencedStore = new SessionStore(dir, {
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),

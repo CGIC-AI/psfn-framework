@@ -299,6 +299,35 @@ export class InMemoryMemoryStore {
     return this.getAllActiveMemories().slice(offset, offset + limit);
   }
 
+  listActiveMemoriesInWindow(options: import('../faculties/memory/memory-store-port.js').ActiveMemoryWindowOptions): {
+    memories: PurrMemory[];
+    saturated: boolean;
+  } {
+    if (!Number.isFinite(options.fromMs) || !Number.isFinite(options.toMs) || options.fromMs > options.toMs) {
+      throw new Error('Active memory window requires finite ordered bounds');
+    }
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
+      throw new Error('Active memory window limit must be a positive safe integer');
+    }
+    const matchesScope = (value: PurrMemory): boolean => {
+      if (options.scope.kind === 'companion') return true;
+      const conversationMatches = value.provenance?.channelId === options.scope.conversationId
+        || (value.scopeRef?.kind === 'conversation'
+          && value.scopeRef.id === options.scope.conversationId);
+      return options.scope.kind === 'conversation'
+        ? conversationMatches
+        : value.contactId === options.scope.contactId || conversationMatches;
+    };
+    const matches = this.getAllActiveMemories()
+      .filter(value => value.extractedAt >= options.fromMs && value.extractedAt <= options.toMs)
+      .filter(matchesScope)
+      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
+    return {
+      memories: matches.slice(0, options.limit),
+      saturated: matches.length > options.limit,
+    };
+  }
+
   listAdminMemories(options: MemoryAdminListOptions = {}): MemoryAdminListResult {
     const offset = options.offset ?? 0;
     const limit = options.limit ?? 50;

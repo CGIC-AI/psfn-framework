@@ -187,6 +187,31 @@ describe('AdminDashboardDataService', () => {
     await eventBus.emit('agent.turn.performance', {
       schemaVersion: 1,
       traceId: 'trace-1',
+      requestId: 'trace-1',
+      companionId: 'companion-a',
+      channelId: 'discord:shared-room',
+      channelType: 'discord',
+      stage: 'cogsec_local_screening',
+      stageStatus: 'observed',
+      monotonicAtMs: 950,
+      timestampMs: 950,
+      durationMs: 5,
+    });
+    await eventBus.emit('agent.turn.performance', {
+      schemaVersion: 1,
+      traceId: 'trace-1',
+      requestId: 'trace-1',
+      companionId: 'companion-a',
+      channelId: 'discord:shared-room',
+      channelType: 'discord',
+      stage: 'cogsec_l2_screening',
+      stageStatus: 'not_run',
+      monotonicAtMs: 950,
+      timestampMs: 950,
+    });
+    await eventBus.emit('agent.turn.performance', {
+      schemaVersion: 1,
+      traceId: 'trace-1',
       stage: 'provider_first_token',
       monotonicAtMs: 1_900,
       timestampMs: 1_900,
@@ -205,6 +230,17 @@ describe('AdminDashboardDataService', () => {
       dimensions: {},
       percentiles: { samples: 1, p50Ms: 900, p95Ms: 900, p99Ms: 900 },
     });
+    expect(dashboard.stats.transientSessionTelemetry.recentLatencyWaterfalls[0]).toMatchObject({
+      traceId: 'trace-1',
+      companionId: 'companion-a',
+      channelId: 'discord:shared-room',
+      stages: expect.arrayContaining([
+        expect.objectContaining({ stage: 'local_screening', status: 'observed', durationMs: 5 }),
+        expect.objectContaining({ stage: 'l2', status: 'not_run', durationMs: null }),
+      ]),
+    });
+    expect(JSON.stringify(dashboard.stats.transientSessionTelemetry.recentLatencyWaterfalls))
+      .not.toMatch(/transcript|rawText|content|author/i);
     expect(dashboard.stats.toolStatus).toEqual([
       { name: 'orient', status: 'degraded', detail: 'last call timed out' },
       { name: 'memory', status: 'healthy', detail: 'ready' },

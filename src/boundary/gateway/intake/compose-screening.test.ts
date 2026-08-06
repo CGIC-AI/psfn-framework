@@ -235,6 +235,7 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
     tempDirs.push(companionBDataDir);
     const queueChanges: string[] = [];
     const failClosedEvents: Array<{ companionId?: string; stage: string }> = [];
+    const timingEvents: Array<{ companionId?: string; traceId: string; stage: string }> = [];
     const artifactPath = join(companionBDataDir, 'workspace', 'held-document.txt');
 
     const runtime = await composeGatewayIntakeScreeningRuntime({
@@ -253,6 +254,9 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
       onFailClosedScreening: (companionId, event) => {
         failClosedEvents.push({ companionId, stage: event.stage });
       },
+      onScreeningTiming: (companionId, event) => {
+        timingEvents.push({ companionId, traceId: event.traceId, stage: event.stage });
+      },
     });
 
     const screened = await runtime.resolve(companionB).screening!.screen(
@@ -262,6 +266,12 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
         origin: { ref: 'discord:account-b:channel-1:message-1:attachment-0' },
         scope: 'context',
         artifactPaths: [artifactPath],
+        timing: {
+          traceId: 'message-1',
+          requestId: 'message-1',
+          channelId: 'channel-1',
+          channelType: 'discord',
+        },
       },
     );
     expect(screened.action).toBe('quarantine');
@@ -279,6 +289,11 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
     expect(gardenBQueue.list().map(entry => entry.id)).toEqual([screened.envelope.id]);
     expect(gardenAQueue.list()).toEqual([]);
     expect(queueChanges).toEqual([companionB]);
+    expect(timingEvents).toEqual([
+      { companionId: companionB, traceId: 'message-1', stage: 'local_screening' },
+      { companionId: companionB, traceId: 'message-1', stage: 'l2' },
+      { companionId: companionB, traceId: 'message-1', stage: 'l3' },
+    ]);
     expect(() => runtime.resolve('cccccccc-cccc-4ccc-8ccc-cccccccccccc'))
       .toThrow(/no composition for companionId/u);
 

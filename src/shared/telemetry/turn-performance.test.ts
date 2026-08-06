@@ -81,6 +81,120 @@ describe('TurnPerformanceTracker', () => {
     ));
     expect(all?.percentiles).toEqual({ samples: 2, p50Ms: 10, p95Ms: 20, p99Ms: 20 });
   });
+
+  it('projects a content-free per-message waterfall with explicit not-run stages', () => {
+    const tracker = new TurnPerformanceTracker();
+    const base = {
+      traceId: 'message-1',
+      requestId: 'message-1',
+      turnId: 'turn-1',
+      companionId: 'companion-a',
+      channelId: 'discord:shared-room',
+      channelType: 'discord',
+    } as const;
+    tracker.observe(event({
+      ...base,
+      stage: 'cogsec_local_screening',
+      stageStatus: 'observed',
+      monotonicAtMs: 110,
+      timestampMs: 1_010,
+      durationMs: 10,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'cogsec_l2_screening',
+      stageStatus: 'not_run',
+      monotonicAtMs: 110,
+      timestampMs: 1_010,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'cogsec_l3_screening',
+      stageStatus: 'not_run',
+      monotonicAtMs: 110,
+      timestampMs: 1_010,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'channel_queue_wait',
+      monotonicAtMs: 130,
+      timestampMs: 1_030,
+      durationMs: 20,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'prompt_assembly',
+      monotonicAtMs: 150,
+      timestampMs: 1_050,
+      durationMs: 20,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'provider_complete',
+      monotonicAtMs: 250,
+      timestampMs: 1_150,
+      durationMs: 100,
+    }));
+    tracker.observe(event({
+      ...base,
+      stage: 'outbound_delivery',
+      monotonicAtMs: 270,
+      timestampMs: 1_170,
+      durationMs: 20,
+    }));
+
+    expect(tracker.recentWaterfalls()).toEqual([{
+      traceId: 'message-1',
+      turnId: 'turn-1',
+      requestId: 'message-1',
+      companionId: 'companion-a',
+      channelId: 'discord:shared-room',
+      channelType: 'discord',
+      observedAtMs: 1_170,
+      totalObservedMs: 170,
+      stages: [
+        { stage: 'local_screening', label: 'Local screening', status: 'observed', durationMs: 10 },
+        { stage: 'l2', label: 'L2', status: 'not_run', durationMs: null },
+        { stage: 'l3', label: 'L3', status: 'not_run', durationMs: null },
+        { stage: 'channel_queue', label: 'Channel queue', status: 'observed', durationMs: 20 },
+        { stage: 'prompt_assembly', label: 'Prompt assembly', status: 'observed', durationMs: 20 },
+        { stage: 'model_provider', label: 'Model / provider', status: 'observed', durationMs: 100 },
+        { stage: 'outbound_delivery', label: 'Outbound delivery', status: 'observed', durationMs: 20 },
+      ],
+    }]);
+  });
+
+  it('keys identical shared-room message ids by companion without cross-companion leakage', () => {
+    const tracker = new TurnPerformanceTracker();
+    for (const [companionId, durationMs] of [['companion-a', 5], ['companion-b', 50]] as const) {
+      tracker.observe(event({
+        traceId: 'same-platform-message-id',
+        requestId: 'same-platform-message-id',
+        companionId,
+        channelId: 'discord:shared-room',
+        channelType: 'discord',
+        stage: 'cogsec_local_screening',
+        stageStatus: 'observed',
+        monotonicAtMs: 100 + durationMs,
+        timestampMs: 1_000 + durationMs,
+        durationMs,
+      }));
+    }
+
+    expect(tracker.recentWaterfalls({ companionId: 'companion-a' })).toHaveLength(1);
+    expect(tracker.recentWaterfalls({ companionId: 'companion-a' })[0]).toMatchObject({
+      companionId: 'companion-a',
+      stages: expect.arrayContaining([
+        expect.objectContaining({ stage: 'local_screening', durationMs: 5 }),
+      ]),
+    });
+    expect(tracker.recentWaterfalls({ companionId: 'companion-b' })[0]).toMatchObject({
+      companionId: 'companion-b',
+      stages: expect.arrayContaining([
+        expect.objectContaining({ stage: 'local_screening', durationMs: 50 }),
+      ]),
+    });
+  });
 });
 
 describe('parseTurnPerformanceEvent', () => {
@@ -131,6 +245,32 @@ describe('parseTurnPerformanceEvent', () => {
       timestampMs: 200,
       transcript: 'must never cross',
     })).toThrow('unsupported field "transcript"');
+  });
+
+  it('accepts explicit skipped-stage state without fabricating a zero duration', () => {
+    const parsed = parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'trace-fast-path',
+      stage: 'cogsec_l2_screening',
+      stageStatus: 'not_run',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      companionId: 'companion-a',
+    });
+    expect(parsed.stageStatus).toBe('not_run');
+    expect(parsed.durationMs).toBeUndefined();
+  });
+
+  it('rejects a skipped stage carrying a misleading zero duration', () => {
+    expect(() => parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'trace-fast-path',
+      stage: 'cogsec_l3_screening',
+      stageStatus: 'not_run',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      durationMs: 0,
+    })).toThrow('not_run stage must not carry durationMs');
   });
 
   it('rejects a raw session id disguised as a background session hash', () => {

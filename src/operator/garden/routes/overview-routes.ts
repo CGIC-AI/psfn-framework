@@ -33,7 +33,12 @@ import type {
   AdminAuditTimeRange,
 } from '../types.js';
 import { parseAdminJsonBody } from '../request-body.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import {
+  ADMIN_DYNAMIC_JSON_HEADERS,
+  parsePositiveIntegerQueryNumber,
+  sendInternalError,
+  toSanitizedMessage,
+} from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 import { parseModelUsageQuery } from './model-usage-query.js';
 import { parseChargeCostQuery } from './charge-cost-query.js';
@@ -63,20 +68,6 @@ function toFiniteQueryNumber(
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed < 0) {
     return { ok: false, error: `Invalid ${fieldName} query parameter. Expected a finite number >= 0.` };
-  }
-  return { ok: true, value: parsed };
-}
-
-function toPositiveIntegerQueryNumber(
-  value: string | null,
-  fieldName: string,
-): { ok: true; value?: number } | { ok: false; error: string } {
-  if (value === null) return { ok: true };
-  const trimmed = value.trim();
-  if (!trimmed) return { ok: true };
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return { ok: false, error: `Invalid ${fieldName} query parameter. Expected a positive integer.` };
   }
   return { ok: true, value: parsed };
 }
@@ -241,7 +232,7 @@ export function buildAdminOverviewRoutes(options: {
     value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryObservations']>[0];
   } | { ok: false; error: string } => {
     const url = parseRequestUrl(req, routePath);
-    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
     if (!limit.ok) return { ok: false, error: limit.error };
     const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
     if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
@@ -288,7 +279,7 @@ export function buildAdminOverviewRoutes(options: {
     value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryLeverEvents']>[0];
   } | { ok: false; error: string } => {
     const url = parseRequestUrl(req, routePath);
-    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
     if (!limit.ok) return { ok: false, error: limit.error };
     const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
     if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
@@ -316,7 +307,7 @@ export function buildAdminOverviewRoutes(options: {
     value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryRuns']>[0];
   } | { ok: false; error: string } => {
     const url = parseRequestUrl(req, routePath);
-    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
     if (!limit.ok) return { ok: false, error: limit.error };
     const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
     if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
@@ -401,7 +392,7 @@ export function buildAdminOverviewRoutes(options: {
         }
 
         const url = parseRequestUrl(req, '/api/admin/audit/history');
-        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
         if (!limit.ok) {
           sendJson(res, 400, { error: limit.error });
           return;
@@ -442,9 +433,7 @@ export function buildAdminOverviewRoutes(options: {
           ...(url.searchParams.get('query')?.trim() ? { query: url.searchParams.get('query')!.trim() } : {}),
         }).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load audit history'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load audit history'),
         );
       },
     },
@@ -463,9 +452,7 @@ export function buildAdminOverviewRoutes(options: {
               sendJson(res, 404, { error: 'Audit history entry not found' }, ADMIN_DYNAMIC_JSON_HEADERS);
               return;
             }
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to load audit history detail'),
-            }, ADMIN_DYNAMIC_JSON_HEADERS);
+            sendInternalError(res, error, 'Failed to load audit history detail', ADMIN_DYNAMIC_JSON_HEADERS);
           },
         );
       },
@@ -480,7 +467,7 @@ export function buildAdminOverviewRoutes(options: {
         }
 
         const url = parseRequestUrl(req, '/api/admin/charges');
-        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
         if (!limit.ok) {
           sendJson(res, 400, { error: limit.error });
           return;
@@ -515,9 +502,7 @@ export function buildAdminOverviewRoutes(options: {
           ...(dayKey ? { dayKey } : {}),
         }).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load charge ledger data'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load charge ledger data'),
         );
       },
     },
@@ -545,9 +530,7 @@ export function buildAdminOverviewRoutes(options: {
         }
         chargeCostReconciliationService.getChargeCostReconciliation(query.value).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to reconcile charge and model-usage telemetry'),
-          }),
+          error => sendInternalError(res, error, 'Failed to reconcile charge and model-usage telemetry'),
         );
       },
     },
@@ -577,9 +560,7 @@ export function buildAdminOverviewRoutes(options: {
 
         modelUsageService.getModelUsageData(query.value).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load model usage telemetry'),
         );
       },
     },
@@ -630,9 +611,7 @@ export function buildAdminOverviewRoutes(options: {
             'Content-Disposition': `attachment; filename="${payload.filename}"`,
             'X-Model-Usage-Row-Count': String(payload.rowCount),
           }),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to export model usage telemetry'),
-          }),
+          error => sendInternalError(res, error, 'Failed to export model usage telemetry'),
         );
       },
     },
@@ -756,9 +735,7 @@ export function buildAdminOverviewRoutes(options: {
         }
         actionPipeService.getActionPipeStatus().then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load action pipe status'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load action pipe status'),
         );
       },
     },

@@ -15,7 +15,11 @@ import {
   MAX_ADMIN_SESSION_SEARCH_LIMIT,
 } from '../services/session-service.js';
 import { parseRequestUrl } from '../request-url.js';
-import { toSanitizedMessage } from './shared.js';
+import {
+  parsePositiveIntegerQueryParam,
+  sendInternalError,
+  toSanitizedMessage,
+} from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
@@ -24,26 +28,6 @@ interface ParsedSessionMessageQuery {
   beforeId?: number;
   messagesOnly?: boolean;
   includeTurns?: boolean;
-}
-
-function parsePositiveIntegerParam(
-  params: URLSearchParams,
-  name: string,
-  max?: number,
-): { ok: true; value?: number } | { ok: false; error: string } {
-  const raw = params.get(name);
-  if (raw === null || raw === '') return { ok: true };
-  if (!/^\d+$/.test(raw)) {
-    return { ok: false, error: `${name} must be a positive integer` };
-  }
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    return { ok: false, error: `${name} must be a positive integer` };
-  }
-  if (max !== undefined && value > max) {
-    return { ok: false, error: `${name} must be <= ${max}` };
-  }
-  return { ok: true, value };
 }
 
 function parseBooleanParam(
@@ -61,9 +45,11 @@ function parseSessionMessageQuery(req: IncomingMessage):
   | { ok: true; value: ParsedSessionMessageQuery }
   | { ok: false; error: string } {
   const params = parseRequestUrl(req).searchParams;
-  const limit = parsePositiveIntegerParam(params, 'limit', MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT);
+  const limit = parsePositiveIntegerQueryParam(params, 'limit', {
+    max: MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT,
+  });
   if (!limit.ok) return limit;
-  const beforeId = parsePositiveIntegerParam(params, 'beforeId');
+  const beforeId = parsePositiveIntegerQueryParam(params, 'beforeId');
   if (!beforeId.ok) return beforeId;
   const messagesOnly = parseBooleanParam(params, 'messagesOnly');
   if (!messagesOnly.ok) return messagesOnly;
@@ -243,9 +229,7 @@ export function buildAdminSessionRoutes(options: {
             sendJson(res, 200, payload);
           },
           (error) => {
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to load sessions'),
-            });
+            sendInternalError(res, error, 'Failed to load sessions');
           },
         );
       },
@@ -256,9 +240,7 @@ export function buildAdminSessionRoutes(options: {
       handle: (_req, res, _params, context) => {
         (context ? sessionService.listSessionRoutes(context) : sessionService.listSessionRoutes()).then(
           payload => sendJson(res, 200, payload),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load session routes'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load session routes'),
         );
       },
     },
@@ -300,9 +282,7 @@ export function buildAdminSessionRoutes(options: {
       handle: (_req, res, _params, context) => {
         (context ? sessionService.listCogSecEvents(context) : sessionService.listCogSecEvents()).then(
           payload => sendJson(res, 200, payload),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load CogSec events'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load CogSec events'),
         );
       },
     },
@@ -380,7 +360,9 @@ export function buildAdminSessionRoutes(options: {
           sendJson(res, 400, { error: 'q is required' });
           return;
         }
-        const limit = parsePositiveIntegerParam(params, 'limit', MAX_ADMIN_SESSION_SEARCH_LIMIT);
+        const limit = parsePositiveIntegerQueryParam(params, 'limit', {
+          max: MAX_ADMIN_SESSION_SEARCH_LIMIT,
+        });
         if (!limit.ok) {
           sendJson(res, 400, { error: limit.error });
           return;
@@ -389,9 +371,7 @@ export function buildAdminSessionRoutes(options: {
           ? sessionService.searchSessionMessages(channelId, query, limit.value, context)
           : sessionService.searchSessionMessages(channelId, query, limit.value)).then(
           payload => sendJson(res, 200, payload),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to search session messages'),
-          }),
+          error => sendInternalError(res, error, 'Failed to search session messages'),
         );
       },
     },
@@ -410,9 +390,7 @@ export function buildAdminSessionRoutes(options: {
               sendJson(res, 404, { error: error.message });
               return;
             }
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to load session detail'),
-            });
+            sendInternalError(res, error, 'Failed to load session detail');
           },
         );
       },
@@ -433,9 +411,7 @@ export function buildAdminSessionRoutes(options: {
               sendJson(res, 404, { error: error.message });
               return;
             }
-            sendJson(res, 500, {
-              error: toSanitizedMessage(error, 'Failed to load turn detail'),
-            });
+            sendInternalError(res, error, 'Failed to load turn detail');
           },
         );
       },
@@ -453,9 +429,7 @@ export function buildAdminSessionRoutes(options: {
           ? sessionService.getSessionMessagesForAdminRead(channelId, parsed.value, context)
           : sessionService.getSessionMessagesForAdminRead(channelId, parsed.value)).then(
           payload => sendCompressedJson(req, res, 200, payload),
-          error => sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load session messages'),
-          }),
+          error => sendInternalError(res, error, 'Failed to load session messages'),
         );
       },
     },

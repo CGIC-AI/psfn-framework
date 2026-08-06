@@ -35,7 +35,12 @@ import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-route
 import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
 import { buildAdminRoomArbiterRoutes } from './routes/room-arbiter-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
+import {
+  ADMIN_DYNAMIC_JSON_HEADERS,
+  ADMIN_POLLED_QUEUE_JSON_HEADERS,
+  parsePositiveIntegerQueryNumber,
+  toSanitizedMessage,
+} from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import { buildAdminBearerCompanionRoutes } from './routes/bearer-companion-routes.js';
@@ -117,20 +122,6 @@ const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/boo
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const WIKI_UNAVAILABLE_ERROR = 'Wiki backend unavailable';
 const GROUP_MEMORY_UNAVAILABLE_ERROR = 'Group memory diagnostics backend unavailable';
-
-function toPositiveIntegerQueryNumber(
-  value: string | null,
-  fieldName: string,
-): { ok: true; value?: number } | { ok: false; error: string } {
-  if (value === null) return { ok: true };
-  const trimmed = value.trim();
-  if (!trimmed) return { ok: true };
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return { ok: false, error: `Invalid ${fieldName} query parameter. Expected a positive integer.` };
-  }
-  return { ok: true, value: parsed };
-}
 
 const GROUP_MEMORY_BACKFILL_KEYS = new Set<string>([
   'mode',
@@ -254,7 +245,7 @@ function parseDiagnosticsQuery(req: IncomingMessage): { ok: true; value: Runtime
   if (!windowMs.ok) return windowMs;
   const sinceMs = parseOptionalNonNegativeQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
   if (!sinceMs.ok) return sinceMs;
-  const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+  const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
   if (!limit.ok) return limit;
   const includeFileLogs = parseOptionalBooleanQuery(url.searchParams.get('includeFileLogs'), 'includeFileLogs');
   if (!includeFileLogs.ok) return includeFileLogs;
@@ -407,7 +398,7 @@ export function buildAdminApiRoutes(options: {
     path: string,
   ): { ok: true; value: number } | { ok: false; error: string } => {
     const url = parseRequestUrl(req, path);
-    const parsed = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    const parsed = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
     if (!parsed.ok) return parsed;
     return { ok: true, value: Math.min(parsed.value ?? 250, 250) };
   };
@@ -956,7 +947,7 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 400, { error: 'query is required' });
           return;
         }
-        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        const limit = parsePositiveIntegerQueryNumber(url.searchParams, 'limit');
         if (!limit.ok) {
           sendJson(res, 400, { error: limit.error });
           return;

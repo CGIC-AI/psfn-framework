@@ -12457,153 +12457,6 @@
       "note": "Canonical owner-file/schema metadata SESSION_TAIL_CACHE_MAX_ENTRIES_RANGE; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens",
-      "value": "300",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens",
-      "value": "500",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.intervalMs",
-      "value": "86_400_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.intervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxCandidatesPerRun",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxCandidatesPerRun; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxSourceChars",
-      "value": "4_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxSourceChars; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.minConfidence",
-      "value": "0.7",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.minConfidence; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentSessionLimit",
-      "value": "16",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentSessionLimit; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentTurnLimit",
-      "value": "64",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentTurnLimit; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens",
-      "value": "300",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.maxReinforcedConcernIds",
-      "value": "16",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.maxReinforcedConcernIds; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.pressureCap",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.pressureCap; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.budget.maxSendsPerWindow",
-      "value": "2",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.budget.maxSendsPerWindow; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.checkIntervalMs",
-      "value": "1_800_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.checkIntervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.intervalMs",
-      "value": "21_600_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.intervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.minPinSuggestionInvocations",
-      "value": "25",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.minPinSuggestionInvocations; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.checkIntervalMs",
-      "value": "1_800_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.checkIntervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.lifecycle.accumulatedWeightCap",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.lifecycle.accumulatedWeightCap; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.maxNudgesPerRun",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.maxNudgesPerRun; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.nudgeThreshold",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.nudgeThreshold; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
       "file": "src/system/config/scheduler-config/background-work.ts",
       "name": "DEFAULT_BACKGROUND_WORK_TUNING.postTurn.extractionDrainRequeueDelayMs",
       "value": "1_000",
@@ -12730,6 +12583,69 @@
       "note": "Scheduler owner-file default; operator-editable via scheduler.json."
     },
     {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens",
+      "value": "300",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens",
+      "value": "500",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.intervalMs",
+      "value": "86_400_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxCandidatesPerRun",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.maxSourceChars",
+      "value": "4_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.minConfidence",
+      "value": "0.7",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentSessionLimit",
+      "value": "16",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.recentTurnLimit",
+      "value": "64",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/introspection.ts",
+      "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens",
+      "value": "300",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
       "file": "src/system/config/scheduler-config/maintenance.ts",
       "name": "DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.ambientPresence.minIdleMinutes",
       "value": "180",
@@ -12805,6 +12721,48 @@
       "value": "3",
       "form": "object-member",
       "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold",
+      "value": "1",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.maxReinforcedConcernIds",
+      "value": "16",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.pressureCap",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.budget.maxSendsPerWindow",
+      "value": "2",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.checkIntervalMs",
+      "value": "1_800_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun",
+      "value": "1",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
       "file": "src/system/config/scheduler-config/social-graph.ts",
@@ -12910,6 +12868,48 @@
       "value": "160",
       "form": "object-member",
       "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/tool-usage.ts",
+      "name": "DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.intervalMs",
+      "value": "21_600_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/tool-usage.ts",
+      "name": "DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG.minPinSuggestionInvocations",
+      "value": "25",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/weighted-thought.ts",
+      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.checkIntervalMs",
+      "value": "1_800_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/weighted-thought.ts",
+      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.lifecycle.accumulatedWeightCap",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/weighted-thought.ts",
+      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.maxNudgesPerRun",
+      "value": "1",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/weighted-thought.ts",
+      "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.nudgeThreshold",
+      "value": "1",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
       "file": "src/system/config/settings-contract.ts",

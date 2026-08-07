@@ -2,10 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import { DiscordEvidenceLifecycleCoordinator } from '../../boundary/fleet-auth/discord-evidence-lifecycle.js';
-import {
-  DiscordEvidenceRuntime,
-  type DiscordEvidenceObservationPort,
-} from '../../boundary/fleet-auth/discord-evidence-runtime.js';
+import { DiscordEvidenceRuntime } from '../../boundary/fleet-auth/discord-evidence-runtime.js';
+import type { DiscordEvidenceObservationPort } from '../../boundary/fleet-auth/discord-evidence-types.js';
 import { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
 import {
   verifyAndConsumeHubDeviceAssertion,

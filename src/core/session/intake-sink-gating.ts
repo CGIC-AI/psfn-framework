@@ -61,7 +61,7 @@ export interface ScreenedSelfAuthoredMutation {
   params: Record<string, unknown>;
 }
 
-export type SelfAuthoredMutationEnforcementPosture = 'enforce' | 'audit_only';
+type SelfAuthoredMutationEnforcementPosture = 'enforce' | 'audit_only';
 
 export interface SelfAuthoredMutationContext {
   tool: string;

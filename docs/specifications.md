@@ -2,7 +2,7 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-07-14.
+Last updated: 2026-08-07.
 
 ## Source Of Truth Order
 
@@ -127,11 +127,44 @@ Supported until beta:
   SessionStore filename-boundary tests, and the persistence/sessions suites.
   Remove the command, legacy filename engine, and lazy runtime detector before
   beta after every supported companion session root uses readable filenames.
+- Explicit memory embedding re-index through
+  `npm run migrate:embeddings [-- --batch-size <n> --parallelism <n>]`.
+  This operator-only command re-embeds all L2 memories with the configured
+  in-process Transformers embedding provider after a provider or model change.
+  It requires `config.persistenceBackend=postgres` and never runs at startup.
+  Validate the boundary with a bounded retrieval smoke after migration.
+  Remove the command and its `src/faculties/memory/migration.ts` driver before
+  beta after every live installation has rebuilt its L2 embedding space with
+  the target provider/dimensions and passed the retrieval smoke.
+- Explicit prompt-layer identifier backfill through
+  `npm run migrate:prompt-layer-identifiers -- --apply`.
+  This operator-only command inserts the missing `identifier: "main"` property
+  into stored base prompt layers that predate the identifier field. It performs
+  a byte-surgical write and fails closed on multi-base or malformed layers.
+  Dry-run is the default; `--apply` performs the write. Validate the boundary
+  with the command's own tests and a live-snapshot smoke. Remove the command,
+  its backfill implementation, and the fail-closed coercion path in prompt
+  loading before beta after every companion's base prompt-layer records carry
+  an explicit identifier.
+- Explicit channel envelope label migration through
+  `npm run migrate:channel-envelope -- --apply`.
+  This operator-only command seeds `channels.json` channel-owned
+  `contextEnvelope` labels from contact conversation-channel rows, session
+  journals, and the demoted prefix heuristics. Dry-run report is the default;
+  `--apply` writes through the validated owner-file path. Conflicting or absent
+  evidence is reported, never guessed, and receives `invite_only` plus a
+  `needsReview` flag. Validate the boundary with the command E2E and the
+  Context Envelope golden tests. Remove the command and its planner/support
+  modules before beta after every companion's channels.json owns channel
+  envelope labels and no trust-policy override fallback remains active.
 - Existing companion persistence migrations for legacy continuity files,
   opaque pre-cutover SQLite database placement, contact `discord_user_id`
   identity rows, and the `core_memory.json` orientation filename. These flows
   may preserve or move opaque files but do not open them through a SQLite
-  reader; they are not permission to add new parallel artifact names.
+  reader; they are not permission to add new parallel artifact names. Remove
+  the remaining move/warn paths before beta after every supported companion
+  root no longer contains the legacy filenames or placement that the migrator
+  recognizes.
 - Forward-schema rollback bridges for the live-alpha Postgres memory and model
   usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
   default so an image from before the anchor column can insert a new live

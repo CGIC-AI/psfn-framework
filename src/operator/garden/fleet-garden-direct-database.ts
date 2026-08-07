@@ -30,6 +30,9 @@ const UNREACHABLE_DASHBOARD: AdminDashboardService = {
   getDashboardData: () => {
     throw new Error('Fleet Garden direct database router cannot dispatch dashboard routes');
   },
+  listAnalysisWorkbenchTraces: () => {
+    throw new Error('Fleet Garden direct database router cannot dispatch dashboard routes');
+  },
 };
 
 export interface FleetGardenDirectDatabaseOptions {

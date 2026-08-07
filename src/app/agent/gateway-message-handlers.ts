@@ -20,6 +20,7 @@ import type {
 } from '../../core/agent/arbiter/egress-lease-phase.js';
 import type { SpeakingReservationSnapshot } from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { toRecordView } from '../../shared/utils/types.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import type {
@@ -1569,8 +1570,8 @@ export function registerGatewayMessageHandlers(
   });
 
   gateway.onCompanionDeliveryFailure(async (notification) => {
-    log.warn('Peer companion could not process or answer a delivered message', notification);
-    safeguardAuditTrail.append('companion.message.delivery_failed', notification);
+    log.warn('Peer companion could not process or answer a delivered message', toRecordView(notification));
+    safeguardAuditTrail.append('companion.message.delivery_failed', toRecordView(notification));
     const observation: SubstrateMessage = {
       id: `companion-delivery-failure:${notification.messageId}:${notification.reportingCompanionId}`,
       channelId: notification.channelId,

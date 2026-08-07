@@ -101,7 +101,7 @@ function diagnosticEntry(row: ContactLifecycleIntentRow): ContactLifecycleDiagno
   return {
     action: parsed.request.action,
     state,
-    phase: row.phase,
+    phase: row.phase as (typeof DIAGNOSTIC_PHASES)[number],
     reason,
     retryCount: row.retry_count,
     updatedAt: canonicalTimestamp(row.updated_at, 'diagnostic update'),

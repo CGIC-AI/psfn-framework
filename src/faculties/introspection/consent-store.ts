@@ -4,6 +4,7 @@ import { appendJsonLine } from '../../persistence/jsonl.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   INTROSPECTION_CONSENT_SCHEMA_VERSION,
+  isUnconfiguredIntrospectionConsentPolicy,
   type CompanionConsentActor,
   type IntrospectionConsentPolicy,
   type IntrospectionConsentRevision,
@@ -202,8 +203,8 @@ export class IntrospectionConsentStore {
       throw new Error('Invalid introspection consent input');
     }
     const current = this.load();
-    const revision = current.status === 'unconfigured' ? 1 : current.revision + 1;
-    const previousHash = current.status === 'unconfigured' ? null : current.hash;
+    const revision = isUnconfiguredIntrospectionConsentPolicy(current) ? 1 : current.revision + 1;
+    const previousHash = isUnconfiguredIntrospectionConsentPolicy(current) ? null : current.hash;
     if (typeof input.enabled !== 'boolean') {
       throw new Error('Invalid introspection consent: enabled must be boolean');
     }

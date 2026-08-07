@@ -946,6 +946,13 @@ export interface EventMap {
     lastRefreshError?: string;
     timestamp: number;
   } & EventCorrelationFields;
+  'memory.active_context.invalidate': {
+    reason?: string;
+    memoryIds: string[];
+    sessionChannelIds: string[];
+    invalidatedKeys: string[];
+    timestamp: number;
+  };
   'broadcast.pre_send.classified': {
     channelId: string;
     risky: boolean;

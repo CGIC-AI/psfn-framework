@@ -532,10 +532,11 @@ async function appendKubeLifecycleStatus(
   kube: KubeLifecycleToolRuntime,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const statusText = await buildKubeLifecycleStatusText(kube);
+  const textContent = settingsResult.content.filter((item): item is TextContent => item.type === 'text');
   return {
     ...settingsResult,
     content: [
-      ...settingsResult.content,
+      ...textContent,
       { type: 'text', text: `\n\n${statusText}` },
     ] satisfies TextContent[],
   };

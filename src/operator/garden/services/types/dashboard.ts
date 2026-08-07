@@ -1,4 +1,5 @@
 import type {
+  AnalysisWorkbenchTraceView,
   DashboardCostWindow,
   DashboardStats,
 } from '../../types.js';
@@ -13,4 +14,5 @@ export interface AdminDashboardService {
     options?: { costWindow?: DashboardCostWindow },
     context?: GardenRequestContext,
   ): Promise<AdminDashboardData>;
+  listAnalysisWorkbenchTraces(): AnalysisWorkbenchTraceView[];
 }

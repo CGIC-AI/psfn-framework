@@ -185,9 +185,10 @@ function parseChannel(value: unknown, requestedChannelId: string): NormalizedCha
     'threadMembershipObserved',
     'threadMember',
   ], 'target.channel');
-  if (record.kind !== 'guild_channel'
-    && record.kind !== 'public_thread'
-    && record.kind !== 'private_thread') {
+  if (typeof record.kind !== 'string'
+    || (record.kind !== 'guild_channel'
+      && record.kind !== 'public_thread'
+      && record.kind !== 'private_thread')) {
     throw new Error('target.channel.kind is unknown');
   }
   if (record.overwritesComplete !== true) {
@@ -200,7 +201,7 @@ function parseChannel(value: unknown, requestedChannelId: string): NormalizedCha
     'target.channel.permissionChannelId',
   );
   const common = {
-    kind: record.kind,
+    kind: record.kind as NormalizedChannelObservation['kind'],
     id,
     permissionChannelId,
     everyoneOverwrite: parseOverwrite(record.everyoneOverwrite, 'target.channel.everyoneOverwrite'),

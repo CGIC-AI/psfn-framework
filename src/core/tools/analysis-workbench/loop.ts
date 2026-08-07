@@ -651,7 +651,8 @@ export async function runRLMLoop(
       `sandbox-${purpose}-${Date.now()}`,
     );
     const requestId = normalizeMetadataValue(incomingCorrelation?.requestId)
-      ?? correlationBase.requestId;
+      ?? correlationBase.requestId
+      ?? `repl-analysis-${Date.now()}`;
     const correlatedContext: LLMContext = {
       ...context,
       correlation: {

@@ -228,7 +228,9 @@ function isCurrentOwnerEntry(value: unknown): value is CurrentOwnerReceiptEntry 
 }
 
 function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
-  return isFleetEntry(value)
+  return isRecord(value)
+    && typeof value.companionId === 'string'
+    && typeof value.companionDataDir === 'string'
     && typeof value.destinationPath === 'string'
     && isFilesystemIdentity(value.companionDataDirIdentity)
     && typeof value.stagingDirectoryPath === 'string'

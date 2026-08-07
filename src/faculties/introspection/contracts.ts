@@ -30,6 +30,12 @@ export type IntrospectionConsentPolicy =
   | IntrospectionConsentRevision
   | UnconfiguredIntrospectionConsentPolicy;
 
+export function isUnconfiguredIntrospectionConsentPolicy(
+  policy: IntrospectionConsentPolicy,
+): policy is UnconfiguredIntrospectionConsentPolicy {
+  return 'status' in policy;
+}
+
 export interface IntrospectionAuditCandidate {
   sourceRef: string;
   turnId: string;

@@ -11,7 +11,7 @@ export interface FactRoutingOptions {
   requireStructuredAddressing?: boolean;
 }
 
-export type SessionEntryCompanionRelevance =
+type SessionEntryCompanionRelevance =
   | 'companion_turn'
   | 'reply_to_companion'
   | 'direct_to_companion'

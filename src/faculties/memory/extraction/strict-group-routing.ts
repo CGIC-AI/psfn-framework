@@ -2,7 +2,7 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 import type { ExtractedFact, ExtractedFactAttribution } from '../types.js';
 
-export type StrictGroupRoutingSkipReason =
+type StrictGroupRoutingSkipReason =
   | 'missing_structured_addressing'
   | 'conflicting_source_attribution'
   | 'conflicting_resolved_addressee'

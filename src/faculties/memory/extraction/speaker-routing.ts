@@ -16,13 +16,11 @@ import {
   classifySessionEntryCompanionRelevance,
   inferAddressMode,
   type FactRoutingOptions,
-  type SessionEntryCompanionRelevance,
 } from './message-address-mode.js';
 
 export {
   classifySessionEntryCompanionRelevance,
   type FactRoutingOptions,
-  type SessionEntryCompanionRelevance,
 };
 
 type ExtractionFactRoutingReason =

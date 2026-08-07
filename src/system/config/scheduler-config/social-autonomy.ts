@@ -7,16 +7,19 @@ import {
   parseParticipationAppraiserSettings,
   parsePassiveNameCandidateSettings,
   parseReservationPhaseSettings,
+} from '../participation-config.js';
+import {
+  createDefaultFreeTimeChooserSettings,
+  parseFreeTimeChooserSettings,
+} from '../free-time-chooser-config.js';
+
+export {
   type EgressLeaseTunables,
   type ParticipationAppraiserSettings,
   type PassiveNameCandidateSettings,
   type ReservationPhaseSettings,
 } from '../participation-config.js';
-import {
-  createDefaultFreeTimeChooserSettings,
-  parseFreeTimeChooserSettings,
-  type FreeTimeChooserSettings,
-} from '../free-time-chooser-config.js';
+export { type FreeTimeChooserSettings } from '../free-time-chooser-config.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { assertNoUnknownKeys } from '../validators.js';
 

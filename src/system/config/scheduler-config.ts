@@ -3,105 +3,83 @@ import {
   loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
-import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
+import { assertNoUnknownKeys } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   parseIcpAutonomySchedulerConfig,
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
-import {
-  createDefaultEgressLeaseTunables,
-  createDefaultParticipationAppraiserSettings,
-  createDefaultPassiveNameCandidateSettings,
-  createDefaultReservationPhaseSettings,
-  parseEgressLeaseTunables,
-  parseParticipationAppraiserSettings,
-  parsePassiveNameCandidateSettings,
-  parseReservationPhaseSettings,
-  type EgressLeaseTunables,
-  type ParticipationAppraiserSettings,
-  type PassiveNameCandidateSettings,
-  type ReservationPhaseSettings,
-} from './participation-config.js';
-import {
-  createDefaultFreeTimeChooserSettings,
-  parseFreeTimeChooserSettings,
-  type FreeTimeChooserSettings,
-} from './free-time-chooser-config.js';
 import { MODEL_USAGE_RANGES, type ModelUsageRange } from '../../shared/telemetry/model-usage.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
+import {
+  validateBackgroundWorkConfig,
+  validateBackgroundWorkWelfareConfig,
+  type BackgroundWorkWelfareConfig,
+} from './scheduler-config/background-work.js';
+import {
+  validateArtifactLifecycleConfig,
+  validateBackgroundMaintenanceConfig,
+  type ArtifactLifecyclePolicyConfig,
+  type BackgroundMaintenanceConfig,
+} from './scheduler-config/maintenance.js';
+import {
+  validateSocialAutonomyConfig,
+  type SocialAutonomyConfig,
+} from './scheduler-config/social-autonomy.js';
+import {
+  validateSocialGraphBuilderConfig,
+  type SocialGraphBuilderCadenceConfig,
+} from './scheduler-config/social-graph.js';
+import {
+  toBoolean,
+  toCadenceTimezone,
+  toHourOfDay,
+  toInterval,
+  toLocalTime,
+  toNonEmptyString,
+  toNumberAtLeast,
+  toPositiveInteger,
+  toPositiveNumber,
+  toPositiveUnitFactor,
+  toTimeZone,
+  toUnitFactor,
+  toUnitInterval,
+  toWakeTimingMode,
+} from './scheduler-config/primitives.js';
 
 export {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
 
-/**
- * Social-autonomy participation tunables (jp36.8.2). Homes the room-participation
- * gate knobs — passive-name candidate creation, the cheap participation
- * appraiser, the two-phase speaking arbiter (reservation + egress-lease), and the
- * free-time chooser (incl. the rest / silence-persistence window) — in the
- * per-companion scheduler owner file so they are Garden-editable via the raw
- * owner-file editor. The egress-lease `enabled` flag is intentionally NOT part of
- * this surface: autonomous sending is code-pinned OFF until qgqw.3 (P1), so only
- * its tunables are exposed (see participation-config.ts EgressLeaseTunables).
- */
-export interface SocialAutonomyConfig {
-  passiveNameCandidate: PassiveNameCandidateSettings;
-  appraiser: ParticipationAppraiserSettings;
-  reservationPhase: ReservationPhaseSettings;
-  egressLease: EgressLeaseTunables;
-  freeTimeChooser: FreeTimeChooserSettings;
-}
-
-export function createDefaultSocialAutonomyConfig(): SocialAutonomyConfig {
-  return {
-    passiveNameCandidate: createDefaultPassiveNameCandidateSettings(),
-    appraiser: createDefaultParticipationAppraiserSettings(),
-    reservationPhase: createDefaultReservationPhaseSettings(),
-    egressLease: createDefaultEgressLeaseTunables(),
-    freeTimeChooser: createDefaultFreeTimeChooserSettings(),
-  };
-}
-
-export const DEFAULT_SOCIAL_AUTONOMY_CONFIG: SocialAutonomyConfig =
-  createDefaultSocialAutonomyConfig();
-
 export {
+  DEFAULT_BACKGROUND_WORK_TUNING,
+  DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
+  type BackgroundWorkWelfareConfig,
+} from './scheduler-config/background-work.js';
+export {
+  DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
+  type ArtifactLifecyclePolicyConfig,
+  type BackgroundMaintenanceConfig,
+} from './scheduler-config/maintenance.js';
+export {
+  DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+  createDefaultSocialAutonomyConfig,
   type EgressLeaseTunables,
+  type FreeTimeChooserSettings,
   type ParticipationAppraiserSettings,
   type PassiveNameCandidateSettings,
   type ReservationPhaseSettings,
-} from './participation-config.js';
-export { type FreeTimeChooserSettings } from './free-time-chooser-config.js';
+  type SocialAutonomyConfig,
+} from './scheduler-config/social-autonomy.js';
+export {
+  DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE,
+  type SocialGraphBuilderCadenceConfig,
+} from './scheduler-config/social-graph.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
-
-export const DEFAULT_BACKGROUND_WORK_TUNING: BackgroundWorkRuntimeTuning = {
-  supervisor: {
-    maxConcurrentSessions: 4,
-    leaseDurationMs: 5 * 60_000,
-    retryBaseDelayMs: 1_000,
-    retryMaxDelayMs: 5 * 60_000,
-    shutdownTimeoutMs: 5_000,
-    terminalRetentionMs: 7 * 24 * 60 * 60_000,
-    cleanupIntervalMs: 60 * 60_000,
-  },
-  postTurn: {
-    maxAttempts: 5,
-    extractionDrainRequeueDelayMs: 1_000,
-    foregroundPreemptionDeferDelayMs: 1_000,
-  },
-};
-
-export interface ArtifactLifecyclePolicyConfig {
-  scratchpadRetentionDays: number;
-  generatedMediaRetentionDays: number;
-  workspaceTempRetentionDays: number;
-  cleanupBatchSize: number;
-}
 
 export interface EpisodicProcessingRestWindowConfig {
   enabled: boolean;
@@ -308,88 +286,6 @@ export interface ArcFormationConfig {
   /** Cap on canonical episodes included in the LLM judgment prompt. */
   maxEpisodesPerRun: number;
 }
-
-/**
- * Shared cadence for cheap background housekeeping. The runtime exposes every
- * operation attached to this tick in Garden; this is deliberately one honest
- * knob rather than a hidden alias or one interval per maintenance operation.
- */
-export interface BackgroundMaintenanceConfig {
-  /** Shared poll interval for every operation listed by the bundled task. */
-  intervalMs: number;
-  /** Bounded approved shared-world projection drift checks per maintenance tick. */
-  sharedWorldWikiCaretaker: {
-    batchSize: number;
-  };
-  /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
-  ambientPresence: {
-    minIdleMinutes: number;
-    minNoteIntervalMinutes: number;
-  };
-  /** Concern-set grooming threshold evaluated on the shared tick. */
-  concernGrooming: {
-    maxActiveConcerns: number;
-  };
-}
-
-export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
-  intervalMs: 3_600_000,
-  sharedWorldWikiCaretaker: {
-    batchSize: 25,
-  },
-  ambientPresence: {
-    minIdleMinutes: 180,
-    minNoteIntervalMinutes: 360,
-  },
-  concernGrooming: {
-    maxActiveConcerns: 7,
-  },
-};
-
-/**
- * Anti-starvation welfare reserve for durable background work (mmo9.7.4). A
- * background/reflection job repeatedly deferred by sustained foreground turns
- * accrues durable defer pressure; once it has been foreground-deferred
- * `deferThreshold` times OR its first foreground defer is at least
- * `ageThresholdMs` old, it becomes eligible to be admitted past the foreground
- * exclusion into one of `reserveSlots` globally bounded welfare slots, then runs
- * to a protected completion. This is Charter 8.8/8.9's ethical floor: reflection
- * and rest yield to conversation but are guaranteed a bounded slice rather than
- * being starved forever. Optional block — the conservative defaults apply when
- * absent. `reserveSlots: 0` disables welfare admission (fail-closed to FIFO).
- */
-export interface BackgroundWorkWelfareConfig {
-  deferThreshold: number;
-  ageThresholdMs: number;
-  reserveSlots: number;
-}
-
-export const DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG: BackgroundWorkWelfareConfig = {
-  deferThreshold: 8,
-  ageThresholdMs: 300_000,
-  reserveSlots: 1,
-};
-
-/**
- * Social-graph builder worker tuning (E4.2). The worker proposes social-graph
- * edges from accumulated room evidence and only acts on memories past its
- * watermark. Its cadence is the shared `backgroundMaintenance.intervalMs`.
- * Optional block — conservative thresholds apply when absent.
- */
-export interface SocialGraphBuilderCadenceConfig {
-  /** Distinct co-presence windows required before an acquaintance is proposed. */
-  coPresenceMinSessions: number;
-  /** Fallback co-presence window size when a memory has no session id (minutes). */
-  coPresenceWindowMinutes: number;
-  /** Max memories scanned per run. */
-  scanMemoryLimit: number;
-}
-
-export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConfig = {
-  coPresenceMinSessions: 3,
-  coPresenceWindowMinutes: 1440,
-  scanMemoryLimit: 500,
-};
 
 /**
  * Scheduled morning wake lane (E7.1). At a configured wall-clock time, a warm
@@ -929,213 +825,6 @@ function resolveSeedDir(seedDir?: string): string {
   return resolved;
 }
 
-function toInterval(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1_000) {
-    throw new Error(`Invalid scheduler config: ${field} must be an integer >= 1000`);
-  }
-  return value;
-}
-
-function toBackgroundWorkPositiveInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Invalid scheduler config: ${field} must be a positive safe integer`);
-  }
-  return value;
-}
-
-function toBackgroundWorkNonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`Invalid scheduler config: ${field} must be a non-negative safe integer`);
-  }
-  return value;
-}
-
-function validateBackgroundWorkConfig(
-  raw: unknown,
-  sourcePath: string,
-): BackgroundWorkRuntimeTuning {
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundWork must be an object`);
-  }
-  assertNoUnknownKeys(raw, ['supervisor', 'postTurn'], `${sourcePath}.backgroundWork`, {
-    errorPrefix: 'Invalid scheduler config',
-  });
-  if (!isRecord(raw.supervisor)) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: backgroundWork.supervisor must be an object`,
-    );
-  }
-  if (!isRecord(raw.postTurn)) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: backgroundWork.postTurn must be an object`,
-    );
-  }
-  assertNoUnknownKeys(
-    raw.supervisor,
-    [
-      'maxConcurrentSessions',
-      'leaseDurationMs',
-      'retryBaseDelayMs',
-      'retryMaxDelayMs',
-      'shutdownTimeoutMs',
-      'terminalRetentionMs',
-      'cleanupIntervalMs',
-    ],
-    `${sourcePath}.backgroundWork.supervisor`,
-    { errorPrefix: 'Invalid scheduler config' },
-  );
-  assertNoUnknownKeys(
-    raw.postTurn,
-    ['maxAttempts', 'extractionDrainRequeueDelayMs', 'foregroundPreemptionDeferDelayMs'],
-    `${sourcePath}.backgroundWork.postTurn`,
-    { errorPrefix: 'Invalid scheduler config' },
-  );
-  const supervisor = {
-    maxConcurrentSessions: toBackgroundWorkPositiveInteger(
-      raw.supervisor.maxConcurrentSessions,
-      'backgroundWork.supervisor.maxConcurrentSessions',
-    ),
-    leaseDurationMs: toBackgroundWorkPositiveInteger(
-      raw.supervisor.leaseDurationMs,
-      'backgroundWork.supervisor.leaseDurationMs',
-    ),
-    retryBaseDelayMs: toBackgroundWorkPositiveInteger(
-      raw.supervisor.retryBaseDelayMs,
-      'backgroundWork.supervisor.retryBaseDelayMs',
-    ),
-    retryMaxDelayMs: toBackgroundWorkPositiveInteger(
-      raw.supervisor.retryMaxDelayMs,
-      'backgroundWork.supervisor.retryMaxDelayMs',
-    ),
-    shutdownTimeoutMs: toBackgroundWorkNonNegativeInteger(
-      raw.supervisor.shutdownTimeoutMs,
-      'backgroundWork.supervisor.shutdownTimeoutMs',
-    ),
-    terminalRetentionMs: toBackgroundWorkPositiveInteger(
-      raw.supervisor.terminalRetentionMs,
-      'backgroundWork.supervisor.terminalRetentionMs',
-    ),
-    cleanupIntervalMs: toBackgroundWorkPositiveInteger(
-      raw.supervisor.cleanupIntervalMs,
-      'backgroundWork.supervisor.cleanupIntervalMs',
-    ),
-  };
-  if (supervisor.retryMaxDelayMs < supervisor.retryBaseDelayMs) {
-    throw new Error(
-      'Invalid scheduler config: backgroundWork.supervisor.retryMaxDelayMs '
-      + 'must be greater than or equal to backgroundWork.supervisor.retryBaseDelayMs',
-    );
-  }
-  return {
-    supervisor,
-    postTurn: {
-      maxAttempts: toBackgroundWorkPositiveInteger(
-        raw.postTurn.maxAttempts,
-        'backgroundWork.postTurn.maxAttempts',
-      ),
-      extractionDrainRequeueDelayMs: toBackgroundWorkPositiveInteger(
-        raw.postTurn.extractionDrainRequeueDelayMs,
-        'backgroundWork.postTurn.extractionDrainRequeueDelayMs',
-      ),
-      foregroundPreemptionDeferDelayMs: toBackgroundWorkPositiveInteger(
-        raw.postTurn.foregroundPreemptionDeferDelayMs,
-        'backgroundWork.postTurn.foregroundPreemptionDeferDelayMs',
-      ),
-    },
-  };
-}
-
-function toPositiveInteger(value: unknown, field: string, minimum: number): number {
-  return assertPositiveInteger(value, field, {
-    min: minimum,
-    message: ({ fieldLabel, min }) => `Invalid scheduler config: ${fieldLabel} must be an integer >= ${min}`,
-  });
-}
-
-function toBoolean(value: unknown, field: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw new Error(`Invalid scheduler config: ${field} must be true or false`);
-  }
-  return value;
-}
-
-function toNumberAtLeast(value: unknown, field: string, minimum: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum) {
-    throw new Error(`Invalid scheduler config: ${field} must be a finite number >= ${minimum}`);
-  }
-  return value;
-}
-
-function toUnitFactor(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`Invalid scheduler config: ${field} must be a number in [0, 1]`);
-  }
-  return value;
-}
-
-/**
- * A dampening factor multiplied against a decayed weight. The valid range is the
- * half-open interval (0, 1]: a factor of 0 would hard-zero the weight on the
- * first application, silently disabling the mechanism and contradicting the
- * charter invariant that dampening "reduces weight rather than zeroing it out"
- * (Law 27 / 6.24). Fail closed — reject 0 and out-of-range rather than clamp.
- */
-function toPositiveUnitFactor(value: unknown, field: string): number {
-  const factor = toUnitFactor(value, field);
-  if (!(factor > 0)) {
-    throw new Error(
-      `Invalid scheduler config: ${field} must be in (0, 1] — a factor of 0 hard-zeroes the weighted thought, disabling the dampening mechanism against Charter Law 27; use a small positive value to dampen without zeroing`,
-    );
-  }
-  return factor;
-}
-
-function toLocalTime(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`Invalid scheduler config: ${field} must be HH:mm local time`);
-  }
-  const trimmed = value.trim();
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) {
-    throw new Error(`Invalid scheduler config: ${field} must be HH:mm local time`);
-  }
-  return trimmed;
-}
-
-function toTimeZone(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
-  }
-  if (trimmed === 'local') {
-    return trimmed;
-  }
-  try {
-    void new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).format(new Date());
-  } catch {
-    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
-  }
-  return trimmed;
-}
-
-function validateArtifactLifecycleConfig(
-  raw: unknown,
-  sourcePath: string,
-): ArtifactLifecyclePolicyConfig {
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: artifactLifecycle must be an object`);
-  }
-
-  return {
-    scratchpadRetentionDays: toPositiveInteger(raw.scratchpadRetentionDays, 'artifactLifecycle.scratchpadRetentionDays', 1),
-    generatedMediaRetentionDays: toPositiveInteger(raw.generatedMediaRetentionDays, 'artifactLifecycle.generatedMediaRetentionDays', 1),
-    workspaceTempRetentionDays: toPositiveInteger(raw.workspaceTempRetentionDays, 'artifactLifecycle.workspaceTempRetentionDays', 1),
-    cleanupBatchSize: toPositiveInteger(raw.cleanupBatchSize, 'artifactLifecycle.cleanupBatchSize', 1),
-  };
-}
-
 function validateEpisodicProcessingConfig(
   raw: unknown,
   sourcePath: string,
@@ -1155,13 +844,6 @@ function validateEpisodicProcessingConfig(
       1,
     ),
   };
-}
-
-function toUnitInterval(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`Invalid scheduler config: ${field} must be a number between 0 and 1`);
-  }
-  return value;
 }
 
 function validateNearTurnMemoryConfig(
@@ -1371,128 +1053,6 @@ function validateArcFormationConfig(
   };
 }
 
-function validateSocialGraphBuilderConfig(
-  raw: unknown,
-  sourcePath: string,
-): SocialGraphBuilderCadenceConfig {
-  if (raw === undefined) {
-    return { ...DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE };
-  }
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: socialGraphBuilder must be an object`);
-  }
-  if (raw.intervalMs !== undefined) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: socialGraphBuilder.intervalMs was removed; `
-      + 'the worker now uses backgroundMaintenance.intervalMs with the other bundled operations',
-    );
-  }
-  return {
-    coPresenceMinSessions: toPositiveInteger(
-      raw.coPresenceMinSessions ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceMinSessions,
-      'socialGraphBuilder.coPresenceMinSessions',
-      1,
-    ),
-    coPresenceWindowMinutes: toPositiveInteger(
-      raw.coPresenceWindowMinutes ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceWindowMinutes,
-      'socialGraphBuilder.coPresenceWindowMinutes',
-      1,
-    ),
-    scanMemoryLimit: toPositiveInteger(
-      raw.scanMemoryLimit ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.scanMemoryLimit,
-      'socialGraphBuilder.scanMemoryLimit',
-      1,
-    ),
-  };
-}
-
-function validateBackgroundMaintenanceConfig(
-  raw: unknown,
-  sourcePath: string,
-): BackgroundMaintenanceConfig {
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundMaintenance must be an object`);
-  }
-  if (!isRecord(raw.ambientPresence)) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.ambientPresence must be an object`,
-    );
-  }
-  if (!isRecord(raw.sharedWorldWikiCaretaker)) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.sharedWorldWikiCaretaker must be an object`,
-    );
-  }
-  assertNoUnknownKeys(
-    raw.sharedWorldWikiCaretaker,
-    ['batchSize'],
-    `${sourcePath}.backgroundMaintenance.sharedWorldWikiCaretaker`,
-    { errorPrefix: 'Invalid scheduler config' },
-  );
-  if (!isRecord(raw.concernGrooming)) {
-    throw new Error(
-      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
-    );
-  }
-  return {
-    intervalMs: toInterval(raw.intervalMs, 'backgroundMaintenance.intervalMs'),
-    sharedWorldWikiCaretaker: {
-      batchSize: toPositiveInteger(
-        raw.sharedWorldWikiCaretaker.batchSize,
-        'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
-        1,
-      ),
-    },
-    ambientPresence: {
-      minIdleMinutes: toPositiveInteger(
-        raw.ambientPresence.minIdleMinutes,
-        'backgroundMaintenance.ambientPresence.minIdleMinutes',
-        1,
-      ),
-      minNoteIntervalMinutes: toPositiveInteger(
-        raw.ambientPresence.minNoteIntervalMinutes,
-        'backgroundMaintenance.ambientPresence.minNoteIntervalMinutes',
-        1,
-      ),
-    },
-    concernGrooming: {
-      maxActiveConcerns: toPositiveInteger(
-        raw.concernGrooming.maxActiveConcerns,
-        'backgroundMaintenance.concernGrooming.maxActiveConcerns',
-        1,
-      ),
-    },
-  };
-}
-
-function toCadenceTimezone(value: unknown, field: string): 'local' | 'utc' {
-  if (value !== 'local' && value !== 'utc') {
-    throw new Error(`Invalid scheduler config: ${field} must be "local" or "utc"`);
-  }
-  return value;
-}
-
-function toWakeTimingMode(value: unknown, field: string): 'fixed' | 'habit' {
-  if (value !== 'fixed' && value !== 'habit') {
-    throw new Error(`Invalid scheduler config: ${field} must be "fixed" or "habit"`);
-  }
-  return value;
-}
-
-function toHourOfDay(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 23) {
-    throw new Error(`Invalid scheduler config: ${field} must be an integer between 0 and 23`);
-  }
-  return value;
-}
-
-function toPositiveNumber(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`Invalid scheduler config: ${field} must be a number greater than 0`);
-  }
-  return value;
-}
-
 function validateTemporalWakeupHabitConfig(
   raw: unknown,
   sourcePath: string,
@@ -1683,13 +1243,6 @@ function validateTemporalWakeupConfig(
       ),
     },
   };
-}
-
-function toNonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`Invalid scheduler config: ${field} must be a non-empty string`);
-  }
-  return value;
 }
 
 function validateFreeTimeConfig(
@@ -2106,41 +1659,6 @@ function validateIntrospectionAuditConfig(
   };
 }
 
-function toNonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-    throw new Error(`Invalid scheduler config: ${field} must be an integer >= 0`);
-  }
-  return value;
-}
-
-function validateBackgroundWorkWelfareConfig(
-  value: unknown,
-  sourcePath: string,
-): BackgroundWorkWelfareConfig | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundWorkWelfare must be an object`);
-  }
-  const reserveSlots = toNonNegativeInteger(
-    value.reserveSlots ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.reserveSlots,
-    'backgroundWorkWelfare.reserveSlots',
-  );
-  // reserveSlots: 0 disables welfare; the aging thresholds are then irrelevant
-  // but still validated for shape so a later enable cannot ship a bad value.
-  return {
-    deferThreshold: toPositiveInteger(
-      value.deferThreshold ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.deferThreshold,
-      'backgroundWorkWelfare.deferThreshold',
-      1,
-    ),
-    ageThresholdMs: toNonNegativeInteger(
-      value.ageThresholdMs ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.ageThresholdMs,
-      'backgroundWorkWelfare.ageThresholdMs',
-    ),
-    reserveSlots,
-  };
-}
-
 function localTimeMinute(value: string): number {
   const [hour, minute] = value.split(':').map(Number);
   return hour * 60 + minute;
@@ -2176,43 +1694,6 @@ function assertBackgroundMaintenanceRestWindowCoverage(
       + 'otherwise the relative cadence can phase-lock outside every rest window',
     );
   }
-}
-
-function validateSocialAutonomyConfig(raw: unknown, sourcePath: string): SocialAutonomyConfig {
-  if (raw === undefined) {
-    return createDefaultSocialAutonomyConfig();
-  }
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: socialAutonomy must be an object`);
-  }
-  assertNoUnknownKeys(
-    raw,
-    ['passiveNameCandidate', 'appraiser', 'reservationPhase', 'egressLease', 'freeTimeChooser'],
-    `${sourcePath}.socialAutonomy`,
-    { errorPrefix: 'Invalid scheduler config' },
-  );
-  return {
-    passiveNameCandidate: parsePassiveNameCandidateSettings(
-      raw.passiveNameCandidate,
-      `${sourcePath}.socialAutonomy.passiveNameCandidate`,
-    ),
-    appraiser: parseParticipationAppraiserSettings(
-      raw.appraiser,
-      `${sourcePath}.socialAutonomy.appraiser`,
-    ),
-    reservationPhase: parseReservationPhaseSettings(
-      raw.reservationPhase,
-      `${sourcePath}.socialAutonomy.reservationPhase`,
-    ),
-    egressLease: parseEgressLeaseTunables(
-      raw.egressLease,
-      `${sourcePath}.socialAutonomy.egressLease`,
-    ),
-    freeTimeChooser: parseFreeTimeChooserSettings(
-      raw.freeTimeChooser,
-      `${sourcePath}.socialAutonomy.freeTimeChooser`,
-    ),
-  };
 }
 
 export function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {

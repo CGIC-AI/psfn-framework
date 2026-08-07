@@ -149,7 +149,7 @@ export interface BreakdownRow extends TotalsRow {
   key: string | null;
 }
 
-export interface TimeBucketRow extends TotalsRow {
+interface TimeBucketRow extends TotalsRow {
   bucket_start_ms: number | string;
 }
 

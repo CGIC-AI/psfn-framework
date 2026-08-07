@@ -15,6 +15,7 @@ import {
   sensitivityOrd,
 } from '../../../system/trust/types.js';
 import { getAllowedSensitivities } from '../../../system/trust/policy.js';
+import { normalizeAuditActor } from '../../../shared/audit-actor.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
   defaultPrivacyForChannel,
@@ -28,6 +29,8 @@ import type {
   SocialGraphEntityRow,
   SocialRelationshipEdgeRow,
 } from './rows.js';
+
+export { normalizeAuditActor };
 
 export function normalizeTrimmed(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -166,12 +169,6 @@ export function edgeVisible(
 export function normalizeLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
   if (limit === undefined || !Number.isFinite(limit)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(limit)));
-}
-
-export function normalizeAuditActor(actor: string | undefined): string {
-  const trimmed = actor?.trim();
-  if (!trimmed) return 'system:unknown';
-  return trimmed.slice(0, 120);
 }
 
 export function rowToContact(row: ContactRow, identities: ContactIdentityRow[], conversationChannels: ContactChannelActivityRow[]): Contact {

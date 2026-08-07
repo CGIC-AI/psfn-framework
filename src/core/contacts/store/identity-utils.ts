@@ -15,6 +15,7 @@ import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 
 export const LEGACY_DISCORD_CHANNEL = 'discord';
 export const DEFAULT_LINK_VERIFICATION_TTL_MS = 5 * 60_000;
+export const MAX_LINK_VERIFICATION_TTL_MS = 60 * 60_000;
 
 export function normalizeIdentity(channel: ContactChannel, userId: string): ContactChannelIdentity {
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
@@ -77,7 +78,7 @@ export function normalizeVerificationTtlMs(ttlMs: number | undefined): number {
   if (!Number.isFinite(ttlMs) || !ttlMs || ttlMs <= 0) {
     return DEFAULT_LINK_VERIFICATION_TTL_MS;
   }
-  return Math.min(Math.floor(ttlMs), 60 * 60_000);
+  return Math.min(Math.floor(ttlMs), MAX_LINK_VERIFICATION_TTL_MS);
 }
 
 export function createVerificationToken(): string {

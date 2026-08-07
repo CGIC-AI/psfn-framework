@@ -204,6 +204,18 @@ describe('PostgresHubIdentityEnrollmentStore', () => {
     }
   });
 
+  it('uses the shared persisted audit-actor width', async () => {
+    const longActor = `  ${'a'.repeat(140)}  `;
+    const binding = await store.enroll({
+      hubIdentityId: 'hub-long-actor',
+      canonicalContactId: PARTNER,
+      actor: longActor,
+    });
+    expect(binding.enrolledBy).toBe('a'.repeat(120));
+    await expect(store.listAudit({ hubIdentityId: 'hub-long-actor' }))
+      .resolves.toEqual([expect.objectContaining({ actor: 'a'.repeat(120) })]);
+  });
+
   it('resolves an unknown handle to unenrolled (never guesses)', async () => {
     expect((await store.resolve('nope')).status).toBe('unenrolled');
     expect((await store.resolve('')).status).toBe('unenrolled');

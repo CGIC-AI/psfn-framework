@@ -17,6 +17,7 @@ import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../../shared/process-termination-policy.js';
 import type { AuthenticatedShardWorkloadIdentity } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import {
   syncAllBeadsToGitHubProject,
@@ -250,7 +251,7 @@ async function runBdCommand(
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      setTimeout(() => child.kill('SIGKILL'), PROCESS_TERMINATION_GRACE_TIMEOUT_MS).unref();
     }, DEFAULT_BD_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk) => append('stdout', chunk));

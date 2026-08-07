@@ -44,6 +44,7 @@ import {
   normalizeIdentity,
   normalizeNicknameValue,
   normalizePrivacyLevel,
+  normalizeVerificationTtlMs,
   pickMostTrustedLevel,
   pickPreferredDisplayName,
 } from '../store/identity-utils.js';
@@ -1294,7 +1295,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     const now = new Date();
     const createdAt = now.toISOString();
-    const expiresAt = new Date(now.getTime() + Math.min(Math.max(Math.floor(input.ttlMs ?? 5 * 60_000), 1), 60 * 60_000)).toISOString();
+    const expiresAt = new Date(now.getTime() + normalizeVerificationTtlMs(input.ttlMs)).toISOString();
     const verification: ContactIdentityLinkVerification = {
       // Contact lifecycle intent IDs are protocol-visible RFC-4122 UUIDs. Keep
       // verification proof IDs in that same domain so the proof itself is the

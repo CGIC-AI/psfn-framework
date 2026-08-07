@@ -2,8 +2,22 @@ import { describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createPostgresContactStore } from './postgres-adapter.js';
 import { FakePostgresPool } from '../../test-support/fake-postgres-contact-pool.js';
+import { normalizeAuditActor } from './postgres-adapter/mapping.js';
+import {
+  DEFAULT_LINK_VERIFICATION_TTL_MS,
+  MAX_LINK_VERIFICATION_TTL_MS,
+  normalizeVerificationTtlMs,
+} from './store/identity-utils.js';
 
 describe('PostgresContactStore', () => {
+  it('shares the persisted audit-actor and verification TTL bounds', () => {
+    expect(normalizeAuditActor(`  ${'a'.repeat(140)}  `)).toBe('a'.repeat(120));
+    expect(normalizeAuditActor('   ')).toBe('system:unknown');
+    expect(normalizeVerificationTtlMs(undefined)).toBe(DEFAULT_LINK_VERIFICATION_TTL_MS);
+    expect(normalizeVerificationTtlMs(2 * MAX_LINK_VERIFICATION_TTL_MS))
+      .toBe(MAX_LINK_VERIFICATION_TTL_MS);
+  });
+
   it('denies autonomous promotion into a high trust tier', async () => {
     const pool = new FakePostgresPool();
     const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {

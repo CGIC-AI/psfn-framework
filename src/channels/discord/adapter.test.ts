@@ -51,7 +51,7 @@ vi.mock('discord.js', () => {
         get: (channelId: string) => discordMock.channelsCacheById.get(channelId) ?? undefined,
       },
     };
-    user = null;
+    user = { id: 'bot-1', username: 'Test Companion', displayName: 'Test Companion' };
     isReady = vi.fn(() => false);
 
     on = vi.fn();
@@ -604,6 +604,7 @@ function makeDiscordIncomingMessage(
     mentioned?: boolean;
     mentionedUsers?: Array<{ id: string; displayName: string }>;
     replyToMessageId?: string;
+    replyToAuthor?: { id: string; displayName: string };
     authorId?: string;
     authorDisplayName?: string;
     bot?: boolean;
@@ -624,11 +625,16 @@ function makeDiscordIncomingMessage(
   const attachments = new Map(
     (overrides?.attachments ?? []).map((attachment) => [attachment.id, attachment]),
   );
+  const messageChannel = {
+    isThread: () => false,
+    parentId: null,
+    ...channel,
+  };
 
   return {
     id: overrides?.id ?? 'msg-1',
     channelId,
-    channel,
+    channel: messageChannel,
     guild: guildId ? { id: guildId } : null,
     content,
     createdAt: new Date(),
@@ -641,6 +647,7 @@ function makeDiscordIncomingMessage(
     mentions: {
       has: (authorId: string) => mentionedUsers.some(user => user.id === authorId),
       users: new Map(mentionedUsers.map(user => [user.id, user])),
+      repliedUser: overrides?.replyToAuthor ?? null,
     },
     reference: overrides?.replyToMessageId
       ? { messageId: overrides.replyToMessageId }
@@ -1462,14 +1469,32 @@ describe('DiscordAdapter DM routing', () => {
     expect(interactive.sent).toContain('guild reply');
   });
 
-  it('preserves another participant mention and reply lineage on an observed guild message', async () => {
+  it('preserves the complete typed platform envelope through CogSec sanitization', async () => {
     const eventBus = new EventBus();
-    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    const screen = vi.fn(async () => ({
+      effectiveText: '[sanitized group body]',
+      snapshot: {
+        envelopeId: 'env-discord-group-addressing',
+        sourceClass: 'regular_contact' as const,
+        sourceRiskTier: 'standard' as const,
+        state: 'released_sanitized' as const,
+        riskLabels: [] as const,
+        subject: { kind: 'body' as const },
+      },
+    }));
+    const adapter = new DiscordAdapter(makeConfig(), eventBus, {
+      intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
+    });
     await adapter.init();
 
-    const channelId = 'guild-addressing-room';
+    const channelId = 'guild-addressing-thread';
     const interactive = makeInteractiveTextChannel();
-    discordMock.channelsById.set(channelId, interactive.channel);
+    const threadChannel = {
+      ...interactive.channel,
+      isThread: () => true,
+      parentId: 'guild-addressing-room',
+    };
+    discordMock.channelsById.set(channelId, threadChannel);
     const handler = vi.fn(async () => ({
       content: 'unused reply',
       channelId,
@@ -1478,26 +1503,51 @@ describe('DiscordAdapter DM routing', () => {
     adapter.onMessage(handler);
 
     await (adapter as any).onDiscordMessage(
-      makeDiscordIncomingMessage(channelId, interactive.channel, {
+      makeDiscordIncomingMessage(channelId, threadChannel, {
         id: 'guild-addressing-1',
         guildId: 'guild-1',
         content: '<@other-companion> hello there',
         mentionedUsers: [{ id: 'other-companion', displayName: 'Other Companion' }],
         replyToMessageId: 'guild-parent-1',
+        replyToAuthor: { id: 'other-companion', displayName: 'Other Companion' },
+        authorId: 'operator-1',
+        authorDisplayName: 'Vega',
       }),
     );
 
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({
-      content: '<@other-companion> hello there',
+      authorId: 'operator-1',
+      authorName: 'Vega',
+      content: '[sanitized group body]',
       replyToMessageId: 'guild-parent-1',
       routing: expect.objectContaining({
         responseMode: 'observe',
         addressing: {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          source: 'discord',
+          author: { authorId: 'operator-1', authorName: 'Vega' },
+          observer: { authorId: 'bot-1', authorName: 'Test Companion' },
           mentionedTargets: [{
             authorId: 'other-companion',
             authorName: 'Other Companion',
           }],
+          replyTarget: {
+            messageId: 'guild-parent-1',
+            author: { authorId: 'other-companion', authorName: 'Other Companion' },
+          },
+          channel: {
+            scope: 'group',
+            channelId: 'guild-addressing-room',
+            threadId: 'guild-addressing-thread',
+          },
+          resolvedAddressee: {
+            kind: 'participants',
+            participants: [{
+              authorId: 'other-companion',
+              authorName: 'Other Companion',
+              evidence: ['mention', 'reply'],
+            }],
+          },
         },
       }),
     }));
@@ -1729,7 +1779,11 @@ describe('DiscordAdapter DM routing', () => {
     await adapter.init();
 
     const client = discordMock.createdClients[0];
-    client.user = { id: 'bot-runtime' };
+    client.user = {
+      id: 'bot-runtime',
+      username: 'Runtime Companion',
+      displayName: 'Runtime Companion',
+    };
 
     const channelId = 'guild-channel-runtime-bot';
     const interactive = makeInteractiveTextChannel();
@@ -2105,6 +2159,75 @@ describe('DiscordAdapter DM routing', () => {
     await vi.waitFor(() => {
       expect(interactive.sent).toEqual(['reply-dm-1', 'reply-dm-3']);
     });
+  });
+
+  it('keeps queued same-author guild turns separate when their typed addressees differ', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-addressing-queue';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    let releaseFirst: (() => void) | null = null;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      if (message.id === 'guild-address-1') await firstTurn;
+      return {
+        content: `reply-${message.id}`,
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const addressedMessage = (
+      id: string,
+      content: string,
+      other: { id: string; displayName: string },
+    ) => makeDiscordIncomingMessage(channelId, interactive.channel, {
+      id,
+      content,
+      guildId: 'guild-1',
+      mentionedUsers: [
+        { id: 'bot-1', displayName: 'Test Companion' },
+        other,
+      ],
+    });
+
+    const firstDispatch = (adapter as any).onDiscordMessage(addressedMessage(
+      'guild-address-1',
+      '<@bot-1> <@other-1> first',
+      { id: 'other-1', displayName: 'Other One' },
+    ));
+    await Promise.resolve();
+    await (adapter as any).onDiscordMessage(addressedMessage(
+      'guild-address-2',
+      '<@bot-1> <@other-2> second',
+      { id: 'other-2', displayName: 'Other Two' },
+    ));
+    await (adapter as any).onDiscordMessage(addressedMessage(
+      'guild-address-3',
+      '<@bot-1> <@other-3> third',
+      { id: 'other-3', displayName: 'Other Three' },
+    ));
+
+    releaseFirst?.();
+    await firstDispatch;
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(3));
+    expect(handler.mock.calls.map(call => call[0].id)).toEqual([
+      'guild-address-1',
+      'guild-address-2',
+      'guild-address-3',
+    ]);
+    expect(handler.mock.calls.map(call => call[0].content)).toEqual([
+      '<@other-1> first',
+      '<@other-2> second',
+      '<@other-3> third',
+    ]);
   });
 
   it('never merges queued messages from different authors into one attributed turn', async () => {
@@ -2887,7 +3010,11 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
     });
     await adapter.init();
-    (adapter as any).client.user = { id: 'bot-a' };
+    (adapter as any).client.user = {
+      id: 'bot-a',
+      username: 'Companion A',
+      displayName: 'Companion A',
+    };
 
     const channelId = 'guild-shared-room';
     const interactive = makeInteractiveTextChannel();
@@ -2993,7 +3120,11 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
     });
     await adapter.init();
-    (adapter as any).client.user = { id: 'bot-a' };
+    (adapter as any).client.user = {
+      id: 'bot-a',
+      username: 'Companion A',
+      displayName: 'Companion A',
+    };
 
     const channelId = 'guild-lifecycle-room';
     const interactive = makeInteractiveTextChannel();
@@ -3059,7 +3190,11 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
     });
     await adapter.init();
-    (adapter as any).client.user = { id: 'bot-a' };
+    (adapter as any).client.user = {
+      id: 'bot-a',
+      username: 'Companion A',
+      displayName: 'Companion A',
+    };
 
     const channelId = 'guild-owner-room';
     const interactive = makeInteractiveTextChannel();
@@ -3110,7 +3245,11 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
     }> = [];
     const { adapter } = makeAccountAdapter({ siblings: () => siblingIdentities });
     await adapter.init();
-    (adapter as any).client.user = { id: 'bot-a' };
+    (adapter as any).client.user = {
+      id: 'bot-a',
+      username: 'Companion A',
+      displayName: 'Companion A',
+    };
 
     const channelId = 'guild-late-sibling';
     const interactive = makeInteractiveTextChannel();

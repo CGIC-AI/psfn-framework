@@ -201,6 +201,10 @@ general improvements. The implementer verifies and fixes accepted blockers once.
 Do not schedule a closure reviewer; rerun the focused regression that proves the
 fix.
 
+When the operator selects the Pi review lane, new reviews use the exact model
+selector `zai-coding-cn/glm-5.2`. Do not redo historical or already in-flight
+reviews solely to update that selector.
+
 A second model reviewer is exceptional. It requires either an explicit operator
 request or one concrete high-impact claim that remains materially ambiguous after
 the first review and local reproduction. Never use two reviewers merely because

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -54,7 +55,7 @@ function makeSessionToolForNewAction(
 ): ReturnType<typeof createSessionTool> {
   return createSessionTool({
     manager: {} as SessionManager,
-    llmProvider: { complete: vi.fn() } as any,
+    llmProvider: fromPartial({ complete: vi.fn() }),
     sessionsDir: join(dataDir, 'sessions'),
     dataDir,
     ...overrides,
@@ -201,7 +202,7 @@ describe('session tool list/resume actions', () => {
   function makeTool(overrides: Partial<UnifiedSessionToolOptions> = {}): ReturnType<typeof createSessionTool> {
     return createSessionTool({
       manager,
-      llmProvider: { complete: vi.fn() } as any,
+      llmProvider: fromPartial({ complete: vi.fn() }),
       sessionsDir: join(dir, 'sessions'),
       dataDir: dir,
       ...overrides,
@@ -483,7 +484,7 @@ class InMemoryTranscriptSearch {
 
     const tool = createSessionTool({
       manager,
-      llmProvider: {
+      llmProvider: fromPartial({
         complete: vi.fn(async () => ({
           content: 'unused',
           toolCalls: [],
@@ -492,7 +493,7 @@ class InMemoryTranscriptSearch {
           outputTokens: 1,
           stopReason: 'stop',
         })),
-      } as any,
+      }),
       sessionsDir: join(dir, 'sessions'),
       dataDir: dir,
       now: () => 9_999,
@@ -553,7 +554,7 @@ class InMemoryTranscriptSearch {
     manager.setActiveContextSession('api:owner-session');
     const tool = createSessionTool({
       manager,
-      llmProvider: { complete: vi.fn() } as any,
+      llmProvider: fromPartial({ complete: vi.fn() }),
       sessionsDir: join(dir, 'sessions'),
       dataDir: dir,
       now: () => 10_000,
@@ -593,7 +594,7 @@ class InMemoryTranscriptSearch {
 
     const tool = createSessionTool({
       manager,
-      llmProvider: {
+      llmProvider: fromPartial({
         complete: vi.fn(async () => ({
           content: 'unused',
           toolCalls: [],
@@ -602,7 +603,7 @@ class InMemoryTranscriptSearch {
           outputTokens: 1,
           stopReason: 'stop',
         })),
-      } as any,
+      }),
       sessionsDir: join(dir, 'sessions'),
       dataDir: dir,
       now: () => Date.parse('2026-04-01T12:00:00.000Z'),
@@ -683,7 +684,7 @@ class InMemoryTranscriptSearch {
       }],
       truncated: false,
     }));
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Scoped Orion summary.',
         toolCalls: [],
@@ -692,7 +693,7 @@ class InMemoryTranscriptSearch {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = createSessionTool({
       manager,
       llmProvider,
@@ -749,7 +750,7 @@ class InMemoryTranscriptSearch {
   });
 
   it('dispatches focus lifecycle actions through the unified tool', async () => {
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Focus Summary\n- Captured actionable findings from diagnostics.\nOpen questions: none',
         toolCalls: [],
@@ -758,7 +759,7 @@ class InMemoryTranscriptSearch {
         outputTokens: 30,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = createSessionTool({
       manager,
       llmProvider,

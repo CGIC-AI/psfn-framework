@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import { EventBus } from '../../shared/event-bus.js';
 import { executeToolCallsWithScheduler } from '../agent/tool-call-scheduler.js';
@@ -106,9 +107,9 @@ function createTool(options: Partial<Parameters<typeof createScheduleTool>[0]> =
     sender: {
       send: vi.fn(async () => undefined),
     },
-    reflectionPolicyStore: {
+    reflectionPolicyStore: fromPartial({
       load: vi.fn(() => ({ templates: [] })),
-    } as any,
+    }),
     syncReflectionTasks: vi.fn(),
     runTemplate: vi.fn(),
     heartbeatChannelId: 'discord:heartbeat',
@@ -121,10 +122,10 @@ function createTool(options: Partial<Parameters<typeof createScheduleTool>[0]> =
 describe('schedule tool', () => {
   it('uses the canonical schedule description', () => {
     const tool = createScheduleTool({
-      scheduler: {} as any,
-      agentLoop: {} as any,
-      sender: {} as any,
-      reflectionPolicyStore: {} as any,
+      scheduler: fromPartial({}),
+      agentLoop: fromPartial({}),
+      sender: fromPartial({}),
+      reflectionPolicyStore: fromPartial({}),
       syncReflectionTasks: vi.fn(),
       runTemplate: vi.fn(),
     });
@@ -226,7 +227,7 @@ describe('schedule tool', () => {
     ['channel_type', 'channel_type'],
   ])('requires create_reminder field %s before persistence', async (field, expectedError) => {
     const create = vi.fn();
-    const { tool } = createTool({ careReminderStore: { create } as any });
+    const { tool } = createTool({ careReminderStore: fromPartial({ create }) });
     const args: Record<string, unknown> = {
       action: 'create_reminder',
       title: 'Check in',

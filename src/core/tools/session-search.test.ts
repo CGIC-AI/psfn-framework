@@ -6,6 +6,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { createSessionTool } from './session.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -137,7 +138,7 @@ describe('session search tools', () => {
       channelVisibility: 'private',
     });
 
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Model summary should not be used.',
         toolCalls: [],
@@ -146,7 +147,7 @@ describe('session search tools', () => {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
@@ -191,7 +192,7 @@ describe('session search tools', () => {
       channelVisibility: 'public',
     });
 
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Model summary should not be used.',
         toolCalls: [],
@@ -200,7 +201,7 @@ describe('session search tools', () => {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
@@ -243,7 +244,7 @@ describe('session search tools', () => {
       channelVisibility: 'private',
     });
 
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Scoped Pegasus summary.',
         toolCalls: [],
@@ -252,7 +253,7 @@ describe('session search tools', () => {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
@@ -297,7 +298,7 @@ describe('session search tools', () => {
     const completionStarted = new Promise<void>((resolve) => {
       markCompletionStarted = resolve;
     });
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async (
         _context: unknown,
         _purpose: unknown,
@@ -315,7 +316,7 @@ describe('session search tools', () => {
           options?.signal?.addEventListener('abort', rejectAborted, { once: true });
         });
       }),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
     const controller = new AbortController();
     const budgetError = new Error('parent turn continuation budget exhausted');
@@ -348,9 +349,9 @@ describe('session search tools', () => {
   });
 
   it('session_search requires a non-empty query through the canonical surface', async () => {
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
@@ -380,7 +381,7 @@ describe('session search tools', () => {
     });
     manager.recordUserMessage(sourceChannelId, 'Route audit needle after reset.', 'vega-id', 'Vega', false);
 
-    const llmProvider = {
+    const llmProvider = fromPartial({
       complete: vi.fn(async () => ({
         content: 'Route audit summary.',
         toolCalls: [],
@@ -389,7 +390,7 @@ describe('session search tools', () => {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
     const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
@@ -477,7 +478,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
+    const tool = makeTool(fromPartial({ complete: vi.fn() }), runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -548,7 +549,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
+    const tool = makeTool(fromPartial({ complete: vi.fn() }), runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -601,7 +602,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
+    const tool = makeTool(fromPartial({ complete: vi.fn() }), runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -636,7 +637,7 @@ describe('session search tools', () => {
   });
 
   it('session_grep reports runner failures as tool errors', async () => {
-    const tool = makeTool({ complete: vi.fn() } as any, vi.fn(async () => {
+    const tool = makeTool(fromPartial({ complete: vi.fn() }), vi.fn(async () => {
       throw new Error('rg executable not found');
     }));
 

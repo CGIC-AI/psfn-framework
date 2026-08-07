@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { createAnalysisWorkbenchTool } from './tools.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../agent/tool-surface/descriptions.js';
 import { runRLMLoop } from './loop.js';
+import type { SessionManager } from '../../session/manager.js';
 
 vi.mock('./loop.js', () => ({
   runRLMLoop: vi.fn(),
@@ -16,7 +18,7 @@ describe('createAnalysisWorkbenchTool', () => {
 
   it('uses the canonical analysis workbench description', () => {
     const tool = createAnalysisWorkbenchTool({
-      llmProvider: {} as any,
+      llmProvider: fromPartial({}),
       embeddingService: null,
       memoryStore: null,
       sessionManager: null,
@@ -58,7 +60,7 @@ describe('createAnalysisWorkbenchTool', () => {
     });
 
     const tool = createAnalysisWorkbenchTool({
-      llmProvider: {} as any,
+      llmProvider: fromPartial({}),
       embeddingService: null,
       memoryStore: null,
       sessionManager: null,
@@ -107,14 +109,12 @@ describe('createAnalysisWorkbenchTool', () => {
       },
     });
 
-    const sessionManager = {
-      recordFocusEvidence: vi.fn(),
-    };
+    const sessionManager = fromPartial<SessionManager>({ recordFocusEvidence: vi.fn() });
     const tool = createAnalysisWorkbenchTool({
-      llmProvider: {} as any,
+      llmProvider: fromPartial({}),
       embeddingService: null,
       memoryStore: null,
-      sessionManager: sessionManager as any,
+      sessionManager,
       config: DEFAULT_REPL_CONFIG,
     });
 

@@ -25,6 +25,7 @@ export type CogSecCaseType =
   | 'policy_drift'
   | 'content_poisoning'
   | 'intake_firewall'
+  | 'persona_mutation_bypass'
   // Session L0 HMAC-chain verification failure (bead g59z). Operator-only: a
   // broken chain means stored history was altered or corrupted and needs human
   // investigation. Excluded from agent-visible notices (see safe-log.ts) so the
@@ -219,6 +220,7 @@ const CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'policy_drift',
   'content_poisoning',
   'intake_firewall',
+  'persona_mutation_bypass',
   'session_integrity',
   'unknown',
 ]);
@@ -754,6 +756,35 @@ export class CogSecEventStore {
       if (Object.prototype.hasOwnProperty.call(this.state.events, event.caseId)) {
         throw new Error(`CogSec event already exists: ${event.caseId}`);
       }
+      this.state = {
+        version: COGSEC_EVENT_STORE_VERSION,
+        updatedAt: event.updatedAt,
+        events: {
+          ...this.state.events,
+          [event.caseId]: event,
+        },
+      };
+      return cloneEvent(event);
+    });
+  }
+
+  /**
+   * Atomically create one deterministic case or update its correlated
+   * recurrence. The callback runs while the cross-process store lock is held,
+   * so simultaneous gateway retries cannot fork cases or lose occurrence
+   * counts.
+   */
+  upsertEvent(
+    input: CogSecCreateEventInput & { caseId: string },
+    updateExisting: (existing: CogSecEvent) => CogSecUpdateEventInput,
+  ): CogSecEvent {
+    const caseId = parseCaseId(input.caseId, 'caseId');
+    return this.withWriteLock(() => {
+      const existing = this.state.events[caseId];
+      if (Object.prototype.hasOwnProperty.call(this.state.events, caseId)) {
+        return this.updateLoadedEvent(caseId, updateExisting(cloneEvent(existing)));
+      }
+      const event = normalizeCreateInput(input, this.now());
       this.state = {
         version: COGSEC_EVENT_STORE_VERSION,
         updatedAt: event.updatedAt,

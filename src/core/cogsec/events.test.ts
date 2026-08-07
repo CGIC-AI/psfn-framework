@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CogSecEventStore } from './events.js';
+import { CogSecEventStore, type CogSecEvent } from './events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 
 const TEST_HASH = `sha256:${'a'.repeat(64)}`;
@@ -53,6 +53,37 @@ describe('CogSecEventStore', () => {
       'cogsec_20260701T000001Z_second',
       'cogsec_20260701T000000Z_first',
     ]);
+  });
+
+  it('atomically correlates deterministic recurrence across store instances', () => {
+    const root = makeTempRoot();
+    const path = resolveCogSecEventsPath(root);
+    const firstWriter = new CogSecEventStore(path);
+    const secondWriter = new CogSecEventStore(path);
+    const input = {
+      caseId: 'cogsec_persona_mutation_0123456789abcdef01234567',
+      type: 'persona_mutation_bypass' as const,
+      severity: 'high' as const,
+      sourceChannelId: 'tool:fs.write',
+      actor: 'companion:companion-a',
+      affectedArtifacts: { persona_artifacts: { ids: ['character_card'], count: 1 } },
+      safeAgentSummary: 'Protected identity mutation was blocked and correlated.',
+    };
+    const increment = (existing: CogSecEvent) => ({
+      affectedArtifacts: {
+        persona_artifacts: {
+          ids: ['character_card'],
+          count: (existing.affectedArtifacts.persona_artifacts?.count ?? 0) + 1,
+        },
+      },
+    });
+
+    firstWriter.upsertEvent(input, increment);
+    secondWriter.upsertEvent(input, increment);
+
+    const events = new CogSecEventStore(path).listEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].affectedArtifacts.persona_artifacts?.count).toBe(2);
   });
 
   it('creates, persists, and reloads safe CogSec event metadata', () => {

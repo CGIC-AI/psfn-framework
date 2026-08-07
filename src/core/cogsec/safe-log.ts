@@ -6,6 +6,10 @@ import type {
   CogSecResultCounters,
 } from './events.js';
 import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
+import {
+  isPersonaOwnerPathClass,
+  type PersonaOwnerPathClass,
+} from '../../shared/contracts/persona-owner-paths.js';
 import { renderIntakeFirewallNotice } from './intake-firewall-notice-templates.js';
 import {
   escapeXmlAttributeWithApostrophe as escapeXmlAttribute,
@@ -50,6 +54,14 @@ export interface CogSecAgentVisibleEvent {
   createdAt: string;
   updatedAt: string;
   appliedAt?: string;
+  personaMutationAttempt?: CogSecPersonaMutationAttemptProjection;
+}
+
+export interface CogSecPersonaMutationAttemptProjection {
+  companionId: string;
+  tool: 'fs.write' | 'fs.edit' | 'shell.exec';
+  pathClass: PersonaOwnerPathClass;
+  occurrenceCount: number;
 }
 
 export interface CogSecOperatorVisibleEvent extends CogSecAgentVisibleEvent {
@@ -100,7 +112,38 @@ function toAffectedArtifactCounts(event: CogSecEvent): Partial<Record<CogSecArti
   return counts;
 }
 
+function toPersonaMutationAttemptProjection(
+  event: CogSecEvent,
+): CogSecPersonaMutationAttemptProjection | undefined {
+  if (event.type !== 'persona_mutation_bypass') return undefined;
+  const companionId = event.actor.startsWith('companion:')
+    ? event.actor.slice('companion:'.length)
+    : '';
+  const tool = event.sourceChannelId.startsWith('tool:')
+    ? event.sourceChannelId.slice('tool:'.length)
+    : '';
+  const impact = event.affectedArtifacts.persona_artifacts;
+  if (!impact) {
+    throw new Error(`Malformed persona mutation attempt event ${event.caseId}`);
+  }
+  const pathClass = impact.ids[0];
+  if (!companionId
+    || (tool !== 'fs.write' && tool !== 'fs.edit' && tool !== 'shell.exec')
+    || !isPersonaOwnerPathClass(pathClass)
+    || impact.ids.length !== 1
+    || impact.count < 1) {
+    throw new Error(`Malformed persona mutation attempt event ${event.caseId}`);
+  }
+  return {
+    companionId,
+    tool,
+    pathClass,
+    occurrenceCount: impact.count,
+  };
+}
+
 export function toAgentVisibleCogSecEvent(event: CogSecEvent): CogSecAgentVisibleEvent {
+  const personaMutationAttempt = toPersonaMutationAttemptProjection(event);
   return {
     caseId: event.caseId,
     type: event.type,
@@ -123,6 +166,7 @@ export function toAgentVisibleCogSecEvent(event: CogSecEvent): CogSecAgentVisibl
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
     ...(event.appliedAt ? { appliedAt: event.appliedAt } : {}),
+    ...(personaMutationAttempt ? { personaMutationAttempt } : {}),
   };
 }
 
@@ -237,6 +281,16 @@ export function formatCogSecNotice(event: CogSecAgentVisibleEvent): string {
   // exposed to the companion — only that something is held aside for their human.
   if (event.type === 'intake_firewall') {
     return renderIntakeFirewallNotice(resolveIntakeFirewallHeldItemCount(event));
+  }
+  if (event.type === 'persona_mutation_bypass') {
+    const attempt = event.personaMutationAttempt;
+    if (!attempt) throw new Error(`Persona mutation attempt ${event.caseId} lacks safe provenance`);
+    return [
+      `CogSec case ${event.caseId} recorded a blocked direct identity-owner mutation attempt.`,
+      `Tool: ${attempt.tool}. Protected path class: ${attempt.pathClass}.`,
+      `Correlated occurrence count: ${String(attempt.occurrenceCount)}.`,
+      'Use the governed identity tool for persona or prompt-layer changes.',
+    ].join(' ');
   }
   const cleanActions = formatActions(event.actions);
   const artifactCounts = formatArtifactCounts(event.affectedArtifactCounts);

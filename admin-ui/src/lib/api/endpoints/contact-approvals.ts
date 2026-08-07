@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from '$lib/api/client';
+import { apiPost } from '$lib/api/client';
 import {
   createQueuePageCache,
   isContactApprovalListData,
@@ -39,14 +39,6 @@ const contactApprovalCache = createQueuePageCache({
   path: '/api/admin/contact-approvals',
   validate: isContactApprovalListData,
 });
-
-/**
- * Fetch pending contact approvals (contact-tracking policy gate, E3.4).
- * Endpoint: GET /api/admin/contact-approvals
- */
-export function getContactApprovals(): Promise<ContactApprovalListData> {
-  return apiGet<ContactApprovalListData>('/api/admin/contact-approvals');
-}
 
 export function loadContactApprovalsLocalFirst(
   onData: (data: ContactApprovalListData, source: LocalFirstDataSource) => void,

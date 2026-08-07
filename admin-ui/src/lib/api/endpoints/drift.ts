@@ -14,10 +14,6 @@ export interface DriftReviewListData {
   openCount: number;
 }
 
-export interface DriftReviewCardData {
-  card: DriftReviewCard;
-}
-
 export interface DriftReviewResolveResult {
   ok: boolean;
   card: DriftReviewCard;
@@ -28,12 +24,6 @@ export interface DriftReviewResolveResult {
 /** All drift review cards (open first, newest first). */
 export function getDriftReviews(): Promise<DriftReviewListData> {
   return apiGet<DriftReviewListData>('/api/admin/intake/drift-reviews');
-}
-
-export function getDriftReviewCard(id: string): Promise<DriftReviewCardData> {
-  return apiGet<DriftReviewCardData>(
-    `/api/admin/intake/drift-reviews/${encodeURIComponent(id)}`,
-  );
 }
 
 /** Records the operator decision on an open card (audited server-side). */

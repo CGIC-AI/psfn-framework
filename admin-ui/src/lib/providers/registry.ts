@@ -138,10 +138,6 @@ export function providerIsEnabled(entry: { enabled?: boolean }): boolean {
   return entry.enabled !== false;
 }
 
-export function providerRequiresApiBaseUrl(type: CanonicalProviderType): boolean {
-  return PROVIDER_TYPES.includes(type);
-}
-
 export function providerEnvNameIsValid(value: string): boolean {
   return ENV_NAME_PATTERN.test(value.trim());
 }

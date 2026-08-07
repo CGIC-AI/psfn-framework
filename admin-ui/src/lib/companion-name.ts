@@ -4,7 +4,6 @@ import type {
 } from '$lib/types';
 
 export const DEFAULT_COMPANION_NAME = 'Companion';
-export const GENERIC_COMPANION_NAME = 'companion';
 
 export interface AdminModelRoomBootstrapWireResponse extends Omit<AdminModelRoomBootstrapResponse, 'companion'> {
   companion?: AdminModelRoomBootstrapResponse['companion'];

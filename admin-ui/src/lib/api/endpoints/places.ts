@@ -23,11 +23,6 @@ export function getPlaces(): Promise<AdminPlacesData> {
   return apiGet<AdminPlacesData>('/api/admin/places');
 }
 
-/** GET /api/admin/places/map — Mermaid (flowchart TB) world map source. */
-export function getPlacesMap(): Promise<{ mermaid: string }> {
-  return apiGet<{ mermaid: string }>('/api/admin/places/map');
-}
-
 /**
  * PATCH /api/admin/places/satellites/:satelliteId/binding — the only path that
  * changes a satellite's static placeId. Pass `null` to unbind. Fails closed on

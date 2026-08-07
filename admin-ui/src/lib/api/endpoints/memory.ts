@@ -91,10 +91,6 @@ export async function revealMemoryEscalated(
   );
 }
 
-export function getMemoryElevation(): Promise<AdminMemoryElevationStatus> {
-  return apiGet<AdminMemoryElevationStatus>('/api/admin/memory/elevation');
-}
-
 // Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged server-side.
 export function elevateMemoryBodyAccess(): Promise<AdminMemoryElevationStatus> {
   return apiPost<AdminMemoryElevationStatus>('/api/admin/memory/elevation', {});

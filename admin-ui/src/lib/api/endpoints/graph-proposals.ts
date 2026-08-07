@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from '$lib/api/client';
+import { apiPost } from '$lib/api/client';
 import {
   createQueuePageCache,
   isGraphProposalListData,
@@ -49,14 +49,6 @@ const graphProposalCache = createQueuePageCache({
   path: '/api/admin/graph-proposals',
   validate: isGraphProposalListData,
 });
-
-/**
- * Fetch social-graph edge proposals emitted by the background graph-builder
- * worker (E4.2). Endpoint: GET /api/admin/graph-proposals
- */
-export function getGraphProposals(): Promise<GraphProposalListData> {
-  return apiGet<GraphProposalListData>('/api/admin/graph-proposals');
-}
 
 export function loadGraphProposalsLocalFirst(
   onData: (data: GraphProposalListData, source: LocalFirstDataSource) => void,

@@ -11,6 +11,7 @@ import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../shared/process-termination-policy.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { LifecycleRestartSafeguard } from '../../system/capabilities/safeguards.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -218,7 +219,7 @@ export async function runRepoLifecycleBuildCommand(
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      setTimeout(() => child.kill('SIGKILL'), PROCESS_TERMINATION_GRACE_TIMEOUT_MS).unref();
     }, timeoutMs);
 
     child.stdout.on('data', appendOutput);

@@ -7,6 +7,7 @@ import type {
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../../shared/process-termination-policy.js';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 12_000;
 const MAX_COMMAND_OUTPUT_CHARS = 250_000;
@@ -149,7 +150,7 @@ function createSpawnCommandRunner(): CommandRunner {
         const timeoutHandle = setTimeout(() => {
           timedOut = true;
           child.kill('SIGTERM');
-          setTimeout(() => child.kill('SIGKILL'), 250).unref();
+          setTimeout(() => child.kill('SIGKILL'), PROCESS_TERMINATION_GRACE_TIMEOUT_MS).unref();
         }, DEFAULT_COMMAND_TIMEOUT_MS);
 
         child.stdout.on('data', (chunk) => append('stdout', chunk));

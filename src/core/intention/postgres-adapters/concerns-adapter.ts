@@ -4,6 +4,7 @@ import { queryOne, queryRows } from './connection.js';
 import type { ConcernStorePortBackend } from '../concern-store-port.js';
 import {
   ACTIVE_CONCERN_STATUSES,
+  DEFAULT_CONCERN_TTL_MS_BY_PRIORITY,
   MAX_ACTIVE_CONCERNS,
   MAX_ACTIVE_CONCERN_LIFETIME_MS,
   chooseEarlierOptionalConcernTimestamp,
@@ -182,7 +183,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const createdAtMs = Date.parse(createdAt);
     const expiresAt = input.expiresAt
       ? normalizeIsoTimestamp(input.expiresAt, 'expiresAt')
-      : new Date(createdAtMs + this.resolveConcernTtlMs(priority)).toISOString();
+      : new Date(createdAtMs + DEFAULT_CONCERN_TTL_MS_BY_PRIORITY[priority]).toISOString();
     const boundedExpiresAt = clampConcernExpiresAt(expiresAt, createdAt);
     if (Date.parse(boundedExpiresAt) <= createdAtMs) {
       throw new Error('Active concern expiresAt must be after createdAt');
@@ -875,17 +876,6 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       throw error;
     } finally {
       client.release();
-    }
-  }
-
-  private resolveConcernTtlMs(priority: 'high' | 'medium' | 'low'): number {
-    switch (priority) {
-      case 'high':
-        return 48 * 60 * 60 * 1000;
-      case 'medium':
-        return 24 * 60 * 60 * 1000;
-      case 'low':
-        return 8 * 60 * 60 * 1000;
     }
   }
 }

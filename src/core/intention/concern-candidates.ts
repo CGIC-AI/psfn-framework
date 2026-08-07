@@ -80,6 +80,8 @@ function buildConcernReviewTurnGate(reviewTurnInterval: number): DeterministicGa
 }
 const CANDIDATE_SIGNAL_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind(?:er)?|ask\b.*\blater|tomorrow|next\s+week|due|appointment|deadline|worried|worry|concerned|hasn['’]?t|didn['’]?t)\b/i;
 const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+on|remind|ask\b.*\blater)\b/i;
+const TOMORROW_FOLLOW_UP_DELAY_MS = 24 * 60 * 60 * 1000;
+const NEXT_WEEK_FOLLOW_UP_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type ConcernCandidateReviewAction = 'create' | 'merge' | 'defer' | 'reject' | 'route';
 export type ConcernCandidateRouteTarget = ConcernRouteTarget;
@@ -1137,10 +1139,10 @@ function deriveDueAtHint(text: string, createdAt: string): string | undefined {
   const baseMs = Date.parse(createdAt);
   if (!Number.isFinite(baseMs)) return undefined;
   if (/\btomorrow\b/i.test(text)) {
-    return new Date(baseMs + 24 * 60 * 60 * 1000).toISOString();
+    return new Date(baseMs + TOMORROW_FOLLOW_UP_DELAY_MS).toISOString();
   }
   if (/\bnext\s+week\b/i.test(text)) {
-    return new Date(baseMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+    return new Date(baseMs + NEXT_WEEK_FOLLOW_UP_DELAY_MS).toISOString();
   }
   return undefined;
 }

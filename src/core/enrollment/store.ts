@@ -7,6 +7,7 @@ import {
   withPostgresClient,
 } from '../../persistence/postgres.js';
 import { POSTGRES_ENROLLMENT_MIGRATIONS } from '../../persistence/postgres/migrations.js';
+import { normalizeAuditActor } from '../../shared/audit-actor.js';
 import type { HubIdentityEnrollmentStorePort } from './enrollment-store-port.js';
 import type {
   HubIdentityEnrollment,
@@ -49,12 +50,6 @@ interface AuditRow {
   timestamp: string;
 }
 
-function normalizeActor(actor: string | undefined): string {
-  const trimmed = actor?.trim();
-  if (!trimmed) return 'system:unknown';
-  return trimmed.slice(0, 120);
-}
-
 function toEnrollment(row: EnrollmentRow): HubIdentityEnrollment {
   return {
     hubIdentityId: row.hub_identity_id,
@@ -94,7 +89,7 @@ export class PostgresHubIdentityEnrollmentStore implements HubIdentityEnrollment
     if (!contactId) {
       throw new Error('canonicalContactId is required');
     }
-    const actor = normalizeActor(input.actor);
+    const actor = normalizeAuditActor(input.actor);
     const satelliteId = input.satelliteId?.trim() || null;
     const endpointId = input.endpointId?.trim() || null;
     const now = new Date().toISOString();
@@ -152,7 +147,7 @@ export class PostgresHubIdentityEnrollmentStore implements HubIdentityEnrollment
     if (!handle) {
       throw new Error('hubIdentityId is required and must be a non-empty opaque handle');
     }
-    const normalizedActor = normalizeActor(actor);
+    const normalizedActor = normalizeAuditActor(actor);
 
     return withPostgresClient(this.pool, async (client) => {
       const existing = (await client.query<EnrollmentRow>(

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../shared/process-termination-policy.js';
 import { resolveRuntimeCommandInvocation } from './runtime-mode.js';
 
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
@@ -66,7 +67,7 @@ export async function runConfiguredLifecycleCommand(
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      setTimeout(() => child.kill('SIGKILL'), PROCESS_TERMINATION_GRACE_TIMEOUT_MS).unref();
     }, timeoutMs);
 
     child.stdout.on('data', appendOutput);

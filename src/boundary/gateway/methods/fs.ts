@@ -3,10 +3,15 @@ import { open, realpath, stat, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative } from 'node:path';
 import type {
   FsEditParams,
+  FsEditResult,
   FsListParams,
+  FsListResult,
   FsReadParams,
+  FsReadResult,
   FsSearchParams,
+  FsSearchResult,
   FsWriteParams,
+  FsWriteResult,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths } from '../policy.js';
@@ -18,7 +23,9 @@ import {
   resolveWorkspaceRoot,
 } from '../filesystem-paths.js';
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineGatedMethod } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { registerGatedDescriptors } from './register.js';
 import {
   buildWorkingFolderSearchGlob,
@@ -390,9 +397,10 @@ async function replaceHandleContent(handle: FileHandle, content: string): Promis
   }
 }
 
-const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const fsDescriptors = [
+  defineGatedMethod<FsReadParams, FsReadResult>({
     name: 'fs.read',
+    decode: gatewayMethodParamDecoders['fs.read'],
     handler: async (params: FsReadParams, runtime) => {
       const resolved = await resolveReadPath(params.path, runtime);
       if (runtime.personalWorkspaceIsolation && resolved.scope === 'codebase-fallback') {
@@ -466,9 +474,10 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'read',
     approvalScope: (p: FsReadParams) => p.path,
-  },
-  {
+  }),
+  defineGatedMethod<FsWriteParams, FsWriteResult>({
     name: 'fs.write',
+    decode: gatewayMethodParamDecoders['fs.write'],
     prePolicyGuard: (params: FsWriteParams, runtime) => {
       const guard = runtime.personaMutationAttemptGuard;
       if (!guard) return;
@@ -521,9 +530,10 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (p: FsWriteParams) => ({ path: p.path }),
     approvalAction: 'write',
     approvalScope: (p: FsWriteParams) => p.path,
-  },
-  {
+  }),
+  defineGatedMethod<FsListParams, FsListResult>({
     name: 'fs.list',
+    decode: gatewayMethodParamDecoders['fs.list'],
     handler: async (params: FsListParams, runtime) => {
       const limits = normalizeListLimits(params.maxEntries, params.maxScannedEntries);
 
@@ -544,9 +554,10 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'read',
     approvalScope: (p: FsListParams) => `${p.path ?? '.'}:${p.glob ?? '*'}`,
-  },
-  {
+  }),
+  defineGatedMethod<FsSearchParams, FsSearchResult>({
     name: 'fs.search',
+    decode: gatewayMethodParamDecoders['fs.search'],
     handler: async (params: FsSearchParams, runtime) => {
       const searchRoot = resolveReadRoot(runtime);
       return await searchWorkspaceFiles(searchRoot, {
@@ -591,9 +602,10 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'read',
     approvalScope: (p: FsSearchParams) => `${summarizeSearchGlob(p.glob)}:${p.query}`,
-  },
-  {
+  }),
+  defineGatedMethod<FsEditParams, FsEditResult>({
     name: 'fs.edit',
+    decode: gatewayMethodParamDecoders['fs.edit'],
     prePolicyGuard: (params: FsEditParams, runtime) => {
       const guard = runtime.personaMutationAttemptGuard;
       if (!guard) return;
@@ -671,7 +683,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (p: FsEditParams) => ({ path: p.path, replaceAll: p.replaceAll === true }),
     approvalAction: 'write',
     approvalScope: (p: FsEditParams) => p.path,
-  },
+  }),
 ];
 
 export function registerFilesystemMethods(runtime: GatewayMethodRuntime): void {

@@ -14,7 +14,7 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { GatewayErrors } from '../protocol.js';
 import type { VisionIntakeImageScreenResult } from '../intake/vision-screener.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod, type GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 
@@ -96,13 +96,11 @@ function validateParams(params: unknown): IntakeScreenImageParams {
   };
 }
 
-const INTAKE_IMAGE_METHODS: ReadonlyArray<
-  AuditedMethodDescriptor<unknown, VisionIntakeImageScreenResult>
-> = [
-  {
+const INTAKE_IMAGE_METHODS = [
+  defineAuditedMethod<IntakeScreenImageParams, VisionIntakeImageScreenResult>({
     name: 'intake.screen_image',
-    handler: async (rawParams: unknown, runtime: GatewayMethodRuntime) => {
-      const params = validateParams(rawParams);
+    decode: validateParams,
+    handler: async (params, runtime: GatewayMethodRuntime) => {
       if (!runtime.visionIntake) {
         return {
           kind: 'skipped',
@@ -140,17 +138,12 @@ const INTAKE_IMAGE_METHODS: ReadonlyArray<
       });
       return retainedImage ? { ...result, retainedImage } : result;
     },
-    summary: (rawParams: unknown) => {
-      const record = (typeof rawParams === 'object' && rawParams !== null)
-        ? rawParams as Record<string, unknown>
-        : {};
-      return {
-        originRef: typeof record.originRef === 'string' ? record.originRef.slice(0, 512) : '(missing)',
-        hasUrl: typeof record.imageUrl === 'string' && record.imageUrl.trim().length > 0,
-        inlineChars: typeof record.imageBase64 === 'string' ? record.imageBase64.length : 0,
-      };
-    },
-  },
+    summary: (params: IntakeScreenImageParams) => ({
+      originRef: params.originRef.slice(0, 512),
+      hasUrl: params.imageUrl !== undefined && params.imageUrl.trim().length > 0,
+      inlineChars: params.imageBase64 !== undefined ? params.imageBase64.length : 0,
+    }),
+  }),
 ];
 
 export function registerIntakeImageMethods(runtime: GatewayMethodRuntime): void {

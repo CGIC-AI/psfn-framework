@@ -10,8 +10,10 @@ import type {
   HomeAssistantState,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineGatedMethod } from './types.js';
 import { registerGatedDescriptors } from './register.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -186,9 +188,10 @@ function parseStates(payload: unknown): HomeAssistantState[] {
   });
 }
 
-const descriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const descriptors = [
+  defineGatedMethod<HomeAssistantGetStatesParams, HomeAssistantGetStatesResult>({
     name: 'home_assistant.get_states',
+    decode: gatewayMethodParamDecoders['home_assistant.get_states'],
     handler: async (params: HomeAssistantGetStatesParams, runtime): Promise<HomeAssistantGetStatesResult> => {
       const entityIds = params.entityId === undefined ? [] : [parseEntityId(params.entityId, 'entityId')];
       const payload = await requestHub(runtime, '/internal/v1/home-assistant/states', 'POST', { entityIds });
@@ -198,9 +201,10 @@ const descriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (params: HomeAssistantGetStatesParams) => ({ action: 'get_states', entityId: params.entityId ?? null }),
     approvalAction: 'home_assistant.read',
     approvalScope: (params: HomeAssistantGetStatesParams) => params.entityId ?? 'all_states',
-  },
-  {
+  }),
+  defineGatedMethod<HomeAssistantCallServiceParams, HomeAssistantCallServiceResult>({
     name: 'home_assistant.call_service',
+    decode: gatewayMethodParamDecoders['home_assistant.call_service'],
     handler: async (params: HomeAssistantCallServiceParams, runtime): Promise<HomeAssistantCallServiceResult> => {
       const domain = parseToken(params.domain, 'domain');
       const service = parseToken(params.service, 'service');
@@ -237,9 +241,10 @@ const descriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'home_assistant.control',
     approvalScope: (params: HomeAssistantCallServiceParams) => `${params.placeId}:${params.affordanceId}`,
-  },
-  {
+  }),
+  defineGatedMethod<HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult>({
     name: 'home_assistant.check_connection',
+    decode: gatewayMethodParamDecoders['home_assistant.check_connection'],
     handler: async (_params: HomeAssistantCheckConnectionParams, runtime): Promise<HomeAssistantCheckConnectionResult> => {
       const payload = await requestHub(runtime, '/internal/v1/home-assistant/health', 'GET');
       if (!isRecord(payload) || payload.connected !== true || payload.status !== 'ready') {
@@ -250,7 +255,7 @@ const descriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: () => ({ action: 'check_connection' }),
     approvalAction: 'home_assistant.read',
     approvalScope: () => 'connection',
-  },
+  }),
 ];
 
 export function registerHomeAssistantMethods(runtime: GatewayMethodRuntime): void {

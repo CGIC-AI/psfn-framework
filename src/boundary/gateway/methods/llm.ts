@@ -15,7 +15,16 @@ import type {
   LLMFirstOutputNotification,
   GatewayCorrelationParams,
 } from '../protocol.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import {
+  defineAuditedMethod,
+  summarizeDecodedParams,
+  type AuditedMethodDescriptor,
+  type GatewayMethodParams,
+  type GatewayMethodResult,
+  type GatewayMethodRuntime,
+  type GatewayParamsDecoder,
+} from './types.js';
+import type { RpcParamsDecoder } from '../rpc-param-decoder.js';
 import type {
   ContextMessage,
   CorrelationMetadata,
@@ -24,6 +33,7 @@ import type {
   ObservabilityCallType,
 } from '../../../shared/contracts/runtime.js';
 import { registerAuditedDescriptors } from './register.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
@@ -59,12 +69,37 @@ import {
   UnknownModelSelectionSlotError,
 } from '../../../primitives/llm/model-hint-routing.js';
 import { VisionPurposeResolvedNonVisionModelError } from '../../../primitives/llm/routing.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import {
   SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
 
 const log = createComponentLogger('GatewayLLM');
+
+/**
+ * Companion-side context assembly may attach transient metadata
+ * (messageClass, provider observability, timestamp) to persisted messages
+ * before they round-trip through llm.chat/llm.complete. The catalog decoder
+ * validates the wire contract strictly, so strip those decorations before
+ * validation and hand the canonical shape to the handler.
+ */
+function normalizeLlmMessages<P extends { messages: Array<{ role: unknown; content: unknown }> }>(
+  params: unknown,
+  decode: RpcParamsDecoder<P>,
+): P {
+  if (!isRecord(params) || !Array.isArray(params.messages)) {
+    return decode(params);
+  }
+  const messages = params.messages.map((message: unknown) => {
+    if (!isRecord(message)) return message;
+    const { role, content, provenance } = message;
+    const normalized: Record<string, unknown> = { role, content };
+    if (isRecord(provenance)) normalized.provenance = provenance;
+    return normalized;
+  });
+  return decode({ ...params, messages });
+}
 
 /**
  * Re-raise gateway-side model-call gate/budget outcomes as typed JSON-RPC
@@ -245,19 +280,36 @@ async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
   };
 }
 
-interface CancellableLlmMethodDescriptor<P extends { cancellationId?: string }, R> {
-  name: 'llm.chat' | 'llm.complete' | 'llm.embed';
+type CancellableLlmMethodName = 'llm.chat' | 'llm.complete' | 'llm.embed';
+
+interface CancellableLlmMethodDescriptor {
+  name: CancellableLlmMethodName;
+  decode: RpcParamsDecoder<unknown>;
   handler: (
-    params: P,
+    params: unknown,
     runtime: GatewayMethodRuntime,
     signal: AbortSignal | undefined,
-  ) => Promise<R>;
-  summary: (params: P) => Record<string, unknown>;
+  ) => Promise<unknown>;
+  summary: (params: unknown) => Record<string, unknown>;
 }
 
-const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unknown>> = [
-  {
+function defineCancellableLlmMethod<K extends CancellableLlmMethodName>(definition: {
+  name: K;
+  decode: GatewayParamsDecoder<GatewayMethodParams<K>>;
+  handler: (
+    params: GatewayMethodParams<K>,
+    runtime: GatewayMethodRuntime,
+    signal: AbortSignal | undefined,
+  ) => Promise<GatewayMethodResult<K>>;
+  summary: (params: GatewayMethodParams<K>) => Record<string, unknown>;
+}): CancellableLlmMethodDescriptor {
+  return definition as unknown as CancellableLlmMethodDescriptor;
+}
+
+const cancellableLlmDescriptors = [
+  defineCancellableLlmMethod({
     name: 'llm.chat',
+    decode: (params) => normalizeLlmMessages(params, gatewayMethodParamDecoders['llm.chat']),
     handler: async (params: LLMChatParams, runtime, signal) => {
       const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
@@ -385,9 +437,10 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         telemetryVisibility: p.telemetryVisibility,
       })),
     }),
-  },
-  {
+  }),
+  defineCancellableLlmMethod({
     name: 'llm.complete',
+    decode: (params) => normalizeLlmMessages(params, gatewayMethodParamDecoders['llm.complete']),
     handler: async (params: LLMCompleteParams, runtime, signal) => {
       const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
@@ -467,15 +520,16 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
         telemetryVisibility: p.telemetryVisibility,
       })),
     }),
-  },
-  {
+  }),
+  defineCancellableLlmMethod({
+    name: 'llm.embed',
+    decode: gatewayMethodParamDecoders['llm.embed'],
     // zn2iy: route llm.embed through the SAME governed cancellation registry as
     // llm.chat/llm.complete so an aborted or disconnected agent connection tears
     // down the upstream embedding provider instead of leaving a zombie that
     // finishes and records cost after the caller is gone. Connection close fires
     // the registry's abortAll (the dominant split-runtime protection, needing no
     // caller signal); an explicit caller abort additionally routes llm.cancel.
-    name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime, signal): Promise<{ embeddings: number[][] }> => {
       const startedAtMs = Date.now();
       const logicalCallId = `embedding:${randomUUID()}`;
@@ -526,11 +580,11 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
       return { embeddings: result.embeddings.map(e => Array.from(e)) };
     },
     summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
-  },
+  }),
 ];
 
-const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
-  {
+const llmDescriptors: AuditedMethodDescriptor[] = [
+  defineAuditedMethod({
     // oetdv: route llm.cancel through the same audited wrapper as its siblings
     // (audit-then-act, real durationMs, runtime-health tracking, durable audit
     // even under an audit-store outage) instead of the previous raw addMethod
@@ -539,19 +593,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     // killed, and invalid input throws a typed JSON-RPC error inside the
     // GatewayErrors block rather than a bare Error flattened to code 0.
     name: 'llm.cancel',
-    // Boundary input is untrusted: a malformed RPC frame can carry a non-object
-    // or a non-UUID cancellationId, so the handler validates at runtime rather
-    // than trusting the LLMCancelParams shape.
-    handler: async (params: unknown, runtime): Promise<LLMCancelResult> => {
-      if (typeof params !== 'object' || params === null) {
-        throw new JSONRPCErrorException(
-          'llm.cancel requires object params',
-          GatewayErrors.INVALID_LLM_CANCELLATION,
-        );
-      }
-      const { cancellationId } = params as LLMCancelParams;
+    decode: gatewayMethodParamDecoders['llm.cancel'],
+    handler: async (params: LLMCancelParams, runtime): Promise<LLMCancelResult> => {
       try {
-        return { cancelled: runtime.llmRequestCancellation.cancel(cancellationId) };
+        return { cancelled: runtime.llmRequestCancellation.cancel(params.cancellationId) };
       } catch (error) {
         throw new JSONRPCErrorException(
           error instanceof Error ? error.message : 'Invalid llm.cancel request',
@@ -559,24 +604,21 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         );
       }
     },
-    summary: (params: unknown) => {
-      const cancellationId = typeof params === 'object' && params !== null
-        ? (params as LLMCancelParams).cancellationId
-        : undefined;
-      return typeof cancellationId === 'string' ? { cancellationId } : {};
-    },
-  },
-  {
+    summary: (params: LLMCancelParams) => ({ cancellationId: params.cancellationId }),
+  }),
+  defineAuditedMethod({
     name: 'llm.discover_models',
+    decode: gatewayMethodParamDecoders['llm.discover_models'],
     handler: async (_params: LLMDiscoverModelsParams, runtime): Promise<LLMDiscoverModelsResult> => {
       const discovery = requireModelDiscovery(runtime);
       return {
         models: await discovery.getAvailableModels(),
       };
     },
-  },
-  {
+  }),
+  defineAuditedMethod({
     name: 'llm.invalidate_model_discovery',
+    decode: gatewayMethodParamDecoders['llm.invalidate_model_discovery'],
     handler: async (
       _params: LLMInvalidateModelDiscoveryParams,
       runtime,
@@ -585,22 +627,28 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       discovery.invalidateCache();
       return { success: true };
     },
-  },
+  }),
 ];
 
 export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
   for (const descriptor of cancellableLlmDescriptors) {
     runtime.target.addMethod(descriptor.name, (params: unknown) => {
-      const cancellationId = typeof params === 'object' && params !== null
-        ? (params as { cancellationId?: unknown }).cancellationId
-        : undefined;
+      let cancellationId: string | undefined;
+      try {
+        const decoded = descriptor.decode(params);
+        cancellationId = isRecord(decoded)
+          ? (decoded as { cancellationId?: string }).cancellationId
+          : undefined;
+      } catch {
+        cancellationId = undefined;
+      }
       return runtime.llmRequestCancellation.run(cancellationId, signal => {
         const auditedHandler = runtime.audited(
           descriptor.name,
-          (cleaned: any) => descriptor.handler(cleaned, runtime, signal),
-          descriptor.summary,
+          (raw: unknown) => descriptor.handler(descriptor.decode(raw), runtime, signal),
+          (raw: unknown) => summarizeDecodedParams(descriptor.decode, descriptor.summary, raw),
         );
-        return auditedHandler(params as any);
+        return auditedHandler(params);
       });
     });
   }

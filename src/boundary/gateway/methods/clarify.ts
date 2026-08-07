@@ -1,5 +1,6 @@
-import type { ClarifyDeliverParams, ClarifyDeliverResult } from '../protocol.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import type { ClarifyDeliverParams } from '../protocol.js';
+import { gatewayMethodParamDecoders } from './params.js';
+import { defineAuditedMethod, type GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 
 /**
@@ -10,9 +11,10 @@ import { registerAuditedDescriptors } from './register.js';
  * dock so a companion can only render on its own bot; Telegram uses the
  * single-account dock. Fails closed when the requested channel is not wired.
  */
-const clarifyDescriptors: Array<AuditedMethodDescriptor<ClarifyDeliverParams, ClarifyDeliverResult>> = [
-  {
+const clarifyDescriptors = [
+  defineAuditedMethod({
     name: 'clarify.deliver',
+    decode: gatewayMethodParamDecoders['clarify.deliver'],
     handler: async (params: ClarifyDeliverParams, runtime: GatewayMethodRuntime) => {
       const dock = params.channel === 'discord' ? runtime.discordAdapter : runtime.telegramDock;
       const deliver = dock?.outbound.deliverClarification;
@@ -26,7 +28,7 @@ const clarifyDescriptors: Array<AuditedMethodDescriptor<ClarifyDeliverParams, Cl
       target: p.target,
       clarificationId: p.clarification.id,
     }),
-  },
+  }),
 ];
 
 export function registerClarifyMethods(runtime: GatewayMethodRuntime): void {

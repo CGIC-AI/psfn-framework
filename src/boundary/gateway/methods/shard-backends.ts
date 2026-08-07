@@ -1,11 +1,14 @@
-import { JSONRPCErrorException } from 'json-rpc-2.0';
+import { JSONRPCErrorException, JSONRPCErrorCode } from 'json-rpc-2.0';
+import { Type } from '@sinclair/typebox';
+import { Value } from '@sinclair/typebox/value';
 import type {
   ShardBackendRequestBackend,
   ShardBackendRequestParams,
   ShardBackendRequestResult,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineGatedMethod } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -14,6 +17,24 @@ import {
 } from '../../../system/capabilities/shard-derivation.js';
 
 const log = createComponentLogger('GatewayShardBackends');
+
+const shardBackendRequestSchema = Type.Object({
+  backend: Type.Union([Type.Literal('container'), Type.Literal('orchestrated')]),
+  shardId: Type.String(),
+  name: Type.String(),
+  ownerVersion: Type.String(),
+  grantDigest: Type.String(),
+});
+
+function decodeShardBackendRequest(params: unknown): ShardBackendRequestParams {
+  if (!Value.Check(shardBackendRequestSchema, params)) {
+    throw new JSONRPCErrorException(
+      'shard.backend.request received invalid params',
+      JSONRPCErrorCode.InvalidParams,
+    );
+  }
+  return params as ShardBackendRequestParams;
+}
 
 const AUTONOMOUS_SHARD_BACKEND_TIERS = new Set(['autonomous', 'custom']);
 
@@ -106,9 +127,10 @@ function requiredShardBackendCommand(
   return backend === 'container' ? 'docker' : 'kubectl';
 }
 
-const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const shardBackendDescriptors = [
+  defineGatedMethod<ShardBackendRequestParams, ShardBackendRequestResult>({
     name: 'shard.backend.request',
+    decode: decodeShardBackendRequest,
     handler: async (
       params: ShardBackendRequestParams,
       runtime: GatewayMethodRuntime,
@@ -202,7 +224,7 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'shard.backend.request',
     approvalScope: (params: ShardBackendRequestParams) => `${params.backend}:${params.name}`,
-  },
+  }),
 ];
 
 export function registerShardBackendMethods(runtime: GatewayMethodRuntime): void {

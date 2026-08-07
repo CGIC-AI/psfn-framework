@@ -13,8 +13,9 @@ import type {
   BeadsUpdateParams,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
+import { type GatewayMethodRuntime, defineGatedMethod } from './types.js';
 import { registerGatedDescriptors } from './register.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../../shared/process-termination-policy.js';
@@ -397,9 +398,10 @@ function summaryActor(value: unknown): string {
     : DEFAULT_ACTOR;
 }
 
-const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const beadsDescriptors = [
+  defineGatedMethod<BeadsReadyParams, BeadsActionResult>({
     name: 'beads.ready',
+    decode: gatewayMethodParamDecoders['beads.ready'],
     handler: async (params: BeadsReadyParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const limit = parseReadyLimit(params.limit);
@@ -412,9 +414,10 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'issue.read',
     approvalScope: () => 'ready',
-  },
-  {
+  }),
+  defineGatedMethod<BeadsShowParams, BeadsActionResult>({
     name: 'beads.show',
+    decode: gatewayMethodParamDecoders['beads.show'],
     handler: async (params: BeadsShowParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const id = parseIssueRef(params.id, 'id');
@@ -429,9 +432,10 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     approvalScope: (params: BeadsShowParams) => (
       typeof params.id === 'string' ? params.id : 'unknown'
     ),
-  },
-  {
+  }),
+  defineGatedMethod<BeadsCreateParams, BeadsActionResult>({
     name: 'beads.create',
+    decode: gatewayMethodParamDecoders['beads.create'],
     handler: async (params: BeadsCreateParams, runtime) => {
       const shardCaller = resolveShardCaller(runtime, params.channelId);
       const actor = shardCaller?.shardId ?? normalizeActor(params.actor);
@@ -503,9 +507,10 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'issue.write',
     approvalScope: () => 'create',
-  },
-  {
+  }),
+  defineGatedMethod<BeadsUpdateParams, BeadsActionResult>({
     name: 'beads.update',
+    decode: gatewayMethodParamDecoders['beads.update'],
     handler: async (params: BeadsUpdateParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const id = parseIssueRef(params.id, 'id');
@@ -549,9 +554,10 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     approvalScope: (params: BeadsUpdateParams) => (
       typeof params.id === 'string' ? params.id : 'unknown'
     ),
-  },
-  {
+  }),
+  defineGatedMethod<BeadsCloseParams, BeadsActionResult>({
     name: 'beads.close',
+    decode: gatewayMethodParamDecoders['beads.close'],
     handler: async (params: BeadsCloseParams, runtime) => {
       const shardCaller = resolveShardCaller(runtime, params.channelId);
       if (!shardCaller) {
@@ -587,9 +593,10 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     approvalScope: (params: BeadsCloseParams) => (
       typeof params.id === 'string' ? params.id : 'unknown'
     ),
-  },
-  {
+  }),
+  defineGatedMethod<BeadsSyncParams, BeadsActionResult>({
     name: 'beads.sync',
+    decode: gatewayMethodParamDecoders['beads.sync'],
     handler: async (params: BeadsSyncParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const startedAt = Date.now();
@@ -644,7 +651,7 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'issue.close',
     approvalScope: () => 'sync',
-  },
+  }),
 ];
 
 export function registerBeadsMethods(runtime: GatewayMethodRuntime): void {

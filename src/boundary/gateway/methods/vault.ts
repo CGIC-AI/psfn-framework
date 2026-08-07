@@ -7,7 +7,9 @@ import type {
   VaultWriteParams,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { GatedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineGatedMethod } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { registerGatedDescriptors } from './register.js';
 
 const VALID_WRITE_MODES = new Set<VaultWriteMode>(['create', 'append', 'prepend']);
@@ -30,9 +32,10 @@ function getVaultOps(runtime: GatewayMethodRuntime) {
   return ops;
 }
 
-const vaultDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const vaultDescriptors = [
+  defineGatedMethod({
     name: 'vault.write',
+    decode: gatewayMethodParamDecoders['vault.write'],
     handler: async (params: VaultWriteParams, runtime) => {
       const name = ensureNonEmptyString(params.name, 'write.name');
       const content = ensureNonEmptyString(params.content, 'write.content');
@@ -59,9 +62,10 @@ const vaultDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       typeof params.name === 'string' && params.name.trim().length > 0
         ? params.name
         : 'vault',
-  },
-  {
+  }),
+  defineGatedMethod({
     name: 'vault.read',
+    decode: gatewayMethodParamDecoders['vault.read'],
     handler: async (params: VaultReadParams, runtime) => {
       const name = ensureNonEmptyString(params.name, 'read.name');
       return await getVaultOps(runtime).read(name);
@@ -72,9 +76,10 @@ const vaultDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       typeof params.name === 'string' && params.name.trim().length > 0
         ? params.name
         : 'vault',
-  },
-  {
+  }),
+  defineGatedMethod({
     name: 'vault.search',
+    decode: gatewayMethodParamDecoders['vault.search'],
     handler: async (params: VaultSearchParams, runtime) => {
       const query = ensureNonEmptyString(params.query, 'search.query');
       const limit = params.limit;
@@ -102,9 +107,10 @@ const vaultDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'vault.search',
     approvalScope: (_params: VaultSearchParams) => 'vault',
-  },
-  {
+  }),
+  defineGatedMethod({
     name: 'vault.daily',
+    decode: gatewayMethodParamDecoders['vault.daily'],
     handler: async (params: VaultDailyParams, runtime) => {
       const content = params.content;
       if (content !== undefined && typeof content !== 'string') {
@@ -125,7 +131,7 @@ const vaultDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'vault.daily',
     approvalScope: (_params: VaultDailyParams) => 'vault-daily',
-  },
+  }),
 ];
 
 export function registerVaultMethods(runtime: GatewayMethodRuntime): void {

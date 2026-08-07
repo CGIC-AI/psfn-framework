@@ -91,6 +91,12 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   method: string;
   handler: (params: P) => Promise<R>;
   paramsSummary: (params: P) => Record<string, unknown>;
+  /**
+   * Decode untrusted JSON-RPC params into the canonical typed contract before
+   * policy evaluation, summaries, or handler dispatch. Defaults to identity for
+   * backwards-compatible direct gate callers.
+   */
+  prepareParams?: (params: unknown) => P;
   /** Authenticated owner of the RPC that may enter the confirmation queue. */
   authenticatedCompanionId: () => string | undefined;
   approvalAction: string;
@@ -564,16 +570,21 @@ export function createGatewayApprovalBoundaryService(
       }
       return confirmationQueue.reconcileRetainedResolution(input.id, input.status);
     },
-    gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
-      return async (rawParams: P) => {
+    gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: unknown) => Promise<R> {
+      return async (rawParams: unknown) => {
         // htm9.18 egress tripwire: hold the action if the session canary leaked
         // into this outbound method, and strip the carrier before policy eval,
-        // approval enqueue, or the handler ever sees it.
+        // approval enqueue, or the handler ever sees it. Then decode the wire
+        // params through the method's own decoder so policy and handlers see
+        // only validated canonical params.
         let params: P;
         try {
-          params = (options.canaryEgressGuard
+          const inspected = options.canaryEgressGuard
             ? options.canaryEgressGuard.inspect(gateOptions.method, rawParams)
-            : rawParams) as P;
+            : rawParams;
+          params = gateOptions.prepareParams
+            ? gateOptions.prepareParams(inspected)
+            : inspected as P;
         } catch (err) {
           options.recordMethodFailure(gateOptions.method, err);
           const heldAuditId = await options.audit(gateOptions.method, 'DENY', { canaryEgressHeld: true });

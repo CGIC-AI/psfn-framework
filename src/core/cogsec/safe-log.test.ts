@@ -123,6 +123,43 @@ describe('CogSec safe event log', () => {
     expect(serialized).not.toContain(DIRTY_TEXT);
   });
 
+  it('projects persona mutation alerts as structured redacted owner metadata', () => {
+    const event = makeEvent({
+      caseId: 'cogsec_persona_mutation_0123456789abcdef01234567',
+      type: 'persona_mutation_bypass',
+      sourceChannelId: 'tool:shell.exec',
+      actor: 'companion:companion-a',
+      affectedArtifacts: {
+        persona_artifacts: { ids: ['prompt_layers'], count: 3 },
+      },
+      safeAgentSummary: 'Protected identity mutation was blocked and correlated.',
+    });
+    const visible = listOperatorVisibleCogSecEvents([event])[0];
+
+    expect(visible.personaMutationAttempt).toEqual({
+      companionId: 'companion-a',
+      tool: 'shell.exec',
+      pathClass: 'prompt_layers',
+      occurrenceCount: 3,
+    });
+    expect(JSON.stringify(visible)).not.toContain('/private/');
+    expect(buildCogSecEventNoticeBlock([event])).toContain('Protected path class: prompt_layers');
+  });
+
+  it('fails closed when a persona mutation projection contains an unknown owner class', () => {
+    const malformed = makeEvent({
+      caseId: 'cogsec_persona_mutation_abcdef0123456789abcdef01',
+      type: 'persona_mutation_bypass',
+      sourceChannelId: 'tool:fs.write',
+      actor: 'companion:companion-a',
+      affectedArtifacts: {
+        persona_artifacts: { ids: ['raw_absolute_path'], count: 1 },
+      },
+    });
+
+    expect(() => toAgentVisibleCogSecEvent(malformed)).toThrow(/Malformed persona mutation attempt/u);
+  });
+
   it('filters safe events to relevant source or logical channels', () => {
     const event = makeEvent();
     const unrelated = makeEvent({

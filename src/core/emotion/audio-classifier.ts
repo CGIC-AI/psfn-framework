@@ -1,5 +1,5 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
-import { clampUnit } from '../../shared/utils/numeric.js';
+import { clampUnit, positiveIntegerOr } from '../../shared/utils/numeric.js';
 import { createRequire } from 'node:module';
 import type { EmotionObservation, VADVector } from './state.js';
 
@@ -353,8 +353,8 @@ function normalizeAudioEmotionClassifierConfig(
     tokensPath: trimOptionalString(config.tokensPath),
     language: trimOptionalString(config.language) ?? DEFAULT_LANGUAGE,
     provider: trimOptionalString(config.provider) ?? DEFAULT_PROVIDER,
-    numThreads: normalizePositiveInteger(config.numThreads, DEFAULT_NUM_THREADS),
-    featureDim: normalizePositiveInteger(config.featureDim, DEFAULT_FEATURE_DIM),
+    numThreads: positiveIntegerOr(config.numThreads, DEFAULT_NUM_THREADS),
+    featureDim: positiveIntegerOr(config.featureDim, DEFAULT_FEATURE_DIM),
     useInverseTextNormalization: normalizeBoolean(config.useInverseTextNormalization, DEFAULT_USE_INVERSE_TEXT_NORMALIZATION),
   };
 }
@@ -477,12 +477,6 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
   return undefined;
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value) || (value as number) <= 0) {
-    return fallback;
-  }
-  return Math.floor(value as number);
-}
 
 function normalizeBoolean(value: boolean | undefined, fallback: boolean): boolean {
   if (typeof value === 'boolean') return value;

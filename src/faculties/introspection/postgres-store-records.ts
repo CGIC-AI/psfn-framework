@@ -1,5 +1,6 @@
 import type { QueryResultRow } from 'pg';
 import { isRecord } from '../../shared/utils/types.js';
+import { requirePositiveInteger } from '../../shared/utils/numeric.js';
 import type {
   IntrospectionAuditDecisionAppendInput,
   IntrospectionDivergenceType,
@@ -92,13 +93,6 @@ function normalizeBoundedText(
     throw new Error(`Introspection ${field} must not contain NUL characters`);
   }
   return normalized;
-}
-
-function normalizePositiveInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Introspection ${field} must be a positive safe integer`);
-  }
-  return value;
 }
 
 function normalizeConfidence(value: unknown, field = 'confidence'): number {
@@ -232,7 +226,7 @@ export function normalizeLandmarkInput(
       MAX_NARRATIVE_LENGTH,
       { allowLineBreaks: true },
     ),
-    consentRevision: normalizePositiveInteger(input.consentRevision, 'consentRevision'),
+    consentRevision: requirePositiveInteger(input.consentRevision, 'consentRevision'),
     consentHash: normalizeConsentHash(input.consentHash),
     stableEstimatorModel: normalizeBoundedText(
       input.stableEstimatorModel,
@@ -275,7 +269,7 @@ export function normalizeDecisionInput(
     outcome,
     confidence,
     landmarkId: null,
-    consentRevision: normalizePositiveInteger(input.consentRevision, 'consentRevision'),
+    consentRevision: requirePositiveInteger(input.consentRevision, 'consentRevision'),
     consentHash: normalizeConsentHash(input.consentHash),
     provenance: normalizeProvenance(input.provenance),
     createdAt: normalizeTimestamp(input.createdAt, 'createdAt'),
@@ -304,7 +298,7 @@ export function mapLandmarkRow(row: IntrospectionLandmarkRow): IntrospectionLand
       MAX_NARRATIVE_LENGTH,
       { allowLineBreaks: true },
     ),
-    consentRevision: normalizePositiveInteger(row.consent_revision, 'consentRevision'),
+    consentRevision: requirePositiveInteger(row.consent_revision, 'consentRevision'),
     consentHash: normalizeConsentHash(row.consent_hash),
     stableEstimatorModel: normalizeBoundedText(
       row.stable_estimator_model,
@@ -357,7 +351,7 @@ export function mapDecisionRow(
     outcome,
     confidence,
     landmarkId,
-    consentRevision: normalizePositiveInteger(row.consent_revision, 'consentRevision'),
+    consentRevision: requirePositiveInteger(row.consent_revision, 'consentRevision'),
     consentHash: normalizeConsentHash(row.consent_hash),
     provenance: normalizeProvenance(row.provenance_json),
     createdAt: normalizeTimestamp(row.created_at, 'createdAt'),

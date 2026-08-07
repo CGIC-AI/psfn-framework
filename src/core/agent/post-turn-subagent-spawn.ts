@@ -2,13 +2,7 @@ import {
   type PostTurnSubagentSpawnQueuedStatus,
 } from './post-turn-action-runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
-
-function normalizePositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
+import { toPositiveInteger } from '../../shared/utils/numeric.js';
 
 export function resolvePostTurnSubagentSpawnQueuedStatus(
   payload: Record<string, unknown>,
@@ -24,8 +18,8 @@ export function resolvePostTurnSubagentSpawnQueuedStatus(
   const policyMode = typeof payload.policy.mode === 'string' && payload.policy.mode.trim()
     ? payload.policy.mode.trim()
     : undefined;
-  const budgetMaxTurns = normalizePositiveInteger(budget.maxTurns);
-  const requestedMaxTurns = normalizePositiveInteger(request.maxTurns);
+  const budgetMaxTurns = toPositiveInteger(budget.maxTurns);
+  const requestedMaxTurns = toPositiveInteger(request.maxTurns);
   return {
     ...(requestName ? { requestName } : {}),
     ...(policyMode ? { policyMode } : {}),

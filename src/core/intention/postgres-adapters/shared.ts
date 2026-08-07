@@ -13,7 +13,7 @@ import { normalizeOptionalIcpRootInitiationId } from '../pending-follow-up-norma
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
 export { clampListLimit, MAX_LIST_LIMIT } from '../list-limit.js';
 
-export interface ActiveConcernRow {
+export interface ActiveConcernPgRow {
   id: string;
   text: string;
   priority: string;
@@ -488,7 +488,7 @@ export function scoreConcernSimilarity(left: string, right: string): number {
   return (2 * intersection) / (leftTokens.length + rightTokens.length);
 }
 
-export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
+export function mapActiveConcernRow(row: ActiveConcernPgRow): ActiveConcern {
   const resolvedAt = row.resolved_at === null ? undefined : normalizeIsoTimestamp(row.resolved_at, 'resolved_at');
   const resolutionOutcome = row.resolution_outcome === null
     ? undefined

@@ -26,7 +26,7 @@ export interface TurnStrategy {
   shouldCloseUserTurn(activity: TurnActivity): boolean;
 }
 
-export interface TurnSnapshot {
+export interface VoiceTurnSnapshot {
   state: TurnState;
   turnId: number;
   interruptions: number;
@@ -46,5 +46,5 @@ export interface TurnTransition {
 
 export type TurnTransitionListener = (
   transition: TurnTransition,
-  snapshot: TurnSnapshot,
+  snapshot: VoiceTurnSnapshot,
 ) => void;

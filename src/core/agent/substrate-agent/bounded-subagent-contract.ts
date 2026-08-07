@@ -76,7 +76,7 @@ export interface BoundedSubagentLaunchEnvelope {
 }
 
 export type SubagentExecutionRequestInput = BoundedSubagentLaunchRequestInput;
-export type SubagentExecutionRequest = BoundedSubagentLaunchRequest;
+export type BoundedSubagentExecutionRequest = BoundedSubagentLaunchRequest;
 export type SubagentExecutionResult = BoundedSubagentLaunchResult;
 export type SubagentExecutionSummary = BoundedSubagentLaunchSummary;
 export type SubagentExecutionDiagnostics = BoundedSubagentLaunchDiagnostics;

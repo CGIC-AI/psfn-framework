@@ -1,14 +1,10 @@
 import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
+import {
+  METACOGNITIVE_FLAG_NAMES,
+  type MetacognitiveFlagName,
+} from '../../../shared/contracts/self-model-contracts.js';
 
-export const METACOGNITIVE_FLAG_HINT_NAMES = [
-  'uncertainty',
-  'avoidance',
-  'high_engagement',
-  'repetition',
-  'confabulation_risk',
-] as const;
-
-export type MetacognitiveFlagName = typeof METACOGNITIVE_FLAG_HINT_NAMES[number];
+export const METACOGNITIVE_FLAG_HINT_NAMES = METACOGNITIVE_FLAG_NAMES;
 
 /**
  * Volatility class for a registered prompt macro:

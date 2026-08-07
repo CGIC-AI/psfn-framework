@@ -40,7 +40,7 @@ import {
   DEFAULT_RECENT_RESOLUTION_LIMIT,
   MAX_CONCERN_RESOLUTION_CHARS,
   MAX_CONCERN_TEXT_CHARS,
-  type ActiveConcernRow,
+  type ActiveConcernPgRow,
   clampListLimit,
   mapActiveConcernRow,
   normalizeContactId,
@@ -159,7 +159,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   }
 
   async hydrateCache(): Promise<void> {
-    const rows = await queryRows<ActiveConcernRow>(
+    const rows = await queryRows<ActiveConcernPgRow>(
       this.pool,
       `
         SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
@@ -287,7 +287,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const terminalAt = isConcernTerminalStatus(status) ? createdAt : null;
     const resolutionGenerationId = terminalAt ? randomUUID() : null;
 
-    const row = await queryOne<ActiveConcernRow>(
+    const row = await queryOne<ActiveConcernPgRow>(
       this.pool,
       `
         INSERT INTO active_concerns (
@@ -338,7 +338,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
 
   async getById(id: string): Promise<ActiveConcern | null> {
     const normalizedId = normalizeRequiredText(id, 'id', 128);
-    const row = await queryOne<ActiveConcernRow>(
+    const row = await queryOne<ActiveConcernPgRow>(
       this.pool,
       `
         SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
@@ -363,7 +363,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const contactClause = normalizedContactId
       ? `AND (contact_id IS NULL OR contact_id = $${params.push(normalizedContactId)})`
       : '';
-    const rows = await queryRows<ActiveConcernRow>(this.pool, `
+    const rows = await queryRows<ActiveConcernPgRow>(this.pool, `
       SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
       FROM active_concerns
       WHERE resolved_at IS NULL
@@ -406,7 +406,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     params.push(limit);
     params.push(offset);
 
-    const rows = await queryRows<ActiveConcernRow>(
+    const rows = await queryRows<ActiveConcernPgRow>(
       this.pool,
       `
         SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
@@ -446,7 +446,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     }
     params.push(limit);
 
-    const rows = await queryRows<ActiveConcernRow>(
+    const rows = await queryRows<ActiveConcernPgRow>(
       this.pool,
       `
         SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
@@ -543,7 +543,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       if (current.resolvedAt) transitionValues.push(current.resolvedAt);
     }
 
-    const row = await queryOne<ActiveConcernRow>(
+    const row = await queryOne<ActiveConcernPgRow>(
       this.pool,
       `
         UPDATE active_concerns
@@ -672,7 +672,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const lockedResult = await client.query<ActiveConcernRow>(
+      const lockedResult = await client.query<ActiveConcernPgRow>(
         `
           SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
           FROM active_concerns
@@ -702,7 +702,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       );
       const originIcpRootInitiationId = existing.originIcpRootInitiationId
         ?? input.originIcpRootInitiationId;
-      const updatedResult = await client.query<ActiveConcernRow>(
+      const updatedResult = await client.query<ActiveConcernPgRow>(
         `
           UPDATE active_concerns
           SET
@@ -774,7 +774,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const lockedResult = await client.query<ActiveConcernRow>(
+      const lockedResult = await client.query<ActiveConcernPgRow>(
         `
           SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
           FROM active_concerns
@@ -816,7 +816,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         parseDurableCandidateReviewSnapshot(snapshot);
         candidateReviewSnapshot = JSON.stringify(snapshot);
       }
-      const updatedResult = await client.query<ActiveConcernRow>(
+      const updatedResult = await client.query<ActiveConcernPgRow>(
         `
           UPDATE active_concerns
           SET

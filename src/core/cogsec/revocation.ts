@@ -53,14 +53,14 @@ export interface CogSecCompactionInvalidationInput {
   reason: string;
 }
 
-export interface CogSecCompactionInvalidationResult {
+export interface CogSecCompactionRevocationOutcome {
   invalidatedCompactionIds: string[];
 }
 
 export interface CogSecCompactionInvalidator {
   invalidateCompactionSummaries(
     input: CogSecCompactionInvalidationInput,
-  ): Awaitable<CogSecCompactionInvalidationResult>;
+  ): Awaitable<CogSecCompactionRevocationOutcome>;
 }
 
 export interface CogSecExternalArtifactInvalidationInput {

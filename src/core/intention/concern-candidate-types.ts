@@ -9,7 +9,7 @@ import type {
 } from '../../shared/contracts/intention-contracts.js';
 import type { SessionEntry } from '../session/types.js';
 
-export type ConcernCandidateExtractionContext = MemoryConcernCandidateExtractionContext;
+export type IntentionConcernCandidateExtractionContext = MemoryConcernCandidateExtractionContext;
 export type ConcernCandidateSource = 'memory_extraction';
 export type ConcernCandidateFollowUpHint = 'internal_only' | 'possible_follow_up';
 
@@ -41,7 +41,7 @@ export interface ConcernCandidate {
   priorityHint: ActiveConcernPriority;
   followUpHint: ConcernCandidateFollowUpHint;
   channelId: string;
-  triggerReason: ConcernCandidateExtractionContext['triggerReason'];
+  triggerReason: IntentionConcernCandidateExtractionContext['triggerReason'];
   sourceRef: string;
   sourceMessageIds: number[];
   conversationContext: ConcernCandidateMessageContext[];

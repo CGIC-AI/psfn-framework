@@ -14,6 +14,7 @@ import type {
   SkillSkipRecord,
   SkillSnapshot,
 } from '../../faculties/skills/types.js';
+import type { ManagedSkillRecord as RuntimeManagedSkillRecord } from '../../faculties/skills/store.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
 import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
 import type { ReflectionMetacognitionJournalEntry } from '../../persistence/journals/reflection-metacognition-journal.js';
@@ -141,21 +142,16 @@ export interface AdminSchedulerApi {
   getWakeWindow?(): WakeWindowSnapshot | null;
 }
 
-export interface ManagedSkillRecord {
-  name: string;
-  description: string;
-  category: string;
-  version: number;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type AdminManagedSkillRecord = Omit<
+  RuntimeManagedSkillRecord,
+  'absolutePath' | 'relativePath'
+>;
 
 export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot | Promise<SkillSnapshot>;
-  listManaged(): Promise<{ managed: ManagedSkillRecord[]; skipped: SkillSkipRecord[] }>;
-  createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
-  updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
+  listManaged(): Promise<{ managed: AdminManagedSkillRecord[]; skipped: SkillSkipRecord[] }>;
+  createSkill(input: { name: string; category: string; content: string; description?: string }): AdminManagedSkillRecord;
+  updateSkill(input: { name: string; content: string; description?: string }): AdminManagedSkillRecord;
   deleteSkill(name: string): void;
   toggleSkill(name: string): boolean;
   getDisabledSkills(): string[];

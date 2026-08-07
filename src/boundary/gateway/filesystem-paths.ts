@@ -153,6 +153,23 @@ export interface ResolveCanonicalPathOptions {
   onParentResolutionError?: (details: { path: string; error: unknown }) => void;
 }
 
+function resolveThroughNearestExistingAncestor(pathValue: string): string {
+  const suffix: string[] = [];
+  let cursor = pathValue;
+  for (;;) {
+    try {
+      return resolve(realpathSync(cursor), ...suffix.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) throw error;
+      suffix.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
 export function resolveCanonicalPath(
   pathValue: string,
   options: ResolveCanonicalPathOptions & { errorBehavior: 'returnNormalized' },
@@ -173,8 +190,7 @@ export function resolveCanonicalPath(
     if (code === 'ENOENT') {
       if (options.missingPathBehavior === 'resolveParent') {
         try {
-          const parentReal = realpathSync(dirname(normalized));
-          return resolve(parentReal, basename(normalized));
+          return resolveThroughNearestExistingAncestor(normalized);
         } catch (parentErr) {
           options.onParentResolutionError?.({ path: normalized, error: parentErr });
         }

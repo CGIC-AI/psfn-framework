@@ -24,7 +24,7 @@ interface ResolvedOwnerPath extends PersonaOwnerPathDefinition {
   physicalIdentity?: string;
 }
 
-export interface PersonaOwnerPathClassification {
+interface PersonaOwnerPathClassification {
   pathClass: PersonaOwnerPathClass;
 }
 

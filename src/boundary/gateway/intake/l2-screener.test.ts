@@ -125,6 +125,52 @@ function fetchReturning(
   };
 }
 
+function fetchSequence(
+  contents: readonly string[],
+  captured: CapturedRequest[],
+): L2ScreenerFetch {
+  let index = 0;
+  return (url, init) => {
+    captured.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      body: JSON.parse(init.body) as Record<string, unknown>,
+    });
+    const content = contents[index];
+    index += 1;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: () => Promise.resolve(JSON.stringify({ choices: [{ message: { content } }] })),
+    });
+  };
+}
+
+function fetchProviderPayloadSequence(
+  payloads: readonly string[],
+  captured: CapturedRequest[],
+): L2ScreenerFetch {
+  let index = 0;
+  return (url, init) => {
+    captured.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      body: JSON.parse(init.body) as Record<string, unknown>,
+    });
+    const payload = payloads[index];
+    index += 1;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: () => Promise.resolve(payload),
+    });
+  };
+}
+
 function fetchHttpError(status: number, statusText: string): L2ScreenerFetch {
   return () => Promise.resolve({
     ok: false,
@@ -257,6 +303,40 @@ describe('screenL2', () => {
       backend: BACKEND, model: 'm', timeoutMs: 5000, fetch: fetchReturning(response),
     });
     expect(classification.injectionConfidence).toBe(0.91);
+  });
+
+  it('re-prompts once after malformed JSON and accepts the repaired schema-valid verdict', async () => {
+    const captured: CapturedRequest[] = [];
+    const classification = await screenL2('x', baseContext(), {
+      backend: BACKEND,
+      model: 'm',
+      timeoutMs: 5000,
+      fetch: fetchSequence(['{"labels":[]', BENIGN_RESPONSE], captured),
+    });
+
+    expect(classification.injectionConfidence).toBe(0.1);
+    expect(captured).toHaveLength(2);
+    const retryMessages = captured[1].body.messages as Array<{ role: string; content: string }>;
+    expect(retryMessages[0].content).toContain('previous response failed validation');
+    expect(retryMessages[0].content).toContain('complete JSON object');
+    expect(retryMessages[1].content).toContain('<untrusted_content>');
+    expect(captured[1].body).not.toHaveProperty('tools');
+  });
+
+  it('re-prompts once when the provider returns no choices', async () => {
+    const captured: CapturedRequest[] = [];
+    const classification = await screenL2('x', baseContext(), {
+      backend: BACKEND,
+      model: 'm',
+      timeoutMs: 5000,
+      fetch: fetchProviderPayloadSequence([
+        JSON.stringify({ choices: [] }),
+        JSON.stringify({ choices: [{ message: { content: BENIGN_RESPONSE } }] }),
+      ], captured),
+    });
+
+    expect(classification.injectionConfidence).toBe(0.1);
+    expect(captured).toHaveLength(2);
   });
 
   it('rejects an empty input before any call', async () => {

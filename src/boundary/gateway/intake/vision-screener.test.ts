@@ -136,6 +136,24 @@ function makeVlmFetch(content: string, captured: CapturedRequest[] = []): Screen
   };
 }
 
+function makeVlmFetchSequence(
+  contents: readonly string[],
+  captured: CapturedRequest[],
+): ScreenerFetch {
+  let index = 0;
+  return async (url, init) => {
+    captured.push({ url, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> });
+    const content = contents[index];
+    index += 1;
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify({ choices: [{ message: { content } }] }),
+    };
+  };
+}
+
 function verdictJson(input: {
   ocrText?: string;
   noLegibleText?: boolean;
@@ -224,6 +242,34 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         fetch: makeVlmFetch(verdictJson({ flags: ['made_up_flag'] })),
       },
     )).rejects.toThrow(VisionScreenerSchemaError);
+  });
+
+  it('re-prompts once after truncated JSON and accepts the repaired vision verdict', async () => {
+    const captured: CapturedRequest[] = [];
+    const verdict = await screenImageWithVisionModel(
+      { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
+      {
+        backend: BACKEND,
+        model: 'test/vision-model',
+        timeoutMs: 5000,
+        maxOutputTokens: 1600,
+        fetch: makeVlmFetchSequence([
+          '{"ocrText":""',
+          verdictJson({
+            ocrText: '',
+            noLegibleText: true,
+            description: 'A solid red square with no text.',
+            flags: [],
+          }),
+        ], captured),
+      },
+    );
+
+    expect(verdict.noLegibleText).toBe(true);
+    expect(captured).toHaveLength(2);
+    const retryMessages = captured[1].body.messages as Array<{ role: string; content: string }>;
+    expect(retryMessages[0].content).toContain('previous response failed validation');
+    expect(retryMessages[0].content).toContain('complete JSON object');
   });
 
   it('fails closed on unparseable model output', async () => {

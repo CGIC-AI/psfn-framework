@@ -14,6 +14,10 @@ import {
   hasUniqueIntakeRuleMatchRuleIds,
   type IntakeL1RuleMatchProvenance,
 } from '../../../../src/shared/contracts/intake-rule-match.js';
+import {
+  classifyIntakeQuarantineHoldReason,
+  isIntakeQuarantineHoldReason,
+} from '../../../../src/shared/contracts/intake-quarantine-hold-reason.js';
 import { getGardenCacheStorage } from './indexeddb';
 import {
   LocalFirstResource,
@@ -239,18 +243,30 @@ export function normalizeIntakeQuarantineListData(value: unknown): unknown {
   let changed = false;
   const items = value.items.map((candidate) => {
     if (!isRecord(candidate)) return candidate;
+    let normalizedCandidate = candidate;
+    if (candidate.holdReason === undefined) {
+      normalizedCandidate = {
+        ...candidate,
+        holdReason: classifyIntakeQuarantineHoldReason(
+          typeof candidate.screeningDecisionReason === 'string'
+            ? candidate.screeningDecisionReason
+            : undefined,
+        ),
+      };
+      changed = true;
+    }
     const carriesProvenance = RULE_MATCH_PROVENANCE_KEYS.some((key) => (
-      Object.prototype.hasOwnProperty.call(candidate, key)
+      Object.prototype.hasOwnProperty.call(normalizedCandidate, key)
     ));
-    if (!carriesProvenance) return candidate;
-    const markerValid = candidate.ruleMatchProvenanceUnavailable === undefined
-      || typeof candidate.ruleMatchProvenanceUnavailable === 'boolean';
-    if (isOptionalRuleMatches(candidate.ruleMatches)
-      && isOptionalRuleMatchSummary(candidate)
-      && markerValid) return candidate;
+    if (!carriesProvenance) return normalizedCandidate;
+    const markerValid = normalizedCandidate.ruleMatchProvenanceUnavailable === undefined
+      || typeof normalizedCandidate.ruleMatchProvenanceUnavailable === 'boolean';
+    if (isOptionalRuleMatches(normalizedCandidate.ruleMatches)
+      && isOptionalRuleMatchSummary(normalizedCandidate)
+      && markerValid) return normalizedCandidate;
     changed = true;
     return {
-      ...candidate,
+      ...normalizedCandidate,
       ruleMatches: [],
       ruleMatchTotalCount: 0,
       ruleMatchesTruncated: false,
@@ -264,6 +280,7 @@ function isIntakeQuarantineItem(value: unknown): boolean {
   return isRecord(value)
     && typeof value.id === 'string'
     && typeof value.status === 'string'
+    && (value.holdReason === undefined || isIntakeQuarantineHoldReason(value.holdReason))
     && (value.mode === 'shadow' || value.mode === 'enforce')
     && typeof value.sourceClass === 'string'
     && typeof value.sourceRiskTier === 'string'

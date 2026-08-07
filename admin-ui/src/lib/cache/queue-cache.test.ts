@@ -75,6 +75,9 @@ describe('queue cache validators', () => {
       items: [{ ...item, ruleMatchProvenanceUnavailable: 'yes' }],
     })).toBe(false);
     expect(isIntakeQuarantineListData({
+      items: [{ ...item, holdReason: 'provider_was_weird' }],
+    })).toBe(false);
+    expect(isIntakeQuarantineListData({
       items: [{
         ...item,
         ruleMatches: [{
@@ -212,5 +215,32 @@ describe('queue cache validators', () => {
       .not.toHaveProperty('ruleMatchProvenanceUnavailable');
     expect(JSON.stringify(normalized)).not.toContain('unsafe');
     expect(JSON.stringify(normalized)).not.toContain('must not survive');
+  });
+
+  it('upgrades cached fail-closed rows with an explicit screener-malfunction hold reason', () => {
+    const normalized = normalizeIntakeQuarantineListData({
+      items: [{
+        id: 'env-malfunction-cache',
+        status: 'held',
+        mode: 'enforce',
+        sourceClass: 'image_ocr',
+        sourceRiskTier: 'hostile',
+        originRef: 'discord:attachment:0',
+        riskLabels: [],
+        scores: {},
+        screeningDecisionReason: 'vision-screener-fail-closed:response contained no choices',
+        heldAt: '2026-08-06T00:00:00.000Z',
+        expiresAt: '2026-08-13T00:00:00.000Z',
+        ttlRemainingMs: 1000,
+        rawTextTruncated: false,
+        safeRepresentationAvailable: false,
+        flywheelTarget: null,
+      }],
+    });
+
+    expect(normalized).toMatchObject({
+      items: [{ holdReason: 'screener_malfunction' }],
+    });
+    expect(isIntakeQuarantineListData(normalized)).toBe(true);
   });
 });

@@ -53,6 +53,8 @@
 
   const STATUS_STYLES: Record<string, string> = {
     held: 'bg-gold-100 text-gold-700',
+    detection_hold: 'bg-gold-100 text-gold-700',
+    screener_malfunction: 'bg-wilt-100 text-wilt-700',
     released_raw: 'bg-wilt-100 text-wilt-600',
     released_sanitized: 'bg-moss-100 text-moss-700',
     discarded: 'bg-bark-200 text-shadow-700',
@@ -82,6 +84,13 @@
 
   function statusLabel(status: string): string {
     return status.replace(/_/g, ' ');
+  }
+
+  function queueStatus(item: AdminIntakeQuarantineItemView): string {
+    if (item.status !== 'held') return item.status;
+    return item.holdReason === 'screener_malfunction'
+      ? 'screener_malfunction'
+      : 'detection_hold';
   }
 
   async function loadData() {
@@ -290,8 +299,8 @@
                 <span class="text-shadow-600 font-normal font-mono text-sm">{item.originRef}</span>
               </h3>
               <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                <span class="inline-block px-2 py-0.5 rounded-full font-medium {STATUS_STYLES[item.status] ?? 'bg-bark-200 text-shadow-700'}">
-                  {statusLabel(item.status)}
+                <span class="inline-block px-2 py-0.5 rounded-full font-medium {STATUS_STYLES[queueStatus(item)] ?? 'bg-bark-200 text-shadow-700'}">
+                  {statusLabel(queueStatus(item))}
                 </span>
                 <span class="inline-block px-2 py-0.5 rounded-full font-medium {TIER_STYLES[item.sourceRiskTier] ?? 'bg-bark-200 text-shadow-700'}">
                   {item.sourceRiskTier}
@@ -314,9 +323,20 @@
               <span class="inline-block px-2 py-0.5 rounded bg-wilt-50 border border-wilt-200 text-wilt-700 font-mono text-xs">{label}</span>
             {/each}
             {#if item.riskLabels.length === 0}
-              <span class="text-xs text-shadow-600">No risk labels (score-driven or fail-closed hold)</span>
+              <span class="text-xs text-shadow-600">
+                {item.holdReason === 'screener_malfunction'
+                  ? 'No risk verdict: screening did not complete.'
+                  : 'No risk labels (score-driven hold).'}
+              </span>
             {/if}
           </div>
+
+          {#if item.holdReason === 'screener_malfunction'}
+            <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700">
+              Held fail-closed because a screener malfunctioned. This is a reliability failure,
+              not a detection verdict; review remains required before release.
+            </p>
+          {/if}
 
           {#if item.whyFlagged}
             <p class="text-sm text-shadow-800"><span class="font-medium text-shadow-700">Why flagged:</span> {item.whyFlagged}</p>

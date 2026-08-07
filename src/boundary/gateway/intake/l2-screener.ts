@@ -52,7 +52,7 @@ import {
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
 import {
-  callToolLessJsonScreener,
+  callValidatedToolLessJsonScreener,
   neutralizeUntrustedDelimiters,
   stripJsonFences,
   type ScreenerBackend,
@@ -271,7 +271,7 @@ export async function screenL2(
   }
 
   const startedAt = performance.now();
-  const content = await callToolLessJsonScreener({
+  const classification = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
@@ -280,9 +280,15 @@ export async function screenL2(
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     screenerName: 'L2 screener',
     makeError: (message) => new L2ScreenerError(message),
+    validateContent: content => parseClassification(
+      content,
+      deps.model,
+      performance.now() - startedAt,
+    ),
+    isValidationError: error => error instanceof L2ScreenerSchemaError,
   });
   const latencyMs = performance.now() - startedAt;
-  const classification = parseClassification(content, deps.model, latencyMs);
+  classification.latencyMs = latencyMs;
 
   // Latency measured and logged per call (bead acceptance criterion). The
   // untrusted content and summary are NOT logged — only structural metadata.

@@ -54,6 +54,7 @@ function makeQuarantinedEnvelope(input: {
   withL3Fields?: boolean;
   withRuleMatch?: boolean;
   ruleMatchTotalCount?: number;
+  decisionReason?: string;
 } = {}): IntakeEnvelope {
   const sha256 = 'b'.repeat(64);
   let envelope = createIntakeEnvelope({
@@ -64,14 +65,15 @@ function makeQuarantinedEnvelope(input: {
     ...(input.id !== undefined ? { id: input.id } : {}),
     atMs: NOW,
   });
+  const decisionReason = input.decisionReason ?? 'l1:injection/override_attempt';
   envelope = transitionIntakeEnvelope(envelope, {
     to: 'screened',
     actor: 'test:screening',
-    reason: 'l1:injection/override_attempt',
+    reason: decisionReason,
     atMs: NOW,
     decision: {
       action: 'quarantine',
-      reason: 'l1:injection/override_attempt',
+      reason: decisionReason,
       decidedBy: 'screening',
       decidedAtMs: NOW,
       ...(input.withRuleMatch
@@ -245,6 +247,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     withL3Fields?: boolean;
     withRuleMatch?: boolean;
     ruleMatchTotalCount?: number;
+    decisionReason?: string;
   } = {}): IntakeEnvelope {
     const envelope = makeQuarantinedEnvelope(input);
     store.hold({
@@ -271,6 +274,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     const item = items[0];
     expect(item.id).toBe(envelope.id);
     expect(item.status).toBe('held');
+    expect(item.holdReason).toBe('detection');
     expect(item.sourceClass).toBe('web_fetch');
     expect(item.riskLabels).toContain('injection/override_attempt');
     expect(item.scores['l1-rule-engine']).toBe(1);
@@ -281,6 +285,20 @@ describe('admin intake quarantine service (htm9.11)', () => {
     expect(item.flywheelTarget).toEqual({ kind: 'site', pattern: 'suspect.example' });
     expect(item.contentSha256).toBe('b'.repeat(64));
     expect(item.ruleMatches).toEqual([]);
+  });
+
+  it.each([
+    'l2-fail-closed:L2 screener response was not valid JSON',
+    'l3-fail-closed:z-ai/glm-4.5-air: summary-instead-of-quote violation',
+    'vision-screener-fail-closed:vision screener response contained no assistant content',
+  ])('labels fail-closed screener reliability holds separately from detections: %s', (decisionReason) => {
+    holdItem({ decisionReason });
+
+    expect(service.listItems().items[0]).toMatchObject({
+      status: 'held',
+      holdReason: 'screener_malfunction',
+      screeningDecisionReason: decisionReason,
+    });
   });
 
   it('surfaces L1 rule ids and safe match evidence while legacy envelopes remain empty', () => {

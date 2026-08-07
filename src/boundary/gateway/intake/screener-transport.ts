@@ -45,7 +45,7 @@ export type ScreenerUserContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
 
-export interface ToolLessScreenerCallInput {
+interface ToolLessScreenerCallInput {
   backend: ScreenerBackend;
   /** OpenRouter model slug (always config-resolved, never hardcoded). */
   model: string;
@@ -62,6 +62,31 @@ export interface ToolLessScreenerCallInput {
   screenerName: string;
   /** Error constructor so callers keep their own typed error hierarchy. */
   makeError: (message: string) => Error;
+}
+
+export interface ValidatedToolLessScreenerCallInput<T>
+extends ToolLessScreenerCallInput {
+  /** Parses and schema-validates assistant content. */
+  validateContent: (content: string) => T;
+  /** Identifies caller-owned schema errors that are safe to repair once. */
+  isValidationError: (error: unknown) => boolean;
+}
+
+const retryableResponseFailures = new WeakSet<object>();
+
+const SCHEMA_REPAIR_INSTRUCTION = [
+  'Your previous response failed validation. Retry once from the original input.',
+  'Return one complete JSON object matching the requested schema exactly.',
+  'Do not add markdown, prose, commentary, or fields outside that schema.',
+].join(' ');
+
+function responseFailure(
+  input: ToolLessScreenerCallInput,
+  message: string,
+): Error {
+  const error = input.makeError(message);
+  retryableResponseFailures.add(error);
+  return error;
 }
 
 function resolveFetch(input: ToolLessScreenerCallInput): ScreenerFetch {
@@ -107,7 +132,7 @@ function extractMessageText(message: ScreenerChoiceMessage | undefined): string 
  * HTTP error, or an empty/malformed provider response — never returns a
  * default.
  */
-export async function callToolLessJsonScreener(
+async function callToolLessJsonScreener(
   input: ToolLessScreenerCallInput,
 ): Promise<string> {
   const fetchImpl = resolveFetch(input);
@@ -163,18 +188,51 @@ export async function callToolLessJsonScreener(
   try {
     parsed = JSON.parse(rawText);
   } catch (error) {
-    throw input.makeError(`${input.screenerName} returned non-JSON response: ${String(error)}`);
+    throw responseFailure(
+      input,
+      `${input.screenerName} returned non-JSON response: ${String(error)}`,
+    );
   }
   const choices = (parsed as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) {
-    throw input.makeError(`${input.screenerName} response contained no choices`);
+    throw responseFailure(input, `${input.screenerName} response contained no choices`);
   }
   const message = (choices[0] as { message?: ScreenerChoiceMessage }).message;
   const content = extractMessageText(message);
   if (content.trim().length === 0) {
-    throw input.makeError(`${input.screenerName} response contained no assistant content`);
+    throw responseFailure(input, `${input.screenerName} response contained no assistant content`);
   }
   return content;
+}
+
+/**
+ * Executes and validates a screener response, with one schema-constrained
+ * repair attempt for malformed provider envelopes or caller-owned schema
+ * failures. Transport, timeout, HTTP, and authentication failures are not
+ * retried here; callers retain their existing fail-closed behavior and timeout
+ * budget. The repair prompt never includes the malformed response or untrusted
+ * content outside the original framed user message.
+ */
+export async function callValidatedToolLessJsonScreener<T>(
+  input: ValidatedToolLessScreenerCallInput<T>,
+): Promise<T> {
+  const validateAttempt = async (
+    callInput: ToolLessScreenerCallInput,
+  ): Promise<T> => input.validateContent(await callToolLessJsonScreener(callInput));
+
+  try {
+    return await validateAttempt(input);
+  } catch (error) {
+    const retryableResponse = typeof error === 'object'
+      && error !== null
+      && retryableResponseFailures.has(error);
+    if (!retryableResponse && !input.isValidationError(error)) throw error;
+  }
+
+  return validateAttempt({
+    ...input,
+    systemPrompt: `${input.systemPrompt}\n\n${SCHEMA_REPAIR_INSTRUCTION}`,
+  });
 }
 
 /**

@@ -39,6 +39,7 @@ class CapturingResponse {
 const SAMPLE_ITEM: AdminIntakeQuarantineItemView = {
   id: 'env-sample-000001',
   status: 'held',
+  holdReason: 'detection',
   mode: 'enforce',
   sourceClass: 'web_fetch',
   sourceRiskTier: 'untrusted',

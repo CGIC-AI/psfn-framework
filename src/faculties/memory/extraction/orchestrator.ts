@@ -60,7 +60,7 @@ import { ExtractionIntegrityError } from './integrity-error.js';
 import { selectExtractionRecentEntries } from './recovered-entries.js';
 import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 
-export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
+export { ExtractionIntegrityError } from './integrity-error.js';
 
 const log = createComponentLogger('Extraction');
 

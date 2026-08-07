@@ -1,7 +1,6 @@
 import { getChatBootstrap } from '$lib/api/endpoints/chat';
 import {
   companionNameFromChatBootstrap,
-  normalizeCompanionName,
   DEFAULT_COMPANION_NAME,
 } from '$lib/companion-name';
 import type { AdminChatBootstrapResponse } from '$lib/types';
@@ -20,11 +19,6 @@ onCompanionScopeChange(() => {
 });
 
 export function getCompanionName(): string {
-  return companionName;
-}
-
-export function setCompanionName(value: string | null | undefined): string {
-  companionName = normalizeCompanionName(value);
   return companionName;
 }
 

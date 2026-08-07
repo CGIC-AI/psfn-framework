@@ -3,11 +3,8 @@ import { withQuery } from '$lib/api/query';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
-  AdminEpisodicEpisodeProvenanceData,
-  AdminEpisodicRelatedArcView,
   AdminEpisodicThreadDetailData,
   AdminEpisodicThreadListData,
-  EpisodeArcKind,
 } from '$lib/types';
 
 export interface EpisodicEpisodeListParams {
@@ -16,12 +13,6 @@ export interface EpisodicEpisodeListParams {
   to?: string;
   limit?: number;
   offset?: number;
-}
-
-export interface EpisodicArcListParams {
-  direction?: 'incoming' | 'outgoing' | 'both';
-  arcKind?: EpisodeArcKind;
-  limit?: number;
 }
 
 function toQueryString(params: object): string {
@@ -46,23 +37,6 @@ export function getEpisodicEpisodeDetail(
 ): Promise<AdminEpisodicEpisodeDetailData> {
   return apiGet<AdminEpisodicEpisodeDetailData>(
     `/api/admin/episodic-memory/episodes/${encodeURIComponent(id)}`
-  );
-}
-
-export function getEpisodicEpisodeProvenance(
-  id: string
-): Promise<AdminEpisodicEpisodeProvenanceData> {
-  return apiGet<AdminEpisodicEpisodeProvenanceData>(
-    `/api/admin/episodic-memory/episodes/${encodeURIComponent(id)}/provenance`
-  );
-}
-
-export function listEpisodicEpisodeArcs(
-  id: string,
-  params: EpisodicArcListParams = {}
-): Promise<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] }> {
-  return apiGet<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] }>(
-    `/api/admin/episodic-memory/episodes/${encodeURIComponent(id)}/arcs${toQueryString(params)}`
   );
 }
 

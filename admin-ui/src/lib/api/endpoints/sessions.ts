@@ -86,11 +86,6 @@ export async function getCachedSessionList(): Promise<AdminSessionListData | nul
   return (await sessionListCache.read())?.data ?? null;
 }
 
-export async function clearSessionListCache(): Promise<void> {
-  await sessionListCache.remove();
-  sessionListRevalidations.delete(getCompanionCacheScope());
-}
-
 export function revalidateSessionList(): Promise<AdminSessionListData> {
   const companionScope = getCompanionCacheScope();
   const active = sessionListRevalidations.get(companionScope);

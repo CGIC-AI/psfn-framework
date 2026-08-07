@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from '$lib/api/client';
+import { apiPost } from '$lib/api/client';
 import {
   createQueuePageCache,
   isAdminConfirmationsData,
@@ -19,16 +19,6 @@ const confirmationQueueCache = createQueuePageCache({
   path: '/api/admin/confirmations',
   validate: isAdminConfirmationsData,
 });
-
-/**
- * Fetch pending confirmations from the admin API.
- * Endpoint: GET /api/admin/confirmations
- *
- * When the gateway is not connected, the backend returns { available: false }.
- */
-export function getConfirmations(): Promise<AdminConfirmationsData> {
-  return apiGet<AdminConfirmationsData>('/api/admin/confirmations');
-}
 
 export function loadConfirmationsLocalFirst(
   onData: (data: AdminConfirmationsData, source: LocalFirstDataSource) => void,

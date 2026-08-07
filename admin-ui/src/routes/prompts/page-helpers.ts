@@ -2,7 +2,6 @@ import type {
   NorthStarItem,
   PromptLayer,
   PromptRuntimeBlock,
-  PromptRuntimeLayerCoverageEntry,
   PromptRuntimeMacroHint,
 } from '$lib/types';
 
@@ -231,22 +230,6 @@ export function runtimeBlockStatusLabel(block: PromptRuntimeBlock): string {
   return block.customContent?.trim() ? 'Companion override active' : 'Using built-in guidance';
 }
 
-export function runtimeSchemaLabel(block: PromptRuntimeBlock): string {
-  if (block.immutable) return 'Immutable';
-  return block.required ? 'Required' : 'Optional';
-}
-
-export function runtimeSchemaBadge(block: PromptRuntimeBlock): string {
-  if (block.immutable) return 'bg-bark-300 text-shadow-700';
-  return block.required ? 'bg-wilt-100 text-wilt-700' : 'bg-moss-100 text-moss-700';
-}
-
-export function runtimeLayerStatusBadge(entry: PromptRuntimeLayerCoverageEntry): string {
-  if (entry.status === 'valid') return 'bg-moss-100 text-moss-700';
-  if (entry.status === 'missing') return 'bg-wilt-100 text-wilt-700';
-  return 'bg-gold-100 text-gold-800';
-}
-
 export function runtimePlacementBadge(block: PromptRuntimeBlock): string {
   if (block.placement === 'system_prompt') return 'bg-[#4A5C8B] text-white';
   if (block.placement === 'context_messages') return 'bg-[#4A7C59] text-white';
@@ -315,10 +298,6 @@ export function roleBadge(role: string | undefined): RoleBadgeMeta | null {
 }
 
 export function isProtected(_layer: PromptLayer): boolean {
-  return false;
-}
-
-export function isConstitutionOwnedLayer(_layer: PromptLayer): boolean {
   return false;
 }
 

@@ -15,7 +15,7 @@ export interface GardenCacheStorage {
   removePrefix?(prefix: string): Promise<void>;
 }
 
-export function companionCachePrefix(companionScope: string): string {
+function companionCachePrefix(companionScope: string): string {
   return `companion:${companionScope}:`;
 }
 
@@ -49,7 +49,7 @@ function transactionCompletion(transaction: IDBTransaction): Promise<void> {
  * Origin-scoped Garden cache. The browser origin is the companion deployment
  * boundary; credentials and mutation intents are never written here.
  */
-export class IndexedDbGardenCacheStorage implements GardenCacheStorage {
+class IndexedDbGardenCacheStorage implements GardenCacheStorage {
   private databasePromise: Promise<IDBDatabase> | null = null;
 
   constructor(private readonly factory?: IDBFactory) {}
@@ -140,14 +140,6 @@ let browserStorage: GardenCacheStorage | null = null;
 export function getGardenCacheStorage(): GardenCacheStorage {
   if (!browserStorage) browserStorage = new IndexedDbGardenCacheStorage();
   return browserStorage;
-}
-
-export async function clearGardenCacheScope(companionScope: string): Promise<void> {
-  const storage = getGardenCacheStorage();
-  if (!storage.removePrefix) {
-    throw new Error('Garden cache storage cannot clear a companion scope');
-  }
-  await storage.removePrefix(companionCachePrefix(companionScope));
 }
 
 onCompanionScopeChange((previousCompanionId) => {

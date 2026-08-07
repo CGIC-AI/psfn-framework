@@ -56,8 +56,6 @@ export function buildModelUsageExportPath(
   return withQuery('/api/admin/model-usage/export', params);
 }
 
-export const getModelUsageExportUrl = buildModelUsageExportPath;
-
 export function downloadModelUsageExport(
   format: 'csv' | 'json',
   query: AdminModelUsageQuery = {},

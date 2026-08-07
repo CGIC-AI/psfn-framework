@@ -81,11 +81,6 @@ export function mutateIntakeSourceList(
   return apiPost<IntakeSourceListMutationResult>('/api/admin/intake/source-lists', input);
 }
 
-/** The quarantine approval queue (held items first, newest first). */
-export function getIntakeQuarantine(): Promise<IntakeQuarantineListData> {
-  return apiGet<IntakeQuarantineListData>('/api/admin/intake/quarantine');
-}
-
 export function loadIntakeQuarantineLocalFirst(
   onData: (data: IntakeQuarantineListData, source: LocalFirstDataSource) => void,
 ): Promise<LocalFirstResult<IntakeQuarantineListData>> {

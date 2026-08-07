@@ -178,14 +178,6 @@ export interface AdminObserverEvalSidecarLatestData {
   filters: Omit<AdminObserverEvalSidecarObservationFilters, 'limit'>;
 }
 
-export interface AdminObserverEvalSidecarExportData {
-  exportVersion: 'garden.observer-eval-sidecar.export.v1';
-  generatedAtMs: number;
-  redacted: true;
-  filters: AdminObserverEvalSidecarObservationFilters;
-  observations: AdminObserverEvalSidecarObservationView[];
-}
-
 export interface AdminObserverEvalSidecarRunView {
   runId: string;
   sidecarId: string;
@@ -331,12 +323,6 @@ export function buildObserverEvalSidecarExportPath(
   filters: AdminObserverEvalSidecarObservationFilters = {},
 ): string {
   return `${OBSERVER_EVAL_SIDECAR_BASE_PATH}/export${buildObserverEvalSidecarObservationQuery(filters)}`;
-}
-
-export function exportObserverEvalSidecarObservations(
-  filters: AdminObserverEvalSidecarObservationFilters = {},
-): Promise<AdminObserverEvalSidecarExportData> {
-  return apiGet<AdminObserverEvalSidecarExportData>(buildObserverEvalSidecarExportPath(filters));
 }
 
 export function buildObserverEvalSidecarObservationQuery(

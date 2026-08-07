@@ -3,7 +3,6 @@ import { getToken } from '$lib/stores/auth.svelte';
 import type {
   AdminSettingsData,
   ConfigUpdateResult,
-  DiscoveredModel,
   SettingsContractData,
 } from '$lib/types';
 
@@ -101,10 +100,6 @@ export function saveSubConfig(key: string, json: string): Promise<string> {
   const params = new URLSearchParams();
   params.set('configJson', json);
   return apiPostForm(`/api/admin/settings/${encodeURIComponent(key)}`, params);
-}
-
-export function listModels(): Promise<DiscoveredModel[]> {
-  return apiGet<DiscoveredModel[]>('/api/admin/models');
 }
 
 export function refreshModels(): Promise<void> {

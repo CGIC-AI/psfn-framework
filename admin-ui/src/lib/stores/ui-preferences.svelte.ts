@@ -41,10 +41,6 @@ export function getAvailableThemePacks(): readonly ThemePackDefinition[] {
   return listThemePacks();
 }
 
-export function hasResolvedUiPreferences(): boolean {
-  return resolvedFromServer;
-}
-
 export async function ensureUiPreferencesLoaded(forceRefresh = false): Promise<string> {
   if (resolvedFromServer && !forceRefresh) return selectedThemeId;
   if (loadPromise && !forceRefresh) return loadPromise;

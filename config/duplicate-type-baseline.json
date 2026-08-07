@@ -20,15 +20,6 @@
       "note": "Audit lane 2 (m1): `type Awaitable<T> = T | Promise<T>` is declared in 12 files, but only these two export it; this gate scopes to exported definitions so the unexported copies are out of scope. Fix per audit: one export from src/shared/utils/types.ts with import swaps everywhere."
     },
     {
-      "name": "BeadsAction",
-      "kind": "collision",
-      "files": [
-        "src/boundary/gateway/protocol.ts",
-        "src/boundary/integrations/beads/enablement.ts"
-      ],
-      "note": "Audit lane 2 (m9): protocol.ts hand-writes the union while enablement.ts derives it from ALL_BEADS_ACTIONS (whose header claims single-source-of-truth). Values match today; the scanner flags the spelling difference as a collision, so this is a drift risk, not a true semantic conflict. Fix: protocol.ts imports the type from enablement.ts (no cycle risk)."
-    },
-    {
       "name": "FleetRestoreDatabaseOperation",
       "kind": "identical",
       "files": [
@@ -45,24 +36,6 @@
         "src/primitives/llm/model-hint-routing.ts"
       ],
       "note": "New finding beyond the 2026-08-05 audit. Both files declare the identical alias `type LLMCompletionModelHint = LLMModelHint`. Consolidation candidate: keep the alias in one module (model-hint-routing owns hint semantics) and import it in the other."
-    },
-    {
-      "name": "PolicyContext",
-      "kind": "collision",
-      "files": [
-        "src/boundary/gateway/protocol.ts",
-        "src/system/trust/policy.ts"
-      ],
-      "note": "Audit lane 2 (M3): trust-layer disclosure context vs gateway RPC-gate `{ method, params, callerClass }` — different domains under one load-bearing name. Fix: rename the gateway pair to GatewayPolicyContext (with GatewayPolicyDecision)."
-    },
-    {
-      "name": "PolicyDecision",
-      "kind": "collision",
-      "files": [
-        "src/boundary/gateway/protocol.ts",
-        "src/system/trust/policy.ts"
-      ],
-      "note": "Audit lane 2 (M3): trust values 'allow'|'deny'|'sanitize' vs gateway values 'ALLOW'|'DENY'|'NEEDS_APPROVAL' — different domains and casing conventions under one load-bearing name. Fix: rename the gateway pair to GatewayPolicyDecision (with GatewayPolicyContext)."
     },
     {
       "name": "ReflectionExecutionSource",
@@ -83,24 +56,6 @@
       "note": "Audit lane 2 (m4): byte-identical 5-field interface in two parallel auto-publishers. Fix: share the input type from one place (e.g. a shared integrations module or the reflection runtime)."
     },
     {
-      "name": "RuntimeMode",
-      "kind": "collision",
-      "files": [
-        "src/core/agent/tool-wiring-validator.ts",
-        "src/system/lifecycle/runtime-mode.ts"
-      ],
-      "note": "Audit lane 2 (M1): canonical process-topology mode 'split'|'gateway-agent' vs a single-literal 'gateway' stub in the tool-wiring validator — disjoint value sets, and the stub is imported by production code. Fix: rename the validator type (e.g. ToolWiringValidationMode)."
-    },
-    {
-      "name": "SatelliteRoutingMetadata",
-      "kind": "collision",
-      "files": [
-        "src/core/agent/satellite-adapter-port.ts",
-        "src/shared/contracts/satellite-registry.ts"
-      ],
-      "note": "Audit lane 2 (M2): fully-required registry wire snapshot vs all-optional agent-internal delegation hint — structurally incompatible shapes, and the port type's name claims a canonical-contract meaning it does not have. Fix: rename the port type to SatelliteDelegationRoutingHint."
-    },
-    {
       "name": "ScratchpadEntry",
       "kind": "identical",
       "files": [
@@ -117,15 +72,6 @@
         "src/faculties/shards/tool-sync.ts"
       ],
       "note": "Audit lane 2 (m6): identical one-method interface in the same subsystem. Fix: move to shards/types.ts or have tool-sync import from manager — check the import-cycle direction first per the audit's caveat."
-    },
-    {
-      "name": "ShardCreationMode",
-      "kind": "collision",
-      "files": [
-        "src/faculties/shards/types.ts",
-        "src/shared/routing/envelope.ts"
-      ],
-      "note": "Reviewed by audit lane 2 and deliberately left unflagged: shards/types.ts is a plain alias (`= RoutingShardCreationMode`) to the canonical union in shared/routing/envelope.ts. The scanner classifies alias-vs-union as a collision by spelling; this is name reuse for a single definition, not duplication."
     }
   ]
 }

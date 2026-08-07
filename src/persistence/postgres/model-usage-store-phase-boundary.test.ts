@@ -7,8 +7,9 @@ const readSource = async (relativePath: string): Promise<string> => (
 
 describe('PostgresModelUsageStore phased module boundary', () => {
   it('delegates capture and query ownership behind the public class', async () => {
-    const [store, capture, common, queries, queryInput, querySupport, rows] = await Promise.all([
+    const [facade, store, capture, common, queries, queryInput, querySupport, rows] = await Promise.all([
       readSource('./model-usage-store.ts'),
+      readSource('./model-usage-store/store.ts'),
       readSource('./model-usage-store/capture.ts'),
       readSource('./model-usage-store/common.ts'),
       readSource('./model-usage-store/queries.ts'),
@@ -17,10 +18,12 @@ describe('PostgresModelUsageStore phased module boundary', () => {
       readSource('./model-usage-store/rows.ts'),
     ]);
 
+    expect(facade).toContain("from './model-usage-store/store.js'");
+    expect(facade).not.toContain('class PostgresModelUsageStore');
     expect(store).toContain('export class PostgresModelUsageStore');
-    expect(store).toContain("from './model-usage-store/capture.js'");
-    expect(store).toContain("from './model-usage-store/common.js'");
-    expect(store).toContain("from './model-usage-store/queries.js'");
+    expect(store).toContain("from './capture.js'");
+    expect(store).toContain("from './common.js'");
+    expect(store).toContain("from './queries.js'");
     expect(capture).not.toContain("from '../model-usage-store.js'");
     expect(capture).toContain('export class PostgresModelUsageCapture');
     expect(capture).toContain('INSERT INTO model_usage_events');
@@ -48,6 +51,7 @@ describe('PostgresModelUsageStore phased module boundary', () => {
   it('does not invent retention behavior absent from the store contract', async () => {
     const sources = await Promise.all([
       readSource('./model-usage-store.ts'),
+      readSource('./model-usage-store/store.ts'),
       readSource('./model-usage-store/capture.ts'),
       readSource('./model-usage-store/queries.ts'),
     ]);

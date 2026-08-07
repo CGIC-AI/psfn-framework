@@ -1241,6 +1241,7 @@ describe('hydrateCanonicalStartupConfig', () => {
           cleanupIntervalMs: 30_000,
         },
         postTurn: {
+          ...loadSchedulerSeedDefaults().backgroundWork.postTurn,
           extractionDrainRequeueDelayMs: 1_500,
           foregroundPreemptionDeferDelayMs: 2_500,
         },
@@ -1332,6 +1333,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         cleanupIntervalMs: 30_000,
       },
       postTurn: {
+        maxAttempts: loadSchedulerSeedDefaults().backgroundWork.postTurn.maxAttempts,
         extractionDrainRequeueDelayMs: 1_500,
         foregroundPreemptionDeferDelayMs: 2_500,
       },

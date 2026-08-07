@@ -18,6 +18,7 @@ import {
   saveProvidersConfig,
 } from './providers-config.js';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   DEFAULT_SOCIAL_DESIRE_CONFIG,
@@ -334,6 +335,7 @@ describe('subsystem config round-trip', () => {
           cleanupIntervalMs: 3_600_000,
         },
         postTurn: {
+          maxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
           extractionDrainRequeueDelayMs: 1_000,
           foregroundPreemptionDeferDelayMs: 1_000,
         },

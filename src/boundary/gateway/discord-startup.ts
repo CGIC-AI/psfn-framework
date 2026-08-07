@@ -1,5 +1,6 @@
 import { backoffMs, sleep as defaultSleep } from '../../shared/utils/timing.js';
 import { toError } from '../../shared/utils/errors.js';
+import { positiveIntegerOr } from '../../shared/utils/numeric.js';
 
 export const DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS = 2_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS = 30_000;
@@ -72,11 +73,6 @@ function normalizeNonNegativeInt(value: number | undefined, fallback: number): n
   return parsed >= 0 ? parsed : fallback;
 }
 
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  const parsed = Math.floor(value!);
-  return parsed > 0 ? parsed : fallback;
-}
 
 export function isRetryableDiscordStartError(error: Error): boolean {
   const statusCode = parseStatusCode(error);
@@ -99,11 +95,11 @@ export async function startDiscordWithRetry(
     options.maxAttempts,
     DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
   );
-  const baseDelayMs = normalizePositiveInt(
+  const baseDelayMs = positiveIntegerOr(
     options.baseDelayMs,
     DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   );
-  const maxDelayMs = normalizePositiveInt(
+  const maxDelayMs = positiveIntegerOr(
     options.maxDelayMs,
     DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   );

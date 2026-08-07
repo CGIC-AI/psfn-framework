@@ -14,6 +14,7 @@ import {
 } from '../../persistence/layout.js';
 import { resolveWorkspaceRoot } from '../../boundary/gateway/filesystem-paths.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { requirePositiveInteger } from '../../shared/utils/numeric.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   VALID_SENSITIVITY_LEVELS,
@@ -241,13 +242,6 @@ function normalizeIsoTimestamp(value: unknown, field: string): string {
   return new Date(parsed).toISOString();
 }
 
-function normalizePositiveInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new Error(`wiki ${field} must be an integer >= 1`);
-  }
-  return value;
-}
-
 function clampSearchLimit(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return DEFAULT_SEARCH_LIMIT;
@@ -309,7 +303,7 @@ function normalizePersistedMetadata(raw: unknown, body: string): WikiDocumentMet
     createdAt: normalizeIsoTimestamp(raw.createdAt, 'createdAt'),
     updatedAt: normalizeIsoTimestamp(raw.updatedAt, 'updatedAt'),
     updatedBy: normalizeNonEmptyString(raw.updatedBy, 'updatedBy', 120),
-    version: normalizePositiveInteger(raw.version, 'version'),
+    version: requirePositiveInteger(raw.version, 'version'),
     bodySha256: normalizeNonEmptyString(raw.bodySha256, 'bodySha256'),
   };
   ensureProvenance(metadata.sourceClass, metadata.provenanceRefs);

@@ -4,6 +4,7 @@ import type { ShellExecParams } from '../../gateway/protocol.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type { ShellExecPolicyConfig } from './shell-policy-config.js';
 import { createDefaultShellExecSettings } from '../../../system/config/shell-exec-config.js';
+import { toPositiveInteger } from '../../../shared/utils/numeric.js';
 
 const DEFAULT_SANDBOX_BINARY = '/usr/bin/bwrap';
 const DEFAULT_RESOURCE_LIMIT_BINARY = '/usr/bin/prlimit';
@@ -73,13 +74,6 @@ export interface ResolvedShellExecution {
 }
 
 export class ShellExecPolicyError extends Error {}
-
-function normalizePositiveInt(value: unknown): number | undefined {
-  if (!Number.isFinite(value)) return undefined;
-  const parsed = Math.floor(Number(value));
-  if (parsed <= 0) return undefined;
-  return parsed;
-}
 
 function includesPathSeparator(value: string): boolean {
   return value.includes('/') || value.includes('\\');
@@ -421,21 +415,21 @@ function resolveLimits(
   params: ShellExecParams,
   policy: ShellExecPolicyConfig,
 ): { timeoutMs: number; maxOutputChars: number } {
-  const maxTimeoutMs = normalizePositiveInt(policy.maxTimeoutMs)
+  const maxTimeoutMs = toPositiveInteger(policy.maxTimeoutMs)
     ?? DEFAULT_SHELL_EXEC_SETTINGS.maxTimeoutMs;
-  const defaultTimeoutMs = normalizePositiveInt(policy.defaultTimeoutMs)
+  const defaultTimeoutMs = toPositiveInteger(policy.defaultTimeoutMs)
     ?? DEFAULT_SHELL_EXEC_SETTINGS.defaultTimeoutMs;
   const timeoutMs = Math.min(
-    normalizePositiveInt(params.timeoutMs) ?? defaultTimeoutMs,
+    toPositiveInteger(params.timeoutMs) ?? defaultTimeoutMs,
     maxTimeoutMs,
   );
 
-  const maxOutputCharsCap = normalizePositiveInt(policy.maxOutputChars)
+  const maxOutputCharsCap = toPositiveInteger(policy.maxOutputChars)
     ?? DEFAULT_SHELL_EXEC_SETTINGS.maxOutputChars;
-  const defaultMaxOutputChars = normalizePositiveInt(policy.defaultMaxOutputChars)
+  const defaultMaxOutputChars = toPositiveInteger(policy.defaultMaxOutputChars)
     ?? DEFAULT_SHELL_EXEC_SETTINGS.defaultMaxOutputChars;
   const maxOutputChars = Math.min(
-    normalizePositiveInt(params.maxOutputChars) ?? defaultMaxOutputChars,
+    toPositiveInteger(params.maxOutputChars) ?? defaultMaxOutputChars,
     maxOutputCharsCap,
   );
   return { timeoutMs, maxOutputChars };
@@ -452,15 +446,15 @@ function resolveResourceLimits(
   | 'maxOpenFiles'
 > {
   return {
-    maxProcesses: normalizePositiveInt(policy.maxProcesses)
+    maxProcesses: toPositiveInteger(policy.maxProcesses)
       ?? DEFAULT_SHELL_EXEC_SETTINGS.maxProcesses,
-    maxAddressSpaceBytes: normalizePositiveInt(policy.maxAddressSpaceBytes)
+    maxAddressSpaceBytes: toPositiveInteger(policy.maxAddressSpaceBytes)
       ?? DEFAULT_SHELL_EXEC_SETTINGS.maxAddressSpaceBytes,
-    maxFileBytes: normalizePositiveInt(policy.maxFileBytes)
+    maxFileBytes: toPositiveInteger(policy.maxFileBytes)
       ?? DEFAULT_SHELL_EXEC_SETTINGS.maxFileBytes,
-    maxCpuSeconds: normalizePositiveInt(policy.maxCpuSeconds)
+    maxCpuSeconds: toPositiveInteger(policy.maxCpuSeconds)
       ?? DEFAULT_SHELL_EXEC_SETTINGS.maxCpuSeconds,
-    maxOpenFiles: normalizePositiveInt(policy.maxOpenFiles)
+    maxOpenFiles: toPositiveInteger(policy.maxOpenFiles)
       ?? DEFAULT_SHELL_EXEC_SETTINGS.maxOpenFiles,
   };
 }

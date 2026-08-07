@@ -6,6 +6,7 @@ import type {
 import type { MemoryProvenance, PurrMemory } from '../../faculties/memory/types.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
+import { toPositiveInteger } from '../../shared/utils/numeric.js';
 
 export type CogSecLineageAction =
   | 'seal'
@@ -149,12 +150,6 @@ interface MatchResult {
   reason: string;
 }
 
-function normalizePositiveInteger(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isInteger(value) || value <= 0) return undefined;
-  return value;
-}
-
 function normalizeRange(
   range: CogSecAffectedMessageRange,
   fallbackLogicalSessionId: string,
@@ -162,8 +157,8 @@ function normalizeRange(
 ): AffectedSpan {
   const messageIds = new Set<number>((range.messageIds ?? [])
     .filter((id): id is number => Number.isInteger(id) && id > 0));
-  const startEntryId = normalizePositiveInteger(range.startEntryId);
-  const endEntryId = normalizePositiveInteger(range.endEntryId);
+  const startEntryId = toPositiveInteger(range.startEntryId);
+  const endEntryId = toPositiveInteger(range.endEntryId);
   const sourceChannelId = range.sourceChannelId ?? fallbackSourceChannelId;
   return {
     ...(sourceChannelId ? { sourceChannelId } : {}),

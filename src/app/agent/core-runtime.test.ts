@@ -39,6 +39,28 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
+  it('production-wires one nonempty-envelope mutation intake into identity, wiki, and contacts', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    const runtimeStart = coreRuntimeSource.indexOf('const selfAuthoredMutationIntake = {');
+    const wikiWiring = coreRuntimeSource.indexOf('intake: selfAuthoredMutationIntake', runtimeStart);
+    const identityWiring = coreRuntimeSource.indexOf('intake: selfAuthoredMutationIntake', wikiWiring + 1);
+    const contactWiring = coreRuntimeSource.indexOf('intake: selfAuthoredMutationIntake', identityWiring + 1);
+
+    expect(runtimeStart).toBeGreaterThan(-1);
+    expect(coreRuntimeSource.slice(runtimeStart, wikiWiring)).toContain(
+      'getIntakeSinkGate: () => intakeSinkGate',
+    );
+    expect(coreRuntimeSource.slice(runtimeStart, wikiWiring)).toContain(
+      'getIntakeScreening: () => sessionManager.intakeScreening',
+    );
+    expect(coreRuntimeSource.slice(runtimeStart, wikiWiring)).toContain(
+      'getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes()',
+    );
+    expect(wikiWiring).toBeGreaterThan(runtimeStart);
+    expect(identityWiring).toBeGreaterThan(wikiWiring);
+    expect(contactWiring).toBeGreaterThan(identityWiring);
+  });
+
   it('registers the canonical lazy MCP client with runtime-derived disclosure lineage', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('agentLoop.registerTool(createMcpTool({');

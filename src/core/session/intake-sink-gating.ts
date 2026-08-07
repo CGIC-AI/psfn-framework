@@ -61,6 +61,10 @@ export interface ScreenedSelfAuthoredMutation {
   params: Record<string, unknown>;
 }
 
+function isPersonaMutationAuditOnly(sink: SelfAuthoredMutationSink): boolean {
+  return sink === 'persona_mutation';
+}
+
 function assertSelfAuthoredMutationSink(sink: IntakeSink): asserts sink is SelfAuthoredMutationSink {
   if (sink !== 'persona_mutation' && sink !== 'wiki_write' && sink !== 'trust_mutation') {
     throw new Error(`Unsupported self-authored mutation sink: ${sink}`);
@@ -69,10 +73,13 @@ function assertSelfAuthoredMutationSink(sink: IntakeSink): asserts sink is SelfA
 
 /**
  * Screen model-authored mutation arguments before they can reach durable
- * persona, wiki, or trust state. Every string leaf gets its own envelope so
- * sanitization is applied to the exact value the sink consumes. The active
- * turn's envelopes join those proposed-content envelopes, matching managed
- * skill writes: a clean-looking derivative cannot shed hostile provenance.
+ * persona, wiki, or trust state. Every string leaf gets its own envelope. Wiki
+ * and trust mutations consume the screened effective value and enforce the
+ * sink verdict. Persona mutations preserve the companion-authored value and
+ * treat CogSec as audit-only; their existing structural/charter and
+ * confirmation path remains authoritative. The active turn's envelopes join
+ * those proposed-content envelopes, matching managed skill writes: a
+ * clean-looking derivative cannot shed hostile provenance from the audit.
  *
  * A partially wired runtime fails loudly before gate evaluation. In
  * particular, this function never calls a mutation sink with an empty
@@ -86,6 +93,7 @@ export async function screenSelfAuthoredMutation(
   context: { tool: string; action: string },
 ): Promise<ScreenedSelfAuthoredMutation> {
   assertSelfAuthoredMutationSink(sink);
+  const personaAuditOnly = isPersonaMutationAuditOnly(sink);
   const gate = intake.getIntakeSinkGate();
   const screening = intake.getIntakeScreening();
   if (!gate && !screening) {
@@ -113,7 +121,12 @@ export async function screenSelfAuthoredMutation(
         scope: 'strict',
       });
       proposedContentEnvelopes.push(screened.snapshot);
-      return screened.effectiveText;
+      // Persona belongs to the companion. CogSec still evaluates and audits
+      // the exact proposed text, but it is not an independent persona
+      // authority and therefore must not replace a companion-authored value
+      // with the generic withheld placeholder. The existing persona
+      // structural/charter and confirmation path remains authoritative.
+      return personaAuditOnly ? value : screened.effectiveText;
     }
     if (Array.isArray(value)) {
       const screenedItems: unknown[] = [];
@@ -147,6 +160,7 @@ export async function screenSelfAuthoredMutation(
   const envelopes = [...activeTurnEnvelopes, ...proposedContentEnvelopes];
   const decision = gate.evaluate(sink, envelopes, {
     ...context,
+    enforcementPosture: personaAuditOnly ? 'audit_only' : 'enforce',
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: proposedContentEnvelopes.length,
   });
@@ -155,7 +169,10 @@ export async function screenSelfAuthoredMutation(
       `Self-authored ${sink} mutation unexpectedly reached an unscreened sink-gate path`,
     );
   }
-  return { allowed: decision.allowed, params: screenedParams };
+  return {
+    allowed: personaAuditOnly || decision.allowed,
+    params: screenedParams,
+  };
 }
 
 export interface PromptAssemblyGateSummary {

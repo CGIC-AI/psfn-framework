@@ -54,6 +54,21 @@ describe('silent Garden background revalidation', () => {
     expect(next[2]).toBe(first);
   });
 
+  it('retains fleet companion identities across insertion and reordering', () => {
+    const first = { companionId: 'companion-1', displayName: 'One' };
+    const second = { companionId: 'companion-2', displayName: 'Two' };
+    const current = [first, second];
+
+    const next = reconcilePollingSnapshot(current, [
+      { companionId: 'companion-3', displayName: 'Three' },
+      { companionId: 'companion-2', displayName: 'Two' },
+      { companionId: 'companion-1', displayName: 'One' },
+    ]);
+
+    expect(next[1]).toBe(second);
+    expect(next[2]).toBe(first);
+  });
+
   it('surfaces refresh errors locally and discards a superseded response', async () => {
     let current = { entries: [{ id: 'held-1', count: 1 }] };
     let resolveFirst: ((value: { entries: Array<{ id: string; count: number }> }) => void) | undefined;

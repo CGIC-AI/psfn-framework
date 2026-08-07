@@ -9,7 +9,7 @@ import {
   registerStreamingTtsConnectorFactory,
   registerStreamingTtsProvider,
   resolveStreamingTtsRuntimeConfig,
-  type EchoStreamingTtsConfig,
+  type EchoTtsProviderSettings,
 } from './index.js';
 import type { StreamingTtsConnector, TtsAudioChunk } from './types.js';
 
@@ -51,7 +51,7 @@ describe('createStreamingTtsConnector', () => {
 
   it('dispatches to a registered factory for provider "echo"', () => {
     const connector = createStubConnector('echo-test');
-    const factory = vi.fn((config: EchoStreamingTtsConfig) => {
+    const factory = vi.fn((config: EchoTtsProviderSettings) => {
       expect(config).toMatchObject({
         url: 'http://127.0.0.1:5050/v1/audio/speech',
         voice: 'echo-voice-1',

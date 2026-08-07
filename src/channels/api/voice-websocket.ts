@@ -26,7 +26,7 @@ type UpgradeRejectStatus = 401 | 404;
 
 export type VoiceWebSocketCloseReason = 'client_disconnect' | 'shutdown';
 
-export interface WebSocketVoiceSession {
+export interface ApiWebSocketVoiceSession {
   id: string;
   openedAtMs: number;
   lastSeenAtMs: number;
@@ -43,9 +43,9 @@ export interface VoiceWebSocketRuntime {
 }
 
 export interface VoiceWebSocketRuntimeHooks {
-  onSessionOpen?: (session: WebSocketVoiceSession, context: VoiceWebSocketRuntimeContext) => void | Promise<void>;
-  onSessionClose?: (session: WebSocketVoiceSession, reason: VoiceWebSocketCloseReason) => void | Promise<void>;
-  onMessage?: (session: WebSocketVoiceSession, data: VoiceWireTransportData) => void | Promise<void>;
+  onSessionOpen?: (session: ApiWebSocketVoiceSession, context: VoiceWebSocketRuntimeContext) => void | Promise<void>;
+  onSessionClose?: (session: ApiWebSocketVoiceSession, reason: VoiceWebSocketCloseReason) => void | Promise<void>;
+  onMessage?: (session: ApiWebSocketVoiceSession, data: VoiceWireTransportData) => void | Promise<void>;
 }
 
 export interface ApiVoiceWebSocketConfig {
@@ -207,7 +207,7 @@ export function createHookVoiceWebSocketRuntime(
   return {
     attach(connection: WebSocketVoiceConnection, context: VoiceWebSocketRuntimeContext): () => void {
       const openedAtMs = now();
-      const session: WebSocketVoiceSession = {
+      const session: ApiWebSocketVoiceSession = {
         id: connection.id,
         openedAtMs,
         lastSeenAtMs: openedAtMs,

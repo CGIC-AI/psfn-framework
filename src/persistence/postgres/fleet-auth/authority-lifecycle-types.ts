@@ -9,11 +9,11 @@ import {
   parseVerifiedDiscordContactAuthoritySnapshot,
   type VerifiedDiscordContactAuthoritySnapshot,
 } from '../../../shared/contracts/contact-authority-snapshot.js';
+import type { FleetAuthRole } from '../../../system/config/fleet-auth-config.js';
+export type { FleetAuthRole } from '../../../system/config/fleet-auth-config.js';
 
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const DISCORD_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
-
-export type FleetAuthRole = 'owner' | 'admin' | 'member' | 'guest';
 
 export interface PrincipalAuthorityClaim {
   principalId: string;

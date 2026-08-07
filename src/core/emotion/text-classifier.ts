@@ -1,4 +1,5 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import type { TextEmotionDType } from '../../shared/contracts/runtime-base.js';
 export interface TextEmotionClassification {
   label: string;
   score: number;
@@ -15,8 +16,6 @@ export const TEXT_EMOTION_DTYPE_VALUES = [
   'bnb4',
   'q4f16',
 ] as const;
-
-export type TextEmotionDType = typeof TEXT_EMOTION_DTYPE_VALUES[number];
 
 export interface TextEmotionClassifierConfig {
   model: string;

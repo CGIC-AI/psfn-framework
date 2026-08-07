@@ -1,7 +1,7 @@
 import { createSilenceTurnStrategy } from './strategies.js';
 import type {
   TurnActivity,
-  TurnSnapshot,
+  VoiceTurnSnapshot,
   TurnState,
   TurnStrategy,
   TurnTransition,
@@ -15,7 +15,7 @@ export class TurnLifecycleController {
   private readonly listeners = new Set<TurnTransitionListener>();
   private readonly strategy: TurnStrategy;
 
-  private snapshot: TurnSnapshot;
+  private snapshot: VoiceTurnSnapshot;
 
   constructor(
     strategy: TurnStrategy = createSilenceTurnStrategy({ silenceThresholdMs: DEFAULT_SILENCE_THRESHOLD_MS }),
@@ -31,7 +31,7 @@ export class TurnLifecycleController {
     };
   }
 
-  getSnapshot(): TurnSnapshot {
+  getSnapshot(): VoiceTurnSnapshot {
     return { ...this.snapshot };
   }
 

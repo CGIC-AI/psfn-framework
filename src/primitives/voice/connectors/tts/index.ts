@@ -11,7 +11,7 @@ export * from './echo-stream.js';
 
 export type StreamingTtsProvider = 'elevenlabs' | 'echo' | (string & {});
 
-export interface EchoStreamingTtsConfig {
+export interface EchoTtsProviderSettings {
   url: string;
   voice: string;
   preset?: string;
@@ -20,7 +20,7 @@ export interface EchoStreamingTtsConfig {
 
 export interface StreamingTtsConfigByProvider {
   elevenlabs: ElevenLabsStreamingTtsConfig;
-  echo: EchoStreamingTtsConfig;
+  echo: EchoTtsProviderSettings;
   [provider: string]: unknown;
 }
 
@@ -110,7 +110,7 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
     },
   }],
   ['echo', {
-    createConnector: (config: EchoStreamingTtsConfig) => createEchoStreamingTtsConnector({
+    createConnector: (config: EchoTtsProviderSettings) => createEchoStreamingTtsConnector({
       baseUrl: toEchoBaseUrl(config.url),
       voice: config.voice,
       preset: config.preset,

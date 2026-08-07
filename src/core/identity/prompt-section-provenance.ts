@@ -100,7 +100,7 @@ function scopeKeyFor(scopeClass: PromptSectionScopeClass, scopeKeys: TurnPromptS
 }
 
 /** Resolves per-block producer + scope labels for a normalized section id. */
-export type PromptSectionScopeResolver = (
+export type PromptSectionProvenanceScopeResolver = (
   sectionId: string,
 ) => PromptSectionScopeProvenance | undefined;
 
@@ -111,7 +111,7 @@ export type PromptSectionScopeResolver = (
  */
 export function buildTurnPromptSectionScopeResolver(
   scopeKeys: TurnPromptScopeKeys,
-): PromptSectionScopeResolver {
+): PromptSectionProvenanceScopeResolver {
   return (sectionId: string): PromptSectionScopeProvenance | undefined => {
     const spec = PROMPT_SECTION_SCOPE_REGISTRY[sectionId];
     if (!spec) return undefined;

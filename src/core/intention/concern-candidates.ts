@@ -15,7 +15,7 @@ import {
 import type { ConcernStorePort } from './concern-store-port.js';
 import type {
   ConcernCandidate,
-  ConcernCandidateExtractionContext,
+  IntentionConcernCandidateExtractionContext,
   ConcernCandidateMessageContext,
   ConcernCandidateMemoryContext,
 } from './concern-candidate-types.js';
@@ -44,7 +44,7 @@ import {
 
 export type {
   ConcernCandidate,
-  ConcernCandidateExtractionContext,
+  IntentionConcernCandidateExtractionContext,
   ConcernCandidateFollowUpHint,
   ConcernCandidateMemoryContext,
   ConcernCandidateMessageContext,
@@ -138,7 +138,7 @@ export class ConcernCandidateQueue {
     this.now = options.now ?? (() => new Date());
   }
 
-  enqueueFromExtraction(context: ConcernCandidateExtractionContext): ConcernCandidate[] {
+  enqueueFromExtraction(context: IntentionConcernCandidateExtractionContext): ConcernCandidate[] {
     return this.enqueueMany(deriveConcernCandidatesFromExtraction({
       context,
       idFactory: this.idFactory,
@@ -183,7 +183,7 @@ export class ConcernCandidateQueue {
 }
 
 export interface DeriveConcernCandidatesOptions {
-  context: ConcernCandidateExtractionContext;
+  context: IntentionConcernCandidateExtractionContext;
   idFactory?: () => string;
   now?: () => Date;
 }
@@ -242,7 +242,7 @@ export function deriveConcernCandidatesFromExtraction(
 
 function buildCandidateFromFact(input: {
   fact: ExtractedFact;
-  context: ConcernCandidateExtractionContext;
+  context: IntentionConcernCandidateExtractionContext;
   messageContext: ConcernCandidateMessageContext[];
   relatedMemoryContext: ConcernCandidateMemoryContext[];
   id: string;
@@ -278,7 +278,7 @@ function buildCandidateFromFact(input: {
 
 function buildCandidateFromMessage(input: {
   entry: SessionEntry;
-  context: ConcernCandidateExtractionContext;
+  context: IntentionConcernCandidateExtractionContext;
   messageContext: ConcernCandidateMessageContext[];
   relatedMemoryContext: ConcernCandidateMemoryContext[];
   id: string;

@@ -2,7 +2,7 @@ import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import type {
   BoundedSubagentLaunchHealthState,
   BoundedSubagentLaunchLifecycleState,
-  SubagentExecutionRequest,
+  BoundedSubagentExecutionRequest,
 } from './substrate-agent/bounded-subagent-contract.js';
 import type {
   RuntimeLaneBudgetProfile,
@@ -63,7 +63,7 @@ export interface PostTurnSubagentSpawnPolicy {
 }
 
 export interface PostTurnSubagentSpawnPayload {
-  request: Omit<SubagentExecutionRequest, 'maxTurns'> & { maxTurns?: number };
+  request: Omit<BoundedSubagentExecutionRequest, 'maxTurns'> & { maxTurns?: number };
   policy: PostTurnSubagentSpawnPolicy;
 }
 

@@ -1,7 +1,7 @@
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type {
   AdminSkillsApi,
-  ManagedSkillRecord,
+  AdminManagedSkillRecord,
 } from '../admin-contract.js';
 import type {
   SkillSkipRecord,
@@ -35,7 +35,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     return this.runtime.getSnapshot();
   }
 
-  listManaged(): Promise<{ managed: ManagedSkillRecord[]; skipped: SkillSkipRecord[] }> {
+  listManaged(): Promise<{ managed: AdminManagedSkillRecord[]; skipped: SkillSkipRecord[] }> {
     return this.runtime.listManaged();
   }
 
@@ -44,7 +44,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     category: string;
     content: string;
     description?: string;
-  }): ManagedSkillRecord {
+  }): AdminManagedSkillRecord {
     return this.runtime.createSkill(input);
   }
 
@@ -52,7 +52,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     name: string;
     content: string;
     description?: string;
-  }): ManagedSkillRecord {
+  }): AdminManagedSkillRecord {
     return this.runtime.updateSkill(input);
   }
 

@@ -9489,33 +9489,32 @@
       "value": "8"
     },
     {
-      "file": "src/persistence/postgres/model-usage-store.ts",
+      "file": "src/persistence/postgres/model-usage-store/queries.ts",
       "name": "DEFAULT_BREAKDOWN_LIMIT",
       "value": "20"
     },
     {
-      "file": "src/persistence/postgres/model-usage-store.ts",
-      "name": "DEFAULT_EVENT_LIMIT",
-      "value": "200"
-    },
-    {
-      "file": "src/persistence/postgres/model-usage-store.ts",
+      "file": "src/persistence/postgres/model-usage-store/queries.ts",
       "name": "MAX_DIMENSION_TIME_SERIES_ROWS",
-      "value": "5_000",
-      "note": "Code-owned fail-closed query safety boundary that caps high-cardinality dimension series before materialization; it is not operator-tunable policy."
+      "value": "5_000"
     },
     {
-      "file": "src/persistence/postgres/model-usage-store.ts",
-      "name": "MAX_EVENT_LIMIT",
-      "value": "2_000"
-    },
-    {
-      "file": "src/persistence/postgres/model-usage-store.ts",
+      "file": "src/persistence/postgres/model-usage-store/queries.ts",
       "name": "MAX_EXPORT_ROWS",
       "value": "50_000"
     },
     {
-      "file": "src/persistence/postgres/model-usage-store.ts",
+      "file": "src/persistence/postgres/model-usage-store/query-input.ts",
+      "name": "DEFAULT_EVENT_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store/query-input.ts",
+      "name": "MAX_EVENT_LIMIT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store/query-input.ts",
       "name": "MAX_TOP_N",
       "value": "100"
     },

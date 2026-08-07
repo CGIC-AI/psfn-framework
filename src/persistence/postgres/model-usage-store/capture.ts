@@ -44,13 +44,13 @@ import type {
 
 const log = createComponentLogger('ModelUsageStore');
 
-export function normalizeText(value: string | undefined, fallback: string): string {
+function normalizeText(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : fallback;
 }
 
 
-export function validateEnabledIcpCostPolicy(
+function validateEnabledIcpCostPolicy(
   policy: unknown,
 ): EnabledIcpCostBreakerPolicy {
   if (!isRecord(policy) || policy.enabled !== true) {
@@ -115,7 +115,7 @@ export function validateEnabledIcpCostPolicy(
   };
 }
 
-export function readIcpCostPurposeFromMetadata(metadata: Record<string, unknown>): string | undefined {
+function readIcpCostPurposeFromMetadata(metadata: Record<string, unknown>): string | undefined {
   const icpCost = metadata.icpCost;
   if (!isRecord(icpCost) || typeof icpCost.purpose !== 'string') return undefined;
   return icpCost.purpose.trim() || undefined;
@@ -141,13 +141,13 @@ function mergeCostTotal(
 }
 
 
-export function eventFingerprint(event: ModelUsageEvent): string {
+function eventFingerprint(event: ModelUsageEvent): string {
   return createHash('sha256')
     .update(JSON.stringify(canonicalize(event)))
     .digest('hex');
 }
 
-export function normalizeEvent(
+function normalizeEvent(
   input: ModelUsageEventInput,
   expectedCompanionId?: string,
 ): ModelUsageEvent {

@@ -18,7 +18,6 @@ import {
   RUNTIME_LAYOUT_MODE,
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
-  normalizeRuntimeLayoutMode,
   resolveBackupsDir,
   resolveCharacterCardHistoryPath,
   resolveCoreMemoryPath,
@@ -71,6 +70,7 @@ import {
   resolveValuesJournalPath,
   ensurePersonalFilesLayout,
 } from './layout.js';
+import { normalizeRuntimeLayoutMode } from '../shared/runtime-layout-mode.js';
 
 function writeJournalEntry(filePath: string, channelId: string): void {
   writeFileSync(

@@ -23,7 +23,7 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
-} from '../../app/startup/support/bootstrap-helpers.js';
+} from '../backplane/voice-provider-runtime.js';
 import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
 import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
 import {

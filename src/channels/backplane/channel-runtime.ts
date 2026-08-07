@@ -1,25 +1,25 @@
-import type { EventBus } from '../../../shared/event-bus.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
-import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
-import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
+import { ApiServer, type ApiServerConfig } from '../api/server.js';
 import {
   DiscordAdapter,
   type DiscordAdapterAccountBinding,
   type DiscordPrimaryUserBinding,
-} from '../../../channels/discord/adapter.js';
-import type { DiscordChannelConfig, TelegramChannelConfig } from '../../../channels/backplane/config.js';
-import type { CustomEmojiMeaningsByGuild } from '../../../channels/shared/reaction-surface.js';
-import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
+} from '../discord/adapter.js';
+import type { DiscordChannelConfig, TelegramChannelConfig } from './config.js';
+import type { CustomEmojiMeaningsByGuild } from '../shared/reaction-surface.js';
+import { TelegramAdapter } from '../telegram/adapter.js';
 import type {
   ChannelAdapterFactoryPort,
   ChannelAdapterPort,
   MessageHandler,
-} from '../../../channels/backplane/types.js';
-import type { ChannelAdapterRegistryPort } from '../../../channels/backplane/registry-port.js';
-import type { SessionStore } from '../../../persistence/sessions/store.js';
-import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
-import type { DocumentIngestLimits } from '../../../faculties/file-ingest/index.js';
+} from './types.js';
+import type { ChannelAdapterRegistryPort } from './registry-port.js';
+import type { SessionStore } from '../../persistence/sessions/store.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { DocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;

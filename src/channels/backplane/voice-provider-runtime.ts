@@ -1,5 +1,5 @@
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
   createStreamingSttConnector,
   getStreamingSttProviderMetadata,
@@ -8,7 +8,7 @@ import {
   resolveStreamingSttRuntimeConfig,
   type StreamingSttConnector,
   type StreamingSttProvider,
-} from '../../../primitives/voice/connectors/stt/index.js';
+} from '../../primitives/voice/connectors/stt/index.js';
 import {
   createStreamingTtsConnector,
   getStreamingTtsProviderMetadata,
@@ -17,7 +17,7 @@ import {
   resolveStreamingTtsRuntimeConfig,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
-} from '../../../primitives/voice/connectors/tts/index.js';
+} from '../../primitives/voice/connectors/tts/index.js';
 import {
   requirePluginActivationEligibility,
   wrapStreamingSttConnectorWithEligibility,

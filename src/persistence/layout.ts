@@ -1,9 +1,20 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../shared/logger.js';
+import {
+  RUNTIME_LAYOUT_MODE,
+  type RuntimeLayoutMode,
+  normalizeDir,
+  resolveRuntimeLayoutMode,
+} from '../shared/runtime-layout-mode.js';
 import { readJournalFirstEntry } from './journals/journal-utils.js';
 import { sanitizeChannelId } from './sessions/store-primitives.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
+
+export {
+  RUNTIME_LAYOUT_MODE,
+  resolveRuntimeLayoutMode,
+} from '../shared/runtime-layout-mode.js';
 
 const log = createComponentLogger('PersistenceLayout');
 
@@ -35,13 +46,6 @@ export interface ConfiguredPersistenceDirs {
   systemDataDir?: string;
   companionDataDir?: string;
 }
-
-export const RUNTIME_LAYOUT_MODE = Object.freeze({
-  CONTINUOUS: 'continuous',
-  PRODUCTION: 'production',
-} as const);
-
-export type RuntimeLayoutMode = (typeof RUNTIME_LAYOUT_MODE)[keyof typeof RUNTIME_LAYOUT_MODE];
 
 export interface RuntimePathLayoutOptions extends PersistenceRootOptions {
   mode?: string;
@@ -95,49 +99,6 @@ const COMPANION_WORKSPACE_DIRNAME = 'workspace';
 const COMPANION_IMAGES_DIRNAME = 'images';
 const COMPANION_VAULT_DIRNAME = 'vault';
 const COMPANION_SKILLS_DIRNAME = 'skills';
-
-const RUNTIME_LAYOUT_MODE_ALIASES: Readonly<Record<string, RuntimeLayoutMode>> = Object.freeze({
-  continuous: RUNTIME_LAYOUT_MODE.CONTINUOUS,
-  dev: RUNTIME_LAYOUT_MODE.CONTINUOUS,
-  development: RUNTIME_LAYOUT_MODE.CONTINUOUS,
-  production: RUNTIME_LAYOUT_MODE.PRODUCTION,
-  prod: RUNTIME_LAYOUT_MODE.PRODUCTION,
-  live: RUNTIME_LAYOUT_MODE.PRODUCTION,
-});
-
-function normalizeDir(value: string | undefined): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function normalizeRuntimeLayoutMode(value: string | undefined): RuntimeLayoutMode | null {
-  const normalized = value?.trim().toLowerCase() ?? '';
-  if (!normalized) return null;
-  return RUNTIME_LAYOUT_MODE_ALIASES[normalized] ?? null;
-}
-
-export function resolveRuntimeLayoutMode(
-  options: { mode?: string; nodeEnv?: string } = {},
-): RuntimeLayoutMode {
-  const normalizedMode = normalizeRuntimeLayoutMode(options.mode);
-  if (normalizedMode) {
-    return normalizedMode;
-  }
-
-  if (normalizeDir(options.mode)) {
-    throw new Error(
-      `Unsupported PSFN_RUNTIME_LAYOUT_MODE "${options.mode}". ` +
-      'Expected one of: continuous, dev, production, prod.',
-    );
-  }
-
-  if ((options.nodeEnv ?? '').trim().toLowerCase() === 'production') {
-    return RUNTIME_LAYOUT_MODE.PRODUCTION;
-  }
-
-  return RUNTIME_LAYOUT_MODE.CONTINUOUS;
-}
 
 export function isStrictSubpath(path: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(path));

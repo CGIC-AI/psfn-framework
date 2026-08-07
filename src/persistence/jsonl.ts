@@ -1,21 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { createComponentLogger } from '../shared/logger.js';
+import { appendJsonLine } from '../shared/utils/jsonl.js';
 
 const log = createComponentLogger('Jsonl');
-const ensuredAppendDirectories = new Set<string>();
 
-function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error
-    && 'code' in error
-    && (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-function ensureAppendDirectory(directory: string): void {
-  if (ensuredAppendDirectories.has(directory)) return;
-  mkdirSync(directory, { recursive: true });
-  ensuredAppendDirectories.add(directory);
-}
+export { appendJsonLine } from '../shared/utils/jsonl.js';
 
 export interface ReadJsonLineContext {
   path: string;
@@ -39,20 +28,6 @@ export interface ReadJsonLinesResult<T> {
 }
 
 type JsonLineNormalizer<T> = (raw: unknown, context: ReadJsonLineContext) => T | null;
-
-export function appendJsonLine(path: string, entry: unknown): void {
-  const directory = dirname(path);
-  ensureAppendDirectory(directory);
-  const serialized = `${JSON.stringify(entry)}\n`;
-  try {
-    appendFileSync(path, serialized, 'utf-8');
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
-    ensuredAppendDirectories.delete(directory);
-    ensureAppendDirectory(directory);
-    appendFileSync(path, serialized, 'utf-8');
-  }
-}
 
 export function readJsonLines<T>(
   path: string,

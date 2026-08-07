@@ -21,6 +21,12 @@ describe('PostgresModelUsageStore phased module boundary', () => {
     expect(store).toContain("from './model-usage-store/query-support.js'");
     expect(store).toContain("from './model-usage-store/rows.js'");
     expect(capture).not.toContain("from '../model-usage-store.js'");
+    expect(capture).toContain('export class PostgresModelUsageCapture');
+    expect(capture).toContain('INSERT INTO model_usage_events');
+    expect(capture).toContain('UPDATE icp_conversation_cost_reservations');
+    expect(store).toContain('private readonly capture: PostgresModelUsageCapture');
+    expect(store).not.toContain('INSERT INTO model_usage_events');
+    expect(store).not.toContain('UPDATE icp_conversation_cost_reservations');
     expect(common).not.toContain("from '../model-usage-store.js'");
     expect(querySupport).not.toContain("from '../model-usage-store.js'");
     expect(querySupport).not.toContain("from './capture.js'");

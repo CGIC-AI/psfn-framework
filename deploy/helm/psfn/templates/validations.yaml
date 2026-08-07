@@ -262,6 +262,26 @@ never back a ClusterIssuer. */ -}}
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) (not .Values.postgres.auth.keys.databaseUrl) -}}
 {{- fail "postgres.auth.keys.databaseUrl is required for runtime database access" -}}
 {{- end -}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) -}}
+{{- $restoreVerifyRoles := .Values.postgres.restoreVerify.roles -}}
+{{- if lt (len $restoreVerifyRoles.companionSchemaOwners) 1 -}}
+{{- fail "postgres.restoreVerify.roles.companionSchemaOwners must name at least one companion schema-owner role" -}}
+{{- end -}}
+{{- $restoreVerifyRoleNames := concat (list $restoreVerifyRoles.fleetAuthMigration $restoreVerifyRoles.fleetAuthBackupRestore) $restoreVerifyRoles.companionSchemaOwners (list $restoreVerifyRoles.sharedMigration) -}}
+{{- $seenRestoreVerifyRoles := dict -}}
+{{- range $role := $restoreVerifyRoleNames -}}
+{{- if or (eq $role "public") (not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $role)) -}}
+{{- fail (printf "postgres.restoreVerify role %q must match ^[a-z][a-z0-9_]{0,62}$ and must not be public" $role) -}}
+{{- end -}}
+{{- if eq $role $.Values.postgres.auth.username -}}
+{{- fail (printf "postgres.restoreVerify role %s must not own the bundled Postgres database" $role) -}}
+{{- end -}}
+{{- if hasKey $seenRestoreVerifyRoles $role -}}
+{{- fail (printf "postgres.restoreVerify role is duplicated: %s" $role) -}}
+{{- end -}}
+{{- $_ := set $seenRestoreVerifyRoles $role true -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.postgres.external.enabled (not .Values.postgres.external.databaseUrlSecret.key) -}}
 {{- fail "postgres.external.databaseUrlSecret.key is required for runtime database access" -}}
 {{- end -}}

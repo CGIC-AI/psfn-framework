@@ -874,11 +874,14 @@ assertIncludes(
 );
 for (const expected of [
   '\\connect "psfn_restore_verify"',
+  "'CREATE ROLE %I NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'",
+  'GRANT CONNECT, CREATE ON DATABASE "psfn_restore_verify" TO "fleet_auth_migration", "fleet_auth_backup", "companion_default_runtime", "shared_schema_migration";',
   'CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION "psfn";',
   'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;',
   'ALTER SCHEMA extensions OWNER TO "psfn";',
   'ALTER EXTENSION vector SET SCHEMA extensions;',
   'REVOKE ALL ON SCHEMA extensions FROM PUBLIC;',
+  'GRANT USAGE ON SCHEMA extensions TO "fleet_auth_backup", "companion_default_runtime", "shared_schema_migration";',
 ]) {
   assertIncludes(
     postgresInit,
@@ -903,18 +906,13 @@ assertIncludes(
 );
 assertIncludes(
   restoreVerifyProvisioner,
-  "'GRANT USAGE ON SCHEMA extensions TO %I;',",
-  'Postgres restore-verify mirrored extension grants',
+  '--file=/docker-entrypoint-initdb.d/00-pgvector.sql',
+  'Postgres restore-verify explicit role grant application',
 );
-assertIncludes(
+assertNotIncludes(
   restoreVerifyProvisioner,
-  "extension_schema.nspname = 'extensions'",
-  'Postgres restore-verify source extension grant scope',
-);
-assertIncludes(
-  restoreVerifyProvisioner,
-  '--file=/scratch/extension-usage-grants.sql',
-  'Postgres restore-verify grant application',
+  'aclexplode(',
+  'Postgres restore-verify implicit primary ACL mirroring',
 );
 const postgresNetworkPolicy = findDocumentByKindName(
   rendered,
@@ -1093,6 +1091,67 @@ assertIncludes(
   customPostgresInit,
   'CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION "companion_owner";',
   'custom Postgres restore-verify extension schema owner',
+);
+
+const customRestoreRoleRendered = render([
+  '--set-string',
+  'postgres.restoreVerify.roles.fleetAuthMigration=auth_migrate_custom',
+  '--set-string',
+  'postgres.restoreVerify.roles.fleetAuthBackupRestore=auth_backup_custom',
+  '--set-string',
+  'postgres.restoreVerify.roles.companionSchemaOwners[0]=companion_alpha_runtime',
+  '--set-string',
+  'postgres.restoreVerify.roles.companionSchemaOwners[1]=companion_beta_runtime',
+  '--set-string',
+  'postgres.restoreVerify.roles.sharedMigration=shared_migrate_custom',
+]);
+const customRestoreRoleInit = findDocumentByKindName(
+  customRestoreRoleRendered,
+  'ConfigMap',
+  'psfn-postgres-init',
+);
+assertIncludes(
+  customRestoreRoleInit,
+  'GRANT CONNECT, CREATE ON DATABASE "psfn_restore_verify" TO "auth_migrate_custom", "auth_backup_custom", "companion_alpha_runtime", "companion_beta_runtime", "shared_migrate_custom";',
+  'custom Postgres restore-verify database role grants',
+);
+assertIncludes(
+  customRestoreRoleInit,
+  'GRANT USAGE ON SCHEMA extensions TO "auth_backup_custom", "companion_alpha_runtime", "companion_beta_runtime", "shared_migrate_custom";',
+  'custom Postgres restore-verify extension role grants',
+);
+assertNotIncludes(
+  customRestoreRoleInit,
+  'fleet_auth_backup',
+  'default Postgres restore-verify role after explicit override',
+);
+assertRenderFails(
+  [
+    '--set-string',
+    'postgres.restoreVerify.roles.fleetAuthBackupRestore=fleet_auth_migration',
+  ],
+  'postgres.restoreVerify role is duplicated: fleet_auth_migration',
+);
+assertRenderFails(
+  [
+    '--set-string',
+    'postgres.restoreVerify.roles.fleetAuthBackupRestore=PUBLIC',
+  ],
+  'must match ^[a-z][a-z0-9_]{0,62}$ and must not be public',
+);
+assertRenderFails(
+  [
+    '--set-string',
+    'postgres.restoreVerify.roles.fleetAuthBackupRestore=psfn',
+  ],
+  'postgres.restoreVerify role psfn must not own the bundled Postgres database',
+);
+assertRenderFails(
+  [
+    '--set-json',
+    'postgres.restoreVerify.roles.companionSchemaOwners=[]',
+  ],
+  'postgres.restoreVerify.roles.companionSchemaOwners must name at least one companion schema-owner role',
 );
 
 const appSecret = findDocument(rendered, 'psfn-app');

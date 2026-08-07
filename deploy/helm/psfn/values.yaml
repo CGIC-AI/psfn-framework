@@ -435,6 +435,17 @@ postgres:
     keys:
       password: postgres-password
       databaseUrl: postgres-database-url
+  restoreVerify:
+    # These role names must match fleet-auth.json databaseRoles and
+    # companions.json postgres role bindings. The bundled Postgres chart
+    # creates only missing NOLOGIN role shells and never sets or rotates their
+    # credentials; operator provisioning remains responsible for LOGIN posture.
+    roles:
+      fleetAuthMigration: fleet_auth_migration
+      fleetAuthBackupRestore: fleet_auth_backup
+      companionSchemaOwners:
+        - companion_default_runtime
+      sharedMigration: shared_schema_migration
   primary:
     resources: {}
     persistence:

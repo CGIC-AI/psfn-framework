@@ -7,6 +7,7 @@ import { SessionManager } from '../../session/manager.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import { createTurnId } from '../../turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { DEFAULT_BACKGROUND_WORK_TUNING } from '../../../system/config/scheduler-config.js';
 import { TurnSupportRuntime } from './turn-support-runtime.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import type { BackgroundWorkSupervisor } from '../background-work/supervisor.js';
@@ -427,6 +428,7 @@ describe('TurnSupportRuntime durable background work delegation', () => {
       eventBus: new EventBus(),
       sessionManager: {} as SessionManager,
       backgroundWorkSupervisor: supervisor,
+      backgroundWorkMaxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });

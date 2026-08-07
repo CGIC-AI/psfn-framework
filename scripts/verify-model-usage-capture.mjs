@@ -10,6 +10,12 @@ const EXCLUDED_PREFIXES = [
   'admin-ui/',
 ];
 
+export const CANONICAL_LLM_TRANSPORT_FILES = new Set([
+  'src/primitives/llm/client.ts',
+  'src/primitives/llm/client-request-capability.ts',
+  'src/primitives/llm/client-stream-capability.ts',
+]);
+
 function sourceFiles() {
   return execFileSync(
     'git',
@@ -44,7 +50,7 @@ function allowOnly(pattern, allowedFiles, description) {
 allowOnly(
   /\b(?:completeSimple|streamSimple)\s*\(/g,
   new Set([
-    'src/primitives/llm/client.ts',
+    ...CANONICAL_LLM_TRANSPORT_FILES,
     'src/primitives/images/vision-reviewer.ts',
   ]),
   'direct pi-ai model call bypasses the canonical LLM client',
@@ -96,7 +102,7 @@ allowOnly(
 allowOnly(
   /\bcreate(?:OpenAICompatibleEndpointModel|LiteLLMModel|Model)\s*\(/g,
   new Set([
-    'src/primitives/llm/client.ts',
+    ...CANONICAL_LLM_TRANSPORT_FILES,
     'src/primitives/llm/models.ts',
     'src/core/agent/stream-adapter.ts',
   ]),
@@ -105,7 +111,7 @@ allowOnly(
 allowOnly(
   /\bresolveRegisteredModel\s*\(/g,
   new Set([
-    'src/primitives/llm/client.ts',
+    ...CANONICAL_LLM_TRANSPORT_FILES,
     'src/primitives/llm/models.ts',
     'src/core/agent/stream-adapter.ts',
   ]),

@@ -1234,11 +1234,6 @@
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/methods/intake-image.ts",
-      "name": "INTAKE_SCREEN_IMAGE_MAX_BYTES",
-      "value": "8 * 1024 * 1024"
-    },
-    {
       "file": "src/boundary/gateway/methods/openrouter-web.ts",
       "name": "callOpenRouter.$call:truncation:slice.arg1#1",
       "value": "500",
@@ -3022,11 +3017,6 @@
       "file": "src/core/agent/substrate-agent/vision-attachments.ts",
       "name": "DEDICATED_VISION_REVIEW_MAX_ATTEMPTS",
       "value": "3"
-    },
-    {
-      "file": "src/core/agent/substrate-agent/vision-attachments.ts",
-      "name": "VISION_ATTACHMENT_MAX_BYTES",
-      "value": "8 * 1024 * 1024"
     },
     {
       "file": "src/core/agent/substrate-agent/vision-attachments.ts",
@@ -6632,13 +6622,6 @@
     },
     {
       "file": "src/core/tools/self-diagnosis.ts",
-      "name": "DEFAULT_EXEC.stdout.maxBuffer",
-      "value": "4 * 1024 * 1024",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate DEFAULT_EXEC.stdout.maxBuffer; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/tools/self-diagnosis.ts",
       "name": "DEFAULT_EXEC.stdout.timeout",
       "value": "5_000",
       "form": "object-member",
@@ -6660,6 +6643,12 @@
       "value": "/(password|passwd|secret|token|apikey|api[_-]?key|credential|hmac|authorization|bearer|private[_-]?key)/i",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract SECRET_KEY_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/core/tools/self-diagnosis.ts",
+      "name": "SELF_DIAGNOSIS_MAX_BUFFER_BYTES",
+      "value": "4 * 1024 * 1024",
+      "note": "Code-owned child-process DoS bound for local diagnostic probes, not companion behavior or operator tuning."
     },
     {
       "file": "src/core/tools/self-status.ts",
@@ -10093,16 +10082,17 @@
       "note": "Existing mutable policy candidate referenceSelectionSchema.reference_image_tags.minItems; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/primitives/images/vision-policy.ts",
+      "name": "VISION_IMAGE_MAX_BYTES",
+      "value": "8 * 1024 * 1024",
+      "note": "Code-owned decoded-image safety ceiling shared across gateway screening, attachment resolution, and the vision reviewer so no stage accepts bytes another rejects."
+    },
+    {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
       "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
-    },
-    {
-      "file": "src/primitives/images/vision-reviewer.ts",
-      "name": "VISION_IMAGE_MAX_BYTES",
-      "value": "8 * 1024 * 1024"
     },
     {
       "file": "src/primitives/images/vision-reviewer.ts",

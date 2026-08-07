@@ -630,7 +630,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     if (transaction) {
       return (await transaction.client.query<T>(text, [...values])).rows;
     }
-    return (await executeQuery(this.pool, text, values)).rows as T[];
+    return (await executeQuery<T>(this.pool, text, values)).rows;
   }
 
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<number> {
@@ -1975,7 +1975,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       return `(${row.join(', ')})`;
     });
 
-    const result = await this.persist(() => executeQuery(this.pool, `
+    const result = await this.persist(() => executeQuery<{ id: unknown }>(this.pool, `
       UPDATE l2_memories AS memory
       SET ${setClauses.join(', ')}
       FROM (VALUES ${rows.join(', ')}) AS updates(${valueColumns.join(', ')})
@@ -2012,7 +2012,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       return `($${idParam}::text, $${salienceParam}::numeric, $${anchorParam}::bigint)`;
     });
 
-    const result = await this.persist(() => executeQuery(this.pool, `
+    const result = await this.persist(() => executeQuery<{ id: unknown }>(this.pool, `
       UPDATE l2_memories AS memory
       SET salience = updates.salience,
           salience_decay_anchor_at = updates.salience_decay_anchor_at

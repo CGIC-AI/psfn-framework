@@ -1,5 +1,6 @@
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type {
   CompanionId,
   ShardCompanionId,
@@ -47,6 +48,8 @@ export interface ShardResultLineageEnvelope {
   shardChannelId: string;
   companionProvenance: ShardCompanionProvenance;
   sourceMessage: ShardResultLineageSourceMessage;
+  /** Source envelopes consumed by this worker; retained across every foldback. */
+  ingestedIntakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
   sourceContext?: ShardSourceContext;
   satelliteRouting?: ShardResultLineageSatelliteRouting;
 }

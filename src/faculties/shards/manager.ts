@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import { cloneIntakeSnapshots } from '../../core/cogsec/intake/derived-content.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
@@ -254,6 +256,8 @@ export interface ShardManagerDeps {
    * unavailable (fail closed at the gateway).
    */
   workloadRegistry?: ShardWorkloadLifecyclePort;
+  /** Exact async-local parent turn envelopes captured at shard launch. */
+  activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
 }
 
 export class ShardManager implements ShardExecutionPort {
@@ -399,6 +403,7 @@ export class ShardManager implements ShardExecutionPort {
       shardId,
       shardChannelId: channelId,
       sourceMessage: baseMessage,
+      ingestedIntakeEnvelopes: this.deps.activeTurnIntakeEnvelopesProvider?.(),
       ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
     });
     const execute = () => shardPostgres
@@ -1152,6 +1157,7 @@ export class ShardManager implements ShardExecutionPort {
       partialResult: false,
       recommendedNextAction: 'Revise the shard request, wait for active shards to clear, or choose a narrower task before any partner notification.',
       origin: this.originFromShardConfig(input.shardConfig),
+      ingestedIntakeEnvelopes: input.lineage.ingestedIntakeEnvelopes,
       dedupeKey: buildCompletionHandoffDedupeKey([
         'shard',
         input.shardId,
@@ -1195,6 +1201,7 @@ export class ShardManager implements ShardExecutionPort {
         ? 'Review returned artifacts through fold review, then decide whether to continue or write a companion-authored response.'
         : 'Review the shard handoff and decide whether to continue, delegate follow-up work, or write a companion-authored response.',
       origin: this.originFromShardConfig(input.shardConfig),
+      ingestedIntakeEnvelopes: input.result.lineage.ingestedIntakeEnvelopes,
       dedupeKey: buildCompletionHandoffDedupeKey([
         'shard',
         input.result.shardId,
@@ -1286,6 +1293,8 @@ export class ShardManager implements ShardExecutionPort {
     targetChannelId: string | undefined,
     bufferNotice = true,
   ): Promise<void> {
+    const intakeScreening = this.deps.sessionManager?.intakeScreening ?? null;
+    const intakeSinkGate = this.deps.sessionManager?.intakeSinkGate ?? null;
     try {
       await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
@@ -1297,6 +1306,8 @@ export class ShardManager implements ShardExecutionPort {
         ...(bufferNotice && this.deps.completionNoticeDelivery
           ? { noticeDelivery: this.deps.completionNoticeDelivery }
           : {}),
+        intakeScreening,
+        intakeSinkGate,
       });
     } catch (error) {
       this.auditTrail?.append('shard.completion_handoff.failed', {
@@ -1376,6 +1387,7 @@ export class ShardManager implements ShardExecutionPort {
               }
             : {}),
         },
+        ingestedIntakeEnvelopes: review.lineage.ingestedIntakeEnvelopes,
         dedupeKey: buildCompletionHandoffDedupeKey([
           'shard',
           review.shardId,
@@ -1783,5 +1795,8 @@ function cloneShardLineage(lineage: ShardResult['lineage']): ShardResult['lineag
     sourceMessage: { ...lineage.sourceMessage },
     ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
     ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
+    ...(lineage.ingestedIntakeEnvelopes
+      ? { ingestedIntakeEnvelopes: cloneIntakeSnapshots(lineage.ingestedIntakeEnvelopes) }
+      : {}),
   };
 }

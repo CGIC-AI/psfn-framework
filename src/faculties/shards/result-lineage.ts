@@ -13,6 +13,8 @@ import type {
   ShardResultLineageSourceMessage,
   ShardSourceContext,
 } from './lineage-contracts.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import { cloneIntakeSnapshots } from '../../core/cogsec/intake/derived-content.js';
 
 export type {
   ShardCompanionProvenance,
@@ -114,8 +116,9 @@ export function buildShardLineageEnvelope(input: {
   shardChannelId: string;
   sourceMessage: Pick<
     SubstrateMessage,
-    'id' | 'channelId' | 'channelType' | 'authorId' | 'authorName' | 'timestamp' | 'isDirectMessage'
+    'id' | 'channelId' | 'channelType' | 'authorId' | 'authorName' | 'timestamp' | 'isDirectMessage' | 'routing'
   >;
+  ingestedIntakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
   sourceContext?: ShardSourceContext;
   satelliteRouting?: SatelliteRoutingMetadata;
 }): ShardResultLineageEnvelope {
@@ -124,6 +127,9 @@ export function buildShardLineageEnvelope(input: {
   const coreCompanionId = createCompanionId(input.coreCompanionId, 'Shard lineage core companion id');
   const shardId = normalizeNonEmptyString(input.shardId, 'shard id');
   const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+  const ingestedIntakeEnvelopes = cloneIntakeSnapshots(
+    input.ingestedIntakeEnvelopes ?? input.sourceMessage.routing?.intakeEnvelopes,
+  );
 
   return {
     schemaVersion: 2,
@@ -137,6 +143,7 @@ export function buildShardLineageEnvelope(input: {
       shardCompanionId,
     },
     sourceMessage: normalizeSourceMessage(input.sourceMessage),
+    ...(ingestedIntakeEnvelopes.length > 0 ? { ingestedIntakeEnvelopes } : {}),
     ...(sourceContext ? { sourceContext } : {}),
     ...(satelliteRouting ? { satelliteRouting } : {}),
   };

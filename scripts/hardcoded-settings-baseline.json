@@ -8211,24 +8211,24 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1469",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1481",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1469; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1481; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1480",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1492",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1480; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1492; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1493",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1505",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1493; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1505; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
@@ -8239,17 +8239,17 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L598",
+      "name": "ShardManager.executeShard.retryHint@L603",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L598; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L603; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L622",
+      "name": "ShardManager.executeShard.retryHint@L627",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L622; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L627; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/parent-icp-tool.ts",

@@ -32,6 +32,7 @@ import {
   type ShardLineage,
 } from '../../shared/routing/envelope.js';
 import type { ChannelType, SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
@@ -53,6 +54,7 @@ import type {
 import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
 import { buildShardLineageEnvelope } from '../shards/result-lineage.js';
 import type { ShardResultLineageEnvelope } from '../shards/result-lineage.js';
+import { cloneIntakeSnapshots } from '../../core/cogsec/intake/derived-content.js';
 import {
   createGovernedSubagentMemoryTool,
   createSubagentMemoryProviderFacade,
@@ -204,6 +206,13 @@ export interface SubagentFacultyDeps {
    * for this runtime (matches the parent's own null contract).
    */
   intakeScreeningProvider?: () => SessionManager['intakeScreening'];
+  /** Parent prompt-foldback firewall services, resolved together and late. */
+  completionIntakeProvider?: () => {
+    screening: SessionManager['intakeScreening'];
+    sinkGate: SessionManager['intakeSinkGate'];
+  };
+  /** Exact async-local parent turn envelopes captured before detached work. */
+  activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -221,6 +230,7 @@ interface ActiveSubagentHandle {
   subagentId: string;
   request: SubagentExecutionRequest;
   baseMessage: SubstrateMessage;
+  ingestedIntakeEnvelopes: IntakeEnvelopeSnapshot[];
   channelId: string;
   startTime: number;
   maxTurns: number;
@@ -393,6 +403,10 @@ export class SubagentFaculty implements SubagentControlPort {
       ?? `subagent:${subagentId}`;
     const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
     const baseMessage = this.buildBaseMessage(subagentId, executionChannelId, request);
+    const ingestedIntakeEnvelopes = cloneIntakeSnapshots(
+      request.message?.routing?.intakeEnvelopes
+        ?? this.deps.activeTurnIntakeEnvelopesProvider?.(),
+    );
     if (memoryWritePolicy.mode === 'elevated') {
       if (!this.auditTrail) {
         throw new Error(
@@ -445,6 +459,7 @@ export class SubagentFaculty implements SubagentControlPort {
       subagentId,
       request,
       baseMessage,
+      ingestedIntakeEnvelopes,
       channelId: executionChannelId,
       startTime,
       maxTurns,
@@ -1038,6 +1053,7 @@ export class SubagentFaculty implements SubagentControlPort {
         ...(sourceContext ? this.originFromSourceContext(sourceContext) : {}),
         ...(sourceContext ? { sourceChannelId: sourceContext.channelId } : {}),
       },
+      ingestedIntakeEnvelopes: handle.ingestedIntakeEnvelopes,
       dedupeKey: buildCompletionHandoffDedupeKey([
         'subagent',
         handle.subagentId,
@@ -1091,6 +1107,7 @@ export class SubagentFaculty implements SubagentControlPort {
     targetChannelId?: string,
     bufferNotice = true,
   ): Promise<void> {
+    const completionIntake = this.deps.completionIntakeProvider?.();
     try {
       await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
@@ -1101,6 +1118,12 @@ export class SubagentFaculty implements SubagentControlPort {
           : {}),
         ...(bufferNotice && this.deps.completionNoticeDelivery
           ? { noticeDelivery: this.deps.completionNoticeDelivery }
+          : {}),
+        ...(completionIntake
+          ? {
+              intakeScreening: completionIntake.screening,
+              intakeSinkGate: completionIntake.sinkGate,
+            }
           : {}),
       });
     } catch (error) {
@@ -1538,6 +1561,7 @@ export class SubagentFaculty implements SubagentControlPort {
       shardId: handle.subagentId,
       shardChannelId: handle.channelId,
       sourceMessage: handle.baseMessage,
+      ingestedIntakeEnvelopes: handle.ingestedIntakeEnvelopes,
       ...(sourceContext
         ? {
             sourceContext: {

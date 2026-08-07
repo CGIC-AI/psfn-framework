@@ -1,5 +1,6 @@
 import { GatewayClient } from '../../../boundary/gateway/client.js';
 import type { GatewayRpcEndpoint } from '../../../boundary/gateway/transport.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { parseContactAuthorityLifecycleRequest } from '../../../shared/contracts/contact-authority-lifecycle.js';
 
 interface Command {
@@ -29,7 +30,7 @@ async function main(): Promise<void> {
     });
   }
   const gateway = await GatewayClient.connectEndpoint(endpoint, 8, {
-    companionId,
+    companionId: createCompanionId(companionId),
     companionAuthToken: authToken,
     keepaliveIntervalMs: 60_000,
   });

@@ -11,6 +11,7 @@ import {
   type IcpContinuationTaskKind,
   type SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { TurnID } from '../../shared/contracts/turn-contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   assertIcpRecoveryStatusBinding,
@@ -415,7 +416,7 @@ export function createIcpTargetChannelInitiator(input: {
           channelId: permit.channelId,
           metadata: {
             ...recoveryResponse.metadata,
-            turnId: correlation.turnId,
+            turnId: correlation.turnId as TurnID,
             requestId: correlation.requestId,
             icpCorrelation: correlation,
           },
@@ -424,7 +425,7 @@ export function createIcpTargetChannelInitiator(input: {
         if (previousObservation.status === 'suppressed') {
           assertIcpRecoveryStatusBinding(
             'suppressed',
-            turnResponse,
+            turnResponse!,
             'ICP target-channel recovery',
           );
           return { disposition: 'suppressed', recoveredTurn: true, correlation };
@@ -461,9 +462,11 @@ export function createIcpTargetChannelInitiator(input: {
         );
       }
       recoveredTurn = true;
-      correlation = validateRecordedCorrelation(
-        previousObservation.recoveryResponse.metadata.icpCorrelation,
-      );
+      const recordedCorrelation = previousObservation.recoveryResponse.metadata.icpCorrelation;
+      if (!recordedCorrelation) {
+        throw new Error('Consumed ICP permit recovery response is missing correlation');
+      }
+      correlation = validateRecordedCorrelation(recordedCorrelation);
       turnResponse = previousObservation.recoveryResponse;
       content = turnResponse.content;
       return await resumeOrdinaryTurn();

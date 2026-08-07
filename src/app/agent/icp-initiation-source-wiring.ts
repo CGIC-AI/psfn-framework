@@ -88,7 +88,7 @@ export function wireIcpInitiationSources(
   const weightedThoughtCandidateAdapter = sourceRuntime && input.peers
     ? createIcpWeightedThoughtCandidateAdapter({ sourceRuntime, peers: input.peers })
     : undefined;
-  const intentionCandidateAdapter = sourceRuntime && input.peers
+  const intentionCandidateAdapter = sourceRuntime && input.peers && input.candidateStore
     ? createIcpIntentionCandidateAdapter({
         sourceRuntime,
         peers: input.peers,

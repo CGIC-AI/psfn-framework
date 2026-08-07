@@ -14,6 +14,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -761,8 +762,8 @@ async function main(): Promise<Record<string, unknown>> {
       databaseUrl,
       fixture,
       channelRouting: {
-        api: CERTIFICATION_COMPANION_A,
-        telegram: CERTIFICATION_COMPANION_B,
+        api: CERTIFICATION_COMPANION_A as CompanionId,
+        telegram: CERTIFICATION_COMPANION_B as CompanionId,
       },
     });
     const ready = await Promise.all(harness.agents.map(agent => agent.ready()));

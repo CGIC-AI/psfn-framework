@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { PoolClient } from 'pg';
 import { assertValidPostgresSchemaName, createPostgresPool } from '../postgres.js';
 import {
   createSanitizedPostgresChildEnv,
@@ -35,7 +36,7 @@ export async function withFleetRestoreDatabaseLock<T>(
     applicationName: 'fleet-restore-family-lock',
     max: 1,
   });
-  let client: Awaited<ReturnType<typeof pool.connect>>;
+  let client: PoolClient;
   try {
     client = await pool.connect();
   } catch (connectError) {

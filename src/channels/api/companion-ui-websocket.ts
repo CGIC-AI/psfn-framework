@@ -13,7 +13,10 @@ import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
-import type { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import type {
+  CompanionUiActionBrokerInput,
+  GatewayCompanionUiActionBroker,
+} from '../../boundary/gateway/companion-ui-action-broker.js';
 import {
   parseCompanionUiActionFrame,
   parseCompanionUiSessionConfigureFrame,
@@ -453,12 +456,12 @@ export class CompanionUiWebSocketAdapter {
         }
         seenRequestIds.add(frame.requestId);
         await refreshAuthority();
-        const common = {
+        const common: Omit<CompanionUiActionBrokerInput, 'sessionToken'> = {
           rawBody: body,
           companionId: authority.companionId,
           attachment,
           physicalCeiling: authority.physicalCeiling,
-          deviceTransport: authority.deviceTransport,
+          deviceTransport: authority.deviceTransport as CompanionUiActionBrokerInput['deviceTransport'],
         };
         const result = authority.sessionToken
           ? await this.config.actionBroker.execute({ ...common, sessionToken: authority.sessionToken })

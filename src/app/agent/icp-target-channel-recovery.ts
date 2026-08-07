@@ -111,8 +111,12 @@ export function validateObservedIcpTargetRecovery(input: {
     input.observation.recoveryResponse,
     'ICP target-channel recovery',
   );
+  const icpCorrelation = input.observation.recoveryResponse.metadata.icpCorrelation;
+  if (!icpCorrelation) {
+    throw new Error('Durable ICP recovery response is missing correlation');
+  }
   const correlation = validateIcpTargetCorrelationBinding(
-    input.observation.recoveryResponse.metadata.icpCorrelation,
+    icpCorrelation,
     input.binding,
   );
   const recoveryResponse = validateRecoveryResponse(

@@ -6,6 +6,7 @@ import type {
 } from '../../core/agent/companion-presence-runtime.js';
 import { composeRoomContentWindowPorts } from '../../core/session/room-content-window.js';
 import type { RoomContentWindowPort } from '../../core/session/room-content-window.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import {
   createVoicePresenceWindowPort,
   registerVoicePresenceWindow,
@@ -48,7 +49,7 @@ export function wireCompanionPresenceContext(input: CompanionPresenceWiringInput
     registerCompanionRoomEntryNotes({
       eventBus: input.eventBus,
       sink: input.sessionManager,
-      placesRegistry: input.placesRegistry,
+      placesRegistry: input.placesRegistry as PlacesRegistryConfig,
       coPresence: (place) => presence.getCoPresent(place),
     });
     windowPorts.push(createCompanionRoomContentWindowPort({

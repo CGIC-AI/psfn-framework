@@ -105,7 +105,7 @@ class InMemoryVoiceConnection implements WebSocketVoiceConnection {
     this.emitInboundRaw(serializeVoiceWireFrame(frame));
   }
 
-  emitInboundRaw(raw: string): void {
+  emitInboundRaw(raw: VoiceWireTransportData): void {
     if (this.closed) return;
     for (const handler of [...this.messageHandlers]) {
       handler(raw);

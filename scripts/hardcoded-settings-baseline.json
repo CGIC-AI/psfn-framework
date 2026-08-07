@@ -12458,62 +12458,6 @@
     },
     {
       "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxChargeUnits",
-      "value": "8",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.budget.maxChargeUnits; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxTurns",
-      "value": "6",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.budget.maxTurns; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.idle.checkIntervalMs",
-      "value": "900_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.idle.checkIntervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.idle.minIdleMinutes",
-      "value": "180",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.idle.minIdleMinutes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.maxBlocksPerDay",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.maxBlocksPerDay; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.minBlockIntervalMinutes",
-      "value": "240",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.minBlockIntervalMinutes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.quietHours.checkIntervalMs",
-      "value": "900_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.quietHours.checkIntervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_FREE_TIME_CONFIG.returnNote.summaryMaxTokens",
-      "value": "160",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_FREE_TIME_CONFIG.returnNote.summaryMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
       "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens",
       "value": "300",
       "form": "object-member",
@@ -12577,55 +12521,6 @@
     },
     {
       "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_ORIENTATION_REWRITE_GATE.minNewEntriesSinceRewrite",
-      "value": "4",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_ORIENTATION_REWRITE_GATE.minNewEntriesSinceRewrite; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxEntriesPerRun",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SLEEPTIME_WIKI_PASS.maxEntriesPerRun; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceEpisodes",
-      "value": "12",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceEpisodes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceMemories",
-      "value": "30",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceMemories; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.minNewCanonicalEpisodes",
-      "value": "1",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SLEEPTIME_WIKI_PASS.minNewCanonicalEpisodes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.minNewDurableMemories",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_SLEEPTIME_WIKI_PASS.minNewDurableMemories; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold",
       "value": "1",
       "form": "object-member",
@@ -12665,97 +12560,6 @@
       "value": "1",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.checkIntervalMs",
-      "value": "900_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.checkIntervalMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minIdleMinutes",
-      "value": "120",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minIdleMinutes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minNoteIntervalMinutes",
-      "value": "120",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minNoteIntervalMinutes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpEntryLimit",
-      "value": "32",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpEntryLimit; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpSummaryMaxTokens",
-      "value": "160",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpSummaryMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.fullTurnMaxIdleHours",
-      "value": "72",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.fullTurnMaxIdleHours; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.maxSamplesScanned",
-      "value": "2000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.maxSamplesScanned; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSampleDays",
-      "value": "4",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSampleDays; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSleepGapHours",
-      "value": "4",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSleepGapHours; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.minPartnerIdleMinutes",
-      "value": "60",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.minPartnerIdleMinutes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuityMinEntries",
-      "value": "2",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuityMinEntries; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuitySummaryMaxTokens",
-      "value": "160",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuitySummaryMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/scheduler-config.ts",
-      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.sessionSummaryMaxTokens",
-      "value": "160",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.sessionSummaryMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/config/scheduler-config.ts",
@@ -12870,6 +12674,62 @@
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxChargeUnits",
+      "value": "8",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxTurns",
+      "value": "6",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.idle.checkIntervalMs",
+      "value": "900_000",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.idle.minIdleMinutes",
+      "value": "180",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.maxBlocksPerDay",
+      "value": "3",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.minBlockIntervalMinutes",
+      "value": "240",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.quietHours.checkIntervalMs",
+      "value": "900_000",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/free-time.ts",
+      "name": "DEFAULT_FREE_TIME_CONFIG.returnNote.summaryMaxTokens",
+      "value": "160",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
       "file": "src/system/config/scheduler-config/maintenance.ts",
       "name": "DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.ambientPresence.minIdleMinutes",
       "value": "180",
@@ -12898,6 +12758,55 @@
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_ORIENTATION_REWRITE_GATE.minNewEntriesSinceRewrite",
+      "value": "4",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries",
+      "value": "1",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxEntriesPerRun",
+      "value": "3",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceEpisodes",
+      "value": "12",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceMemories",
+      "value": "30",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.minNewCanonicalEpisodes",
+      "value": "1",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/sleep-memory.ts",
+      "name": "DEFAULT_SLEEPTIME_WIKI_PASS.minNewDurableMemories",
+      "value": "3",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
       "file": "src/system/config/scheduler-config/social-graph.ts",
       "name": "DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceMinSessions",
       "value": "3",
@@ -12910,6 +12819,97 @@
       "value": "500",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.checkIntervalMs",
+      "value": "900_000",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minIdleMinutes",
+      "value": "120",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minNoteIntervalMinutes",
+      "value": "120",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpEntryLimit",
+      "value": "32",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.catchUpSummaryMaxTokens",
+      "value": "160",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.fullTurnMaxIdleHours",
+      "value": "72",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.maxSamplesScanned",
+      "value": "2000",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSampleDays",
+      "value": "4",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSleepGapHours",
+      "value": "4",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.minPartnerIdleMinutes",
+      "value": "60",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuityMinEntries",
+      "value": "2",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.continuitySummaryMaxTokens",
+      "value": "160",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
+    },
+    {
+      "file": "src/system/config/scheduler-config/temporal.ts",
+      "name": "DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary.sessionSummaryMaxTokens",
+      "value": "160",
+      "form": "object-member",
+      "note": "Scheduler owner-file default; operator-editable via scheduler.json."
     },
     {
       "file": "src/system/config/settings-contract.ts",

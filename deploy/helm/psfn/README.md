@@ -549,10 +549,16 @@ Because `/docker-entrypoint-initdb.d` runs only against an empty data directory,
 the chart also runs the same idempotent SQL from a bounded
 `post-install,post-upgrade` Job. Existing Postgres PVCs therefore receive new
 restore-verification prerequisites during an upgrade rather than only on a
-greenfield install. Deployments using distinct Fleet Auth, companion-schema,
-and shared-migration roles must grant those exact roles `CONNECT, CREATE` on the
-scratch database and `USAGE` on its `extensions` schema; the repo-owned local
-Artemis shakedown provisions those grants without rotating retained credentials.
+greenfield install. `postgres.restoreVerify.roles` binds the scratch database
+to the canonical Fleet Auth migration/backup, companion schema-owner, and
+shared-migration roles declared by `fleet-auth.json` and `companions.json`. The
+chart creates a missing role only as a least-authority `NOLOGIN` shell, grants
+the bound roles `CONNECT, CREATE` on the scratch database, and grants the roles
+that restore pgvector-backed schemas `USAGE` on its `extensions` schema.
+Existing role attributes and credentials are never altered. Set every role
+binding to the deployed owner-file names; operator provisioning remains
+responsible for passwords and valid `LOGIN` posture. The repo-owned local
+Artemis shakedown applies the same grants without rotating retained credentials.
 
 External Postgres mode:
 

@@ -1,6 +1,9 @@
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
 {{- $restoreVerifyDatabase := printf "%s_restore_verify" .Values.postgres.auth.database -}}
 {{- $restoreVerifyOwner := .Values.postgres.auth.username -}}
+{{- $restoreVerifyRoles := .Values.postgres.restoreVerify.roles -}}
+{{- $restoreVerifyConnectCreateRoles := concat (list $restoreVerifyRoles.fleetAuthMigration $restoreVerifyRoles.fleetAuthBackupRestore) $restoreVerifyRoles.companionSchemaOwners (list $restoreVerifyRoles.sharedMigration) -}}
+{{- $restoreVerifyExtensionUsageRoles := concat (list $restoreVerifyRoles.fleetAuthBackupRestore) $restoreVerifyRoles.companionSchemaOwners (list $restoreVerifyRoles.sharedMigration) -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,6 +13,18 @@ metadata:
 data:
   00-pgvector.sql: |
     CREATE EXTENSION IF NOT EXISTS vector;
+{{- range $role := $restoreVerifyConnectCreateRoles }}
+    SELECT format(
+      'CREATE ROLE %I NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
+      '{{ $role | replace "'" "''" }}'
+    )
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_roles
+      WHERE rolname = '{{ $role | replace "'" "''" }}'
+    )
+    \gexec
+{{- end }}
     SELECT format(
       'CREATE DATABASE %I OWNER %I',
       '{{ $restoreVerifyDatabase | replace "'" "''" }}',
@@ -21,12 +36,14 @@ data:
       WHERE datname = '{{ $restoreVerifyDatabase | replace "'" "''" }}'
     )
     \gexec
+    GRANT CONNECT, CREATE ON DATABASE {{ $restoreVerifyDatabase | quote }} TO {{ range $index, $role := $restoreVerifyConnectCreateRoles }}{{ if $index }}, {{ end }}{{ $role | quote }}{{ end }};
     \connect {{ $restoreVerifyDatabase | quote }}
     CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION {{ $restoreVerifyOwner | quote }};
     ALTER SCHEMA extensions OWNER TO {{ $restoreVerifyOwner | quote }};
     CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
     ALTER EXTENSION vector SET SCHEMA extensions;
     REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+    GRANT USAGE ON SCHEMA extensions TO {{ range $index, $role := $restoreVerifyExtensionUsageRoles }}{{ if $index }}, {{ end }}{{ $role | quote }}{{ end }};
 ---
 apiVersion: batch/v1
 kind: Job
@@ -75,39 +92,6 @@ spec:
                 --username="$POSTGRES_USER" \
                 --dbname="$POSTGRES_DB" \
                 --file=/docker-entrypoint-initdb.d/00-pgvector.sql
-              psql --no-password --set=ON_ERROR_STOP=1 \
-                --host="$POSTGRES_HOST" \
-                --port="$POSTGRES_PORT" \
-                --username="$POSTGRES_USER" \
-                --dbname="$POSTGRES_DB" \
-                --tuples-only \
-                --no-align \
-                --command="
-                  SELECT format(
-                    'GRANT USAGE ON SCHEMA extensions TO %I;',
-                    grantee.rolname
-                  )
-                  FROM pg_namespace AS extension_schema
-                  JOIN pg_roles AS schema_owner
-                    ON schema_owner.oid = extension_schema.nspowner
-                  CROSS JOIN LATERAL aclexplode(
-                    COALESCE(
-                      extension_schema.nspacl,
-                      acldefault('n', extension_schema.nspowner)
-                    )
-                  ) AS privilege
-                  JOIN pg_roles AS grantee ON grantee.oid = privilege.grantee
-                  WHERE extension_schema.nspname = 'extensions'
-                    AND privilege.privilege_type = 'USAGE'
-                    AND grantee.oid <> schema_owner.oid
-                  ORDER BY grantee.rolname
-                " > /scratch/extension-usage-grants.sql
-              psql --no-password --set=ON_ERROR_STOP=1 \
-                --host="$POSTGRES_HOST" \
-                --port="$POSTGRES_PORT" \
-                --username="$POSTGRES_USER" \
-                --dbname="$POSTGRES_RESTORE_VERIFY_DB" \
-                --file=/scratch/extension-usage-grants.sql
           securityContext:
             allowPrivilegeEscalation: false
             seccompProfile:
@@ -121,8 +105,6 @@ spec:
               value: {{ .Values.postgres.auth.database | quote }}
             - name: POSTGRES_USER
               value: {{ .Values.postgres.auth.username | quote }}
-            - name: POSTGRES_RESTORE_VERIFY_DB
-              value: {{ $restoreVerifyDatabase | quote }}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
@@ -137,14 +119,10 @@ spec:
               mountPath: /docker-entrypoint-initdb.d/00-pgvector.sql
               subPath: 00-pgvector.sql
               readOnly: true
-            - name: scratch
-              mountPath: /scratch
       volumes:
         - name: init-sql
           configMap:
             name: {{ include "psfn.fullname" . }}-postgres-init
-        - name: scratch
-          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

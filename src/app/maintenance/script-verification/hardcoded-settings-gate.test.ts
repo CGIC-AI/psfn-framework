@@ -69,7 +69,7 @@ describe('Hardcoded-settings repository gate', () => {
       'src/primitives/images/vision-policy.ts::VISION_IMAGE_MAX_BYTES',
       'src/shared/audit-actor.ts::AUDIT_ACTOR_MAX_CHARS',
       'src/shared/process-termination-policy.ts::PROCESS_TERMINATION_GRACE_TIMEOUT_MS',
-      'src/system/config/scheduler-config.ts::DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts',
+      'src/system/config/scheduler-config/background-work.ts::DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts',
     ]) {
       expect(identities).toContain(identity);
     }

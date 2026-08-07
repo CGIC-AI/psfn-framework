@@ -732,7 +732,7 @@ function validateApprovalRequestInput(
   return normalized;
 }
 
-export function formatApprovalRequestNotification(request: NotifyApprovalRequestInput): string {
+function formatApprovalRequestNotification(request: NotifyApprovalRequestInput): string {
   const normalized = validateApprovalRequestInput(request);
   return [
     `Approval required: ${normalized.method} (${normalized.approvalAction})`,
@@ -746,7 +746,7 @@ export function formatApprovalRequestNotification(request: NotifyApprovalRequest
   ].join('\n');
 }
 
-export async function deliverApprovalRequestNotification(options: {
+async function deliverApprovalRequestNotification(options: {
   request: NotifyApprovalRequestInput;
   briefNotifier: NotificationPort;
   channelSender?: NotifyChannelSender;
@@ -820,17 +820,6 @@ export async function deliverApprovalRequestNotification(options: {
   }
 
   throw new Error(`approval_request delivery failed (${errors.join('; ')})`);
-}
-
-export function createGatewayNotificationPort(
-  gateway: { notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> },
-): NotificationPort {
-  return {
-    notify: (params) => gateway.notifyNtfy({
-      ...params,
-      sender: normalizeNotificationSenderMetadata(params.sender),
-    }),
-  };
 }
 
 /** System-only operator alerts fan out through every configured gateway sink. */
@@ -925,7 +914,7 @@ export function createGatewayClarificationPort(
   };
 }
 
-export function createHttpNotificationPort(options: HttpNtfyNotifierOptions): NotificationPort {
+function createHttpNotificationPort(options: HttpNtfyNotifierOptions): NotificationPort {
   return new HttpNtfyNotifier(options);
 }
 

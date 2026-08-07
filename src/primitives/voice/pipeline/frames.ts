@@ -97,11 +97,3 @@ export type InterruptControlCommand = (typeof INTERRUPT_CONTROL_COMMANDS)[number
 export function isVoiceControlFrame(frame: VoiceFrame): frame is VoiceControlFrame {
   return frame.kind === 'control';
 }
-
-export function isVoiceDataFrame(frame: VoiceFrame): frame is VoiceDataFrame {
-  return frame.kind !== 'control';
-}
-
-export function isInterruptControlFrame(frame: VoiceFrame): frame is VoiceControlFrame {
-  return isVoiceControlFrame(frame) && INTERRUPT_CONTROL_COMMANDS.includes(frame.payload.command as InterruptControlCommand);
-}

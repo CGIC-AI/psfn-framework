@@ -7,7 +7,7 @@ import type {
 export const COMPLETION_HANDOFF_SCHEMA_VERSION = 1;
 export const COMPLETION_HANDOFF_METADATA_TYPE = 'completion_handoff';
 
-export const COMPLETION_HANDOFF_SOURCE_VALUES = [
+const COMPLETION_HANDOFF_SOURCE_VALUES = [
   'subagent',
   'shard',
   'post_turn_action',
@@ -17,7 +17,7 @@ export const COMPLETION_HANDOFF_SOURCE_VALUES = [
 
 export type CompletionHandoffSource = typeof COMPLETION_HANDOFF_SOURCE_VALUES[number];
 
-export const COMPLETION_HANDOFF_STATUS_VALUES = [
+const COMPLETION_HANDOFF_STATUS_VALUES = [
   'started',
   'progress',
   'completed',

@@ -2,12 +2,6 @@ import * as fs from 'node:fs';
 
 export type JsonValidator<T> = (value: unknown, sourcePath: string) => T;
 
-export interface LoadOrSeedJsonOptions<T> {
-  dataPath: string;
-  seedPath: string;
-  validate: JsonValidator<T>;
-}
-
 export interface LoadRequiredJsonOptions<T> {
   dataPath: string;
   examplePath?: string;
@@ -115,18 +109,6 @@ export function loadRequiredJson<T>(options: LoadRequiredJsonOptions<T>): T {
   }
 }
 
-/**
- * @deprecated Runtime config must not seed itself. This compatibility wrapper
- * treats seedPath as example guidance only and requires dataPath to exist.
- */
-export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {
-  return loadRequiredJson({
-    dataPath: options.dataPath,
-    examplePath: options.seedPath,
-    validate: options.validate,
-  });
-}
-
 export function loadSeedJson<T>(options: LoadSeedJsonOptions<T>): T {
   const { seedPath, validate } = options;
   const seedRaw = parseJsonFile(seedPath);
@@ -197,16 +179,4 @@ export function loadRequiredJsonCachedWithMetadata<T>(
 
 export function loadRequiredJsonCached<T>(options: LoadRequiredJsonOptions<T>): T {
   return loadRequiredJsonCachedWithMetadata(options).value;
-}
-
-/**
- * @deprecated Runtime config must not seed itself. This compatibility wrapper
- * treats seedPath as example guidance only and requires dataPath to exist.
- */
-export function loadOrSeedJsonCached<T>(options: LoadOrSeedJsonOptions<T>): T {
-  return loadRequiredJsonCached({
-    dataPath: options.dataPath,
-    examplePath: options.seedPath,
-    validate: options.validate,
-  });
 }

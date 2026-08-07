@@ -955,18 +955,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/identity/companion-naming.ts",
-      "contains": "LEGACY_COMPANION_ID = 'psfn'",
-      "reason": "Legacy companion-id migration constant.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/identity/companion-naming.ts",
-      "contains": "LEGACY_COMPANION_NAME = 'PSFN'",
-      "reason": "Legacy companion-name migration constant.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/core/intention/appraisal.ts",
       "contains": "psfn-amica",
       "reason": "Intention appraisal logic recognizes the psfn-amica channel type.",

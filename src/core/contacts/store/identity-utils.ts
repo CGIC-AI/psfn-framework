@@ -1,4 +1,3 @@
-import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -6,10 +5,7 @@ import type {
   ContactChannelIdentity,
   ContactChannelLink,
   ContactIdentityLinkOptions,
-  ContactIdentityLinkVerificationState,
-  RelationshipType,
 } from '../types.js';
-import { CHANNEL_PRIVACY_LEVELS } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 
@@ -52,10 +48,6 @@ export function normalizePrivacyLevel(
   return decodeStoredChannelVisibility(privacyLevel) ?? defaultPrivacyForChannel(channel);
 }
 
-export function isValidChannelPrivacyLevel(level: string): level is ChannelPrivacyLevel {
-  return CHANNEL_PRIVACY_LEVELS.includes(level as ChannelPrivacyLevel);
-}
-
 export function normalizeChannelLinkInput(
   identity: ContactChannelIdentity,
   options?: ContactIdentityLinkOptions,
@@ -79,34 +71,6 @@ export function normalizeVerificationTtlMs(ttlMs: number | undefined): number {
     return DEFAULT_LINK_VERIFICATION_TTL_MS;
   }
   return Math.min(Math.floor(ttlMs), MAX_LINK_VERIFICATION_TTL_MS);
-}
-
-export function createVerificationToken(): string {
-  return uuidv7().replace(/-/g, '');
-}
-
-export function normalizeVerificationState(value: string): ContactIdentityLinkVerificationState {
-  switch (value) {
-    case 'verified':
-    case 'failed':
-    case 'expired':
-    case 'pending':
-      return value;
-    default:
-      return 'pending';
-  }
-}
-
-export function getLegacyDiscordUserId(
-  existingDiscordUserId: string | undefined,
-  partialDiscordUserId: string | undefined,
-  identities: ContactChannelIdentity[],
-): string | undefined {
-  if (existingDiscordUserId) return existingDiscordUserId;
-  if (partialDiscordUserId) return partialDiscordUserId;
-
-  const discordIdentity = identities.find(identity => identity.channel === LEGACY_DISCORD_CHANNEL);
-  return discordIdentity?.userId;
 }
 
 export function isPrimaryUser(discordUserId: string, primaryUserId?: string): boolean {
@@ -229,11 +193,4 @@ export function latestTimestamp(left: string, right: string): string {
   if (!left) return right;
   if (!right) return left;
   return compareIsoTimestamps(left, right) >= 0 ? left : right;
-}
-
-export function relationshipForTrust(
-  trustLevel: TrustLevel,
-  fallback: RelationshipType,
-): RelationshipType {
-  return trustLevel === 'primary' ? 'partner' : fallback;
 }

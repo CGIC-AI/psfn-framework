@@ -1,8 +1,4 @@
 import {
-  existsSync,
-  lstatSync,
-} from 'node:fs';
-import {
   open,
   opendir,
   stat,
@@ -1013,13 +1009,4 @@ export async function buildSkillFileSignature(
     await maybeYield(index + 1, yieldEvery);
   }
   return parts.join('||');
-}
-
-export function safeFileExists(path: string): boolean {
-  if (!existsSync(path)) return false;
-  try {
-    return lstatSync(path).isFile();
-  } catch {
-    return false;
-  }
 }

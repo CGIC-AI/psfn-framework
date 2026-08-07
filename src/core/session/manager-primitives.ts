@@ -118,8 +118,6 @@ const DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const MAX_PRESERVED_SAFETY_TAGS = 8;
 const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
 const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
-const MAX_HISTORY_SUMMARY_ITEMS = 6;
-const MAX_HISTORY_SUMMARY_ITEM_CHARS = 160;
 const DEFAULT_SUMMARY_SOURCE_ENTRY_CHARS = 700;
 const MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS = 220;
 const MAX_FALLBACK_RECENT_SUMMARY_ITEMS = 4;
@@ -544,11 +542,6 @@ function resolveHistorySummarySpeaker(
   }
 }
 
-interface HistorySummaryLine {
-  speaker: string;
-  content: string;
-}
-
 interface ToolFailureSummary {
   metadata: ToolObservationMetadata;
   content: string;
@@ -737,135 +730,11 @@ export function buildRecentSessionSummaryFallbackText(params: {
   return countTokens(compressedFailureSummary) <= params.maxTokens ? compressedFailureSummary : '';
 }
 
-function formatRepeatedToolFailureSummary(failures: readonly ToolFailureSummary[]): HistorySummaryLine {
-  const latest = failures[failures.length - 1];
-  const toolName = latest.metadata.toolName;
-  const latestContent = latest.content;
-  const content = failures.length === 1
-    ? latestContent
-    : `${toolName} failed ${failures.length} times. Most recent failure: ${latestContent}`;
-  return {
-    speaker: 'Tool',
-    content,
-  };
-}
-
-function pushHistorySummaryLine(
-  grouped: HistorySummaryLine[],
-  line: HistorySummaryLine,
-): void {
-  const last = grouped.at(-1);
-  if (last && last.speaker === line.speaker) {
-    last.content = `${last.content} / ${line.content}`;
-    return;
-  }
-
-  grouped.push(line);
-}
-
-function buildHistorySummaryLines(
-  entries: SessionEntry[],
-  characterName?: string,
-): HistorySummaryLine[] {
-  const grouped: HistorySummaryLine[] = [];
-  let pendingToolFailures: ToolFailureSummary[] = [];
-
-  const flushToolFailures = (): void => {
-    if (pendingToolFailures.length === 0) return;
-    pushHistorySummaryLine(grouped, formatRepeatedToolFailureSummary(pendingToolFailures));
-    pendingToolFailures = [];
-  };
-
-  for (const entry of entries) {
-    if (entry.role === 'tool') {
-      const failureSummary = resolveToolHistorySummary(entry);
-      if (failureSummary) {
-        pendingToolFailures.push(failureSummary);
-        continue;
-      }
-      flushToolFailures();
-    } else {
-      flushToolFailures();
-    }
-
-    const normalizedContent = normalizeHistorySummaryContent(entry.content);
-    if (!normalizedContent) continue;
-
-    pushHistorySummaryLine(grouped, {
-      speaker: resolveHistorySummarySpeaker(entry, characterName),
-      content: normalizedContent,
-    });
-  }
-  flushToolFailures();
-
-  return grouped.slice(-MAX_HISTORY_SUMMARY_ITEMS);
-}
-
-function formatHistorySummaryClause(line: HistorySummaryLine, maxContentChars: number): string {
-  const content = clipHistorySummaryContent(line.content, maxContentChars).replace(/[.!?]+$/u, '');
-  const verb = line.speaker === 'Tool' ? 'reported' : 'said';
-  return `${line.speaker} ${verb}: ${content}`;
-}
-
 function joinHistorySummaryClauses(clauses: readonly string[]): string {
   if (clauses.length === 0) return '';
   if (clauses.length === 1) return clauses[0];
   if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
   return `${clauses.slice(0, -1).join('; ')}; and ${clauses[clauses.length - 1]}`;
-}
-
-function buildHistorySummaryParagraph(
-  lines: readonly HistorySummaryLine[],
-  maxContentChars: number,
-): string | null {
-  if (lines.length === 0) return null;
-  const clauses = lines.map(line => formatHistorySummaryClause(line, maxContentChars));
-  return `In the summarized span, ${joinHistorySummaryClauses(clauses)}.`;
-}
-
-function fitHistorySummaryParagraph(
-  headerLines: readonly string[],
-  summaryLines: readonly HistorySummaryLine[],
-  maxTokens: number,
-): string | null {
-  for (let lineCount = summaryLines.length; lineCount > 0; lineCount -= 1) {
-    const lines = summaryLines.slice(-lineCount);
-    for (
-      let maxContentChars = MAX_HISTORY_SUMMARY_ITEM_CHARS;
-      maxContentChars >= 32;
-      maxContentChars -= 24
-    ) {
-      const paragraph = buildHistorySummaryParagraph(lines, maxContentChars);
-      if (!paragraph) continue;
-      if (countTokens([...headerLines, paragraph].join('\n')) <= maxTokens) {
-        return paragraph;
-      }
-    }
-  }
-
-  return null;
-}
-
-export function buildSessionHistorySummaryText(params: {
-  entries: SessionEntry[];
-  characterName?: string;
-  maxTokens: number;
-}): string {
-  if (params.entries.length === 0 || params.maxTokens <= 0) {
-    return '';
-  }
-
-  const headerLines = ['[History summary]'];
-  if (countTokens(headerLines.join('\n')) > params.maxTokens) {
-    return '';
-  }
-
-  const paragraph = fitHistorySummaryParagraph(
-    headerLines,
-    buildHistorySummaryLines(params.entries, params.characterName),
-    params.maxTokens,
-  );
-  return paragraph ? [...headerLines, paragraph].join('\n') : '';
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {

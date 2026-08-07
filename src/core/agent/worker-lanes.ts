@@ -23,7 +23,7 @@ import {
  * They stay separate so task delegation cannot accidentally reuse the whisper
  * path and so metacognitive work does not get mislabeled as subagent work.
  */
-export const WORKER_LANES = {
+const WORKER_LANES = {
   subagent: 'subagent',
   whisper: 'whisper',
 } as const;

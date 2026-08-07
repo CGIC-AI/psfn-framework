@@ -20,6 +20,10 @@ export type ShardHealthState = 'healthy' | 'stale' | 'failed';
 export type ShardRuntimeCreationMode = RoutingShardCreationMode;
 export type ShardOutcome = 'completed' | 'failed';
 
+export interface ShardAuditTrail {
+  append(event: string, details?: Record<string, unknown>): unknown;
+}
+
 export type { ShardSourceContext } from './lineage-contracts.js';
 
 export interface ShardContextPackEntry {

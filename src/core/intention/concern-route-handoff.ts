@@ -1,11 +1,12 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { Awaitable } from '../../shared/utils/types.js';
 import type { ActiveConcernEvidenceRef, ActiveConcernPriority } from './concerns.js';
 
 const log = createComponentLogger('ConcernRouteHandoff');
 
-export type Awaitable<T> = T | Promise<T>;
+export type { Awaitable } from '../../shared/utils/types.js';
 
 /**
  * Canonical route target set shared by review decisions and grooming.

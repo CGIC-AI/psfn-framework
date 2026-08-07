@@ -16,12 +16,12 @@ import {
   type ValidationError,
 } from '../../../core/scheduler/reflection-policy.js';
 import type {
-  RecurringCadence,
   RecurringCadenceTimezone,
   ScheduledTask,
   ScheduledTaskOperation,
   TaskType,
 } from '../../../core/scheduler/types.js';
+import type { AdminTaskCadence } from '../admin-contract.js';
 import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
 import {
   resolveReflectionPolicyPath,
@@ -38,7 +38,7 @@ const log = createComponentLogger('AdminSchedulerService');
 const REFLECTION_TASK_PREFIX = 'reflection:';
 const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
 
-export type AdminTaskCadence = RecurringCadence;
+export type { AdminTaskCadence } from '../admin-contract.js';
 
 type ScheduledTaskWithCadence = ScheduledTask & { cadence?: unknown };
 

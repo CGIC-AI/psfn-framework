@@ -1,4 +1,6 @@
 import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
+import type { Awaitable } from '../../shared/utils/types.js';
+import type { ScratchpadEntry } from './scratchpad-types.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -27,6 +29,7 @@ export type {
   CoreMemoryRethinkInput,
   CoreMemorySnapshot,
 } from '../core-memory/store.js';
+export type { ScratchpadEntry } from './scratchpad-types.js';
 
 export interface ContactProfileArtifact {
   contactId: string;
@@ -115,13 +118,6 @@ export interface MemoryPatchEvent {
   previousValues: Record<string, unknown>;
   nextValues: Record<string, unknown>;
   createdAt: number;
-}
-
-export interface ScratchpadEntry {
-  id: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface ScratchpadAddResult {
@@ -514,8 +510,6 @@ export interface MemoryEmbeddingSample {
   salience: number;
   embedding: Float32Array;
 }
-
-type Awaitable<T> = T | Promise<T>;
 
 interface MemoryStorePortBackend extends ScratchpadProvider {
   /** Monotonic in-process signal for mutations that can change salience decay work. */

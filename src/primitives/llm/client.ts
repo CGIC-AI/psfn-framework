@@ -9,13 +9,13 @@ import type {
   LLMContext,
   LLMUsageDetails,
   LLMProviderObservability,
-  LLMModelHint,
   LLMResponse,
   LLMWorkSpec,
   ModelBudgetBlockedEvent,
   StreamCallbacks,
   ToolCall,
 } from '../../shared/contracts/runtime.js';
+import type { LLMCompletionModelHint } from './model-hint-routing.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { withRetry, markErrorAsNonRetryable, isRetryableError } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
@@ -123,7 +123,7 @@ const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
 const LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 30_000;
 const LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
 
-export type LLMCompletionModelHint = LLMModelHint;
+export type { LLMCompletionModelHint } from './model-hint-routing.js';
 
 export interface LLMCompletionOptions {
   signal?: AbortSignal;

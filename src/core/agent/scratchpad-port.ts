@@ -1,9 +1,6 @@
-export interface ScratchpadEntry {
-  id: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
-}
+import type { ScratchpadEntry } from '../../faculties/memory/scratchpad-types.js';
+
+export type { ScratchpadEntry } from '../../faculties/memory/scratchpad-types.js';
 
 export interface ScratchpadProvider {
   // Narrow synchronous exemption: prompt assembly reads a local scratchpad view

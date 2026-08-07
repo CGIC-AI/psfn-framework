@@ -681,7 +681,7 @@ export class MemoryRetriever implements MemoryProvider {
           sessionChannelId: request.sessionChannelId?.trim() || null,
           rolledOutSessionBoundary: request.rolledOutSessionBoundary ?? null,
         }), 'utf8').digest('hex'),
-        corpusVersion,
+        corpusVersion: corpusVersion!,
         accessPolicyHash,
       },
     };

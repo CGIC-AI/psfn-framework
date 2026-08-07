@@ -5,7 +5,7 @@ import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/m
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { IntrospectionConsentStore } from './consent-store.js';
-import type { IntrospectionDivergenceType } from './contracts.js';
+import { isUnconfiguredIntrospectionConsentPolicy, type IntrospectionDivergenceType } from './contracts.js';
 
 export const VALUES_CONSISTENCY_STATUSES = [
   'supported',
@@ -240,14 +240,14 @@ export class IntrospectionValuesConsistencyRuntime {
 
   async runOnce(): Promise<{ evaluated: number }> {
     const baselineConsent = this.options.consentStore.load();
-    if (baselineConsent.status === 'unconfigured' || !baselineConsent.enabled) {
+    if (isUnconfiguredIntrospectionConsentPolicy(baselineConsent) || !baselineConsent.enabled) {
       return { evaluated: 0 };
     }
     const allowedChannels = new Set(baselineConsent.allowedPublicChannelIds);
     const assertConsentStillActive = (): void => {
       const current = this.options.consentStore.load();
       if (
-        current.status === 'unconfigured'
+        isUnconfiguredIntrospectionConsentPolicy(current)
         || !current.enabled
         || current.revision !== baselineConsent.revision
         || current.hash !== baselineConsent.hash

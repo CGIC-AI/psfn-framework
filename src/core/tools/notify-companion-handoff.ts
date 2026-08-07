@@ -6,7 +6,7 @@ import type {
   PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
-import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord, isRfc4122Uuid, toRecordView } from '../../shared/utils/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import {
@@ -201,7 +201,9 @@ export async function executeCompanionNotify(input: {
   }
 }
 
-function isSuccessfulCompanionNotifyResult(message: AgentMessage): boolean {
+type ToolResultAgentMessage = Extract<AgentMessage, { role: 'toolResult' }>;
+
+function isSuccessfulCompanionNotifyResult(message: AgentMessage): message is ToolResultAgentMessage {
   if (message.role !== 'toolResult' || message.isError === true || message.toolName !== 'notify') {
     return false;
   }
@@ -256,7 +258,7 @@ export function inferDeferredCompanionOutreachActions(
     const permitFingerprint = createHash('sha256').update(payload.permitId).digest('hex').slice(0, 20);
     actions.push({
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
-      payload,
+      payload: toRecordView(payload),
       dedupeKey: `${DEFERRED_COMPANION_OUTREACH_ACTION_KIND}:${permitFingerprint}`,
       maxRetries: 2,
     });

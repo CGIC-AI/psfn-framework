@@ -257,7 +257,8 @@ function expandEpisodeSpans(
       turnId: resolveEpisodeSessionEntryTurnId(entry),
     }));
     const startIndex = indexed.findIndex(candidate => candidate.turnId === startTurnId);
-    const endIndex = indexed.findLastIndex(candidate => candidate.turnId === endTurnId);
+    const reverseEndIndex = indexed.slice().reverse().findIndex(candidate => candidate.turnId === endTurnId);
+    const endIndex = reverseEndIndex < 0 ? -1 : indexed.length - 1 - reverseEndIndex;
     if (startIndex < 0 || endIndex < 0) {
       return unavailableSpan(spanRef, 'compacted');
     }

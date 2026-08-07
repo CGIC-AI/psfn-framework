@@ -84,6 +84,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare updateRelationshipType: ContactStorePort['updateRelationshipType'];
   declare compareAndSetRelationshipType: ContactStorePort['compareAndSetRelationshipType'];
   declare setChannelPrivacy: ContactStorePort['setChannelPrivacy'];
+  declare setChannelBonding: ContactStorePort['setChannelBonding'];
   declare setConversationChannelPrivacy: ContactStorePort['setConversationChannelPrivacy'];
   declare getConversationChannelPrivacy: ContactStorePort['getConversationChannelPrivacy'];
   declare deleteConversationChannel: ContactStorePort['deleteConversationChannel'];

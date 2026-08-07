@@ -43,7 +43,8 @@ function timestampValue(
   field: 'sinceMs' | 'untilMs',
 ): { ok: true; value?: number } | { ok: false; error: string } {
   const parsed = singleValue(searchParams, field);
-  if (!parsed.ok || parsed.value === undefined) return parsed;
+  if (!parsed.ok) return parsed;
+  if (parsed.value === undefined) return { ok: true };
   const value = Number(parsed.value);
   if (!Number.isSafeInteger(value) || value < 0) {
     return { ok: false, error: `Invalid ${field} query parameter. Expected a non-negative safe integer.` };

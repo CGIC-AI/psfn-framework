@@ -98,7 +98,7 @@ function normalizeChannelType(value: unknown): ChannelType {
 
 function normalizeLimit(value: unknown): number {
   if (value === undefined) return DEFAULT_LIST_LIMIT;
-  if (!Number.isInteger(value) || value < 1 || value > MAX_LIST_LIMIT) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_LIST_LIMIT) {
     throw new Error(`Scheduled prompt list limit must be an integer between 1 and ${MAX_LIST_LIMIT}`);
   }
   return value;

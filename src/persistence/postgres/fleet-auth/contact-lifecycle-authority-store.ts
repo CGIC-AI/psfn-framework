@@ -326,7 +326,10 @@ implements GatewayContactLifecycleAuthorityPort {
       if (PERMANENT.has(request.action)) {
         const floorResources = contactLifecycleFloorResources(companionId, request, affected);
         const fenced = await this.accountAuthority.fenceMany({
-          resources: floorResources,
+          resources: floorResources as ReadonlyArray<{
+            kind: 'companion' | 'principal' | 'provider_subject' | 'contact_binding' | 'role_grant' | 'contact_authority_fence';
+            resourceId: string;
+          }>,
           reasonDigest: contactAuthorityLifecycleIntentDigest(request),
           at: this.now(),
         });

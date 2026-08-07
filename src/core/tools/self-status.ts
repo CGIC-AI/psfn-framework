@@ -27,6 +27,7 @@ import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/type
 import { buildSelfDiagnosisReport, type SelfDiagnosisDeps } from './self-diagnosis.js';
 import type { ToolConformanceRunResult } from '../agent/tool-conformance/types.js';
 import { textResult, textResultWithError } from './results.js';
+import { toRecordView } from '../../shared/utils/types.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import {
   executeSelfAvailabilityAction,
@@ -512,9 +513,9 @@ export async function buildSelfDiagnosticsSnapshot(
   };
 
   try {
-    return runtime.getDiagnosticsSnapshot
+    return toRecordView(runtime.getDiagnosticsSnapshot
       ? await runtime.getDiagnosticsSnapshot(query)
-      : buildRuntimeDiagnosticsSnapshot(query);
+      : buildRuntimeDiagnosticsSnapshot(query));
   } catch {
     return {
       schemaVersion: 1,

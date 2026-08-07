@@ -2,7 +2,7 @@ import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
-import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord, isRfc4122Uuid, toRecordView } from '../../shared/utils/types.js';
 import type {
   IcpInitiationSourceRequest,
   IcpInitiationSourceRuntime,
@@ -78,7 +78,9 @@ export function executeCompanionCandidateConsider(
   }
 }
 
-function isSuccessfulCandidateResult(message: AgentMessage): boolean {
+type ToolResultAgentMessage = Extract<AgentMessage, { role: 'toolResult' }>;
+
+function isSuccessfulCandidateResult(message: AgentMessage): message is ToolResultAgentMessage {
   return message.role === 'toolResult'
     && message.isError !== true
     && message.toolName === 'notify'
@@ -192,7 +194,7 @@ export function inferIcpInitiationCandidateActions(
     };
     actions.push({
       kind: ICP_INITIATION_CANDIDATE_ACTION_KIND,
-      payload,
+      payload: toRecordView(payload),
       dedupeKey: `${ICP_INITIATION_CANDIDATE_ACTION_KIND}:${context.turnId}:${message.toolCallId}`,
       maxRetries: 2,
     });

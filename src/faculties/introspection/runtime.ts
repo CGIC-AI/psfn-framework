@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { IntrospectionAuditConfig } from '../../system/config/scheduler-config.js';
 import type { IntrospectionConsentStore } from './consent-store.js';
-import type {
-  BlindedAuditorPort,
-  CompanionLandmarkReflectorPort,
-  IntrospectionAuditCandidate,
-  IntrospectionAuditPersistencePort,
-  IntrospectionAuditSourcePort,
-  IntrospectionConsentRevision,
+import {
+  isUnconfiguredIntrospectionConsentPolicy,
+  type BlindedAuditorPort,
+  type CompanionLandmarkReflectorPort,
+  type IntrospectionAuditCandidate,
+  type IntrospectionAuditPersistencePort,
+  type IntrospectionAuditSourcePort,
+  type IntrospectionConsentRevision,
 } from './contracts.js';
 
 export type IntrospectionAuditGateReason =
@@ -80,7 +81,7 @@ function assertConsentStillActive(
 ): void {
   const current = consentStore.load();
   if (
-    current.status === 'unconfigured'
+    isUnconfiguredIntrospectionConsentPolicy(current)
     || !current.enabled
     || current.revision !== baseline.revision
     || current.hash !== baseline.hash
@@ -131,7 +132,7 @@ export class IntrospectionAuditRuntime {
       return { reason: 'infrastructure_disabled', candidates: 0, audited: 0, landmarksCreated: 0 };
     }
     const consent = this.options.consentStore.load();
-    if (consent.status === 'unconfigured') {
+    if (isUnconfiguredIntrospectionConsentPolicy(consent)) {
       return { reason: 'consent_unconfigured', candidates: 0, audited: 0, landmarksCreated: 0 };
     }
     if (!consent.enabled) {

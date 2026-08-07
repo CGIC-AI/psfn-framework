@@ -46,8 +46,10 @@ Hard stopping rules:
   on worker checkpoints, and do not rerun an unchanged attested head.
 - When compatible fixes are ready, batch them into one train up to the hard PR
   limits. The 800-line publication floor exists to prevent tiny PRs from creating
-  separate paid-review events; use its documented blocker exception, never filler,
-  when a smaller change genuinely must land alone.
+  separate paid-review events. None of these numbers is set in stone: variances
+  are fine when the change is coherent — tag the variance and finish the work
+  rather than reshaping, splitting, or delaying it to fit the numbers, and never
+  add filler to reach the floor.
 - Publishing, CI, external review, and merging are asynchronous boundaries. After
   creating the PR, report its URL and move to the next implementation task. Do not
   babysit checks or wait for Greptile unless the operator explicitly asks.
@@ -317,12 +319,12 @@ Before publication:
 5. Return the PR URL. CI continues asynchronously; use `--wait` only when the
    operator explicitly asks this session to monitor required checks.
 
-The mandatory publication window is 800–2,500 counted changed lines, at most 25
-files, and at most 8 commits. Fifteen files, 1,500 lines, and 5 commits are
-planning targets, not limits. A coherent commit may span up to the PR hard limits.
-Bundle compatible ready work to reach the floor; never add filler. A smaller PR
-requires `change-budget:exception` and a `BLOCKER:` rationale explaining why it
-must land alone and cannot safely wait for compatible work.
+The publication window is 800–2,500 counted changed lines, at most 25 files, and
+at most 8 commits. These numbers are not set in stone: variances are fine when
+the change is coherent. Tag an out-of-window PR `change-budget:exception` with a
+one-line reason, then finish the work — never reshape, split, or delay a ready
+change just to fit the numbers, and never add filler to reach the floor.
+Fifteen files, 1,500 lines, and 5 commits are planning targets, not limits.
 
 Integration-test timeout overrides must be registered in
 `src/test-support/integration-timeout-registry.json`. Measure first and preserve

@@ -27,7 +27,7 @@ The causes were in this repository's own instructions:
 | Every lane and phase generated bus traffic and tracker evidence. | Coordination artifacts became work with no downstream reader. | Use direct messages and concise bead notes by default. Use a bus only for concurrent writers who need durable shared findings. |
 | Clean-main canary and broad gates were run before or during fanout. | Whole-repository certification ran before the final publishable diff existed. | Run focused checks while implementing and `gate:pre-pr` once on the frozen final train head. |
 | PR publication waited synchronously for CI and Greptile. | A created, ready PR held the agent idle for up to 45 minutes and could spend paid review budget. | Publication ends when the PR is created. Checks are asynchronous; waiting is explicit opt-in. |
-| Every bead became a separate PR and paid scan. | The operator reports about $230 spent this month, roughly 70% on low-value reviews, because even tiny PRs cost another flat-price scan. | Keep the 800-line PR floor, batch compatible beads into a train, and reserve the under-floor exception for an unbundleable blocker. |
+| Every bead became a separate PR and paid scan. | The operator reports about $230 spent this month, roughly 70% on low-value reviews, because even tiny PRs cost another flat-price scan. | Batch compatible beads into a train to amortize paid scans, but treat the 800-line floor as a guide: tag an under-floor PR as a variance and ship it rather than blocking or padding it. |
 | Worktree isolation was confused with PR ceremony. | Removing worktrees would make concurrent agents and subagents collide, especially across overlapping systems. | Every concurrent writer gets a branch and worktree. Many worktrees may still integrate into one train and one PR. |
 | Agents stayed with published work until merge and tracker closure. | Delivery monitoring displaced the next ready implementation. | Mark `published, awaiting checks`, return the URL, and move on. The merger or later reconciliation closes beads. |
 
@@ -139,13 +139,17 @@ Hard PR limits:
 - 2,500 counted changed lines; and
 - 8 commits.
 
+These limits are not set in stone: variances are fine when the change is
+coherent. Tag an out-of-window PR `change-budget:exception` with a one-line
+reason, then finish the work. Never reshape, split, or delay a ready change just
+to fit the numbers.
+
 Planning targets are 15 files, 1,500 lines, and 5 commits. They are suggestions,
 not split points. A coherent commit may span up to the PR hard limits. The
 publication floor is 800 counted changed lines because each PR can incur a flat
-paid-review cost regardless of diff size. Hold and batch compatible ready work;
-never add unrelated filler. An under-800 PR is allowed only with
-`change-budget:exception` and a `BLOCKER:` rationale proving it must land alone
-and cannot safely wait for compatible work.
+paid-review cost regardless of diff size. Hold and batch compatible ready work
+when that is cheap; never add unrelated filler, and never delay a ready fix just
+to reach the floor — tag the variance and ship it.
 
 ## Canonical Wave
 

@@ -248,6 +248,7 @@ export function createTurnExecutionRuntimeAdapter(
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
     observerEvalSidecar: options.observerEvalSidecar ?? null,
+    backgroundWorkMaxAttempts: options.turnSupportRuntime.backgroundWorkMaxAttempts,
     beginForegroundBackgroundWork: (logicalSessionId) => options.turnSupportRuntime
       .beginForegroundBackgroundWork(logicalSessionId),
     endForegroundBackgroundWork: (lease) => options.turnSupportRuntime

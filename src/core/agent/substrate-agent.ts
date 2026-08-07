@@ -680,6 +680,9 @@ export class SubstrateAgent {
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
       backgroundWorkSupervisor: this.backgroundWorkSupervisor,
+      ...(backgroundWorkTuning
+        ? { backgroundWorkMaxAttempts: backgroundWorkTuning.postTurn.maxAttempts }
+        : {}),
       backgroundWorkDisabled: options.backgroundWorkDisabled === true,
       hashPromptText: hashPromptTextForTurn,
       resolveContextWindow: () => resolveContextWindowForRuntime(

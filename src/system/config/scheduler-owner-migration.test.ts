@@ -269,14 +269,14 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['icpAutonomy.policyHolds'],
+      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
 
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['icpAutonomy.policyHolds'],
+      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
     });
     expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
       .toEqual(DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds);
@@ -303,6 +303,7 @@ describe('migrateLegacySchedulerOwner', () => {
       status: 'planned',
       addedPaths: [
         'backgroundMaintenance.sharedWorldWikiCaretaker',
+        'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
       ],
     });
@@ -313,6 +314,7 @@ describe('migrateLegacySchedulerOwner', () => {
       status: 'applied',
       addedPaths: [
         'backgroundMaintenance.sharedWorldWikiCaretaker',
+        'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
       ],
     });
@@ -358,6 +360,34 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migratedRaw.operatorExtension).toEqual({ note: 'preserve me' });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       status: 'not_needed',
+    });
+  });
+
+  it('adds the scheduler-owned post-turn retry limit to existing background-work owners', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      const backgroundWork = owner.backgroundWork as Record<string, unknown>;
+      const postTurn = backgroundWork.postTurn as Record<string, unknown>;
+      delete postTurn.maxAttempts;
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['backgroundWork.postTurn.maxAttempts', 'icpAutonomy.policyHolds'],
+    });
+    expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts).toBe(5);
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({
+      backgroundWork: { postTurn: { maxAttempts: 5 } },
     });
   });
 

@@ -169,6 +169,7 @@ export interface TurnExecutionRuntime {
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
+  backgroundWorkMaxAttempts: number;
   beginForegroundBackgroundWork: (logicalSessionId: string) => ForegroundWorkLease | null;
   endForegroundBackgroundWork: (lease: ForegroundWorkLease | null) => Promise<void>;
   enqueuePostTurnBackgroundWork: (

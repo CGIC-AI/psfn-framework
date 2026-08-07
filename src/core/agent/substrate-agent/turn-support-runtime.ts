@@ -49,6 +49,7 @@ import type {
   ForegroundWorkLease,
 } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import { DISABLED_BACKGROUND_WORK_MAX_ATTEMPTS } from '../background-work/config.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -66,6 +67,7 @@ export interface TurnSupportRuntimeOptions {
   eventBus: EventBus;
   sessionManager: TurnSessionWriteManager;
   backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
+  backgroundWorkMaxAttempts?: number;
   backgroundWorkDisabled?: boolean;
   hashPromptText: (text: string) => string;
   resolveContextWindow: () => number;
@@ -79,6 +81,7 @@ export class TurnSupportRuntime {
   private readonly sessionManager: TurnSessionWriteManager;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
   private readonly backgroundWorkDisabled: boolean;
+  readonly backgroundWorkMaxAttempts: number;
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
   private readonly companionId?: string;
@@ -100,6 +103,13 @@ export class TurnSupportRuntime {
     if (this.backgroundWorkDisabled && this.backgroundWorkSupervisor) {
       throw new Error('Background work cannot be both durable and disabled');
     }
+    if (this.backgroundWorkSupervisor
+      && (!Number.isSafeInteger(options.backgroundWorkMaxAttempts)
+        || (options.backgroundWorkMaxAttempts ?? 0) <= 0)) {
+      throw new Error('Durable background work requires scheduler-owned maxAttempts');
+    }
+    this.backgroundWorkMaxAttempts = options.backgroundWorkMaxAttempts
+      ?? DISABLED_BACKGROUND_WORK_MAX_ATTEMPTS;
     this.hashPromptText = options.hashPromptText;
     this.resolveContextWindow = options.resolveContextWindow;
     this.companionId = typeof options.companionId === 'string' && options.companionId.trim().length > 0

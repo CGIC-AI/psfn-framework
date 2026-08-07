@@ -90,6 +90,7 @@ export const DEFAULT_BACKGROUND_WORK_TUNING: BackgroundWorkRuntimeTuning = {
     cleanupIntervalMs: 60 * 60_000,
   },
   postTurn: {
+    maxAttempts: 5,
     extractionDrainRequeueDelayMs: 1_000,
     foregroundPreemptionDeferDelayMs: 1_000,
   },
@@ -985,7 +986,7 @@ function validateBackgroundWorkConfig(
   );
   assertNoUnknownKeys(
     raw.postTurn,
-    ['extractionDrainRequeueDelayMs', 'foregroundPreemptionDeferDelayMs'],
+    ['maxAttempts', 'extractionDrainRequeueDelayMs', 'foregroundPreemptionDeferDelayMs'],
     `${sourcePath}.backgroundWork.postTurn`,
     { errorPrefix: 'Invalid scheduler config' },
   );
@@ -1028,6 +1029,10 @@ function validateBackgroundWorkConfig(
   return {
     supervisor,
     postTurn: {
+      maxAttempts: toBackgroundWorkPositiveInteger(
+        raw.postTurn.maxAttempts,
+        'backgroundWork.postTurn.maxAttempts',
+      ),
       extractionDrainRequeueDelayMs: toBackgroundWorkPositiveInteger(
         raw.postTurn.extractionDrainRequeueDelayMs,
         'backgroundWork.postTurn.extractionDrainRequeueDelayMs',

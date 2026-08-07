@@ -16,9 +16,13 @@ export interface BackgroundWorkSupervisorTuning {
 }
 
 export interface BackgroundWorkPostTurnTuning {
+  maxAttempts: number;
   extractionDrainRequeueDelayMs: number;
   foregroundPreemptionDeferDelayMs: number;
 }
+
+/** Disabled lanes never persist or retry work; their transient inputs are single-attempt. */
+export const DISABLED_BACKGROUND_WORK_MAX_ATTEMPTS = 1;
 
 export interface BackgroundWorkRuntimeTuning {
   supervisor: BackgroundWorkSupervisorTuning;

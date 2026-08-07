@@ -86,6 +86,7 @@ function createBackgroundWorkInput(input: {
   kind: BackgroundWorkKind;
   payload: BackgroundWorkPayload;
   source: BackgroundWorkSourceRef;
+  maxAttempts: number;
 }): EnqueueBackgroundWorkInput {
   const identity = createBackgroundWorkIdentity({
     logicalSessionId: input.source.logicalSessionId,
@@ -102,7 +103,7 @@ function createBackgroundWorkInput(input: {
     sourceRequestId: input.source.requestId,
     sourceChannelId: input.source.channelId,
     createdAtMs: input.source.createdAtMs,
-    maxAttempts: 5,
+    maxAttempts: input.maxAttempts,
   };
 }
 
@@ -362,6 +363,7 @@ export async function schedulePostTurnWork(input: {
     kind: payload.kind,
     payload,
     source,
+    maxAttempts: runtime.backgroundWorkMaxAttempts,
   }));
   if (payloads.some(payload => payload.kind === 'memory_extraction')) {
     const projectionBinding = {

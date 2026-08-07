@@ -16,6 +16,7 @@ import type { IcpAutonomyCandidateOrigin } from '../../shared/contracts/runtime.
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type {
   IcpCompanionOutreachExecutionResult,
   KnownCompanionPeer,
@@ -171,7 +172,10 @@ function resolveChannelId(
   request: IcpInitiationSourceRequest,
 ): string {
   if (request.preferredChannel === 'dm') {
-    return composeCompanionDmChannelId(localCompanionId, peerCompanionId);
+    return composeCompanionDmChannelId(
+      localCompanionId as CompanionId,
+      peerCompanionId as CompanionId,
+    );
   }
   const channelId = requireTrimmed(
     request.currentRoomChannelId ?? '',
@@ -371,14 +375,18 @@ export function createIcpInitiationSourceRuntime(
       revision: 1,
     });
 
-    let candidate = await dependencies.store.getCandidate(candidateId);
-    if (!candidate) {
+    let candidate: IcpInitiationCandidate;
+    const existingCandidate = await dependencies.store.getCandidate(candidateId);
+    if (existingCandidate) {
+      candidate = existingCandidate;
+    } else {
       try {
         candidate = await dependencies.store.createCandidate(proposed);
         await emitLifecycle(candidate, null);
       } catch (error) {
-        candidate = await dependencies.store.getCandidate(candidateId);
-        if (!candidate) throw error;
+        const racedCandidate = await dependencies.store.getCandidate(candidateId);
+        if (!racedCandidate) throw error;
+        candidate = racedCandidate;
       }
     }
     if (!sameCandidate(candidate, proposed)) {

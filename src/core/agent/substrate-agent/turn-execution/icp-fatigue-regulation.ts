@@ -152,7 +152,7 @@ export async function reserveIcpFatigueRegulation(input: {
     deferredPressureUnits: regulation.deferredPressureUnits,
     unansweredPressureUnits: regulation.unansweredPressureUnits,
   });
-  const localDecision = evaluation.decision === 'overcharge' ? 'overcharge' : 'charged';
+  const localDecision: 'charged' | 'overcharge' = evaluation.decision === 'overcharge' ? 'overcharge' : 'charged';
   let reservation = await reserve(localDecision);
   let reservedDecision = localDecision;
   if (reservation.outcome === 'exhausted'
@@ -247,8 +247,8 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   }, async () => {
     await chargeSurfaceDurably('companionSocialContinuation', {
       eventId: `${input.turnId}:companion-social`,
-      probeChargeEvent: input.probeChargeEvent,
-      recordChargeEvent: input.recordChargeEvent,
+      probeChargeEvent: input.probeChargeEvent!,
+      recordChargeEvent: input.recordChargeEvent!,
       details: {
         regulationState: regulation.state,
         rootInitiationId: regulation.rootInitiationId,

@@ -134,25 +134,28 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         },
       };
     }
+    const activeSatelliteClaim = satelliteClaim?.ok ? satelliteClaim.value : undefined;
     const requestAgent = async <T>(
       method: string,
       params: unknown,
     ): Promise<T> => {
-      const sharedSatellite = satelliteClaim?.ok
-        && satelliteClaim.value.satellite.sharedDevice
+      const sharedSatellite = activeSatelliteClaim?.satellite.sharedDevice
         ? {
-            ...satelliteClaim.value.satellite,
-            sharedDevice: satelliteClaim.value.satellite.sharedDevice,
+            ...activeSatelliteClaim.satellite,
+            sharedDevice: activeSatelliteClaim.satellite.sharedDevice,
           }
         : undefined;
       if (sharedSatellite && method === 'api.chat.completion') {
+        if (!activeSatelliteClaim) {
+          throw new Error('Shared-satellite chat arbitration requires a valid satellite claim');
+        }
         if (!this.gateway.requestSharedSatelliteChatCompletion) {
           throw new Error('Shared-satellite chat arbitration is not configured');
         }
         return await this.gateway.requestSharedSatelliteChatCompletion({
           satellite: sharedSatellite,
-          canonicalContactId: satelliteClaim.value.canonicalContactId,
-          channelId: satelliteClaim.value.channelId,
+          canonicalContactId: activeSatelliteClaim.canonicalContactId,
+          channelId: activeSatelliteClaim.channelId,
           params: params as Parameters<
             GatewayServer['requestSharedSatelliteChatCompletion']
           >[0]['params'],

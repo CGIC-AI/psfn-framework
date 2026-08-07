@@ -13,6 +13,7 @@ import type {
   GatewayRpcEndpoint,
   GatewayRpcTlsFileConfig,
 } from '../../../boundary/gateway/transport.js';
+import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type {
   ContactAuthorityLifecycleRequest,
   ContactAuthorityLifecycleResult,
@@ -283,6 +284,7 @@ async function endpoints(
     },
     server: {
       kind: 'wss',
+      url: `wss://127.0.0.1:${port}${path}`,
       host: '127.0.0.1',
       port,
       path,
@@ -312,7 +314,10 @@ function serverOptions(
     contactLifecycleAuthority: authority,
     multiCompanion: {
       enabled: true,
-      fleetCompanionIds: [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B],
+      fleetCompanionIds: [
+        CERTIFICATION_COMPANION_A as CompanionId,
+        CERTIFICATION_COMPANION_B as CompanionId,
+      ],
       channelRouting: {},
       discordAccounts: {},
       personalWorkspaceByCompanionId: {
@@ -375,7 +380,11 @@ async function startCertificationAgents(
       .map(async result => result.value.forceStop()));
     throw failure.reason;
   }
-  return [results[0].value, results[1].value];
+  const [agentA, agentB] = results as [
+    PromiseFulfilledResult<ContactLifecycleCertificationAgent>,
+    PromiseFulfilledResult<ContactLifecycleCertificationAgent>,
+  ];
+  return [agentA.value, agentB.value];
 }
 
 export async function startContactLifecycleCertificationHarness(

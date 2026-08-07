@@ -3,7 +3,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { resolveOptionalEnvCredential } from '../custody/credential-vault.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
 
-function isSet(value: string | undefined): boolean {
+function isSet(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 

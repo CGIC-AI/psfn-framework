@@ -295,8 +295,8 @@ export class GatewayCompanionChannelLane {
     peerCompanionId: string,
     channelId: string,
   ): Promise<CompanionDeliveryResolution> {
-    if (!this.fleetCompanionIds.has(senderCompanionId)
-      || !this.fleetCompanionIds.has(peerCompanionId)) {
+    if (!this.fleetCompanionIds.has(senderCompanionId as CompanionId)
+      || !this.fleetCompanionIds.has(peerCompanionId as CompanionId)) {
       return violation(
         'companion_initiation_unknown_participant',
         'Companion initiation requires two current fleet participants',
@@ -312,7 +312,7 @@ export class GatewayCompanionChannelLane {
       );
     }
     if (parsed.kind === 'dm') {
-      const resolution = await this.resolveDelivery(senderCompanionId, channelId);
+      const resolution = await this.resolveDelivery(senderCompanionId as CompanionId, channelId);
       if (!resolution.ok) return resolution;
       if (resolution.recipients.length !== 1 || resolution.recipients[0] !== peerCompanionId) {
         return violation(
@@ -348,8 +348,10 @@ export class GatewayCompanionChannelLane {
       ok: true,
       kind: 'room',
       channelId,
-      recipients: [peerCompanionId],
+      placeId: place.placeId,
+      recipients: [peerCompanionId as CompanionId],
       roomPrivacy: resolvePlacePrivacy(place),
+      recipientPresenceEpochs: {},
     };
   }
 }

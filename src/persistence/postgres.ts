@@ -376,10 +376,10 @@ export async function queryOne<T extends QueryResultRow>(
   return result.rows[0];
 }
 
-export async function executeQuery(
+export async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   pool: Pool,
   text: string,
   values: readonly unknown[] = [],
-): Promise<QueryResult> {
-  return await pool.query(text, stripNulBytesFromBindParameters(values));
+): Promise<QueryResult<T>> {
+  return await pool.query<T>(text, stripNulBytesFromBindParameters(values));
 }

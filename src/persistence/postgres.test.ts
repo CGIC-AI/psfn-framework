@@ -124,6 +124,13 @@ describe('bind-parameter NUL stripping (psfn-framework-dn05)', () => {
     expect(lastValues()).toEqual(['portalid']);
   });
 
+  it('preserves explicit row types through executeQuery', async () => {
+    const { pool } = captureBindPool();
+    const result = await executeQuery<{ ok: number }>(pool, 'SELECT 1 AS ok');
+
+    expect(result.rows).toEqual([{ ok: 1 }]);
+  });
+
   it('strips a raw NUL byte embedded inside a JSON-shaped string parameter', async () => {
     const { pool, lastValues } = captureBindPool();
     // A raw 0x00 byte living inside a JSON string bound to a jsonb column —

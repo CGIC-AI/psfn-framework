@@ -667,6 +667,10 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   const foldReviewController = new ShardFoldReviewController(
     resolveShardFoldReviewStorePath(companionDataDir),
     foldReviewMemoryWriter,
+    () => ({
+      screening: options.sessionManager.intakeScreening,
+      sinkGate: options.sessionManager.intakeSinkGate,
+    }),
   );
   const shardManager = new ShardManager({
     eventBus: options.eventBus,
@@ -690,6 +694,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     shardParentIcpDelivery,
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
     workloadRegistry: options.shardWorkloadRegistry ?? new ShardWorkloadRegistry(),
+    activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,
@@ -713,6 +718,11 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     // agent entrypoint assigns intakeScreening onto the parent SessionManager
     // after this composition runs.
     intakeScreeningProvider: () => options.sessionManager.intakeScreening,
+    completionIntakeProvider: () => ({
+      screening: options.sessionManager.intakeScreening,
+      sinkGate: options.sessionManager.intakeSinkGate,
+    }),
+    activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');

@@ -1,3 +1,9 @@
+import type {
+  IntakeEnvelopeSnapshot,
+  IntakeSink,
+  IntakeSourceClass,
+} from './intake-envelope.js';
+
 export const COMPLETION_HANDOFF_SCHEMA_VERSION = 1;
 export const COMPLETION_HANDOFF_METADATA_TYPE = 'completion_handoff';
 
@@ -84,6 +90,25 @@ export interface CompletionHandoffInput {
   origin?: CompletionHandoffOrigin;
   dedupeKey?: string;
   createdAt?: number;
+  /** Parent inputs consumed to derive this child result (CaMeL taint lineage). */
+  ingestedIntakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
+}
+
+export interface CompletionHandoffIntakeDisposition {
+  sourceClass: Extract<IntakeSourceClass, 'subagent_output' | 'shard_foldback'>;
+  mode: 'shadow' | 'enforce';
+  action: 'pass' | 'sanitize' | 'quarantine' | 'block';
+  withheld: boolean;
+  envelopes: IntakeEnvelopeSnapshot[];
+  sink: {
+    sink: IntakeSink;
+    allowed: boolean;
+    verdict: 'allow' | 'deny';
+    mode: 'shadow' | 'enforce';
+    reason: string;
+    unscreened: boolean;
+    deniedEnvelopeIds: readonly string[];
+  };
 }
 
 export interface CompletionHandoffRecord {
@@ -102,6 +127,7 @@ export interface CompletionHandoffRecord {
   result: {
     summary: string;
     partial: boolean;
+    intake?: CompletionHandoffIntakeDisposition;
   };
   refs: {
     artifacts: CompletionHandoffRef[];

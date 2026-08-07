@@ -4,6 +4,7 @@ import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { cloneIntakeSnapshots } from '../../core/cogsec/intake/derived-content.js';
 import type {
   ShardCapabilityGrantEvidence,
   ShardConfigurationOverridePatch,
@@ -493,6 +494,9 @@ function cloneLineage(lineage: ShardResult['lineage']): ShardResult['lineage'] {
     sourceMessage: { ...lineage.sourceMessage },
     ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
     ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
+    ...(lineage.ingestedIntakeEnvelopes
+      ? { ingestedIntakeEnvelopes: cloneIntakeSnapshots(lineage.ingestedIntakeEnvelopes) }
+      : {}),
   };
 }
 

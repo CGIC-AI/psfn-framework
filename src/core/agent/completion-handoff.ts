@@ -16,6 +16,9 @@ import {
   type CompletionNoticeDeliveryPort,
 } from './completion-notices.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
+import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import { screenDerivedContent } from '../cogsec/intake/derived-content.js';
 
 export {
   COMPLETION_HANDOFF_METADATA_TYPE,
@@ -34,11 +37,6 @@ export type {
   CompletionHandoffStatus,
 } from '../../shared/contracts/completion-handoff.js';
 
-// TODO(htm9.2-followup): subagent completion summaries fold back into the
-// main agent with lifecycle audit but no content-risk gate. Screen the
-// summary text through the intake screening service (sourceClass
-// 'subagent_output'; derive the envelope from the ingested sources' envelopes
-// per the CaMeL taint rule) before it is emitted toward session context.
 const MAX_SUMMARY_CHARS = 700;
 const MAX_TRACKED_DEDUPE_KEYS = 4096;
 
@@ -158,8 +156,10 @@ export async function emitCompletionHandoff(input: {
   targetChannelId?: string;
   notices?: CompletionNoticeBuffer;
   noticeDelivery?: CompletionNoticeDeliveryPort;
+  intakeScreening?: IntakeScreeningService | null;
+  intakeSinkGate?: IntakeSinkGate | null;
 }): Promise<CompletionHandoffEmission> {
-  const handoff = isCompletionHandoffRecord(input.handoff)
+  let handoff = isCompletionHandoffRecord(input.handoff)
     ? input.handoff
     : buildCompletionHandoff(input.handoff);
   const targetChannelId = input.targetChannelId?.trim();
@@ -170,6 +170,32 @@ export async function emitCompletionHandoff(input: {
   let noticeDelivery: CompletionNoticeDeliveryDisposition | undefined;
   const logicalSessionId = handoff.origin.logicalSessionId?.trim();
   if (targetChannelId && logicalSessionId && shouldRouteCompanionCompletionNotice(handoff)) {
+    if (!handoff.result.intake) {
+      const sourceClass = handoff.source === 'subagent' ? 'subagent_output' : 'shard_foldback';
+      const screened = await screenDerivedContent({
+        text: handoff.result.summary,
+        sourceClass,
+        origin: `completion-handoff:${handoff.handoffId}`,
+        sink: 'prompt_assembly',
+        ingestedEnvelopes: isCompletionHandoffRecord(input.handoff)
+          ? undefined
+          : input.handoff.ingestedIntakeEnvelopes,
+        screening: input.intakeScreening,
+        sinkGate: input.intakeSinkGate,
+        auditContext: {
+          handoffId: handoff.handoffId,
+          taskId: handoff.task.id,
+        },
+      });
+      handoff = {
+        ...handoff,
+        result: {
+          ...handoff.result,
+          summary: summarizeCompletionText(screened.effectiveText),
+          ...(screened.intake ? { intake: screened.intake } : {}),
+        },
+      };
+    }
     const notice = buildCompletionNotice(handoff);
     if (input.noticeDelivery) {
       noticeDelivery = await input.noticeDelivery.deliver({

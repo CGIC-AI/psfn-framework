@@ -69,4 +69,35 @@ describe('buildShardLineageEnvelope', () => {
       },
     } as any)).toThrow('Shard lineage source message id cannot be empty');
   });
+
+  it('retains intake snapshots from the source message across foldback lineage', () => {
+    const intakeEnvelope = {
+      envelopeId: 'source-envelope-1',
+      sourceClass: 'document' as const,
+      sourceRiskTier: 'untrusted' as const,
+      state: 'released' as const,
+      riskLabels: ['injection/indirect' as const],
+      subject: { kind: 'body' as const },
+    };
+    const routingEnvelopes = [intakeEnvelope];
+    const lineage = buildShardLineageEnvelope({
+      kind: 'wyoming',
+      coreCompanionId: TEST_COMPANION_ID,
+      shardId: 'shard-intake',
+      shardChannelId: 'api:source',
+      sourceMessage: {
+        id: 'source-message',
+        channelId: 'api:source',
+        channelType: 'api',
+        authorId: 'source-user',
+        authorName: 'Source User',
+        timestamp: new Date('2026-03-28T12:00:00.000Z'),
+        routing: { intakeEnvelopes: routingEnvelopes },
+      },
+    });
+
+    expect(lineage.ingestedIntakeEnvelopes).toEqual([intakeEnvelope]);
+    expect(lineage.ingestedIntakeEnvelopes).not.toBe(routingEnvelopes);
+    expect(lineage.ingestedIntakeEnvelopes?.[0]).not.toBe(intakeEnvelope);
+  });
 });

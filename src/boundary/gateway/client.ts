@@ -2,9 +2,8 @@
 // Agent-side typed RPC wrapper. Implements LLMProviderPort and EmbeddingProviderPort
 // so it can be used as a drop-in replacement for direct clients.
 
-import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { randomUUID } from 'node:crypto';
-import { Worker } from 'node:worker_threads';
 import type {
   LLMProviderPort,
   LLMProviderStreamOptions,
@@ -12,7 +11,6 @@ import type {
 } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
-import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   GatewayRpcConnection,
@@ -30,60 +28,21 @@ import {
   createWebSocketRpcClient,
 } from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { abortError } from '../../shared/utils/errors.js';
-import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
 import { getMcpTurnDisclosureContext } from '../../core/cogsec/disclosure/mcp-turn-context.js';
-import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
+import type { QueueOverflowPolicy } from './backpressure.js';
+import { GatewayClientTransportRuntime } from './client/transport-runtime.js';
+import { GatewayClientSessionIntegrityRuntime } from './client/session-integrity-runtime.js';
 import {
-  captureReplyCanary,
-  getReplyCanaryCaptureToken,
-} from '../../core/cogsec/canary/reply-canary.js';
-import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
-import { registerReverseGatewayMethods } from './reverse-methods.js';
-import type { MessageHandler, MessageHandlerOptions } from '../../channels/backplane/types.js';
+  GatewayClientReverseRpcRuntime,
+  type IcpLocalPolicyAuthorityPort,
+} from './client/reverse-rpc-runtime.js';
+import type { MessageHandler } from '../../channels/backplane/types.js';
 import {
-  parseContactAuthoritySnapshotRequest,
-  parseVerifiedDiscordContactAuthoritySnapshot,
   type ContactAuthoritySnapshotRequest,
   type VerifiedDiscordContactAuthoritySnapshot,
 } from '../../shared/contracts/contact-authority-snapshot.js';
-import {
-  parseIcpLocalPolicyAcquireParams,
-  parseIcpLocalPolicyAcquireResult,
-  parseIcpLocalPolicyInspectParams,
-  parseIcpLocalPolicyInspectResult,
-  parseIcpLocalPolicyReleaseParams,
-  parseIcpLocalPolicyReleaseResult,
-  type IcpLocalPolicyAcquireParams,
-  type IcpLocalPolicyAcquireResult,
-  type IcpLocalPolicyInspectParams,
-  type IcpLocalPolicyInspectResult,
-  type IcpLocalPolicyReleaseParams,
-  type IcpLocalPolicyReleaseResult,
-} from '../../core/icp/local-policy-contract.js';
 const log = createComponentLogger('GatewayClient');
 
-/**
- * htm9.18: attach the live session canary token to outbound egress requests so
- * the gateway egress guard can scan for a prompt leak. Only egress methods and
- * only when a turn-scoped canary context is active; the raw token rides in a
- * reserved param the gateway strips before the handler and never logs. LLM and
- * other non-egress calls are untouched (the canary lives in the prompt there
- * legitimately).
- */
-function attachCanaryToEgressRequest<T>(request: T): T {
-  const rpc = request as unknown as { method?: unknown; params?: unknown };
-  if (typeof rpc.method !== 'string' || !isEgressCanaryMethod(rpc.method)) {
-    return request;
-  }
-  const token = getActiveCanaryToken();
-  if (!token) return request;
-  if (!rpc.params || typeof rpc.params !== 'object' || Array.isArray(rpc.params)) {
-    return request;
-  }
-  (rpc.params as Record<string, unknown>)[CANARY_CARRIER_PARAM_KEY] = token;
-  return request;
-}
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
   ApiChatCompletionCancelRpcParams,
@@ -160,8 +119,6 @@ import type {
   CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
-  TurnPerformanceIngestResult,
-  VoiceHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
   OperatorAlertResult,
@@ -173,13 +130,6 @@ import type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
   GatewayCredentialPresenceResult,
-  RpcSubstrateMessage,
-  VoiceStreamChunkParams,
-  VoiceStreamEndParams,
-  VoiceStreamCancelParams,
-  VoiceStreamAckResult,
-  VoiceStreamEndResult,
-  VoiceStreamCancelResult,
   SessionHmacSignResult,
   SessionHmacVerifyResult,
   GitDiffParams,
@@ -244,11 +194,6 @@ import {
   type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import { GatewayErrors } from './protocol.js';
-import {
-  SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES,
-  SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES,
-  SESSION_INTEGRITY_WORKER_SOURCE,
-} from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints.js';
 import {
@@ -276,54 +221,13 @@ import {
   type CompanionId,
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
-import { parseGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
-import {
-  parseTurnPerformanceEvent,
-  type TurnPerformanceEvent,
-} from '../../shared/telemetry/turn-performance.js';
+import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
-
-function assertRpcSubstrateMessage(
-  value: unknown,
-  options: { fieldName: string; allowEmptyContent?: boolean },
-): asserts value is RpcSubstrateMessage {
-  const { fieldName, allowEmptyContent = false } = options;
-  if (!isRecord(value)) {
-    throw new Error(`${fieldName} must be an object`);
-  }
-  for (const field of ['id', 'channelId', 'authorId', 'authorName'] as const) {
-    if (typeof value[field] !== 'string' || !value[field].trim()) {
-      throw new Error(`${fieldName}.${field} must be a non-empty string`);
-    }
-  }
-  if (typeof value.content !== 'string' || (!allowEmptyContent && !value.content.trim())) {
-    throw new Error(
-      `${fieldName}.content must be ${allowEmptyContent ? 'a string' : 'a non-empty string'}`,
-    );
-  }
-  if (typeof value.channelType !== 'string'
-    || !CHANNEL_TYPES.some(channelType => channelType === value.channelType)) {
-    throw new Error(`${fieldName}.channelType is not supported`);
-  }
-  const timestamp = value.timestamp;
-  if (!(timestamp instanceof Date) && typeof timestamp !== 'string') {
-    throw new Error(`${fieldName}.timestamp must be a Date or ISO string`);
-  }
-  const timestampMs = timestamp instanceof Date
-    ? timestamp.getTime()
-    : Date.parse(timestamp);
-  if (!Number.isFinite(timestampMs)) {
-    throw new Error(`${fieldName}.timestamp must be valid`);
-  }
-  if (!isRecord(value.routing)) {
-    throw new Error(`${fieldName}.routing must be an object`);
-  }
-}
 
 export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   voiceStreamQueueSize?: number;
@@ -473,37 +377,12 @@ function buildOutboundUsageCorrelation(
   };
 }
 
-interface VoiceStreamState {
-  correlationId: string;
-  streamId: string;
-  baseMessage: SubstrateMessage;
-  expectedSequence: number;
-  chunkQueue: BoundedQueue<string>;
-  chunks: string[];
-  droppedChunks: number;
-  cancelled: boolean;
-  /**
-   * mmo9.6.1: turn-cancellation identity carried on the streamed message's
-   * routing, and a per-stream AbortController threaded into the in-flight model
-   * turn. `voice.stream.cancel` aborts this controller so a barge-in that lands
-   * AFTER dispatch actually cancels the running turn instead of only flagging
-   * state for a future (never-dispatched) end frame.
-   */
-  cancellationId?: string;
-  abortController: AbortController;
-}
-
 export interface GatewayConnectionCloseEvent {
   source: 'close' | 'error';
   error?: Error;
 }
 
-export interface IcpLocalPolicyAuthorityPort {
-  inspect(input: IcpLocalPolicyInspectParams): Promise<IcpLocalPolicyInspectResult>;
-  acquire(input: IcpLocalPolicyAcquireParams): Promise<IcpLocalPolicyAcquireResult>;
-  release(input: IcpLocalPolicyReleaseParams): Promise<IcpLocalPolicyReleaseResult>;
-  releaseAll(): Promise<void>;
-}
+export type { IcpLocalPolicyAuthorityPort } from './client/reverse-rpc-runtime.js';
 
 export class GatewayClient implements
   LLMProviderPort,
@@ -512,13 +391,9 @@ export class GatewayClient implements
   GatewaySystemDataWriterPort,
   ShardWorkloadLifecyclePort,
   MemoryDeletionApprovalPort {
-  private rpcInstance: JSONRPCServerAndClient;
-  private conn: GatewayRpcConnection;
+  private transportRuntime: GatewayClientTransportRuntime;
+  private reverseRpcRuntime: GatewayClientReverseRpcRuntime;
   private embeddingDims: number;
-  private notificationHandlers = new Map<
-    string,
-    Array<(params: unknown) => void | Promise<void>>
-  >();
   private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
   private chunkHandlers = new Map<string, (text: string) => void>();
   private firstOutputHandlers = new Map<
@@ -526,49 +401,14 @@ export class GatewayClient implements
     NonNullable<StreamCallbacks['onFirstOutput']>
   >();
   private requestCounter = 0;
-  private reverseMethodsRegistered = false;
-  private handleMessageHandler: MessageHandler | null = null;
-  private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
-  private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
-  private companionUiShardActionHandler: ((
-    params: ApiCompanionUiShardActionRpcParams,
-  ) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
-  private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
-  private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
-  private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
-  private satelliteResponseEligibilityHandler: ((
-    params: SatelliteResponseEligibilityRpcParams,
-  ) => Promise<SatelliteResponseEligibilityRpcResult>) | null = null;
-  private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
-  private contactAuthoritySnapshotHandler: ((
-    params: ContactAuthoritySnapshotRequest,
-  ) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>) | null = null;
-  private memoryDeletionPartnerAlertedHandler: ((
-    params: MemoryDeletionPartnerAlertedParams,
-  ) => Promise<MemoryDeletionPartnerAlertedResult>) | null = null;
-  private memoryDeletionProposalSnapshotHandler: ((
-    params: MemoryDeletionProposalSnapshotParams,
-  ) => Promise<MemoryDeletionProposalSnapshotResult>) | null = null;
-  private memoryDeletionResolveHandler: ((
-    params: MemoryDeletionResolveParams,
-  ) => Promise<MemoryDeletionResolveResult>) | null = null;
-  private icpLocalPolicyAuthority: IcpLocalPolicyAuthorityPort | null = null;
-  private icpLocalPolicyReady = false;
-  private icpLocalPolicyCleanupStarted = false;
-  private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
   private readonly sessionIntegrityEndpoint: GatewayRpcEndpoint | null;
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private readonly sessionIntegritySignMaxRetries?: number;
   private readonly sessionIntegritySignRetryBaseDelayMs?: number;
+  private readonly sessionIntegrityRuntime: GatewayClientSessionIntegrityRuntime;
   private readonly keepaliveIntervalMs: number;
-  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  private fleetPostureProvider: (() => FleetCompanionPostureSummary) | null = null;
-  private fleetPostureReportInFlight = false;
-  private sessionIntegrityWorker: Worker | null = null;
-  private sessionIntegrityRequestCounter = 0;
-  private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
   private readonly companionId?: CompanionId;
@@ -583,7 +423,6 @@ export class GatewayClient implements
   private readonly mcpPermitByToolCallId = new Map<string, string>();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
-    this.conn = conn;
     this.embeddingDims = embeddingDims;
     if (options.companionId !== undefined) {
       this.companionId = createCompanionId(options.companionId, 'GatewayClient companionId');
@@ -652,52 +491,30 @@ export class GatewayClient implements
       throw new Error(`keepaliveIntervalMs must be a positive integer, got ${this.keepaliveIntervalMs}`);
     }
 
-    // Create bidirectional RPC instance (client sends requests to gateway,
-    // server handles incoming requests from gateway like discord.handleMessage)
-    this.rpcInstance = new JSONRPCServerAndClient(
-      new JSONRPCServer(),
-      new JSONRPCClient((request) => { this.conn.send(attachCanaryToEgressRequest(request)); }),
-    );
-
-    // Route incoming messages
-    this.conn.onMessage((message: unknown) => {
-      const msg = message as Record<string, unknown>;
-
-      // Intercept llm.chunk notifications — these use our custom routing
-      if ('method' in msg && !('id' in msg)) {
-        const method = msg.method as string;
-        if (method === 'llm.chunk') {
-          this.handleChunkNotification(msg.params);
-          return;
-        }
-        if (method === 'llm.first_output') {
-          this.handleFirstOutputNotification(msg.params);
-          return;
-        }
-        // Other notifications (discord.message) use our handler system
-        this.handleNotification(method, msg.params);
-        return;
-      }
-
-      // Everything else: responses to our requests + incoming RPC requests from gateway
-      // json-rpc-2.0 receiveAndSend() payload param is typed as `any`
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      void this.rpcInstance.receiveAndSend(msg as any).catch((error: unknown) => {
-        const normalized = error instanceof Error ? error : new Error(String(error));
-        log.error('Gateway RPC dispatch failed', { error: normalized.message });
-        this.emitConnectionClose({ source: 'error', error: normalized });
-      });
+    this.sessionIntegrityRuntime = new GatewayClientSessionIntegrityRuntime({
+      endpoint: this.sessionIntegrityEndpoint,
+      rpcTimeoutMs: this.sessionIntegrityRpcTimeoutMs,
+      signMaxRetries: this.sessionIntegritySignMaxRetries,
+      signRetryBaseDelayMs: this.sessionIntegritySignRetryBaseDelayMs,
+      companionId: this.companionId,
+      authToken: this.sessionIntegrityAuthToken,
     });
 
-    this.conn.on('close', () => {
-      this.emitConnectionClose({ source: 'close' });
+    this.transportRuntime = new GatewayClientTransportRuntime(conn, {
+      onChunkNotification: (params) => this.handleChunkNotification(params),
+      onFirstOutputNotification: (params) => this.handleFirstOutputNotification(params),
+      onClose: (event) => this.emitConnectionClose(event),
     });
-    this.conn.on('error', (error: unknown) => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
-      this.emitConnectionClose({ source: 'error', error: normalized });
+    this.reverseRpcRuntime = new GatewayClientReverseRpcRuntime({
+      target: this.transportRuntime.target,
+      send: (message) => this.transportRuntime.send(message),
+      companionId: this.companionId,
+      voiceStreamQueueSize: this.voiceStreamQueueSize,
+      voiceStreamOverflowPolicy: this.voiceStreamOverflowPolicy,
+      isClosed: () => this.isDestroying || this.closedNotified,
     });
 
-    this.startKeepalive();
+    this.transportRuntime.startKeepalive(this.keepaliveIntervalMs);
   }
 
   static async connect(
@@ -732,7 +549,7 @@ export class GatewayClient implements
    * failure here must abort agent startup — never continue unidentified.
    */
   async identifyAsAgent(): Promise<void> {
-    await this.rpcInstance.request('gateway.client.identify', {
+    await this.transportRuntime.request('gateway.client.identify', {
       role: 'agent',
       ...(this.companionId ? { companionId: this.companionId } : {}),
       ...(this.companionAuthToken ? { authToken: this.companionAuthToken } : {}),
@@ -745,7 +562,7 @@ export class GatewayClient implements
    * process; it does not mean the runtime can safely consume partner traffic.
    */
   async declareRuntimeReady(): Promise<void> {
-    const result = await this.rpcInstance.request('gateway.client.ready', {});
+    const result = await this.transportRuntime.request('gateway.client.ready', {});
     if (!isRecord(result)
       || result.success !== true
       || Object.keys(result).length !== 1) {
@@ -764,19 +581,7 @@ export class GatewayClient implements
     if (!this.companionId) {
       throw new Error('Fleet posture reporting requires a configured companionId');
     }
-    if (this.fleetPostureProvider) {
-      throw new Error('Fleet posture reporting is already configured');
-    }
-    this.fleetPostureProvider = provider;
-    this.fleetPostureReportInFlight = true;
-    try {
-      await this.publishFleetPosture();
-    } catch (error) {
-      this.fleetPostureProvider = null;
-      throw error;
-    } finally {
-      this.fleetPostureReportInFlight = false;
-    }
+    await this.transportRuntime.startFleetPostureReporting(provider);
   }
 
   /**
@@ -1086,7 +891,7 @@ export class GatewayClient implements
   }
 
   getSerializedTransportStats(): GatewayRpcSerializedTransportStats {
-    return this.conn.serializedTransportStats;
+    return this.transportRuntime.serializedTransportStats;
   }
 
   async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
@@ -1118,32 +923,32 @@ export class GatewayClient implements
   }
 
   async getAvailableModels(): Promise<DiscoveredModel[]> {
-    const result = await this.rpcInstance.request('llm.discover_models', {}) as LLMDiscoverModelsResult;
+    const result = await this.transportRuntime.request('llm.discover_models', {}) as LLMDiscoverModelsResult;
     return result.models;
   }
 
   async invalidateModelDiscoveryCache(): Promise<void> {
-    await this.rpcInstance.request('llm.invalidate_model_discovery', {}) as LLMInvalidateModelDiscoveryResult;
+    await this.transportRuntime.request('llm.invalidate_model_discovery', {}) as LLMInvalidateModelDiscoveryResult;
   }
 
   // ── Discord methods ──
 
   async discordSend(channelId: string, content: string): Promise<void> {
-    await this.rpcInstance.request('discord.send', {
+    await this.transportRuntime.request('discord.send', {
       channelId,
       content,
     }) as DiscordSendResult;
   }
 
   async discordSendMedia(channelId: string, media: Attachment): Promise<void> {
-    await this.rpcInstance.request('discord.sendMedia', {
+    await this.transportRuntime.request('discord.sendMedia', {
       channelId,
       media,
     }) as DiscordSendMediaResult;
   }
 
   async discordTyping(channelId: string): Promise<void> {
-    await this.rpcInstance.request('discord.typing', { channelId });
+    await this.transportRuntime.request('discord.typing', { channelId });
   }
 
   /** Contact authority executes in the companion domain bound to this connection. */
@@ -1151,7 +956,7 @@ export class GatewayClient implements
     request: ContactAuthorityLifecycleRequest,
   ): Promise<ContactLifecycleExecuteResult> {
     return parseContactAuthorityLifecycleResult(
-      await this.rpcInstance.request('contact.lifecycle.execute', { request }),
+      await this.transportRuntime.request('contact.lifecycle.execute', { request }),
     );
   }
 
@@ -1176,7 +981,7 @@ export class GatewayClient implements
       ? correlationOrReplyToMessageId
       : correlation?.messageId;
     const messageId = correlation ? deriveIcpTransportMessageId(correlation) : undefined;
-    return await this.rpcInstance.request('companion.message.send', {
+    return await this.transportRuntime.request('companion.message.send', {
       channelId,
       content,
       ...(authorName ? { authorName } : {}),
@@ -1198,7 +1003,7 @@ export class GatewayClient implements
     correlation: IcpConversationCorrelation;
   }): Promise<CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' }> {
     const messageId = deriveIcpTransportMessageId(input.correlation);
-    return await this.rpcInstance.request('companion.message.send', {
+    return await this.transportRuntime.request('companion.message.send', {
       channelId: input.channelId,
       content: input.content,
       ...(input.authorName ? { authorName: input.authorName } : {}),
@@ -1217,7 +1022,7 @@ export class GatewayClient implements
   async companionReportFailure(
     params: CompanionMessageFailureReportParams,
   ): Promise<CompanionMessageFailureReportResult> {
-    return await this.rpcInstance.request('companion.message.report_failure', {
+    return await this.transportRuntime.request('companion.message.report_failure', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageFailureReportResult;
@@ -1228,7 +1033,7 @@ export class GatewayClient implements
   async companionPublishAvailability(
     params: Omit<IcpAvailabilityPublishParams, 'companionId'>,
   ): Promise<IcpAvailabilityLease> {
-    return await this.rpcInstance.request('companion.availability.publish', {
+    return await this.transportRuntime.request('companion.availability.publish', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpAvailabilityLease;
@@ -1237,7 +1042,7 @@ export class GatewayClient implements
   async companionClearAvailability(
     params: Omit<IcpAvailabilityClearParams, 'companionId'>,
   ): Promise<{ cleared: boolean }> {
-    return await this.rpcInstance.request('companion.availability.clear', {
+    return await this.transportRuntime.request('companion.availability.clear', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as { cleared: boolean };
@@ -1246,7 +1051,7 @@ export class GatewayClient implements
   async refreshRuntimeAvailability(
     params: Omit<IcpRuntimeAvailabilityRefreshParams, 'companionId'>,
   ): Promise<IcpOwnAvailabilityResult> {
-    return await this.rpcInstance.request('companion.availability.refresh_runtime', {
+    return await this.transportRuntime.request('companion.availability.refresh_runtime', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpOwnAvailabilityResult;
@@ -1256,7 +1061,7 @@ export class GatewayClient implements
     const params: IcpRuntimeAvailabilityClearParams = {
       ...(this.companionId ? { companionId: this.companionId } : {}),
     };
-    return await this.rpcInstance.request(
+    return await this.transportRuntime.request(
       'companion.availability.clear_runtime',
       params,
     ) as IcpOwnAvailabilityResult;
@@ -1265,7 +1070,7 @@ export class GatewayClient implements
   async companionReadPeerAvailability(
     params: Omit<IcpPeerAvailabilityReadParams, 'companionId'>,
   ): Promise<IcpPeerAvailabilityResult> {
-    return await this.rpcInstance.request('companion.availability.read_peer', {
+    return await this.transportRuntime.request('companion.availability.read_peer', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpPeerAvailabilityResult;
@@ -1275,14 +1080,14 @@ export class GatewayClient implements
     const params: IcpOwnAvailabilityReadParams = {
       ...(this.companionId ? { companionId: this.companionId } : {}),
     };
-    return await this.rpcInstance.request('companion.availability.read_self', params) as
+    return await this.transportRuntime.request('companion.availability.read_self', params) as
       IcpOwnAvailabilityResult;
   }
 
   async companionInitiationPreflight(
     params: Omit<IcpInitiationPreflightParams, 'companionId'>,
   ): Promise<IcpInitiationGateDecision> {
-    return await this.rpcInstance.request('companion.initiation.preflight', {
+    return await this.transportRuntime.request('companion.initiation.preflight', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpInitiationGateDecision;
@@ -1291,7 +1096,7 @@ export class GatewayClient implements
   async companionIssueInitiationPermit(
     params: Omit<IcpInitiationPermitIssueParams, 'companionId'>,
   ): Promise<IcpInitiationPermitIssueResult> {
-    return await this.rpcInstance.request('companion.initiation.permit.issue', {
+    return await this.transportRuntime.request('companion.initiation.permit.issue', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpInitiationPermitIssueResult;
@@ -1300,7 +1105,7 @@ export class GatewayClient implements
   async companionPrepareInitiationHandoff(
     params: Omit<IcpInitiationHandoffPrepareParams, 'companionId'>,
   ): Promise<IcpInitiationHandoffPrepareResult> {
-    return await this.rpcInstance.request('companion.initiation.permit.prepare_handoff', {
+    return await this.transportRuntime.request('companion.initiation.permit.prepare_handoff', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpInitiationHandoffPrepareResult;
@@ -1309,7 +1114,7 @@ export class GatewayClient implements
   async companionConsumeInitiationPermit(
     params: Omit<IcpPermitConsumeParams, 'companionId'>,
   ): Promise<IcpPermitConsumeResult> {
-    return await this.rpcInstance.request('companion.initiation.permit.consume', {
+    return await this.transportRuntime.request('companion.initiation.permit.consume', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpPermitConsumeResult;
@@ -1318,7 +1123,7 @@ export class GatewayClient implements
   async companionRevokeInitiationPermit(
     params: Omit<IcpPermitRevokeParams, 'companionId'>,
   ): Promise<IcpPermitRevokeResult> {
-    return await this.rpcInstance.request('companion.initiation.permit.revoke', {
+    return await this.transportRuntime.request('companion.initiation.permit.revoke', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpPermitRevokeResult;
@@ -1328,7 +1133,7 @@ export class GatewayClient implements
   async invalidatePendingInitiationPermitsForBlock(
     params: Omit<IcpPermitInvalidateSelfParams, 'companionId'> = { reasonCode: 'peer_blocked' },
   ): Promise<{ revokedCount: number }> {
-    return await this.rpcInstance.request('companion.initiation.permit.invalidate_for_self', {
+    return await this.transportRuntime.request('companion.initiation.permit.invalidate_for_self', {
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as { revokedCount: number };
@@ -1341,7 +1146,7 @@ export class GatewayClient implements
     prompt?: string,
     lane: WebFetchLane = 'default',
   ): Promise<string> {
-    const result = await this.rpcInstance.request('web.fetch', {
+    const result = await this.transportRuntime.request('web.fetch', {
       url,
       prompt,
       lane,
@@ -1353,7 +1158,7 @@ export class GatewayClient implements
     query: string,
     maxResults?: number,
   ): Promise<WebSearchResult> {
-    return await this.rpcInstance.request('web.search', {
+    return await this.transportRuntime.request('web.search', {
       query,
       ...(typeof maxResults === 'number' && Number.isFinite(maxResults)
         ? { maxResults: Math.max(1, Math.floor(maxResults)) }
@@ -1392,7 +1197,7 @@ export class GatewayClient implements
 
   /** Reversible operator lifecycle path; never connects to or invokes MCP. */
   async mcpRelease(serverId?: string): Promise<McpReleaseResult> {
-    const result = await this.rpcInstance.request('mcp.release', {
+    const result = await this.transportRuntime.request('mcp.release', {
       ...(serverId?.trim() ? { serverId: serverId.trim() } : {}),
     });
     if (!isRecord(result)
@@ -1414,7 +1219,7 @@ export class GatewayClient implements
       headers?: Record<string, string>;
     } = {},
   ): Promise<WebFetchBinaryResult> {
-    return await this.rpcInstance.request('web.fetch_binary', {
+    return await this.transportRuntime.request('web.fetch_binary', {
       url,
       lane: options.lane ?? 'default',
       ...(typeof options.maxBytes === 'number' && Number.isFinite(options.maxBytes)
@@ -1440,7 +1245,7 @@ export class GatewayClient implements
     canonicalContactId?: string;
     requestScope?: string;
   }): Promise<VisionIntakeImageScreenResult> {
-    const result = await this.rpcInstance.request('intake.screen_image', {
+    const result = await this.transportRuntime.request('intake.screen_image', {
       ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
       ...(input.imageBase64 ? { imageBase64: input.imageBase64 } : {}),
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
@@ -1476,7 +1281,7 @@ export class GatewayClient implements
       bodyBase64?: string;
     } = {},
   ): Promise<WebRequestBinaryResult> {
-    return await this.rpcInstance.request('web.request_binary', {
+    return await this.transportRuntime.request('web.request_binary', {
       url,
       ...(options.method ? { method: options.method } : {}),
       lane: options.lane ?? 'default',
@@ -1498,7 +1303,7 @@ export class GatewayClient implements
       envVars?: string[];
     } = {},
   ): Promise<ShellExecResult> {
-    return await this.rpcInstance.request('shell.exec', {
+    return await this.transportRuntime.request('shell.exec', {
       command,
       args,
       ...options,
@@ -1508,7 +1313,7 @@ export class GatewayClient implements
   async shardBackendRequest(
     params: ShardBackendRequestParams,
   ): Promise<ShardBackendRequestResult> {
-    return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
+    return await this.transportRuntime.request('shard.backend.request', params) as ShardBackendRequestResult;
   }
 
   async registerWorkload(
@@ -1522,7 +1327,7 @@ export class GatewayClient implements
     const registrationId = randomUUID();
     let result: ShardWorkloadRegisterResult;
     try {
-      result = await this.rpcInstance.request('shard.workload.register', {
+      result = await this.transportRuntime.request('shard.workload.register', {
         registrationId,
         shardId: input.shardId,
         ...(input.shardLabel ? { shardLabel: input.shardLabel } : {}),
@@ -1534,7 +1339,7 @@ export class GatewayClient implements
       try {
         await this.confirmShardWorkloadEnded(registrationId);
       } catch (cleanupError) {
-        this.conn.destroy();
+        this.transportRuntime.destroyConnection();
         throw new AggregateError(
           [registrationError, cleanupError],
           'Shard workload registration failed and gateway cleanup could not be confirmed',
@@ -1551,7 +1356,7 @@ export class GatewayClient implements
       try {
         await this.confirmShardWorkloadEnded(registrationId);
       } catch (cleanupError) {
-        this.conn.destroy();
+        this.transportRuntime.destroyConnection();
         throw new AggregateError(
           [invalidResultError, cleanupError],
           'Gateway returned an invalid shard workload registration result and cleanup failed',
@@ -1577,14 +1382,14 @@ export class GatewayClient implements
       // Revocation is security-sensitive. If its acknowledgement is missing,
       // tear down the authenticated connection so the gateway releases every
       // connection-scoped lease rather than retaining ambiguous authority.
-      this.conn.destroy();
+      this.transportRuntime.destroyConnection();
       throw error;
     }
     this.shardWorkloadRegistrationIds.delete(handle);
   }
 
   private async confirmShardWorkloadEnded(registrationId: string): Promise<void> {
-    const result = await this.rpcInstance.request('shard.workload.end', {
+    const result = await this.transportRuntime.request('shard.workload.end', {
       registrationId,
     }) as unknown;
     if (!isRecord(result) || typeof result.ended !== 'boolean') {
@@ -1600,7 +1405,7 @@ export class GatewayClient implements
       mode?: 'create' | 'append' | 'prepend';
     } = {},
   ): Promise<VaultWriteResult> {
-    return await this.rpcInstance.request('vault.write', {
+    return await this.transportRuntime.request('vault.write', {
       name,
       content,
       ...options,
@@ -1608,11 +1413,11 @@ export class GatewayClient implements
   }
 
   async vaultRead(name: string): Promise<VaultReadResult> {
-    return await this.rpcInstance.request('vault.read', { name }) as VaultReadResult;
+    return await this.transportRuntime.request('vault.read', { name }) as VaultReadResult;
   }
 
   async vaultSearch(query: string, limit?: number): Promise<VaultSearchResult> {
-    return await this.rpcInstance.request('vault.search', {
+    return await this.transportRuntime.request('vault.search', {
       query,
       ...(typeof limit === 'number' && Number.isFinite(limit)
         ? { limit: Math.max(1, Math.floor(limit)) }
@@ -1621,7 +1426,7 @@ export class GatewayClient implements
   }
 
   async vaultDaily(content?: string): Promise<VaultDailyResult> {
-    return await this.rpcInstance.request('vault.daily', {
+    return await this.transportRuntime.request('vault.daily', {
       ...(typeof content === 'string' ? { content } : {}),
     }) as VaultDailyResult;
   }
@@ -1655,7 +1460,7 @@ export class GatewayClient implements
     path: string,
     options?: { maxBytes?: number; offsetBytes?: number },
   ): Promise<FsReadResult> {
-    return await this.rpcInstance.request('fs.read', {
+    return await this.transportRuntime.request('fs.read', {
       path,
       ...(typeof options?.maxBytes === 'number' ? { maxBytes: options.maxBytes } : {}),
       ...(typeof options?.offsetBytes === 'number' ? { offsetBytes: options.offsetBytes } : {}),
@@ -1668,7 +1473,7 @@ export class GatewayClient implements
   }
 
   async fsWrite(path: string, content: string): Promise<void> {
-    await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
+    await this.transportRuntime.request('fs.write', { path, content }) as FsWriteResult;
   }
 
   async fsList(
@@ -1676,7 +1481,7 @@ export class GatewayClient implements
     maxEntries = 200,
     options?: { path?: string; maxScannedEntries?: number },
   ): Promise<FsListResult> {
-    return await this.rpcInstance.request('fs.list', {
+    return await this.transportRuntime.request('fs.list', {
       ...(typeof options?.path === 'string' ? { path: options.path } : {}),
       ...(typeof glob === 'string' ? { glob } : {}),
       ...(typeof options?.maxScannedEntries === 'number' ? { maxScannedEntries: options.maxScannedEntries } : {}),
@@ -1685,25 +1490,25 @@ export class GatewayClient implements
   }
 
   async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {
-    return await this.rpcInstance.request('fs.search', params) as FsSearchResult;
+    return await this.transportRuntime.request('fs.search', params) as FsSearchResult;
   }
 
   async fsEdit(params: FsEditParams): Promise<FsEditResult> {
-    return await this.rpcInstance.request('fs.edit', params) as FsEditResult;
+    return await this.transportRuntime.request('fs.edit', params) as FsEditResult;
   }
 
   // ── Git operations ──
 
   async gitStatus(): Promise<GitStatusResult> {
-    return await this.rpcInstance.request('git.status', {}) as GitStatusResult;
+    return await this.transportRuntime.request('git.status', {}) as GitStatusResult;
   }
 
   async gitDiff(opts: GitDiffParams = {}): Promise<GitDiffResult> {
-    return await this.rpcInstance.request('git.diff', opts) as GitDiffResult;
+    return await this.transportRuntime.request('git.diff', opts) as GitDiffResult;
   }
 
   async gitCreateBranch(name: string, startPoint?: string): Promise<string> {
-    const result = await this.rpcInstance.request('git.create_branch', {
+    const result = await this.transportRuntime.request('git.create_branch', {
       name,
       startPoint,
     }) as GitCreateBranchResult;
@@ -1711,42 +1516,42 @@ export class GatewayClient implements
   }
 
   async gitApplyPatch(filePath: string, content: string): Promise<void> {
-    await this.rpcInstance.request('git.apply_patch', { filePath, content }) as GitApplyPatchResult;
+    await this.transportRuntime.request('git.apply_patch', { filePath, content }) as GitApplyPatchResult;
   }
 
   async gitCommit(message: string, intent: string, scope?: string): Promise<GitCommitResult> {
-    return await this.rpcInstance.request('git.commit', { message, intent, scope }) as GitCommitResult;
+    return await this.transportRuntime.request('git.commit', { message, intent, scope }) as GitCommitResult;
   }
 
   async gitOpenPR(title: string, body: string, base?: string): Promise<string> {
-    const result = await this.rpcInstance.request('git.open_pr', { title, body, base }) as GitOpenPRResult;
+    const result = await this.transportRuntime.request('git.open_pr', { title, body, base }) as GitOpenPRResult;
     return result.url;
   }
 
   // ── Beads issue management ──
 
   async beadsReady(params: BeadsReadyParams = {}): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.ready', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.ready', params) as BeadsActionResult;
   }
 
   async beadsShow(params: BeadsShowParams): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.show', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.show', params) as BeadsActionResult;
   }
 
   async beadsCreate(params: BeadsCreateParams): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.create', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.create', params) as BeadsActionResult;
   }
 
   async beadsUpdate(params: BeadsUpdateParams): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.update', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.update', params) as BeadsActionResult;
   }
 
   async beadsClose(params: BeadsCloseParams): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.close', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.close', params) as BeadsActionResult;
   }
 
   async beadsSync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
-    return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
+    return await this.transportRuntime.request('beads.sync', params) as BeadsActionResult;
   }
 
   // ── Home Assistant world control (Sprint 10, bead .8 gateway method) ──
@@ -1754,78 +1559,78 @@ export class GatewayClient implements
   async homeAssistantGetStates(
     params: HomeAssistantGetStatesParams = {},
   ): Promise<HomeAssistantGetStatesResult> {
-    return await this.rpcInstance.request('home_assistant.get_states', params) as HomeAssistantGetStatesResult;
+    return await this.transportRuntime.request('home_assistant.get_states', params) as HomeAssistantGetStatesResult;
   }
 
   async homeAssistantCallService(
     params: HomeAssistantCallServiceParams,
   ): Promise<HomeAssistantCallServiceResult> {
-    return await this.rpcInstance.request('home_assistant.call_service', params) as HomeAssistantCallServiceResult;
+    return await this.transportRuntime.request('home_assistant.call_service', params) as HomeAssistantCallServiceResult;
   }
 
   async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {
-    return await this.rpcInstance.request('image.create', {
+    return await this.transportRuntime.request('image.create', {
       ...params,
       ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
     }) as ImageGenerationRpcResult;
   }
 
   async imageEdit(params: ImageEditParams): Promise<ImageGenerationRpcResult> {
-    return await this.rpcInstance.request('image.edit', {
+    return await this.transportRuntime.request('image.edit', {
       ...params,
       ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
     }) as ImageGenerationRpcResult;
   }
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
-    return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
+    return await this.transportRuntime.request('notify.ntfy', params) as NotifyNtfyResult;
   }
 
   async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
-    return await this.rpcInstance.request('notify.operator', params) as OperatorAlertResult;
+    return await this.transportRuntime.request('notify.operator', params) as OperatorAlertResult;
   }
 
   async clarifyDeliver(params: ClarifyDeliverParams): Promise<ClarifyDeliverResult> {
-    return await this.rpcInstance.request('clarify.deliver', params) as ClarifyDeliverResult;
+    return await this.transportRuntime.request('clarify.deliver', params) as ClarifyDeliverResult;
   }
 
   async runtimeHealth(): Promise<RuntimeHealthResult> {
-    return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
+    return await this.transportRuntime.request('runtime.health', {}) as RuntimeHealthResult;
   }
 
   async writeSystemData(request: SystemDataWriteRequest): Promise<SystemDataWriteResult> {
-    const result = await this.rpcInstance.request('system.data.write', request) as unknown;
+    const result = await this.transportRuntime.request('system.data.write', request) as unknown;
     return parseSystemDataWriteResult(request, result);
   }
 
   async kubeSelfManagement(
     params: KubeSelfManagementRequest,
   ): Promise<KubeSelfManagementResponse> {
-    return await this.rpcInstance.request(
+    return await this.transportRuntime.request(
       'kube.self_management',
       params,
     ) as KubeSelfManagementResponse;
   }
 
   async getCredentialPresence(): Promise<GatewayCredentialPresenceResult> {
-    return await this.rpcInstance.request(
+    return await this.transportRuntime.request(
       'runtime.credential_presence',
       {},
     ) as GatewayCredentialPresenceResult;
   }
 
   async listConfirmationQueue(): Promise<ConfirmationListResult> {
-    return await this.rpcInstance.request('confirmation.list', {}) as ConfirmationListResult;
+    return await this.transportRuntime.request('confirmation.list', {}) as ConfirmationListResult;
   }
 
   async resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult> {
-    return await this.rpcInstance.request('confirmation.resolve', params) as ConfirmationResolveResult;
+    return await this.transportRuntime.request('confirmation.resolve', params) as ConfirmationResolveResult;
   }
 
   async requestMemoryDeletionApproval(
     request: MemoryDeletionApprovalRequest,
   ): Promise<MemoryDeletionApprovalResult> {
-    const result = await this.rpcInstance.request('memory.deletion.propose', request);
+    const result = await this.transportRuntime.request('memory.deletion.propose', request);
     if (!isRecord(result)) throw new Error('Gateway returned an invalid memory deletion approval result');
     assertNoUnknownKeys(
       result,
@@ -1867,7 +1672,7 @@ export class GatewayClient implements
   }
 
   async sessionHmacSign(entry: JournalEntry, previousHmac: string | null): Promise<JournalEntry> {
-    const result = await this.rpcInstance.request('session.hmac.sign', {
+    const result = await this.transportRuntime.request('session.hmac.sign', {
       entry,
       previousHmac,
     }) as SessionHmacSignResult;
@@ -1878,81 +1683,25 @@ export class GatewayClient implements
     entry: JournalEntry,
     previousHmac: string | null,
   ): Promise<JournalIntegrityVerificationResult> {
-    return await this.rpcInstance.request('session.hmac.verify', {
+    return await this.transportRuntime.request('session.hmac.verify', {
       entry,
       previousHmac,
     }) as SessionHmacVerifyResult;
   }
 
   createSessionIntegrityProvider(): SessionIntegrityProvider {
-    return {
-      sign: (entry, previousHmac) => {
-        const result = this.requestSessionIntegritySignWithRetry(entry, previousHmac);
-        return result.entry;
-      },
-      verify: (entry, previousHmac) => {
-        const cacheKey = this.buildSessionIntegrityVerifyCacheKey(entry, previousHmac);
-        const cached = this.sessionIntegrityVerifyCache.get(cacheKey);
-        if (cached) {
-          this.sessionIntegrityVerifyCache.delete(cacheKey);
-          this.sessionIntegrityVerifyCache.set(cacheKey, cached);
-          return { ...cached };
-        }
-
-        const result = this.requestSessionIntegritySync<SessionHmacVerifyResult>(
-          'session.hmac.verify',
-          {
-            entry,
-            previousHmac,
-          },
-        );
-        this.sessionIntegrityVerifyCache.set(cacheKey, { ...result });
-        while (this.sessionIntegrityVerifyCache.size > SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES) {
-          const oldestKey = this.sessionIntegrityVerifyCache.keys().next().value;
-          if (oldestKey === undefined) break;
-          this.sessionIntegrityVerifyCache.delete(oldestKey);
-        }
-        return result;
-      },
-    };
+    return this.sessionIntegrityRuntime.createProvider(
+      <T>(method: 'session.hmac.sign' | 'session.hmac.verify', params: Record<string, unknown>) => (
+        this.requestSessionIntegritySync<T>(method, params)
+      ),
+    );
   }
 
-  private requestSessionIntegritySignWithRetry(
-    entry: JournalEntry,
-    previousHmac: string | null,
-  ): SessionHmacSignResult {
-    const maxRetries = this.sessionIntegritySignMaxRetries;
-    let remainingRetries = maxRetries;
-    for (;;) {
-      try {
-        return this.requestSessionIntegritySync<SessionHmacSignResult>('session.hmac.sign', {
-          entry,
-          previousHmac,
-        });
-      } catch (error) {
-        const timedOut = error instanceof Error && (
-          error.message === 'Session integrity RPC timed out' // ubs:ignore — matches a public error label, not signature or secret material
-          // ubs:ignore — matches a public error label, not signature or secret material
-          || error.message === 'Session integrity RPC timed out for session.hmac.sign'
-        );
-        if (!timedOut
-          || typeof maxRetries !== 'number'
-          || typeof remainingRetries !== 'number'
-          || typeof this.sessionIntegritySignRetryBaseDelayMs !== 'number'
-          || remainingRetries <= 0) {
-          throw error;
-        }
-        const retryCount = maxRetries - remainingRetries + 1;
-        remainingRetries -= 1;
-        log.warn('Session integrity sign RPC timed out; retrying idempotent signing request', {
-          retryCount,
-          maxRetries,
-          backoffMs: this.sessionIntegritySignRetryBaseDelayMs,
-        });
-        const backoffState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-        Atomics.wait(backoffState, 0, 0, this.sessionIntegritySignRetryBaseDelayMs);
-      }
-    }
+  private requestSessionIntegritySync<T>(
+    method: 'session.hmac.sign' | 'session.hmac.verify',
+    params: Record<string, unknown>,
+  ): T {
+    return this.sessionIntegrityRuntime.requestSync<T>(method, params);
   }
 
   // ── Notification handlers ──
@@ -2005,731 +1754,89 @@ export class GatewayClient implements
     signal?: AbortSignal,
     remoteCancellation?: 'llm' | 'mcp',
   ): Promise<T> {
-    const cancellationId = remoteCancellation ? randomUUID() : undefined;
-    const requestParams = cancellationId ? { ...params, cancellationId } : params;
-
-    if (!signal) {
-      return await this.rpcInstance.request(method, requestParams) as T;
-    }
-
-    if (signal.aborted) {
-      throw abortError(signal.reason);
-    }
-
-    return await new Promise<T>((resolve, reject) => {
-      let settled = false;
-
-      const finalize = (kind: 'resolve' | 'reject', value: unknown): void => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener('abort', onAbort);
-        if (kind === 'resolve') {
-          resolve(value as T);
-        } else {
-          reject(value);
-        }
-      };
-
-      const onAbort = () => {
-        if (cancellationId && remoteCancellation) {
-          this.rpcInstance.notify(`${remoteCancellation}.cancel`, {
-            cancellationId,
-            ...(remoteCancellation === 'llm' && this.companionId
-              ? { companionId: this.companionId }
-              : {}),
-          });
-        }
-        finalize('reject', abortError(signal.reason));
-      };
-
-      signal.addEventListener('abort', onAbort, { once: true });
-
-      this.rpcInstance.request(method, requestParams).then(
-        (result) => finalize('resolve', result),
-        (error) => finalize('reject', error),
-      );
-    });
+    return await this.transportRuntime.requestWithAbortSignal<T>(
+      method,
+      params,
+      signal,
+      remoteCancellation,
+      this.companionId,
+    );
   }
 
   private onNotification(
     method: string,
     handler: (params: unknown) => void | Promise<void>,
   ): () => void {
-    const handlers = this.notificationHandlers.get(method) ?? [];
-    handlers.push(handler);
-    this.notificationHandlers.set(method, handlers);
-    return () => {
-      const idx = handlers.indexOf(handler);
-      if (idx !== -1) handlers.splice(idx, 1);
-    };
-  }
-
-  private startKeepalive(): void {
-    if (this.keepaliveTimer || this.isDestroying) {
-      return;
-    }
-    this.keepaliveTimer = setInterval(() => {
-      this.sendKeepalive();
-    }, this.keepaliveIntervalMs);
-    this.keepaliveTimer.unref();
-  }
-
-  private stopKeepalive(): void {
-    if (!this.keepaliveTimer) {
-      return;
-    }
-    clearInterval(this.keepaliveTimer);
-    this.keepaliveTimer = null;
-  }
-
-  private sendKeepalive(): void {
-    if (this.isDestroying) {
-      return;
-    }
-    if (!this.conn.sendHeartbeat()) {
-      log.debug('Gateway transport heartbeat failed; closing connection');
-      this.conn.destroy();
-      return;
-    }
-    if (this.fleetPostureProvider && !this.fleetPostureReportInFlight) {
-      this.fleetPostureReportInFlight = true;
-      void this.publishFleetPosture()
-        .catch((error: unknown) => {
-          log.error('Fleet posture health report failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        })
-        .finally(() => {
-          this.fleetPostureReportInFlight = false;
-        });
-    }
-  }
-
-  private async publishFleetPosture(): Promise<void> {
-    const provider = this.fleetPostureProvider;
-    if (!provider) return;
-    const result = await this.rpcInstance.request('gateway.client.health', {
-      posture: provider(),
-    });
-    if (!isRecord(result)
-      || result.success !== true
-      || Object.keys(result).length !== 1) {
-      throw new Error('Gateway returned an invalid fleet posture acknowledgement');
-    }
+    return this.transportRuntime.onNotification(method, handler);
   }
 
   /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
   onHandleMessage(handler: MessageHandler): void {
-    this.handleMessageHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onHandleMessage(handler);
   }
 
   onApiChatCompletion(handler: (params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>): void {
-    this.apiChatCompletionHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onApiChatCompletion(handler);
   }
 
   onApiChatCancel(handler: (params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>): void {
-    this.apiChatCancelHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onApiChatCancel(handler);
   }
 
-  onCompanionUiShardAction(handler: (
-    params: ApiCompanionUiShardActionRpcParams,
-  ) => Promise<ApiCompanionUiShardActionRpcResult>): void {
-    this.companionUiShardActionHandler = handler;
-    this.registerReverseMethods();
+  onCompanionUiShardAction(handler: (params: ApiCompanionUiShardActionRpcParams) => Promise<ApiCompanionUiShardActionRpcResult>): void {
+    this.reverseRpcRuntime.onCompanionUiShardAction(handler);
   }
 
   onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void {
-    this.shardOwnerHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onShardOwner(handler);
   }
 
   onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void {
-    this.apiTelemetryIngestHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onApiTelemetryIngest(handler);
   }
 
   onApiHealth(handler: () => Promise<ApiHealthRpcResult>): void {
-    this.apiHealthHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onApiHealth(handler);
   }
 
-  onSatelliteResponseEligibility(handler: (
-    params: SatelliteResponseEligibilityRpcParams,
-  ) => Promise<SatelliteResponseEligibilityRpcResult>): void {
-    this.satelliteResponseEligibilityHandler = handler;
-    this.registerReverseMethods();
+  onSatelliteResponseEligibility(handler: (params: SatelliteResponseEligibilityRpcParams) => Promise<SatelliteResponseEligibilityRpcResult>): void {
+    this.reverseRpcRuntime.onSatelliteResponseEligibility(handler);
   }
 
   onTurnPerformance(handler: (event: TurnPerformanceEvent) => Promise<void>): void {
-    this.turnPerformanceHandler = handler;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onTurnPerformance(handler);
   }
 
-  onContactAuthoritySnapshot(handler: (
-    params: ContactAuthoritySnapshotRequest,
-  ) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>): void {
-    this.contactAuthoritySnapshotHandler = handler;
-    this.registerReverseMethods();
+  onContactAuthoritySnapshot(handler: (params: ContactAuthoritySnapshotRequest) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>): void {
+    this.reverseRpcRuntime.onContactAuthoritySnapshot(handler);
   }
 
-  onMemoryDeletionPartnerAlerted(handler: (
-    params: MemoryDeletionPartnerAlertedParams,
-  ) => Promise<MemoryDeletionPartnerAlertedResult>): void {
-    this.memoryDeletionPartnerAlertedHandler = handler;
-    this.registerReverseMethods();
+  onMemoryDeletionPartnerAlerted(handler: (params: MemoryDeletionPartnerAlertedParams) => Promise<MemoryDeletionPartnerAlertedResult>): void {
+    this.reverseRpcRuntime.onMemoryDeletionPartnerAlerted(handler);
   }
 
-  onMemoryDeletionProposalSnapshot(handler: (
-    params: MemoryDeletionProposalSnapshotParams,
-  ) => Promise<MemoryDeletionProposalSnapshotResult>): void {
-    this.memoryDeletionProposalSnapshotHandler = handler;
-    this.registerReverseMethods();
+  onMemoryDeletionProposalSnapshot(handler: (params: MemoryDeletionProposalSnapshotParams) => Promise<MemoryDeletionProposalSnapshotResult>): void {
+    this.reverseRpcRuntime.onMemoryDeletionProposalSnapshot(handler);
   }
 
-  onMemoryDeletionResolve(handler: (
-    params: MemoryDeletionResolveParams,
-  ) => Promise<MemoryDeletionResolveResult>): void {
-    this.memoryDeletionResolveHandler = handler;
-    this.registerReverseMethods();
+  onMemoryDeletionResolve(handler: (params: MemoryDeletionResolveParams) => Promise<MemoryDeletionResolveResult>): void {
+    this.reverseRpcRuntime.onMemoryDeletionResolve(handler);
   }
 
-  /** Install the non-model-facing local authority without declaring it ready. */
   onIcpLocalPolicyAuthority(authority: IcpLocalPolicyAuthorityPort): void {
-    if (this.icpLocalPolicyAuthority) {
-      throw new Error('ICP local policy authority is already registered');
-    }
-    this.icpLocalPolicyAuthority = authority;
-    this.icpLocalPolicyReady = false;
-    this.icpLocalPolicyCleanupStarted = false;
-    this.registerReverseMethods();
+    this.reverseRpcRuntime.onIcpLocalPolicyAuthority(authority);
   }
 
-  /** Independent from ordinary runtime readiness so ICP can fail closed per companion. */
   markIcpLocalPolicyAuthorityReady(): void {
-    if (!this.icpLocalPolicyAuthority) {
-      throw new Error('Cannot mark an unregistered ICP local policy authority ready');
-    }
-    if (this.isDestroying || this.closedNotified) {
-      throw new Error('Cannot mark ICP local policy ready on a closed gateway connection');
-    }
-    this.icpLocalPolicyReady = true;
+    this.reverseRpcRuntime.markIcpLocalPolicyAuthorityReady();
   }
 
   notifyApiStreamDelta(requestId: string, text: string): void {
-    // d269: streamed reply frames are main-reply egress over the reverse-RPC
-    // seam. Attach the live session canary (turn async context, falling back to
-    // the reply capture the api.chat.completion handler runs inside) so the
-    // gateway delta guard can scan each frame before dispatching it to API
-    // stream listeners. This frame bypasses the JSONRPCClient send wrapper, so
-    // the carrier is attached here explicitly.
-    const canaryToken = getActiveCanaryToken() ?? getReplyCanaryCaptureToken();
-    this.conn.send({
-      jsonrpc: '2.0',
-      method: 'api.stream.delta',
-      params: {
-        requestId,
-        text,
-        ...(canaryToken ? { [CANARY_CARRIER_PARAM_KEY]: canaryToken } : {}),
-      },
-    });
+    this.reverseRpcRuntime.notifyApiStreamDelta(requestId, text);
   }
 
-  /**
-   * Forwards a REDACTED companion event (tool activity / artifact created)
-   * to the gateway relay (w9hj.1). Payloads must already have passed through
-   * `channels/backplane/companion-relay/redaction.ts`; the gateway re-validates
-   * and reconstructs them at the process boundary.
-   */
   publishCompanionEvent(params: CompanionRelayPublishParams): void {
-    this.conn.send({
-      jsonrpc: '2.0',
-      method: 'companion.event.publish',
-      params,
-    });
-  }
-
-  private registerReverseMethods(): void {
-    if (this.reverseMethodsRegistered) return;
-    this.reverseMethodsRegistered = true;
-
-    registerReverseGatewayMethods({
-      target: this.rpcInstance,
-      dispatchHandleMessage: (message) => this.dispatchHandleMessage(message),
-      handleVoiceStreamStart: (params) => this.handleVoiceStreamStart(params),
-      handleVoiceStreamChunk: (params) => this.handleVoiceStreamChunk(params),
-      handleVoiceStreamEnd: (params) => this.handleVoiceStreamEnd(params),
-      handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
-      handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
-      handleApiChatCancel: (params) => this.handleApiChatCancel(params),
-      handleCompanionUiShardAction: (params) => this.handleCompanionUiShardAction(params),
-      handleShardOwner: (params) => this.handleShardOwner(params),
-      handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
-      handleApiHealth: () => this.handleApiHealth(),
-      handleSatelliteResponseEligibility: params => (
-        this.handleSatelliteResponseEligibility(params)
-      ),
-      handleTurnPerformance: (params) => this.handleTurnPerformance(params),
-      handleContactAuthoritySnapshot: (params) => this.handleContactAuthoritySnapshot(params),
-      handleMemoryDeletionPartnerAlerted: params => this.handleMemoryDeletionPartnerAlerted(params),
-      handleMemoryDeletionProposalSnapshot: params => this.handleMemoryDeletionProposalSnapshot(params),
-      handleMemoryDeletionResolve: params => this.handleMemoryDeletionResolve(params),
-      handleIcpLocalPolicyInspect: params => this.handleIcpLocalPolicyInspect(params),
-      handleIcpLocalPolicyAcquire: params => this.handleIcpLocalPolicyAcquire(params),
-      handleIcpLocalPolicyRelease: params => this.handleIcpLocalPolicyRelease(params),
-    });
-  }
-
-  private async handleIcpLocalPolicyInspect(
-    params: IcpLocalPolicyInspectParams,
-  ): Promise<IcpLocalPolicyInspectResult> {
-    const request = parseIcpLocalPolicyInspectParams(params);
-    const authority = this.requireIcpLocalPolicyAuthority();
-    if (!this.icpLocalPolicyReady) return { role: request.role, ready: false };
-    return parseIcpLocalPolicyInspectResult(await authority.inspect(request));
-  }
-
-  private async handleIcpLocalPolicyAcquire(
-    params: IcpLocalPolicyAcquireParams,
-  ): Promise<IcpLocalPolicyAcquireResult> {
-    const request = parseIcpLocalPolicyAcquireParams(params);
-    const authority = this.requireReadyIcpLocalPolicyAuthority();
-    return parseIcpLocalPolicyAcquireResult(await authority.acquire(request));
-  }
-
-  private async handleIcpLocalPolicyRelease(
-    params: IcpLocalPolicyReleaseParams,
-  ): Promise<IcpLocalPolicyReleaseResult> {
-    const request = parseIcpLocalPolicyReleaseParams(params);
-    const authority = this.requireReadyIcpLocalPolicyAuthority();
-    return parseIcpLocalPolicyReleaseResult(await authority.release(request));
-  }
-
-  private requireIcpLocalPolicyAuthority(): IcpLocalPolicyAuthorityPort {
-    if (!this.icpLocalPolicyAuthority) {
-      throw new Error('No ICP local policy authority registered');
-    }
-    return this.icpLocalPolicyAuthority;
-  }
-
-  private requireReadyIcpLocalPolicyAuthority(): IcpLocalPolicyAuthorityPort {
-    const authority = this.requireIcpLocalPolicyAuthority();
-    if (!this.icpLocalPolicyReady) throw new Error('ICP local policy authority is not ready');
-    return authority;
-  }
-
-  private cleanupIcpLocalPolicyHolds(): void {
-    if (this.icpLocalPolicyCleanupStarted || !this.icpLocalPolicyAuthority) return;
-    this.icpLocalPolicyCleanupStarted = true;
-    this.icpLocalPolicyReady = false;
-    void this.icpLocalPolicyAuthority.releaseAll().catch((error: unknown) => {
-      log.error('Failed to release ICP local policy holds after connection shutdown', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
-
-  private async handleMemoryDeletionPartnerAlerted(
-    params: MemoryDeletionPartnerAlertedParams,
-  ): Promise<MemoryDeletionPartnerAlertedResult> {
-    if (!this.memoryDeletionPartnerAlertedHandler) {
-      throw new Error('No memory.deletion.partner_alerted handler registered');
-    }
-    if (!isRecord(params)) throw new Error('memory.deletion.partner_alerted params must be an object');
-    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.partner_alerted params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
-      throw new Error('memory.deletion.partner_alerted proposalId must be a non-empty string');
-    }
-    return await this.memoryDeletionPartnerAlertedHandler({ proposalId: params.proposalId.trim() });
-  }
-
-  private async handleMemoryDeletionProposalSnapshot(
-    params: MemoryDeletionProposalSnapshotParams,
-  ): Promise<MemoryDeletionProposalSnapshotResult> {
-    if (!this.memoryDeletionProposalSnapshotHandler) {
-      throw new Error('No memory.deletion.snapshot handler registered');
-    }
-    if (!isRecord(params)) throw new Error('memory.deletion.snapshot params must be an object');
-    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.snapshot params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
-      throw new Error('memory.deletion.snapshot proposalId must be a non-empty string');
-    }
-    return await this.memoryDeletionProposalSnapshotHandler({ proposalId: params.proposalId.trim() });
-  }
-
-  private async handleMemoryDeletionResolve(
-    params: MemoryDeletionResolveParams,
-  ): Promise<MemoryDeletionResolveResult> {
-    if (!this.memoryDeletionResolveHandler) {
-      throw new Error('No memory.deletion.resolve handler registered');
-    }
-    if (!isRecord(params)) throw new Error('memory.deletion.resolve params must be an object');
-    assertNoUnknownKeys(params, ['proposalId', 'decision', 'operatorId'], 'memory.deletion.resolve params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) {
-      throw new Error('memory.deletion.resolve proposalId must be a non-empty string');
-    }
-    const decision: unknown = params.decision;
-    if (decision !== 'approve' && decision !== 'deny') {
-      throw new Error('memory.deletion.resolve decision must be approve or deny');
-    }
-    if (typeof params.operatorId !== 'string' || !params.operatorId.trim()) {
-      throw new Error('memory.deletion.resolve operatorId must be a non-empty string');
-    }
-    return await this.memoryDeletionResolveHandler({
-      proposalId: params.proposalId.trim(),
-      decision,
-      operatorId: params.operatorId.trim(),
-    });
-  }
-
-  private async handleContactAuthoritySnapshot(
-    params: ContactAuthoritySnapshotRequest,
-  ): Promise<VerifiedDiscordContactAuthoritySnapshot | null> {
-    if (!this.contactAuthoritySnapshotHandler) {
-      throw new Error('No contact.authority.snapshot handler registered');
-    }
-    const request = parseContactAuthoritySnapshotRequest(params);
-    const snapshot = await this.contactAuthoritySnapshotHandler(request);
-    return snapshot ? parseVerifiedDiscordContactAuthoritySnapshot(snapshot) : null;
-  }
-
-  private async dispatchHandleMessage(
-    message: unknown,
-    options?: MessageHandlerOptions,
-  ): Promise<VoiceHandleMessageResult> {
-    if (!this.handleMessageHandler) {
-      throw new Error('No voice.handleMessage handler registered');
-    }
-
-    // d269: the returned reply crosses the reverse-RPC seam back to the
-    // gateway. Run the turn inside a canary reply capture so the session
-    // canary rides the result carrier and the gateway reply guard can scan the
-    // reply before it reaches a channel adapter. `handleVoiceStreamEnd`
-    // funnels through here, so voice.transcript.end inherits the carrier via
-    // its `...result` spread.
-    return captureReplyCanary(async () => {
-      const substrateMessage = this.deserializeMessage(message);
-      const response = await this.handleMessageHandler!(substrateMessage, options);
-      return {
-        content: response.content,
-        channelId: response.channelId,
-        ...(response.attachments ? { attachments: response.attachments } : {}),
-        model: response.metadata.model,
-        durationMs: response.metadata.durationMs,
-        ...(response.metadata.noReply ? { disposition: 'decline' as const } : {}),
-      } satisfies VoiceHandleMessageResult;
-    });
-  }
-
-  private async handleApiChatCompletion(
-    params: ApiChatCompletionRpcParams,
-  ): Promise<ApiChatCompletionRpcResult> {
-    if (!this.apiChatCompletionHandler) {
-      throw new Error('No api.chat.completion handler registered');
-    }
-    // d269: main-reply egress over the reverse-RPC seam — capture the session
-    // canary so the completion result carries it to the gateway reply guard.
-    return captureReplyCanary(() => this.apiChatCompletionHandler!(params));
-  }
-
-  private async handleApiChatCancel(
-    params: ApiChatCompletionCancelRpcParams,
-  ): Promise<ApiChatCompletionCancelRpcResult> {
-    if (!this.apiChatCancelHandler) {
-      throw new Error('No api.chat.cancel handler registered');
-    }
-    return await this.apiChatCancelHandler(params);
-  }
-
-  private async handleCompanionUiShardAction(
-    params: ApiCompanionUiShardActionRpcParams,
-  ): Promise<ApiCompanionUiShardActionRpcResult> {
-    if (!this.companionUiShardActionHandler) {
-      throw new Error('No api.companion-ui.shard.action handler registered');
-    }
-    // d269: shard chat responses are conversational reply egress over the same
-    // seam; capture so a canary minted during the shard turn rides the result.
-    return captureReplyCanary(() => this.companionUiShardActionHandler!(params));
-  }
-
-  private async handleShardOwner(
-    params: ApiShardOwnerRpcParams,
-  ): Promise<ApiShardOwnerRpcResult> {
-    if (!this.shardOwnerHandler) {
-      throw new Error('No shard.directory.owner handler registered');
-    }
-    return await this.shardOwnerHandler(params);
-  }
-
-  private async handleApiTelemetryIngest(
-    params: ApiTelemetryIngestRpcParams,
-  ): Promise<ApiTelemetryIngestRpcResult> {
-    if (!this.apiTelemetryIngestHandler) {
-      throw new Error('No api.telemetry.ingest handler registered');
-    }
-    return await this.apiTelemetryIngestHandler(params);
-  }
-
-  private async handleApiHealth(): Promise<ApiHealthRpcResult> {
-    if (!this.apiHealthHandler) {
-      throw new Error('No api.health handler registered');
-    }
-    return await this.apiHealthHandler();
-  }
-
-  private async handleSatelliteResponseEligibility(
-    params: SatelliteResponseEligibilityRpcParams,
-  ): Promise<SatelliteResponseEligibilityRpcResult> {
-    if (!this.satelliteResponseEligibilityHandler) {
-      throw new Error('No satellite.response.eligibility handler registered');
-    }
-    return await this.satelliteResponseEligibilityHandler(params);
-  }
-
-  private async handleTurnPerformance(params: unknown): Promise<TurnPerformanceIngestResult> {
-    if (!isRecord(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'event')) {
-      throw new Error('telemetry.turn.performance requires exactly params.event');
-    }
-    if (!this.turnPerformanceHandler) {
-      throw new Error('No telemetry.turn.performance handler registered');
-    }
-    const event = parseTurnPerformanceEvent(params.event);
-    await this.turnPerformanceHandler(event);
-    return { accepted: true };
-  }
-
-  private handleVoiceStreamStart(params: unknown): VoiceStreamAckResult {
-    if (!isRecord(params)) {
-      throw new Error('voice.stream.start params must be an object');
-    }
-    const correlationId = typeof params.correlationId === 'string'
-      ? params.correlationId.trim()
-      : '';
-    const streamId = typeof params.streamId === 'string' ? params.streamId.trim() : '';
-    if (!correlationId || correlationId !== params.correlationId) {
-      throw new Error('voice.stream.start params.correlationId must be a canonical non-empty string');
-    }
-    if (!streamId || streamId !== params.streamId) {
-      throw new Error('voice.stream.start params.streamId must be a canonical non-empty string');
-    }
-    if (typeof params.sequence !== 'number'
-      || !Number.isSafeInteger(params.sequence)
-      || params.sequence < 0) {
-      throw new Error('voice.stream.start params.sequence must be a non-negative safe integer');
-    }
-    if (params.metadata !== undefined && !isRecord(params.metadata)) {
-      throw new Error('voice.stream.start params.metadata must be an object when provided');
-    }
-    if (!Object.hasOwn(params, 'message')) {
-      throw new Error('voice.stream.start params.message is required');
-    }
-    const message = this.deserializeMessage(params.message, {
-      fieldName: 'voice.stream.start params.message',
-      allowEmptyContent: true,
-    });
-    const sequence = params.sequence;
-    const key = this.voiceStreamKey(correlationId, streamId);
-    if (this.voiceStreams.has(key)) {
-      throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
-    }
-
-    const cancellationId = typeof message.routing?.cancellationId === 'string'
-      && message.routing.cancellationId.trim()
-      ? message.routing.cancellationId
-      : undefined;
-    const state: VoiceStreamState = {
-      correlationId,
-      streamId,
-      baseMessage: message,
-      expectedSequence: sequence + 1,
-      chunkQueue: new BoundedQueue<string>({
-        maxSize: this.voiceStreamQueueSize,
-        overflowPolicy: this.voiceStreamOverflowPolicy,
-      }),
-      chunks: [],
-      droppedChunks: 0,
-      cancelled: false,
-      ...(cancellationId ? { cancellationId } : {}),
-      abortController: new AbortController(),
-    };
-    this.voiceStreams.set(key, state);
-
-    return this.streamAck(state, sequence, true);
-  }
-
-  private handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult {
-    const state = this.requireVoiceStream(params.correlationId, params.streamId);
-    this.assertSequence(state, params.sequence);
-    if (state.cancelled) {
-      throw this.rpcError('Voice stream cancelled', GatewayErrors.VOICE_STREAM_CANCELLED);
-    }
-
-    let accepted = true;
-    try {
-      const result = state.chunkQueue.enqueue(params.text);
-      accepted = result.accepted;
-      if (result.droppedReason) {
-        state.droppedChunks += 1;
-      }
-    } catch (error) {
-      if (error instanceof QueueOverflowError) {
-        throw this.rpcError(error.message, GatewayErrors.VOICE_STREAM_OVERFLOW);
-      }
-      throw error;
-    }
-
-    state.expectedSequence = params.sequence + 1;
-    return this.streamAck(state, params.sequence, accepted);
-  }
-
-  private async handleVoiceStreamEnd(
-    params: VoiceStreamEndParams,
-  ): Promise<VoiceStreamEndResult> {
-    const key = this.voiceStreamKey(params.correlationId, params.streamId);
-    const state = this.requireVoiceStream(params.correlationId, params.streamId);
-    if (state.cancelled) {
-      this.voiceStreams.delete(key);
-      throw this.rpcError('Voice stream cancelled', GatewayErrors.VOICE_STREAM_CANCELLED);
-    }
-    this.assertSequence(state, params.sequence);
-    state.expectedSequence = params.sequence + 1;
-    this.drainQueuedChunks(state);
-
-    try {
-      const result = await this.dispatchHandleMessage(
-        {
-          ...state.baseMessage,
-          content: state.baseMessage.content + state.chunks.join(''),
-        },
-        {
-          signal: state.abortController.signal,
-          ...(state.cancellationId ? { cancellationId: state.cancellationId } : {}),
-        },
-      );
-      return {
-        ...result,
-        correlationId: state.correlationId,
-        streamId: state.streamId,
-        droppedChunks: state.droppedChunks,
-      };
-    } finally {
-      this.voiceStreams.delete(key);
-    }
-  }
-
-  private async handleVoiceStreamCancel(
-    params: VoiceStreamCancelParams,
-  ): Promise<VoiceStreamCancelResult> {
-    const key = this.voiceStreamKey(params.correlationId, params.streamId);
-    const state = this.voiceStreams.get(key);
-    if (!state) {
-      return {
-        correlationId: params.correlationId,
-        streamId: params.streamId,
-        cancelled: false,
-      };
-    }
-
-    // mmo9.6.1 barge-in order: abort the in-flight model turn FIRST, then clear
-    // transport stream state. Aborting the per-stream controller trips the
-    // AbortSignal threaded into `handleVoiceStreamEnd`'s dispatch, which the
-    // SubstrateAgent resolves through its identity-guarded `cancelTurn` — so a
-    // cancel that lands after dispatch cancels the running turn, and a stale
-    // cancel for an already-finished stream (deleted above) is a safe no-op.
-    state.cancelled = true;
-    if (!state.abortController.signal.aborted) {
-      state.abortController.abort(new Error('voice.stream.cancel'));
-    }
-    state.chunkQueue.clear();
-    this.voiceStreams.delete(key);
-
-    return {
-      correlationId: params.correlationId,
-      streamId: params.streamId,
-      cancelled: true,
-    };
-  }
-
-  private streamAck(
-    state: VoiceStreamState,
-    sequence: number,
-    accepted: boolean,
-  ): VoiceStreamAckResult {
-    return {
-      correlationId: state.correlationId,
-      streamId: state.streamId,
-      sequence,
-      accepted,
-      queueDepth: state.chunkQueue.size,
-      droppedChunks: state.droppedChunks,
-    };
-  }
-
-  private requireVoiceStream(correlationId: string, streamId: string): VoiceStreamState {
-    const state = this.voiceStreams.get(this.voiceStreamKey(correlationId, streamId));
-    if (!state) {
-      throw this.rpcError('Voice stream not found', GatewayErrors.VOICE_STREAM_NOT_FOUND);
-    }
-    return state;
-  }
-
-  private assertSequence(state: VoiceStreamState, sequence: number): void {
-    if (sequence !== state.expectedSequence) {
-      throw this.rpcError(
-        `Unexpected voice stream sequence: expected ${state.expectedSequence}, got ${sequence}`,
-        GatewayErrors.VOICE_STREAM_SEQUENCE,
-      );
-    }
-  }
-
-  private drainQueuedChunks(state: VoiceStreamState): void {
-    while (state.chunkQueue.size > 0) {
-      const chunk = state.chunkQueue.dequeue();
-      if (chunk !== undefined) {
-        state.chunks.push(chunk);
-      }
-    }
-  }
-
-  private deserializeMessage(
-    message: unknown,
-    options: { fieldName?: string; allowEmptyContent?: boolean } = {},
-  ): SubstrateMessage {
-    const fieldName = options.fieldName ?? 'voice.handleMessage params.message';
-    assertRpcSubstrateMessage(message, {
-      fieldName,
-      ...(options.allowEmptyContent ? { allowEmptyContent: true } : {}),
-    });
-    const gatewayRouting = parseGatewayRoutingEnvelope(
-      message.routing?.gateway,
-      `${fieldName}.routing.gateway`,
-    );
-    if (this.companionId && gatewayRouting.companionId !== this.companionId) {
-      throw new Error(
-        `${fieldName} routing companionId does not match this gateway client binding: `
-        + `expected ${JSON.stringify(this.companionId)}, got ${JSON.stringify(gatewayRouting.companionId)}`,
-      );
-    }
-    return {
-      ...message,
-      routing: {
-        ...message.routing,
-        gateway: gatewayRouting,
-      },
-      timestamp: typeof message.timestamp === 'string'
-        ? new Date(message.timestamp)
-        : message.timestamp,
-    };
-  }
-
-  private voiceStreamKey(correlationId: string, streamId: string): string {
-    return `${correlationId}::${streamId}`;
-  }
-
-  private rpcError(message: string, code: number): Error {
-    return new JSONRPCErrorException(message, code);
+    this.reverseRpcRuntime.publishCompanionEvent(params);
   }
 
   private handleChunkNotification(params: unknown): void {
@@ -2772,39 +1879,18 @@ export class GatewayClient implements
     handler({ kind, monotonicAtMs, timestampMs });
   }
 
-  private handleNotification(method: string, params: unknown): void {
-    const handlers = this.notificationHandlers.get(method);
-    if (handlers) {
-      for (const handler of handlers) {
-        try {
-          const lifecycle = handler(params);
-          if (lifecycle) {
-            void lifecycle.catch((err: unknown) => {
-              log.error(`Async notification handler error for ${method}`, {
-                error: String(err),
-              });
-            });
-          }
-        } catch (err) {
-          log.error(`Notification handler error for ${method}`, { error: String(err) });
-        }
-      }
-    }
-  }
-
   private emitConnectionClose(event: GatewayConnectionCloseEvent): void {
     if (this.isDestroying || this.closedNotified) {
       return;
     }
     this.closedNotified = true;
-    this.cleanupIcpLocalPolicyHolds();
-    this.stopKeepalive();
-    this.rpcInstance.rejectAllPendingRequests(
+    this.reverseRpcRuntime.cleanupIcpLocalPolicyHolds();
+    this.transportRuntime.handleConnectionClosed();
+    this.transportRuntime.rejectAllPendingRequests(
       event.source === 'error' && event.error
         ? `Gateway connection error: ${event.error.message}`
         : 'Gateway connection closed',
     );
-    this.fleetPostureProvider = null;
     this.inlineImageReferenceHints.clear();
     for (const handler of this.connectionCloseHandlers) {
       try {
@@ -2815,123 +1901,19 @@ export class GatewayClient implements
     }
   }
 
-  private ensureSessionIntegrityWorker(): Worker {
-    if (this.sessionIntegrityWorker) return this.sessionIntegrityWorker;
-    if (!this.sessionIntegrityEndpoint) {
-      throw new Error('Session integrity provider requires a gateway socket path or gateway RPC endpoint');
-    }
-
-    const worker = new Worker(SESSION_INTEGRITY_WORKER_SOURCE, { eval: true });
-    worker.on('error', (error) => {
-      log.error('Session integrity worker error', { error: error.message });
-    });
-    this.sessionIntegrityWorker = worker;
-    return worker;
-  }
-
-  private requestSessionIntegritySync<T>(
-    method: 'session.hmac.sign' | 'session.hmac.verify',
-    params: Record<string, unknown>,
-  ): T {
-    const worker = this.ensureSessionIntegrityWorker();
-    const stateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-    const payloadBuffer = new SharedArrayBuffer(SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES);
-    const state = new Int32Array(stateBuffer);
-    const requestId = ++this.sessionIntegrityRequestCounter;
-
-    worker.postMessage({
-      stateBuffer,
-      payloadBuffer,
-      endpoint: this.sessionIntegrityEndpoint,
-      method,
-      params,
-      companionId: this.companionId,
-      companionAuthToken: this.sessionIntegrityAuthToken,
-      requestId,
-      timeoutMs: this.sessionIntegrityRpcTimeoutMs,
-    });
-
-    const wait = Atomics.wait(state, 0, 0, this.sessionIntegrityRpcTimeoutMs + 250);
-    if (wait === 'timed-out') {
-      throw new Error(`Session integrity RPC timed out for ${method}`);
-    }
-
-    const payloadSize = Atomics.load(state, 1);
-    if (!Number.isInteger(payloadSize) || payloadSize <= 0 || payloadSize > SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES) {
-      throw new Error('Session integrity RPC returned an invalid payload');
-    }
-
-    const raw = Buffer.from(new Uint8Array(payloadBuffer, 0, payloadSize)).toString('utf8');
-    const parsed = JSON.parse(raw) as {
-      ok: boolean;
-      response?: { result?: unknown; error?: { code: number; message: string } };
-      error?: string;
-    };
-
-    if (!parsed.ok) {
-      throw new Error(parsed.error ?? `Session integrity RPC failed for ${method}`);
-    }
-
-    const rpcResponse = parsed.response;
-    if (!rpcResponse) {
-      throw new Error(`Session integrity RPC missing response for ${method}`);
-    }
-
-    if (rpcResponse.error) {
-      throw new JSONRPCErrorException(rpcResponse.error.message, rpcResponse.error.code);
-    }
-
-    return rpcResponse.result as T;
-  }
-
-  private buildSessionIntegrityVerifyCacheKey(
-    entry: JournalEntry,
-    previousHmac: string | null,
-  ): string {
-    return JSON.stringify({
-      previousHmac,
-      type: entry.type,
-      id: entry.id,
-      channelId: entry.channelId,
-      role: entry.role ?? null,
-      content: entry.content ?? null,
-      authorId: entry.authorId ?? null,
-      authorName: entry.authorName ?? null,
-      timestamp: entry.timestamp,
-      discordMessageId: entry.discordMessageId ?? null,
-      metadata: entry.metadata ?? null,
-      originChannelId: entry.originChannelId ?? null,
-      channelVisibility: entry.channelVisibility ?? null,
-      summary: entry.summary ?? null,
-      coveredUpTo: entry.coveredUpTo ?? null,
-      marker: entry.marker ?? null,
-      tombstoneTargetType: entry.tombstoneTargetType ?? null,
-      tombstoneTargetId: entry.tombstoneTargetId ?? null,
-      tombstoneAction: entry.tombstoneAction ?? null,
-      tombstoneActor: entry.tombstoneActor ?? null,
-      tombstoneReason: entry.tombstoneReason ?? null,
-      _hmac: entry._hmac ?? null,
-      _hmacKeyVersion: entry._hmacKeyVersion ?? null,
-    });
-  }
-
   // ── Lifecycle ──
 
   destroy(): void {
     if (this.isDestroying) return;
     this.isDestroying = true;
-    this.cleanupIcpLocalPolicyHolds();
-    this.stopKeepalive();
-    this.rpcInstance.rejectAllPendingRequests('Gateway client destroyed');
-    this.sessionIntegrityVerifyCache.clear();
+    this.reverseRpcRuntime.cleanupIcpLocalPolicyHolds();
+    this.transportRuntime.handleConnectionClosed();
+    this.transportRuntime.rejectAllPendingRequests('Gateway client destroyed');
+    this.sessionIntegrityRuntime.destroy();
     this.inlineImageReferenceHints.clear();
-    this.voiceStreams.clear();
+    this.reverseRpcRuntime.clearVoiceStreams();
     this.connectionCloseHandlers.clear();
-    if (this.sessionIntegrityWorker) {
-      void this.sessionIntegrityWorker.terminate();
-      this.sessionIntegrityWorker = null;
-    }
-    this.conn.destroy();
+    this.transportRuntime.destroy();
   }
 
   private shouldResendInlineImages(error: unknown, usedHintKeys: readonly string[]): boolean {

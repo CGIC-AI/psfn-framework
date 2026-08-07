@@ -4,6 +4,7 @@ import type { LLMProviderPort } from '../contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
+import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
 import { sanitizeDiagnosticText } from '../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -111,7 +112,6 @@ const VISION_ATTACHMENT_MAX_COUNT = 4;
  * not reviewed; nothing is silently truncated.
  */
 const VISION_TURN_IMAGE_CEILING = 12;
-const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const DEDICATED_VISION_REVIEW_MAX_ATTEMPTS = 3;
 const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
   '[Runtime note]',
@@ -937,7 +937,7 @@ async function resolveVisionAttachmentContent(input: {
     try {
       const fetched = await visionFetchCapabilities.webFetchBinary(attachmentUrl.toString(), {
         lane: 'default',
-        maxBytes: VISION_ATTACHMENT_MAX_BYTES,
+        maxBytes: VISION_IMAGE_MAX_BYTES,
       });
       const responseMimeType = fetched.mimeType
         .split(';')[0]
@@ -952,7 +952,7 @@ async function resolveVisionAttachmentContent(input: {
           },
         };
       }
-      if (fetched.sizeBytes <= 0 || fetched.sizeBytes > VISION_ATTACHMENT_MAX_BYTES) {
+      if (fetched.sizeBytes <= 0 || fetched.sizeBytes > VISION_IMAGE_MAX_BYTES) {
         return {
           failure: {
             code: 'invalid_size',
@@ -1019,7 +1019,7 @@ function resolveInlineVisionAttachmentContent(input: {
   }
 
   const bytes = Buffer.from(dataBase64, 'base64');
-  if (bytes.byteLength <= 0 || bytes.byteLength > VISION_ATTACHMENT_MAX_BYTES) {
+  if (bytes.byteLength <= 0 || bytes.byteLength > VISION_IMAGE_MAX_BYTES) {
     return {
       failure: {
         code: 'invalid_size',

@@ -11,6 +11,9 @@ import { execFileSync } from 'node:child_process';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
 import type { ShellExecSettings } from '../../system/config/shell-exec-config.js';
 
+/** Child-process output ceiling for bounded diagnostic probes. */
+export const SELF_DIAGNOSIS_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+
 // ── Fail-closed section vocabulary (mirrors self-status.ts) ────────────────
 export type DiagnosisStatus = 'available' | 'unavailable' | 'error';
 
@@ -100,7 +103,7 @@ const DEFAULT_EXEC: DiagnosisExec = (bin, args, cwd) => {
       ...(cwd ? { cwd } : {}),
       encoding: 'utf-8',
       timeout: 5_000,
-      maxBuffer: 4 * 1024 * 1024,
+      maxBuffer: SELF_DIAGNOSIS_MAX_BUFFER_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout, stderr: '' };

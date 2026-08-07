@@ -4,6 +4,7 @@ import {
   buildSelfDiagnosisReport,
   redactDeep,
   redactSecretString,
+  SELF_DIAGNOSIS_MAX_BUFFER_BYTES,
   type DiagnosisExec,
   type DiagnosisFs,
   type SelfDiagnosisDeps,
@@ -182,6 +183,10 @@ function makeDeps(world: FakeWorld, overrides: Partial<SelfDiagnosisDeps> = {}):
 }
 
 describe('buildSelfDiagnosisReport', () => {
+  it('pins the bounded child-process output ceiling', () => {
+    expect(SELF_DIAGNOSIS_MAX_BUFFER_BYTES).toBe(4 * 1024 * 1024);
+  });
+
   it('assembles all sections when everything is available', async () => {
     const world = baseWorld();
     world.files.set(CONFORMANCE_PATH, JSON.stringify({

@@ -1,4 +1,5 @@
 import type { CompanionFleetEntry } from '../../system/config/companions-config.js';
+import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import type { GatewayFleetCompanionConnection, GatewayFleetConnectionSnapshot } from './server.js';
 import { FleetAuthorizationDeniedError } from './fleet-authorization-context.js';
@@ -205,7 +206,7 @@ export class GatewayFleetPortalProjection {
     }
 
     const seen = new Set<string>();
-    const companions: FleetPortalCompanionProjection[] = [];
+    const visibleManifest: ProjectionManifestEntry[] = [];
     for (const authority of authorized.companions) {
       this.assertSafeAuthority(authority, seen);
       const manifest = this.fleetByCompanionId.get(authority.companionId);
@@ -216,11 +217,16 @@ export class GatewayFleetPortalProjection {
       // a Garden link for. gardenPort is retired (one fleet Garden derives every
       // admin endpoint), so authorization is the only gate.
       if (!authority.gardenLinkEligible) continue;
+      visibleManifest.push(manifest);
+    }
+    const displayIdentity = createCompanionDisplayIdentityResolver(visibleManifest);
+    const companions: FleetPortalCompanionProjection[] = [];
+    for (const manifest of visibleManifest) {
       const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
       const connection = connections.get(manifest.companionId);
       companions.push(Object.freeze({
         companionId: manifest.companionId,
-        displayName: manifest.displayName?.trim() || manifest.companionId,
+        displayName: displayIdentity.resolve(manifest.companionId).displayLabel,
         health: Object.freeze({
           agentRpc: agentRpcHealth(connection),
           // The gateway does not own the per-companion Garden transport. Do
@@ -253,19 +259,21 @@ export class GatewayFleetPortalProjection {
     const request = parseProjectionRequest(input);
     const authorized = await this.options.authorizer.resolve(request);
     const seen = new Set<string>();
-    const companions: FleetPortalRosterCompanion[] = [];
+    const visibleManifest: ProjectionManifestEntry[] = [];
     for (const authority of authorized.companions) {
       this.assertSafeAuthority(authority, seen);
       const manifest = this.fleetByCompanionId.get(authority.companionId);
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
-      if (!manifest.displayName?.trim()) {
-        throw new Error('Companion UI roster requires a canonical displayName for every authorized companion');
-      }
+      visibleManifest.push(manifest);
+    }
+    const displayIdentity = createCompanionDisplayIdentityResolver(visibleManifest);
+    const companions: FleetPortalRosterCompanion[] = [];
+    for (const manifest of visibleManifest) {
       companions.push(Object.freeze({
         companionId: manifest.companionId,
-        displayName: manifest.displayName,
+        displayName: displayIdentity.resolve(manifest.companionId).displayLabel,
         websocketPath: compileCompanionUiWebSocketPath(manifest.companionId),
         ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));

@@ -42,6 +42,7 @@ import { GatewaySystemDataWriter } from './system-data-writer.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
+import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -101,6 +102,22 @@ export async function buildGatewayPrivilegedCore(
   input: GatewayPrivilegedCoreBuildInput,
 ): Promise<GatewayPrivilegedCore> {
   const eventBus = new EventBus();
+  const approvalDisplayIdentity = input.config.companionFleet
+    ? createCompanionDisplayIdentityResolver(input.config.companionFleet.companions)
+    : undefined;
+  const unknownApprovalDisplayIdentity = createCompanionDisplayIdentityResolver([]);
+  const resolveApprovalDisplayLabel = (companionId: string): string => {
+    if (approvalDisplayIdentity) {
+      return approvalDisplayIdentity.resolve(companionId).displayLabel;
+    }
+    if (companionId === input.config.companionId) {
+      return createCompanionDisplayIdentityResolver([{
+        companionId,
+        displayName: resolveCompanionNameFromConfig(input.config),
+      }]).resolve(companionId).displayLabel;
+    }
+    return unknownApprovalDisplayIdentity.resolve(companionId).displayLabel;
+  };
   const gitOps = new GitOps({
     repoRoot: input.bootstrap.gitRepoRoot,
     companionId: input.config.companionId,
@@ -368,12 +385,7 @@ export async function buildGatewayPrivilegedCore(
       capabilityGrantSnapshotProvider: (companionId) =>
         capabilityTierResolver.snapshotOwnerGrantStrict(companionId),
       approvalParentLabelProvider: (companionId) => {
-        const fleetEntry = input.config.companionFleet?.companions
-          .find(entry => entry.companionId === companionId);
-        if (fleetEntry) return fleetEntry.displayName?.trim() || undefined;
-        return companionId === input.config.companionId
-          ? resolveCompanionNameFromConfig(input.config)
-          : undefined;
+        return resolveApprovalDisplayLabel(companionId);
       },
       auditStore,
       ...(kubeSelfManagement ? { kubeSelfManagement } : {}),

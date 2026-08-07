@@ -27,6 +27,7 @@ import {
   DEFAULT_CONFIRMATION_EXPIRY_MS,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { ApprovalAttribution } from '../../shared/contracts/approval-envelope.js';
+import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import {
   redactApprovalRequested,
   redactApprovalResolved,
@@ -41,6 +42,8 @@ import {
 } from './ntfy-notifier.js';
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
 import type { CanaryEgressGuard } from './canary-egress-guard.js';
+
+const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
 
 interface ApprovalBoundaryAuditHooks {
   audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
@@ -317,7 +320,8 @@ export function createGatewayApprovalBoundaryService(
         );
       }
     }
-    const parentLabel = options.parentLabelProvider?.(owner)?.trim() || owner;
+    const parentLabel = options.parentLabelProvider?.(owner)?.trim()
+      || unknownCompanionDisplayIdentity.resolve(owner).displayLabel;
     return {
       parentId: owner,
       parentLabel,

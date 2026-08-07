@@ -110,6 +110,8 @@ import type {
   GatewaySystemDataWriterPort,
   SystemOwnerWriteKey,
 } from '../../../boundary/gateway/system-data-writer.js';
+import { createCompanionDisplayIdentityResolver } from '../../../shared/companion-display-identity.js';
+import { resolveCompanionNameFromConfig } from '../../../core/identity/companion-runtime.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -1448,13 +1450,22 @@ export class AdminSettingsDataService implements AdminSettingsService {
   private bearerApiCompanionRoster(): BearerApiCompanionOption[] {
     const fleet = this.deps.config.companionFleet;
     if (fleet) {
+      const displayIdentity = createCompanionDisplayIdentityResolver(fleet.companions);
       return fleet.companions.map(companion => ({
         companionId: companion.companionId,
-        displayName: companion.displayName ?? companion.companionId,
+        displayName: displayIdentity.resolve(companion.companionId).displayLabel,
       }));
     }
     const single = this.deps.config.companionId;
-    return single ? [{ companionId: single, displayName: single }] : [];
+    if (!single) return [];
+    const displayIdentity = createCompanionDisplayIdentityResolver([{
+      companionId: single,
+      displayName: resolveCompanionNameFromConfig(this.deps.config),
+    }]);
+    return [{
+      companionId: single,
+      displayName: displayIdentity.resolve(single).displayLabel,
+    }];
   }
 
   /**
@@ -1487,7 +1498,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
       return { ok: false, message: 'companionId must be a non-empty string' };
     }
     const requested = companionId.trim();
-    if (!this.bearerApiCompanionRoster().some(option => option.companionId === requested)) {
+    const roster = this.bearerApiCompanionRoster();
+    const selected = roster.find(option => option.companionId === requested);
+    if (!selected) {
       return {
         ok: false,
         message: `companionId ${requested} is not a registered companion; the Bearer API can only be `
@@ -1509,7 +1522,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
       return {
         ok: true,
-        message: `Bearer API pinned to companion ${requested}. Restart the gateway for the API `
+        message: `Bearer API pinned to ${selected.displayName}. Restart the gateway for the API `
           + 'channel to pick up the new pin.',
       };
     } catch (error) {

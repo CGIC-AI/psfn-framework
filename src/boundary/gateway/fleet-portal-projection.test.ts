@@ -90,7 +90,7 @@ describe('gateway fleet portal projection', () => {
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_A,
-        displayName: COMPANION_A,
+        displayName: 'Unknown companion · 11111111',
         health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_A}/garden`,
@@ -326,6 +326,39 @@ describe('gateway fleet portal projection', () => {
       expect(JSON.stringify(roster)).not.toContain(COMPANION_C);
       expect(JSON.stringify(roster)).not.toContain('private-c');
       expect(authorize).toHaveBeenCalledWith({ sessionToken: SESSION_TOKEN });
+    });
+
+    it('uses explicit unknown labels and disambiguates duplicate canonical names', async () => {
+      const projection = new GatewayFleetPortalProjection({
+        authorizer: {
+          resolve: async () => ({
+            companions: [
+              { companionId: COMPANION_A, gardenLinkEligible: true },
+              { companionId: COMPANION_B, gardenLinkEligible: true },
+              { companionId: COMPANION_C, gardenLinkEligible: true },
+            ],
+          }),
+        },
+        fleet: [
+          { companionId: COMPANION_A, displayName: 'Nova' },
+          { companionId: COMPANION_B, displayName: ' nova ' },
+          { companionId: COMPANION_C },
+        ],
+        source: { getFleetConnectionSnapshot: () => snapshot([]) },
+        now: () => GENERATED_AT,
+      });
+
+      const roster = await projection.resolveRoster({ sessionToken: SESSION_TOKEN });
+      expect(roster.companions.map(companion => companion.displayName)).toEqual([
+        'Nova · 11111111',
+        'nova · 22222222',
+        'Unknown companion · 33333333',
+      ]);
+      expect(roster.companions.map(companion => companion.companionId)).toEqual([
+        COMPANION_A,
+        COMPANION_B,
+        COMPANION_C,
+      ]);
     });
 
     it('fails closed on a malformed request', async () => {

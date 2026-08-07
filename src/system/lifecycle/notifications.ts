@@ -29,11 +29,19 @@ export function isCompanionReadyLifecycleNotification(
   content: string,
   companionId: CompanionId,
 ): boolean {
-  const prefix = `[agent:${companionId}] I'm back~ (startup took `;
+  const prefix = `[agent:${companionId}] `;
+  const readyMarker = ' is back~ (startup took ';
+  const legacyReadyPrefix = "I'm back~ (startup took ";
   const suffix = 's)';
   if (!content.startsWith(prefix) || !content.endsWith(suffix)) return false;
 
-  const seconds = content.slice(prefix.length, -suffix.length);
+  const message = content.slice(prefix.length, -suffix.length);
+  const readyMarkerIndex = message.lastIndexOf(readyMarker);
+  const seconds = readyMarkerIndex > 0
+    ? message.slice(readyMarkerIndex + readyMarker.length)
+    : message.startsWith(legacyReadyPrefix)
+      ? message.slice(legacyReadyPrefix.length)
+      : '';
   if (!seconds) return false;
   const parsedSeconds = Number(seconds);
   return Number.isSafeInteger(parsedSeconds)
@@ -68,6 +76,8 @@ export interface LifecycleNotifierConfig {
    * owning process role (`agent`); the label is never guessed from free text.
    */
   subsystemLabel?: string;
+  /** Human-facing companion label resolved from the canonical roster. */
+  companionDisplayLabel?: string;
 }
 
 // ── Last-active session tracking ──
@@ -370,6 +380,7 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
   private startTime: number;
   private imageTag: string | undefined;
   private subsystemLabel: string;
+  private companionDisplayLabel: string;
 
   constructor(config: LifecycleNotifierConfig) {
     this.sender = config.sender;
@@ -380,6 +391,7 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
     // Fail closed to the owning process role rather than announcing unlabelled;
     // never guess a label from free text.
     this.subsystemLabel = config.subsystemLabel?.trim() || 'agent';
+    this.companionDisplayLabel = config.companionDisplayLabel?.trim() || 'Unknown companion';
   }
 
   /** Prefix a lifecycle message with the subsystem/source label. */
@@ -408,8 +420,8 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
 
     const msg = this.withSubsystemLabel(
       reason
-        ? `Gonna reboot real quick -- ${reason}. brb~`
-        : 'Gonna reboot real quick, brb~',
+        ? `${this.companionDisplayLabel} is restarting -- ${reason}. Back soon.`
+        : `${this.companionDisplayLabel} is restarting. Back soon.`,
     );
 
     try {
@@ -438,7 +450,9 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
 
     const uptimeMs = Date.now() - this.startTime;
     const uptimeSec = Math.round(uptimeMs / 1000);
-    const msg = this.withSubsystemLabel(`I'm back~ (startup took ${uptimeSec}s)`);
+    const msg = this.withSubsystemLabel(
+      `${this.companionDisplayLabel} is back~ (startup took ${uptimeSec}s)`,
+    );
 
     try {
       await this.sender.send(channelId, msg);
@@ -483,8 +497,8 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
 
     const msg = this.withSubsystemLabel(
       reason
-        ? `Going offline -- ${reason}. See you soon.`
-        : 'Going offline for a bit. See you soon.',
+        ? `${this.companionDisplayLabel} is going offline -- ${reason}. See you soon.`
+        : `${this.companionDisplayLabel} is going offline for a bit. See you soon.`,
     );
 
     try {

@@ -21,21 +21,25 @@ describe('companion ready lifecycle notification authentication', () => {
 
   it('matches only the exact ready message for the bound companion identity', () => {
     expect(isCompanionReadyLifecycleNotification(
-      `[agent:${companionId}] I'm back~ (startup took 0s)`,
+      `[agent:${companionId}] Purrsephone is back~ (startup took 0s)`,
       companionId,
     )).toBe(true);
     expect(isCompanionReadyLifecycleNotification(
-      `[agent:${companionId}] I'm back~ (startup took 17s)`,
+      `[agent:${companionId}] Purrsephone is back~ (startup took 17s)`,
+      companionId,
+    )).toBe(true);
+    expect(isCompanionReadyLifecycleNotification(
+      `[agent:${companionId}] I'm back~ (startup took 0s)`,
       companionId,
     )).toBe(true);
   });
 
   it.each([
-    "[agent:22222222-2222-4222-8222-222222222223] I'm back~ (startup took 0s)",
-    "[agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took 00s)",
-    "[agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took -1s)",
-    "[agent:22222222-2222-4222-8222-222222222222] I'm back (startup took 0s)",
-    "prefix [agent:22222222-2222-4222-8222-222222222222] I'm back~ (startup took 0s)",
+    "[agent:22222222-2222-4222-8222-222222222223] Purrsephone is back~ (startup took 0s)",
+    "[agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took 00s)",
+    "[agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took -1s)",
+    "[agent:22222222-2222-4222-8222-222222222222] is back~ (startup took 0s)",
+    "prefix [agent:22222222-2222-4222-8222-222222222222] Purrsephone is back~ (startup took 0s)",
   ])('rejects unauthenticated or non-canonical lookalike %j', (content) => {
     expect(isCompanionReadyLifecycleNotification(content, companionId)).toBe(false);
   });
@@ -84,7 +88,7 @@ describe('DiscordLifecycleNotifier', () => {
 
       expect(sentMessages).toHaveLength(1);
       expect(sentMessages[0].channelId).toBe('hb-channel');
-      expect(sentMessages[0].content).toContain('brb');
+      expect(sentMessages[0].content).toContain('Unknown companion is restarting');
     });
 
     it('includes reason when provided', async () => {
@@ -131,7 +135,7 @@ describe('DiscordLifecycleNotifier', () => {
       await notifier.notifyReady();
 
       expect(sentMessages[0].channelId).toBe('1313001762793197678');
-      expect(sentMessages[0].content).toContain("I'm back");
+      expect(sentMessages[0].content).toContain('is back');
     });
 
     it('falls back to heartbeat when latest active session is non-discord', async () => {
@@ -217,7 +221,7 @@ describe('DiscordLifecycleNotifier', () => {
       await notifier.notifyReady();
 
       expect(sentMessages).toHaveLength(1);
-      expect(sentMessages[0].content).toContain("I'm back");
+      expect(sentMessages[0].content).toContain('is back');
       expect(sentMessages[0].content).toMatch(/\d+s/);
       // Fail-closed process-role label when no subsystemLabel is configured.
       expect(sentMessages[0].content).toMatch(/^\[agent\] /);
@@ -230,11 +234,12 @@ describe('DiscordLifecycleNotifier', () => {
         dataDir: tempDir,
         startTime: Date.now(),
         subsystemLabel: 'agent:purrsephone',
+        companionDisplayLabel: 'Purrsephone',
       });
 
       await notifier.notifyReady();
 
-      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] I'm back/);
+      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] Purrsephone is back/);
     });
 
     it('falls back to the process role when the subsystem label is blank', async () => {
@@ -319,7 +324,7 @@ describe('DiscordLifecycleNotifier', () => {
       await notifier.notifyShutdown();
 
       expect(sentMessages).toHaveLength(1);
-      expect(sentMessages[0].content).toContain('Going offline');
+      expect(sentMessages[0].content).toContain('Unknown companion is going offline');
       expect(sentMessages[0].content).toMatch(/^\[agent\] /);
     });
 
@@ -330,11 +335,14 @@ describe('DiscordLifecycleNotifier', () => {
         dataDir: tempDir,
         startTime: Date.now(),
         subsystemLabel: 'agent:purrsephone',
+        companionDisplayLabel: 'Purrsephone',
       });
 
       await notifier.notifyShutdown('maintenance');
 
-      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] Going offline -- maintenance\./);
+      expect(sentMessages[0].content).toMatch(
+        /^\[agent:purrsephone\] Purrsephone is going offline -- maintenance\./,
+      );
     });
 
     it('includes reason when provided', async () => {

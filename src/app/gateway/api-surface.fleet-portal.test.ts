@@ -70,7 +70,7 @@ describe('gateway API fleet portal composition', () => {
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_ID,
-        displayName: COMPANION_ID,
+        displayName: 'Unknown companion · 11111111',
         health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         gardenPath: `/companions/${COMPANION_ID}/garden`,
       }],

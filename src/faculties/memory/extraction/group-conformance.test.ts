@@ -58,7 +58,7 @@ function groupSettings(patch: Record<string, unknown> = {}): GroupMemorySettings
 
 function makeEntry(id: number, content: string, humanIndex = id % HUMANS.length): SessionEntry {
   const human = HUMANS[humanIndex % HUMANS.length];
-  return {
+  const entry: SessionEntry = {
     id,
     channelId: CHANNEL_ID,
     role: 'user',
@@ -69,6 +69,16 @@ function makeEntry(id: number, content: string, humanIndex = id % HUMANS.length)
     channelVisibility: 'invite_only',
     discordMessageId: `discord-${id}`,
   };
+  entry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
+    schemaVersion: 2,
+    source: 'discord',
+    author: { authorId: human.authorId, authorName: human.authorName },
+    observer: { authorId: 'current-bot', authorName: 'Lyra' },
+    mentionedTargets: [],
+    channel: { scope: 'group', channelId: CHANNEL_ID },
+    resolvedAddressee: { kind: 'room', channelId: CHANNEL_ID },
+  });
+  return entry;
 }
 
 function makeGroupFixture(count: number): SessionEntry[] {
@@ -354,7 +364,7 @@ describe('group-room memory conformance', () => {
     const entries = makeGroupFixture(50);
     replaceEntry(entries, 8, 0, 'Lyra, remember that I prefer concise deployment summaries.');
     entries[7].metadata = addressedEntryMetadata(entries[7], [
-      { authorId: 'lyra-bot', authorName: 'Lyra' },
+      { authorId: 'current-bot', authorName: 'Lyra' },
     ]);
     replaceEntry(entries, 24, 0, 'My friend Vega is helping run moderation tonight.');
     replaceEntry(entries, 45, 2, 'Please do not share my school schedule outside this room.');
@@ -402,6 +412,7 @@ describe('group-room memory conformance', () => {
 <confidence>0.95</confidence>
 <source_message_ids>8</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>MrDragonFox</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
 <fact>
@@ -412,6 +423,7 @@ describe('group-room memory conformance', () => {
 <source_message_ids>24</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
 <subject_name>Vega</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
 <text>Iki does not want her school schedule shared outside this room.</text>
@@ -421,6 +433,8 @@ describe('group-room memory conformance', () => {
 <sensitivity>confidential</sensitivity>
 <source_message_ids>45</source_message_ids>
 <source_speaker_name>Iki</source_speaker_name>
+<subject_name>Iki</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
       });
@@ -484,10 +498,10 @@ describe('group-room memory conformance', () => {
     }));
   });
 
-  it('rejects observer-directed confabulation while retaining context that names the true addressee', async () => {
+  it('rejects observer-directed confabulation after sanitization while retaining the true speaker and addressee', async () => {
     const addressedEntry = makeEntry(
       1,
-      '<@other-companion> remember that I call you starlight when the observatory is quiet.',
+      'remember that I call you starlight when the observatory is quiet. [sanitized]',
       0,
     );
     addressedEntry.metadata = addressedEntryMetadata(addressedEntry, [{
@@ -500,12 +514,12 @@ describe('group-room memory conformance', () => {
       llmResponse: `<response>
 <fact>
 <text>MrDragonFox affectionately called Lyra "starlight".</text>
-<type>relational</type>
+<type>emotional</type>
 <importance>0.94</importance>
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
-<address_mode>direct_to_companion</address_mode>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
 <text>MrDragonFox affectionately called Other Companion "starlight".</text>
@@ -514,6 +528,7 @@ describe('group-room memory conformance', () => {
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>Other Companion</subject_name>
 <address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
@@ -523,6 +538,16 @@ describe('group-room memory conformance', () => {
 
     expect(JSON.stringify(llmComplete.mock.calls)).toContain(
       '[mentioned_targets: Other Companion (author_id=other-companion)]',
+    );
+    expect(JSON.stringify(llmComplete.mock.calls)).toContain(
+      '[author: MrDragonFox (author_id=dragon)]',
+    );
+    expect(JSON.stringify(llmComplete.mock.calls)).toContain(
+      '[observer: Lyra (author_id=current-bot)]',
+    );
+    expect(JSON.stringify(llmComplete.mock.calls)).toContain('[channel_scope: group]');
+    expect(JSON.stringify(llmComplete.mock.calls)).toContain(
+      '[resolved_addressee: Other Companion (author_id=other-companion; evidence=mention)]',
     );
     expect(processFact).toHaveBeenCalledTimes(1);
     expect(processFact).toHaveBeenCalledWith(
@@ -566,6 +591,7 @@ describe('group-room memory conformance', () => {
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>Cedar</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
 </response>`,
@@ -604,6 +630,7 @@ describe('group-room memory conformance', () => {
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>Lyra</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
 </response>`,
@@ -636,6 +663,7 @@ describe('group-room memory conformance', () => {
 <confidence>0.96</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>Lyra</subject_name>
 <address_mode>direct_to_companion</address_mode>
 </fact>
 </response>`,
@@ -676,6 +704,8 @@ describe('group-room memory conformance', () => {
 <confidence>0.96</confidence>
 <source_message_ids>15</source_message_ids>
 <source_speaker_name>Vega</source_speaker_name>
+<subject_name>Vega</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
     });
@@ -689,7 +719,7 @@ describe('group-room memory conformance', () => {
     });
     expect(llmComplete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining(
-        '[message_id:15] Vega: Lyra, remember that my favorite coffee is cardamom latte.',
+        'Vega: Lyra, remember that my favorite coffee is cardamom latte.',
       ),
     }), 'extraction', expect.anything());
     expect(processFact).toHaveBeenCalledWith(
@@ -875,6 +905,7 @@ describe('group-room memory conformance', () => {
       },
       makeEntry(3, 'I also like chess.', 0),
     ];
+    for (const entry of directEntries) delete entry.metadata;
     const getRecentMessages = vi.fn().mockReturnValue(directEntries);
     const processFact = vi.fn().mockResolvedValue({
       action: 'created',
@@ -1017,6 +1048,7 @@ describe('group-room memory conformance', () => {
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>Vega</source_speaker_name>
 <subject_name>Iki</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
     });
@@ -1029,7 +1061,7 @@ describe('group-room memory conformance', () => {
       writeCount: 0,
       ambiguousSpeakerSkippedCount: 2,
       ambiguousSpeakerSkipReasons: {
-        ambiguous_group_speaker: 1,
+        missing_structured_attribution: 1,
         conflicting_source_attribution: 1,
       },
       rejectionBreakdown: expect.objectContaining({

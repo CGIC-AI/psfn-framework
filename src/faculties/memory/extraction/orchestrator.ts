@@ -15,6 +15,7 @@ import {
 } from '../../../shared/contracts/icp-autonomy.js';
 import {
   EXTRACTION_PROMPT_KEY,
+  GROUP_EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
@@ -57,6 +58,7 @@ import type {
 import type { ExtractionSessionReader } from './session-port.js';
 import { ExtractionIntegrityError } from './integrity-error.js';
 import { selectExtractionRecentEntries } from './recovered-entries.js';
+import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
 
 export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
 
@@ -188,6 +190,13 @@ function emptyExtractionOutputs(): MemoryExtractionOutputs {
   return { memoryIds: [], concernIds: [], contactIds: [] };
 }
 
+function hasTypedDiscordGroupScope(entries: readonly SessionEntry[]): boolean {
+  return entries.some(entry => (
+    entry.role === 'user'
+    && parseSessionMessageAddressing(entry.metadata)?.channel.scope === 'group'
+  ));
+}
+
 export async function runExtractionOrchestration(
   options: ExtractionRunOptions,
 ): Promise<MemoryExtractionOutputs> {
@@ -209,6 +218,8 @@ export async function runExtractionOrchestration(
       fetchLiveHistory: () => options.sessionManager.getRecentMessages(options.channelId, 10),
       groupRecoveredRange: Boolean(options.groupWriteCaps),
     });
+    const groupRoomExtraction = Boolean(options.groupWriteCaps)
+      || hasTypedDiscordGroupScope(recentEntries);
     const experientialSelfDirected = isExperientialSelfDirectedSessionId(options.channelId);
     // A reflection may have a grounding contact, but its first-person
     // experiential output is companion-owned. Never let that grounding contact
@@ -298,8 +309,11 @@ export async function runExtractionOrchestration(
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
 
-    const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
-      ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
+    const extractionPromptKey = groupRoomExtraction
+      ? GROUP_EXTRACTION_PROMPT_KEY
+      : EXTRACTION_PROMPT_KEY;
+    const extractionPrompt = options.promptRegistry?.getPrompt(extractionPromptKey)
+      ?? getDefaultPromptText(extractionPromptKey);
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
     const llmPass = await executeExtractionLlmPass({
       recentEntries,
@@ -386,7 +400,7 @@ export async function runExtractionOrchestration(
         ].filter((name): name is string => Boolean(name))),
       ],
       companionAuthorIds: options.companionAuthorIds ?? [],
-      requireStructuredAddressing: Boolean(options.groupWriteCaps),
+      requireStructuredAddressing: groupRoomExtraction,
       channelId: options.channelId,
       triggerReason: options.triggerReason,
       telemetryEnabled: options.telemetryEnabled,

@@ -16,8 +16,9 @@ export interface SilentBackgroundRevalidationOptions<T> {
 
 function recordId(value: unknown): string | number | undefined {
   if (!isRecord(value)) return undefined;
-  return typeof value.id === 'string' || typeof value.id === 'number'
-    ? value.id
+  if (typeof value.id === 'string' || typeof value.id === 'number') return value.id;
+  return typeof value.companionId === 'string' || typeof value.companionId === 'number'
+    ? value.companionId
     : undefined;
 }
 

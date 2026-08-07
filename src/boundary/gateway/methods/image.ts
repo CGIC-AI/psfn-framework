@@ -16,7 +16,9 @@ import {
 } from '../../../primitives/images/fal-cost-estimate.js';
 import { resolveInlineOrEnvCredential } from '../../custody/credential-vault.js';
 import { roundModelUsageUsd } from '../../../shared/telemetry/model-usage-accounting.js';
-import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { registerAuditedDescriptors } from './register.js';
 
 type ImageUsageParams = (ImageCreateParams | ImageEditParams) & GatewayCorrelationParams;
@@ -197,39 +199,41 @@ async function runImageWithUsage(
     : await imageService.edit(params as ImageEditParams);
 }
 
-const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationRpcResult>> = [
-  {
+const IMAGE_METHODS = [
+  defineAuditedMethod<ImageCreateParams & GatewayCorrelationParams, ImageGenerationRpcResult>({
     name: 'image.create',
-    handler: async (params: ImageCreateParams, runtime: GatewayMethodRuntime) =>
+    decode: gatewayMethodParamDecoders['image.create'],
+    handler: async (params: ImageCreateParams & GatewayCorrelationParams, runtime: GatewayMethodRuntime) =>
       await runImageWithUsage(
         runtime,
         'image_create',
         'create',
         params as ImageEditParams & GatewayCorrelationParams,
       ),
-    summary: (params: ImageCreateParams) => ({
+    summary: (params: ImageCreateParams & GatewayCorrelationParams) => ({
       provider: params.provider ?? 'auto',
       model: params.model ?? 'default',
       promptChars: params.prompt.length,
       numImages: params.numImages ?? 1,
     }),
-  },
-  {
+  }),
+  defineAuditedMethod<ImageEditParams & GatewayCorrelationParams, ImageGenerationRpcResult>({
     name: 'image.edit',
-    handler: async (params: ImageEditParams, runtime: GatewayMethodRuntime) =>
+    decode: gatewayMethodParamDecoders['image.edit'],
+    handler: async (params: ImageEditParams & GatewayCorrelationParams, runtime: GatewayMethodRuntime) =>
       await runImageWithUsage(
         runtime,
         'image_edit',
         'edit',
         params,
       ),
-    summary: (params: ImageEditParams) => ({
+    summary: (params: ImageEditParams & GatewayCorrelationParams) => ({
       provider: params.provider ?? 'auto',
       model: params.model ?? 'default',
       promptChars: params.prompt.length,
       imageCount: params.imageUrls.length,
     }),
-  },
+  }),
 ];
 
 export function registerImageMethods(runtime: GatewayMethodRuntime): void {

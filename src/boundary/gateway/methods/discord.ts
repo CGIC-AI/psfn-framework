@@ -4,13 +4,16 @@ import type {
   DiscordTypingParams,
   DiscordAvailabilityParams,
 } from '../protocol.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod, type GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 import { materializeGatewayAttachment } from '../attachment-materialization.js';
+import { gatewayMethodParamDecoders } from './params.js';
+import { enumSchema, gatewayDecoder, strictObject } from './params/schema.js';
 
-const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
-  {
+const discordDescriptors = [
+  defineAuditedMethod({
     name: 'discord.send',
+    decode: gatewayMethodParamDecoders['discord.send'],
     handler: async (params: DiscordSendParams, runtime) => {
       await runtime.discordAdapter.outbound.sendText(
         { channelId: params.channelId },
@@ -19,9 +22,10 @@ const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       return { success: true };
     },
     summary: (p: DiscordSendParams) => ({ channelId: p.channelId }),
-  },
-  {
+  }),
+  defineAuditedMethod({
     name: 'discord.sendMedia',
+    decode: gatewayMethodParamDecoders['discord.sendMedia'],
     handler: async (params: DiscordSendMediaParams, runtime) => {
       const media = materializeGatewayAttachment(params.media, runtime.workspacePath);
       await runtime.discordAdapter.outbound.sendMedia?.(
@@ -34,28 +38,24 @@ const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       channelId: p.channelId,
       mediaName: p.media.name,
     }),
-  },
-  {
+  }),
+  defineAuditedMethod({
     name: 'discord.typing',
+    decode: gatewayMethodParamDecoders['discord.typing'],
     handler: async (_params: DiscordTypingParams) => ({ success: true }),
-  },
-  {
+  }),
+  defineAuditedMethod({
     name: 'discord.availability',
-    handler: async (params: DiscordAvailabilityParams, runtime) => {
-      const state: unknown = params.state;
-      if (state !== 'available'
-        && state !== 'idle'
-        && state !== 'do_not_disturb') {
-        throw new Error('discord.availability state must be available, idle, or do_not_disturb');
-      }
-      return {
-        status: runtime.discordAdapter.availability
-          ? await runtime.discordAdapter.availability.setAvailability(state)
-          : 'unsupported',
-      };
-    },
-    summary: (params: DiscordAvailabilityParams) => ({ state: params.state }),
-  },
+    decode: gatewayDecoder('discord.availability', strictObject({
+      state: enumSchema(['available', 'idle', 'do_not_disturb']),
+    })),
+    handler: async (params: DiscordAvailabilityParams, runtime) => ({
+      status: runtime.discordAdapter.availability
+        ? await runtime.discordAdapter.availability.setAvailability(params.state)
+        : 'unsupported',
+    }),
+    summary: (p: DiscordAvailabilityParams) => ({ state: p.state }),
+  }),
 ];
 
 export function registerDiscordMethods(runtime: GatewayMethodRuntime): void {

@@ -14,7 +14,7 @@ import type {
 } from '../protocol.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import { registerAuditedDescriptors } from './register.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod, type GatewayMethodRuntime } from './types.js';
 
 export interface MemoryDeletionGatewayRuntime {
   target: {
@@ -174,10 +174,9 @@ async function denyProposal(
 }
 
 export async function handleMemoryDeletionPropose(
-  input: unknown,
+  params: MemoryDeletionProposeParams,
   runtime: MemoryDeletionGatewayRuntime,
 ): Promise<MemoryDeletionProposeResult> {
-    const params = parseParams(input);
     const authenticatedCompanionId = runtime.authenticatedCompanionId();
     if (!authenticatedCompanionId) {
       throw new Error('memory.deletion.propose requires an authenticated Companion connection');
@@ -294,20 +293,18 @@ export async function handleMemoryDeletionPropose(
     };
 }
 
-export const memoryDeletionMethodDescriptors: ReadonlyArray<
-  AuditedMethodDescriptor<unknown, MemoryDeletionProposeResult>
-> = [{
-  name: 'memory.deletion.propose',
-  handler: handleMemoryDeletionPropose,
-  summary: input => {
-    const params = parseParams(input);
-    return {
+export const memoryDeletionMethodDescriptors = [
+  defineAuditedMethod<MemoryDeletionProposeParams, MemoryDeletionProposeResult>({
+    name: 'memory.deletion.propose',
+    decode: parseParams,
+    handler: handleMemoryDeletionPropose,
+    summary: params => ({
       proposalId: params.proposalId,
       memoryId: params.memoryId,
       justificationCategory: params.justificationCategory,
-    };
-  },
-}];
+    }),
+  }),
+];
 
 export function registerMemoryDeletionMethods(runtime: GatewayMethodRuntime): void {
   registerAuditedDescriptors(runtime, memoryDeletionMethodDescriptors);

@@ -18,7 +18,9 @@ import type {
   OperatorAlertResult,
   GatewayPolicyDecision,
   RuntimeHealthResult,
+  GatewayMethods,
 } from '../protocol.js';
+import type { RpcParamsDecoder } from '../rpc-param-decoder.js';
 import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
@@ -211,15 +213,94 @@ export interface GatewayMethodRuntime {
   ): (params: P) => Promise<R>;
 }
 
-export interface AuditedMethodDescriptor<P, R> {
+export type GatewayMethodParams<K extends keyof GatewayMethods> = GatewayMethods[K][0];
+export type GatewayMethodResult<K extends keyof GatewayMethods> = GatewayMethods[K][1];
+
+export type GatewayParamsDecoder<P> = RpcParamsDecoder<P>;
+
+/**
+ * Decode params for an audit summary, keeping the summary total even when the
+ * wire payload is malformed or a projection throws. Malformed params are
+ * rejected by the audited handler and recorded as a failure instead of escaping
+ * before audit setup.
+ */
+export function summarizeDecodedParams<P>(
+  decode: RpcParamsDecoder<P>,
+  summarize: (params: P) => Record<string, unknown>,
+  params: unknown,
+): Record<string, unknown> {
+  let decoded: P;
+  try {
+    decoded = decode(params);
+  } catch {
+    return { invalidParams: true };
+  }
+  try {
+    return summarize(decoded);
+  } catch {
+    return { summaryProjectionFailed: true };
+  }
+}
+
+/** Runtime descriptor registered by the gateway method factories. */
+export interface AuditedMethodDescriptor {
+  readonly name: string;
+  readonly decode: RpcParamsDecoder<unknown>;
+  readonly handler: (params: unknown, runtime: GatewayMethodRuntime) => Promise<unknown>;
+  readonly summary: (params: unknown) => Record<string, unknown>;
+}
+
+export interface GatedMethodDescriptor extends AuditedMethodDescriptor {
+  readonly prePolicyGuard?: (params: unknown, runtime: GatewayMethodRuntime) => void;
+  readonly approvalAction: string;
+  readonly approvalScope: (params: unknown) => string;
+  readonly approvalReason?: (params: unknown) => string;
+}
+
+interface AuditedMethodDefinition<P, R> {
   name: string;
+  decode: RpcParamsDecoder<P>;
   handler: (params: P, runtime: GatewayMethodRuntime) => Promise<R>;
   summary?: (params: P) => Record<string, unknown>;
 }
 
-export interface GatedMethodDescriptor<P, R> extends AuditedMethodDescriptor<P, R> {
+interface GatedMethodDefinition<P, R> extends AuditedMethodDefinition<P, R> {
   prePolicyGuard?: (params: P, runtime: GatewayMethodRuntime) => void;
   approvalAction: string;
   approvalScope: (params: P) => string;
   approvalReason?: (params: P) => string;
+}
+
+export function defineAuditedMethod<P, R>(
+  definition: AuditedMethodDefinition<P, R>,
+): AuditedMethodDescriptor {
+  const summary = definition.summary ?? (() => ({}));
+  return {
+    name: definition.name,
+    decode: definition.decode as RpcParamsDecoder<unknown>,
+    handler: async (params, runtime) => definition.handler(definition.decode(params), runtime),
+    summary: (params: unknown) => summarizeDecodedParams(definition.decode, summary, params),
+  };
+}
+
+export function defineGatedMethod<P, R>(
+  definition: GatedMethodDefinition<P, R>,
+): GatedMethodDescriptor {
+  const summary = definition.summary ?? (() => ({}));
+  const prePolicyGuard = definition.prePolicyGuard;
+  const approvalReason = definition.approvalReason;
+  return {
+    name: definition.name,
+    decode: definition.decode as RpcParamsDecoder<unknown>,
+    handler: async (params, runtime) => definition.handler(params as P, runtime),
+    summary: (params: unknown) => summary(params as P),
+    prePolicyGuard: prePolicyGuard
+      ? (params, runtime) => prePolicyGuard(params as P, runtime)
+      : undefined,
+    approvalAction: definition.approvalAction,
+    approvalScope: (params: unknown) => definition.approvalScope(params as P),
+    ...(approvalReason
+      ? { approvalReason: (params: unknown) => approvalReason(params as P) }
+      : {}),
+  };
 }

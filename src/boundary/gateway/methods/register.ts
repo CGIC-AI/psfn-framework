@@ -21,15 +21,15 @@ function readCorrelationChannelId(params: unknown): string | undefined {
 
 export function registerAuditedDescriptors(
   runtime: GatewayMethodRuntime,
-  descriptors: ReadonlyArray<AuditedMethodDescriptor<any, unknown>>,
+  descriptors: ReadonlyArray<AuditedMethodDescriptor>,
 ): void {
   for (const descriptor of descriptors) {
     runtime.target.addMethod(
       descriptor.name,
       runtime.audited(
         descriptor.name,
-        (params: unknown) => descriptor.handler(params as never, runtime),
-        descriptor.summary as ((params: unknown) => Record<string, unknown>) | undefined,
+        (params: unknown) => descriptor.handler(params, runtime),
+        descriptor.summary,
       ),
     );
   }
@@ -37,7 +37,7 @@ export function registerAuditedDescriptors(
 
 export function registerGatedDescriptors(
   runtime: GatewayMethodRuntime,
-  descriptors: ReadonlyArray<GatedMethodDescriptor<any, unknown>>,
+  descriptors: ReadonlyArray<GatedMethodDescriptor>,
 ): void {
   const runtimeWithCompatibility = runtime as Partial<GatewayMethodRuntime> & {
     gated?: <P, R>(
@@ -50,10 +50,11 @@ export function registerGatedDescriptors(
     | ((input: {
       method: string;
       handler: (params: unknown) => Promise<unknown>;
-      paramsSummary?: (params: unknown) => Record<string, unknown>;
+      prepareParams: (params: unknown) => unknown;
+      paramsSummary: (params: unknown) => Record<string, unknown>;
       authenticatedCompanionId: () => string | undefined;
-      approvalAction?: string;
-      approvalScope?: (params: unknown) => string;
+      approvalAction: string;
+      approvalScope: (params: unknown) => string;
       approvalReason?: (params: unknown) => string;
       prePolicyGuard?: (params: unknown) => void;
       policyConfigProvider?: () => GatewayMethodRuntime['policyConfig'];
@@ -64,10 +65,11 @@ export function registerGatedDescriptors(
     gateMethod = (input) => runtimeWithCompatibility.approvalBoundary!.gate({
       method: input.method,
       handler: input.handler,
-      paramsSummary: input.paramsSummary ?? (() => ({})),
+      prepareParams: input.prepareParams,
+      paramsSummary: input.paramsSummary,
       authenticatedCompanionId: input.authenticatedCompanionId,
-      approvalAction: input.approvalAction ?? input.method,
-      approvalScope: input.approvalScope ?? (() => input.method),
+      approvalAction: input.approvalAction,
+      approvalScope: input.approvalScope,
       ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
       ...(input.prePolicyGuard ? { prePolicyGuard: input.prePolicyGuard } : {}),
       ...(input.policyConfigProvider ? { policyConfigProvider: input.policyConfigProvider } : {}),
@@ -82,7 +84,9 @@ export function registerGatedDescriptors(
         : {}),
     });
   } else if (runtimeWithCompatibility.gated) {
-    gateMethod = ({ method, handler }) => runtimeWithCompatibility.gated!(method, handler);
+    gateMethod = ({ method, handler, prepareParams }) =>
+      runtimeWithCompatibility.gated!(method, (params: unknown) =>
+        handler(prepareParams(params)));
   }
   if (gateMethod === undefined) {
     throw new Error('Gateway method runtime is missing approvalBoundary.gate');
@@ -93,14 +97,15 @@ export function registerGatedDescriptors(
       descriptor.name,
       gateMethod({
         method: descriptor.name,
-        handler: (params: unknown) => descriptor.handler(params as never, runtime),
-        paramsSummary: descriptor.summary as (params: unknown) => Record<string, unknown>,
+        handler: (params: unknown) => descriptor.handler(params, runtime),
+        prepareParams: descriptor.decode,
+        paramsSummary: descriptor.summary,
         authenticatedCompanionId: runtime.authenticatedCompanionId,
         approvalAction: descriptor.approvalAction,
-        approvalScope: descriptor.approvalScope as (params: unknown) => string,
-        approvalReason: descriptor.approvalReason as ((params: unknown) => string) | undefined,
+        approvalScope: descriptor.approvalScope,
+        approvalReason: descriptor.approvalReason,
         ...(descriptor.prePolicyGuard
-          ? { prePolicyGuard: (params: unknown) => descriptor.prePolicyGuard!(params as never, runtime) }
+          ? { prePolicyGuard: (params: unknown) => descriptor.prePolicyGuard!(params, runtime) }
           : {}),
         policyConfigProvider: () => runtime.policyConfig,
       }),

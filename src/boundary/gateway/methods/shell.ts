@@ -3,7 +3,8 @@ import { opendir, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { ShellExecParams, ShellExecResult } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { GatedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import { defineGatedMethod, type GatewayMethodRuntime } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { registerGatedDescriptors } from './register.js';
 import { executeShellCommandWithPolicy, ShellExecPolicyError } from '../../sandbox/execution/shell-runner.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -210,9 +211,10 @@ async function findQuarantinedArtifactAliases(
   return [...aliases].map(([path, identity]) => ({ path, identity }));
 }
 
-const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const shellDescriptors = [
+  defineGatedMethod({
     name: 'shell.exec',
+    decode: gatewayMethodParamDecoders['shell.exec'],
     prePolicyGuard: (params: ShellExecParams, runtime) => {
       const guard = runtime.personaMutationAttemptGuard;
       if (!guard) return;
@@ -323,7 +325,7 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'shell.exec',
     approvalScope: (params: ShellExecParams) => params.command,
-  },
+  }),
 ];
 
 export function registerShellMethods(runtime: GatewayMethodRuntime): void {

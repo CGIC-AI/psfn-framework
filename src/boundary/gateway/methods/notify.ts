@@ -3,12 +3,15 @@ import type {
   NotifyNtfyResult,
   OperatorAlertResult,
 } from '../protocol.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import type { GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { registerAuditedDescriptors } from './register.js';
 
-const notifyDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
-  {
+const notifyDescriptors = [
+  defineAuditedMethod<NotifyNtfyParams, NotifyNtfyResult>({
     name: 'notify.ntfy',
+    decode: gatewayMethodParamDecoders['notify.ntfy'],
     handler: async (params: NotifyNtfyParams, runtime): Promise<NotifyNtfyResult> => {
       return await runtime.sendNtfy(params);
     },
@@ -26,9 +29,10 @@ const notifyDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         messageLength: typeof p.message === 'string' ? p.message.length : 0,
       };
     },
-  },
-  {
+  }),
+  defineAuditedMethod<NotifyNtfyParams, OperatorAlertResult>({
     name: 'notify.operator',
+    decode: gatewayMethodParamDecoders['notify.operator'],
     handler: async (params: NotifyNtfyParams, runtime): Promise<OperatorAlertResult> => {
       return await runtime.sendOperatorAlert(params);
     },
@@ -45,7 +49,7 @@ const notifyDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         messageLength: typeof p.message === 'string' ? p.message.length : 0,
       };
     },
-  },
+  }),
 ];
 
 export function registerNotifyMethods(runtime: GatewayMethodRuntime): void {

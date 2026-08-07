@@ -17,10 +17,14 @@ import {
 import {
   GatewayErrors,
   type WebFetchBinaryParams,
+  type WebFetchBinaryResult,
   type WebFetchParams,
+  type WebFetchResult,
   type WebIntakeScreeningSummary,
   type WebRequestBinaryParams,
+  type WebRequestBinaryResult,
   type WebSearchParams,
+  type WebSearchResult,
 } from '../protocol.js';
 import type { IntakeSourceClass } from '../../../shared/contracts/intake-envelope.js';
 import type { WebBackendPolicy } from '../policy.js';
@@ -29,7 +33,8 @@ import {
   openRouterWebFetch,
   openRouterWebSearch,
 } from './openrouter-web.js';
-import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
+import { defineGatedMethod, type GatewayMethodRuntime } from './types.js';
+import { gatewayMethodParamDecoders } from './params.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   WEB_FETCH_TIMEOUT_MS,
@@ -783,9 +788,10 @@ async function fetchViaOpenRouter(
   return { content: result.content, sanitized: result.sanitized };
 }
 
-const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
-  {
+const webDescriptors = [
+  defineGatedMethod<WebFetchParams, WebFetchResult>({
     name: 'web.fetch',
+    decode: gatewayMethodParamDecoders['web.fetch'],
     handler: async (params: WebFetchParams, runtime) => {
       const backend = resolveWebBackend(runtime);
       if (backend.kind === 'openrouter') {
@@ -859,9 +865,10 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (p: WebFetchParams) => ({ url: p.url, lane: describeLane(p.lane) }),
     approvalAction: 'fetch',
     approvalScope: (p: WebFetchParams) => `${describeLane(p.lane)}:${p.url}`,
-  },
-  {
+  }),
+  defineGatedMethod<WebFetchBinaryParams, WebFetchBinaryResult>({
     name: 'web.fetch_binary',
+    decode: gatewayMethodParamDecoders['web.fetch_binary'],
     handler: async (params: WebFetchBinaryParams, runtime) => {
       const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
@@ -936,9 +943,10 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebFetchBinaryParams) => `${describeLane(p.lane)}:${p.url}`,
-  },
-  {
+  }),
+  defineGatedMethod<WebRequestBinaryParams, WebRequestBinaryResult>({
     name: 'web.request_binary',
+    decode: gatewayMethodParamDecoders['web.request_binary'],
     handler: async (params: WebRequestBinaryParams, runtime) => {
       const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
@@ -1014,13 +1022,14 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebRequestBinaryParams) => `${describeLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
-  },
-  {
+  }),
+  defineGatedMethod<WebSearchParams, WebSearchResult>({
     // Web search via OpenRouter's web_search server tool (bead htm9.10).
     // Only available when the OpenRouter web backend is explicitly configured;
     // self-hosted deployments keep discovery in the agent-side search planner
     // (no silent fallback here — this method fails closed).
     name: 'web.search',
+    decode: gatewayMethodParamDecoders['web.search'],
     handler: async (params: WebSearchParams, runtime) => {
       const backend = resolveWebBackend(runtime);
       if (backend.kind !== 'openrouter') {
@@ -1066,7 +1075,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebSearchParams) => `search:${typeof p.query === 'string' ? p.query : ''}`,
-  },
+  }),
 ];
 
 export function registerWebMethods(runtime: GatewayMethodRuntime): void {

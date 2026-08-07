@@ -3,12 +3,9 @@ import {
   parseContactAuthorityLifecycleResult,
 } from '../../../shared/contracts/contact-authority-lifecycle.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
-import type {
-  ContactLifecycleExecuteParams,
-  ContactLifecycleExecuteResult,
-} from '../protocol.js';
+import type { ContactLifecycleExecuteParams } from '../protocol.js';
 import { registerAuditedDescriptors } from './register.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
+import { defineAuditedMethod, type GatewayMethodRuntime } from './types.js';
 
 function parseParams(input: unknown): ContactLifecycleExecuteParams {
   if (!isRecord(input)) throw new Error('contact.lifecycle.execute params must be an object');
@@ -19,32 +16,29 @@ function parseParams(input: unknown): ContactLifecycleExecuteParams {
   return { request: parseContactAuthorityLifecycleRequest(input.request) };
 }
 
-export const contactLifecycleMethodDescriptors: ReadonlyArray<
-AuditedMethodDescriptor<unknown, ContactLifecycleExecuteResult>
-> = [{
-  name: 'contact.lifecycle.execute',
-  handler: async (input, runtime) => {
-    const params = parseParams(input);
-    const companionId = runtime.authenticatedCompanionId();
-    if (!companionId) {
-      throw new Error('contact.lifecycle.execute requires an authenticated companion connection');
-    }
-    if (!runtime.contactLifecycleAuthority) {
-      throw new Error('Gateway contact lifecycle authority is not configured');
-    }
-    return parseContactAuthorityLifecycleResult(
-      await runtime.contactLifecycleAuthority.executeForCompanion(companionId, params.request),
-    );
-  },
-  summary: input => {
-    const params = parseParams(input);
-    return {
+export const contactLifecycleMethodDescriptors = [
+  defineAuditedMethod({
+    name: 'contact.lifecycle.execute',
+    decode: parseParams,
+    handler: async (params, runtime) => {
+      const companionId = runtime.authenticatedCompanionId();
+      if (!companionId) {
+        throw new Error('contact.lifecycle.execute requires an authenticated companion connection');
+      }
+      if (!runtime.contactLifecycleAuthority) {
+        throw new Error('Gateway contact lifecycle authority is not configured');
+      }
+      return parseContactAuthorityLifecycleResult(
+        await runtime.contactLifecycleAuthority.executeForCompanion(companionId, params.request),
+      );
+    },
+    summary: params => ({
       intentId: params.request.intentId,
       action: params.request.action,
       phase: params.request.phase,
-    };
-  },
-}];
+    }),
+  }),
+];
 
 export function registerContactLifecycleMethods(runtime: GatewayMethodRuntime): void {
   registerAuditedDescriptors(runtime, contactLifecycleMethodDescriptors);

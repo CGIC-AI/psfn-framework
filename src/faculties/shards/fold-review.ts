@@ -11,12 +11,14 @@ import type { ShardReturnedArtifact } from './artifact-policy.js';
 import { buildShardValidationPath, type StagedShardMemoryOutput } from './output-review.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
 import type { ShardTaggedOutput, ShardTaggedOutputReviewState } from './types.js';
+import {
+  cloneIntakeSnapshots,
+  screenDerivedContent,
+  type DerivedContentIntakeDisposition,
+} from '../../core/cogsec/intake/derived-content.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 
-// TODO(htm9.2-followup): fold review gates the shard's OUTPUT, but nothing
-// screens what the shard INGESTED. Propagate intake envelope taint through
-// shard workspace content: screen folded-back text through the intake
-// screening service (sourceClass 'shard_foldback') and derive child envelopes
-// from the shard's ingested-source envelopes (CaMeL rule) before promotion.
 const SHARD_FOLD_REVIEW_STORE_SCHEMA_VERSION = 1;
 const EMOTIONAL_REVIEW_TAG = 'interpretive:emotional_or_relational';
 const ARTIFACT_PENDING_REASON = 'artifact_output_pending_merge_review';
@@ -25,6 +27,7 @@ const EMOTIONAL_PENDING_REASON = 'emotional_or_relational_interpretation_require
 const PROMOTION_UNAVAILABLE_REASON = 'fold_review_memory_promotion_unavailable';
 const INVALID_MEMORY_CANDIDATE_REASON = 'fold_review_memory_candidate_invalid';
 const PROMOTION_FAILED_REASON_PREFIX = 'fold_review_memory_promotion_failed';
+const INTAKE_DENIED_REASON = 'fold_review_intake_denied';
 
 export type ShardFoldReviewState = ShardTaggedOutputReviewState;
 export type ShardFoldReviewDecision = 'approve' | 'deny';
@@ -50,6 +53,7 @@ export interface ShardFoldReviewMemoryItem {
   resolutionNote?: string;
   promotedMemoryId?: string;
   promotionAction?: WriteResult['action'];
+  intake?: DerivedContentIntakeDisposition;
 }
 
 export interface ShardFoldReviewArtifactItem {
@@ -115,21 +119,15 @@ export interface ShardFoldReviewPort {
 }
 
 function cloneTaggedOutput(output: ShardTaggedOutput): ShardTaggedOutput {
+  const embeddedCandidate = (output as ShardTaggedOutput & {
+    candidate?: ShardFoldReviewMemoryCandidate;
+  }).candidate;
   return {
     ...output,
+    ...(embeddedCandidate ? { candidate: cloneMemoryCandidate(embeddedCandidate) } : {}),
     provenance: {
       ...output.provenance,
-      lineage: {
-        ...output.provenance.lineage,
-        companionProvenance: { ...output.provenance.lineage.companionProvenance },
-        ...(output.provenance.lineage.sourceContext
-          ? { sourceContext: { ...output.provenance.lineage.sourceContext } }
-          : {}),
-        ...(output.provenance.lineage.satelliteRouting
-          ? { satelliteRouting: { ...output.provenance.lineage.satelliteRouting } }
-          : {}),
-        sourceMessage: { ...output.provenance.lineage.sourceMessage },
-      },
+      lineage: cloneLineage(output.provenance.lineage),
       tags: [...output.provenance.tags],
     },
   };
@@ -140,17 +138,7 @@ function cloneArtifact(artifact: ShardReturnedArtifact): ShardReturnedArtifact {
     ...artifact,
     provenance: {
       ...artifact.provenance,
-      lineage: {
-        ...artifact.provenance.lineage,
-        companionProvenance: { ...artifact.provenance.lineage.companionProvenance },
-        ...(artifact.provenance.lineage.sourceContext
-          ? { sourceContext: { ...artifact.provenance.lineage.sourceContext } }
-          : {}),
-        ...(artifact.provenance.lineage.satelliteRouting
-          ? { satelliteRouting: { ...artifact.provenance.lineage.satelliteRouting } }
-          : {}),
-        sourceMessage: { ...artifact.provenance.lineage.sourceMessage },
-      },
+      lineage: cloneLineage(artifact.provenance.lineage),
     },
   };
 }
@@ -176,6 +164,18 @@ function cloneMemoryItem(item: ShardFoldReviewMemoryItem): ShardFoldReviewMemory
     output: cloneTaggedOutput(item.output),
     candidate: cloneMemoryCandidate(item.candidate),
     blockingReasons: [...item.blockingReasons],
+    ...(item.intake
+      ? {
+          intake: {
+            ...item.intake,
+            envelopes: cloneIntakeSnapshots(item.intake.envelopes),
+            sink: {
+              ...item.intake.sink,
+              deniedEnvelopeIds: [...item.intake.sink.deniedEnvelopeIds],
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -190,13 +190,7 @@ function cloneArtifactItem(item: ShardFoldReviewArtifactItem): ShardFoldReviewAr
 function cloneFoldReviewRecord(record: ShardFoldReviewRecord): ShardFoldReviewRecord {
   return {
     ...record,
-    lineage: {
-      ...record.lineage,
-      companionProvenance: { ...record.lineage.companionProvenance },
-      ...(record.lineage.sourceContext ? { sourceContext: { ...record.lineage.sourceContext } } : {}),
-      ...(record.lineage.satelliteRouting ? { satelliteRouting: { ...record.lineage.satelliteRouting } } : {}),
-      sourceMessage: { ...record.lineage.sourceMessage },
-    },
+    lineage: cloneLineage(record.lineage),
     blockingReasons: [...record.blockingReasons],
     visibilitySignals: cloneVisibilitySignals(record.visibilitySignals),
     memoryItems: record.memoryItems.map(cloneMemoryItem),
@@ -238,6 +232,9 @@ function cloneLineage(lineage: ShardResultLineageEnvelope): ShardResultLineageEn
     ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
     ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
     sourceMessage: { ...lineage.sourceMessage },
+    ...(lineage.ingestedIntakeEnvelopes
+      ? { ingestedIntakeEnvelopes: cloneIntakeSnapshots(lineage.ingestedIntakeEnvelopes) }
+      : {}),
   };
 }
 
@@ -378,6 +375,10 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
   constructor(
     filePath: string,
     private readonly memoryWriter?: Pick<MemoryWriter, 'write'> | null,
+    private readonly intakeProvider?: () => {
+      screening: IntakeScreeningService | null;
+      sinkGate: IntakeSinkGate | null;
+    },
   ) {
     this.store = new ShardFoldReviewStore(filePath);
   }
@@ -398,11 +399,39 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
     const existingOutputIds = new Set(record.memoryItems.map(item => item.output.outputId));
     for (const output of input.outputs) {
       if (existingOutputIds.has(output.outputId)) continue;
+      const intakeServices = this.intakeProvider?.();
+      const screened = await screenDerivedContent({
+        text: output.candidate.text,
+        sourceClass: 'shard_foldback',
+        origin: `shard-fold-review:${input.shardId}:${output.outputId}`,
+        sink: 'memory_write',
+        ingestedEnvelopes: input.lineage.ingestedIntakeEnvelopes,
+        screening: intakeServices?.screening,
+        sinkGate: intakeServices?.sinkGate,
+        auditContext: {
+          shardId: input.shardId,
+          outputId: output.outputId,
+        },
+      });
+      const clonedOutput = cloneTaggedOutput(output);
+      if (screened.intake?.withheld) {
+        clonedOutput.content = screened.effectiveText;
+        clonedOutput.preview = screened.effectiveText;
+        clonedOutput.reviewState = 'blocked';
+        clonedOutput.blockedCorePromotion = true;
+        clonedOutput.blockedCorePromotionReason = INTAKE_DENIED_REASON;
+        const embeddedCandidate = (clonedOutput as ShardTaggedOutput & {
+          candidate?: ShardFoldReviewMemoryCandidate;
+        }).candidate;
+        if (embeddedCandidate) {
+          embeddedCandidate.text = screened.effectiveText;
+        }
+      }
       record.memoryItems.push({
         kind: 'memory',
-        output: cloneTaggedOutput(output),
+        output: clonedOutput,
         candidate: {
-          text: output.candidate.text,
+          text: screened.effectiveText,
           type: output.candidate.type,
           importance: clampUnit(output.candidate.importance, undefined),
           emotionalValence: clampSigned(output.candidate.emotionalValence, undefined),
@@ -410,9 +439,13 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
           tags: [...output.candidate.tags],
           sensitivity: output.candidate.sensitivity,
         },
-        reviewState: 'pending',
-        blockingReasons: buildMemoryItemBlockingReasons(output),
+        reviewState: screened.intake?.withheld ? 'blocked' : 'pending',
+        blockingReasons: uniqueStrings([
+          ...buildMemoryItemBlockingReasons(output),
+          ...(screened.intake?.withheld ? [INTAKE_DENIED_REASON] : []),
+        ]),
         createdAt: output.createdAt,
+        ...(screened.intake ? { intake: screened.intake } : {}),
       });
     }
     record.updatedAt = timestamp;
@@ -465,7 +498,17 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
         item.resolutionNote = note ?? 'operator_denied_fold_review';
       }
     } else {
-      const memoryItemsToPromote = record.memoryItems.filter(item => item.reviewState !== 'approved');
+      const memoryItemsToPromote: ShardFoldReviewMemoryItem[] = [];
+      for (const item of record.memoryItems.filter(candidate => candidate.reviewState !== 'approved')) {
+        if (!this.recheckMemoryIntake(record, item)) {
+          item.reviewState = 'blocked';
+          item.resolvedAt = now;
+          item.resolutionNote = note ?? 'intake_denied';
+          item.blockingReasons = uniqueStrings([...item.blockingReasons, INTAKE_DENIED_REASON]);
+          continue;
+        }
+        memoryItemsToPromote.push(item);
+      }
       const artifactItemsToResolve = record.artifactItems.filter(item => item.reviewState !== 'approved');
       if (memoryItemsToPromote.length > 0 && !this.memoryWriter) {
         for (const item of [...memoryItemsToPromote, ...artifactItemsToResolve]) {
@@ -529,6 +572,29 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
     recomputeFoldReviewRecord(record);
     this.store.put(record);
     return cloneFoldReviewRecord(record);
+  }
+
+  private recheckMemoryIntake(
+    record: ShardFoldReviewRecord,
+    item: ShardFoldReviewMemoryItem,
+  ): boolean {
+    if (!item.intake) return true;
+    if (item.intake.withheld) return false;
+    const services = this.intakeProvider?.();
+    if (!services?.screening || !services.sinkGate) return false;
+    if (services.screening.mode !== services.sinkGate.mode) return false;
+    const sink = services.sinkGate.evaluate('memory_write', item.intake.envelopes, {
+      shardId: record.shardId,
+      outputId: item.output.outputId,
+      phase: 'operator_approval',
+    });
+    item.intake = {
+      ...item.intake,
+      mode: services.screening.mode,
+      withheld: !sink.allowed,
+      sink,
+    };
+    return sink.allowed;
   }
 
   private ensureRecord(input: ShardFoldReviewRecordInput): ShardFoldReviewRecord {
@@ -595,5 +661,6 @@ function buildMemoryWriteOptions(
       `${originKind}_output:${item.output.outputId}`,
       `${originKind}_lineage:${record.lineage.shardId}`,
     ]),
+    ...(item.intake ? { intakeEnvelopes: cloneIntakeSnapshots(item.intake.envelopes) } : {}),
   };
 }

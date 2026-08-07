@@ -3,40 +3,28 @@ import {
   completeSimple,
   type AssistantMessage as PiAssistantMessage,
   type Context as PiContext,
-  type Model,
-  type SimpleStreamOptions,
-  type ThinkingLevel,
 } from '@mariozechner/pi-ai';
 import { randomUUID } from 'node:crypto';
 import type {
   CompletionPurpose,
   CorrelationMetadata,
-  LLMCallAccountingContext,
   LLMContext,
   LLMUsageDetails,
-  LLMPromptCacheObservability,
   LLMProviderObservability,
   LLMModelHint,
   LLMResponse,
-  LLMProviderWireMessage,
   LLMWorkSpec,
   ModelBudgetBlockedEvent,
   StreamCallbacks,
   ToolCall,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel, createOpenAICompatibleEndpointModel, type OpenAICompatibleApi } from './models.js';
 import { withRetry, markErrorAsNonRetryable, isRetryableError } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
 import {
   extractReasoningContent,
   extractTextContent,
-  toPiTools,
 } from './conversion.js';
-import {
-  contextMessagesToPiMessages,
-  mergeSystemContextIntoSystemPrompt,
-} from './message-conversion.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { abortError } from '../../shared/utils/errors.js';
 import { FallbackRunner, NonRecoverableFallbackError } from './fallback.js';
@@ -45,11 +33,7 @@ import {
   evaluateImportPolicy,
   toCompletionRoutingPurpose,
 } from './routing.js';
-import {
-  applyModelAgnosticPromptCache,
-  buildPromptCacheObservability,
-} from './client-prompt-cache.js';
-import { resolveRegisteredModel, resolveSystemRoleCapabilityMetadata } from './models.js';
+import { applyModelAgnosticPromptCache } from './client-prompt-cache.js';
 import {
   EligibilityDeniedError,
   type EligibilityDecision,
@@ -68,14 +52,7 @@ import {
   resolveModelUsageCostRates,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
-import { captureProviderWirePayload } from './wire-payload-capture.js';
 import {
-  type CredentialReference,
-  resolveProviderApiKey,
-  resolveOptionalEnvCredential,
-} from '../../boundary/custody/credential-vault.js';
-import {
-  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
@@ -110,7 +87,6 @@ import {
   isPotentialProviderResponsePrefixArtifact,
   normalizeContent,
   normalizeLLMUsageDetails,
-  normalizeProxyModelId,
   normalizeSharedRouteKey,
   stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
@@ -134,6 +110,7 @@ import {
   IcpConversationCostBreakerError,
   type IcpConversationChargePolicyResolver,
 } from './icp-conversation-cost-breaker.js';
+import { LLMRequestCapability } from './client-request-capability.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -148,16 +125,6 @@ const log = createComponentLogger('LLMClient');
 const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
 const LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 30_000;
 const LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
-
-interface LLMRequestOptions extends SimpleStreamOptions {
-  zdr?: boolean;
-  provider?: { order: string[] };
-  contextWindow?: number;
-  topP?: number;
-  topK?: number;
-  frequencyPenalty?: number;
-  repetitionPenalty?: number;
-}
 
 export type LLMCompletionModelHint = LLMModelHint;
 
@@ -198,8 +165,6 @@ export interface LLMClientRuntimeOptions {
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
-const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
-
 function hasSubstantiveToolCallIdentity(
   partial: PiAssistantMessage,
   contentIndex: number,
@@ -226,7 +191,7 @@ export class SensitiveImportRoutePolicyError extends Error {
 export class LLMClient {
   private config: SubstrateConfig;
   private litellmBaseUrl: string | null;
-  private litellmApiKeyRef: CredentialReference;
+  private requestCapability: LLMRequestCapability;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
   private transport?: LLMProviderPort;
@@ -248,7 +213,11 @@ export class LLMClient {
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
     this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
-    this.litellmApiKeyRef = resolveConfiguredLiteLLMApiKeyReference(config);
+    this.requestCapability = new LLMRequestCapability(
+      config,
+      this.litellmBaseUrl,
+      resolveConfiguredLiteLLMApiKeyReference(config),
+    );
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config, runtimeOptions.usageBudgetQuery);
     this.transport = runtimeOptions.transport;
@@ -269,174 +238,6 @@ export class LLMClient {
       windowMs: LLM_CIRCUIT_BREAKER_WINDOW_MS,
       cooldownMs: LLM_CIRCUIT_BREAKER_COOLDOWN_MS,
     });
-  }
-
-  private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
-    const modelId = this.shouldNormalizeProxyModelId(candidate)
-      ? normalizeProxyModelId(candidate.provider, candidate.model)
-      : candidate.model;
-    const routedModelOptions = {
-      reasoning: candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
-      supportsVision: candidate.supportsVision ?? false,
-    };
-
-    if (candidate.requestBaseUrl) {
-      const apiKey = candidate.requestApiKeyEnv
-        ? resolveOptionalEnvCredential(this.config.credentialVault, candidate.requestApiKeyEnv)
-        : undefined;
-      return {
-        model: createOpenAICompatibleEndpointModel({
-          baseUrl: candidate.requestBaseUrl,
-          modelId,
-          provider: candidate.provider,
-          routeLabel: candidate.provider.replace(/_/g, ' '),
-          maxTokens: candidate.maxTokens,
-          contextWindow: candidate.contextWindow,
-          reasoning: routedModelOptions.reasoning,
-          supportsVision: routedModelOptions.supportsVision,
-          api: this.resolveOpenAICompatibleApi(candidate),
-        }),
-        apiKey,
-      };
-    }
-
-    if (this.litellmBaseUrl) {
-      return {
-        model: createModel(
-          this.litellmBaseUrl,
-          modelId,
-          candidate.maxTokens,
-          candidate.contextWindow,
-          this.resolveOpenAICompatibleApi(candidate),
-          routedModelOptions,
-        ),
-        apiKey: resolveConfiguredLiteLLMApiKey({
-          credentialVault: this.config.credentialVault,
-          litellmApiKeyRef: this.litellmApiKeyRef,
-        }),
-      };
-    }
-    const model = resolveRegisteredModel(candidate.provider, modelId);
-    if (!model) {
-      throw new Error(
-        `Unknown model "${modelId}" for provider "${candidate.provider}". `
-        + 'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
-      );
-    }
-    return {
-      model,
-      apiKey: resolveProviderApiKey(candidate.provider, this.config),
-    };
-  }
-
-  private buildRequestOptions(
-    candidate: RoutingCandidate,
-    apiKey: string | undefined,
-    extra: { signal?: AbortSignal; correlation?: ResolvedCorrelationMetadata } = {},
-  ): LLMRequestOptions {
-    const requestOptions: LLMRequestOptions = {
-      apiKey,
-      maxTokens: candidate.maxTokens,
-      ...(extra.signal ? { signal: extra.signal } : {}),
-    };
-
-    if (candidate.contextWindow !== undefined) {
-      requestOptions.contextWindow = candidate.contextWindow;
-    }
-
-    if (candidate.temperature !== undefined) {
-      requestOptions.temperature = candidate.temperature;
-    }
-
-    const reasoning = this.resolveReasoningLevel(candidate);
-    if (reasoning) {
-      requestOptions.reasoning = reasoning;
-    }
-
-    if (this.supportsFullKnobPassthrough(candidate)) {
-      if (candidate.topP !== undefined) requestOptions.topP = candidate.topP;
-      if (candidate.topK !== undefined) requestOptions.topK = candidate.topK;
-      if (candidate.frequencyPenalty !== undefined) requestOptions.frequencyPenalty = candidate.frequencyPenalty;
-      if (candidate.repetitionPenalty !== undefined) requestOptions.repetitionPenalty = candidate.repetitionPenalty;
-    }
-
-    const promptCaching = buildPromptCacheObservability({
-      promptCacheStrategy: candidate.promptCacheStrategy,
-      promptCacheRetention: candidate.promptCacheRetention,
-      promptCacheScope: candidate.promptCacheScope,
-      correlation: extra.correlation,
-    });
-    if (promptCaching.engaged && promptCaching.retention && promptCaching.sessionId) {
-      requestOptions.cacheRetention = promptCaching.retention;
-      requestOptions.sessionId = promptCaching.sessionId;
-    }
-
-    if (candidate.provider === 'openrouter') {
-      if (candidate.openRouterZdrOnly) {
-        requestOptions.zdr = true;
-      }
-      if (candidate.openRouterProviderOrder && candidate.openRouterProviderOrder.length > 0) {
-        requestOptions.provider = { order: [...candidate.openRouterProviderOrder] };
-      }
-    }
-
-    return requestOptions;
-  }
-
-  private buildTransportContext(
-    context: LLMContext,
-    candidate: RoutingCandidate,
-    correlation: ResolvedCorrelationMetadata | undefined,
-    accounting?: LLMCallAccountingContext,
-  ): LLMContext {
-    const hintModel = this.shouldNormalizeProxyModelId(candidate)
-      ? normalizeProxyModelId(candidate.provider, candidate.model)
-      : candidate.model;
-    return {
-      systemPrompt: context.systemPrompt,
-      messages: context.messages,
-      ...(context.tools?.length ? { tools: context.tools } : {}),
-      ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
-      modelHint: {
-        model: hintModel,
-        provider: candidate.provider,
-        pin: true,
-        maxTokens: candidate.maxTokens,
-        ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
-        ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
-        ...(candidate.thinkingEffort ? { thinkingEffort: candidate.thinkingEffort } : {}),
-        ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
-        ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
-        ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
-        ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
-        ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
-      },
-      ...(correlation ? { correlation } : {}),
-      ...(accounting ? { accounting } : {}),
-    };
-  }
-
-  private shouldNormalizeProxyModelId(candidate: RoutingCandidate): boolean {
-    return !candidate.requestBaseUrl && this.litellmBaseUrl !== null;
-  }
-
-  private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
-    if (candidate.thinkingEnabled === false) return undefined;
-    if (candidate.thinkingEffort) return candidate.thinkingEffort;
-    if (candidate.thinkingEnabled === true) return 'medium';
-    return undefined;
-  }
-
-  private supportsFullKnobPassthrough(candidate: RoutingCandidate): boolean {
-    return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
-      || !!candidate.requestBaseUrl
-      || this.litellmBaseUrl !== null;
-  }
-
-  private resolveOpenAICompatibleApi(candidate: RoutingCandidate): OpenAICompatibleApi {
-    return candidate.promptCacheStrategy === 'openai_responses'
-      ? 'openai-responses'
-      : 'openai-completions';
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
@@ -469,106 +270,6 @@ export class LLMClient {
     return {
       ...candidate,
       maxTokens,
-    };
-  }
-
-  private buildPiContext(context: LLMContext): PiContext {
-    return {
-      systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
-      messages: contextMessagesToPiMessages(context.messages),
-      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
-    };
-  }
-
-  private resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {
-    if (candidate.requestBaseUrl) return 'request_base_url';
-    if (this.litellmBaseUrl) return 'configured_litellm_proxy';
-    return 'registered_model';
-  }
-
-  private toProviderWireMessages(context: PiContext, systemTransport: ReturnType<typeof resolveSystemRoleCapabilityMetadata>): LLMProviderWireMessage[] {
-    const messages: LLMProviderWireMessage[] = [];
-    if (context.systemPrompt) {
-      messages.push({
-        role: systemTransport.transport === 'openai_developer'
-          ? 'developer'
-          : systemTransport.transport === 'google_system_instruction'
-            ? 'system_instruction'
-            : 'system',
-        source: 'system_prompt',
-        content: context.systemPrompt,
-      });
-    }
-    for (const message of context.messages) {
-      messages.push({
-        role: message.role === 'assistant' ? 'assistant' : 'user',
-        source: 'message',
-        content: typeof message.content === 'string'
-          ? message.content
-          : JSON.stringify(message.content),
-      });
-    }
-    return messages;
-  }
-
-  /**
-   * Capture the true provider wire body as-sent (bead hgw3-80f6). Chains a
-   * pass-through `onPayload` that clones the outbound payload — after any
-   * prompt-cache breakpoint transform already chained onto `requestOptions` —
-   * onto `providerObservability.capturedWirePayload`. The response threads the
-   * same `providerObservability` reference, so the capture rides back to the
-   * turn snapshot and (in split mode) across the gateway RPC.
-   *
-   * Heal-not-block: a capture failure logs loudly but never mutates the payload
-   * or throws into the live turn (the reply must ship regardless).
-   */
-  private attachWirePayloadCapture(
-    requestOptions: LLMRequestOptions,
-    providerObservability: LLMProviderObservability,
-    model: Model<any>,
-  ): void {
-    const priorOnPayload = requestOptions.onPayload;
-    requestOptions.onPayload = async (payload, payloadModel) => {
-      const prior = await priorOnPayload?.(payload, payloadModel);
-      // pi-ai sends `prior` when a prior hook returns a replacement, else the
-      // original payload unchanged. Capture whatever will actually be sent.
-      const sent = prior ?? payload;
-      try {
-        providerObservability.capturedWirePayload = captureProviderWirePayload(sent, model);
-      } catch (error) {
-        log.warn('Failed to capture provider wire payload', {
-          error: error instanceof Error ? error.message : String(error),
-          model: String(model.id),
-        });
-      }
-      return prior;
-    };
-  }
-
-  private buildProviderObservability(
-    candidate: RoutingCandidate,
-    model: Model<any>,
-    context: PiContext,
-    correlation: ResolvedCorrelationMetadata | undefined,
-    promptCachingOverride?: LLMPromptCacheObservability,
-  ): LLMProviderObservability {
-    const systemRole = resolveSystemRoleCapabilityMetadata(model);
-    return {
-      routeKind: this.resolveRouteKind(candidate),
-      requestedProvider: candidate.provider,
-      requestedModel: candidate.model,
-      backendProvider: model.provider,
-      backendModel: model.id,
-      backendApi: model.api,
-      ...(model.baseUrl ? { backendBaseUrl: model.baseUrl } : {}),
-      systemRole,
-      promptCaching: promptCachingOverride ?? buildPromptCacheObservability({
-        promptCacheStrategy: candidate.promptCacheStrategy,
-        promptCacheRetention: candidate.promptCacheRetention,
-        promptCacheScope: candidate.promptCacheScope,
-        correlation,
-      }),
-      providerWireMessages: this.toProviderWireMessages(context, systemRole),
     };
   }
 
@@ -695,7 +396,7 @@ export class LLMClient {
   }
 
   private resolveModelCallResourceKey(candidate: RoutingCandidate): string | null {
-    const routeKind = this.resolveRouteKind(candidate);
+    const routeKind = this.requestCapability.resolveRouteKind(candidate);
     if (routeKind === 'request_base_url') {
       return `request_base_url::${normalizeSharedRouteKey(candidate.requestBaseUrl)}`;
     }
@@ -807,7 +508,7 @@ export class LLMClient {
    * single-in-flight behavior for any unconfigured endpoint.
    */
   private resolveModelCallCapacity(candidate: RoutingCandidate): ModelCallGateCapacity {
-    const routeKind = this.resolveRouteKind(candidate);
+    const routeKind = this.requestCapability.resolveRouteKind(candidate);
     const providerId = routeKind === 'configured_litellm_proxy'
       ? 'litellm'
       : candidate.provider.trim().toLowerCase();
@@ -1139,7 +840,7 @@ export class LLMClient {
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks, options?: LLMProviderStreamOptions): Promise<LLMResponse> {
-    const piContext = this.buildPiContext(context);
+    const piContext = this.requestCapability.buildPiContext(context);
     // mmo9.7.1 (+ mmo9.8 seam): honor an option-level work spec instead of
     // dropping option-level correlation and hardcoding purpose 'chat'. Absent a
     // spec (the interactive chat turn), streamPurpose/streamRoutingPurpose stay
@@ -1184,7 +885,7 @@ export class LLMClient {
           const transport = this.transport;
           if (transport) {
             physicalAttempt += 1;
-            const transportContext = this.buildTransportContext(
+            const transportContext = this.requestCapability.buildTransportContext(
               context,
               candidateTarget,
               correlation,
@@ -1202,8 +903,8 @@ export class LLMClient {
             throwIfTransportAborted(transportSignal);
             return response;
           }
-          const { model, apiKey } = this.getModelAndKey(candidateTarget);
-          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
+          const { model, apiKey } = this.requestCapability.getModelAndKey(candidateTarget);
+          const requestOptions = this.requestCapability.buildRequestOptions(candidateTarget, apiKey, {
             signal: transportSignal,
             correlation,
           });
@@ -1226,14 +927,18 @@ export class LLMClient {
               log.warn('Prompt cache boundaries did not match the serialized system prompt; skipping cache breakpoints', payload);
             },
           });
-          const providerObservability = this.buildProviderObservability(
+          const providerObservability = this.requestCapability.buildProviderObservability(
             candidateTarget,
             model,
             piContext,
             correlation,
             promptCaching ?? undefined,
           );
-          this.attachWirePayloadCapture(requestOptions, providerObservability, model);
+          this.requestCapability.attachWirePayloadCapture(
+            requestOptions,
+            providerObservability,
+            model,
+          );
 
           return retryCompletionOnCorruptEmptyToolArgs<LLMResponse>({
             tools: context.tools,
@@ -1672,7 +1377,7 @@ export class LLMClient {
     options: LLMCompletionOptions = {},
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
-    const piContext = this.buildPiContext(context);
+    const piContext = this.requestCapability.buildPiContext(context);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     if (options.workSpec) {
       this.validateWorkSpecForCall(purpose, routingPurpose, options.workSpec, correlation);
@@ -1694,7 +1399,7 @@ export class LLMClient {
         const transport = this.transport;
         if (transport) {
           physicalAttempt += 1;
-          const transportContext = this.buildTransportContext(
+          const transportContext = this.requestCapability.buildTransportContext(
             context,
             candidateTarget,
             correlation,
@@ -1718,8 +1423,8 @@ export class LLMClient {
           assertUsableProviderResponse(response, candidateTarget);
           return response;
         }
-        const { model, apiKey } = this.getModelAndKey(candidateTarget);
-        const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
+        const { model, apiKey } = this.requestCapability.getModelAndKey(candidateTarget);
+        const requestOptions = this.requestCapability.buildRequestOptions(candidateTarget, apiKey, {
           signal: transportSignal,
           correlation,
         });
@@ -1742,14 +1447,18 @@ export class LLMClient {
             log.warn('Prompt cache boundaries did not match the serialized system prompt; skipping cache breakpoints', payload);
           },
         });
-        const providerObservability = this.buildProviderObservability(
+        const providerObservability = this.requestCapability.buildProviderObservability(
           candidateTarget,
           model,
           piContext,
           correlation,
           promptCaching ?? undefined,
         );
-        this.attachWirePayloadCapture(requestOptions, providerObservability, model);
+        this.requestCapability.attachWirePayloadCapture(
+          requestOptions,
+          providerObservability,
+          model,
+        );
 
         const request = async (emptyArgsRetries: number) => {
           physicalAttempt += 1;

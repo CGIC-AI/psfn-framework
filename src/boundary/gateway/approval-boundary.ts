@@ -96,6 +96,8 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   approvalAction: string;
   approvalScope: (params: P) => string;
   approvalReason?: (params: P) => string;
+  /** Runs on canonical raw-tool params before policy summaries or handler dispatch. */
+  prePolicyGuard?: (params: P) => void;
   /** Connection-scoped policy authority for multi-companion workspace isolation. */
   policyConfigProvider?: () => PolicyConfig;
   /**
@@ -576,6 +578,16 @@ export function createGatewayApprovalBoundaryService(
           options.recordMethodFailure(gateOptions.method, err);
           const heldAuditId = await options.audit(gateOptions.method, 'DENY', { canaryEgressHeld: true });
           await options.auditComplete(heldAuditId, Date.now(), toErrorMessage(err));
+          throw err;
+        }
+        try {
+          gateOptions.prePolicyGuard?.(params);
+        } catch (err) {
+          options.recordMethodFailure(gateOptions.method, err);
+          const deniedAuditId = await options.audit(gateOptions.method, 'DENY', {
+            prePolicyGuardDenied: true,
+          });
+          await options.auditComplete(deniedAuditId, Date.now(), toErrorMessage(err));
           throw err;
         }
         const summary = gateOptions.paramsSummary(params);

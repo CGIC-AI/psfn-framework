@@ -55,6 +55,7 @@ export function registerGatedDescriptors(
       approvalAction?: string;
       approvalScope?: (params: unknown) => string;
       approvalReason?: (params: unknown) => string;
+      prePolicyGuard?: (params: unknown) => void;
       policyConfigProvider?: () => GatewayMethodRuntime['policyConfig'];
     }) => (params: unknown) => Promise<unknown>)
     | undefined;
@@ -68,6 +69,7 @@ export function registerGatedDescriptors(
       approvalAction: input.approvalAction ?? input.method,
       approvalScope: input.approvalScope ?? (() => input.method),
       ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
+      ...(input.prePolicyGuard ? { prePolicyGuard: input.prePolicyGuard } : {}),
       ...(input.policyConfigProvider ? { policyConfigProvider: input.policyConfigProvider } : {}),
       // 2h6q.3: bind authenticated shard lineage per dispatch from the
       // server-owned workload registry (never from tool params/client fields;
@@ -97,6 +99,9 @@ export function registerGatedDescriptors(
         approvalAction: descriptor.approvalAction,
         approvalScope: descriptor.approvalScope as (params: unknown) => string,
         approvalReason: descriptor.approvalReason as ((params: unknown) => string) | undefined,
+        ...(descriptor.prePolicyGuard
+          ? { prePolicyGuard: (params: unknown) => descriptor.prePolicyGuard!(params as never, runtime) }
+          : {}),
         policyConfigProvider: () => runtime.policyConfig,
       }),
     );

@@ -46,6 +46,7 @@ import type {
 import type { GatewaySystemDataWriterPort } from '../system-data-writer.js';
 import type { McpGatewayBroker } from '../mcp/broker.js';
 import type { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
+import type { PersonaMutationAttemptGuard } from '../persona-mutation-attempt-guard.js';
 
 /**
  * Gateway-created authority passed to a shard backend executor only after the
@@ -116,6 +117,8 @@ export interface GatewayMethodRuntime {
    * intake firewall is off.
    */
   quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
+  /** Detects direct raw-tool attempts to mutate governed persona owner files. */
+  personaMutationAttemptGuard?: PersonaMutationAttemptGuard;
   policyConfig: PolicyConfig;
   workspacePath: string;
   /** True when this connection is confined to one fleet Personal Workspace. */
@@ -215,6 +218,7 @@ export interface AuditedMethodDescriptor<P, R> {
 }
 
 export interface GatedMethodDescriptor<P, R> extends AuditedMethodDescriptor<P, R> {
+  prePolicyGuard?: (params: P, runtime: GatewayMethodRuntime) => void;
   approvalAction: string;
   approvalScope: (params: P) => string;
   approvalReason?: (params: P) => string;

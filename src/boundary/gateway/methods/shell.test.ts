@@ -40,12 +40,19 @@ vi.mock('../../sandbox/execution/shell-runner.js', async (importOriginal) => {
 
 function createHarness(
   policyConfig: PolicyConfig,
-  options: { quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard; workspacePath?: string } = {},
+  options: {
+    quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
+    personaMutationAttemptGuard?: GatewayMethodRuntime['personaMutationAttemptGuard'];
+    workspacePath?: string;
+  } = {},
 ): { invoke(params: Record<string, unknown>): Promise<any> } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
   const runtime: GatewayMethodRuntime = {
     ...(options.quarantinedArtifactGuard
       ? { quarantinedArtifactGuard: options.quarantinedArtifactGuard }
+      : {}),
+    ...(options.personaMutationAttemptGuard
+      ? { personaMutationAttemptGuard: options.personaMutationAttemptGuard }
       : {}),
     target: {
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
@@ -67,7 +74,13 @@ function createHarness(
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    approvalBoundary: { gate: options => async params => options.handler(params) } as any,
+    authenticatedCompanionId: () => 'companion-a',
+    approvalBoundary: {
+      gate: gateOptions => async params => {
+        gateOptions.prePolicyGuard?.(params);
+        return gateOptions.handler(params);
+      },
+    } as any,
   };
   registerShellMethods(runtime);
   const method = methods.get('shell.exec');
@@ -80,6 +93,23 @@ describe('registerShellMethods', () => {
     resetShellCircuitBreakersForTests();
     shellRunnerMock.execute.mockReset();
     shellRunnerMock.execute.mockImplementation(shellRunnerMock.actualExecute!);
+  });
+
+  it('reaches the persona mutation guard before starting the shell runner', async () => {
+    const inspectShellMutation = vi.fn(() => [{ pathClass: 'prompt_layers' as const }]);
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: { enabled: true, allowlist: ['bash'], allowedCwd: [process.cwd()] },
+    }, {
+      personaMutationAttemptGuard: { inspectShellMutation } as any,
+    });
+
+    await expect(harness.invoke({ command: 'bash', args: ['-lc', 'rm protected.json'] }))
+      .rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
+    expect(inspectShellMutation).toHaveBeenCalledWith(expect.objectContaining({
+      companionId: 'companion-a',
+    }));
+    expect(shellRunnerMock.execute).not.toHaveBeenCalled();
   });
 
   it('maps an execution-policy rejection to a policy denial', async () => {

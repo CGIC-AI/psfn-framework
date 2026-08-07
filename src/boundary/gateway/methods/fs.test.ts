@@ -15,6 +15,52 @@ import { GatewayErrors } from '../protocol.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 
 describe('registerFilesystemMethods', () => {
+  it('reaches the persona mutation guard before dispatch and leaves read-only methods unguarded', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'gateway-fs-persona-guard-'));
+    const readablePath = join(workspaceRoot, 'readable.txt');
+    writeFileSync(readablePath, 'safe');
+    const methods = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
+    const inspectFilesystemMutation = vi.fn(() => [{ pathClass: 'character_card' as const }]);
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      policyConfig: { workspacePath: workspaceRoot },
+      workspacePath: workspaceRoot,
+      personaMutationAttemptGuard: { inspectFilesystemMutation },
+      approvalBoundary: {
+        gate: (options: {
+          handler: (params: unknown) => Promise<unknown>;
+          prePolicyGuard?: (params: unknown) => void;
+        }) => async (params: unknown) => {
+          options.prePolicyGuard?.(params);
+          return options.handler(params);
+        },
+      },
+      authenticatedCompanionId: () => 'companion-a',
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+    } as unknown as GatewayMethodRuntime;
+
+    try {
+      registerFilesystemMethods(runtime);
+      await expect(methods.get('fs.write')!({ path: 'protected.json', content: 'x' }))
+        .rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
+      expect(inspectFilesystemMutation).toHaveBeenCalledWith(expect.objectContaining({
+        companionId: 'companion-a',
+        tool: 'fs.write',
+      }));
+      inspectFilesystemMutation.mockClear();
+      await expect(methods.get('fs.read')!({ path: readablePath })).resolves.toMatchObject({
+        content: 'safe',
+      });
+      expect(inspectFilesystemMutation).not.toHaveBeenCalled();
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('edits files addressed by relative and Personal Workspace-prefixed paths', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gateway-fs-edit-prefix-'));
     const workspaceRoot = join(root, 'workspaces', 'personal', 'companion-a');

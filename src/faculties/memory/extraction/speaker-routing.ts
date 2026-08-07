@@ -5,9 +5,25 @@ import type {
   GroupMemoryAddressMode,
   MemoryScopeRef,
 } from '../types.js';
-import { isRecord } from '../../../shared/utils/types.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
-import { parseSessionMessageAddressing } from '../../../core/session/message-addressing.js';
+import {
+  hasSpeakerWord,
+  normalizeSpeakerPhrase,
+  resolveStrictGroupSubject,
+  validateStrictGroupAddressing,
+} from './strict-group-routing.js';
+import {
+  classifySessionEntryCompanionRelevance,
+  inferAddressMode,
+  type FactRoutingOptions,
+  type SessionEntryCompanionRelevance,
+} from './message-address-mode.js';
+
+export {
+  classifySessionEntryCompanionRelevance,
+  type FactRoutingOptions,
+  type SessionEntryCompanionRelevance,
+};
 
 type ExtractionFactRoutingReason =
   | 'single_speaker_transcript'
@@ -57,13 +73,6 @@ export interface SpeakerRoutingContext {
   entries: SessionEntry[];
 }
 
-export interface FactRoutingOptions {
-  companionNames?: readonly string[];
-  companionAuthorIds?: readonly string[];
-  /** Group-room facts may claim direct address only when journal metadata proves it. */
-  requireStructuredAddressing?: boolean;
-}
-
 export type FactRoutingDecision =
   | {
     status: 'route';
@@ -88,9 +97,17 @@ export type FactRoutingDecision =
     reason:
       | 'ambiguous_group_speaker'
       | 'unresolved_speaker_contact'
+      | 'missing_structured_attribution'
+      | 'missing_structured_addressing'
       | 'missing_source_message_ids'
       | 'ambiguous_source_message_ids'
       | 'conflicting_source_attribution'
+      | 'conflicting_resolved_addressee'
+      | 'missing_subject_attribution'
+      | 'conflicting_subject_attribution'
+      | 'conflicting_subject_addressee'
+      | 'conflicting_subject_contact'
+      | 'conflicting_observer_attribution'
       | 'unverified_direct_address'
       | 'unresolved_subject_contact';
     sourceSpeakerName?: string;
@@ -153,6 +170,9 @@ export function resolveFactRouting(
     options,
   );
   if (structuredRouting) return structuredRouting;
+  if (options.requireStructuredAddressing) {
+    return { status: 'skip', reason: 'missing_structured_attribution' };
+  }
 
   if (!context.mixedHumanSpeakers) {
     const speaker = context.speakers.at(0);
@@ -208,8 +228,23 @@ function resolveStructuredFactRouting(
   const attribution = fact.attribution;
   if (!attribution) return undefined;
 
+  if (
+    options.requireStructuredAddressing
+    && (
+      !attribution.sourceMessageIds?.length
+      || !attribution.sourceSpeakerName?.trim()
+      || !attribution.addressMode
+    )
+  ) {
+    return { status: 'skip', reason: 'missing_structured_attribution' };
+  }
+
   const sourceEntries = resolveAttributionSourceEntries(attribution, context.entries);
-  if (sourceEntries === null) return undefined;
+  if (sourceEntries === null) {
+    return options.requireStructuredAddressing
+      ? { status: 'skip', reason: 'missing_structured_attribution' }
+      : undefined;
+  }
   if (sourceEntries.length === 0) {
     return { status: 'skip', reason: 'missing_source_message_ids' };
   }
@@ -238,6 +273,17 @@ function resolveStructuredFactRouting(
     };
   }
 
+  const groupAddressing = options.requireStructuredAddressing
+    ? validateStrictGroupAddressing(fact, attribution, sourceEntries)
+    : null;
+  if (groupAddressing?.status === 'skip') {
+    return {
+      status: 'skip',
+      reason: groupAddressing.reason,
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+
   const addressModeDecision = resolveStructuredAddressMode(
     attribution.addressMode,
     sourceEntries,
@@ -250,7 +296,18 @@ function resolveStructuredFactRouting(
     };
   }
 
-  const subject = resolveSubjectSpeaker(attribution, context.speakers);
+  const strictSubject = options.requireStructuredAddressing
+    ? resolveStrictGroupSubject(attribution, context.speakers)
+    : null;
+  if (strictSubject?.status === 'skip') {
+    return {
+      status: 'skip',
+      reason: strictSubject.reason,
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+  const subject = strictSubject?.speaker
+    ?? resolveSubjectSpeaker(attribution, context.speakers);
   const roomContextScope = resolveRoomContextScope(attribution, context.entries);
   const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
   // A named subject whose contact could not be resolved — either no matching
@@ -269,6 +326,19 @@ function resolveStructuredFactRouting(
         subjectName: attribution.subjectName,
         scopeRef: roomContextScope,
         scopeTags: ['group_memory', 'room_context'],
+      });
+    }
+    if (groupAddressing?.addressedParticipantNames.some(name => (
+      normalizeSpeakerPhrase(name) === normalizeSpeakerPhrase(attribution.subjectName ?? '')
+    ))) {
+      return buildStructuredRoute({
+        attribution,
+        sourceSpeaker,
+        sourceEntries,
+        addressMode: addressModeDecision.addressMode,
+        reason: 'structured_source_metadata',
+        contactId: sourceSpeaker.contactId,
+        subjectName: attribution.subjectName,
       });
     }
     return {
@@ -399,9 +469,10 @@ function resolveAttributionSourceEntries(
 ): SessionEntry[] | null {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   if (attribution.sourceMessageIds && attribution.sourceMessageIds.length > 0) {
-    return attribution.sourceMessageIds
-      .map(id => byId.get(id))
-      .filter((entry): entry is SessionEntry => Boolean(entry));
+    const resolved = attribution.sourceMessageIds.map(id => byId.get(id));
+    return resolved.every((entry): entry is SessionEntry => Boolean(entry))
+      ? resolved
+      : [];
   }
   const spanStart = attribution.sourceSpanStartMessageId;
   const spanEnd = attribution.sourceSpanEndMessageId;
@@ -442,160 +513,6 @@ function resolveSubjectSpeaker(
   if (!normalizedSubject) return undefined;
   const matches = speakers.filter(speaker => speaker.normalizedName === normalizedSubject);
   return matches.length === 1 ? matches[0] : undefined;
-}
-
-export type SessionEntryCompanionRelevance =
-  | 'companion_turn'
-  | 'reply_to_companion'
-  | 'direct_to_companion'
-  | 'mention_of_companion'
-  | 'not_relevant';
-
-/**
- * Deterministic per-entry companion-relevance classification for background
- * gating (E5.3). Reuses the same addressing/mention detection as group fact
- * routing (`inferAddressMode`) instead of growing a parallel detector:
- *
- * - the companion's own turns are relevant (conversation with her);
- * - replies to the companion, direct address, and mentions are relevant;
- * - async group traffic between other members is NOT relevant on its own.
- */
-export function classifySessionEntryCompanionRelevance(
-  entry: SessionEntry,
-  options: FactRoutingOptions,
-): SessionEntryCompanionRelevance {
-  if (entry.role === 'assistant') {
-    return 'companion_turn';
-  }
-  if (entry.role !== 'user') {
-    return 'not_relevant';
-  }
-  if (isReplyToCompanion(entry, options)) {
-    return 'reply_to_companion';
-  }
-  if (isDirectCompanionAddress(entry, options)) {
-    return 'direct_to_companion';
-  }
-  if (containsCompanionMention(entry, options)) {
-    return 'mention_of_companion';
-  }
-  return 'not_relevant';
-}
-
-function isReplyToCompanion(entry: SessionEntry, options: FactRoutingOptions): boolean {
-  const companionAuthorIds = options.companionAuthorIds ?? [];
-  if (companionAuthorIds.length === 0) return false;
-  const metadata = parseEntryMetadata(entry);
-  const replyAuthorId = normalizeOptionalMetadataString(metadata?.replyToAuthorId)
-    ?? normalizeOptionalMetadataString(metadata?.referencedMessageAuthorId);
-  return replyAuthorId !== undefined && companionAuthorIds.includes(replyAuthorId);
-}
-
-function inferAddressMode(
-  sourceEntries: readonly SessionEntry[],
-  options: FactRoutingOptions,
-): GroupMemoryAddressMode {
-  if (sourceEntries.some(entry => entry.role === 'system' || entry.role === 'tool')) {
-    return 'system_api';
-  }
-  const structuredAddressing = sourceEntries.map(entry => ({
-    entry,
-    addressing: parseSessionMessageAddressing(entry.metadata),
-  }));
-  const userAddressing = structuredAddressing.filter(item => item.entry.role === 'user');
-  const everyUserSourceTargetsCompanion = userAddressing.length > 0
-    && userAddressing.every(item => (
-      item.addressing?.mentionedTargets.some(target => (
-        isCurrentCompanionTarget(target, options)
-      )) === true
-    ));
-  if (everyUserSourceTargetsCompanion) {
-    return 'direct_to_companion';
-  }
-  if (sourceEntries.some(entry => isReplyToUser(entry))) {
-    return 'reply_to_user';
-  }
-  if (
-    structuredAddressing.some(item => (item.addressing?.mentionedTargets.length ?? 0) > 0)
-    || options.requireStructuredAddressing
-  ) {
-    return 'overheard_room_context';
-  }
-  if (sourceEntries.some(entry => isDirectCompanionAddress(entry, options))) {
-    return 'direct_to_companion';
-  }
-  if (sourceEntries.some(entry => containsCompanionMention(entry, options))) {
-    return 'mention_of_companion';
-  }
-  return 'overheard_room_context';
-}
-
-function isCurrentCompanionTarget(
-  target: { authorId: string; authorName: string },
-  options: FactRoutingOptions,
-): boolean {
-  const companionAuthorIds = options.companionAuthorIds ?? [];
-  if (companionAuthorIds.length > 0) {
-    return companionAuthorIds.includes(target.authorId);
-  }
-  const normalizedName = normalizeSpeakerPhrase(target.authorName);
-  return buildCompanionAliases(options.companionNames).includes(normalizedName);
-}
-
-function isReplyToUser(entry: SessionEntry): boolean {
-  const metadata = parseEntryMetadata(entry);
-  const turn = isRecord(metadata?.turn) ? metadata.turn : undefined;
-  return Boolean(
-    normalizeOptionalMetadataString(metadata?.replyToAuthorId)
-    || normalizeOptionalMetadataString(metadata?.referencedMessageAuthorId)
-    || normalizeOptionalMetadataString(turn?.replyToMessageId)
-    || normalizeOptionalMetadataString(metadata?.referencedMessageId),
-  );
-}
-
-function isDirectCompanionAddress(entry: SessionEntry, options: FactRoutingOptions): boolean {
-  const content = entry.content.trim();
-  if (options.companionAuthorIds?.some(authorId => content.startsWith(`<@${authorId}>`))) {
-    return true;
-  }
-  const normalized = normalizeSpeakerPhrase(content);
-  return buildCompanionAliases(options.companionNames).some(alias => (
-    normalized === alias || normalized.startsWith(`${alias} `)
-  ));
-}
-
-function containsCompanionMention(entry: SessionEntry, options: FactRoutingOptions): boolean {
-  const content = entry.content;
-  if (options.companionAuthorIds?.some(authorId => content.includes(`<@${authorId}>`))) {
-    return true;
-  }
-  const normalized = normalizeSpeakerPhrase(content);
-  return buildCompanionAliases(options.companionNames)
-    .some(alias => hasSpeakerWord(normalized, alias));
-}
-
-function buildCompanionAliases(names: readonly string[] | undefined): string[] {
-  return [...new Set((names ?? [])
-    .map(name => normalizeSpeakerPhrase(name))
-    .filter(Boolean))];
-}
-
-function hasSpeakerWord(normalized: string, word: string): boolean {
-  return new RegExp(`(^|\\s)${escapeRegExp(word)}(\\s|$)`).test(normalized);
-}
-
-function parseEntryMetadata(entry: SessionEntry): Record<string, unknown> | undefined {
-  if (!entry.metadata) return undefined;
-  try {
-    const parsed = JSON.parse(entry.metadata) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeOptionalMetadataString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function collectTranscriptSpeakers(entries: readonly SessionEntry[]): TranscriptSpeaker[] {
@@ -880,17 +797,4 @@ function normalizeSourceMatchToken(token: string): string {
   if (token === 'needs') return 'need';
   if (token === 'putting') return 'put';
   return token;
-}
-
-function normalizeSpeakerPhrase(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

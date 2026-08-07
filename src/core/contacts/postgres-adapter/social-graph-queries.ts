@@ -100,7 +100,14 @@ async function upsertSingleSocialEdgeRow(
             updated_at = $5
         WHERE id = $6
       `,
-      [nextSensitivity, nextProvenanceRefs, nextEvidenceMemoryIds, nextConfidence, now, existingEdge.id],
+      [
+        nextSensitivity,
+        JSON.stringify(nextProvenanceRefs),
+        JSON.stringify(nextEvidenceMemoryIds),
+        nextConfidence,
+        now,
+        existingEdge.id,
+      ],
     );
     const updated = await queryOne<SocialRelationshipEdgeRow>(
       pool,
@@ -120,7 +127,19 @@ async function upsertSingleSocialEdgeRow(
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
-    [id, sourceEntityId, targetEntityId, relationshipType, directional, fields.sensitivity, fields.provenanceRefs, fields.evidenceMemoryIds, fields.confidence, now, now],
+    [
+      id,
+      sourceEntityId,
+      targetEntityId,
+      relationshipType,
+      directional,
+      fields.sensitivity,
+      JSON.stringify(fields.provenanceRefs),
+      JSON.stringify(fields.evidenceMemoryIds),
+      fields.confidence,
+      now,
+      now,
+    ],
   );
   const created = await queryOne<SocialRelationshipEdgeRow>(
     pool,
@@ -331,7 +350,17 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
               updated_at = $8
           WHERE id = $9
         `,
-        [entityKind, displayName, normalizedContactId ?? null, nextSensitivity, nextProvenanceRefs, nextConfidence, source, now, existing.id],
+        [
+          entityKind,
+          displayName,
+          normalizedContactId ?? null,
+          nextSensitivity,
+          JSON.stringify(nextProvenanceRefs),
+          nextConfidence,
+          source,
+          now,
+          existing.id,
+        ],
       );
       const updated = await this.loadSocialGraphEntityById(existing.id);
       if (!updated) throw new Error(`Failed to reload social graph entity ${existing.id}`);
@@ -354,7 +383,18 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
-      [id, entityKind, displayName, normalizedContactId ?? null, sensitivity, provenanceRefs, confidence, source, now, now],
+      [
+        id,
+        entityKind,
+        displayName,
+        normalizedContactId ?? null,
+        sensitivity,
+        JSON.stringify(provenanceRefs),
+        confidence,
+        source,
+        now,
+        now,
+      ],
     );
     const created = await this.loadSocialGraphEntityById(id);
     if (!created) throw new Error(`Failed to load social graph entity ${id}`);

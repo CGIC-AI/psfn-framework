@@ -43,6 +43,7 @@ import type { AdminApiRoute, AdminBodyReader } from './types.js';
 import { parseModelUsageQuery } from './model-usage-query.js';
 import { parseChargeCostQuery } from './charge-cost-query.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { SingleCompanionFleetModelUsageService } from '../services/fleet-model-usage-service.js';
 import { handleFleetModelUsageRoute } from './fleet-model-usage-routes.js';
 
@@ -57,6 +58,25 @@ const OBSERVER_EVAL_PRIVACY_CLASSES = ['public', 'private', 'restricted', 'close
 const OBSERVER_EVAL_OBSERVATION_STATUSES = ['ok', 'degraded', 'error'] as const;
 const OBSERVER_EVAL_RUN_STATUSES = ['running', 'completed', 'degraded', 'failed'] as const;
 const OBSERVER_EVAL_LEVER_NAMES = ['would_message', 'would_check_in', 'would_rest', 'rumination_watch'] as const;
+
+function parseActionPipeTextField(
+  value: unknown,
+  field: 'reason' | 'detail',
+): { ok: true; value?: string } | { ok: false; error: string } {
+  if (!isRecord(value)) {
+    return { ok: false, error: 'Action pipe mutation payload must be a JSON object' };
+  }
+  try {
+    assertNoUnknownKeys(value, [field], 'Action pipe mutation payload');
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const raw = value[field];
+  if (raw === undefined) return { ok: true };
+  return typeof raw === 'string'
+    ? { ok: true, value: raw }
+    : { ok: false, error: `${field} must be a string` };
+}
 
 function toFiniteQueryNumber(
   value: string | null,
@@ -753,9 +773,12 @@ export function buildAdminOverviewRoutes(options: {
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
           }
-          const payload = parsed.value as Record<string, unknown>;
-          const reason = typeof payload.reason === 'string' ? payload.reason : undefined;
-          actionPipeService.cancelAction({ actionRef, reason }).then(
+          const payload = parseActionPipeTextField(parsed.value, 'reason');
+          if (!payload.ok) {
+            sendJson(res, 400, { ok: false, message: payload.error });
+            return;
+          }
+          actionPipeService.cancelAction({ actionRef, reason: payload.value }).then(
             result => sendJson(res, result.ok ? 200 : 400, result, ADMIN_DYNAMIC_JSON_HEADERS),
             error => sendJson(res, 500, {
               ok: false,
@@ -779,9 +802,12 @@ export function buildAdminOverviewRoutes(options: {
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
           }
-          const payload = parsed.value as Record<string, unknown>;
-          const detail = typeof payload.detail === 'string' ? payload.detail : undefined;
-          actionPipeService.acknowledgeAction({ actionRef, detail }).then(
+          const payload = parseActionPipeTextField(parsed.value, 'detail');
+          if (!payload.ok) {
+            sendJson(res, 400, { ok: false, message: payload.error });
+            return;
+          }
+          actionPipeService.acknowledgeAction({ actionRef, detail: payload.value }).then(
             result => sendJson(res, result.ok ? 200 : 400, result, ADMIN_DYNAMIC_JSON_HEADERS),
             error => sendJson(res, 500, {
               ok: false,

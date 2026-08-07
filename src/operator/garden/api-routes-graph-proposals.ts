@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import {
   exactPath,
   paramWithSuffix,
@@ -19,6 +20,7 @@ import type {
   AdminGraphProposalMutationResult,
   AdminGraphProposalsService,
 } from './services/graph-proposals-service.js';
+import { parseAdminJsonBody } from './request-body.js';
 import { ADMIN_POLLED_QUEUE_JSON_HEADERS } from './routes/shared.js';
 
 interface AdminApiRoute {
@@ -27,15 +29,32 @@ interface AdminApiRoute {
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
 
-function parseAdjustedType(body: string): string | undefined {
-  const trimmed = body.trim();
-  if (!trimmed) return undefined;
-  try {
-    const parsed = JSON.parse(trimmed) as { relationshipType?: unknown };
-    return typeof parsed.relationshipType === 'string' ? parsed.relationshipType : undefined;
-  } catch {
-    return undefined;
+type AdjustedTypeParseResult =
+  | { ok: true; value: string | undefined }
+  | { ok: false; error: string };
+
+function parseAdjustedType(body: unknown): AdjustedTypeParseResult {
+  const parsed = parseAdminJsonBody(body);
+  if (!parsed.ok) return parsed;
+  if (!isRecord(parsed.value)) {
+    return { ok: false, error: 'Graph proposal approval payload must be a JSON object' };
   }
+  try {
+    assertNoUnknownKeys(
+      parsed.value,
+      ['relationshipType'],
+      'Graph proposal approval payload',
+    );
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (parsed.value.relationshipType === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (typeof parsed.value.relationshipType !== 'string') {
+    return { ok: false, error: 'relationshipType must be a string' };
+  }
+  return { ok: true, value: parsed.value.relationshipType };
 }
 
 export function buildAdminGraphProposalRoutes(options: {
@@ -81,7 +100,12 @@ export function buildAdminGraphProposalRoutes(options: {
       match: paramWithSuffix('/api/admin/graph-proposals/', 'id', '/approve'),
       handle: (req, res, { id }) => {
         withBody(req, res, (body) => {
-          handleMutation(res, graphProposalsService.approveGraphProposal(id, parseAdjustedType(body)));
+          const parsed = parseAdjustedType(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          handleMutation(res, graphProposalsService.approveGraphProposal(id, parsed.value));
         });
       },
     },

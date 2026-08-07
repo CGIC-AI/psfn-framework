@@ -127,18 +127,32 @@ describe('PersonaMutationAttemptGuard', () => {
 
     const attempts = [
       { command: 'bash', args: ['-lc', `printf x > "${protectedViaAlias}"`] },
+      { command: 'bash', args: ['-lc', `printf x >| "${protectedViaAlias}"`] },
+      { command: 'bash', args: ['-lc', `printf x >& "${protectedViaAlias}"`] },
+      { command: 'bash', args: ['-lc', `printf x 0<> "${protectedViaAlias}"`] },
       { command: 'rm', args: ['--', protectedRelative] },
       { command: 'mv', args: [protectedRelative, 'card.old'] },
       { command: 'ln', args: [protectedRelative, 'card-hardlink'] },
       { command: 'ln', args: ['-s', protectedRelative, 'card-symlink'] },
       { command: 'truncate', args: ['-s', '0', hardlinkAlias] },
+      { command: 'bash', args: ['-lc', `printf safe\nrm "${protectedViaAlias}"`] },
+      { command: 'bash', args: ['-lc', `printf safe & rm "${protectedViaAlias}"`] },
+      { command: 'bash', args: ['-lc', `(rm "${protectedViaAlias}")`] },
+      { command: 'bash', args: ['-lc', `bash -c 'printf x > "${protectedViaAlias}"'`] },
+      { command: 'bash', args: ['-lc', `bash -c $'printf x > "${protectedViaAlias}"'`] },
+      { command: 'bash', args: ['-lc', `bash -c $'printf x \\x3e "${protectedViaAlias}"'`] },
+      { command: 'bash', args: ['-lc', `printf '%s' "$(rm '${protectedViaAlias}')"`] },
+      { command: 'bash', args: ['-lc', `printf '%s' "\`rm '${protectedViaAlias}'\`"`] },
+      { command: 'bash', args: ['-lc', `if true; then rm "${protectedViaAlias}"; fi`] },
+      { command: 'bash', args: ['-lc', `env -- rm "${protectedViaAlias}"`] },
+      { command: 'env', args: ['--', 'bash', '-c', `printf x > "${protectedViaAlias}"`] },
     ];
     for (const params of attempts) {
       expect(guard.inspectShellMutation({
         companionId: companionA.companionId,
         params,
         workspacePath: companionA.workspacePath,
-      })).toEqual([{ pathClass: 'character_card' }]);
+      }), JSON.stringify(params)).toEqual([{ pathClass: 'character_card' }]);
     }
 
     const events = companionA.eventStore.listEvents();
@@ -163,6 +177,9 @@ describe('PersonaMutationAttemptGuard', () => {
       { command: 'cat', args: [companionA.characterCardPath] },
       { command: 'printf', args: [`rm ${companionA.characterCardPath}`] },
       { command: 'bash', args: ['-lc', `printf '%s' 'rm ${companionA.characterCardPath}'`] },
+      { command: 'bash', args: ['-lc', `$'printf x > ${companionA.characterCardPath}'`] },
+      { command: 'bash', args: ['-lc', `printf safe # ; rm ${companionA.characterCardPath}`] },
+      { command: 'bash', args: ['-lc', `printf '%s' '$(rm ${companionA.characterCardPath})'`] },
       { command: 'bash', args: ['-lc', `printf x > ${ordinaryPath}`] },
     ]) {
       expect(guard.inspectShellMutation({

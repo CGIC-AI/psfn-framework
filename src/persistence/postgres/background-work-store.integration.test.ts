@@ -41,6 +41,7 @@ import {
   recoveryResponse as icpRecoveryResponse,
 } from '../../core/session/icp-recovery.test-fixtures.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { DEFAULT_BACKGROUND_WORK_TUNING } from '../../system/config/scheduler-config.js';
 import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
@@ -2893,6 +2894,7 @@ describe('PostgresBackgroundWorkStore', () => {
           eventBus,
           inferPostTurnActions: async () => [],
           buildTurnRecord: () => turnRecord,
+          backgroundWorkMaxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
           enqueuePostTurnBackgroundWork: async (inputs) => {
             enqueuedInputs.push(...inputs);
             await supervisor.enqueue(inputs);

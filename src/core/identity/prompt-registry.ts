@@ -17,6 +17,7 @@ import { buildSubsystemPersonaPromptSeeds } from './persona-preamble-seeds.js';
 const log = createComponentLogger('PromptRegistry');
 
 export const EXTRACTION_PROMPT_KEY = 'memory.extraction' as const;
+export const GROUP_EXTRACTION_PROMPT_KEY = 'memory.extraction.group' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
 export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
 export const SESSION_SEARCH_SUMMARY_PROMPT_KEY = 'session.search.summary' as const;
@@ -26,6 +27,7 @@ export const WIKI_PASS_PROMPT_KEY = 'memory.sleeptime.wiki' as const;
 
 export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
+  | typeof GROUP_EXTRACTION_PROMPT_KEY
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
   | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
   | typeof SESSION_SEARCH_SUMMARY_PROMPT_KEY
@@ -43,13 +45,7 @@ interface PromptSeed {
   text: string;
 }
 
-const CORE_PROMPT_SEEDS: PromptSeed[] = [
-  {
-    key: EXTRACTION_PROMPT_KEY,
-    description:
-      'Memory extraction system prompt. Must include {existing_facts} and {recent_messages}.',
-    consumers: ['src/faculties/memory/extraction.ts'],
-    text: `You are analyzing a conversation to extract durable facts about human participant(s), named speakers, and relevant relationships. Extract atomic, specific facts - each should be a single piece of information.
+const EXTRACTION_PROMPT_TEXT = `You are analyzing a conversation to extract durable facts about human participant(s), named speakers, and relevant relationships. Extract atomic, specific facts - each should be a single piece of information.
 
 For each fact, provide:
 - text: A single clear sentence stating the fact
@@ -81,7 +77,7 @@ When the transcript contains message IDs or line IDs, include structured attribu
 - Use subject_name "room", "channel", "group", or "conversation" when the fact is about the group context rather than a single participant.
 - subject_contact_id: known canonical subject contact ID only when explicitly available
 - address_mode: direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api
-Shared-room transcript lines may include [mentioned_targets: ...] and [reply_to_message_id: ...]. These fields are transport-authoritative addressing evidence. Visibility in a shared room is not evidence of direct address. When mentioned_targets names another participant and excludes the observing companion, use overheard_room_context and name the actual mentioned target in the fact. Never turn that message into speech addressed to the observer, even if prose or an inferred relationship would sound plausible.
+Shared-room transcript lines may include [observer: ...], [channel_scope: group], [mentioned_targets: ...], [reply_target: ...], and [resolved_addressee: ...]. These fields are transport-authoritative addressing evidence. Visibility in a shared room is not evidence of direct address. When resolved_addressee names another participant and excludes the observer, use overheard_room_context and name the actual mentioned or replied-to target in the fact. Never turn that message into speech addressed to the observer, even if prose or an inferred relationship would sound plausible.
 Never output raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}". Use the actual human participant or companion name when known. If a macro or generic role cannot be resolved to a real participant, skip the fact.
 Do NOT extract:
 - Small talk or social filler ("thanks", "good morning", "lol", "see you")
@@ -115,7 +111,37 @@ Respond with facts inside a <response> block. Each fact as a <fact> block:
 </response>
 
 If there are no new facts worth extracting, respond with an empty response block:
-<response></response>`,
+<response></response>`;
+
+const GROUP_EXTRACTION_PROMPT_TEXT = `You are the group-room memory automaton. Before proposing any memory, resolve who said what to whom from the transport-authoritative fields on each transcript line.
+
+Group attribution protocol:
+- Read [platform_source: discord], [author: ... (author_id=...)], [observer: ... (author_id=...)], [channel_scope: group], [channel_id: ...], optional [thread_id: ...], [mentioned_targets: ...], optional [reply_target: ...], and [resolved_addressee: ...] as one typed envelope. These fields survive CogSec sanitization and outrank prose guesses.
+- Every fact must include source_message_ids, source_speaker_name, subject_name, and address_mode. Spans and omitted fields are insufficient in a group room, regardless of fact type.
+- Every fact's text must name its subject exactly. This applies to emotional and episodic facts as strictly as relational facts.
+- source_speaker_name must be the envelope author for every cited source message.
+- direct_to_companion is valid only when resolved_addressee names the observing companion. A room audience, unresolved reply, or another named participant is not direct address to the observer.
+- A reply to another participant is overheard_room_context, never reply_to_user or direct_to_companion for the observer.
+- When another participant is the resolved addressee, preserve the event only as overheard room context and name that true addressee. Never rewrite another participant's directed or relational memory as the observer's.
+- Never insert the observer into a fact when the cited source does not name the observer and resolved_addressee excludes the observer.
+- If the cited messages disagree on speaker or addressee, skip the fact. Do not average, merge, or guess across participants.
+
+${EXTRACTION_PROMPT_TEXT}`;
+
+const CORE_PROMPT_SEEDS: PromptSeed[] = [
+  {
+    key: EXTRACTION_PROMPT_KEY,
+    description:
+      'Memory extraction system prompt. Must include {existing_facts} and {recent_messages}.',
+    consumers: ['src/faculties/memory/extraction.ts'],
+    text: EXTRACTION_PROMPT_TEXT,
+  },
+  {
+    key: GROUP_EXTRACTION_PROMPT_KEY,
+    description:
+      'Group-room memory automaton prompt. Resolves speaker and addressee from the typed platform envelope.',
+    consumers: ['src/faculties/memory/extraction.ts'],
+    text: GROUP_EXTRACTION_PROMPT_TEXT,
   },
   {
     key: COMPACTION_SUMMARY_PROMPT_KEY,
@@ -258,6 +284,16 @@ const REQUIRED_KEYS = new Set<string>(PROMPT_SEEDS.map(seed => seed.key));
 
 const REQUIRED_SUBSTRINGS: Partial<Record<PromptRegistryKey, string[]>> = {
   [EXTRACTION_PROMPT_KEY]: ['{existing_facts}', '{recent_messages}', '<response>', '<fact>'],
+  [GROUP_EXTRACTION_PROMPT_KEY]: [
+    '{existing_facts}',
+    '{recent_messages}',
+    '<response>',
+    '<fact>',
+    'who said what to whom',
+    '[observer: ... (author_id=...)]',
+    '[channel_scope: group]',
+    '[resolved_addressee: ...]',
+  ],
   [PROFILE_SYNTHESIS_PROMPT_KEY]: ['{contact_id}', '{existing_profile}', '{memory_facts}', '<profile>', '<summary>'],
 };
 

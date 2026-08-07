@@ -1,45 +1,52 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import { test } from 'vitest';
 
-const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repositoryRoot, 'scripts', 'check-dependency-cycles.ts');
 const tsxPath = join(repositoryRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
-function writeFixtureFile(root, relativePath, contents) {
+function writeFixtureFile(root: string, relativePath: string, contents: string): void {
   const path = join(root, relativePath);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents, 'utf8');
 }
 
-function writeBaseline(root, cycles) {
-  writeFixtureFile(root, 'config/dependency-cycle-baseline.json', `${JSON.stringify({
-    schemaVersion: 1,
-    remediationTracker: 'psfn-framework-683cc',
-    cycles,
-  }, null, 2)}\n`);
-}
-
-function runGate(root) {
-  return spawnSync(process.execPath, [
-    tsxPath,
-    scriptPath,
-    '--baseline',
+function writeBaseline(root: string, cycles: string[]): void {
+  writeFixtureFile(
+    root,
     'config/dependency-cycle-baseline.json',
-  ], {
-    cwd: root,
-    encoding: 'utf8',
-  });
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        remediationTracker: 'psfn-framework-683cc',
+        cycles,
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
-function withFixture(run) {
+function runGate(root: string) {
+  return spawnSync(
+    process.execPath,
+    [tsxPath, scriptPath, '--baseline', 'config/dependency-cycle-baseline.json'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
+}
+
+function withFixture(run: (root: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), 'dependency-cycle-gate-'));
   try {
-    return run(root);
+    run(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

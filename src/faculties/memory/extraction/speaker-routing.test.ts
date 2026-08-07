@@ -62,7 +62,209 @@ function addressedTo(...targets: Array<{ authorId: string; authorName: string }>
   });
 }
 
+function repliedTo(target: { authorId: string; authorName: string }): string {
+  return buildSessionMetadataWithMessageAddressing(undefined, {
+    schemaVersion: 2,
+    source: 'discord',
+    author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+    observer: { authorId: 'current-companion-bot', authorName: 'Lyra' },
+    mentionedTargets: [],
+    replyTarget: { messageId: 'discord-parent', author: target },
+    channel: { scope: 'group', channelId: 'discord-room' },
+    resolvedAddressee: {
+      kind: 'participants',
+      participants: [{ ...target, evidence: ['reply'] }],
+    },
+  });
+}
+
 describe('structured group fact routing', () => {
+  it('rejects attribution-less facts whenever group addressing is required', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember the observatory promise', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({ text: 'MrDragonFox remembers the observatory promise.' }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'missing_structured_attribution',
+    });
+  });
+
+  it('rejects observer-directed relational confabulation even when claimed as overheard', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox affectionately called Lyra starlight.',
+        type: 'relational',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'Lyra',
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'conflicting_observer_attribution',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('rejects attribution-less subjects for emotional facts in a typed group room', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox reassured Lyra that he was not angry.',
+        type: 'emotional',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'missing_subject_attribution',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('rejects episodic observer confabulation when another participant is the true addressee', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox told Lyra that the observatory promise still mattered.',
+        type: 'episodic',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'conflicting_observer_attribution',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('rejects the known source contact when the model binds it to another named subject', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox affectionately called Other Companion starlight.',
+        type: 'relational',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'Other Companion',
+          subjectContactId: 'contact-dragon',
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'conflicting_subject_contact',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('rejects an unrelated known contact when the model binds it to another named subject', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'remember that I call you starlight', {
+        metadata: addressedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+      entry(2, 'vega', 'Vega', 'I can help later.'),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox affectionately called Other Companion starlight.',
+        type: 'relational',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'Other Companion',
+          subjectContactId: 'contact-vega',
+          addressMode: 'overheard_room_context',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toEqual({
+      status: 'skip',
+      reason: 'conflicting_subject_contact',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
+  it('treats a typed reply to another participant as overheard room context', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'the observatory promise still matters', {
+        metadata: repliedTo({ authorId: 'other-bot', authorName: 'Other Companion' }),
+      }),
+    ]);
+
+    expect(resolveFactRouting(
+      fact({
+        text: 'MrDragonFox told Other Companion the observatory promise still matters.',
+        attribution: {
+          sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
+          addressMode: 'reply_to_user',
+        },
+      }),
+      routingContext,
+      undefined,
+      { requireStructuredAddressing: true },
+    )).toMatchObject({
+      status: 'route',
+      addressMode: 'overheard_room_context',
+    });
+  });
+
   it('routes source speaker from source message metadata', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'Lyra, remember that I hate blue cheese.'),
@@ -282,10 +484,12 @@ describe('structured group fact routing', () => {
 
     expect(resolveFactRouting(
       fact({
-        text: 'MrDragonFox affectionately greeted Lyra.',
-        type: 'relational',
+        text: 'MrDragonFox affectionately greeted Other Companion.',
+        type: 'semantic',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -311,6 +515,8 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox greeted Other Companion.',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -327,7 +533,7 @@ describe('structured group fact routing', () => {
   it('derives direct address from a structured current-companion mention', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'hello there', {
-        metadata: addressedTo({ authorId: 'lyra-bot', authorName: 'Lyra' }),
+        metadata: addressedTo({ authorId: 'current-companion-bot', authorName: 'Lyra' }),
       }),
     ]);
 
@@ -336,6 +542,8 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -372,6 +580,8 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -389,6 +599,8 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox greeted the participant using Lyra as a display name.',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'overheard_room_context',
         },
       }),
@@ -419,6 +631,7 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox addressed Lyra directly.',
         attribution: {
           sourceMessageIds: [1, 2],
+          sourceSpeakerName: 'MrDragonFox',
           addressMode: 'direct_to_companion',
         },
       }),
@@ -431,7 +644,7 @@ describe('structured group fact routing', () => {
       },
     )).toEqual({
       status: 'skip',
-      reason: 'unverified_direct_address',
+      reason: 'conflicting_resolved_addressee',
       sourceSpeakerName: 'MrDragonFox',
     });
   });
@@ -451,6 +664,8 @@ describe('structured group fact routing', () => {
         text: 'MrDragonFox greeted Lyra.',
         attribution: {
           sourceMessageIds: [1],
+          sourceSpeakerName: 'MrDragonFox',
+          subjectName: 'MrDragonFox',
           addressMode: 'direct_to_companion',
         },
       }),

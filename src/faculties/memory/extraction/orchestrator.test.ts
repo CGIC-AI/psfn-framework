@@ -8,6 +8,11 @@ import {
 import type { ExtractionSourceSpeaker } from './speaker-routing.js';
 import { MemoryWritePolicyError } from '../writer.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
+import {
+  EXTRACTION_PROMPT_KEY,
+  GROUP_EXTRACTION_PROMPT_KEY,
+} from '../../../core/identity/prompt-registry.js';
+import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
 
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
@@ -145,6 +150,87 @@ function factResponse(text: string): string {
 }
 
 describe('runExtractionOrchestration durable children', () => {
+  it('routes group extraction through the dedicated group memory-automaton prompt', async () => {
+    const defaults = createDefaultGroupMemorySettings();
+    const getPrompt = vi.fn((key: string) => (
+      key === GROUP_EXTRACTION_PROMPT_KEY
+        ? 'GROUP WHO-SAID-WHAT-TO-WHOM\n{existing_facts}\n{recent_messages}'
+        : 'ORDINARY EXTRACTION\n{existing_facts}\n{recent_messages}'
+    ));
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as ExtractionRunOptions['llmClient'];
+    const options = buildOptions({
+      promptRegistry: { getPrompt } as ExtractionRunOptions['promptRegistry'],
+      llmClient,
+      groupWriteCaps: defaults.writeCaps,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(getPrompt).toHaveBeenCalledWith(GROUP_EXTRACTION_PROMPT_KEY);
+    expect(getPrompt).not.toHaveBeenCalledWith(EXTRACTION_PROMPT_KEY);
+    expect(llmClient.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining('GROUP WHO-SAID-WHAT-TO-WHOM'),
+      }),
+      'extraction',
+      expect.any(Object),
+    );
+  });
+
+  it('derives strict group extraction from the typed channel scope without write-cap options', async () => {
+    const getPrompt = vi.fn((key: string) => (
+      key === GROUP_EXTRACTION_PROMPT_KEY
+        ? 'GROUP WHO-SAID-WHAT-TO-WHOM\n{existing_facts}\n{recent_messages}'
+        : 'ORDINARY EXTRACTION\n{existing_facts}\n{recent_messages}'
+    ));
+    const groupEntry = {
+      id: 1,
+      channelId: 'discord-room',
+      role: 'user' as const,
+      content: 'remember the observatory promise',
+      authorId: 'dragon',
+      authorName: 'MrDragonFox',
+      timestamp: 1,
+      metadata: buildSessionMetadataWithMessageAddressing(undefined, {
+        schemaVersion: 2,
+        source: 'discord',
+        author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+        observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
+        mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
+        channel: { scope: 'group', channelId: 'discord-room' },
+        resolvedAddressee: {
+          kind: 'participants',
+          participants: [{
+            authorId: 'other-bot',
+            authorName: 'Other Companion',
+            evidence: ['mention'],
+          }],
+        },
+      }),
+    };
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-unsafe-fallback' },
+    });
+    const options = buildOptions({
+      channelId: 'discord-room',
+      recoveredEntries: [groupEntry],
+      promptRegistry: { getPrompt } as ExtractionRunOptions['promptRegistry'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({ content: factResponse('MrDragonFox remembers the promise.') }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(getPrompt).toHaveBeenCalledWith(GROUP_EXTRACTION_PROMPT_KEY);
+    expect(getPrompt).not.toHaveBeenCalledWith(EXTRACTION_PROMPT_KEY);
+    expect(processFact).not.toHaveBeenCalled();
+  });
+
   it('rejects a queued testing-session run before transcript, model, or write boundaries', async () => {
     const options = buildOptions({
       channelId: 'discord:fixture-alias',
@@ -817,6 +903,15 @@ describe('runExtractionOrchestration write caps', () => {
           authorName: 'Aster',
           content: 'I prefer quiet launch notes.',
           timestamp: 1,
+          metadata: buildSessionMetadataWithMessageAddressing(undefined, {
+            schemaVersion: 2,
+            source: 'discord',
+            author: { authorId: 'discord-a', authorName: 'Aster' },
+            observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
+            mentionedTargets: [],
+            channel: { scope: 'group', channelId: 'discord:kube' },
+            resolvedAddressee: { kind: 'room', channelId: 'discord:kube' },
+          }),
         },
         {
           id: 2,
@@ -826,6 +921,15 @@ describe('runExtractionOrchestration write caps', () => {
           authorName: 'Briar',
           content: 'I prefer short summaries.',
           timestamp: 2,
+          metadata: buildSessionMetadataWithMessageAddressing(undefined, {
+            schemaVersion: 2,
+            source: 'discord',
+            author: { authorId: 'discord-b', authorName: 'Briar' },
+            observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
+            mentionedTargets: [],
+            channel: { scope: 'group', channelId: 'discord:kube' },
+            resolvedAddressee: { kind: 'room', channelId: 'discord:kube' },
+          }),
         },
       ] as ExtractionRunOptions['recoveredEntries'],
       resolveSourceSpeakerContactId,
@@ -849,6 +953,8 @@ describe('runExtractionOrchestration write caps', () => {
 <confidence>0.95</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>Aster</source_speaker_name>
+<subject_name>Aster</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
 <text>Aster cares about release-plan wording.</text>
@@ -857,6 +963,8 @@ describe('runExtractionOrchestration write caps', () => {
 <confidence>0.95</confidence>
 <source_message_ids>1</source_message_ids>
 <source_speaker_name>Aster</source_speaker_name>
+<subject_name>Aster</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 <fact>
 <text>Briar prefers short summaries.</text>
@@ -865,6 +973,8 @@ describe('runExtractionOrchestration write caps', () => {
 <confidence>0.95</confidence>
 <source_message_ids>2</source_message_ids>
 <source_speaker_name>Briar</source_speaker_name>
+<subject_name>Briar</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 </response>`,
         }),

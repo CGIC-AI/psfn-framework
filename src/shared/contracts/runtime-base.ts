@@ -35,13 +35,9 @@ import type {
 import type { ObservabilityCallType } from './observability-call-types.js';
 export type { ObservabilityCallType } from './observability-call-types.js';
 export type {
-  MessageAddressingChannel,
   MessageAddressingMetadata,
   MessageAddressingParticipant,
-  MessageAddressingReplyTarget,
   MessageAddresseeEvidence,
-  MessageResolvedAddressee,
-  MessageResolvedParticipant,
 } from './message-addressing.js';
 
 // ── Channel-agnostic message types ──

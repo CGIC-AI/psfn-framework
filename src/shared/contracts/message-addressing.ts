@@ -7,12 +7,12 @@ export interface MessageAddressingParticipant {
   authorName: string;
 }
 
-export interface MessageAddressingReplyTarget {
+interface MessageAddressingReplyTarget {
   messageId: string;
   author?: MessageAddressingParticipant;
 }
 
-export interface MessageAddressingChannel {
+interface MessageAddressingChannel {
   scope: 'direct' | 'group';
   channelId: string;
   threadId?: string;
@@ -20,11 +20,11 @@ export interface MessageAddressingChannel {
 
 export type MessageAddresseeEvidence = 'mention' | 'reply' | 'direct_message';
 
-export interface MessageResolvedParticipant extends MessageAddressingParticipant {
+interface MessageResolvedParticipant extends MessageAddressingParticipant {
   evidence: readonly MessageAddresseeEvidence[];
 }
 
-export type MessageResolvedAddressee =
+type MessageResolvedAddressee =
   | {
     kind: 'participants';
     participants: readonly MessageResolvedParticipant[];

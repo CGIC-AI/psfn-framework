@@ -19,6 +19,13 @@ function result(rows: unknown[] = []): QueryResult {
   } as QueryResult;
 }
 
+function decodeJsonbParameter(value: unknown, fallback: unknown): unknown {
+  const candidate = value ?? fallback;
+  return typeof candidate === 'string'
+    ? JSON.parse(candidate) as unknown
+    : candidate;
+}
+
 export class FakePostgresPool {
   contacts = new Map<string, ContactRow>();
   contactChannelIds = new Map<string, ContactIdentityRow>();
@@ -651,7 +658,7 @@ export class FakePostgresPool {
         display_name: String(values[2] ?? ''),
         contact_id: values[3] == null ? null : String(values[3]),
         sensitivity: String(values[4] ?? 'personal'),
-        provenance_refs: values[5] ?? [],
+        provenance_refs: decodeJsonbParameter(values[5], []),
         confidence: Number(values[6] ?? 1),
         source: String(values[7] ?? 'manual'),
         created_at: String(values[8] ?? ''),
@@ -668,7 +675,7 @@ export class FakePostgresPool {
         row.display_name = String(values[1] ?? row.display_name);
         row.contact_id = values[2] == null ? null : String(values[2]);
         row.sensitivity = String(values[3] ?? row.sensitivity);
-        row.provenance_refs = values[4] ?? row.provenance_refs;
+        row.provenance_refs = decodeJsonbParameter(values[4], row.provenance_refs);
         row.confidence = Number(values[5] ?? row.confidence);
         row.source = String(values[6] ?? row.source);
         row.updated_at = String(values[7] ?? row.updated_at);
@@ -973,8 +980,8 @@ export class FakePostgresPool {
         relationship_type: String(values[3] ?? 'other'),
         directional: Boolean(values[4]),
         sensitivity: String(values[5] ?? 'personal'),
-        provenance_refs: values[6] ?? [],
-        evidence_memory_ids: values[7] ?? [],
+        provenance_refs: decodeJsonbParameter(values[6], []),
+        evidence_memory_ids: decodeJsonbParameter(values[7], []),
         confidence: Number(values[8] ?? 0.7),
         created_at: String(values[9] ?? ''),
         updated_at: String(values[10] ?? ''),
@@ -992,8 +999,8 @@ export class FakePostgresPool {
       const row = this.socialRelationshipEdges.get(String(values[5] ?? ''));
       if (row) {
         row.sensitivity = String(values[0] ?? row.sensitivity);
-        row.provenance_refs = values[1] ?? row.provenance_refs;
-        row.evidence_memory_ids = values[2] ?? row.evidence_memory_ids;
+        row.provenance_refs = decodeJsonbParameter(values[1], row.provenance_refs);
+        row.evidence_memory_ids = decodeJsonbParameter(values[2], row.evidence_memory_ids);
         row.confidence = Number(values[3] ?? row.confidence);
         row.updated_at = String(values[4] ?? row.updated_at);
       }
@@ -1019,7 +1026,7 @@ export class FakePostgresPool {
       const row = this.socialGraphEntities.get(String(values[4] ?? ''));
       if (row) {
         row.sensitivity = String(values[0] ?? row.sensitivity);
-        row.provenance_refs = values[1] ?? row.provenance_refs;
+        row.provenance_refs = decodeJsonbParameter(values[1], row.provenance_refs);
         row.confidence = Number(values[2] ?? row.confidence);
         row.updated_at = String(values[3] ?? row.updated_at);
       }

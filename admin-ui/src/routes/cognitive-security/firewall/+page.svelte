@@ -12,6 +12,7 @@
     IntakeSourceListName,
     IntakeSourceListsConfig,
   } from '$lib/types';
+  import { getCompanionName } from '$lib/stores/companion.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
   let policy = $state<IntakePolicyConfig | null>(null);
@@ -350,7 +351,7 @@
                 <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
                   <div>
                     <dt class="text-shadow-500">Companion</dt>
-                    <dd class="font-mono text-shadow-800">{event.personaMutationAttempt.companionId}</dd>
+                    <dd class="text-shadow-800">{getCompanionName()}</dd>
                   </div>
                   <div>
                     <dt class="text-shadow-500">Tool</dt>

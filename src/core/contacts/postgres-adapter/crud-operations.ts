@@ -737,7 +737,13 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
                 updated_at = $4
             WHERE id = $5
           `,
-          [mergedSensitivity, mergedProvenanceRefs, mergedConfidence, mergedLastSeen, targetEntity.id],
+          [
+            mergedSensitivity,
+            JSON.stringify(mergedProvenanceRefs),
+            mergedConfidence,
+            mergedLastSeen,
+            targetEntity.id,
+          ],
         );
 
         const sourceEdges = await client.query<SocialRelationshipEdgeRow>(
@@ -787,8 +793,14 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               `,
               [
                 duplicateEdge.sensitivity >= edge.sensitivity ? duplicateEdge.sensitivity : edge.sensitivity,
-                [...new Set([...duplicateEdge.provenanceRefs, ...edge.provenanceRefs])],
-                [...new Set([...duplicateEdge.evidenceMemoryIds, ...edge.evidenceMemoryIds])],
+                JSON.stringify([...new Set([
+                  ...duplicateEdge.provenanceRefs,
+                  ...edge.provenanceRefs,
+                ])]),
+                JSON.stringify([...new Set([
+                  ...duplicateEdge.evidenceMemoryIds,
+                  ...edge.evidenceMemoryIds,
+                ])]),
                 Math.max(duplicateEdge.confidence, edge.confidence),
                 duplicateEdge.updatedAt >= edge.updatedAt ? duplicateEdge.updatedAt : edge.updatedAt,
                 duplicateEdge.id,

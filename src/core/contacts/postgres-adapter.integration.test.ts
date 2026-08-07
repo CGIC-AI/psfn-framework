@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Pool, PoolClient } from 'pg';
 
 import { createPostgresPool } from '../../persistence/postgres.js';
@@ -8,6 +11,8 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import type { TrustLevel } from '../../system/trust/types.js';
+import { createFileSocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
+import { createAdminGraphProposalsService } from '../../operator/garden/services/graph-proposals-service.js';
 import { createPostgresContactStore } from './postgres-adapter.js';
 
 const TIMEOUT_MS = 120_000;
@@ -469,12 +474,108 @@ describe('PostgresContactStore trust concurrency', () => {
 
       await expect(merge).resolves.toBe(true);
       await expect(store.getById(target.id)).resolves.toMatchObject({ trustLevel: 'trusted' });
+      const mergedEntity = await pool.query<{ provenance_kind: string }>(`
+        SELECT jsonb_typeof(provenance_refs) AS provenance_kind
+        FROM social_graph_entities
+        WHERE contact_id = $1
+      `, [target.id]);
+      expect(mergedEntity.rows).toEqual([{ provenance_kind: 'array' }]);
     } finally {
       if (blocker) {
         await blocker.query('ROLLBACK').catch(() => undefined);
         blocker.release();
       }
       await pool.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('approves a graph proposal through real Postgres JSONB writes', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: APPLICATION_NAME,
+      allowExitOnIdle: true,
+      max: 8,
+    });
+    const scratch = mkdtempSync(join(tmpdir(), 'psfn-graph-approval-postgres-'));
+    try {
+      const contactStore = await createPostgresContactStore(
+        databaseUrl,
+        'primary-user-123',
+        { pool },
+      );
+      const source = await contactStore.upsert({ displayName: 'Graph Source' });
+      const target = await contactStore.upsert({ displayName: 'Graph Target' });
+      const proposalStore = createFileSocialGraphProposalStore(
+        join(scratch, 'social-graph-proposals.json'),
+      );
+      const { proposal } = await proposalStore.create({
+        evidenceClass: 'named_relationship',
+        sourceContactId: source.id,
+        targetContactId: target.id,
+        sourceDisplayName: source.displayName,
+        targetDisplayName: target.displayName,
+        relationshipType: 'acquaintance',
+        directional: false,
+        confidence: 0.8,
+        sensitivity: 'personal',
+        evidenceMemoryIds: ['memory-one'],
+        provenanceRefs: ['source:test'],
+        rationale: 'real Postgres approval regression',
+        status: 'pending',
+      });
+      const service = createAdminGraphProposalsService({
+        proposalStore,
+        contactStore,
+      });
+
+      await expect(service.approveGraphProposal(proposal.id, 'friend')).resolves.toMatchObject({
+        ok: true,
+        relationshipType: 'friend',
+      });
+      const stored = await proposalStore.getById(proposal.id);
+      expect(stored).toMatchObject({
+        status: 'accepted',
+        acceptedRelationshipType: 'friend',
+      });
+      const sourceEntity = await contactStore.getSocialGraphEntityByContactId(source.id);
+      const targetEntity = await contactStore.getSocialGraphEntityByContactId(target.id);
+      if (!sourceEntity || !targetEntity) {
+        throw new Error('Graph approval did not retain its contact entities');
+      }
+      const updatedEdge = await contactStore.upsertSocialRelationshipEdge({
+        sourceEntityId: sourceEntity.id,
+        targetEntityId: targetEntity.id,
+        relationshipType: 'friend',
+        directional: false,
+        sensitivity: 'personal',
+        provenanceRefs: ['source:second-pass'],
+        evidenceMemoryIds: ['memory-two'],
+        confidence: 0.9,
+      });
+      expect(updatedEdge.provenanceRefs).toEqual([
+        'source:test',
+        'source:memory',
+        `proposal:${proposal.id}`,
+        'source:second-pass',
+      ]);
+      expect(updatedEdge.evidenceMemoryIds).toEqual(['memory-one', 'memory-two']);
+      const jsonKinds = await pool.query<{
+        provenance_kind: string;
+        evidence_kind: string;
+      }>(`
+        SELECT
+          jsonb_typeof(provenance_refs) AS provenance_kind,
+          jsonb_typeof(evidence_memory_ids) AS evidence_kind
+        FROM social_relationship_edges
+        WHERE id = $1
+      `, [stored?.acceptedEdgeId]);
+      expect(jsonKinds.rows).toEqual([{
+        provenance_kind: 'array',
+        evidence_kind: 'array',
+      }]);
+    } finally {
+      await pool.end();
+      rmSync(scratch, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);
 });

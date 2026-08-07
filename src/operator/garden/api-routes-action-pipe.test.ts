@@ -177,6 +177,65 @@ describe('action pipe admin API routes', () => {
     expect(JSON.parse(response.body).ok).toBe(true);
   });
 
+  it.each([
+    { label: 'malformed JSON', body: '{' },
+    { label: 'a non-object value', body: 'null' },
+    { label: 'a non-string reason', body: '{"reason":7}' },
+    { label: 'an unknown field', body: '{"actor":"forged"}' },
+  ])('returns a typed 400 for $label without invoking the action', async ({ body }) => {
+    const service: AdminActionPipeService = {
+      getActionPipeStatus: vi.fn(),
+      cancelAction: vi.fn(),
+      acknowledgeAction: vi.fn(),
+    };
+    const route = makeRoutes(service).find(candidate => (
+      candidate.match('/api/admin/action-pipe/actions/action-1/cancel') !== null
+    ));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(
+      route!,
+      '/api/admin/action-pipe/actions/action-1/cancel',
+      body,
+    );
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      message: expect.any(String),
+    });
+    expect(service.cancelAction).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges actions with an optional typed detail', async () => {
+    const status = makeStatus();
+    const service: AdminActionPipeService = {
+      getActionPipeStatus: vi.fn(),
+      cancelAction: vi.fn(),
+      acknowledgeAction: vi.fn(async () => ({
+        ok: true,
+        message: 'Action acknowledged.',
+        status,
+      })),
+    };
+    const route = makeRoutes(service).find(candidate => (
+      candidate.match('/api/admin/action-pipe/actions/action-1/acknowledge') !== null
+    ));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(
+      route!,
+      '/api/admin/action-pipe/actions/action-1/acknowledge',
+      '{"detail":"operator reviewed"}',
+    );
+
+    expect(response.status).toBe(200);
+    expect(service.acknowledgeAction).toHaveBeenCalledWith({
+      actionRef: 'action-1',
+      detail: 'operator reviewed',
+    });
+  });
+
   it('reports the action pipe route as unavailable when the service is absent', async () => {
     const route = makeRoutes(null).find(candidate => candidate.match('/api/admin/action-pipe'));
     expect(route).toBeDefined();

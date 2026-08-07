@@ -78,6 +78,28 @@ function makeGroupFixture(count: number): SessionEntry[] {
   ));
 }
 
+function addressedEntryMetadata(
+  entry: SessionEntry,
+  targets: Array<{ authorId: string; authorName: string }>,
+  observer = { authorId: 'current-bot', authorName: 'Lyra' },
+): string {
+  if (!entry.authorId || !entry.authorName) {
+    throw new Error('group addressing fixture requires an authored entry');
+  }
+  return buildSessionMetadataWithMessageAddressing(undefined, {
+    schemaVersion: 2,
+    source: 'discord',
+    author: { authorId: entry.authorId, authorName: entry.authorName },
+    observer,
+    mentionedTargets: targets,
+    channel: { scope: 'group', channelId: CHANNEL_ID },
+    resolvedAddressee: {
+      kind: 'participants',
+      participants: targets.map(target => ({ ...target, evidence: ['mention'] })),
+    },
+  });
+}
+
 function replaceEntry(
   entries: SessionEntry[],
   id: number,
@@ -331,10 +353,9 @@ describe('group-room memory conformance', () => {
   it('extracts useful memories from a configured 50-message online room window', async () => {
     const entries = makeGroupFixture(50);
     replaceEntry(entries, 8, 0, 'Lyra, remember that I prefer concise deployment summaries.');
-    entries[7].metadata = buildSessionMetadataWithMessageAddressing(undefined, {
-      schemaVersion: 1,
-      mentionedTargets: [{ authorId: 'lyra-bot', authorName: 'Lyra' }],
-    });
+    entries[7].metadata = addressedEntryMetadata(entries[7], [
+      { authorId: 'lyra-bot', authorName: 'Lyra' },
+    ]);
     replaceEntry(entries, 24, 0, 'My friend Vega is helping run moderation tonight.');
     replaceEntry(entries, 45, 2, 'Please do not share my school schedule outside this room.');
     const settings = groupSettings({
@@ -469,13 +490,10 @@ describe('group-room memory conformance', () => {
       '<@other-companion> remember that I call you starlight when the observatory is quiet.',
       0,
     );
-    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
-      schemaVersion: 1,
-      mentionedTargets: [{
+    addressedEntry.metadata = addressedEntryMetadata(addressedEntry, [{
         authorId: 'other-companion',
         authorName: 'Other Companion',
-      }],
-    });
+      }]);
     const { options, processFact, llmComplete } = buildExtractionOptions({
       entries: [addressedEntry],
       maxWrites: 4,
@@ -531,9 +549,11 @@ describe('group-room memory conformance', () => {
         '<@cedar-bot> remember that our observatory promise matters to me.',
         0,
       );
-      addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
-        schemaVersion: 1,
-        mentionedTargets: [{ authorId: 'cedar-bot', authorName: 'Cedar' }],
+      addressedEntry.metadata = addressedEntryMetadata(addressedEntry, [
+        { authorId: 'cedar-bot', authorName: 'Cedar' },
+      ], {
+        authorId: `${companionName.toLowerCase()}-bot`,
+        authorName: companionName,
       });
       const { options, processFact } = buildExtractionOptions({
         entries: [addressedEntry],
@@ -569,10 +589,9 @@ describe('group-room memory conformance', () => {
 
   it('uses the current companion transport id when the room display name differs', async () => {
     const addressedEntry = makeEntry(1, '<@current-bot> remember our observatory promise.', 0);
-    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
-      schemaVersion: 1,
-      mentionedTargets: [{ authorId: 'current-bot', authorName: 'Room Nickname' }],
-    });
+    addressedEntry.metadata = addressedEntryMetadata(addressedEntry, [
+      { authorId: 'current-bot', authorName: 'Room Nickname' },
+    ]);
     const { options, processFact } = buildExtractionOptions({
       entries: [addressedEntry],
       companionName: 'Lyra',
@@ -602,10 +621,9 @@ describe('group-room memory conformance', () => {
 
   it('rejects a companion-like display name carried by a different transport id', async () => {
     const addressedEntry = makeEntry(1, '<@imposter-bot> remember our observatory promise.', 0);
-    addressedEntry.metadata = buildSessionMetadataWithMessageAddressing(undefined, {
-      schemaVersion: 1,
-      mentionedTargets: [{ authorId: 'imposter-bot', authorName: 'Lyra' }],
-    });
+    addressedEntry.metadata = addressedEntryMetadata(addressedEntry, [
+      { authorId: 'imposter-bot', authorName: 'Lyra' },
+    ]);
     const { options, processFact } = buildExtractionOptions({
       entries: [addressedEntry],
       companionName: 'Lyra',

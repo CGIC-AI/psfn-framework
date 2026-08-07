@@ -73,7 +73,7 @@ import type {
   IntakeSourceClass,
 } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import { screenChatMessageBody } from '../../core/cogsec/intake/chat-message-screening.js';
+import { screenChatMessageEnvelope } from '../../core/cogsec/intake/chat-message-screening.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
@@ -85,6 +85,10 @@ import {
 import { createDiscordClient, type DiscordEvidenceAdapterSurface } from './evidence-adapter-surface.js';
 import { LongRunningToolStatusTracker } from '../shared/long-running-tool-status.js';
 import { isCompanionReadyLifecycleNotification } from '../../system/lifecycle/notifications.js';
+import {
+  buildDiscordMessageAddressing,
+  coalesceDiscordTurnsByAddressing,
+} from './message-addressing.js';
 
 const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
@@ -197,22 +201,6 @@ function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDis
     replyToOriginal: turns.some(turn => turn.replyToOriginal),
     respondToMessage: turns.some(turn => turn.respondToMessage),
   };
-}
-
-// Only contiguous same-author turns may merge into one substrate message;
-// merging across authors would attribute one user's text to another for
-// downstream memory, policy, and audit paths.
-function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn[] {
-  const groups: PendingDiscordTurn[][] = [];
-  for (const turn of turns) {
-    const current = groups.at(-1);
-    if (current && current[0]!.substrateMsg.authorId === turn.substrateMsg.authorId) {
-      current.push(turn);
-    } else {
-      groups.push([turn]);
-    }
-  }
-  return groups.map(group => coalesceSameAuthorDiscordTurns(group));
 }
 
 export class DiscordAdapter implements ChannelAdapterPort {
@@ -996,7 +984,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
       const pendingQueue = this.pendingByChannel.get(channelId);
       const coalescedQueueDepth = pendingQueue?.length ?? 0;
       const coalescedMessageIds = pendingQueue?.map(entry => entry.substrateMsg.id) ?? [];
-      const coalescedTurns = pendingQueue ? coalescePendingDiscordTurns(pendingQueue.splice(0)) : [];
+      const coalescedTurns = pendingQueue
+        ? coalesceDiscordTurnsByAddressing(pendingQueue.splice(0), coalesceSameAuthorDiscordTurns)
+        : [];
       if (pendingQueue) {
         this.pendingByChannel.delete(channelId);
       }
@@ -1074,6 +1064,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    let addressing = buildDiscordMessageAddressing({
+      message: msg, isDirectMessage, runtimeBotId,
+      observer: this.client.user ?? undefined,
+      fallbackObserverName: this.runtimeConfig.characterName,
+    });
     const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
     const sourceClass = this.resolveMessageSourceClass(msg, isDirectMessage, runtimeBotId);
     const primaryUser = sourceClass === 'primary_user'
@@ -1081,8 +1076,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
       : undefined;
     let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     if (content !== '(empty message)') {
-      const screenedBody = await screenChatMessageBody({
-        content,
+      const screenedMessage = await screenChatMessageEnvelope({
+        envelope: { content, addressing },
         screening: this.intakeScreening,
         sourceClass,
         surface: 'discord',
@@ -1093,8 +1088,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
           ? { canonicalContactId: primaryUser.canonicalContactId }
           : {}),
       });
-      content = screenedBody.content;
-      if (screenedBody.snapshot) intakeEnvelopes.push(screenedBody.snapshot);
+      content = screenedMessage.envelope.content;
+      addressing = screenedMessage.envelope.addressing;
+      if (screenedMessage.snapshot) intakeEnvelopes.push(screenedMessage.snapshot);
     }
     const documentCandidates = extractDiscordDocumentAttachmentCandidates(msg);
     if (documentCandidates.length > 0 && this.personalFilesDir) {
@@ -1155,10 +1151,6 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const resolvedContent = content === '(empty message)' && attachments.length > 0
       ? '(image attachment)'
       : content;
-    const mentionedTargets = [...msg.mentions.users.values()].map(user => ({
-      authorId: user.id,
-      authorName: user.displayName,
-    }));
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -1174,9 +1166,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
         channelPrivacy,
-        ...(mentionedTargets.length > 0
-          ? { addressing: { schemaVersion: 1, mentionedTargets } }
-          : {}),
+        addressing,
         // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
         // set true for bot-authored messages so a human author never triggers
         // machine-intelligence auto-tagging. Consumed by author-context

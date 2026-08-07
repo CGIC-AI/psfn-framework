@@ -13,6 +13,7 @@ import type {
 } from './runtime-base.js';
 
 export * from './runtime-base.js';
+export * from './message-addressing.js';
 export * from './tool-call-outcome.js';
 
 export interface TurnRecord {

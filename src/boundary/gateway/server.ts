@@ -48,6 +48,7 @@ import type { GatewayAuditStorePort } from './audit-port.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { resolvePersonalSkillsDir } from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
@@ -145,6 +146,7 @@ import type { GatewaySystemDataWriterPort } from './system-data-writer.js';
 import type { McpGatewayBroker } from './mcp/broker.js';
 
 const log = createComponentLogger('Gateway');
+const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
 const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
   30_000,
@@ -340,7 +342,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * audit-then-remove). Defaults to the gateway structured logger.
    */
   shardApprovalGrantAudit?: (event: ShardApprovalGrantAuditEvent) => void;
-  /** Canonical companion display label used in human-facing approval attribution. */
+  /** Canonical companion display label used across human-facing gateway surfaces. */
   approvalParentLabelProvider?: (companionId: string) => string | undefined;
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: CompanionId;
@@ -463,6 +465,11 @@ export class GatewayServer {
   private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
   private readonly sharedSatelliteResponseArbiter: SharedSatelliteResponseArbiter;
   private readonly sharedSatelliteChatRequests = new Map<string, CompanionId>();
+
+  private companionDisplayLabel(companionId: string): string {
+    return this.options.approvalParentLabelProvider?.(companionId)?.trim()
+      || unknownCompanionDisplayIdentity.resolve(companionId).displayLabel;
+  }
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -2487,7 +2494,9 @@ export class GatewayServer {
     }
     if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
       this.companionConnections.delete(status.companionId);
-      log.info('Companion connection unbound', { companionId: status.companionId });
+      log.info(`${this.companionDisplayLabel(status.companionId)} connection unbound`, {
+        companionId: status.companionId,
+      });
       void this.queueIcpInvalidation(status.companionId, 'peer_offline')
         .catch((error: unknown) => {
           log.error('Failed to invalidate ICP permits after companion disconnect', {
@@ -3487,7 +3496,7 @@ export class GatewayServer {
       }
       status.companionId = authenticatedCompanionId;
       this.companionLastSeen.set(authenticatedCompanionId, Date.now());
-      log.info('Companion connection authenticated', {
+      log.info(`${this.companionDisplayLabel(authenticatedCompanionId)} connection authenticated`, {
         companionId: authenticatedCompanionId,
         role: params.role,
       });

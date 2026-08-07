@@ -43,6 +43,7 @@ function buildSingleService(root: string): AdminSettingsDataService {
     dataDir: root,
     defaultContextWindow: 128_000,
     companionId: COMPANION_A,
+    characterName: 'Aria',
   } as unknown as SubstrateConfig;
   return new AdminSettingsDataService({
     config,
@@ -76,7 +77,10 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
   it('falls back to the single configured companion when there is no fleet', () => {
     const root = makeTempDir();
     const pin = buildSingleService(root).getBearerApiCompanionPin();
-    expect(pin.companions).toEqual([{ companionId: COMPANION_A, displayName: COMPANION_A }]);
+    expect(pin.companions).toEqual([{
+      companionId: COMPANION_A,
+      displayName: 'Aria',
+    }]);
   });
 
   it('rejects a companion id that is not a registered companion (fail closed)', async () => {
@@ -104,6 +108,8 @@ describe('AdminSettingsDataService Bearer API companion pin (vknn)', () => {
 
     const result = await service.setBearerApiCompanionPin(COMPANION_B);
     expect(result.ok).toBe(true);
+    expect(result.message).toContain('Bex');
+    expect(result.message).not.toContain(COMPANION_B);
     expect(result.message).toContain('Restart the gateway');
 
     // persisted to the owner file under api.companionId

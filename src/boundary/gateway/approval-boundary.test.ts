@@ -214,7 +214,7 @@ describe('approval attribution — ordinary companion approvals (non-shard)', ()
     expect(h.service.listPendingConfirmations()).toEqual([]);
   });
 
-  it('overwrites caller-supplied attribution with the server-derived stable-id label when no roster label resolves', async () => {
+  it('overwrites caller-supplied attribution with an explicit unknown label when no roster label resolves', async () => {
     const h = createHarness({});
     const entry = await h.service.requestExplicitApproval({
       authenticatedCompanionId: PARENT_A,
@@ -224,14 +224,16 @@ describe('approval attribution — ordinary companion approvals (non-shard)', ()
       execute: async () => 'ok',
     });
 
-    // A caller-supplied label is never authority: without a roster label the
-    // authenticated stable companion id is the canonical presentation fallback,
-    // and the spoofed label must not survive to the entry or the wire.
-    expect(entry.attribution).toEqual({ parentId: PARENT_A, parentLabel: PARENT_A });
+    // A caller-supplied label is never authority. The exact stable id remains
+    // machine-readable while the human-facing label stays honest and readable.
+    expect(entry.attribution).toEqual({
+      parentId: PARENT_A,
+      parentLabel: 'Unknown companion · companion-parent-a',
+    });
     await vi.waitFor(() => expect(h.requested).toHaveLength(1));
     expect(h.requested[0].payload.attribution).toEqual({
       parentId: PARENT_A,
-      parentLabel: PARENT_A,
+      parentLabel: 'Unknown companion · companion-parent-a',
     });
     expect(JSON.stringify(h.requested)).not.toContain('Spoofed');
   });
@@ -681,7 +683,7 @@ describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', 
     expect(h.service.listPendingConfirmations()).toHaveLength(0);
   });
 
-  it('uses the authenticated stable id when an ordinary companion has no cosmetic label', async () => {
+  it('uses an explicit unknown label when an ordinary companion has no cosmetic label', async () => {
     const h = createHarness({}); // no labels resolvable
     const entry = await h.service.requestExplicitApproval({
       authenticatedCompanionId: PARENT_A,
@@ -692,7 +694,7 @@ describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', 
 
     expect(entry.attribution).toEqual({
       parentId: PARENT_A,
-      parentLabel: PARENT_A,
+      parentLabel: 'Unknown companion · companion-parent-a',
     });
     expect(h.service.listPendingConfirmationsForOwner(PARENT_A)).toHaveLength(1);
     expect(h.requested).toEqual([
@@ -702,7 +704,7 @@ describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', 
           id: entry.id,
           attribution: {
             parentId: PARENT_A,
-            parentLabel: PARENT_A,
+            parentLabel: 'Unknown companion · companion-parent-a',
           },
         }),
       }),

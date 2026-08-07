@@ -54,6 +54,8 @@ import {
 } from './icp-autonomy-candidate-dispatcher.js';
 import { registerIcpInitiationCandidatePostTurnRuntime } from '../../core/tools/notify-companion-candidate.js';
 import type { IcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
+import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
+import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -165,6 +167,14 @@ export function buildAgentControlPlane(
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
+  const lifecycleDisplayIdentity = config.companionId
+    ? createCompanionDisplayIdentityResolver(
+        config.companionFleet?.companions ?? [{
+          companionId: config.companionId,
+          displayName: resolveCompanionNameFromConfig(config),
+        }],
+      ).resolve(config.companionId)
+    : undefined;
   const lifecycleNotifier = createDiscordLifecycleNotifier({
     sender: gatewaySender,
     heartbeatChannelId,
@@ -173,6 +183,9 @@ export function buildAgentControlPlane(
     // Distinguish this agent process in multi-companion fleets; falls back to
     // the bare process role when no companion id is bound.
     ...(config.companionId ? { subsystemLabel: `agent:${config.companionId}` } : {}),
+    ...(lifecycleDisplayIdentity
+      ? { companionDisplayLabel: lifecycleDisplayIdentity.displayLabel }
+      : {}),
   });
 
   const prepareRestartCommand = createRetryableShutdown(async () => {

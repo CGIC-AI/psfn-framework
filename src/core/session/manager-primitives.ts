@@ -1061,11 +1061,10 @@ export function isUntrustedVisibility(privacy: ChannelPrivacy): boolean {
   return privacy === 'public';
 }
 
-// TODO(htm9.2-followup): unify this narrow opt-in wrapper under the intake
-// envelope — audit its call sites (context-history-assembly.ts,
-// context-support.ts) and attach envelope snapshots so public-visibility
-// context participates in the same screening/decision surface as web fetch,
-// documents, and tool observations.
+// Public transcript text always crosses this structural boundary before prompt
+// or compaction use. Typed intake envelopes carry the independently enforced
+// screening and sink-gate decision; this wrapper makes the trust posture
+// explicit to the model even when no envelope metadata is rendered.
 export function wrapUntrustedContext(content: string, source: 'public' = 'public'): string {
   return `<untrusted_context source="${source}">\n${content}\n</untrusted_context>`;
 }

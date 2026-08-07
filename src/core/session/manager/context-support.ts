@@ -323,7 +323,7 @@ export function getMergedContinuity(params: {
 export function entriesToMessages(
   entries: SessionEntry[],
   defaultVisibility: ChannelPrivacy,
-  includeTrustTags: boolean = true,
+  _includeTrustTags: boolean = true,
   preserveLeadingAssistant: boolean = false,
   renderGroupUserAttribution: boolean = true,
 ): ContextMessage[] {
@@ -396,10 +396,11 @@ export function entriesToMessages(
     if (bondMarker && role !== 'assistant' && !contentWithheldByIntakeGate) {
       content = `[via ${bondMarker.sourceChannelId}] ${content}`;
     }
-    if (includeTrustTags) {
-      if (isUntrustedVisibility(visibility)) {
-        content = wrapUntrustedContext(content);
-      }
+    // Public context is structurally untrusted. `_includeTrustTags` remains as
+    // a compatibility argument for private-history callers, but it must never
+    // disable the security boundary around public transcript text.
+    if (isUntrustedVisibility(visibility)) {
+      content = wrapUntrustedContext(content);
     }
     const provenance = provenanceForEntry(
       entry,

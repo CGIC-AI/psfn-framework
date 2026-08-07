@@ -93,6 +93,7 @@ describe('companion display-name surface inventory', () => {
     ].map(source).join('\n');
 
     expect(cogSecPages).not.toContain('companionId');
+    expect(cogSecPages).toContain('getCompanionName()');
   });
 
   it('keeps Bearer API companion ids behind technical details', () => {

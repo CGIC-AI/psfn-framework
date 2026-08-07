@@ -1312,11 +1312,27 @@ describe('SessionManager', () => {
         sourceMessageId: 'discord-message-1',
         replyToMessageId: 'discord-parent-1',
         addressing: {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          source: 'discord',
+          author: { authorId: 'operator-1', authorName: 'Operator' },
+          observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
           mentionedTargets: [{
             authorId: 'other-companion',
             authorName: 'Other Companion',
           }],
+          replyTarget: {
+            messageId: 'discord-parent-1',
+            author: { authorId: 'other-companion', authorName: 'Other Companion' },
+          },
+          channel: { scope: 'group', channelId: 'discord:shared-room' },
+          resolvedAddressee: {
+            kind: 'participants',
+            participants: [{
+              authorId: 'other-companion',
+              authorName: 'Other Companion',
+              evidence: ['mention', 'reply'],
+            }],
+          },
         },
       },
     );
@@ -1328,11 +1344,27 @@ describe('SessionManager', () => {
         replyToMessageId: 'discord-parent-1',
       },
       messageAddressing: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        source: 'discord',
+        author: { authorId: 'operator-1', authorName: 'Operator' },
+        observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
         mentionedTargets: [{
           authorId: 'other-companion',
           authorName: 'Other Companion',
         }],
+        replyTarget: {
+          messageId: 'discord-parent-1',
+          author: { authorId: 'other-companion', authorName: 'Other Companion' },
+        },
+        channel: { scope: 'group', channelId: 'discord:shared-room' },
+        resolvedAddressee: {
+          kind: 'participants',
+          participants: [{
+            authorId: 'other-companion',
+            authorName: 'Other Companion',
+            evidence: ['mention', 'reply'],
+          }],
+        },
       },
     });
   });

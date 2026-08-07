@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
-import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, LLMContext, LLMResponse, MessageAddressingMetadata, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
 import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
@@ -2248,15 +2248,32 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
     );
+    const addressing = {
+      schemaVersion: 2,
+      source: 'discord',
+      author: { authorId: 'user-1', authorName: 'TestUser' },
+      observer: { authorId: 'bot-1', authorName: 'Test Companion' },
+      mentionedTargets: [{ authorId: 'bot-1', authorName: 'Test Companion' }],
+      replyTarget: {
+        messageId: 'discord-parent-responding',
+        author: { authorId: 'bot-1', authorName: 'Test Companion' },
+      },
+      channel: { scope: 'group', channelId: 'test-channel' },
+      resolvedAddressee: {
+        kind: 'participants',
+        participants: [{
+          authorId: 'bot-1',
+          authorName: 'Test Companion',
+          evidence: ['mention', 'reply'],
+        }],
+      },
+    } satisfies MessageAddressingMetadata;
     await agent.handleMessage(makeMessage({
       replyToMessageId: 'discord-parent-responding',
       routing: {
         source: 'discord',
         responseMode: 'respond',
-        addressing: {
-          schemaVersion: 1,
-          mentionedTargets: [{ authorId: 'bot-1', authorName: 'Test Companion' }],
-        },
+        addressing,
       },
     }));
 
@@ -2273,10 +2290,7 @@ describe('SubstrateAgent.handleMessage', () => {
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
         replyToMessageId: 'discord-parent-responding',
-        addressing: {
-          schemaVersion: 1,
-          mentionedTargets: [{ authorId: 'bot-1', authorName: 'Test Companion' }],
-        },
+        addressing,
         turnId: expect.any(String),
       }),
     );
@@ -2290,6 +2304,26 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
     );
+    const addressing = {
+      schemaVersion: 2,
+      source: 'discord',
+      author: { authorId: 'user-1', authorName: 'TestUser' },
+      observer: { authorId: 'bot-1', authorName: 'Test Companion' },
+      mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
+      replyTarget: {
+        messageId: 'discord-parent-observed',
+        author: { authorId: 'other-bot', authorName: 'Other Companion' },
+      },
+      channel: { scope: 'group', channelId: 'discord-channel' },
+      resolvedAddressee: {
+        kind: 'participants',
+        participants: [{
+          authorId: 'other-bot',
+          authorName: 'Other Companion',
+          evidence: ['mention', 'reply'],
+        }],
+      },
+    } satisfies MessageAddressingMetadata;
     const message = makeMessage({
       id: 'discord-observe-1',
       channelId: 'discord-channel',
@@ -2299,10 +2333,7 @@ describe('SubstrateAgent.handleMessage', () => {
       routing: {
         source: 'discord',
         responseMode: 'observe',
-        addressing: {
-          schemaVersion: 1,
-          mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
-        },
+        addressing,
       },
       replyToMessageId: 'discord-parent-observed',
     });
@@ -2323,10 +2354,7 @@ describe('SubstrateAgent.handleMessage', () => {
         requestId: 'discord-observe-1',
         sourceMessageId: 'discord-observe-1',
         replyToMessageId: 'discord-parent-observed',
-        addressing: {
-          schemaVersion: 1,
-          mentionedTargets: [{ authorId: 'other-bot', authorName: 'Other Companion' }],
-        },
+        addressing,
         turnId: expect.any(String),
         metadata: expect.stringContaining('"type":"observed_message"'),
       }),

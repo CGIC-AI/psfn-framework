@@ -29,6 +29,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { TelegramChannelConfig } from '../backplane/config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { backoffMs } from '../../shared/utils/timing.js';
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import {
   appendDocumentIngestToContent,
@@ -542,19 +543,12 @@ export class TelegramAdapter implements ChannelAdapterPort {
         })
         .finally(() => {
           this.activePoll = undefined;
-          const delay = this.resolveNextPollDelayMs();
+          const delay = this.consecutivePollFailures <= 0
+            ? this.telegram.pollIntervalMs
+            : backoffMs(this.telegram.pollIntervalMs, this.consecutivePollFailures - 1, MAX_POLL_BACKOFF_MS);
           this.schedulePoll(delay);
         });
     }, delayMs);
-  }
-
-  private resolveNextPollDelayMs(): number {
-    if (this.consecutivePollFailures <= 0) {
-      return this.telegram.pollIntervalMs;
-    }
-    const exponent = Math.max(0, this.consecutivePollFailures - 1);
-    const nextDelay = this.telegram.pollIntervalMs * (2 ** exponent);
-    return Math.min(MAX_POLL_BACKOFF_MS, nextDelay);
   }
 
   private isAbortError(error: unknown): boolean {

@@ -8,6 +8,7 @@ import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
 import { sanitizeDiagnosticText } from '../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { chunk } from '../../../shared/utils/arrays.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 
 interface VisionAttachmentFetchCapabilities {
@@ -615,14 +616,6 @@ async function screenTurnImageAttachments(input: {
   };
 }
 
-function chunkVisionUrls(urls: readonly string[], size: number): string[][] {
-  const chunks: string[][] = [];
-  for (let index = 0; index < urls.length; index += size) {
-    chunks.push(urls.slice(index, index + size));
-  }
-  return chunks;
-}
-
 interface ChunkedVisionReviewResult {
   summary: string;
   question: string;
@@ -648,7 +641,7 @@ async function analyzeVisionUrlsInChunks(input: {
   channelId: string;
   channelType?: string;
 }): Promise<ChunkedVisionReviewResult> {
-  const chunks = chunkVisionUrls(input.imageUrls, VISION_ATTACHMENT_MAX_COUNT);
+  const chunks = chunk(input.imageUrls, VISION_ATTACHMENT_MAX_COUNT);
   const settled = await Promise.allSettled(chunks.map((chunk) => analyzeWithDedicatedVisionRetry({
     ...input,
     imageUrls: chunk,
@@ -660,18 +653,18 @@ async function analyzeVisionUrlsInChunks(input: {
   let reviewedImageCount = 0;
   let model: string | undefined;
   settled.forEach((result, index) => {
-    const chunk = chunks[index];
+    const imageChunk = chunks[index];
     const start = index * VISION_ATTACHMENT_MAX_COUNT + 1;
-    const end = start + chunk.length - 1;
+    const end = start + imageChunk.length - 1;
     const rangeLabel = chunks.length === 1
       ? null
-      : (chunk.length === 1 ? `Image ${String(start)}` : `Images ${String(start)}-${String(end)}`);
+      : (imageChunk.length === 1 ? `Image ${String(start)}` : `Images ${String(start)}-${String(end)}`);
     if (result.status === 'fulfilled') {
       summaries.push(rangeLabel ? `${rangeLabel}: ${result.value.summary}` : result.value.summary);
-      reviewedUrls.push(...chunk);
+      reviewedUrls.push(...imageChunk);
       reviewedImageCount += Number.isFinite(result.value.imageCount)
         ? result.value.imageCount
-        : chunk.length;
+        : imageChunk.length;
       if (!model && typeof result.value.model === 'string' && result.value.model.trim().length > 0) {
         model = result.value.model.trim();
       }

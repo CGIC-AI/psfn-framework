@@ -8,6 +8,7 @@ import {
 } from '../../persistence/postgres.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { chunk } from '../../shared/utils/arrays.js';
 
 interface RetrievalRow {
   memory_id: string;
@@ -107,14 +108,6 @@ function normalizePositiveInt(
     throw new Error(`${fieldName} must be a positive integer`);
   }
   return value;
-}
-
-function chunk<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
 }
 
 function toEmbeddingBuffer(embedding: Float32Array): Buffer {

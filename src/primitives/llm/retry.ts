@@ -1,4 +1,4 @@
-import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import { backoffMs, sleep as defaultSleep } from '../../shared/utils/timing.js';
 import { toError } from '../../shared/utils/errors.js';
 import type {
   CircuitBreakerTransition,
@@ -108,10 +108,6 @@ function resolveRetryConfig(config?: RetryConfig): ResolvedRetryConfig {
   };
 }
 
-function backoffDelay(baseDelayMs: number, retryAttemptIndex: number): number {
-  return baseDelayMs * (2 ** retryAttemptIndex);
-}
-
 export function markErrorAsNonRetryable(error: Error): Error {
   (error as MarkedError)[NON_RETRYABLE_ERROR] = true;
   return error;
@@ -157,7 +153,7 @@ export async function withRetry<T>(
         const canRetry = retryAttempt < resolved.maxRetries && retryable && shouldRetry;
         if (!canRetry) throw err;
 
-        const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
+        const delayMs = backoffMs(resolved.baseDelayMs, retryAttempt);
         await options?.onRetry?.({
           attempt,
           maxRetries: resolved.maxRetries,

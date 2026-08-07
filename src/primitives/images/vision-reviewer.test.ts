@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
+import { VISION_IMAGE_MAX_BYTES } from './vision-policy.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 
@@ -56,7 +57,7 @@ describe('DefaultImageVisionReviewer', () => {
 
     expect(binaryFetcher).toHaveBeenCalledWith(
       'https://images.example.test/review.png',
-      { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      { lane: 'default', maxBytes: VISION_IMAGE_MAX_BYTES },
     );
     expect(result.summary).toContain('matches the expected look');
     expect(result.model).toBe('vision-model');
@@ -91,7 +92,7 @@ describe('DefaultImageVisionReviewer', () => {
     expect(binaryFetcher).toHaveBeenCalledTimes(1);
     expect(binaryFetcher).toHaveBeenCalledWith(
       'https://comfy.local.example.test/view?filename=review.png',
-      { lane: 'local_crawler', maxBytes: 8 * 1024 * 1024 },
+      { lane: 'local_crawler', maxBytes: VISION_IMAGE_MAX_BYTES },
     );
     expect(completeImpl).not.toHaveBeenCalled();
   });

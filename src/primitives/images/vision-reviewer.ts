@@ -34,9 +34,9 @@ import {
   type ImageVisionReviewRequest,
   type ImageVisionReviewer,
 } from './types.js';
+import { VISION_IMAGE_MAX_BYTES } from './vision-policy.js';
 
 const VISION_IMAGE_MAX_COUNT = 4;
-const VISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Minimal shape the reviewer needs to load the active identity reference.

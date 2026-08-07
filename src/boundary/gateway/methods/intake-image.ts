@@ -16,9 +16,10 @@ import { GatewayErrors } from '../protocol.js';
 import type { VisionIntakeImageScreenResult } from '../intake/vision-screener.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
+import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 
 /** Decoded-size cap for inline screening payloads (vision attachment parity). */
-export const INTAKE_SCREEN_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+export const INTAKE_SCREEN_IMAGE_MAX_BYTES = VISION_IMAGE_MAX_BYTES;
 
 export interface IntakeScreenImageParams {
   /** http(s) URL of the image (URL-addressed attachments). */

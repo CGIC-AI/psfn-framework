@@ -54,6 +54,23 @@ function addMissingIcpPolicyHolds(
   addedPaths.push('icpAutonomy.policyHolds');
 }
 
+function addMissingBackgroundWorkMaxAttempts(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (!isRecord(candidate.backgroundWork)
+    || !isRecord(candidate.backgroundWork.postTurn)
+    || candidate.backgroundWork.postTurn.maxAttempts !== undefined) return;
+  candidate.backgroundWork = {
+    ...candidate.backgroundWork,
+    postTurn: {
+      ...candidate.backgroundWork.postTurn,
+      maxAttempts: DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts,
+    },
+  };
+  addedPaths.push('backgroundWork.postTurn.maxAttempts');
+}
+
 /**
  * Converts the pre-bundled scheduler owner shape into the canonical shared
  * background-maintenance cadence. Dry-run is the default. The candidate is
@@ -132,6 +149,7 @@ export function migrateLegacySchedulerOwner(
         ...structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG),
         intervalMs: selectedInterval,
       };
+      addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
@@ -173,6 +191,7 @@ export function migrateLegacySchedulerOwner(
         candidate.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
         addedPaths.push('backgroundWork');
       }
+      addMissingBackgroundWorkMaxAttempts(candidate, addedPaths);
       addMissingIcpPolicyHolds(candidate, addedPaths);
       if (addedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);

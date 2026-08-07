@@ -25,6 +25,7 @@
       "cleanupIntervalMs": 3600000
     },
     "postTurn": {
+      "maxAttempts": 5,
       "extractionDrainRequeueDelayMs": 1000,
       "foregroundPreemptionDeferDelayMs": 1000
     }

@@ -592,6 +592,7 @@ function createRuntime(params: {
   beginForegroundBackgroundWork?: ReturnType<typeof vi.fn>;
   endForegroundBackgroundWork?: ReturnType<typeof vi.fn>;
   enqueuePostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
+  backgroundWorkMaxAttempts?: number;
   consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
@@ -793,6 +794,7 @@ function createRuntime(params: {
     evaluateReflectionNudge: vi.fn(() => null),
     emotionSelfModelRuntime,
     observerEvalSidecar: params.observerEvalSidecar ?? null,
+    backgroundWorkMaxAttempts: params.backgroundWorkMaxAttempts ?? 5,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
     beginForegroundBackgroundWork: params.beginForegroundBackgroundWork
       ?? vi.fn((logicalSessionId: string) => ({
@@ -4091,6 +4093,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({
         kind: 'memory_extraction',
+        maxAttempts: 5,
         payload: expect.objectContaining({ kind: 'memory_extraction', icpCorrelation: correlation }),
       }),
       expect.objectContaining({

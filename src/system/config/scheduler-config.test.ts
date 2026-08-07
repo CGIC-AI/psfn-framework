@@ -163,6 +163,7 @@ describe('config validators', () => {
 describe('scheduler config seed defaults', () => {
   it('owns the complete durable background-work tuning group', () => {
     expect(loadSchedulerSeedDefaults().backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
+    expect(DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts).toBe(5);
   });
 
   it('fails closed on missing, unknown, unsafe, or incoherent background-work tuning', () => {
@@ -222,6 +223,19 @@ describe('scheduler config seed defaults', () => {
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), negativeShutdown);
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'backgroundWork.supervisor.shutdownTimeoutMs must be a non-negative safe integer',
+      );
+
+      const invalidPostTurnAttempts = buildValidSchedulerConfig();
+      invalidPostTurnAttempts.backgroundWork = {
+        ...structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        postTurn: {
+          ...DEFAULT_BACKGROUND_WORK_TUNING.postTurn,
+          maxAttempts: 0,
+        },
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), invalidPostTurnAttempts);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundWork.postTurn.maxAttempts must be a positive safe integer',
       );
     });
   });

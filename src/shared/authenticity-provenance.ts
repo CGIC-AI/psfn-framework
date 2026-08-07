@@ -7,6 +7,7 @@ import type {
   AuthenticityTransformer,
   AuthenticityWording,
 } from './contracts/runtime-base.js';
+import { toPositiveInteger } from './utils/numeric.js';
 
 export const DERIVED_DETAIL_LOSS_NOTE = 'Derived context; exact details may be lost.';
 export const DERIVED_EMOTIONAL_TEXTURE_NOTE = 'Emotional texture may be flattened by summarization or retrieval.';
@@ -25,16 +26,10 @@ export interface BuildAuthenticityProvenanceInput {
   notes?: readonly string[];
 }
 
-function normalizePositiveInteger(value: number | undefined): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : undefined;
-}
-
 function normalizeEntryIds(value: readonly number[] | undefined): number[] | undefined {
   if (!value || value.length === 0) return undefined;
   const ids = value
-    .map(id => normalizePositiveInteger(id))
+    .map(id => toPositiveInteger(id))
     .filter((id): id is number => id !== undefined);
   return ids.length > 0 ? [...new Set(ids)] : undefined;
 }
@@ -51,7 +46,7 @@ export function buildAuthenticityProvenance(
   input: BuildAuthenticityProvenanceInput,
 ): AuthenticityProvenance {
   const sourceEntryIds = normalizeEntryIds(input.sourceEntryIds);
-  const sourceSpanCount = normalizePositiveInteger(input.sourceSpanCount)
+  const sourceSpanCount = toPositiveInteger(input.sourceSpanCount)
     ?? (sourceEntryIds ? sourceEntryIds.length : undefined);
   const notes = normalizeNotes(input.notes);
   return {

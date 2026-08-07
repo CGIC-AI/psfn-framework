@@ -1,3 +1,5 @@
+import { positiveIntegerOr } from '../utils/numeric.js';
+
 export type CircuitBreakerState = 'closed' | 'open' | 'half_open';
 
 export type CircuitBreakerTransitionReason =
@@ -109,20 +111,14 @@ export function isCircuitOpenError(error: unknown): error is CircuitOpenError {
 
 function resolveOptions(options: CircuitBreakerOptions): ResolvedCircuitBreakerOptions {
   return {
-    failureThreshold: normalizePositiveInt(options.failureThreshold, 1),
-    windowMs: normalizePositiveInt(options.windowMs, 1),
-    cooldownMs: normalizePositiveInt(options.cooldownMs, 1),
-    halfOpenMaxAttempts: normalizePositiveInt(options.halfOpenMaxAttempts, 1),
+    failureThreshold: positiveIntegerOr(options.failureThreshold, 1),
+    windowMs: positiveIntegerOr(options.windowMs, 1),
+    cooldownMs: positiveIntegerOr(options.cooldownMs, 1),
+    halfOpenMaxAttempts: positiveIntegerOr(options.halfOpenMaxAttempts, 1),
     now: options.now ?? (() => Date.now()),
   };
 }
 
-function normalizePositiveInt(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
-}
 
 function createEntry(): CircuitEntry {
   return {

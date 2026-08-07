@@ -7,6 +7,7 @@ import { appendJsonLine } from '../../persistence/jsonl.js';
 import { resolveSafeguardAuditTrailPath } from '../../persistence/layout.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
+import { positiveIntegerOr } from '../../shared/utils/numeric.js';
 
 export type ToolReversibility = 'reversible' | 'irreversible';
 export type ExternalCommunicationChannel = 'discord' | 'email';
@@ -70,11 +71,6 @@ interface SafeguardAnnotatedTool {
   reversibility?: ToolReversibility;
 }
 
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function normalizeAuditDetails(input: Record<string, unknown>): Record<string, unknown> {
   return normalizeJsonRecordForSerialization(input, 'safeguard audit details');
@@ -206,7 +202,7 @@ export class IdentityCoolingOffManager {
   private readonly stages = new Map<string, IdentityEditStage>();
 
   constructor(options: IdentityCoolingOffOptions = {}) {
-    this.defaultCooldownMs = normalizePositiveInt(
+    this.defaultCooldownMs = positiveIntegerOr(
       options.defaultCooldownMs,
       DEFAULT_IDENTITY_COOLDOWN_MS,
     );
@@ -217,7 +213,7 @@ export class IdentityCoolingOffManager {
 
   stageBaseLayerEdit(request: IdentityEditStageRequest): IdentityEditStage {
     const now = this.now();
-    const cooldownMs = normalizePositiveInt(request.cooldownMs, this.defaultCooldownMs);
+    const cooldownMs = positiveIntegerOr(request.cooldownMs, this.defaultCooldownMs);
     const stage: IdentityEditStage = {
       id: this.idFactory(),
       layerId: request.layerId,
@@ -354,9 +350,9 @@ export class LifecycleRestartSafeguard {
   constructor(options: LifecycleRestartOptions = {}) {
     this.cooldownMs = Math.max(
       MIN_RESTART_COOLDOWN_MS,
-      normalizePositiveInt(options.cooldownMs, DEFAULT_RESTART_COOLDOWN_MS),
+      positiveIntegerOr(options.cooldownMs, DEFAULT_RESTART_COOLDOWN_MS),
     );
-    this.maxPerHour = normalizePositiveInt(options.maxPerHour, DEFAULT_MAX_RESTARTS_PER_HOUR);
+    this.maxPerHour = positiveIntegerOr(options.maxPerHour, DEFAULT_MAX_RESTARTS_PER_HOUR);
     this.now = options.now ?? Date.now;
     this.auditTrail = options.auditTrail;
   }
@@ -480,11 +476,11 @@ export class ExternalCommunicationRateLimiter {
 
   constructor(options: ExternalCommunicationRateLimitOptions = {}) {
     this.limits = {
-      discord: normalizePositiveInt(
+      discord: positiveIntegerOr(
         options.discordPerHour,
         DEFAULT_DISCORD_MESSAGES_PER_HOUR,
       ),
-      email: normalizePositiveInt(
+      email: positiveIntegerOr(
         options.emailPerHour,
         DEFAULT_EMAIL_MESSAGES_PER_HOUR,
       ),

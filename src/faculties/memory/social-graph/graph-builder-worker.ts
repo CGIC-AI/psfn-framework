@@ -45,6 +45,7 @@ import {
   type SocialGraphEvidenceClass,
   type SocialGraphProposalStore,
 } from './proposals.js';
+import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 const log = createComponentLogger('SocialGraphBuilder');
 
@@ -136,23 +137,18 @@ interface EdgeCandidate {
   rationale: string;
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function normalizeConfig(config?: Partial<SocialGraphBuilderConfig>): SocialGraphBuilderConfig {
   return {
-    coPresenceMinSessions: normalizePositiveInteger(
+    coPresenceMinSessions: positiveIntegerOr(
       config?.coPresenceMinSessions,
       DEFAULT_SOCIAL_GRAPH_BUILDER_CONFIG.coPresenceMinSessions,
     ),
-    coPresenceWindowMinutes: normalizePositiveInteger(
+    coPresenceWindowMinutes: positiveIntegerOr(
       config?.coPresenceWindowMinutes,
       DEFAULT_SOCIAL_GRAPH_BUILDER_CONFIG.coPresenceWindowMinutes,
     ),
-    scanMemoryLimit: normalizePositiveInteger(
+    scanMemoryLimit: positiveIntegerOr(
       config?.scanMemoryLimit,
       DEFAULT_SOCIAL_GRAPH_BUILDER_CONFIG.scanMemoryLimit,
     ),

@@ -33,6 +33,7 @@ import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js
 import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
+import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
 
@@ -211,13 +212,6 @@ const STOP_WORDS = new Set([
   'your',
 ]);
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function normalizeBoundedUnit(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(3))));
@@ -659,26 +653,26 @@ export class EpisodicSynthesizer {
   ) {
     this.store = store;
     this.sessionReader = sessionReader;
-    this.transcriptMessageLimit = normalizePositiveInteger(
+    this.transcriptMessageLimit = positiveIntegerOr(
       options.transcriptMessageLimit,
       DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
     );
-    this.maxEpisodesPerRun = normalizePositiveInteger(options.maxEpisodesPerRun, DEFAULT_MAX_EPISODES_PER_RUN);
-    this.maxPriorCandidates = normalizePositiveInteger(options.maxPriorCandidates, DEFAULT_MAX_PRIOR_CANDIDATES);
-    this.gapSplitMs = normalizePositiveInteger(options.gapSplitMinutes, DEFAULT_GAP_SPLIT_MINUTES) * MINUTE_MS;
-    this.maxEntriesPerEpisode = normalizePositiveInteger(
+    this.maxEpisodesPerRun = positiveIntegerOr(options.maxEpisodesPerRun, DEFAULT_MAX_EPISODES_PER_RUN);
+    this.maxPriorCandidates = positiveIntegerOr(options.maxPriorCandidates, DEFAULT_MAX_PRIOR_CANDIDATES);
+    this.gapSplitMs = positiveIntegerOr(options.gapSplitMinutes, DEFAULT_GAP_SPLIT_MINUTES) * MINUTE_MS;
+    this.maxEntriesPerEpisode = positiveIntegerOr(
       options.maxEntriesPerEpisode,
       DEFAULT_MAX_ENTRIES_PER_EPISODE,
     );
-    this.minConversationalEntries = normalizePositiveInteger(
+    this.minConversationalEntries = positiveIntegerOr(
       options.minConversationalEntries,
       MIN_CONVERSATIONAL_ENTRIES,
     );
-    this.minSingleEntryChars = normalizePositiveInteger(
+    this.minSingleEntryChars = positiveIntegerOr(
       options.minSingleEntryChars,
       MIN_SINGLE_ENTRY_CHARS,
     );
-    this.maxThreadEpisodes = normalizePositiveInteger(
+    this.maxThreadEpisodes = positiveIntegerOr(
       options.maxThreadEpisodes,
       DEFAULT_MAX_THREAD_EPISODES,
     );

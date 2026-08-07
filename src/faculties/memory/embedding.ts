@@ -19,6 +19,7 @@ import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-q
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { toPositiveInteger } from '../../shared/utils/numeric.js';
 import {
   extractGatewayProviderCostEvidence,
   extractGatewayProviderCostEvidenceFromHeaders,
@@ -170,16 +171,6 @@ function normalizeTransformersCacheDir(cacheDir: string | undefined): string {
 
 function resolveOptionalHfToken(env: NodeJS.ProcessEnv): string | undefined {
   return resolveHuggingFaceToken({}, env);
-}
-
-function toPositiveInteger(value: unknown): number | undefined {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
-  }
-  if (typeof value === 'string') {
-    return parsePositiveInt(value);
-  }
-  return undefined;
 }
 
 function appendPath(baseUrl: string, suffix: string): string {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { positiveIntegerOr } from '../../shared/utils/numeric.js';
 import type {
   ApprovalAttribution,
   ApprovalSourceSystem,
@@ -362,11 +363,6 @@ function cloneConfirmationParams(input: Record<string, unknown>): Record<string,
   return clone;
 }
 
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value) || value === undefined) return fallback;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 export class ConfirmationQueue {
   private readonly defaultExpiryMs: number;
@@ -377,7 +373,7 @@ export class ConfirmationQueue {
   private readonly history: ConfirmationQueueHistoryEntry[] = [];
 
   constructor(options: ConfirmationQueueOptions = {}) {
-    this.defaultExpiryMs = normalizePositiveInt(
+    this.defaultExpiryMs = positiveIntegerOr(
       options.defaultExpiryMs,
       DEFAULT_CONFIRMATION_EXPIRY_MS,
     );
@@ -411,7 +407,7 @@ export class ConfirmationQueue {
   ): ConfirmationQueueEntry {
     this.expirePending();
     const requestedAt = this.now();
-    const expiresInMs = normalizePositiveInt(request.expiresInMs, this.defaultExpiryMs);
+    const expiresInMs = positiveIntegerOr(request.expiresInMs, this.defaultExpiryMs);
     const entry: ConfirmationQueueEntry = {
       id: this.idFactory(),
       method: request.method,

@@ -32,7 +32,7 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
-import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
+import { clampSigned, clampUnit, positiveIntegerOr } from '../../shared/utils/numeric.js';
 import type {
   CoreMemoryStorePort,
   MemoryMaintenanceDiagnostics,
@@ -207,13 +207,6 @@ export interface SleeptimeMemoryAgentOptions {
   episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function normalizeText(raw: unknown): string {
   if (typeof raw !== 'string') {
@@ -586,11 +579,11 @@ export class SleeptimeMemoryAgent {
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
-    this.transcriptMessageLimit = normalizePositiveInteger(
+    this.transcriptMessageLimit = positiveIntegerOr(
       options.transcriptMessageLimit,
       DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
     );
-    this.maxMemoryWrites = normalizePositiveInteger(
+    this.maxMemoryWrites = positiveIntegerOr(
       options.maxMemoryWrites,
       DEFAULT_MAX_MEMORY_WRITES,
     );
@@ -622,7 +615,7 @@ export class SleeptimeMemoryAgent {
     const nowMs = typeof options.nowMs === 'number' && Number.isFinite(options.nowMs)
       ? options.nowMs
       : Date.now();
-    const limit = normalizePositiveInteger(options.limit, DEFAULT_IDLE_SESSION_LIMIT);
+    const limit = positiveIntegerOr(options.limit, DEFAULT_IDLE_SESSION_LIMIT);
     const actions: PostTurnActionCandidate[] = [];
 	    for (const session of this.sessionManager.listRecentSessions(limit)) {
 	      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);

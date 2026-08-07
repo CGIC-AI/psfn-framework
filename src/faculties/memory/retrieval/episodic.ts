@@ -31,6 +31,7 @@ import type {
   EpisodicRetrievalChain,
   EpisodicRetrievalStore,
 } from './episodic-types.js';
+import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
 
 export { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
 export type {
@@ -165,9 +166,9 @@ export async function retrieveEpisodicChains(
   const queryTokens = tokenizeQuery(input.contextText);
   const normalizedQuery = normalizeSearchText(input.contextText);
   const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
-  const maxChains = normalizePositiveInteger(input.maxChains, episodicPolicy.maxChains);
+  const maxChains = positiveIntegerOr(input.maxChains, episodicPolicy.maxChains);
   const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth);
-  const maxEpisodesPerChain = normalizePositiveInteger(
+  const maxEpisodesPerChain = positiveIntegerOr(
     input.maxEpisodesPerChain,
     episodicPolicy.maxEpisodesPerChain,
   );
@@ -175,14 +176,14 @@ export async function retrieveEpisodicChains(
     store,
     boundary: input.rolledOutSessionBoundary,
     maxChains,
-    scanLimit: normalizePositiveInteger(input.scanLimit, episodicPolicy.scanLimit),
+    scanLimit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
     isVisible: episode => isEpisodeVisibleForTurn(episode, input),
   });
   if (queryTokens.length === 0 && !input.scopeQuery) {
     return rolledOutBreadcrumbs;
   }
   const episodes = (await store.listEpisodes({
-    limit: normalizePositiveInteger(input.scanLimit, episodicPolicy.scanLimit),
+    limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
   })).map(cloneEpisode);
   const episodeIndex = new Map<string, Episode>();
   const roots = episodes
@@ -235,15 +236,15 @@ export async function retrieveEpisodicTimeline(
   input: EpisodicTimelineInput,
 ): Promise<EpisodicTimelineEntry[]> {
   const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
-  const limit = normalizePositiveInteger(input.limit, episodicPolicy.timelineLimit);
-  const scanLimit = normalizePositiveInteger(
+  const limit = positiveIntegerOr(input.limit, episodicPolicy.timelineLimit);
+  const scanLimit = positiveIntegerOr(
     input.scanLimit,
     Math.max(episodicPolicy.timelineScanLimit, limit * 4),
   );
   const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.timelineMaxDepth);
   const maxEpisodesPerRoot = Math.max(
     2,
-    normalizePositiveInteger(input.maxEpisodesPerRoot, episodicPolicy.timelineMaxEpisodesPerRoot),
+    positiveIntegerOr(input.maxEpisodesPerRoot, episodicPolicy.timelineMaxEpisodesPerRoot),
   );
   const visibilityInput: EpisodicRetrievalInput = {
     contextText: '',
@@ -717,11 +718,6 @@ function singularizeToken(token: string): string {
   return token;
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  const normalized = Math.floor(value as number);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;

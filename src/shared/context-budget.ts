@@ -3,7 +3,7 @@ import type {
   ContextBudgetModelSelectionLike,
   ContextBudgetModelSlotLike,
 } from './context-budget-contracts.js';
-import { clamp } from './utils/numeric.js';
+import { clamp, toPositiveInteger } from './utils/numeric.js';
 
 export interface ContextBudgetConfigLike {
   defaultContextWindow: number;
@@ -177,12 +177,6 @@ const ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY: Readonly<Record<
   creative: { sessionHistoryBudgetPct: 9, memoryRetrievalBudgetPct: 3 },
   factual: { sessionHistoryBudgetPct: 6, memoryRetrievalBudgetPct: 3 },
 };
-
-function toPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  const normalized = Math.trunc(value);
-  return normalized > 0 ? normalized : undefined;
-}
 
 function normalizeNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;

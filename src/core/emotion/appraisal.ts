@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { requirePositiveInteger } from '../../shared/utils/numeric.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { buildSystemPromptCacheBoundaries } from '../../primitives/llm/prompt-cache.js';
@@ -147,14 +148,6 @@ function normalizeVadDeltaThreshold(value: number | undefined): number {
   const normalized = value ?? DEFAULT_VAD_DELTA_THRESHOLD;
   if (!Number.isFinite(normalized) || normalized <= 0 || normalized > 2) {
     throw new Error(`Emotion appraisal VAD delta threshold must be in range (0, 2], received ${String(value)}`);
-  }
-  return normalized;
-}
-
-function normalizePositiveInteger(value: number | undefined, field: string, fallback: number): number {
-  const normalized = value ?? fallback;
-  if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`${field} must be a positive integer, received ${String(value)}`);
   }
   return normalized;
 }
@@ -396,25 +389,21 @@ export class EmotionAppraisal {
       ],
       closedReason: 'no_movement',
     };
-    this.recentMessageCount = normalizePositiveInteger(
-      config.recentMessageCount,
+    this.recentMessageCount = requirePositiveInteger(
+      config.recentMessageCount ?? DEFAULT_RECENT_MESSAGE_COUNT,
       'Emotion appraisal recentMessageCount',
-      DEFAULT_RECENT_MESSAGE_COUNT,
     );
-    this.maxChainEntries = normalizePositiveInteger(
-      config.maxChainEntries,
+    this.maxChainEntries = requirePositiveInteger(
+      config.maxChainEntries ?? DEFAULT_MAX_CHAIN_ENTRIES,
       'Emotion appraisal maxChainEntries',
-      DEFAULT_MAX_CHAIN_ENTRIES,
     );
-    this.maxMessageChars = normalizePositiveInteger(
-      config.maxMessageChars,
+    this.maxMessageChars = requirePositiveInteger(
+      config.maxMessageChars ?? DEFAULT_MAX_MESSAGE_CHARS,
       'Emotion appraisal maxMessageChars',
-      DEFAULT_MAX_MESSAGE_CHARS,
     );
-    this.maxSummaryChars = normalizePositiveInteger(
-      config.maxSummaryChars,
+    this.maxSummaryChars = requirePositiveInteger(
+      config.maxSummaryChars ?? DEFAULT_MAX_SUMMARY_CHARS,
       'Emotion appraisal maxSummaryChars',
-      DEFAULT_MAX_SUMMARY_CHARS,
     );
     const normalizedPrompt = config.systemPrompt?.replace(/\s+/g, ' ').trim();
     this.systemPrompt = normalizedPrompt && normalizedPrompt.length > 0

@@ -22,6 +22,7 @@ import {
   type CompanionId,
 } from '../../shared/routing/envelope.js';
 import type { CompanionRoutingBinding } from '../../shared/routing/companion-id.js';
+import { positiveIntegerOr } from '../../shared/utils/numeric.js';
 
 const DEFAULT_VOICE_CHUNK_SIZE = 120;
 const DEFAULT_VOICE_QUEUE_SIZE = 32;
@@ -99,8 +100,8 @@ export async function requestAgentVoiceStream({
   inspectReply,
 }: RequestAgentVoiceStreamOptions): Promise<VoiceHandleMessageResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
-  const chunkSize = normalizePositiveInt(options.chunkSize, DEFAULT_VOICE_CHUNK_SIZE);
-  const maxQueueSize = normalizePositiveInt(options.maxQueueSize, DEFAULT_VOICE_QUEUE_SIZE);
+  const chunkSize = positiveIntegerOr(options.chunkSize, DEFAULT_VOICE_CHUNK_SIZE);
+  const maxQueueSize = positiveIntegerOr(options.maxQueueSize, DEFAULT_VOICE_QUEUE_SIZE);
   const overflowPolicy = options.overflowPolicy ?? DEFAULT_VOICE_OVERFLOW_POLICY;
   const requestCounter = nextRequestCounter();
   const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${requestCounter}`;
@@ -342,14 +343,6 @@ export async function requestAgentVoiceStream({
   }
 }
 
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value) || value === undefined) {
-    return fallback;
-  }
-
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : fallback;
-}
 
 function chunkText(text: string, chunkSize: number): string[] {
   const source = text;

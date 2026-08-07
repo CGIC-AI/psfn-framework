@@ -17,7 +17,7 @@ import type {
 
 const log = createComponentLogger('GatewayClient');
 
-export interface GatewayClientTransportCloseEvent {
+interface GatewayClientTransportCloseEvent {
   source: 'close' | 'error';
   error?: Error;
 }

@@ -49,8 +49,16 @@ async function context(entries: SessionEntry[]) {
 
 function addressedTo(...targets: Array<{ authorId: string; authorName: string }>): string {
   return buildSessionMetadataWithMessageAddressing(undefined, {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    source: 'discord',
+    author: { authorId: 'dragon', authorName: 'MrDragonFox' },
+    observer: { authorId: 'current-companion-bot', authorName: 'Lyra' },
     mentionedTargets: targets,
+    channel: { scope: 'group', channelId: 'discord-room' },
+    resolvedAddressee: {
+      kind: 'participants',
+      participants: targets.map(target => ({ ...target, evidence: ['mention'] })),
+    },
   });
 }
 

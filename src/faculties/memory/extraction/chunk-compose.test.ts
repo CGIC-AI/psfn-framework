@@ -86,11 +86,34 @@ describe('chunk-compose extraction transcript filtering', () => {
 
   it('renders transport addressing and reply lineage into the extraction transcript', () => {
     const addressingMetadata = buildSessionMetadataWithMessageAddressing(undefined, {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      source: 'discord',
+      author: { authorId: 'operator-1', authorName: 'Operator' },
+      observer: { authorId: 'lyra-bot', authorName: 'Lyra' },
       mentionedTargets: [
         { authorId: 'other-companion', authorName: 'Other Companion' },
         { authorId: 'second-companion', authorName: 'Second Companion' },
       ],
+      replyTarget: {
+        messageId: 'discord-parent-1',
+        author: { authorId: 'other-companion', authorName: 'Other Companion' },
+      },
+      channel: { scope: 'group', channelId: 'discord-room', threadId: 'discord-thread' },
+      resolvedAddressee: {
+        kind: 'participants',
+        participants: [
+          {
+            authorId: 'other-companion',
+            authorName: 'Other Companion',
+            evidence: ['mention', 'reply'],
+          },
+          {
+            authorId: 'second-companion',
+            authorName: 'Second Companion',
+            evidence: ['mention'],
+          },
+        ],
+      },
     });
     const metadata = buildSessionMetadataWithTurn(addressingMetadata, {
       turnId: createTurnId(),

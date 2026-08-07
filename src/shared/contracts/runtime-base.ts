@@ -27,12 +27,22 @@ import type {
   IcpInitiationSource,
 } from './icp-autonomy.js';
 import type { PlacePrivacy } from './places-registry.js';
+import type { MessageAddressingMetadata } from './message-addressing.js';
 import type {
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
 } from './companion-relay.js';
 import type { ObservabilityCallType } from './observability-call-types.js';
 export type { ObservabilityCallType } from './observability-call-types.js';
+export type {
+  MessageAddressingChannel,
+  MessageAddressingMetadata,
+  MessageAddressingParticipant,
+  MessageAddressingReplyTarget,
+  MessageAddresseeEvidence,
+  MessageResolvedAddressee,
+  MessageResolvedParticipant,
+} from './message-addressing.js';
 
 // ── Channel-agnostic message types ──
 
@@ -456,22 +466,6 @@ export interface ReflectionTurnProvenance {
   templateId: string;
   mode: ReflectionTurnMode;
   journalEntryId?: string;
-}
-
-/** Transport-authoritative participant named by an explicit message mention. */
-export interface MessageMentionTarget {
-  authorId: string;
-  authorName: string;
-}
-
-/**
- * Structured addressing captured by the channel adapter before content
- * normalization. Downstream cognition must prefer this evidence over prose
- * guesses about who a shared-room message addressed.
- */
-export interface MessageAddressingMetadata {
-  schemaVersion: 1;
-  mentionedTargets: readonly MessageMentionTarget[];
 }
 
 export interface MessageRoutingMetadata {

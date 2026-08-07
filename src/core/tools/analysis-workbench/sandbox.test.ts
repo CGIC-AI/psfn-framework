@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
@@ -371,7 +372,7 @@ describe('REPLSandbox', () => {
   });
 
   it('repo_* helpers call gateway git methods when available', async () => {
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       gitStatus: vi.fn(async () => ({
         branch: 'feature/test',
@@ -391,7 +392,7 @@ describe('REPLSandbox', () => {
         message: 'test commit',
         filesChanged: 1,
       })),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
       allowRepoMutation: true,
     }));
@@ -414,10 +415,10 @@ describe('REPLSandbox', () => {
   });
 
   it('repo_apply_patch rejects disallowed paths before calling git', async () => {
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       gitApplyPatch: vi.fn(async () => {}),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
       allowRepoMutation: true,
     }));
@@ -434,12 +435,12 @@ describe('REPLSandbox', () => {
   });
 
   it('web browse/search use the gateway webFetch path', async () => {
-    const llm = {
+    const llm = fromAny({
       ...mockSequentialLLM([
         '["https://example.com/a","https://example.com/b"]',
       ]),
       webFetch: vi.fn(async (url: string) => `content for ${url}`),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
       [
@@ -467,7 +468,7 @@ describe('REPLSandbox', () => {
       eof: true,
       truncated: false,
     }));
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ({
@@ -480,7 +481,7 @@ describe('REPLSandbox', () => {
         entryLimitReached: false,
       })),
       webFetch: vi.fn(async (url: string) => `fetched:${url}`),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox({
       ...nullDeps(llm, null, {
         allowWorkspaceWrite: true,
@@ -599,11 +600,11 @@ describe('REPLSandbox', () => {
         isolatedFromGatewaySecrets: true,
       },
       shellExec: vi.fn(),
-      codeExecutionBoundary: {
+      codeExecutionBoundary: fromAny({
         kind: 'node_vm',
         isolatedFromGatewaySecrets: false,
         reason: 'legacy false claim',
-      } as any,
+      }),
     })).toThrow('requires an out-of-process child_process sandbox boundary');
   });
 
@@ -721,7 +722,7 @@ describe('REPLSandbox', () => {
       eof: true,
       truncated: false,
     }));
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ({
@@ -734,7 +735,7 @@ describe('REPLSandbox', () => {
         entryLimitReached: false,
       })),
       webFetch: vi.fn(async () => 'web'),
-    } as unknown as LLMProviderPort;
+    });
     const budgetRef: SandboxBudgetRef = {
       subQueries: 0,
       maxSubQueries: 10,
@@ -780,12 +781,12 @@ describe('REPLSandbox', () => {
         message: 'unable to get local issuer certificate',
       },
     });
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       webFetch: vi.fn(async () => {
         throw fetchError;
       }),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
       'const c = await web("browse", "https://1.1.1.1/"); print(c);',
@@ -807,11 +808,11 @@ describe('REPLSandbox', () => {
       updatedAt: 2,
       version: 1,
     }]);
-    const llm = {
+    const llm = fromAny({
       ...mockLLM(),
       fsRead: vi.fn(async () => stored),
       fsWrite: vi.fn(),
-    } as unknown as LLMProviderPort;
+    });
     const sandbox = new REPLSandbox(nullDeps(llm));
 
     const result = await sandbox.execute(
@@ -1238,13 +1239,13 @@ describe('evidence collection', () => {
   });
 
   it('records session_messages evidence', async () => {
-    const sessionManager = {
+    const sessionManager = fromAny<SessionManager>({
       getRecentMessages: vi.fn(() => [
         { role: 'user', content: 'hello there', timestamp: Date.now() },
         { role: 'assistant', content: 'hi!', timestamp: Date.now() },
       ]),
       appendSystemNote: vi.fn(),
-    } as unknown as SessionManager;
+    });
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),

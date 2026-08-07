@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -155,24 +156,24 @@ function writeHydrationOwnerExamples(systemDataDir: string, companionDataDir: st
 
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {
-    expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'deepgram' } as any)).toBe('deepgram');
-    expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'disabled' } as any)).toBe('disabled');
+    expect(resolveRuntimeVoiceSttProvider(fromPartial({ sttProvider: 'deepgram' }))).toBe('deepgram');
+    expect(resolveRuntimeVoiceSttProvider(fromPartial({ sttProvider: 'disabled' }))).toBe('disabled');
   });
 
   it('throws when provider selection is not explicitly configured', () => {
-    expect(() => resolveRuntimeVoiceSttProvider({ deepgramApiKey: 'key' } as any)).toThrow(
+    expect(() => resolveRuntimeVoiceSttProvider(fromPartial({ deepgramApiKey: 'key' }))).toThrow(
       'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
     );
-    expect(() => resolveRuntimeVoiceSttProvider({} as any)).toThrow(
+    expect(() => resolveRuntimeVoiceSttProvider(fromPartial({}))).toThrow(
       'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
     );
   });
 
   it('throws for unsupported configured providers instead of falling back', () => {
-    expect(() => resolveRuntimeVoiceSttProvider({
+    expect(() => resolveRuntimeVoiceSttProvider(fromPartial({
       sttProvider: 'invalid-provider',
       deepgramApiKey: 'key',
-    } as any)).toThrow('Unsupported runtime voice STT provider: invalid-provider');
+    }))).toThrow('Unsupported runtime voice STT provider: invalid-provider');
   });
 
   it('accepts registered providers without core switch edits', () => {
@@ -192,7 +193,7 @@ describe('resolveRuntimeVoiceSttProvider', () => {
     });
 
     try {
-      expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'plugin-test' } as any)).toBe('plugin-test');
+      expect(resolveRuntimeVoiceSttProvider(fromPartial({ sttProvider: 'plugin-test' }))).toBe('plugin-test');
     } finally {
       restoreProvider();
     }
@@ -201,24 +202,24 @@ describe('resolveRuntimeVoiceSttProvider', () => {
 
 describe('resolveRuntimeVoiceTtsProvider', () => {
   it('uses explicit provider when configured', () => {
-    expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'echo' } as any)).toBe('echo');
-    expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'disabled' } as any)).toBe('disabled');
+    expect(resolveRuntimeVoiceTtsProvider(fromPartial({ ttsProvider: 'echo' }))).toBe('echo');
+    expect(resolveRuntimeVoiceTtsProvider(fromPartial({ ttsProvider: 'disabled' }))).toBe('disabled');
   });
 
   it('throws when provider selection is not explicitly configured', () => {
-    expect(() => resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toThrow(
+    expect(() => resolveRuntimeVoiceTtsProvider(fromPartial({ elevenLabsApiKey: 'elevenlabs-key' }))).toThrow(
       'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
     );
-    expect(() => resolveRuntimeVoiceTtsProvider({} as any)).toThrow(
+    expect(() => resolveRuntimeVoiceTtsProvider(fromPartial({}))).toThrow(
       'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
     );
   });
 
   it('throws for unsupported configured providers instead of falling back', () => {
-    expect(() => resolveRuntimeVoiceTtsProvider({
+    expect(() => resolveRuntimeVoiceTtsProvider(fromPartial({
       ttsProvider: 'invalid-provider',
       elevenLabsApiKey: 'elevenlabs-key',
-    } as any)).toThrow('Unsupported runtime voice TTS provider: invalid-provider');
+    }))).toThrow('Unsupported runtime voice TTS provider: invalid-provider');
   });
 
   it('accepts registered providers without core switch edits', () => {
@@ -237,7 +238,7 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
     });
 
     try {
-      expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'plugin-test' } as any)).toBe('plugin-test');
+      expect(resolveRuntimeVoiceTtsProvider(fromPartial({ ttsProvider: 'plugin-test' }))).toBe('plugin-test');
     } finally {
       restoreProvider();
     }
@@ -246,12 +247,12 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
 
 describe('resolveRuntimeVoiceProviderGate', () => {
   it('keeps voice disabled when providers are explicitly set to disabled', () => {
-    const gate = resolveRuntimeVoiceProviderGate({
+    const gate = resolveRuntimeVoiceProviderGate(fromPartial({
       sttProvider: 'disabled',
       ttsProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
       elevenLabsApiKey: 'elevenlabs-key',
-    } as any);
+    }));
     expect(gate).toEqual({
       sttProvider: 'disabled',
       ttsProvider: 'disabled',
@@ -261,29 +262,29 @@ describe('resolveRuntimeVoiceProviderGate', () => {
   });
 
   it('throws when provider selections are missing even if credentials exist', () => {
-    expect(() => resolveRuntimeVoiceProviderGate({
+    expect(() => resolveRuntimeVoiceProviderGate(fromPartial({
       deepgramApiKey: 'deepgram-key',
       elevenLabsApiKey: 'elevenlabs-key',
-    } as any)).toThrow(
+    }))).toThrow(
       'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
     );
 
-    expect(() => resolveRuntimeVoiceProviderGate({
+    expect(() => resolveRuntimeVoiceProviderGate(fromPartial({
       sttProvider: 'disabled',
       elevenLabsApiKey: 'elevenlabs-key',
-    } as any)).toThrow(
+    }))).toThrow(
       'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
     );
   });
 
   it('requires explicit echo URL/voice by default', () => {
-    const gate = resolveRuntimeVoiceProviderGate({
+    const gate = resolveRuntimeVoiceProviderGate(fromPartial({
       sttProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
       ttsProvider: 'echo',
       echoTtsUrl: '',
       echoTtsVoice: '',
-    } as any);
+    }));
     expect(gate).toEqual({
       sttProvider: 'disabled',
       ttsProvider: 'echo',
@@ -294,11 +295,11 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
   it('can allow echo defaults for websocket runtime gating', () => {
     const gate = resolveRuntimeVoiceProviderGate(
-      {
+      fromPartial({
         sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'echo',
-      } as any,
+      }),
       { allowEchoDefaults: true },
     );
     expect(gate).toEqual({
@@ -311,31 +312,31 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
   it('can require explicit elevenlabs voice id when needed', () => {
     const strictGate = resolveRuntimeVoiceProviderGate(
-      {
+      fromPartial({
         sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'elevenlabs',
         elevenLabsApiKey: 'elevenlabs-key',
         elevenLabsVoiceId: '',
-      } as any,
+      }),
       { requireElevenLabsVoiceId: true },
     );
     expect(strictGate.ttsEnabled).toBe(false);
 
     const relaxedGate = resolveRuntimeVoiceProviderGate(
-      {
+      fromPartial({
         sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'elevenlabs',
         elevenLabsApiKey: 'elevenlabs-key',
         elevenLabsVoiceId: '',
-      } as any,
+      }),
     );
     expect(relaxedGate.ttsEnabled).toBe(true);
   });
 
   it('treats vault-backed voice credentials as configured during provider gating', () => {
-    const gate = resolveRuntimeVoiceProviderGate({
+    const gate = resolveRuntimeVoiceProviderGate(fromPartial({
       credentialVault: createEnvCredentialVault({
         DEEPGRAM_API_KEY: 'deepgram-key',
         ELEVENLABS_API_KEY: 'elevenlabs-key',
@@ -343,7 +344,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       sttProvider: 'deepgram',
       ttsProvider: 'elevenlabs',
       elevenLabsVoiceId: 'voice-id',
-    } as any);
+    }));
 
     expect(gate).toEqual({
       sttProvider: 'deepgram',
@@ -370,26 +371,26 @@ describe('resolveRuntimeVoiceProviderGate', () => {
     });
 
     try {
-      const enabledGate = resolveRuntimeVoiceProviderGate({
+      const enabledGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'plugin-test',
         ttsProvider: 'disabled',
         pluginSttToken: 'plugin-key',
-      } as any);
+      }));
       expect(enabledGate.sttEnabled).toBe(true);
       expect(enabledGate.sttProvider).toBe('plugin-test');
 
-      const defaultGate = resolveRuntimeVoiceProviderGate({
+      const defaultGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'disabled',
         ttsProvider: 'disabled',
         pluginSttToken: 'plugin-key',
-      } as any);
+      }));
       expect(defaultGate.sttEnabled).toBe(false);
       expect(defaultGate.sttProvider).toBe('disabled');
 
-      const disabledGate = resolveRuntimeVoiceProviderGate({
+      const disabledGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'plugin-test',
         ttsProvider: 'disabled',
-      } as any);
+      }));
       expect(disabledGate.sttEnabled).toBe(false);
     } finally {
       restoreProvider();
@@ -412,27 +413,27 @@ describe('resolveRuntimeVoiceProviderGate', () => {
     });
 
     try {
-      const enabledGate = resolveRuntimeVoiceProviderGate({
+      const enabledGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'disabled',
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
-      } as any);
+      }));
       expect(enabledGate.ttsEnabled).toBe(true);
       expect(enabledGate.ttsProvider).toBe('plugin-test');
 
-      const defaultGate = resolveRuntimeVoiceProviderGate({
+      const defaultGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'disabled',
         ttsProvider: 'disabled',
         pluginTtsToken: 'plugin-key',
         elevenLabsApiKey: '',
-      } as any);
+      }));
       expect(defaultGate.ttsEnabled).toBe(false);
       expect(defaultGate.ttsProvider).toBe('disabled');
 
-      const disabledGate = resolveRuntimeVoiceProviderGate({
+      const disabledGate = resolveRuntimeVoiceProviderGate(fromPartial({
         sttProvider: 'disabled',
         ttsProvider: 'plugin-test',
-      } as any);
+      }));
       expect(disabledGate.ttsEnabled).toBe(false);
     } finally {
       restoreProvider();
@@ -442,13 +443,13 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
 describe('createRuntimeVoiceSttConnector', () => {
   it('throws when provider selection is missing and returns null when explicitly disabled', () => {
-    expect(() => createRuntimeVoiceSttConnector({} as any)).toThrow(
+    expect(() => createRuntimeVoiceSttConnector(fromPartial({}))).toThrow(
       'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
     );
-    expect(createRuntimeVoiceSttConnector({
+    expect(createRuntimeVoiceSttConnector(fromPartial({
       sttProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
-    } as any)).toBeNull();
+    }))).toBeNull();
   });
 
   it('creates a connector from registered runtime config without entrypoint switch logic', () => {
@@ -474,11 +475,11 @@ describe('createRuntimeVoiceSttConnector', () => {
     });
 
     try {
-      const binding = createRuntimeVoiceSttConnector({
+      const binding = createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
         pluginSttToken: 'plugin-key',
         pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any);
+      }));
 
       expect(binding?.provider).toBe('plugin-test');
       expect(binding?.connector).toBe(connector);
@@ -511,9 +512,9 @@ describe('createRuntimeVoiceSttConnector', () => {
     });
 
     try {
-      expect(() => createRuntimeVoiceSttConnector({
+      expect(() => createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
-      } as any)).toThrow('plugin STT runtime config missing');
+      }))).toThrow('plugin STT runtime config missing');
     } finally {
       restoreProvider();
     }
@@ -539,11 +540,11 @@ describe('createRuntimeVoiceSttConnector', () => {
     });
 
     try {
-      expect(() => createRuntimeVoiceSttConnector({
+      expect(() => createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
         pluginSttToken: 'plugin-key',
         pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any)).toThrow('stt plugin "plugin-test" is missing eligibility requirements');
+      }))).toThrow('stt plugin "plugin-test" is missing eligibility requirements');
     } finally {
       restoreProvider();
     }
@@ -577,11 +578,11 @@ describe('createRuntimeVoiceSttConnector', () => {
     });
 
     try {
-      const binding = createRuntimeVoiceSttConnector({
+      const binding = createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
         pluginSttToken: 'plugin-key',
         pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any, { eligibilityGate });
+      }), { eligibilityGate });
 
       allowExternalWeb = false;
       await expect(binding!.connector.startStream({
@@ -615,11 +616,11 @@ describe('createRuntimeVoiceSttConnector', () => {
 
     try {
       const { gate } = createMutableEligibilityGate([]);
-      expect(() => createRuntimeVoiceSttConnector({
+      expect(() => createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
         pluginSttToken: 'plugin-key',
         pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any, {
+      }), {
         eligibilityGate: gate,
       })).toThrow('Eligibility denied');
     } finally {
@@ -648,11 +649,11 @@ describe('createRuntimeVoiceSttConnector', () => {
 
     try {
       const { gate, setTokens } = createMutableEligibilityGate(['external.web']);
-      const binding = createRuntimeVoiceSttConnector({
+      const binding = createRuntimeVoiceSttConnector(fromPartial({
         sttProvider: 'plugin-test',
         pluginSttToken: 'plugin-key',
         pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any, {
+      }), {
         eligibilityGate: gate,
       });
       expect(binding).not.toBeNull();
@@ -674,14 +675,14 @@ describe('createRuntimeVoiceSttConnector', () => {
 
 describe('createRuntimeVoiceTtsConnector', () => {
   it('throws when provider selection is missing and returns null when explicitly disabled', () => {
-    expect(() => createRuntimeVoiceTtsConnector({} as any)).toThrow(
+    expect(() => createRuntimeVoiceTtsConnector(fromPartial({}))).toThrow(
       'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
     );
-    expect(createRuntimeVoiceTtsConnector({
+    expect(createRuntimeVoiceTtsConnector(fromPartial({
       ttsProvider: 'disabled',
       elevenLabsApiKey: 'elevenlabs-key',
       elevenLabsVoiceId: 'voice-id',
-    } as any)).toBeNull();
+    }))).toBeNull();
   });
 
   it('creates a connector from registered runtime config without entrypoint switch logic', () => {
@@ -706,11 +707,11 @@ describe('createRuntimeVoiceTtsConnector', () => {
     });
 
     try {
-      const binding = createRuntimeVoiceTtsConnector({
+      const binding = createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any);
+      }));
 
       expect(binding?.provider).toBe('plugin-test');
       expect(binding?.connector).toBe(connector);
@@ -742,9 +743,9 @@ describe('createRuntimeVoiceTtsConnector', () => {
     });
 
     try {
-      expect(() => createRuntimeVoiceTtsConnector({
+      expect(() => createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
-      } as any)).toThrow('plugin TTS runtime config missing');
+      }))).toThrow('plugin TTS runtime config missing');
     } finally {
       restoreProvider();
     }
@@ -769,11 +770,11 @@ describe('createRuntimeVoiceTtsConnector', () => {
     });
 
     try {
-      expect(() => createRuntimeVoiceTtsConnector({
+      expect(() => createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any)).toThrow('tts plugin "plugin-test" is missing eligibility requirements');
+      }))).toThrow('tts plugin "plugin-test" is missing eligibility requirements');
     } finally {
       restoreProvider();
     }
@@ -806,11 +807,11 @@ describe('createRuntimeVoiceTtsConnector', () => {
     });
 
     try {
-      const binding = createRuntimeVoiceTtsConnector({
+      const binding = createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any, { eligibilityGate });
+      }), { eligibilityGate });
 
       allowExternalWeb = false;
       await expect(binding!.connector.synthesizeBuffer({ text: 'hello' })).rejects.toThrow('Eligibility denied');
@@ -839,11 +840,11 @@ describe('createRuntimeVoiceTtsConnector', () => {
 
     try {
       const { gate } = createMutableEligibilityGate([]);
-      expect(() => createRuntimeVoiceTtsConnector({
+      expect(() => createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any, {
+      }), {
         eligibilityGate: gate,
       })).toThrow('Eligibility denied');
     } finally {
@@ -871,11 +872,11 @@ describe('createRuntimeVoiceTtsConnector', () => {
 
     try {
       const { gate, setTokens } = createMutableEligibilityGate(['external.web']);
-      const binding = createRuntimeVoiceTtsConnector({
+      const binding = createRuntimeVoiceTtsConnector(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any, {
+      }), {
         eligibilityGate: gate,
       });
       expect(binding).not.toBeNull();
@@ -911,31 +912,31 @@ describe('resolveRuntimeVoiceTtsProviderOrder', () => {
     });
 
     try {
-      expect(resolveRuntimeVoiceTtsProviderOrder({
+      expect(resolveRuntimeVoiceTtsProviderOrder(fromPartial({
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
         elevenLabsApiKey: 'elevenlabs-key',
         elevenLabsVoiceId: 'voice-id',
-      } as any)).toEqual(['plugin-test']);
+      }))).toEqual(['plugin-test']);
     } finally {
       restoreProvider();
     }
   });
 
   it('returns an empty provider order when the provider is explicitly disabled', () => {
-    expect(resolveRuntimeVoiceTtsProviderOrder({
+    expect(resolveRuntimeVoiceTtsProviderOrder(fromPartial({
       ttsProvider: 'disabled',
       elevenLabsApiKey: 'elevenlabs-key',
       elevenLabsVoiceId: 'voice-id',
-    } as any)).toEqual([]);
+    }))).toEqual([]);
   });
 
   it('throws when provider selection is missing', () => {
-    expect(() => resolveRuntimeVoiceTtsProviderOrder({
+    expect(() => resolveRuntimeVoiceTtsProviderOrder(fromPartial({
       elevenLabsApiKey: 'elevenlabs-key',
       elevenLabsVoiceId: 'voice-id',
-    } as any)).toThrow(
+    }))).toThrow(
       'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
     );
   });
@@ -955,7 +956,7 @@ describe('installPromotedToolsPersistenceHook', () => {
     tempDirs.push(dataDir);
     saveSettings(dataDir, {});
 
-    const config = { dataDir } as any;
+    const config = fromPartial({ dataDir });
     installPromotedToolsPersistenceHook(config);
 
     await config.runtimeHooks.persistPromotedExtendedTools(['repo_status', 'repo_diff']);
@@ -969,12 +970,12 @@ describe('installPromotedToolsPersistenceHook', () => {
     tempDirs.push(dataDir);
 
     const existingHook = () => 'ok';
-    const config = {
+    const config = fromPartial({
       dataDir,
       runtimeHooks: {
         existingHook,
       },
-    } as any;
+    });
 
     installPromotedToolsPersistenceHook(config);
 
@@ -993,9 +994,9 @@ describe('installPromotedToolsPersistenceHook', () => {
       },
     } as ConfigStorePort;
 
-    const config = {
+    const config = fromPartial({
       dataDir: '/unused',
-    } as any;
+    });
     installPromotedToolsPersistenceHook(config, {
       configStore,
     });
@@ -1016,7 +1017,7 @@ describe('installPromotedToolsPersistenceHook', () => {
       saveRuntimeSettings,
     } as unknown as ConfigStorePort;
     const writeSystemData = vi.fn(async () => ({ ok: true as const }));
-    const config = { dataDir: '/runtime/system-data' } as any;
+    const config = fromPartial({ dataDir: '/runtime/system-data' });
 
     installPromotedToolsPersistenceHook(config, {
       configStore,
@@ -1039,7 +1040,7 @@ describe('installPromotedToolsPersistenceHook', () => {
       loadRuntimeSettings: () => ({ promotedExtendedTools: [] }),
       saveRuntimeSettings: vi.fn(),
     } as unknown as ConfigStorePort;
-    const config = { dataDir: '/runtime/system-data' } as any;
+    const config = fromPartial({ dataDir: '/runtime/system-data' });
     installPromotedToolsPersistenceHook(config, {
       configStore,
       systemDataWriter: {

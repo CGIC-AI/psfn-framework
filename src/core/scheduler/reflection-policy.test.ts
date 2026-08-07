@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -598,25 +599,25 @@ describe('validateTemplate', () => {
   it('rejects invalid cadence payloads', () => {
     const invalidKind = validateTemplate({
       ...validTemplate,
-      cadence: { kind: 'monthly' as any },
+      cadence: fromAny({ kind: 'monthly' }),
     }, true);
     expect(invalidKind.some(e => e.field === 'cadence.kind')).toBe(true);
 
     const invalidHourlyMinute = validateTemplate({
       ...validTemplate,
-      cadence: { kind: 'hourly', minute: 60, timezone: 'utc' } as any,
+      cadence: fromAny({ kind: 'hourly', minute: 60, timezone: 'utc' }),
     }, true);
     expect(invalidHourlyMinute.some(e => e.field === 'cadence.minute')).toBe(true);
 
     const invalidDailyTimezone = validateTemplate({
       ...validTemplate,
-      cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'mars' } as any,
+      cadence: fromAny({ kind: 'daily', hour: 6, minute: 30, timezone: 'mars' }),
     }, true);
     expect(invalidDailyTimezone.some(e => e.field === 'cadence.timezone')).toBe(true);
 
     const invalidWeeklyDay = validateTemplate({
       ...validTemplate,
-      cadence: { kind: 'weekly', dayOfWeek: 7, hour: 7, minute: 0, timezone: 'local' } as any,
+      cadence: fromAny({ kind: 'weekly', dayOfWeek: 7, hour: 7, minute: 0, timezone: 'local' }),
     }, true);
     expect(invalidWeeklyDay.some(e => e.field === 'cadence.dayOfWeek')).toBe(true);
   });
@@ -674,12 +675,12 @@ describe('validateTemplate', () => {
   });
 
   it('rejects invalid mode', () => {
-    const errors = validateTemplate({ ...validTemplate, mode: 'other' as any }, true);
+    const errors = validateTemplate({ ...validTemplate, mode: fromAny('other') }, true);
     expect(errors.some(e => e.field === 'mode')).toBe(true);
   });
 
   it('rejects invalid internalStateInput type', () => {
-    const errors = validateTemplate({ ...validTemplate, internalStateInput: 'yes' as any }, true);
+    const errors = validateTemplate({ ...validTemplate, internalStateInput: fromAny('yes') }, true);
     expect(errors.some(e => e.field === 'internalStateInput')).toBe(true);
   });
 
@@ -687,7 +688,7 @@ describe('validateTemplate', () => {
     const errors = validateTemplate({
       ...validTemplate,
       mode: 'deliberation',
-      deliberation: { voices: ['reasoning', 'invalid' as any] },
+      deliberation: fromAny({ voices: ['reasoning', 'invalid'] }),
     }, true);
     expect(errors.some(e => e.field === 'deliberation.voices')).toBe(true);
   });

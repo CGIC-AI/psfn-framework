@@ -215,6 +215,7 @@
     }
   },
   "devDependencies": {
+    "@total-typescript/shoehorn": "0.1.2",
     "@types/node": "22.19.11",
     "@types/pg": "8.20.0",
     "@types/uuid": "10.0.0",

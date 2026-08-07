@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import {
   createSystemTool,
@@ -20,6 +21,7 @@ import {
   type ShutdownLogger,
 } from '../../app/startup/support/shutdown-helpers.js';
 import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
+import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -783,7 +785,7 @@ describe('deferred lifecycle execution', () => {
           durationMs: 25,
         },
       },
-      turnMessages: [
+      turnMessages: fromPartial([
         {
           role: 'assistant',
           content: [
@@ -800,7 +802,7 @@ describe('deferred lifecycle execution', () => {
               arguments: { reason: 'autonomous shakedown rebuild' },
             },
           ],
-        } as any,
+        },
         {
           role: 'toolResult',
           toolCallId: 'call-restart',
@@ -808,7 +810,7 @@ describe('deferred lifecycle execution', () => {
           isError: false,
           content: [{ type: 'text', text: 'Restart queued.' }],
           details: {},
-        } as any,
+        },
         {
           role: 'toolResult',
           toolCallId: 'call-rebuild',
@@ -816,8 +818,8 @@ describe('deferred lifecycle execution', () => {
           isError: false,
           content: [{ type: 'text', text: 'Rebuild queued.' }],
           details: {},
-        } as any,
-      ],
+        },
+      ]),
       turnId: 'turn-1' as any,
       completedAt: 1_700_000_000_100,
     });
@@ -863,7 +865,7 @@ describe('deferred lifecycle execution', () => {
           durationMs: 25,
         },
       },
-      turnMessages: [
+      turnMessages: fromPartial([
         {
           role: 'assistant',
           content: [
@@ -879,7 +881,7 @@ describe('deferred lifecycle execution', () => {
               },
             },
           ],
-        } as any,
+        },
         {
           role: 'toolResult',
           toolCallId: 'call-rebuild-structured',
@@ -887,8 +889,8 @@ describe('deferred lifecycle execution', () => {
           isError: false,
           content: [{ type: 'text', text: 'Rebuild queued.' }],
           details: {},
-        } as any,
-      ],
+        },
+      ]),
       turnId: 'turn-structured' as any,
       completedAt: 1_700_000_000_100,
     });
@@ -926,7 +928,7 @@ describe('deferred lifecycle execution', () => {
           durationMs: 25,
         },
       },
-      turnMessages: [
+      turnMessages: fromPartial([
         {
           role: 'assistant',
           content: [
@@ -941,7 +943,7 @@ describe('deferred lifecycle execution', () => {
               },
             },
           ],
-        } as any,
+        },
         {
           role: 'toolResult',
           toolCallId: 'call-restart-structured',
@@ -949,8 +951,8 @@ describe('deferred lifecycle execution', () => {
           isError: false,
           content: [{ type: 'text', text: 'Restart queued.' }],
           details: {},
-        } as any,
-      ],
+        },
+      ]),
       turnId: 'turn-structured-restart' as any,
       completedAt: 1_700_000_000_100,
     });
@@ -988,7 +990,7 @@ describe('deferred lifecycle execution', () => {
           durationMs: 25,
         },
       },
-      turnMessages: [
+      turnMessages: fromPartial([
         {
           role: 'assistant',
           content: [
@@ -1002,7 +1004,7 @@ describe('deferred lifecycle execution', () => {
               },
             },
           ],
-        } as any,
+        },
         {
           role: 'toolResult',
           toolCallId: 'call-system-restart',
@@ -1010,8 +1012,8 @@ describe('deferred lifecycle execution', () => {
           isError: false,
           content: [{ type: 'text', text: 'Restart queued.' }],
           details: {},
-        } as any,
-      ],
+        },
+      ]),
       turnId: 'turn-system-restart' as any,
       completedAt: 1_700_000_000_100,
     });
@@ -1033,16 +1035,16 @@ describe('deferred lifecycle execution', () => {
     const registerHandler = vi.fn((_kind, _handler) => {
       return () => undefined;
     });
-    const postTurnActions = {
+    const postTurnActions = fromPartial<PostTurnActionRuntime>({
       registerHandler,
       listQueued: () => [],
       getStatus: vi.fn(),
-    };
+    });
     const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => undefined);
 
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer },
-      postTurnActions: postTurnActions as any,
+      postTurnActions,
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1078,7 +1080,7 @@ describe('deferred lifecycle execution', () => {
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
+      postTurnActions: fromPartial({ registerHandler, listQueued: () => [], getStatus: vi.fn() }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1105,11 +1107,11 @@ describe('deferred lifecycle execution', () => {
 
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: {
+      postTurnActions: fromPartial({
         registerHandler,
         listQueued: () => [],
         getStatus: vi.fn(),
-      } as any,
+      }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1150,11 +1152,11 @@ describe('deferred lifecycle execution', () => {
 
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: {
+      postTurnActions: fromPartial({
         registerHandler,
         listQueued: () => [],
         getStatus: vi.fn(),
-      } as any,
+      }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1185,7 +1187,7 @@ describe('deferred lifecycle execution', () => {
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
+      postTurnActions: fromPartial({ registerHandler, listQueued: () => [], getStatus: vi.fn() }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1210,7 +1212,7 @@ describe('deferred lifecycle execution', () => {
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
+      postTurnActions: fromPartial({ registerHandler, listQueued: () => [], getStatus: vi.fn() }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,
@@ -1246,11 +1248,11 @@ describe('deferred lifecycle execution', () => {
 
     registerDeferredLifecycleRuntime({
       agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
-      postTurnActions: {
+      postTurnActions: fromPartial({
         registerHandler,
         listQueued: () => [],
         getStatus: vi.fn(),
-      } as any,
+      }),
       notifier: mockNotifier,
       stopFn: mockStopFn,
       prepareRestartCommand,

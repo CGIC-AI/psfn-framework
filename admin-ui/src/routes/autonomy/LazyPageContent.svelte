@@ -16,6 +16,14 @@
     formatUsd,
   } from './autonomy-view';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
+  import {
+    fetchFleetPortalProjection,
+    type FleetPortalCompanion,
+  } from '$lib/fleet/portal';
 
   type PendingAction =
     | { kind: 'cancel'; candidate: AdminIcpCandidateView }
@@ -30,6 +38,7 @@
   let mutating = $state(false);
   let lastLoadedAt = $state<number | null>(null);
   let timer: ReturnType<typeof setInterval> | null = null;
+  let displayCompanions = $state<readonly FleetPortalCompanion[]>([]);
 
   const effectiveScheduler = $derived(data?.settings.scheduler.effectiveValue ?? null);
   const onDiskScheduler = $derived(data?.settings.scheduler.onDiskValue ?? null);
@@ -66,7 +75,12 @@
     if (!background) loading = true;
     error = '';
     try {
-      data = await getIcpAutonomyData();
+      const [nextData, projection] = await Promise.all([
+        getIcpAutonomyData(),
+        fetchFleetPortalProjection().catch(() => null),
+      ]);
+      data = nextData;
+      if (projection) displayCompanions = projection.companions;
       lastLoadedAt = Date.now();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Failed to load autonomy state';
@@ -210,7 +224,15 @@
       <div class="card-garden p-4">
         <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Last refreshed</p>
         <p class="mt-2 text-lg font-semibold text-shadow-900">{relative(lastLoadedAt)}</p>
-        <p class="mt-1 break-all text-xs text-shadow-600">Local: {data.localCompanionId ?? 'unavailable'}</p>
+        <p class="mt-1 text-xs text-shadow-600">
+          Local: {companionDisplayLabel(displayCompanions, data.localCompanionId)}
+        </p>
+        {#if data.localCompanionId}
+          <details class="mt-1 text-xs text-shadow-500">
+            <summary class="cursor-pointer">Technical details</summary>
+            <p class="mt-1 break-all font-mono">{companionTechnicalLabel(data.localCompanionId)}</p>
+          </details>
+        {/if}
       </div>
     </section>
 
@@ -264,7 +286,7 @@
         <p class="p-5 text-sm text-shadow-600">No availability leases recorded.</p>
       {:else}
         <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Companion</th><th class="p-3">State</th><th class="p-3">Source</th><th class="p-3">Expires</th></tr></thead><tbody class="divide-y divide-bark-200">
-          {#each data.availability as lease (lease.companionId)}<tr><td class="p-3 font-mono text-xs">{lease.local ? 'Local · ' : ''}{lease.companionId}</td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(lease.state)}`}>{lease.state.replaceAll('_', ' ')}</span>{#if !lease.current}<span class="ml-2 text-xs text-shadow-500">expired</span>{/if}</td><td class="p-3">{lease.source}</td><td class="p-3">{dateTime(lease.expiresAtMs)}</td></tr>{/each}
+          {#each data.availability as lease (lease.companionId)}<tr><td class="p-3 text-xs"><p>{lease.local ? 'Local · ' : ''}{companionDisplayLabel(displayCompanions, lease.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(lease.companionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(lease.state)}`}>{lease.state.replaceAll('_', ' ')}</span>{#if !lease.current}<span class="ml-2 text-xs text-shadow-500">expired</span>{/if}</td><td class="p-3">{lease.source}</td><td class="p-3">{dateTime(lease.expiresAtMs)}</td></tr>{/each}
         </tbody></table></div>
       {/if}
     </section>
@@ -273,14 +295,14 @@
       <div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Local candidates</h2><p class="text-sm text-shadow-600">Private motivation and contact bindings are withheld. Cancellation uses the current revision and never accepts a target companion.</p></div>
       {#if data.candidates.length === 0}<p class="p-5 text-sm text-shadow-600">No local autonomous candidates recorded.</p>{:else}
         <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Source</th><th class="p-3">Peer</th><th class="p-3">Status / reason</th><th class="p-3">Created</th><th class="p-3"></th></tr></thead><tbody class="divide-y divide-bark-200">
-          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 font-mono text-xs">{candidate.peerCompanionId}</td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span><p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
+          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 text-xs"><p>{companionDisplayLabel(displayCompanions, candidate.peerCompanionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(candidate.peerCompanionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span><p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
         </tbody></table></div>
       {/if}
     </section>
 
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">
       <div class="card-garden overflow-hidden"><div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Episodes</h2><p class="text-sm text-shadow-600">Content-free episode lifecycle with ordinary Garden investigation links.</p></div>{#if data.episodes.length === 0}<p class="p-5 text-sm text-shadow-600">No episodes recorded.</p>{:else}<div class="divide-y divide-bark-200">{#each data.episodes as episode (episode.conversationId)}<div class="p-4 text-sm"><div class="flex items-center justify-between gap-2"><span class={`rounded-full px-2 py-1 text-xs ${badge(episode.status)}`}>{episode.status}</span><span class="text-xs text-shadow-500">{dateTime(episode.lastActivityAtMs)}</span></div><p class="mt-2 font-mono text-xs text-shadow-700">{episode.conversationId}</p><p class="mt-1 text-xs text-shadow-600">{episode.initiationSource} · {episode.closeReasonCode ?? 'open / no close reason'}</p><div class="mt-2 flex gap-3 text-xs"><a href={episode.links.sessions} class="text-gold-700">Sessions</a><a href={episode.links.charges} class="text-gold-700">Charges</a><a href={episode.links.modelUsage} class="text-gold-700">Models</a></div></div>{/each}</div>{/if}</div>
-      <div class="card-garden overflow-hidden"><div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Permits</h2><p class="text-sm text-shadow-600">Bearer permit IDs are withheld; lifecycle and correlation handles remain visible.</p></div>{#if data.permits.length === 0}<p class="p-5 text-sm text-shadow-600">No permits recorded.</p>{:else}<div class="divide-y divide-bark-200">{#each data.permits as permit (`${permit.candidateId}-${permit.revision}`)}<div class="p-4 text-sm"><div class="flex items-center justify-between gap-2"><span class={`rounded-full px-2 py-1 text-xs ${badge(permit.status)}`}>{permit.status}</span><span class="text-xs text-shadow-500">rev {permit.revision}</span></div><p class="mt-2 font-mono text-xs text-shadow-700">Candidate {permit.candidateId}</p><p class="mt-1 text-xs text-shadow-600">{permit.senderCompanionId} → {permit.recipientCompanionId}</p><p class="mt-1 text-xs text-shadow-600">{permit.reasonCode ?? 'no reason recorded'} · expires {dateTime(permit.expiresAtMs)}</p></div>{/each}</div>{/if}</div>
+      <div class="card-garden overflow-hidden"><div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Permits</h2><p class="text-sm text-shadow-600">Bearer permit IDs are withheld; lifecycle and correlation handles remain visible.</p></div>{#if data.permits.length === 0}<p class="p-5 text-sm text-shadow-600">No permits recorded.</p>{:else}<div class="divide-y divide-bark-200">{#each data.permits as permit (`${permit.candidateId}-${permit.revision}`)}<div class="p-4 text-sm"><div class="flex items-center justify-between gap-2"><span class={`rounded-full px-2 py-1 text-xs ${badge(permit.status)}`}>{permit.status}</span><span class="text-xs text-shadow-500">rev {permit.revision}</span></div><p class="mt-2 font-mono text-xs text-shadow-700">Candidate {permit.candidateId}</p><p class="mt-1 text-xs text-shadow-600">{companionDisplayLabel(displayCompanions, permit.senderCompanionId)} → {companionDisplayLabel(displayCompanions, permit.recipientCompanionId)}</p><details class="mt-1 text-xs text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(permit.senderCompanionId)} → {companionTechnicalLabel(permit.recipientCompanionId)}</p></details><p class="mt-1 text-xs text-shadow-600">{permit.reasonCode ?? 'no reason recorded'} · expires {dateTime(permit.expiresAtMs)}</p></div>{/each}</div>{/if}</div>
     </section>
 
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">

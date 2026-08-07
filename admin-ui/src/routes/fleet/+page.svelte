@@ -173,9 +173,10 @@
                 <h2 class="truncate font-serif text-xl font-semibold text-shadow-900">
                   {companion.displayName}
                 </h2>
-                <p class="mt-1 truncate font-mono text-[0.68rem] text-shadow-500">
-                  {companion.companionId}
-                </p>
+                <details class="mt-1 text-[0.68rem] text-shadow-500">
+                  <summary class="cursor-pointer">Technical details</summary>
+                  <p class="mt-1 break-all font-mono">Companion ID {companion.companionId}</p>
+                </details>
               </div>
             </div>
 

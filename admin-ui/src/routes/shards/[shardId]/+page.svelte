@@ -9,6 +9,14 @@
     resolveShardFoldReview,
     updateShardConfiguration,
   } from '$lib/api/endpoints/shards';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
+  import {
+    fetchFleetPortalProjection,
+    type FleetPortalCompanion,
+  } from '$lib/fleet/portal';
   import type { ShardFoldReviewRecord } from '../../../../../src/faculties/shards/fold-review.js';
   import type { ShardConfigurationSnapshot } from '../../../../../src/faculties/shards/types.js';
 
@@ -26,6 +34,7 @@
   let maxOutputTokens = $state(1);
   let maxChargeUnits = $state(0);
   let reviewNote = $state('');
+  let displayCompanions = $state<readonly FleetPortalCompanion[]>([]);
 
   function selectionKey(provider: string, model: string): string {
     return `${provider}::${model}`;
@@ -41,9 +50,10 @@
   async function load(): Promise<void> {
     loading = true;
     error = '';
-    const [configurationResult, reviewResult] = await Promise.allSettled([
+    const [configurationResult, reviewResult, projectionResult] = await Promise.allSettled([
       getShardConfiguration(shardId),
       getShardFoldReview(shardId),
+      fetchFleetPortalProjection(),
     ]);
     if (configurationResult.status === 'fulfilled') {
       snapshot = configurationResult.value;
@@ -65,6 +75,9 @@
       error ||= reviewResult.reason instanceof Error
         ? reviewResult.reason.message
         : 'Failed to load shard fold review';
+    }
+    if (projectionResult.status === 'fulfilled') {
+      displayCompanions = projectionResult.value.companions;
     }
     loading = false;
   }
@@ -182,9 +195,13 @@
               · {snapshot.lifecycleState} / {snapshot.health}
             </p>
           </div>
-          <span class="rounded-full bg-bark-100 px-3 py-1 text-sm text-shadow-700">
-            parent {snapshot.parentCompanionId}
-          </span>
+          <div class="rounded-lg bg-bark-100 px-3 py-2 text-sm text-shadow-700">
+            <p>Parent {companionDisplayLabel(displayCompanions, snapshot.parentCompanionId)}</p>
+            <details class="mt-1 text-xs text-shadow-500">
+              <summary class="cursor-pointer">Technical details</summary>
+              <p class="mt-1 break-all font-mono">{companionTechnicalLabel(snapshot.parentCompanionId)}</p>
+            </details>
+          </div>
         </div>
 
         <div class="mt-5 grid gap-4 lg:grid-cols-3">
@@ -271,7 +288,14 @@
       <section class="card-garden p-5" aria-labelledby="lineage-heading">
         <h2 id="lineage-heading" class="text-lg font-serif font-semibold text-shadow-900">Lineage</h2>
         <dl class="mt-4 grid gap-4 text-sm md:grid-cols-2">
-          <div><dt class="text-shadow-500">Parent companion</dt><dd class="font-mono">{snapshot.lineage.companionProvenance.parentCompanionId}</dd></div>
+          <div>
+            <dt class="text-shadow-500">Parent companion</dt>
+            <dd>{companionDisplayLabel(displayCompanions, snapshot.lineage.companionProvenance.parentCompanionId)}</dd>
+            <details class="mt-1 text-xs text-shadow-500">
+              <summary class="cursor-pointer">Technical details</summary>
+              <p class="mt-1 break-all font-mono">{companionTechnicalLabel(snapshot.lineage.companionProvenance.parentCompanionId)}</p>
+            </details>
+          </div>
           <div><dt class="text-shadow-500">Shard companion</dt><dd class="font-mono break-all">{snapshot.lineage.shardCompanionId}</dd></div>
           <div><dt class="text-shadow-500">Source channel</dt><dd class="font-mono break-all">{snapshot.lineage.sourceMessage.channelId}</dd></div>
           <div><dt class="text-shadow-500">Creation mode</dt><dd>{snapshot.lineage.kind}</dd></div>

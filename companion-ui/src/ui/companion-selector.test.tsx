@@ -10,12 +10,12 @@ const COMPANION_B = '22222222-2222-4222-8222-222222222222';
 const COMPANIONS: readonly FleetRosterCompanion[] = [
   {
     companionId: COMPANION_A,
-    displayName: 'Purrsephone',
+    displayName: 'Nova · 11111111',
     websocketPath: `/companion-ui/companions/${COMPANION_A}/ws`,
   },
   {
     companionId: COMPANION_B,
-    displayName: 'Aria',
+    displayName: 'Nova · 22222222',
     websocketPath: `/companion-ui/companions/${COMPANION_B}/ws`,
     avatarRef: 'avatars/aria.png',
   },
@@ -70,7 +70,8 @@ describe('CompanionSelectorPage', () => {
       requests: [],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Talk to Aria' }));
+    expect(screen.getByRole('button', { name: 'Talk to Nova · 11111111 (active)' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Talk to Nova · 22222222' }));
     expect(onSelect).toHaveBeenCalledWith(COMPANION_B);
     const avatar = document.querySelector('img.companion-avatar');
     expect(avatar?.getAttribute('src')).toBe('/companion-ui/avatars/aria.png');

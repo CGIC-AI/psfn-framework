@@ -16,6 +16,10 @@
     type ContactTrackingMode,
   } from '$lib/api/endpoints/channels';
   import { currentCompanionGardenScope } from '$lib/fleet/companion-scope';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
 
   // ── State ──
   let data = $state<ChannelEnvelopeData | null>(null);
@@ -302,24 +306,40 @@
       {#if bearerPin.companions.length === 0}
         <p class="text-sm text-shadow-600">No registered companions are available to pin.</p>
       {:else}
+        {@const gardenCompanionId = requestBoundCompanionId()}
         <div class="flex flex-wrap items-end gap-3">
-          <p class="text-sm text-shadow-700">
-            This Garden:
-            <code class="font-mono">{requestBoundCompanionId() ?? 'companion scope unavailable'}</code>
-          </p>
+          <div class="text-sm text-shadow-700">
+            <p>This Garden: {companionDisplayLabel(bearerPin.companions, gardenCompanionId)}</p>
+            {#if gardenCompanionId}
+              <details class="mt-1 text-xs text-shadow-500">
+                <summary class="cursor-pointer">Technical details</summary>
+                <p class="mt-1 break-all font-mono">{companionTechnicalLabel(gardenCompanionId)}</p>
+              </details>
+            {/if}
+          </div>
           <button
             onclick={submitBearerPin}
-            disabled={bearerPinSaving || !requestBoundCompanionId() || requestBoundCompanionId() === bearerPin.pinnedCompanionId}
+            disabled={bearerPinSaving || !gardenCompanionId || gardenCompanionId === bearerPin.pinnedCompanionId}
             class="text-sm px-4 py-2 rounded-lg bg-gold-200 text-shadow-900 hover:bg-gold-300
                    transition-colors disabled:opacity-50 font-medium"
           >
             {bearerPinSaving ? 'Pinning...' : 'Pin this companion'}
           </button>
         </div>
-        <p class="text-xs text-shadow-500">
-          Currently pinned:
-          <code class="font-mono">{bearerPin.pinnedCompanionId ?? 'none (single-companion default)'}</code>
-        </p>
+        {#if bearerPin.pinnedCompanionId}
+          <div class="text-xs text-shadow-500">
+            <p>
+              Currently pinned:
+              {companionDisplayLabel(bearerPin.companions, bearerPin.pinnedCompanionId)}
+            </p>
+            <details class="mt-1">
+              <summary class="cursor-pointer">Technical details</summary>
+              <p class="mt-1 break-all font-mono">{companionTechnicalLabel(bearerPin.pinnedCompanionId)}</p>
+            </details>
+          </div>
+        {:else}
+          <p class="text-xs text-shadow-500">Currently pinned: none (single-companion default)</p>
+        {/if}
       {/if}
     {/if}
   </div>

@@ -199,7 +199,7 @@
   </header>
   {#if companionNamesUnavailable}
     <p class="rounded-lg border border-gold-300 bg-gold-50 px-4 py-3 text-sm text-shadow-700" role="status">
-      Companion names are unavailable; showing stable companion IDs.
+      Companion names are unavailable; unknown companions are labeled explicitly below.
     </p>
   {/if}
 

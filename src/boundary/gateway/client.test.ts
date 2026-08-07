@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
@@ -97,7 +98,7 @@ function createMockConnection(options: { heartbeatResults?: boolean[] } = {}) {
   };
 
   return {
-    conn: conn as unknown as NdjsonConnection,
+    conn: fromAny<NdjsonConnection>(conn),
     sent,
     get heartbeatCount(): number {
       return heartbeatCount;
@@ -794,8 +795,8 @@ describe('GatewayClient streaming', () => {
       correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
       messages: [{
         role: 'user',
-        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
-      }] as any,
+        content: fromAny([{ type: 'image', data: imageBase64, mimeType: 'image/png' }]),
+      }],
     });
     const llmRequest = conn.sent[1] as {
       id: number;
@@ -871,8 +872,8 @@ describe('GatewayClient streaming', () => {
       correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
       messages: [{
         role: 'user',
-        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
-      }] as any,
+        content: fromAny([{ type: 'image', data: imageBase64, mimeType: 'image/png' }]),
+      }],
     });
     const referencedRequest = conn.sent[1] as { id: number };
     conn._emit({
@@ -934,8 +935,8 @@ describe('GatewayClient streaming', () => {
       correlation: { turnId: 'turn-b', callType: 'chat', purpose: 'chat' },
       messages: [{
         role: 'user',
-        content: [{ type: 'image', data: imageBase64, mimeType: 'image/jpeg' }],
-      }] as any,
+        content: fromAny([{ type: 'image', data: imageBase64, mimeType: 'image/jpeg' }]),
+      }],
     });
     const llmRequest = conn.sent[1] as { id: number; params: unknown };
     expect(JSON.stringify(llmRequest.params)).toContain(imageBase64);
@@ -987,8 +988,8 @@ describe('GatewayClient streaming', () => {
       correlation: { turnId: requestScope, callType: 'background', purpose: 'vision' },
       messages: [{
         role: 'user',
-        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
-      }] as any,
+        content: fromAny([{ type: 'image', data: imageBase64, mimeType: 'image/png' }]),
+      }],
     }, 'vision');
     const referencedRequest = conn.sent[1] as { id: number; params: unknown };
     expect(JSON.stringify(referencedRequest.params)).toContain('complete-handle');
@@ -2171,9 +2172,9 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(handledMsg.timestamp).toBeInstanceOf(Date);
 
     // The response should have been sent back
-    const response = conn.sent.find(
+    const response = fromAny(conn.sent.find(
       (msg: any) => msg.id === 42 && 'result' in msg,
-    ) as any;
+    ));
     expect(response).toBeDefined();
     expect(response.result.content).toBe('voice response');
     expect(response.result.model).toBe('test-model');
@@ -2931,7 +2932,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     });
 
     expect(messages).toHaveLength(1);
-    expect((messages[0] as any).content).toBe('test notification');
+    expect(fromAny(messages[0]).content).toBe('test notification');
   });
 
   it('owns rejected async companion notification handlers without an unhandled rejection', async () => {
@@ -3161,7 +3162,7 @@ describe('GatewayClient session integrity RPC', () => {
       sessionIntegritySignMaxRetries: 1,
       sessionIntegritySignRetryBaseDelayMs: 1,
     });
-    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+    const requestSessionIntegritySync = vi.spyOn(fromAny(client), 'requestSessionIntegritySync')
       .mockImplementationOnce(() => {
         throw new Error('Session integrity RPC timed out');
       })
@@ -3204,7 +3205,7 @@ describe('GatewayClient session integrity RPC', () => {
       sessionIntegritySignMaxRetries: 2,
       sessionIntegritySignRetryBaseDelayMs: 0,
     });
-    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+    const requestSessionIntegritySync = vi.spyOn(fromAny(client), 'requestSessionIntegritySync')
       .mockImplementation(() => {
         throw new Error('Session integrity RPC timed out');
       });
@@ -3227,7 +3228,7 @@ describe('GatewayClient session integrity RPC', () => {
       sessionIntegritySignMaxRetries: 2,
       sessionIntegritySignRetryBaseDelayMs: 0,
     });
-    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+    const requestSessionIntegritySync = vi.spyOn(fromAny(client), 'requestSessionIntegritySync')
       .mockImplementation(() => {
         throw new Error('Session integrity RPC returned an invalid payload');
       });
@@ -3248,7 +3249,7 @@ describe('GatewayClient session integrity RPC', () => {
     client = new GatewayClient(conn.conn, 1024, {
       sessionIntegritySocketPath: '/tmp/test-gateway.sock',
     });
-    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+    const requestSessionIntegritySync = vi.spyOn(fromAny(client), 'requestSessionIntegritySync')
       .mockReturnValue({
         verified: true,
         observedHmac: 'a'.repeat(64),
@@ -3549,10 +3550,10 @@ describe('GatewayClient vault RPC wrappers', () => {
   });
 
   it('exposes RPC-name aliases for tool wiring validation', () => {
-    expect(typeof (client as any)['vault.write']).toBe('function');
-    expect(typeof (client as any)['vault.read']).toBe('function');
-    expect(typeof (client as any)['vault.search']).toBe('function');
-    expect(typeof (client as any)['vault.daily']).toBe('function');
+    expect(typeof fromAny(client)['vault.write']).toBe('function');
+    expect(typeof fromAny(client)['vault.read']).toBe('function');
+    expect(typeof fromAny(client)['vault.search']).toBe('function');
+    expect(typeof fromAny(client)['vault.daily']).toBe('function');
   });
 });
 

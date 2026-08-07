@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   RUNTIME_MODE,
   DEFAULT_REEXEC_RESTART_EXIT_CODE,
@@ -70,7 +71,7 @@ describe('resolveRuntimeCommandInvocation', () => {
 describe('resolveRuntimeModeContract', () => {
   it('rejects disabled runtime entrypoints', () => {
     expect(() => resolveRuntimeModeContract({
-      entrypoint: 'monolithic' as any,
+      entrypoint: fromAny('monolithic'),
     })).toThrow('Unsupported runtime entrypoint');
   });
 

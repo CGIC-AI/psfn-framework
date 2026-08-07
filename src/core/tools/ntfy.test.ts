@@ -1,4 +1,5 @@
 import { Value } from '@sinclair/typebox/value';
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 import {
   createGatewayClarificationPort,
@@ -51,10 +52,10 @@ describe('notify tool', () => {
       priority: 5,
     });
 
-    expect(resultText(result as any)).toContain('notify: brief sent via ntfy');
-    expect(resultText(result as any)).toContain('topic "ops"');
-    expect(resultText(result as any)).toContain('id msg-1');
-    expect((result.details as any).isError).toBeUndefined();
+    expect(resultText(fromAny(result))).toContain('notify: brief sent via ntfy');
+    expect(resultText(fromAny(result))).toContain('topic "ops"');
+    expect(resultText(fromAny(result))).toContain('id msg-1');
+    expect(fromAny(result.details).isError).toBeUndefined();
     expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({
       sender: companionBriefSender,
     }));
@@ -74,8 +75,8 @@ describe('notify tool', () => {
       message: 'Discord gateway offline',
     });
 
-    expect(resultText(result as any)).toContain('notify: brief debounced');
-    expect((result.details as any).isError).toBeUndefined();
+    expect(resultText(fromAny(result))).toContain('notify: brief debounced');
+    expect(fromAny(result.details).isError).toBeUndefined();
   });
 
   it('returns explicit failure text when brief delivery throws', async () => {
@@ -89,9 +90,9 @@ describe('notify tool', () => {
       message: 'Discord gateway offline',
     });
 
-    expect(resultText(result as any)).toContain('notify: failure');
-    expect(resultText(result as any)).toContain('503 Service Unavailable');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: failure');
+    expect(resultText(fromAny(result))).toContain('503 Service Unavailable');
+    expect(fromAny(result.details).isError).toBe(true);
   });
 
   it('fails fast when brief message is empty', async () => {
@@ -105,8 +106,8 @@ describe('notify tool', () => {
       message: '   ',
     });
 
-    expect(resultText(result as any)).toContain('notify: failure');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: failure');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
@@ -130,16 +131,16 @@ describe('notify tool', () => {
     }));
 
     const first = await tool.execute('call-5', { action: 'brief', message: 'First alert' });
-    expect(resultText(first as any)).toContain('notify: brief sent');
+    expect(resultText(fromAny(first))).toContain('notify: brief sent');
 
     const blocked = await tool.execute('call-6', { action: 'brief', message: 'Second alert' });
-    expect(resultText(blocked as any)).toContain('rate limit');
-    expect((blocked.details as any).isError).toBe(true);
+    expect(resultText(fromAny(blocked))).toContain('rate limit');
+    expect(fromAny(blocked.details).isError).toBe(true);
     expect(notifier.notify).toHaveBeenCalledTimes(1);
 
     now += 60 * 60 * 1000 + 1;
     const afterWindow = await tool.execute('call-7', { action: 'brief', message: 'Third alert' });
-    expect(resultText(afterWindow as any)).toContain('notify: brief sent');
+    expect(resultText(fromAny(afterWindow))).toContain('notify: brief sent');
     expect(notifier.notify).toHaveBeenCalledTimes(2);
   });
 
@@ -161,8 +162,8 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
@@ -194,7 +195,7 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: send sent via discord');
+    expect(resultText(fromAny(result))).toContain('notify: send sent via discord');
   });
 
   it('fails closed when external send has no request context', async () => {
@@ -215,9 +216,9 @@ describe('notify tool', () => {
       delivery_target: 'discord:ops-room',
     });
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('unknown request context');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('unknown request context');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(discordSend).not.toHaveBeenCalled();
   });
 
@@ -247,9 +248,9 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('unknown requester provenance');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('unknown requester provenance');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(discordSend).not.toHaveBeenCalled();
   });
 
@@ -280,9 +281,9 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('non-human requester provenance (system)');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('non-human requester provenance (system)');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(discordSend).not.toHaveBeenCalled();
   });
 
@@ -313,9 +314,9 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('internal channel (internal:free-time)');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('internal channel (internal:free-time)');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(discordSend).not.toHaveBeenCalled();
   });
 
@@ -346,9 +347,9 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('scheduled execution context');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('scheduled execution context');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(discordSend).not.toHaveBeenCalled();
   });
 
@@ -445,9 +446,9 @@ describe('notify tool', () => {
       choices: ['The warm one', 'The concise one'],
     });
 
-    expect(resultText(result as any)).toContain('notify: clarify shared on telegram');
-    expect(resultText(result as any)).toContain('waiting for a choice');
-    expect((result.details as any).isError).toBeUndefined();
+    expect(resultText(fromAny(result))).toContain('notify: clarify shared on telegram');
+    expect(resultText(fromAny(result))).toContain('waiting for a choice');
+    expect(fromAny(result.details).isError).toBeUndefined();
     // Channel-agnostic seam: the renderer receives a typed, normalized clarification.
     expect(presented).toBeDefined();
     expect(presented?.question).toBe('Which draft should I send?');
@@ -481,9 +482,9 @@ describe('notify tool', () => {
       choices: ['Tea', 'Coffee'],
     });
 
-    expect(resultText(result as any)).toContain('notify: clarify answered');
-    expect(resultText(result as any)).toContain('chose "Coffee"');
-    expect((result.details as any).isError).toBeUndefined();
+    expect(resultText(fromAny(result))).toContain('notify: clarify answered');
+    expect(resultText(fromAny(result))).toContain('chose "Coffee"');
+    expect(fromAny(result.details).isError).toBeUndefined();
   });
 
   it('fails closed when a resolved selection does not match a delivered choice', async () => {
@@ -511,9 +512,9 @@ describe('notify tool', () => {
       choices: ['Tea', 'Coffee'],
     });
 
-    expect(resultText(result as any)).toContain('notify: failure');
-    expect(resultText(result as any)).toContain('does not match a delivered choice');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: failure');
+    expect(resultText(fromAny(result))).toContain('does not match a delivered choice');
+    expect(fromAny(result.details).isError).toBe(true);
   });
 
   it('does not plumb an unverified selection from a pending delivery into the turn', async () => {
@@ -545,13 +546,13 @@ describe('notify tool', () => {
       choices: ['Tea', 'Coffee'],
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     // Presented as still-pending, never as answered, and the unverified choice
     // text is absent from the turn-facing output.
     expect(text).toContain('waiting for a choice');
     expect(text).not.toContain('answered');
     expect(text).not.toContain('Coffee');
-    expect((result.details as any).isError).toBeUndefined();
+    expect(fromAny(result.details).isError).toBeUndefined();
   });
 
   it('fails closed when clarify has no interactive channel wired', async () => {
@@ -564,9 +565,9 @@ describe('notify tool', () => {
       choices: ['A', 'B'],
     });
 
-    expect(resultText(result as any)).toContain('notify: failure');
-    expect(resultText(result as any)).toContain('no interactive channel is wired');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: failure');
+    expect(resultText(fromAny(result))).toContain('no interactive channel is wired');
+    expect(fromAny(result.details).isError).toBe(true);
   });
 
   it('blocks clarify from scheduled/internal contexts with no live human', async () => {
@@ -587,9 +588,9 @@ describe('notify tool', () => {
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify: blocked');
-    expect(resultText(result as any)).toContain('clarify is not allowed');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('notify: blocked');
+    expect(resultText(fromAny(result))).toContain('clarify is not allowed');
+    expect(fromAny(result.details).isError).toBe(true);
     expect(clarificationPort.deliver).not.toHaveBeenCalled();
   });
 

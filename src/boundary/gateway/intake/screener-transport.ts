@@ -12,6 +12,8 @@
 // throws through the caller-supplied error factory — there is no silent-pass
 // and no default response.
 
+import { COGSEC_TRANSPORT_ERROR_MAX_CHARS } from '../../../core/cogsec/intake/screening-envelope-policy.js';
+
 /** Gateway-resolved OpenRouter connection for a screener call (secret-bearing). */
 export interface ScreenerBackend {
   /** OpenRouter API base URL, e.g. https://openrouter.ai/api/v1 */
@@ -179,7 +181,7 @@ async function callToolLessJsonScreener(
     const detail = await response.text().catch(() => '');
     throw input.makeError(
       `${input.screenerName} returned ${String(response.status)} ${response.statusText}`
-      + (detail ? `: ${detail.slice(0, 500)}` : ''),
+      + (detail ? `: ${detail.slice(0, COGSEC_TRANSPORT_ERROR_MAX_CHARS)}` : ''),
     );
   }
 

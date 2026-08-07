@@ -30,6 +30,7 @@ import {
   type IntakeScreeningService,
 } from '../../../core/cogsec/intake/screening.js';
 import { createIntakeL1Scanner } from '../../../core/cogsec/intake/scanners/index.js';
+import { COGSEC_ORIGIN_DETAIL_MAX_CHARS } from '../../../core/cogsec/intake/screening-envelope-policy.js';
 import {
   createIntakeQuarantineStore,
   type IntakeQuarantineStoreOptions,
@@ -352,7 +353,7 @@ export async function composeGatewayIntakeScreening(input: {
             origin: {
               ref: request.originRef.slice(0, 2048),
               ...(request.originDetail !== undefined
-                ? { detail: request.originDetail.slice(0, 512) }
+                ? { detail: request.originDetail.slice(0, COGSEC_ORIGIN_DETAIL_MAX_CHARS) }
                 : {}),
             },
             ...(request.subjectIndex !== undefined

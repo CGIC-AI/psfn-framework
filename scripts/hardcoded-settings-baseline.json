@@ -587,7 +587,7 @@
       "name": "checkedEscalationReason.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth envelope bound: limits attacker-controlled escalation reason bytes at the authenticated protocol boundary."
     },
     {
       "file": "src/boundary/fleet-auth/garden-route-capabilities.ts",
@@ -643,56 +643,56 @@
       "name": "parseCompactToken.$call:length-guard:GreaterThanToken#1",
       "value": "8192",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth envelope bound: rejects oversized device assertions before compact-token parsing and verification."
     },
     {
       "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
       "name": "boundedReason.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth ceremony record bound coupled to the signed lifecycle evidence shape."
     },
     {
       "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
       "name": "parseFleetAuthLifecycleCeremonyRequest.$call:length-guard:GreaterThanToken#1",
       "value": "256",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth ceremony request bound that limits attacker-controlled protocol text before verification."
     },
     {
       "file": "src/boundary/fleet-auth/recovery-request-capability.ts",
       "name": "compileTrustedHostRecoveryTarget.$call:length-guard:GreaterThanToken#1",
       "value": "1_024",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth recovery-envelope scope bound coupled to the signed capability contract."
     },
     {
       "file": "src/boundary/fleet-auth/recovery-request-capability.ts",
       "name": "createTrustedHostRecoveryCapabilityVerifier.$call:length-guard:GreaterThanToken#1",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth recovery-envelope size ceiling that bounds untrusted capability decoding and signature verification."
     },
     {
       "file": "src/boundary/fleet-auth/request-capability-replay.ts",
       "name": "compileRequestCapabilityReplayConsumption.$call:length-guard:GreaterThanToken#1",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth replay-envelope size ceiling that bounds untrusted capability decoding before durable consumption."
     },
     {
       "file": "src/boundary/fleet-auth/request-capability-replay.ts",
       "name": "compileTrustedHostRecoveryReplayConsumption.$call:length-guard:GreaterThanToken#1",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth recovery replay-envelope ceiling coupled to capability verification and replay storage."
     },
     {
       "file": "src/boundary/fleet-auth/request-capability.ts",
       "name": "parseCompactToken.$call:length-guard:GreaterThanToken#1",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth request-capability envelope ceiling that rejects oversized compact tokens before verification."
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
@@ -769,7 +769,7 @@
       "name": "GatewayFleetAuthBroker.revokeProvider.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth broker provider-id bound coupled to revocation request validation."
     },
     {
       "file": "src/boundary/gateway/fleet-auth-broker.ts",
@@ -867,27 +867,6 @@
       "value": "12"
     },
     {
-      "file": "src/boundary/gateway/intake/compose-screening.ts",
-      "name": "composeGatewayIntakeScreening.$call:truncation:slice.arg1#1",
-      "value": "512",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/escalation.ts",
-      "name": "createGatewayIntakeEscalationPort.escalate.$call:truncation:slice.arg1#1",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/escalation.ts",
-      "name": "createGatewayIntakeEscalationPort.escalate.$call:truncation:slice.arg1#2",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/boundary/gateway/intake/injection-classifier.ts",
       "name": "DEFAULT_MAX_SEQUENCE_LENGTH",
       "value": "512"
@@ -909,13 +888,6 @@
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
-      "name": "applyL3ScreeningOutcome.$call:truncation:slice.arg1#1",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "DEFAULT_MAX_CONTENT_CHARS",
       "value": "48000"
     },
@@ -923,20 +895,6 @@
       "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "L3_MIN_VERBATIM_QUOTE_CHARS",
       "value": "24"
-    },
-    {
-      "file": "src/boundary/gateway/intake/l3-screener.ts",
-      "name": "l3ScreeningContribution.$call:truncation:slice.arg1#1",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/l3-screener.ts",
-      "name": "l3ScreeningContribution.$call:truncation:slice.arg1#2",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
@@ -1009,27 +967,6 @@
       "value": "8_192",
       "form": "object-member",
       "note": "Deterministic test/certification fixture createIntakeScreenerTestConfig.primaryMaxTokens; code-owned only for harness behavior and not used as an unowned production setting."
-    },
-    {
-      "file": "src/boundary/gateway/intake/screener-transport.ts",
-      "name": "callToolLessJsonScreener.$call:truncation:slice.arg1#1",
-      "value": "500",
-      "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/vision-screener.ts",
-      "name": "failClosed.$call:truncation:slice.arg1#1",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/intake/vision-screener.ts",
-      "name": "failClosed.$call:truncation:slice.arg1#2",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/intake/vision-screener.ts",
@@ -1118,13 +1055,6 @@
     },
     {
       "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
-      "name": "createSpawnCommandRunner.run.$call:timer:setTimeout.arg1#1",
-      "value": "250",
-      "form": "timer",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
       "name": "DEFAULT_COMMAND_TIMEOUT_MS",
       "value": "12_000"
     },
@@ -1191,13 +1121,6 @@
       "value": "200"
     },
     {
-      "file": "src/boundary/gateway/methods/beads.ts",
-      "name": "runBdCommand.$call:timer:setTimeout.arg1#1",
-      "value": "250",
-      "form": "timer",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/boundary/gateway/methods/home-assistant.ts",
       "name": "$call:length-guard:GreaterThanToken#1",
       "value": "240",
@@ -1250,7 +1173,7 @@
       "name": "collectShellPathCandidates.$call:length-guard:GreaterThanToken#1",
       "value": "4096",
       "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned shell path-entry DoS bound applied before candidate normalization and sandbox policy resolution."
     },
     {
       "file": "src/boundary/gateway/methods/shell.ts",
@@ -2253,7 +2176,7 @@
       "name": "parseChildAssertionExchangeRequest.$call:length-guard:GreaterThanToken#1",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth child-assertion envelope ceiling that bounds untrusted API request parsing before verification."
     },
     {
       "file": "src/channels/api/server/fleet-auth-escalation-routes.ts",
@@ -2274,14 +2197,14 @@
       "name": "parseScope.$call:length-guard:GreaterThanToken#1",
       "value": "1_024",
       "form": "length-guard",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth recovery scope bound coupled to the signed recovery capability vocabulary."
     },
     {
       "file": "src/channels/api/server/fleet-auth-recovery-routes.ts",
       "name": "parseScope.$call:length-guard:GreaterThanToken#2",
       "value": "65_536",
       "form": "length-guard",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned fleet-auth recovery envelope ceiling that bounds untrusted API request parsing before signature verification."
     },
     {
       "file": "src/channels/api/server/fleet-auth-routes.ts",
@@ -3383,13 +3306,6 @@
       "note": "Code-owned safety bound for the CogSec store's cross-process persistence lock; failure must surface instead of allowing an unbounded synchronous wait."
     },
     {
-      "file": "src/core/cogsec/events.ts",
-      "name": "normalizeSafeText.$call:length-guard:GreaterThanToken#1",
-      "value": "600",
-      "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
@@ -3421,13 +3337,6 @@
       "file": "src/core/cogsec/intake/marking.ts",
       "name": "NOTED_SCORE_THRESHOLD",
       "value": "0.25"
-    },
-    {
-      "file": "src/core/cogsec/intake/marking.ts",
-      "name": "renderMarkedContent.$call:truncation:slice.arg1#1",
-      "value": "300",
-      "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/cogsec/intake/quarantine-store.ts",
@@ -3535,46 +3444,40 @@
       "value": "32"
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.collectSignalContribution.$call:truncation:slice.arg1#1",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_DECISION_REASON_MAX_CHARS",
+      "value": "1_024",
+      "note": "Code-owned CogSec decision-envelope bound shared by L3, vision, and core fail-closed paths."
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.escalateAndFinalize.$call:truncation:slice.arg1#1",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_EVENT_SAFE_TEXT_MAX_CHARS",
+      "value": "600",
+      "note": "Code-owned CogSec event-text bound coupled to the safe telemetry envelope and log-ingestion contract."
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.escalateAndFinalize.$call:truncation:slice.arg1#2",
-      "value": "4096",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_EVIDENCE_FIELD_MAX_CHARS",
+      "value": "4_096",
+      "note": "Code-owned CogSec evidence-field bound shared by every screening layer so durable envelopes remain mutually compatible."
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.escalateAndFinalize.$call:truncation:slice.arg1#3",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_MARKING_SOURCE_REF_MAX_CHARS",
+      "value": "300",
+      "note": "Code-owned provenance-attribute bound coupled to the CogSec marked-content serialization grammar."
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.finalize.$call:truncation:slice.arg1#1",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_ORIGIN_DETAIL_MAX_CHARS",
+      "value": "512",
+      "note": "Code-owned intake-origin detail bound applied before untrusted metadata enters a screening envelope."
     },
     {
-      "file": "src/core/cogsec/intake/screening.ts",
-      "name": "createIntakeScreeningService.finalize.$call:truncation:slice.arg1#2",
-      "value": "1024",
-      "form": "truncation",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+      "file": "src/core/cogsec/intake/screening-envelope-policy.ts",
+      "name": "COGSEC_TRANSPORT_ERROR_MAX_CHARS",
+      "value": "500",
+      "note": "Code-owned screener-transport diagnostic bound that limits provider-controlled error text before publication."
     },
     {
       "file": "src/core/cogsec/memory-candidacy.ts",
@@ -3636,13 +3539,6 @@
       "note": "Existing mutable policy candidate RECOVERY_POLICY.maximumLimit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/core/contacts/postgres-adapter/crud-operations.ts",
-      "name": "createIdentityLinkChallenge.$call:math-clamp:Math.min.arg1#1",
-      "value": "60 * 60_000",
-      "form": "math-clamp",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/core/contacts/relationship-tools.ts",
       "name": "RELATIONSHIP_SIGNAL_TIME_SERIES_LIMIT",
       "value": "64"
@@ -3659,10 +3555,9 @@
     },
     {
       "file": "src/core/contacts/store/identity-utils.ts",
-      "name": "normalizeVerificationTtlMs.$call:math-clamp:Math.min.arg1#1",
+      "name": "MAX_LINK_VERIFICATION_TTL_MS",
       "value": "60 * 60_000",
-      "form": "math-clamp",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+      "note": "Code-owned security proof-lifetime ceiling shared by every contact identity-link challenge; changing it requires review with the verification protocol."
     },
     {
       "file": "src/core/contacts/tools.ts",
@@ -4491,6 +4386,18 @@
       "value": "3"
     },
     {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "NEXT_WEEK_FOLLOW_UP_DELAY_MS",
+      "value": "7 * 24 * 60 * 60 * 1000",
+      "note": "Code-owned lexical interpretation of the phrase next week; part of deterministic parser semantics, not operator scheduling policy."
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "TOMORROW_FOLLOW_UP_DELAY_MS",
+      "value": "24 * 60 * 60 * 1000",
+      "note": "Code-owned lexical interpretation of the word tomorrow; part of deterministic parser semantics, not operator scheduling policy."
+    },
+    {
       "file": "src/core/intention/concern-grooming.ts",
       "name": "CAP_RESOLUTION_OUTCOME",
       "value": "'Retired from concerns for durable tracking review because the active concern cap was reached.'",
@@ -4788,27 +4695,6 @@
       "value": "128"
     },
     {
-      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
-      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#1",
-      "value": "48 * 60 * 60 * 1000",
-      "form": "return-arithmetic",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
-      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#2",
-      "value": "24 * 60 * 60 * 1000",
-      "form": "return-arithmetic",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/concerns-adapter.ts",
-      "name": "PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#3",
-      "value": "8 * 60 * 60 * 1000",
-      "form": "return-arithmetic",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "CONCERN_DUPLICATE_SIMILARITY_THRESHOLD",
       "value": "0.72"
@@ -5044,7 +4930,7 @@
     {
       "file": "src/core/scheduler/reflection-introspection-policy.ts",
       "name": "REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION",
-      "value": "4"
+      "value": "5"
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
@@ -6386,13 +6272,6 @@
       "name": "executeRebuildAction.$call:truncation:slice.arg1#1",
       "value": "160",
       "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/tools/lifecycle.ts",
-      "name": "runRepoLifecycleBuildCommand.$call:timer:setTimeout.arg1#1",
-      "value": "250",
-      "form": "timer",
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
@@ -7840,7 +7719,7 @@
     {
       "file": "src/faculties/memory/subject-authorized-store.ts",
       "name": "MEMORY_STORE_METHOD_POLICY",
-      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertContactProfile: 'authorized', getContactProfile: 'authorized', listContactProfiles: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
+      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertContactProfile: 'authorized', getContactProfile: 'authorized', listContactProfiles: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
       "form": "object",
       "note": "Existing mutable policy candidate MEMORY_STORE_METHOD_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -10562,6 +10441,12 @@
       "value": "1_200"
     },
     {
+      "file": "src/shared/audit-actor.ts",
+      "name": "AUDIT_ACTOR_MAX_CHARS",
+      "value": "120",
+      "note": "Code-owned persisted audit-provenance width shared by contact and enrollment rows; coupled to durable record shape rather than mutable product tuning."
+    },
+    {
       "file": "src/shared/context-budget.ts",
       "name": "ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY.creative.memoryRetrievalBudgetPct",
       "value": "3",
@@ -11457,6 +11342,12 @@
       "file": "src/shared/logger.ts",
       "name": "DIAGNOSTIC_LOG_RING_LIMIT",
       "value": "256"
+    },
+    {
+      "file": "src/shared/process-termination-policy.ts",
+      "name": "PROCESS_TERMINATION_GRACE_TIMEOUT_MS",
+      "value": "250",
+      "note": "Code-owned subprocess termination invariant shared by bounded repository command runners after SIGTERM; not per-command tuning."
     },
     {
       "file": "src/shared/routing/companion-id.ts",
@@ -13169,13 +13060,6 @@
       "name": "DEFAULT_MAX_OUTPUT_CHARS",
       "value": "10_000",
       "note": "Code-owned child-process diagnostic capture ceiling that bounds memory and error-message amplification."
-    },
-    {
-      "file": "src/system/lifecycle/command-runner.ts",
-      "name": "runConfiguredLifecycleCommand.$call:timer:setTimeout.arg1#1",
-      "value": "250",
-      "form": "timer",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/system/lifecycle/kube-self-management.ts",

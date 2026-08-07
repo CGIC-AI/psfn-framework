@@ -36,6 +36,10 @@ import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
+  COGSEC_DECISION_REASON_MAX_CHARS,
+  COGSEC_EVIDENCE_FIELD_MAX_CHARS,
+} from './screening-envelope-policy.js';
+import {
   createIntakeEnvelope,
   postScreeningStateForDecision,
   snapshotIntakeEnvelope,
@@ -633,20 +637,23 @@ export function createIntakeScreeningService(
     }
     const extractedFields: Record<string, string> = { ...report.extractedFields };
     if (scorerOutcome.error && scorerOutcome.scannerId) {
-      extractedFields[`${scorerOutcome.scannerId}.error`] = scorerOutcome.error.slice(0, 4096);
+      extractedFields[`${scorerOutcome.scannerId}.error`] = scorerOutcome.error.slice(
+        0,
+        COGSEC_EVIDENCE_FIELD_MAX_CHARS,
+      );
     }
     for (const signal of priorSignals) {
       if (signal.score !== undefined) {
         scores[signal.scannerId] = signal.score;
       }
       for (const [key, value] of Object.entries(signal.extractedFields ?? {})) {
-        extractedFields[key] = value.slice(0, 4096);
+        extractedFields[key] = value.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS);
       }
     }
     if (adjusted.adjustment) {
       extractedFields['source_list.match'] =
         `${adjusted.adjustment.match.kind}:${adjusted.adjustment.match.list}:${adjusted.adjustment.match.pattern}`
-          .slice(0, 4096);
+          .slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS);
       extractedFields['source_list.tier_adjustment'] =
         `${adjusted.adjustment.from}->${adjusted.tier} (${adjusted.adjustment.kind})`;
     }
@@ -696,7 +703,7 @@ export function createIntakeScreeningService(
     const ruleMatchEvidence = ruleMatchesForDecision(report, decision);
     const intakeDecision: IntakeDecision = {
       action: decision.action,
-      reason: decision.reason.slice(0, 1024),
+      reason: decision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
       decidedBy: 'screening',
       decidedAtMs: atMs,
       ...(ruleMatchEvidence ?? {}),
@@ -743,13 +750,16 @@ export function createIntakeScreeningService(
       : undefined;
     if (markingPlan) {
       extractedFields['marking.intensity'] = markingPlan.intensity;
-      extractedFields['marking.provenance'] = markingPlan.provenanceNote.slice(0, 4096);
+      extractedFields['marking.provenance'] = markingPlan.provenanceNote.slice(
+        0,
+        COGSEC_EVIDENCE_FIELD_MAX_CHARS,
+      );
     }
 
     envelope = transitionIntakeEnvelope(envelope, {
       to: 'screened',
       actor,
-      reason: decision.reason.slice(0, 1024),
+      reason: decision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
       atMs,
       decision: intakeDecision,
       riskLabels: allRiskLabels,
@@ -964,7 +974,10 @@ export function createIntakeScreeningService(
       return finalize(text, timedInput, report, scorerOutcome, {
         forced: {
           action: 'quarantine',
-          reason: `escalation-fail-closed:${message}`.slice(0, 1024),
+          reason: `escalation-fail-closed:${message}`.slice(
+            0,
+            COGSEC_DECISION_REASON_MAX_CHARS,
+          ),
         },
         failure: {
           stage: 'escalation',
@@ -973,7 +986,9 @@ export function createIntakeScreeningService(
         contribution: {
           riskLabels: [],
           scores: {},
-          extractedFields: { 'escalation.error': message.slice(0, 4096) },
+          extractedFields: {
+            'escalation.error': message.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
+          },
         },
       });
     }
@@ -987,7 +1002,10 @@ export function createIntakeScreeningService(
         });
       case 'quarantine':
         return finalize(text, timedInput, report, scorerOutcome, {
-          forced: { action: 'quarantine', reason: escalationDecision.reason.slice(0, 1024) },
+          forced: {
+            action: 'quarantine',
+            reason: escalationDecision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
+          },
           contribution: escalationDecision.contribution,
         });
       case 'final': {

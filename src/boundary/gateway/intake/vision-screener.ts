@@ -36,6 +36,10 @@
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
+  COGSEC_DECISION_REASON_MAX_CHARS,
+  COGSEC_EVIDENCE_FIELD_MAX_CHARS,
+} from '../../../core/cogsec/intake/screening-envelope-policy.js';
+import {
   createIntakeEnvelope,
   transitionIntakeEnvelope,
   snapshotIntakeEnvelope,
@@ -509,7 +513,10 @@ function failClosed(
 ): Extract<VisionIntakeScreenOutcome, { kind: 'failed_closed' }> {
   const atMs = input.atMs ?? Date.now();
   const actor = input.actor ?? 'gateway:intake-vision';
-  const reason = `vision-screener-fail-closed:${error}`.slice(0, 1024);
+  const reason = `vision-screener-fail-closed:${error}`.slice(
+    0,
+    COGSEC_DECISION_REASON_MAX_CHARS,
+  );
 
   let envelope = createIntakeEnvelope({
     sourceClass: 'image_ocr',
@@ -529,7 +536,9 @@ function failClosed(
     decision: { action: 'quarantine', reason, decidedBy: 'screening', decidedAtMs: atMs },
     riskLabels: [],
     scores: {},
-    extractedFields: { [VISION_FIELD_ERROR]: error.slice(0, 4096) },
+    extractedFields: {
+      [VISION_FIELD_ERROR]: error.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
+    },
   });
   envelope = transitionIntakeEnvelope(envelope, {
     to: 'quarantined',

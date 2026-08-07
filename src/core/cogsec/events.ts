@@ -9,6 +9,7 @@ import type {
   CogSecPersonaConformanceEventRecord,
   CogSecPersonaConformanceStatus,
 } from './persona-conformance.js';
+import { COGSEC_EVENT_SAFE_TEXT_MAX_CHARS } from './intake/screening-envelope-policy.js';
 
 export const COGSEC_EVENT_STORE_VERSION = 1 as const;
 
@@ -303,8 +304,8 @@ function normalizeOptionalString(value: unknown, field: string): string | undefi
 
 function normalizeSafeText(value: unknown, field: string): string {
   const normalized = normalizeRequiredString(value, field);
-  if (normalized.length > 600) {
-    throw new Error(`${field} must be 600 characters or fewer`);
+  if (normalized.length > COGSEC_EVENT_SAFE_TEXT_MAX_CHARS) {
+    throw new Error(`${field} must be ${COGSEC_EVENT_SAFE_TEXT_MAX_CHARS} characters or fewer`);
   }
   if (/[\r\n]/u.test(normalized)) {
     throw new Error(`${field} must be a single line`);

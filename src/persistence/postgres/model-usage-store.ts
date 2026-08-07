@@ -22,11 +22,9 @@ import type {
   FleetModelUsageSummary,
   FleetModelUsageSummaryQueryPort,
   FleetModelUsageTokenTotals,
-  ModelUsageCallKind,
   ModelUsageCostHydrationBreakdown,
   ModelUsageCostHydrationData,
   ModelUsageCostHydrationQueryPort,
-  ModelUsageCostSource,
   ModelUsageCostBreakdown,
   ModelUsageData,
   ModelUsageDimensionTimeBucket,
@@ -40,14 +38,11 @@ import type {
   ModelUsageReconciliationQuery,
   ModelUsageReconciliationQueryPort,
   ModelUsageRecorder,
-  ModelUsageStatus,
-  ModelUsageSettlement,
   ModelUsageTotals,
   ModelUsageGroupDimension,
   ModelUsageGroup,
   ModelUsageResolvedRange,
   ModelUsageTimeBucket,
-  EnabledIcpCostBreakerPolicy,
   IcpConversationCostAccountingPort,
   IcpConversationCostProjection,
   IcpConversationCostProjectionQuery,
@@ -80,11 +75,9 @@ import {
   normalizeStoredModelUsageChargeSurface,
 } from '../../shared/telemetry/model-usage-attribution.js';
 import {
-  reconcileModelUsageAccounting,
   ceilModelUsageUsd,
   roundModelUsageUsd,
 } from '../../shared/telemetry/model-usage-accounting.js';
-import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
@@ -98,6 +91,41 @@ import {
   type PostgresStoreReadinessHandle,
 } from './runtime-readiness.js';
 import { assertModelUsageLedgerReadable } from './model-usage-access.js';
+import {
+  eventFingerprint,
+  normalizeEvent,
+  normalizeText,
+  readIcpCostPurposeFromMetadata,
+  validateEnabledIcpCostPolicy,
+} from './model-usage-store/capture.js';
+import {
+  asNumber,
+  canonicalize,
+  dayKey,
+  inputNonNegativeCost,
+  inputNonNegativeInteger,
+  monthKey,
+  nonNegativeCost,
+  nonNegativeInteger,
+  normalizeTelemetryVisibility,
+  optionalText,
+} from './model-usage-store/common.js';
+import type {
+  BreakdownRow,
+  BudgetSpendRow,
+  CostHydrationBreakdownRow,
+  CoverageRow,
+  DimensionTimeBucketRow,
+  FleetAllTokenTotalsRow,
+  FleetTokenTotalsRow,
+  GroupRow,
+  IcpConversationCostProjectionRow,
+  IcpConversationCostReservationRow,
+  ModelUsageEventRow,
+  PreparedModelUsageQuery,
+  SqlWhere,
+  TotalsRow,
+} from './model-usage-store/rows.js';
 
 const log = createComponentLogger('ModelUsageStore');
 
@@ -108,216 +136,6 @@ const DEFAULT_TOP_N = 20;
 const MAX_TOP_N = 100;
 const MAX_EXPORT_ROWS = 50_000;
 const MAX_DIMENSION_TIME_SERIES_ROWS = 5_000;
-
-interface ModelUsageEventRow {
-  id: string;
-  logical_call_id: string;
-  attempt: number | string;
-  recorded_at_ms: number | string;
-  started_at_ms: number | string;
-  completed_at_ms: number | string | null;
-  duration_ms: number | string | null;
-  ttft_ms: number | string | null;
-  day_key: string;
-  month_key: string;
-  status: ModelUsageStatus;
-  settlement: ModelUsageSettlement;
-  call_kind: ModelUsageCallKind;
-  call_type: ModelUsageEvent['attribution']['callType'];
-  purpose: string;
-  telemetry_visibility: NonNullable<ModelUsageEvent['telemetryVisibility']>;
-  origin_type: ModelUsageEvent['attribution']['originType'] | null;
-  origin_stage: string | null;
-  service: string | null;
-  process: string | null;
-  companion_id: string;
-  session_id: string;
-  turn_id: string | null;
-  request_id: string | null;
-  channel_id: string | null;
-  channel_type: string;
-  tool_name: string | null;
-  tool_call_id: string | null;
-  runtime_lane_class: ModelUsageEvent['attribution']['runtimeLaneClass'] | null;
-  charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
-  charge_surface: string | null;
-  charge_event_id: string | null;
-  charge_run_id: string | null;
-  charge_root_run_id: string | null;
-  charge_parent_run_id: string | null;
-  shard_id: string;
-  subagent_id: string;
-  conversation_id: string;
-  root_initiation_id: string;
-  workload_type: string;
-  workload_id: string;
-  provider: string;
-  model: string;
-  slot_key: string | null;
-  requested_provider: string | null;
-  requested_model: string | null;
-  input_tokens: number | string;
-  output_tokens: number | string;
-  cache_read_tokens: number | string;
-  cache_write_tokens: number | string;
-  total_tokens: number | string;
-  provider_input_cost_usd: number | string | null;
-  provider_output_cost_usd: number | string | null;
-  provider_cache_read_cost_usd: number | string | null;
-  provider_cache_write_cost_usd: number | string | null;
-  provider_cost_usd: number | string | null;
-  estimated_input_cost_usd: number | string | null;
-  estimated_output_cost_usd: number | string | null;
-  estimated_cache_read_cost_usd: number | string | null;
-  estimated_cache_write_cost_usd: number | string | null;
-  estimated_cost_usd: number | string | null;
-  effective_input_cost_usd: number | string | null;
-  effective_output_cost_usd: number | string | null;
-  effective_cache_read_cost_usd: number | string | null;
-  effective_cache_write_cost_usd: number | string | null;
-  effective_cost_usd: number | string | null;
-  cost_source: ModelUsageCostSource;
-  currency: string | null;
-  stop_reason: string | null;
-  error_code: string | null;
-  error_message: string | null;
-  metadata_json: unknown;
-  event_fingerprint: string;
-}
-
-interface TotalsRow {
-  calls: number | string;
-  successful_calls: number | string;
-  failed_calls: number | string;
-  input_tokens: number | string | null;
-  output_tokens: number | string | null;
-  cache_read_tokens: number | string | null;
-  cache_write_tokens: number | string | null;
-  total_tokens: number | string | null;
-  provider_cost_usd: number | string | null;
-  estimated_cost_usd: number | string | null;
-  total_cost_usd: number | string | null;
-  provider_input_cost_usd: number | string | null;
-  provider_input_known_calls: number | string;
-  provider_output_cost_usd: number | string | null;
-  provider_output_known_calls: number | string;
-  provider_cache_read_cost_usd: number | string | null;
-  provider_cache_read_known_calls: number | string;
-  provider_cache_write_cost_usd: number | string | null;
-  provider_cache_write_known_calls: number | string;
-  provider_cost_known_calls: number | string;
-  estimated_input_cost_usd: number | string | null;
-  estimated_input_known_calls: number | string;
-  estimated_output_cost_usd: number | string | null;
-  estimated_output_known_calls: number | string;
-  estimated_cache_read_cost_usd: number | string | null;
-  estimated_cache_read_known_calls: number | string;
-  estimated_cache_write_cost_usd: number | string | null;
-  estimated_cache_write_known_calls: number | string;
-  estimated_cost_known_calls: number | string;
-  effective_input_cost_usd: number | string | null;
-  effective_input_known_calls: number | string;
-  effective_output_cost_usd: number | string | null;
-  effective_output_known_calls: number | string;
-  effective_cache_read_cost_usd: number | string | null;
-  effective_cache_read_known_calls: number | string;
-  effective_cache_write_cost_usd: number | string | null;
-  effective_cache_write_known_calls: number | string;
-  effective_cost_known_calls: number | string;
-  total_duration_ms: number | string | null;
-  duration_samples: number | string;
-  total_ttft_ms: number | string | null;
-  ttft_samples: number | string;
-  average_duration_ms: number | string | null;
-  average_ttft_ms: number | string | null;
-}
-
-interface FleetTokenTotalsRow {
-  companion_id: string;
-  calls: number | string;
-  input_tokens: number | string | null;
-  output_tokens: number | string | null;
-  cache_read_tokens: number | string | null;
-  cache_write_tokens: number | string | null;
-  total_tokens: number | string | null;
-}
-
-interface FleetAllTokenTotalsRow extends FleetTokenTotalsRow {
-  earliest_ms: number | string | null;
-}
-
-interface BreakdownRow extends TotalsRow {
-  key: string | null;
-}
-
-interface TimeBucketRow extends TotalsRow {
-  bucket_start_ms: number | string;
-}
-
-interface DimensionTimeBucketRow extends TimeBucketRow {
-  series_key: string | null;
-}
-
-interface GroupRow extends TotalsRow {
-  dimension_0: string | null;
-  dimension_1: string | null;
-  is_other: boolean;
-  sort_rank: number | string;
-}
-
-interface CostHydrationBreakdownRow extends BreakdownRow {
-  model_key: string;
-  cost_source: ModelUsageCostSource;
-}
-
-type CoverageRow = Record<string, number | string | null | undefined> & {
-  total_calls: number | string;
-};
-
-interface BudgetSpendRow {
-  daily_estimated_cost_usd: number | string | null;
-  monthly_estimated_cost_usd: number | string | null;
-  daily_unknown_cost_attempts: number | string;
-  monthly_unknown_cost_attempts: number | string;
-}
-
-interface IcpConversationCostProjectionRow {
-  actual_cost_usd: number | string | null;
-  pending_projected_cost_usd: number | string | null;
-  actual_attempt_count: number | string;
-  unknown_cost_attempt_count: number | string;
-  pending_reservation_count: number | string;
-  stale_reservation_count: number | string;
-  settled_reservation_count: number | string;
-  attributed_companion_count: number | string;
-}
-
-interface IcpConversationCostReservationRow {
-  logical_call_id: string;
-  attempt: number | string;
-  conversation_id: string;
-  root_initiation_id: string;
-  companion_id: string;
-  cost_purpose: string;
-  closeout_eligible: boolean;
-  projected_cost_usd: number | string;
-  status: 'pending' | 'settled' | 'settled_unknown';
-  reservation_reason: 'below_warning' | 'final_closeout_reserve';
-  settled_event_id: string | null;
-  created_at_ms: number | string;
-  settled_at_ms: number | string | null;
-}
-
-interface SqlWhere {
-  clause: string;
-  values: unknown[];
-}
-
-interface PreparedModelUsageQuery {
-  query: ModelUsageQuery;
-  resolvedRange: ModelUsageResolvedRange;
-  where: SqlWhere;
-}
 
 export type ModelUsageStoreScope =
   | { companionId: string; fleetAggregation?: never }
@@ -399,184 +217,6 @@ const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
   costSource: 'cost_source',
 };
 
-function normalizeText(value: string | undefined, fallback: string): string {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : fallback;
-}
-
-function optionalText(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeTelemetryVisibility(
-  value: unknown,
-): NonNullable<ModelUsageEvent['telemetryVisibility']> {
-  if (value === undefined || value === 'operator_visible') return 'operator_visible';
-  if (value === 'companion_private') return 'companion_private';
-  throw new Error(`Unsupported model usage telemetry visibility: ${String(value)}`);
-}
-
-function asNumber(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function asNullableNumber(value: unknown): number | undefined {
-  if (value === null || value === undefined) return undefined;
-  const numeric = asNumber(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
-}
-
-function nonNegativeInteger(value: unknown): number {
-  const numeric = asNumber(value);
-  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
-}
-
-function inputNonNegativeInteger(
-  value: unknown,
-  field: string,
-  fallback: number = 0,
-): number {
-  if (value === undefined) return fallback;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
-    throw new Error(`${field} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function nonNegativeCost(value: unknown): number | undefined {
-  const numeric = asNullableNumber(value);
-  if (numeric === undefined || numeric < 0) return undefined;
-  return numeric;
-}
-
-function inputNonNegativeCost(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${field} must be a finite number >= 0`);
-  }
-  return value;
-}
-
-function validateEnabledIcpCostPolicy(
-  policy: unknown,
-): EnabledIcpCostBreakerPolicy {
-  if (!isRecord(policy) || policy.enabled !== true) {
-    throw new Error('ICP conversation cost accounting requires an enabled owner policy');
-  }
-  const warningThresholdUsd = inputNonNegativeCost(
-    policy.warningThresholdUsd,
-    'policy.warningThresholdUsd',
-  );
-  const hardLimitUsd = inputNonNegativeCost(policy.hardLimitUsd, 'policy.hardLimitUsd');
-  const finalCloseoutReserveUsd = inputNonNegativeCost(
-    policy.finalCloseoutReserveUsd,
-    'policy.finalCloseoutReserveUsd',
-  );
-  if (
-    warningThresholdUsd <= 0
-    || finalCloseoutReserveUsd <= 0
-    || Math.abs((warningThresholdUsd + finalCloseoutReserveUsd) - hardLimitUsd) > 1e-9
-  ) {
-    throw new Error('ICP conversation cost policy thresholds do not define one exact closeout band');
-  }
-  const pendingReservationStaleAfterMs = inputNonNegativeInteger(
-    policy.pendingReservationStaleAfterMs,
-    'policy.pendingReservationStaleAfterMs',
-  );
-  if (pendingReservationStaleAfterMs <= 0 || !isRecord(policy.includedCostPurposes)) {
-    throw new Error('ICP conversation cost policy requires a positive stale interval and purpose map');
-  }
-  const includedCostPurposes = policy.includedCostPurposes;
-  const purposeKeys = ['conversation_turn', 'tool', 'summary', 'extraction', 'sidecar'] as const;
-  const conversationTurn = includedCostPurposes.conversation_turn;
-  const tool = includedCostPurposes.tool;
-  const summary = includedCostPurposes.summary;
-  const extraction = includedCostPurposes.extraction;
-  const sidecar = includedCostPurposes.sidecar;
-  if (
-    Object.keys(includedCostPurposes).some(
-      key => !purposeKeys.some(purpose => purpose === key),
-    )
-    || typeof conversationTurn !== 'boolean'
-    || typeof tool !== 'boolean'
-    || typeof summary !== 'boolean'
-    || typeof extraction !== 'boolean'
-    || typeof sidecar !== 'boolean'
-    || !conversationTurn
-  ) {
-    throw new Error('ICP conversation cost policy has an invalid includedCostPurposes map');
-  }
-  return {
-    enabled: true,
-    warningThresholdUsd,
-    hardLimitUsd,
-    finalCloseoutReserveUsd,
-    pendingReservationStaleAfterMs,
-    includedCostPurposes: {
-      conversation_turn: conversationTurn,
-      tool,
-      summary,
-      extraction,
-      sidecar,
-    },
-  };
-}
-
-function readIcpCostPurposeFromMetadata(metadata: Record<string, unknown>): string | undefined {
-  const icpCost = metadata.icpCost;
-  if (!isRecord(icpCost) || typeof icpCost.purpose !== 'string') return undefined;
-  return icpCost.purpose.trim() || undefined;
-}
-
-function mergeCostTotal(
-  cost: ModelUsageCostBreakdown | undefined,
-  total: number | undefined,
-  field: string,
-): ModelUsageCostBreakdown | undefined {
-  if (!cost && total === undefined) return undefined;
-  if (
-    cost?.total !== undefined
-    && total !== undefined
-    && Math.round(cost.total * 1_000_000_000_000) !== Math.round(total * 1_000_000_000_000)
-  ) {
-    throw new Error(`${field}Usd must match the structured total`);
-  }
-  return {
-    ...(cost ?? {}),
-    ...(cost?.total === undefined && total !== undefined ? { total } : {}),
-  };
-}
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (typeof value !== 'object' || value === null) return value;
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.keys(record)
-      .sort()
-      .filter(key => record[key] !== undefined)
-      .map(key => [key, canonicalize(record[key])]),
-  );
-}
-
-function eventFingerprint(event: ModelUsageEvent): string {
-  return createHash('sha256')
-    .update(JSON.stringify(canonicalize(event)))
-    .digest('hex');
-}
-
-function dayKey(timestampMs: number): string {
-  return new Date(timestampMs).toISOString().slice(0, 10);
-}
-
-function monthKey(timestampMs: number): string {
-  return new Date(timestampMs).toISOString().slice(0, 7);
-}
 
 function normalizeLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit) || limit < 1) {
@@ -600,122 +240,6 @@ function parseMetadata(value: unknown): Record<string, unknown> {
     }
   }
   return {};
-}
-
-function normalizeEvent(
-  input: ModelUsageEventInput,
-  expectedCompanionId?: string,
-): ModelUsageEvent {
-  const declaredCurrency = optionalText(input.currency)?.toUpperCase();
-  if (declaredCurrency && declaredCurrency !== 'USD') {
-    throw new Error('currency must be USD until explicit currency conversion is implemented');
-  }
-  const recordedAtMs = inputNonNegativeInteger(input.recordedAtMs, 'recordedAtMs', Date.now());
-  const startedAtMs = inputNonNegativeInteger(input.startedAtMs, 'startedAtMs', recordedAtMs);
-  const completedAtMs = input.completedAtMs !== undefined
-    ? inputNonNegativeInteger(input.completedAtMs, 'completedAtMs')
-    : undefined;
-  const durationMs = input.durationMs !== undefined
-    ? inputNonNegativeInteger(input.durationMs, 'durationMs')
-    : (completedAtMs !== undefined ? Math.max(0, completedAtMs - startedAtMs) : undefined);
-  const inputTokens = inputNonNegativeInteger(input.inputTokens, 'inputTokens');
-  const outputTokens = inputNonNegativeInteger(input.outputTokens, 'outputTokens');
-  const cacheReadTokens = inputNonNegativeInteger(input.cacheReadTokens, 'cacheReadTokens');
-  const cacheWriteTokens = inputNonNegativeInteger(input.cacheWriteTokens, 'cacheWriteTokens');
-  const providerCost = mergeCostTotal(input.providerCost, input.providerCostUsd, 'providerCost');
-  const estimatedCost = mergeCostTotal(input.estimatedCost, input.estimatedCostUsd, 'estimatedCost');
-  const effectiveCost = mergeCostTotal(input.effectiveCost, input.effectiveCostUsd, 'effectiveCost');
-  const accounting = reconcileModelUsageAccounting({
-    usage: {
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheWriteTokens,
-      ...(input.totalTokens !== undefined ? { totalTokens: input.totalTokens } : {}),
-    },
-    ...(providerCost ? { providerCost } : {}),
-    ...(estimatedCost ? { estimatedCost } : {}),
-    ...(effectiveCost ? { effectiveCost } : {}),
-    ...(input.costSource ? { costSource: input.costSource } : {}),
-  });
-  const providerCostUsd = accounting.providerCost.total;
-  const estimatedCostUsd = accounting.estimatedCost.total;
-  const effectiveCostUsd = accounting.effectiveCost.total;
-  const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
-  const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
-  const telemetryVisibility = normalizeTelemetryVisibility(input.telemetryVisibility);
-  const operatorVisible = telemetryVisibility === 'operator_visible';
-  const declaredCompanionId = optionalText(input.attribution.companionId);
-  if (!expectedCompanionId && !declaredCompanionId) {
-    throw new Error('Fleet model usage events require an explicit companionId attribution');
-  }
-  if (expectedCompanionId && declaredCompanionId && declaredCompanionId !== expectedCompanionId) {
-    throw new Error(
-      `Model usage companion attribution ${JSON.stringify(declaredCompanionId)} does not match `
-      + `the store tenant ${JSON.stringify(expectedCompanionId)}`,
-    );
-  }
-  const attribution = normalizeModelUsageAttribution({
-    ...input.attribution,
-    ...(expectedCompanionId ? { companionId: expectedCompanionId } : {}),
-    // companion_private calls (e.g. blinded introspection audits) must not persist
-    // turn/request/channel/tool linkage that could re-identify the private context.
-    ...(operatorVisible
-      ? {}
-      : {
-          turnId: undefined,
-          requestId: undefined,
-          channelId: undefined,
-          toolName: undefined,
-          toolCallId: undefined,
-        }),
-    // Embedding is the ledger origin even when it runs inside extraction or
-    // retrieval request context. Preserve the enclosing session attribution,
-    // but do not mislabel the metered model operation itself.
-    ...(input.callKind === 'embedding' ? { originStage: 'embedding' } : {}),
-  });
-
-  return {
-    id: normalizeText(input.id, `${logicalCallId}:${attempt}`),
-    logicalCallId,
-    attempt,
-    recordedAtMs,
-    startedAtMs,
-    ...(completedAtMs !== undefined ? { completedAtMs } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
-    ...(input.ttftMs !== undefined ? { ttftMs: inputNonNegativeInteger(input.ttftMs, 'ttftMs') } : {}),
-    dayKey: dayKey(recordedAtMs),
-    monthKey: monthKey(recordedAtMs),
-    status: input.status,
-    settlement: input.settlement ?? (input.status === 'success' ? 'complete' : 'unknown'),
-    callKind: input.callKind,
-    telemetryVisibility,
-    attribution,
-    provider: normalizeText(input.provider, 'unknown'),
-    model: normalizeText(input.model, 'unknown'),
-    ...(optionalText(input.slotKey) ? { slotKey: optionalText(input.slotKey) } : {}),
-    ...(optionalText(input.requestedProvider) ? { requestedProvider: optionalText(input.requestedProvider) } : {}),
-    ...(optionalText(input.requestedModel) ? { requestedModel: optionalText(input.requestedModel) } : {}),
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    totalTokens: accounting.usage.totalTokens,
-    ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
-    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
-    ...(effectiveCostUsd !== undefined ? { effectiveCostUsd } : {}),
-    providerCost: accounting.providerCost,
-    estimatedCost: accounting.estimatedCost,
-    effectiveCost: accounting.effectiveCost,
-    costSource: accounting.costSource,
-    ...(optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency)
-      ? { currency: optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency) }
-      : {}),
-    ...(optionalText(input.stopReason) ? { stopReason: optionalText(input.stopReason) } : {}),
-    ...(optionalText(input.errorCode) ? { errorCode: optionalText(input.errorCode) } : {}),
-    ...(optionalText(input.errorMessage) ? { errorMessage: optionalText(input.errorMessage) } : {}),
-    metadata: boundModelUsageMetadata(input.metadata),
-  };
 }
 
 function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {

@@ -6,20 +6,24 @@ const readSource = async (relativePath: string): Promise<string> => (
 );
 
 describe('PostgresModelUsageStore phased module boundary', () => {
-  it('extracts shared capture support and row contracts without moving the public class', async () => {
-    const [store, capture, common, rows] = await Promise.all([
+  it('extracts phased support modules without moving the public class', async () => {
+    const [store, capture, common, querySupport, rows] = await Promise.all([
       readSource('./model-usage-store.ts'),
       readSource('./model-usage-store/capture.ts'),
       readSource('./model-usage-store/common.ts'),
+      readSource('./model-usage-store/query-support.ts'),
       readSource('./model-usage-store/rows.ts'),
     ]);
 
     expect(store).toContain('export class PostgresModelUsageStore');
     expect(store).toContain("from './model-usage-store/capture.js'");
     expect(store).toContain("from './model-usage-store/common.js'");
+    expect(store).toContain("from './model-usage-store/query-support.js'");
     expect(store).toContain("from './model-usage-store/rows.js'");
     expect(capture).not.toContain("from '../model-usage-store.js'");
     expect(common).not.toContain("from '../model-usage-store.js'");
+    expect(querySupport).not.toContain("from '../model-usage-store.js'");
+    expect(querySupport).not.toContain("from './capture.js'");
     expect(rows).not.toContain("from '../model-usage-store.js'");
   });
 

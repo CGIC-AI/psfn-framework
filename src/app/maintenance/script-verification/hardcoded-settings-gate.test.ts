@@ -50,6 +50,40 @@ afterEach(() => {
 });
 
 describe('Hardcoded-settings repository gate', () => {
+  it('keeps reconciled production policy literals visible under semantic owners', () => {
+    const entries = scanHardcodedSettings(resolve(process.cwd()));
+    const identities = new Set(entries.map(entry => `${entry.file}::${entry.name}`));
+
+    for (const identity of [
+      'src/core/agent/background-work/config.ts::DISABLED_BACKGROUND_WORK_MAX_ATTEMPTS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_DECISION_REASON_MAX_CHARS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_EVENT_SAFE_TEXT_MAX_CHARS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_EVIDENCE_FIELD_MAX_CHARS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_MARKING_SOURCE_REF_MAX_CHARS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_ORIGIN_DETAIL_MAX_CHARS',
+      'src/core/cogsec/intake/screening-envelope-policy.ts::COGSEC_TRANSPORT_ERROR_MAX_CHARS',
+      'src/core/contacts/store/identity-utils.ts::MAX_LINK_VERIFICATION_TTL_MS',
+      'src/core/intention/concern-candidates.ts::NEXT_WEEK_FOLLOW_UP_DELAY_MS',
+      'src/core/intention/concern-candidates.ts::TOMORROW_FOLLOW_UP_DELAY_MS',
+      'src/core/tools/self-diagnosis.ts::SELF_DIAGNOSIS_MAX_BUFFER_BYTES',
+      'src/primitives/images/vision-policy.ts::VISION_IMAGE_MAX_BYTES',
+      'src/shared/audit-actor.ts::AUDIT_ACTOR_MAX_CHARS',
+      'src/shared/process-termination-policy.ts::PROCESS_TERMINATION_GRACE_TIMEOUT_MS',
+      'src/system/config/scheduler-config.ts::DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts',
+    ]) {
+      expect(identities).toContain(identity);
+    }
+
+    for (const removedDuplicate of [
+      'src/core/agent/substrate-agent/turn-execution/post-turn-scheduling.ts::createBackgroundWorkInput.maxAttempts',
+      'src/core/intention/postgres-adapters/concerns-adapter.ts::PostgresActiveConcernStore.resolveConcernTtlMs.$call:return-arithmetic:AsteriskToken#1',
+      'src/core/tools/lifecycle.ts::runRepoLifecycleBuildCommand.$call:timer:setTimeout.arg1#1',
+      'src/core/agent/substrate-agent/vision-attachments.ts::VISION_ATTACHMENT_MAX_BYTES',
+    ]) {
+      expect(identities).not.toContain(removedDuplicate);
+    }
+  });
+
   it('passes when every matching constant is recorded in the baseline', () => {
     const root = makeFixture();
     writeSource(root, 'src/policy.ts', 'export const REQUEST_TIMEOUT_MS = 5_000;\n');

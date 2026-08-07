@@ -34,6 +34,7 @@ import type {
   IntakeSourceClass,
   IntakeSourceRiskTier,
 } from '../../../shared/contracts/intake-envelope.js';
+import { COGSEC_MARKING_SOURCE_REF_MAX_CHARS } from './screening-envelope-policy.js';
 import { INTAKE_DATAMARK_MARKER } from './scanners/datamark.js';
 import { INTAKE_QUARANTINE_RISK_LABELS } from './risk-label-families.js';
 
@@ -246,7 +247,9 @@ export function renderMarkedContent(
   const marker = options.marker ?? INTAKE_DATAMARK_MARKER;
   const attributes = [`provenance="${escapeAttribute(plan.provenanceNote)}"`];
   if (options.sourceRef?.trim()) {
-    attributes.push(`source="${escapeAttribute(options.sourceRef.trim().slice(0, 300))}"`);
+    attributes.push(
+      `source="${escapeAttribute(options.sourceRef.trim().slice(0, COGSEC_MARKING_SOURCE_REF_MAX_CHARS))}"`,
+    );
   }
 
   let body: string;

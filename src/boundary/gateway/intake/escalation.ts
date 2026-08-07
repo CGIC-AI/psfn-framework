@@ -37,6 +37,7 @@ import type {
   IntakeScreeningServiceOptions,
 } from '../../../core/cogsec/intake/screening.js';
 import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
+import { COGSEC_EVIDENCE_FIELD_MAX_CHARS } from '../../../core/cogsec/intake/screening-envelope-policy.js';
 import type { IntakeRiskLabel } from '../../../shared/contracts/intake-envelope.js';
 import type { CogSecEventStore } from '../../../core/cogsec/events.js';
 import type { IntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
@@ -132,7 +133,7 @@ export function createGatewayIntakeEscalationPort(
             riskLabels: [],
             scores: {},
             extractedFields: {
-              [L2_SCREENER_ERROR_FIELD]: l2Outcome.error.slice(0, 4096),
+              [L2_SCREENER_ERROR_FIELD]: l2Outcome.error.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
             },
           },
         };
@@ -143,7 +144,9 @@ export function createGatewayIntakeEscalationPort(
       l2Contribution = {
         riskLabels: [],
         scores: {},
-        extractedFields: { [L2_SCREENER_ERROR_FIELD]: l2Outcome.error.slice(0, 4096) },
+        extractedFields: {
+          [L2_SCREENER_ERROR_FIELD]: l2Outcome.error.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
+        },
       };
     } else if (l2Outcome.kind === 'classified' || l2Outcome.kind === 'escalate_l3') {
       l2ForL3 = {

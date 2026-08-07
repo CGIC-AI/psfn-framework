@@ -41,6 +41,10 @@
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
+  COGSEC_DECISION_REASON_MAX_CHARS,
+  COGSEC_EVIDENCE_FIELD_MAX_CHARS,
+} from '../../../core/cogsec/intake/screening-envelope-policy.js';
+import {
   createIntakeEnvelope,
   postScreeningStateForDecision,
   snapshotIntakeEnvelope,
@@ -707,7 +711,10 @@ export function l3ScreeningContribution(
 ): L3ScreeningContribution {
   const scores: Record<string, number> = {};
   const extractedFields: Record<string, string> = {
-    [L3_FIELD_ESCALATION_REASON]: outcome.escalationReason.slice(0, 1024),
+    [L3_FIELD_ESCALATION_REASON]: outcome.escalationReason.slice(
+      0,
+      COGSEC_DECISION_REASON_MAX_CHARS,
+    ),
   };
   const labels = new Set<IntakeRiskLabel>();
 
@@ -727,14 +734,16 @@ export function l3ScreeningContribution(
     extractedFields[L3_FIELD_SUMMARY] = rep.summary;
     extractedFields[L3_FIELD_CONTENT_TYPE] = rep.contentType;
     if (rep.keyEntities.length > 0) {
-      extractedFields[L3_FIELD_KEY_ENTITIES] = rep.keyEntities.join(', ').slice(0, 4096);
+      extractedFields[L3_FIELD_KEY_ENTITIES] = rep.keyEntities
+        .join(', ')
+        .slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS);
     }
     if (rep.whyFlagged) {
       extractedFields[L3_FIELD_WHY_FLAGGED] = rep.whyFlagged;
     }
     for (const label of outcome.aggregate.labels) labels.add(label);
   } else {
-    extractedFields[L3_FIELD_ERROR] = outcome.error.slice(0, 4096);
+    extractedFields[L3_FIELD_ERROR] = outcome.error.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS);
   }
 
   return { riskLabels: [...labels], scores, extractedFields };
@@ -912,7 +921,7 @@ export function applyL3ScreeningOutcome(
       + `; models=${outcome.aggregate.models.join('+')}`
       + `; via=${outcome.escalationReason}`;
   }
-  reason = reason.slice(0, 1024);
+  reason = reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS);
 
   const decision: IntakeDecision = {
     action,
@@ -950,7 +959,7 @@ export function applyL3ScreeningOutcome(
     extractedFields: {
       ...(input.priorContribution?.extractedFields ?? {}),
       ...contribution.extractedFields,
-      [L3_FIELD_SOURCE_REF]: input.origin.ref.slice(0, 4096),
+      [L3_FIELD_SOURCE_REF]: input.origin.ref.slice(0, COGSEC_EVIDENCE_FIELD_MAX_CHARS),
     },
   });
   envelope = transitionIntakeEnvelope(envelope, {

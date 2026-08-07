@@ -170,6 +170,8 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       sql.includes('COUNT(*) AS calls,')
     ));
     expect(totalsQueries).toHaveLength(2);
+    expect(postgresMocks.queryOne).toHaveBeenCalledTimes(3);
+    expect(postgresMocks.queryRows).toHaveBeenCalledTimes(9);
     expect(totalsQueries[0]?.[2]).toEqual([
       200,
       300,
@@ -263,6 +265,10 @@ describe('PostgresModelUsageStore previous-period totals', () => {
     const insert = postgresMocks.clientQueries.find(({ sql }) => (
       sql.includes('INSERT INTO model_usage_events')
     ));
+    expect(postgresMocks.clientQueries).toHaveLength(2);
+    expect(postgresMocks.clientQueries[0]?.sql).toContain(
+      'FROM icp_conversation_cost_reservations',
+    );
     expect(insert?.values[16]).toBe('embedding');
     expect(insert?.values[20]).toBe('session-a');
     expect(insert?.values[27]).toBe('background');

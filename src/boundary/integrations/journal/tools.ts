@@ -5,6 +5,7 @@ import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { JournalOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { requireNonEmptyString } from '../../../shared/utils/strings.js';
 
 const JOURNAL_ACTIONS = ['list', 'read', 'write', 'append', 'search'] as const;
 type JournalAction = typeof JOURNAL_ACTIONS[number];
@@ -26,18 +27,11 @@ function requireAction(value: unknown): JournalAction {
   return value as JournalAction;
 }
 
-function requireNonEmpty(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${field} is required`);
-  }
-  return value.trim();
-}
-
 function resolveNotePath(params: JournalToolParams): string {
   if (typeof params.path === 'string' && params.path.trim().length > 0) {
     return params.path.trim();
   }
-  const title = requireNonEmpty(params.title, 'path or title');
+  const title = requireNonEmptyString(params.title, 'path or title');
   return slugifyTitle(title);
 }
 
@@ -126,15 +120,15 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
             );
           }
           case 'write': {
-            const result = await ops.write(resolveNotePath(params), requireNonEmpty(params.content, 'content'));
+            const result = await ops.write(resolveNotePath(params), requireNonEmptyString(params.content, 'content'));
             return textResult(`Journal note ${result.created ? 'created' : 'replaced'}: ${result.path}`);
           }
           case 'append': {
-            const result = await ops.append(resolveNotePath(params), requireNonEmpty(params.content, 'content'));
+            const result = await ops.append(resolveNotePath(params), requireNonEmptyString(params.content, 'content'));
             return textResult(`Journal note ${result.created ? 'created' : 'appended'}: ${result.path}`);
           }
           case 'search': {
-            const result = await ops.search(requireNonEmpty(params.query, 'query'), params.limit);
+            const result = await ops.search(requireNonEmptyString(params.query, 'query'), params.limit);
             if (result.results.length === 0) {
               return textResult(
                 `No journal results for: ${result.query}\n`

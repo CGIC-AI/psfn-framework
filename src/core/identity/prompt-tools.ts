@@ -97,10 +97,6 @@ interface ProtectedPromptLayerProposalInput {
   nextEnabled?: boolean;
 }
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function resolvePromptLayerById(store: PromptLayerStatePort, layerId: string): PromptLayer | null {
   const normalized = layerId.trim();
   if (!normalized) return null;
@@ -685,7 +681,7 @@ export function createIdentityTool(
             });
         }
       } catch (error) {
-        return textResultWithError(`identity failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`identity failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -712,7 +708,7 @@ async function executePromptLayerListAction(
     });
     return textResult(lines.join('\n'));
   } catch (error) {
-    return textResultWithError(`prompt_layer_list failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`prompt_layer_list failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -742,7 +738,7 @@ async function executePromptLayerGetAction(
     ].filter(Boolean).join('\n');
     return textResult(text);
   } catch (error) {
-    return textResultWithError(`prompt_layer_get failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`prompt_layer_get failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -807,7 +803,7 @@ async function executeIdentityDiffAction(
     }
     return textResult(lines.join('\n'));
   } catch (error) {
-    return textResultWithError(`identity_diff failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`identity_diff failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -876,7 +872,7 @@ async function executeIdentityChangelogAction(
 
     return textResult([heading, ...lines].join('\n'));
   } catch (error) {
-    return textResultWithError(`identity_changelog failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`identity_changelog failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -937,7 +933,7 @@ async function executePromptLayerUpdateAction(
     const updated = store.update(layer.id, content, 'agent', {}, reason);
     return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
   } catch (error) {
-    return textResultWithError(`prompt_layer_update failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`prompt_layer_update failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -1019,7 +1015,7 @@ async function executePromptLayerRollbackAction(
       `(now v${updated.version}, checksum: ${updated.checksum})`,
     );
   } catch (error) {
-    return textResultWithError(`prompt_layer_rollback failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`prompt_layer_rollback failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -1070,6 +1066,6 @@ async function executePromptLayerToggleAction(
       state: toggled.enabled ? 'enabled' : 'disabled',
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`prompt_layer_toggle failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`prompt_layer_toggle failed: ${toErrorMessage(error)}`, true);
   }
 }

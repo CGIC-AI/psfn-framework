@@ -129,10 +129,6 @@ interface ContactToolParams extends Partial<ContactSetTrustParams> {
   reason?: string;
 }
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
@@ -1149,7 +1145,7 @@ export function createContactTool(
         );
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
-        return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact failed${suffix}: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1223,7 +1219,7 @@ export function createContactSetTrustTool(
       try {
         return await executeContactSetTrust(contactStore, params, intake);
       } catch (error) {
-        return textResultWithError(`contact_set_trust failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_set_trust failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1248,7 +1244,7 @@ export function createContactNoteTool(contactStore: ContactStorePort): Substrate
       try {
         return await executeContactNote(contactStore, params);
       } catch (error) {
-        return textResultWithError(`contact_note failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_note failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1283,7 +1279,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
       try {
         return await executeContactSetChannelPrivacy(contactStore, params);
       } catch (error) {
-        return textResultWithError(`contact_set_channel_privacy failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_set_channel_privacy failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1307,7 +1303,7 @@ export function createContactLookupTool(contactStore: ContactStorePort): Substra
       try {
         return await executeContactLookup(contactStore, params);
       } catch (error) {
-        return textResultWithError(`contact_lookup failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_lookup failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1342,7 +1338,7 @@ export function createContactLinkIdentityTool(contactStore: ContactStorePort): S
       try {
         return await executeContactLinkIdentity(contactStore, params);
       } catch (error) {
-        return textResultWithError(`contact_link_identity failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_link_identity failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1362,7 +1358,7 @@ export function createContactListTool(contactStore: ContactStorePort): Substrate
       try {
         return await executeContactList(contactStore);
       } catch (error) {
-        return textResultWithError(`contact_list failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`contact_list failed: ${toErrorMessage(error)}`, true);
       }
     },
   };

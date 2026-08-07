@@ -6,6 +6,7 @@ import { withCapabilityRequirement } from '../../../system/capabilities/requirem
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { ShellOperations } from './ops.js';
 import { textResult, textResultFromError } from '../../../core/tools/results.js';
+import { requireNonEmptyString } from '../../../shared/utils/strings.js';
 
 type ShellAction = 'exec';
 
@@ -18,13 +19,6 @@ function normalizeAction(params: Record<string, unknown>): ShellAction {
     return action;
   }
   throw new Error('action is required. Supported actions: exec.');
-}
-
-function requireNonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${field} is required.`);
-  }
-  return value.trim();
 }
 
 function requireArgs(value: unknown): string[] {

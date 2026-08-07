@@ -13,10 +13,6 @@ const SCRATCHPAD_MAX_LIMIT = 64;
 type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
 const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function clampInt(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
   return Math.max(min, Math.min(max, Math.floor(val)));
@@ -148,7 +144,7 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
 
         return textResultWithError(`Error: unsupported scratchpad action "${action}"`, true);
       } catch (error) {
-        return textResultWithError(`Error using scratchpad: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error using scratchpad: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -178,7 +174,7 @@ export function createScratchpadReadTool(memoryStore: MemoryStorePort): Substrat
         const entries = memoryStore.listScratchpadEntries(limit);
         return textResult(formatScratchpadList(entries));
       } catch (error) {
-        return textResultWithError(`Error reading scratchpad: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error reading scratchpad: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -262,7 +258,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
           }
         }
       } catch (error) {
-        return textResultWithError(`Error writing scratchpad: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error writing scratchpad: ${toErrorMessage(error)}`, true);
       }
     },
   };

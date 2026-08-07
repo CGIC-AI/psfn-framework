@@ -143,10 +143,6 @@ export interface ScheduleToolOptions {
   > | null;
 }
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function formatMs(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
@@ -583,7 +579,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
       try {
         action = normalizeAction(params.action);
       } catch (error) {
-        return textResultWithError(`schedule failed: ${errorMessage(error)}`, true);
+        return textResultWithError(`schedule failed: ${toErrorMessage(error)}`, true);
       }
 
       try {
@@ -946,7 +942,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
           }
         }
       } catch (error) {
-        return textResultWithError(`schedule failed for action=${action}: ${errorMessage(error)}`, true);
+        return textResultWithError(`schedule failed for action=${action}: ${toErrorMessage(error)}`, true);
       }
     },
   };

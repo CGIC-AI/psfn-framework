@@ -1,5 +1,6 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ActiveConcernEvidenceRef, ActiveConcernPriority } from './concerns.js';
 
 const log = createComponentLogger('ConcernRouteHandoff');
@@ -126,7 +127,7 @@ export class ConcernRouteDispatcher {
       return this.finalize(request, {
         disposition: 'blocked',
         substrate: handler.substrate,
-        reason: `blocked route: handler for ${request.target} failed (${errorMessage(error)})`,
+        reason: `blocked route: handler for ${request.target} failed (${toErrorMessage(error)})`,
       });
     }
   }
@@ -185,8 +186,4 @@ export function concernRouteProvenanceRefs(request: ConcernRouteRequest): string
   if (request.concernId) refs.push(`concern:${request.concernId}`);
   refs.push(`route-source:${request.source}`);
   return [...new Set(refs.filter(ref => ref.trim().length > 0))];
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

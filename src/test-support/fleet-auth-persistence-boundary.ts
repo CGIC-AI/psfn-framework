@@ -1,3 +1,5 @@
+import { expect } from 'vitest';
+
 const testPath = expect.getState().testPath;
 
 if (testPath?.includes('/persistence/postgres/fleet-auth/')) {

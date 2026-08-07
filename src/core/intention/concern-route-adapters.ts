@@ -1,5 +1,6 @@
 import type { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   CONCERN_ROUTE_SYSTEM_CHANNEL_ID,
   concernRouteProvenanceRefs,
@@ -42,7 +43,7 @@ export function createNorthStarRouteHandler(
         return {
           disposition: 'blocked',
           substrate: 'north_star',
-          reason: `blocked route: north-star handoff failed (${errorMessage(error)})`,
+          reason: `blocked route: north-star handoff failed (${toErrorMessage(error)})`,
         };
       }
     },
@@ -82,7 +83,7 @@ export function createIntrospectionRouteHandler(
         return {
           disposition: 'blocked',
           substrate: 'reflection_journal',
-          reason: `blocked route: reflection-journal handoff failed (${errorMessage(error)})`,
+          reason: `blocked route: reflection-journal handoff failed (${toErrorMessage(error)})`,
         };
       }
     },
@@ -122,8 +123,4 @@ function compact(value: string, maxChars: number): string {
   return compacted.length <= maxChars
     ? compacted
     : `${compacted.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

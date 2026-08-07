@@ -5,6 +5,7 @@ import {
   type CogSecPersonaConformanceSettings,
 } from '../../shared/contracts/cogsec-persona-conformance.js';
 import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import { requireNonEmptyString } from '../../shared/utils/strings.js';
 
 const BASELINE_KEYS = [
   'stableIdentityText',
@@ -26,13 +27,6 @@ function requireRecord(value: unknown, fieldPath: string): Record<string, unknow
     throw new Error(`Invalid settings at ${fieldPath}: expected object`);
   }
   return value;
-}
-
-function requireNonEmptyString(value: unknown, fieldPath: string): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`Invalid settings at ${fieldPath}: expected non-empty string`);
-  }
-  return value.trim();
 }
 
 function requireNonEmptyStringArray(value: unknown, fieldPath: string): string[] {

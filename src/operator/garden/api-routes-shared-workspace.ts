@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { exactPath, paramWithSuffix } from './route-matchers.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
@@ -10,13 +11,9 @@ import {
   type AdminSharedWorkspaceService,
 } from './services/shared-workspace-service.js';
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function sendActionError(res: ServerResponse, error: unknown): void {
   sendJson(res, error instanceof SharedWorkspaceAuthenticationError ? 401 : 400, {
-    error: errorMessage(error),
+    error: toErrorMessage(error),
   });
 }
 
@@ -37,7 +34,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
         try {
           sendJson(res, 200, options.service.getSnapshot(), { 'Cache-Control': 'no-store' });
         } catch (error) {
-          sendJson(res, 500, { error: errorMessage(error) });
+          sendJson(res, 500, { error: toErrorMessage(error) });
         }
       },
     },
@@ -54,7 +51,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
         try {
           sendJson(res, 200, options.service.readArtifact(artifactPath), { 'Cache-Control': 'no-store' });
         } catch (error) {
-          sendJson(res, 400, { error: errorMessage(error) });
+          sendJson(res, 400, { error: toErrorMessage(error) });
         }
       },
     },

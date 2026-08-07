@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { requireNonEmptyString } from './utils/strings.js';
 
 export interface RetrievalQueryEmbeddingProvenance {
   provider: string;
@@ -31,14 +32,6 @@ export interface CreateTurnRetrievalQueryEmbeddingInput extends RetrievalQueryEm
   embed(text: string): Promise<Float32Array>;
 }
 
-function requireNonEmpty(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new Error(`Turn retrieval query embedding ${field} must be a non-empty string`);
-  }
-  return normalized;
-}
-
 function normalizeOptional(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -56,8 +49,8 @@ function normalizeProvenance(
     throw new Error('Turn retrieval query embedding dimensions must be a positive safe integer');
   }
   return {
-    provider: requireNonEmpty(provenance.provider, 'provider'),
-    model: requireNonEmpty(provenance.model, 'model'),
+    provider: requireNonEmptyString(provenance.provider, 'provider'),
+    model: requireNonEmptyString(provenance.model, 'model'),
     dimensions,
   };
 }
@@ -74,10 +67,10 @@ function provenanceMatches(
 export function createTurnRetrievalQueryEmbedding(
   input: CreateTurnRetrievalQueryEmbeddingInput,
 ): TurnRetrievalQueryEmbedding {
-  const turnId = requireNonEmpty(input.turnId, 'turnId');
-  const requestId = requireNonEmpty(input.requestId, 'requestId');
-  const companionId = requireNonEmpty(input.companionId, 'companionId');
-  const channelId = requireNonEmpty(input.channelId, 'channelId');
+  const turnId = requireNonEmptyString(input.turnId, 'turnId');
+  const requestId = requireNonEmptyString(input.requestId, 'requestId');
+  const companionId = requireNonEmptyString(input.companionId, 'companionId');
+  const channelId = requireNonEmptyString(input.channelId, 'channelId');
   const canonicalContactId = normalizeOptional(input.canonicalContactId);
   const queryText = input.queryText;
   const queryHash = hashQuery(queryText);
@@ -87,10 +80,10 @@ export function createTurnRetrievalQueryEmbedding(
   const resolve = async (expected: RetrievalQueryEmbeddingExpected): Promise<Float32Array> => {
     const expectedProvenance = normalizeProvenance(expected.provenance);
     if (
-      requireNonEmpty(expected.turnId, 'turnId') !== turnId
-      || requireNonEmpty(expected.requestId, 'requestId') !== requestId
-      || requireNonEmpty(expected.companionId, 'companionId') !== companionId
-      || requireNonEmpty(expected.channelId, 'channelId') !== channelId
+      requireNonEmptyString(expected.turnId, 'turnId') !== turnId
+      || requireNonEmptyString(expected.requestId, 'requestId') !== requestId
+      || requireNonEmptyString(expected.companionId, 'companionId') !== companionId
+      || requireNonEmptyString(expected.channelId, 'channelId') !== channelId
       || normalizeOptional(expected.canonicalContactId) !== canonicalContactId
       || hashQuery(expected.queryText) !== queryHash
       || !provenanceMatches(expectedProvenance, provenance)

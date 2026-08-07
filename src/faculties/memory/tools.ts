@@ -105,10 +105,6 @@ const MEMORY_EPISODE_GET_LIMITS = {
 } as const;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function clamp(val: number, min: number, max: number): number {
   if (isNaN(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
@@ -504,7 +500,7 @@ export function createMemoryWriteTool(
             return textResult(`Memory created and linked for conflict review (id: ${result.memory.id}, type: ${type})`);
         }
       } catch (error) {
-        return textResultWithError(`Error writing memory: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error writing memory: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -613,7 +609,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
           `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
         );
       } catch (error) {
-        return textResultWithError(`Error importing memories: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error importing memories: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -698,7 +694,7 @@ export function createMemoryPatchTool(writer: MemoryWriter): SubstrateAgentTool 
           `Memory patched (id: ${result.memory.id}, event: ${result.patchEventId}, fields: ${result.updatedFields.join(', ')}).`,
         );
       } catch (error) {
-        return textResultWithError(`Error patching memory: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error patching memory: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -799,7 +795,7 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): Substr
 
         return textResult(`Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`);
       } catch (error) {
-        return textResultWithError(`Error restoring memory: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error restoring memory: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -1414,7 +1410,7 @@ export function createMemoryTool(
 
         return textResultWithError(`Error: unsupported memory action "${action}"`, true);
       } catch (error) {
-        return textResultWithError(`Error executing memory action: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error executing memory action: ${toErrorMessage(error)}`, true);
       }
     },
   };

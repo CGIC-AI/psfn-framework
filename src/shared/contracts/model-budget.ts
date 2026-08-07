@@ -5,6 +5,7 @@ import type {
 } from './runtime.js';
 import { OBSERVABILITY_CALL_TYPES } from './observability-call-types.js';
 import { isRecord } from '../utils/types.js';
+import { requireNonEmptyString } from '../utils/strings.js';
 
 export const MODEL_BUDGET_BLOCK_REASONS = [
   'daily_budget_exceeded',
@@ -60,13 +61,6 @@ function assertNoUnknownKeys(
   if (unknownKeys.length > 0) {
     throw new Error(`${label} contains unknown fields: ${unknownKeys.sort().join(', ')}`);
   }
-}
-
-function requireNonEmptyString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`${label} must be a non-empty string`);
-  }
-  return value.trim();
 }
 
 function optionalNonEmptyString(value: unknown, label: string): string | undefined {

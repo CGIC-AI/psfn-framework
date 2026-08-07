@@ -26,10 +26,6 @@ export interface ValuesUpdateParams {
   context?: string;
 }
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function normalizeLimit(limit: unknown): number {
   if (limit === undefined) return DEFAULT_LIST_LIMIT;
   if (typeof limit !== 'number' || !Number.isFinite(limit) || !Number.isInteger(limit)) {
@@ -85,7 +81,7 @@ export async function executeValuesListAction(
       entries,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`values_list failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`values_list failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -114,7 +110,7 @@ export async function executeValuesAddAction(
       entry,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`values_add failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`values_add failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -156,6 +152,6 @@ export async function executeValuesUpdateAction(
       entry,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`values_update failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`values_update failed: ${toErrorMessage(error)}`, true);
   }
 }

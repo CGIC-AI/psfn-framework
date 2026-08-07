@@ -26,10 +26,6 @@ interface NorthStarToolParams {
   enabled?: boolean;
 }
 
-function errorMessage(error: unknown): string {
-  return toErrorMessage(error);
-}
-
 function normalizeNonEmptyString(value: unknown, fieldName: string): string {
   if (typeof value !== 'string') {
     throw new Error(`${fieldName} must be a string`);
@@ -166,7 +162,7 @@ export function createNorthStarTool(store: NorthStarStore): SubstrateAgentTool {
         }
         return textResultWithError(`north_star failed: unsupported action=${String(action)}`, true);
       } catch (error) {
-        return textResultWithError(`north_star failed for action=${action}: ${errorMessage(error)}`, true);
+        return textResultWithError(`north_star failed for action=${action}: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -186,7 +182,7 @@ async function executeNorthStarListAction(
       preview: store.buildPromptLayer()?.content ?? null,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`north_star_list failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`north_star_list failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -209,7 +205,7 @@ async function executeNorthStarCreateAction(
       limit: MAX_NORTH_STAR_ITEMS,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`north_star_create failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`north_star_create failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -236,7 +232,7 @@ async function executeNorthStarUpdateAction(
       item: updated,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`north_star_update failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`north_star_update failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -253,7 +249,7 @@ async function executeNorthStarDeleteAction(
       count: store.count,
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`north_star_delete failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`north_star_delete failed: ${toErrorMessage(error)}`, true);
   }
 }
 
@@ -273,6 +269,6 @@ async function executeNorthStarReorderAction(
       items: store.list(),
     }, null, 2));
   } catch (error) {
-    return textResultWithError(`north_star_reorder failed: ${errorMessage(error)}`, true);
+    return textResultWithError(`north_star_reorder failed: ${toErrorMessage(error)}`, true);
   }
 }

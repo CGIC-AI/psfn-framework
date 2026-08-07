@@ -8,7 +8,7 @@ import type {
   SubstrateMessage,
   TurnID,
 } from '../../shared/contracts/runtime.js';
-import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
+import type { SatelliteDelegationRoutingHint } from '../../core/agent/satellite-adapter-port.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -93,7 +93,7 @@ function createHarness(overrides?: {
   config?: SubstrateConfig;
   delegateSatelliteSession?: (request: {
     message: SubstrateMessage;
-    routing?: SatelliteRoutingMetadata;
+    routing?: SatelliteDelegationRoutingHint;
   }) => Promise<{
     shardId: string;
     content: string;

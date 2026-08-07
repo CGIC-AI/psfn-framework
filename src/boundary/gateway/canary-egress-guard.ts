@@ -20,7 +20,7 @@
 // errors fail CLOSED — a scan we cannot complete holds the action.
 
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { GatewayErrors, type PolicyDecision } from './protocol.js';
+import { GatewayErrors, type GatewayPolicyDecision } from './protocol.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import { hashCanaryToken } from '../../core/cogsec/canary/canary-token.js';
 import {
@@ -46,7 +46,7 @@ export interface CanaryEgressGuardDeps {
   /** Optional audit hook (records a HELD decision alongside the normal trail). */
   recordAudit?: (entry: {
     method: string;
-    decision: PolicyDecision;
+    decision: GatewayPolicyDecision;
     params?: Record<string, unknown>;
   }) => void;
 }

@@ -27,7 +27,7 @@ import {
   type CompanionMessageFailureReportResult,
   type CompanionMessageSendResult,
   type GatewayCredentialPresenceResult,
-  type PolicyDecision,
+  type GatewayPolicyDecision,
   type RuntimeHealthResult,
   type OperatorAlertResult,
   type NotifyNtfyParams,
@@ -3606,7 +3606,7 @@ export class GatewayServer {
     log.info('Stopped');
   }
 
-  private async audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
+  private async audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number> {
     const correlation = extractGatewayCorrelation(params);
     if (decision !== 'ALLOW') {
       log.info(`${method} → ${decision}`, {

@@ -10,14 +10,14 @@ import type {
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
+import type { SatelliteDelegationRoutingHint } from '../../core/agent/satellite-adapter-port.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
 
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
-export type ShardCreationMode = RoutingShardCreationMode;
+export type ShardRuntimeCreationMode = RoutingShardCreationMode;
 export type ShardOutcome = 'completed' | 'failed';
 
 export type { ShardSourceContext } from './lineage-contracts.js';
@@ -266,7 +266,7 @@ export type ShardStatus = 'running' | 'completed' | 'failed';
 
 export interface SatelliteDelegationRequest {
   message: SubstrateMessage;
-  routing?: SatelliteRoutingMetadata;
+  routing?: SatelliteDelegationRoutingHint;
   shardName?: string;
 }
 

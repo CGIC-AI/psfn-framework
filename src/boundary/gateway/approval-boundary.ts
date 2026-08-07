@@ -35,7 +35,7 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { evaluatePolicy, type PolicyConfig } from './policy.js';
-import { GatewayErrors, type PolicyDecision } from './protocol.js';
+import { GatewayErrors, type GatewayPolicyDecision } from './protocol.js';
 import {
   GatewayNtfyNotifier,
   notifyOperatorForPendingAction,
@@ -46,7 +46,7 @@ import type { CanaryEgressGuard } from './canary-egress-guard.js';
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
 
 interface ApprovalBoundaryAuditHooks {
-  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number>;
   auditComplete(id: number, startTime: number, error?: string): Promise<void>;
   recordMethodSuccess(method: string): void;
   recordMethodFailure(method: string, error: unknown): void;

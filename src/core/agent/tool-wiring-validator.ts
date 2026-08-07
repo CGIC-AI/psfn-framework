@@ -217,7 +217,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
 
 // ── Validation Types ──
 
-export type RuntimeMode = 'gateway';
+export type ToolWiringValidationMode = 'gateway';
 
 export interface ToolValidationResult {
   toolName: string;
@@ -229,7 +229,7 @@ export interface ToolValidationResult {
 }
 
 export interface ValidationReport {
-  mode: RuntimeMode;
+  mode: ToolWiringValidationMode;
   totalTools: number;
   validTools: number;
   invalidTools: ToolValidationResult[];
@@ -311,7 +311,7 @@ export function resolveClientMethod(rpcMethod: string): string {
 // ── Validation Logic ──
 
 export interface ValidateToolsOptions {
-  mode: RuntimeMode;
+  mode: ToolWiringValidationMode;
   tools: readonly AgentTool<any>[];
   /** Available gateway client methods (gateway mode only) */
   gatewayClientMethods?: Set<string>;

@@ -1,6 +1,6 @@
 import { basename, isAbsolute, relative } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
+import type { BeadsAction, GatewayPolicyContext, GatewayPolicyDecision } from './protocol.js';
 import type { VaultOperations } from '../integrations/vault/ops.js';
 import type { ShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
@@ -278,7 +278,7 @@ export function evaluateShardSessionMemorySyncPolicy(
   return { allowed: false, reason: 'denied_operation' };
 }
 
-export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {
+export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyConfig): GatewayPolicyDecision {
   const { method, params } = ctx;
 
   switch (method) {

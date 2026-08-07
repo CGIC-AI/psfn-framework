@@ -12,7 +12,7 @@ import {
   extractGatewayMethods,
   validateAndLogToolWiring,
   type GatewayToolMetadataCoverage,
-  type RuntimeMode,
+  type ToolWiringValidationMode,
 } from '../../../core/agent/tool-wiring-validator.js';
 import {
   createLLMProviderPort,
@@ -149,7 +149,7 @@ class FakeSubstrateAgent {
   }
 
   validateToolWiring(
-    mode: RuntimeMode,
+    mode: ToolWiringValidationMode,
     gatewayClient?: object,
     requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
   ): void {

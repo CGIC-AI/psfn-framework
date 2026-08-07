@@ -54,7 +54,7 @@ import {
   validateAndLogToolWiring,
   cloneToolWiringMeta,
   type GatewayToolMetadataCoverage,
-  type RuntimeMode,
+  type ToolWiringValidationMode,
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
@@ -675,7 +675,7 @@ export class ToolRuntimeFacade {
   }
 
   validateToolWiring(
-    mode: RuntimeMode,
+    mode: ToolWiringValidationMode,
     gatewayClient?: object,
     requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
   ): void {

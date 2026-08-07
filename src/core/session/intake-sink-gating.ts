@@ -61,8 +61,12 @@ export interface ScreenedSelfAuthoredMutation {
   params: Record<string, unknown>;
 }
 
-function isPersonaMutationAuditOnly(sink: SelfAuthoredMutationSink): boolean {
-  return sink === 'persona_mutation';
+export type SelfAuthoredMutationEnforcementPosture = 'enforce' | 'audit_only';
+
+export interface SelfAuthoredMutationContext {
+  tool: string;
+  action: string;
+  enforcementPosture?: SelfAuthoredMutationEnforcementPosture;
 }
 
 function assertSelfAuthoredMutationSink(sink: IntakeSink): asserts sink is SelfAuthoredMutationSink {
@@ -90,10 +94,18 @@ export async function screenSelfAuthoredMutation(
   sink: SelfAuthoredMutationSink,
   params: Readonly<Record<string, unknown>>,
   intake: SelfAuthoredMutationIntakeRuntime,
-  context: { tool: string; action: string },
+  context: SelfAuthoredMutationContext,
 ): Promise<ScreenedSelfAuthoredMutation> {
   assertSelfAuthoredMutationSink(sink);
-  const personaAuditOnly = isPersonaMutationAuditOnly(sink);
+  const personaAuditOnly = context.enforcementPosture === 'audit_only';
+  if (
+    personaAuditOnly
+    && (sink !== 'persona_mutation' || context.tool !== 'identity' || context.action !== 'update_persona')
+  ) {
+    throw new Error(
+      'Audit-only mutation screening is reserved for the companion-owned identity update_persona action',
+    );
+  }
   const gate = intake.getIntakeSinkGate();
   const screening = intake.getIntakeScreening();
   if (!gate && !screening) {
@@ -159,7 +171,8 @@ export async function screenSelfAuthoredMutation(
   const activeTurnEnvelopes = intake.getActiveTurnIntakeEnvelopes();
   const envelopes = [...activeTurnEnvelopes, ...proposedContentEnvelopes];
   const decision = gate.evaluate(sink, envelopes, {
-    ...context,
+    tool: context.tool,
+    action: context.action,
     enforcementPosture: personaAuditOnly ? 'audit_only' : 'enforce',
     activeTurnEnvelopeCount: activeTurnEnvelopes.length,
     screenedFieldCount: proposedContentEnvelopes.length,

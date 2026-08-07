@@ -354,7 +354,7 @@ function handlePromptLayerStagedAction(
 }
 
 function normalizeReason(reason: string | undefined): string | undefined {
-  if (reason == null) return undefined;
+  if (reason === undefined) return undefined;
   const trimmed = reason.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
@@ -613,7 +613,13 @@ export function createIdentityTool(
             'persona_mutation',
             params,
             options.intake,
-            { tool: 'identity', action },
+            {
+              tool: 'identity',
+              action,
+              ...(action === 'update_persona'
+                ? { enforcementPosture: 'audit_only' as const }
+                : {}),
+            },
           );
           if (!screened.allowed) {
             // Soft, truthful, operator-reviewed wording (htm9.12); not an

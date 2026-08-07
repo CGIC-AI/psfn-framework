@@ -44,6 +44,8 @@
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
   import { fleetCostNavigationPath } from '$lib/fleet/fleet-costs';
+  import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
+  import { reconcilePollingSnapshot } from '$lib/polling/silent-background-revalidation';
   import { logoutFleetSession } from '$lib/api/fleet-session';
 
   let { children } = $props();
@@ -132,7 +134,12 @@
     try {
       const result = await fetchFleetPortalProjection(controller.signal);
       if (fleetProjectionController !== controller) return;
-      fleetProjection = result;
+      const reconciledCompanions = fleetProjection
+        ? reconcilePollingSnapshot(fleetProjection.companions, result.companions)
+        : result.companions;
+      if (!fleetProjection || reconciledCompanions !== fleetProjection.companions) {
+        fleetProjection = { ...result, companions: reconciledCompanions };
+      }
       fleetProjectionError = '';
       if (!result.companions.some(companion => (
         companion.companionId === activeCompanionId && companion.gardenPath
@@ -144,7 +151,6 @@
       }
     } catch (error) {
       if (controller.signal.aborted || fleetProjectionController !== controller) return;
-      fleetProjection = null;
       fleetProjectionError = error instanceof Error ? error.message : 'Cluster roster unavailable';
     }
   }
@@ -325,19 +331,24 @@
     mediaQuery.addEventListener('change', syncViewport);
     document.addEventListener('keydown', handleGlobalKeydown);
 
-    void refreshAttentionCounts();
-    const attentionTimer = window.setInterval(() => {
-      void refreshAttentionCounts();
-    }, 30_000);
-    const fleetProjectionTimer = window.setInterval(() => {
-      if (activeCompanionId) void refreshFleetProjection();
-    }, 30_000);
+    const attentionPoller = createVisibilityAwarePoller({
+      intervalMs: 30_000,
+      refresh: refreshAttentionCounts,
+    });
+    const fleetProjectionPoller = createVisibilityAwarePoller({
+      intervalMs: 30_000,
+      refresh: () => {
+        if (activeCompanionId) return refreshFleetProjection();
+      },
+    });
+    attentionPoller.start();
+    fleetProjectionPoller.start();
 
     return () => {
       mediaQuery.removeEventListener('change', syncViewport);
       document.removeEventListener('keydown', handleGlobalKeydown);
-      window.clearInterval(attentionTimer);
-      window.clearInterval(fleetProjectionTimer);
+      attentionPoller.stop();
+      fleetProjectionPoller.stop();
       stopServerSessionRefresh();
       fleetProjectionController?.abort();
       fleetProjectionController = null;
@@ -556,9 +567,7 @@
             Menu
           </button>
         {/if}
-        {#key activeCompanionId ?? $page.url.pathname}
-          {@render children()}
-        {/key}
+        {@render children()}
       </div>
     </main>
 

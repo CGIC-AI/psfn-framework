@@ -12,6 +12,10 @@
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
+  import {
+    createSilentBackgroundRevalidation,
+    reconcilePollingSnapshot,
+  } from '$lib/polling/silent-background-revalidation';
 
   // ── State ──
   let entries = $state<ConfirmationQueueEntryView[]>([]);
@@ -21,6 +25,8 @@
   let endpointMissing = $state(false);
   let actionMessage = $state('');
   let actionIsError = $state(false);
+  let backgroundError = $state('');
+  let initialized = false;
 
   // Track modified params per entry
   let modifiedParams = $state<Record<string, string>>({});
@@ -71,15 +77,18 @@
   }
 
   async function loadData() {
+    backgroundRefresh.invalidate();
     loading = true;
     error = '';
     endpointMissing = false;
+    backgroundError = '';
     let rendered = false;
 
     try {
       await loadConfirmationsLocalFirst((data, source) => {
         rendered = true;
-        entries = data.entries;
+        const reconciled = reconcilePollingSnapshot(entries, data.entries);
+        if (reconciled !== entries) entries = reconciled;
         available = data.available;
         if (data.message) {
           actionMessage = data.message;
@@ -93,7 +102,7 @@
       });
     } catch (e) {
       if (rendered) {
-        pushToast(e instanceof Error ? e.message : 'Failed to refresh confirmations', 'error');
+        backgroundError = e instanceof Error ? e.message : 'Failed to refresh confirmations';
       } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
@@ -101,8 +110,22 @@
       }
     } finally {
       loading = false;
+      initialized = true;
     }
   }
+
+  const backgroundRefresh = createSilentBackgroundRevalidation({
+    load: publish => loadConfirmationsLocalFirst(data => {
+      publish({ entries: data.entries, available: data.available });
+    }),
+    read: () => ({ entries, available }),
+    write: (data) => {
+      if (data.entries !== entries) entries = data.entries;
+      available = data.available;
+    },
+    reportError: message => { backgroundError = message; },
+    fallbackError: 'Failed to refresh confirmations',
+  });
 
   async function handleResolve(id: string, decision: ConfirmationDecision) {
     actionMessage = '';
@@ -156,7 +179,7 @@
 
   const queueRefresh = createGardenQueueRefresh({
     queue: 'confirmations',
-    refresh: loadData,
+    refresh: () => initialized ? backgroundRefresh.refresh() : loadData(),
     intervalMs: 15_000,
   });
 
@@ -166,6 +189,7 @@
 
   onDestroy(() => {
     queueRefresh.stop();
+    backgroundRefresh.dispose();
   });
 </script>
 
@@ -189,6 +213,12 @@
       </button>
     </div>
   </div>
+
+  {#if backgroundError}
+    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+      Background refresh failed: {backgroundError}. Showing the last available queue.
+    </p>
+  {/if}
 
   <!-- Action message -->
   {#if actionMessage}

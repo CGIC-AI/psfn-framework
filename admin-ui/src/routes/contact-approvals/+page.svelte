@@ -9,12 +9,18 @@
   } from '$lib/api/endpoints/contact-approvals';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
+  import {
+    createSilentBackgroundRevalidation,
+    reconcilePollingSnapshot,
+  } from '$lib/polling/silent-background-revalidation';
 
   // ── State ──
   let entries = $state<ContactApprovalEntry[]>([]);
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
+  let backgroundError = $state('');
+  let initialized = false;
 
   function formatTimestamp(value: string): string {
     const parsed = new Date(value);
@@ -22,20 +28,23 @@
   }
 
   async function loadData() {
+    backgroundRefresh.invalidate();
     loading = true;
     error = '';
     endpointMissing = false;
+    backgroundError = '';
     let rendered = false;
 
     try {
       await loadContactApprovalsLocalFirst((data, source) => {
         rendered = true;
-        entries = data.entries;
+        const reconciled = reconcilePollingSnapshot(entries, data.entries);
+        if (reconciled !== entries) entries = reconciled;
         if (source === 'cache') loading = false;
       });
     } catch (e) {
       if (rendered) {
-        pushToast(e instanceof Error ? e.message : 'Failed to refresh contact approvals', 'error');
+        backgroundError = e instanceof Error ? e.message : 'Failed to refresh contact approvals';
       } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
@@ -43,8 +52,17 @@
       }
     } finally {
       loading = false;
+      initialized = true;
     }
   }
+
+  const backgroundRefresh = createSilentBackgroundRevalidation({
+    load: publish => loadContactApprovalsLocalFirst(data => publish(data.entries)),
+    read: () => entries,
+    write: data => { entries = data; },
+    reportError: message => { backgroundError = message; },
+    fallbackError: 'Failed to refresh contact approvals',
+  });
 
   async function handleAction(id: string, action: 'approve' | 'deny' | 'reset') {
     try {
@@ -73,7 +91,7 @@
 
   const queueRefresh = createGardenQueueRefresh({
     queue: 'contact-approvals',
-    refresh: loadData,
+    refresh: () => initialized ? backgroundRefresh.refresh() : loadData(),
     intervalMs: 15_000,
   });
 
@@ -83,6 +101,7 @@
 
   onDestroy(() => {
     queueRefresh.stop();
+    backgroundRefresh.dispose();
   });
 </script>
 
@@ -106,6 +125,12 @@
       </button>
     </div>
   </div>
+
+  {#if backgroundError}
+    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+      Background refresh failed: {backgroundError}. Showing the last available queue.
+    </p>
+  {/if}
 
   {#if loading && entries.length === 0}
     <div class="space-y-3">

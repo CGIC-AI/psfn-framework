@@ -16,12 +16,18 @@
   import RuleMatchProvenance from '$lib/components/cognitive-security/RuleMatchProvenance.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
+  import {
+    createSilentBackgroundRevalidation,
+    reconcilePollingSnapshot,
+  } from '$lib/polling/silent-background-revalidation';
 
   // ── Queue state ──
   let items = $state<AdminIntakeQuarantineItemView[]>([]);
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
+  let backgroundError = $state('');
+  let initialized = false;
 
   // ── Detail state (one expanded item at a time) ──
   let expandedId = $state('');
@@ -94,19 +100,22 @@
   }
 
   async function loadData() {
+    backgroundRefresh.invalidate();
     loading = true;
     error = '';
     endpointMissing = false;
+    backgroundError = '';
     let rendered = false;
     try {
       await loadIntakeQuarantineLocalFirst((data, source) => {
         rendered = true;
-        items = data.items;
+        const reconciled = reconcilePollingSnapshot(items, data.items);
+        if (reconciled !== items) items = reconciled;
         if (source === 'cache') loading = false;
       });
     } catch (e) {
       if (rendered) {
-        pushToast(e instanceof Error ? e.message : 'Failed to refresh quarantine queue', 'error');
+        backgroundError = e instanceof Error ? e.message : 'Failed to refresh quarantine queue';
       } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
@@ -114,8 +123,17 @@
       }
     } finally {
       loading = false;
+      initialized = true;
     }
   }
+
+  const backgroundRefresh = createSilentBackgroundRevalidation({
+    load: publish => loadIntakeQuarantineLocalFirst(data => publish(data.items)),
+    read: () => items,
+    write: data => { items = data; },
+    reportError: message => { backgroundError = message; },
+    fallbackError: 'Failed to refresh quarantine queue',
+  });
 
   async function toggleDetail(item: AdminIntakeQuarantineItemView) {
     if (expandedId === item.id) {
@@ -211,7 +229,9 @@
     queue: 'intake-quarantine',
     refresh: () => {
       // Don't reshuffle the queue mid-decision.
-      if (confirmStage === 'idle') return loadData();
+      if (confirmStage === 'idle') {
+        return initialized ? backgroundRefresh.refresh() : loadData();
+      }
     },
     intervalMs: 15_000,
   });
@@ -222,6 +242,7 @@
 
   onDestroy(() => {
     queueRefresh.stop();
+    backgroundRefresh.dispose();
   });
 </script>
 
@@ -252,6 +273,12 @@
       </button>
     </div>
   </div>
+
+  {#if backgroundError}
+    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+      Background refresh failed: {backgroundError}. Showing the last available queue.
+    </p>
+  {/if}
 
   {#if loading && items.length === 0}
     <div class="space-y-3">

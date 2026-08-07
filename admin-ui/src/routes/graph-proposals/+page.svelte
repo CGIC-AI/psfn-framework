@@ -11,12 +11,18 @@
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
+  import {
+    createSilentBackgroundRevalidation,
+    reconcilePollingSnapshot,
+  } from '$lib/polling/silent-background-revalidation';
 
   let proposals = $state<GraphProposal[]>([]);
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
   let adjustType = $state<Record<string, string>>({});
+  let backgroundError = $state('');
+  let initialized = false;
 
   function formatTimestamp(value: string): string {
     const parsed = new Date(value);
@@ -24,19 +30,22 @@
   }
 
   async function loadData() {
+    backgroundRefresh.invalidate();
     loading = true;
     error = '';
     endpointMissing = false;
+    backgroundError = '';
     let rendered = false;
     try {
       await loadGraphProposalsLocalFirst((data, source) => {
         rendered = true;
-        proposals = data.proposals;
+        const reconciled = reconcilePollingSnapshot(proposals, data.proposals);
+        if (reconciled !== proposals) proposals = reconciled;
         if (source === 'cache') loading = false;
       });
     } catch (e) {
       if (rendered) {
-        pushToast(e instanceof Error ? e.message : 'Failed to refresh graph proposals', 'error');
+        backgroundError = e instanceof Error ? e.message : 'Failed to refresh graph proposals';
       } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
@@ -44,8 +53,17 @@
       }
     } finally {
       loading = false;
+      initialized = true;
     }
   }
+
+  const backgroundRefresh = createSilentBackgroundRevalidation({
+    load: publish => loadGraphProposalsLocalFirst(data => publish(data.proposals)),
+    read: () => proposals,
+    write: data => { proposals = data; },
+    reportError: message => { backgroundError = message; },
+    fallbackError: 'Failed to refresh graph proposals',
+  });
 
   async function handleApprove(p: GraphProposal) {
     try {
@@ -78,7 +96,7 @@
 
   const queueRefresh = createGardenQueueRefresh({
     queue: 'graph-proposals',
-    refresh: loadData,
+    refresh: () => initialized ? backgroundRefresh.refresh() : loadData(),
     intervalMs: 15_000,
   });
   onMount(() => {
@@ -86,6 +104,7 @@
   });
   onDestroy(() => {
     queueRefresh.stop();
+    backgroundRefresh.dispose();
   });
 </script>
 
@@ -106,6 +125,12 @@
       </button>
     </div>
   </div>
+
+  {#if backgroundError}
+    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+      Background refresh failed: {backgroundError}. Showing the last available queue.
+    </p>
+  {/if}
 
   {#if loading && proposals.length === 0}
     <p class="text-sm text-shadow-600 px-1">Loading graph proposals...</p>

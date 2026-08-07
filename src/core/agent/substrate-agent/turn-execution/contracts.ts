@@ -43,7 +43,7 @@ import type { ContextManifest } from '../../../session/context-manifest.js';
 import type { TurnObservabilityRecord } from '../../../turns/observability.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import type { EventBridge } from '../../event-bridge.js';
-import type { RuntimeMode } from '../../tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../../tool-wiring-validator.js';
 import type {
   LLMProviderPort,
   MemoryExtractor,
@@ -118,7 +118,7 @@ export interface TurnExecutionRuntime {
    */
   sessionManager: TurnSessionManager;
   config: CoreSubstrateConfig;
-  runtimeMode: RuntimeMode;
+  runtimeMode: ToolWiringValidationMode;
   agent: Agent;
   bridge: EventBridge;
   systemPrompt: string;

@@ -4,7 +4,7 @@ import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
-import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../../core/agent/tool-wiring-validator.js';
 import type { CapabilityAccess } from '../../system/capabilities/access.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -16,7 +16,7 @@ export interface CreateShardAgentRuntimeOptions {
   readonly sessionStore: SessionStore;
   readonly runtimeConfig: SubstrateConfig;
   readonly systemPrompt: string;
-  readonly runtimeMode?: RuntimeMode;
+  readonly runtimeMode?: ToolWiringValidationMode;
   readonly capabilityAccess: CapabilityAccess;
   readonly memoryProvider: MemoryProvider | null;
   readonly exposeMemory: boolean;

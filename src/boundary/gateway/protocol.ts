@@ -45,6 +45,8 @@ import type {
   GitDiffResult,
   GitStatusResult,
 } from '../integrations/git/ops.js';
+import type { BeadsAction } from '../integrations/beads/enablement.js';
+export type { BeadsAction } from '../integrations/beads/enablement.js';
 import type {
   VaultDailyResult,
   VaultReadResult,
@@ -475,7 +477,6 @@ export interface GitOpenPRParams {
   base?: string;
 }
 
-export type BeadsAction = 'ready' | 'show' | 'create' | 'update' | 'close' | 'sync';
 export type BeadsIssueType = 'bug' | 'feature' | 'task' | 'epic' | 'chore';
 export type BeadsIssueStatus = 'open' | 'in_progress' | 'blocked' | 'closed';
 
@@ -1259,9 +1260,9 @@ export interface GatewayNotifications {
 
 // ── Policy types ──
 
-export type PolicyDecision = 'ALLOW' | 'DENY' | 'NEEDS_APPROVAL';
+export type GatewayPolicyDecision = 'ALLOW' | 'DENY' | 'NEEDS_APPROVAL';
 
-export interface PolicyContext {
+export interface GatewayPolicyContext {
   method: string;
   params: Record<string, unknown>;
   /** Trusted server-derived caller class; never populated from RPC params. */

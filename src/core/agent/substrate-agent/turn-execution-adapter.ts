@@ -10,7 +10,7 @@ import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { RuntimeMode } from '../tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
@@ -172,7 +172,7 @@ export interface TurnExecutionAdapterOptions {
   cogSecMode: IntakeFirewallMode;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
-  runtimeMode: RuntimeMode;
+  runtimeMode: ToolWiringValidationMode;
   agent: Agent;
   bridge: EventBridge;
   systemPrompt: string;

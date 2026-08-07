@@ -19,7 +19,7 @@ export interface SatelliteShardDelegationHint {
   reason?: string;
 }
 
-export interface SatelliteRoutingMetadata {
+export interface SatelliteDelegationRoutingHint {
   connectionId?: string;
   sessionId?: string;
   turnId?: string;
@@ -34,7 +34,7 @@ export interface SatelliteDelegationDecision {
   isSatellite: boolean;
   delegate: boolean;
   reason: string;
-  routing?: SatelliteRoutingMetadata;
+  routing?: SatelliteDelegationRoutingHint;
 }
 
 export interface SatelliteRoutingPort {

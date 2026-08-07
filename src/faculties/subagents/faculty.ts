@@ -16,7 +16,7 @@ import {
   SUBAGENT_WORKER_LANE,
   createWorkerExecutionPolicy,
 } from '../../core/agent/worker-lanes.js';
-import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../../core/agent/tool-wiring-validator.js';
 import {
   normalizeCapabilityTier,
   resolveTierCapabilityTokens,
@@ -185,7 +185,7 @@ export interface SubagentFacultyDeps {
   maxConcurrent?: number;
   toolCatalogProvider?: () => SubagentToolCatalog;
   auditTrail?: SubagentAuditTrail;
-  runtimeMode?: RuntimeMode;
+  runtimeMode?: ToolWiringValidationMode;
   /**
    * c7d: shared shard fold-review queue used to stage restricted-class
    * (emotional/relational/boundary) subagent memory candidates. Absent →

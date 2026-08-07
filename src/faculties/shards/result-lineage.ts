@@ -1,5 +1,5 @@
 import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
+import type { SatelliteDelegationRoutingHint } from '../../core/agent/satellite-adapter-port.js';
 import { normalizePresenceMetadata } from '../../core/agent/presence-metadata.js';
 import {
   createCompanionId,
@@ -87,7 +87,7 @@ function normalizeSourceContext(sourceContext: ShardSourceContext | undefined): 
   };
 }
 
-function normalizeSatelliteRouting(routing: SatelliteRoutingMetadata | undefined): ShardResultLineageSatelliteRouting | undefined {
+function normalizeSatelliteRouting(routing: SatelliteDelegationRoutingHint | undefined): ShardResultLineageSatelliteRouting | undefined {
   if (!routing) {
     return undefined;
   }
@@ -120,7 +120,7 @@ export function buildShardLineageEnvelope(input: {
   >;
   ingestedIntakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
   sourceContext?: ShardSourceContext;
-  satelliteRouting?: SatelliteRoutingMetadata;
+  satelliteRouting?: SatelliteDelegationRoutingHint;
 }): ShardResultLineageEnvelope {
   const sourceContext = normalizeSourceContext(input.sourceContext);
   const satelliteRouting = normalizeSatelliteRouting(input.satelliteRouting);

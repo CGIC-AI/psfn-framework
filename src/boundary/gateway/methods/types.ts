@@ -16,7 +16,7 @@ import type {
   NotifyNtfyParams,
   NotifyNtfyResult,
   OperatorAlertResult,
-  PolicyDecision,
+  GatewayPolicyDecision,
   RuntimeHealthResult,
 } from '../protocol.js';
 import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
@@ -199,7 +199,7 @@ export interface GatewayMethodRuntime {
   ): Promise<IcpConversationCorrelation>;
   recordAuditEvent?(entry: {
     method: string;
-    decision: PolicyDecision;
+    decision: GatewayPolicyDecision;
     params?: Record<string, unknown>;
     durationMs?: number;
     error?: string;

@@ -101,7 +101,7 @@ import type { PersonaPreamblePort } from '../../../core/identity/persona-preambl
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../../../core/agent/tool-wiring-validator.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import {
   migrateLegacyPersistenceLayout,
@@ -355,7 +355,7 @@ export interface SubstrateAgentCompositionOptions {
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   config: CoreSubstrateConfig;
-  runtimeMode?: RuntimeMode;
+  runtimeMode?: ToolWiringValidationMode;
   emotionRuntime?: EmotionRuntimeWiring;
   fatigueBudget?: FatigueBudgetPort | null;
   humanAttentionPressure?: HumanAttentionPressurePort | null;
@@ -618,7 +618,7 @@ export interface ToolRuntimeOptions {
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
-  runtimeMode?: RuntimeMode;
+  runtimeMode?: ToolWiringValidationMode;
   getCapabilityTier?: () => CapabilityTier;
   snapshotParentCapabilityGrant: () => CapabilityGrantSnapshot;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];

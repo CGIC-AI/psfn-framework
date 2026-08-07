@@ -15,9 +15,9 @@ import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-pro
 import {
   createActiveEmanationSatellitePresencePort,
   type SatellitePresencePort,
-  type SatelliteRoutingMetadata,
+  type SatelliteDelegationRoutingHint,
 } from '../../core/agent/satellite-adapter-port.js';
-import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import type {
@@ -229,7 +229,7 @@ export interface ShardManagerDeps {
   shardToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => ShardToolCatalog;
   auditTrail?: ShardAuditTrail;
-  runtimeMode?: RuntimeMode;
+  runtimeMode?: ToolWiringValidationMode;
   shardSessionMemorySyncAuditPath?: string;
   artifactReturnPort?: ArtifactReturnPort;
   satellitePresencePort?: SatellitePresencePort;
@@ -1684,7 +1684,7 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   private resolveWyomingShardName(
-    routing: SatelliteRoutingMetadata | undefined,
+    routing: SatelliteDelegationRoutingHint | undefined,
     presenceSubjectId: string | undefined,
   ): string {
     const siteId = routing?.siteId?.trim() || 'unknown-site';
@@ -1693,7 +1693,7 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   private resolveWyomingRouteCapabilities(
-    routing: SatelliteRoutingMetadata | undefined,
+    routing: SatelliteDelegationRoutingHint | undefined,
     presenceSubjectId: string | undefined,
   ): string[] {
     const siteId = routing?.siteId?.trim() || 'unknown-site';

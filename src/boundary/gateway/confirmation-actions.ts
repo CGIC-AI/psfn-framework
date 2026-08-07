@@ -1,9 +1,9 @@
 import type { ConfirmationQueueEntry } from '../../system/capabilities/confirmation-queue.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { PolicyDecision } from './protocol.js';
+import type { GatewayPolicyDecision } from './protocol.js';
 
 interface QueuedActionAuditHooks {
-  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number>;
   auditComplete(id: number, startTime: number, error?: string): Promise<void>;
 }
 

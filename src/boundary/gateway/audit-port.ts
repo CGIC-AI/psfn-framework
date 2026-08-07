@@ -1,10 +1,10 @@
-import type { PolicyDecision } from './protocol.js';
+import type { GatewayPolicyDecision } from './protocol.js';
 
 export interface AuditEntry {
   id: number;
   timestamp: number;
   method: string;
-  decision: PolicyDecision;
+  decision: GatewayPolicyDecision;
   paramsJson: string;
   durationMs: number | null;
   error: string | null;
@@ -18,7 +18,7 @@ export interface AuditRotationConfig {
 
 export interface AuditSummaryEntry {
   method: string;
-  decision: PolicyDecision;
+  decision: GatewayPolicyDecision;
   params?: Record<string, unknown>;
   durationMs?: number;
   error?: string;
@@ -26,7 +26,7 @@ export interface AuditSummaryEntry {
 
 export interface AuditAppendEntry {
   method: string;
-  decision: PolicyDecision;
+  decision: GatewayPolicyDecision;
   params?: Record<string, unknown>;
 }
 

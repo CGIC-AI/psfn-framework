@@ -10,7 +10,7 @@ import type {
   AuditSummaryHook,
   GatewayAuditStorePort,
 } from './audit-port.js';
-import type { PolicyDecision } from './protocol.js';
+import type { GatewayPolicyDecision } from './protocol.js';
 
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
   maxSizeBytes: 10 * 1024 * 1024,
@@ -30,7 +30,7 @@ interface AuditRow {
   id: number | string;
   timestamp: number | string;
   method: string;
-  decision: PolicyDecision;
+  decision: GatewayPolicyDecision;
   paramsJson: string | null;
   durationMs: number | string | null;
   error: string | null;

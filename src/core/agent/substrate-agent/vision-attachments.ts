@@ -1,7 +1,7 @@
 import type { ImageContent, UserMessage } from '@mariozechner/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../contracts.js';
-import type { RuntimeMode } from '../tool-wiring-validator.js';
+import type { ToolWiringValidationMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
 import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
@@ -216,7 +216,7 @@ export function buildPersistedVisionUnavailableUserContent(message: SubstrateMes
 export async function buildTurnUserContent(input: {
   message: SubstrateMessage;
   llmClient: LLMProviderPort;
-  runtimeMode: RuntimeMode;
+  runtimeMode: ToolWiringValidationMode;
   logger: VisionLogger;
   visionReviewer?: ImageVisionReviewer | null;
   /**
@@ -816,7 +816,7 @@ function isFetchableAttachmentUrl(url: string): boolean {
 async function resolveVisionImageContentBlocks(input: {
   message: SubstrateMessage;
   llmClient: LLMProviderPort;
-  runtimeMode: RuntimeMode;
+  runtimeMode: ToolWiringValidationMode;
   logger: VisionLogger;
 }): Promise<ResolvedVisionAttachmentSet> {
   const attachments = input.message.attachments ?? [];
@@ -888,7 +888,7 @@ async function resolveVisionAttachmentContent(input: {
   message: SubstrateMessage;
   attachment: Attachment;
   llmClient: LLMProviderPort;
-  runtimeMode: RuntimeMode;
+  runtimeMode: ToolWiringValidationMode;
   logger: VisionLogger;
 }): Promise<VisionAttachmentResolutionResult> {
   const inlineDataBase64 = input.attachment.dataBase64?.trim();

@@ -86,7 +86,7 @@ import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   type GatewayToolMetadataCoverage,
-  type RuntimeMode,
+  type ToolWiringValidationMode,
 } from './tool-wiring-validator.js';
 import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
@@ -231,7 +231,7 @@ export interface SubstrateAgentOptions {
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
-  runtimeMode?: RuntimeMode;
+  runtimeMode?: ToolWiringValidationMode;
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
@@ -351,7 +351,7 @@ export class SubstrateAgent {
   private internalStateContinuityGap: InternalStateContinuityGap | null = null;
   private internalStateContinuityGapRenderCount = 0;
   private companionSubstrateHealthContext: CompanionSubstrateHealthContext | null = null;
-  private runtimeMode: RuntimeMode;
+  private runtimeMode: ToolWiringValidationMode;
 
   private get activeTurnCorrelation(): CorrelationMetadata | null {
     return this.turnSupportRuntime.getActiveTurnCorrelation();
@@ -1109,7 +1109,7 @@ export class SubstrateAgent {
   }
 
   validateToolWiring(
-    mode: RuntimeMode,
+    mode: ToolWiringValidationMode,
     gatewayClient?: object,
     requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
   ): void {

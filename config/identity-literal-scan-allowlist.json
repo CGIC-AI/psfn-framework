@@ -1291,7 +1291,7 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/postgres/model-usage-store.ts",
+      "path": "src/persistence/postgres/model-usage-store/store.ts",
       "contains": "applicationName: 'psfn-model-usage'",
       "reason": "Model-usage persistence uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"

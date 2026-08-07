@@ -68,7 +68,7 @@ import {
 import type { CogSecEvent, CogSecEventStore, CogSecSeverity } from '../../../core/cogsec/events.js';
 import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
 import {
-  callToolLessJsonScreener,
+  callValidatedToolLessJsonScreener,
   neutralizeUntrustedDelimiters,
   stripJsonFences,
   type ScreenerBackend,
@@ -459,7 +459,7 @@ export async function screenL3(
   }
 
   const startedAt = performance.now();
-  const content = await callToolLessJsonScreener({
+  const verdict = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
@@ -469,9 +469,16 @@ export async function screenL3(
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     screenerName: 'L3 screener',
     makeError: (message) => new L3ScreenerError(message),
+    validateContent: content => parseVerdict(
+      content,
+      deps.model,
+      performance.now() - startedAt,
+      neutralized,
+    ),
+    isValidationError: error => error instanceof L3ScreenerSchemaError,
   });
   const latencyMs = performance.now() - startedAt;
-  const verdict = parseVerdict(content, deps.model, latencyMs, neutralized);
+  verdict.latencyMs = latencyMs;
 
   // Structural metadata only — the untrusted content and the safe
   // representation are never logged from here.

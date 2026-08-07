@@ -52,7 +52,7 @@ import type {
 import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 import {
-  callToolLessJsonScreener,
+  callValidatedToolLessJsonScreener,
   stripJsonFences,
   type ScreenerBackend,
   type ScreenerFetch,
@@ -357,7 +357,7 @@ export async function screenImageWithVisionModel(
 ): Promise<VisionScreenerVerdict> {
   const imagePart = buildImageContentPart(image);
   const startedAt = performance.now();
-  const content = await callToolLessJsonScreener({
+  const verdict = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
@@ -373,9 +373,15 @@ export async function screenImageWithVisionModel(
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     screenerName: 'vision screener',
     makeError: (message) => new VisionScreenerError(message),
+    validateContent: content => parseVerdict(
+      content,
+      deps.model,
+      performance.now() - startedAt,
+    ),
+    isValidationError: error => error instanceof VisionScreenerSchemaError,
   });
   const latencyMs = performance.now() - startedAt;
-  const verdict = parseVerdict(content, deps.model, latencyMs);
+  verdict.latencyMs = latencyMs;
 
   // Latency measured and logged per call (bead acceptance criterion). The
   // transcript and description are NOT logged — only structural metadata.

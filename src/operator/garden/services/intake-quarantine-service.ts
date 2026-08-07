@@ -38,6 +38,10 @@ import type {
   IntakeQuarantineEntry,
   IntakeQuarantineStore,
 } from '../../../core/cogsec/intake/quarantine-store.js';
+import {
+  classifyIntakeQuarantineHoldReason,
+  type IntakeQuarantineHoldReason,
+} from '../../../shared/contracts/intake-quarantine-hold-reason.js';
 import type { IntakeL1RuleMatchProvenance } from '../../../shared/contracts/intake-envelope.js';
 import { extractHostFromOriginRef } from '../../../core/cogsec/intake/source-lists.js';
 import type { IntakeSourceListName } from '../../../system/config/intake-policy-config.js';
@@ -66,6 +70,8 @@ export interface AdminIntakeQuarantineFlywheelTarget {
 export interface AdminIntakeQuarantineItemView {
   id: string;
   status: IntakeQuarantineEntry['status'];
+  /** Why the firewall created the hold; distinct from its lifecycle status. */
+  holdReason: IntakeQuarantineHoldReason;
   /** Firewall mode at hold time; shadow items were delivered, not withheld. */
   mode: 'shadow' | 'enforce';
   sourceClass: string;
@@ -296,6 +302,7 @@ function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQua
   return {
     id: entry.id,
     status: entry.status,
+    holdReason: classifyIntakeQuarantineHoldReason(entry.envelope.decision?.reason),
     mode: entry.mode,
     sourceClass: entry.envelope.sourceClass,
     sourceRiskTier: entry.envelope.sourceRiskTier,

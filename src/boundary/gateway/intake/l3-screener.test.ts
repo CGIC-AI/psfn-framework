@@ -121,6 +121,25 @@ function fetchReturning(content: string, captured?: CapturedRequest[]): L3Screen
   };
 }
 
+function fetchSequence(
+  contents: readonly string[],
+  captured: CapturedRequest[],
+): L3ScreenerFetch {
+  let index = 0;
+  return (url, init) => {
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    captured.push({ url, method: init.method, headers: init.headers, body });
+    const content = contents[index];
+    index += 1;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: () => Promise.resolve(JSON.stringify({ choices: [{ message: { content } }] })),
+    });
+  };
+}
+
 /** Fetch stub answering per requested model: a string verdict or an HTTP status. */
 function fetchByModel(
   responses: Record<string, string | { httpStatus: number }>,
@@ -282,6 +301,30 @@ describe('screenL3', () => {
       fetch: fetchReturning(incoherent),
     });
     expect(verdict.flagged).toBe(true);
+  });
+
+  it('re-prompts once when the first summary echoes screened content verbatim', async () => {
+    const captured: CapturedRequest[] = [];
+    const echoing = JSON.stringify({
+      flagged: true,
+      labels: ['injection/override_attempt'],
+      injectionConfidence: 0.9,
+      summary: `The page says: "${HOSTILE_CONTENT.slice(0, 80)}" which is an injection.`,
+      contentType: 'web page',
+      keyEntities: [],
+      whyFlagged: 'quoting for evidence',
+    });
+    const verdict = await screenL3(HOSTILE_CONTENT, baseContext(), {
+      ...deps(),
+      fetch: fetchSequence([echoing, FLAGGED_RESPONSE], captured),
+    });
+
+    expect(verdict.flagged).toBe(true);
+    expect(verdict.safeRepresentation.summary).toContain('redirect the assistant');
+    expect(captured).toHaveLength(2);
+    const retryMessages = captured[1].body.messages as Array<{ role: string; content: string }>;
+    expect(retryMessages[0].content).toContain('previous response failed validation');
+    expect(retryMessages[0].content).toContain('complete JSON object');
   });
 
   it('rejects an empty input before any call', async () => {
@@ -463,8 +506,10 @@ describe('evaluateL3', () => {
       }, captured),
     }));
 
+    // The primary first gets one schema-repair attempt; only a second invalid
+    // verdict advances to the existing purpose-model fallback.
     expect(captured.map((request) => request.body.model))
-      .toEqual([PRIMARY_MODEL, SECONDARY_MODEL]);
+      .toEqual([PRIMARY_MODEL, PRIMARY_MODEL, SECONDARY_MODEL]);
     expect(outcome.kind).toBe('screened');
     if (outcome.kind === 'screened') {
       expect(outcome.aggregate.models).toEqual([SECONDARY_MODEL]);

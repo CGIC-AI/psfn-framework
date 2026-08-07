@@ -2602,6 +2602,12 @@
       "value": "512 * 1_024"
     },
     {
+      "file": "src/core/agent/background-work/config.ts",
+      "name": "DISABLED_BACKGROUND_WORK_MAX_ATTEMPTS",
+      "value": "1",
+      "note": "Code-owned disabled-lane invariant: no job is persisted or retried, while the transient handoff shape still requires one valid attempt."
+    },
+    {
       "file": "src/core/agent/background-work/supervisor.ts",
       "name": "BackgroundWorkSupervisor.ensureHeartbeat.$call:math-clamp:Math.max.arg0#1",
       "value": "10",
@@ -2970,13 +2976,6 @@
       "file": "src/core/agent/substrate-agent/turn-execution/agent-invocation.ts",
       "name": "VISION_TURN_TIMEOUT_MS",
       "value": "120_000"
-    },
-    {
-      "file": "src/core/agent/substrate-agent/turn-execution/post-turn-scheduling.ts",
-      "name": "createBackgroundWorkInput.maxAttempts",
-      "value": "5",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate createBackgroundWorkInput.maxAttempts; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts",
@@ -12621,6 +12620,13 @@
       "value": "1_000",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata DEFAULT_BACKGROUND_WORK_TUNING.postTurn.foregroundPreemptionDeferDelayMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/scheduler-config.ts",
+      "name": "DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts",
+      "value": "5",
+      "form": "object-member",
+      "note": "Mutable durable post-turn retry policy owned by scheduler.json; this literal is the canonical seed default and is validated, migrated, and runtime-wired."
     },
     {
       "file": "src/system/config/scheduler-config.ts",

@@ -292,6 +292,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * Absent when the intake firewall is off.
    */
   quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
+  /** Gateway-global registry of protected persona owners for raw mutation tools. */
+  personaMutationAttemptGuard?: import('./persona-mutation-attempt-guard.js').PersonaMutationAttemptGuard;
   /**
    * CogSec event store (htm9.18). When present, a canary token leaking into an
    * outbound method is recorded as a durable CogSecEvent (token sha256 only)
@@ -807,6 +809,9 @@ export class GatewayServer {
       get intakeScreening() { return resolveIntakeScreening(); },
       ...(this.options.quarantinedArtifactGuard
         ? { quarantinedArtifactGuard: this.options.quarantinedArtifactGuard }
+        : {}),
+      ...(this.options.personaMutationAttemptGuard
+        ? { personaMutationAttemptGuard: this.options.personaMutationAttemptGuard }
         : {}),
       get visionIntake() { return resolveVisionIntake(); },
       inlineImageRetention,

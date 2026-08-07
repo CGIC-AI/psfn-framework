@@ -469,6 +469,22 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   },
   {
     name: 'fs.write',
+    prePolicyGuard: (params: FsWriteParams, runtime) => {
+      const guard = runtime.personaMutationAttemptGuard;
+      if (!guard) return;
+      const detections = guard.inspectFilesystemMutation({
+        companionId: runtime.authenticatedCompanionId() ?? '',
+        tool: 'fs.write',
+        requestedPath: params.path,
+        workspacePath: runtime.workspacePath,
+      });
+      if (detections.length > 0) {
+        throw new JSONRPCErrorException(
+          'Direct persona mutation is blocked; use the governed identity tool.',
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
+    },
     handler: async (params: FsWriteParams, runtime) => {
       const { workspaceRoot, resolvedPath } = resolveGuardedMutationPath(
         params.path,
@@ -578,6 +594,22 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   },
   {
     name: 'fs.edit',
+    prePolicyGuard: (params: FsEditParams, runtime) => {
+      const guard = runtime.personaMutationAttemptGuard;
+      if (!guard) return;
+      const detections = guard.inspectFilesystemMutation({
+        companionId: runtime.authenticatedCompanionId() ?? '',
+        tool: 'fs.edit',
+        requestedPath: params.path,
+        workspacePath: runtime.workspacePath,
+      });
+      if (detections.length > 0) {
+        throw new JSONRPCErrorException(
+          'Direct persona mutation is blocked; use the governed identity tool.',
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
+    },
     handler: async (params: FsEditParams, runtime) => {
       const { resolvedPath } = resolveGuardedMutationPath(
         params.path,

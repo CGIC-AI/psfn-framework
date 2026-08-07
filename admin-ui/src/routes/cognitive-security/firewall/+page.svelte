@@ -346,6 +346,26 @@
                 <span class="text-shadow-600">{formatTimestamp(event.createdAt)}</span>
               </div>
               <p class="mt-1 text-sm text-shadow-800">{event.safeSummary}</p>
+              {#if event.personaMutationAttempt}
+                <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                  <div>
+                    <dt class="text-shadow-500">Companion</dt>
+                    <dd class="font-mono text-shadow-800">{event.personaMutationAttempt.companionId}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-shadow-500">Tool</dt>
+                    <dd class="font-mono text-shadow-800">{event.personaMutationAttempt.tool}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-shadow-500">Protected owner</dt>
+                    <dd class="font-mono text-shadow-800">{event.personaMutationAttempt.pathClass}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-shadow-500">Occurrences</dt>
+                    <dd class="font-mono text-shadow-800">{event.personaMutationAttempt.occurrenceCount}</dd>
+                  </div>
+                </dl>
+              {/if}
             </div>
           {/each}
         </div>

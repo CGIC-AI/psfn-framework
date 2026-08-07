@@ -213,6 +213,21 @@ async function findQuarantinedArtifactAliases(
 const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'shell.exec',
+    prePolicyGuard: (params: ShellExecParams, runtime) => {
+      const guard = runtime.personaMutationAttemptGuard;
+      if (!guard) return;
+      const detections = guard.inspectShellMutation({
+        companionId: runtime.authenticatedCompanionId() ?? '',
+        params,
+        workspacePath: runtime.workspacePath,
+      });
+      if (detections.length > 0) {
+        throw new JSONRPCErrorException(
+          'Direct persona mutation is blocked; use the governed identity tool.',
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
+    },
     handler: async (params: ShellExecParams, runtime: GatewayMethodRuntime) => {
       const policy = runtime.policyConfig.shellExec ?? {};
       try {

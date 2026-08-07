@@ -711,3 +711,29 @@ describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', 
     ]);
   });
 });
+
+describe('approval boundary pre-policy guard', () => {
+  it('denies before policy summaries or handler dispatch', async () => {
+    const h = createHarness();
+    const prePolicyGuard = vi.fn(() => {
+      throw new Error('blocked by protected-owner guard');
+    });
+    const paramsSummary = vi.fn(() => ({ path: 'must-not-be-summarized' }));
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'fs.write',
+      handler,
+      paramsSummary,
+      prePolicyGuard,
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'write',
+      approvalScope: () => 'protected-owner',
+    });
+
+    await expect(dispatch({ path: '/private/persona-owner.json' }))
+      .rejects.toThrow('blocked by protected-owner guard');
+    expect(prePolicyGuard).toHaveBeenCalledOnce();
+    expect(paramsSummary).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

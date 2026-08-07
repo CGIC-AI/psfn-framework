@@ -43,6 +43,8 @@ import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-
 import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
+import { PersonaMutationAttemptGuard } from './persona-mutation-attempt-guard.js';
+import { createPersonaOwnerPathRegistry } from './persona-owner-path-registry.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -282,6 +284,24 @@ export async function buildGatewayPrivilegedCore(
   const cogSecEvents = new CogSecEventStore(
     resolveCogSecEventsPath(input.startupHydration.companionDataDir),
   );
+  const personaMutationOwners = input.config.companionFleet?.companions.map(companion => ({
+    companionId: companion.companionId,
+    companionDataDir: companion.companionDataDir,
+    characterCardPath: companion.characterCardPath,
+  })) ?? [{
+    companionId: resolveCoreCompanionIdFromConfig(input.config),
+    companionDataDir: input.startupHydration.companionDataDir,
+    characterCardPath: input.config.characterCardPath,
+  }];
+  const personaMutationAttemptGuard = new PersonaMutationAttemptGuard({
+    companions: personaMutationOwners.map(owner => ({
+      companionId: owner.companionId,
+      registry: createPersonaOwnerPathRegistry(owner),
+      eventStore: owner.companionDataDir === input.startupHydration.companionDataDir
+        ? cogSecEvents
+        : new CogSecEventStore(resolveCogSecEventsPath(owner.companionDataDir)),
+    })),
+  });
   const configStore = createOwnerFileConfigStore({
     dataDir: input.startupHydration.systemDataDir,
     companionDataDir: input.startupHydration.companionDataDir,
@@ -358,6 +378,7 @@ export async function buildGatewayPrivilegedCore(
         ? { quarantinedArtifactGuard: intakeScreening.quarantinedArtifactGuard }
         : {}),
       cogSecEvents,
+      personaMutationAttemptGuard,
       ...(!input.bootstrap.server.multiCompanion.enabled
         && intakeScreening.resolve().visionIntake
         ? { visionIntake: intakeScreening.resolve().visionIntake! }

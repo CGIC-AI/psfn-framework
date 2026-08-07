@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { buildApiHealthChecks } from './api-surface.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { GatewayClient } from '../../boundary/gateway/client.js';
+import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 
 describe('buildApiHealthChecks', () => {
   const runtimeStatusMeta = {
@@ -14,17 +19,17 @@ describe('buildApiHealthChecks', () => {
   function buildSchedulerCheck(scheduler: Scheduler) {
     const checks = buildApiHealthChecks(
       {
-        config: {
+        config: fromPartial<SubstrateConfig>({
           primaryModel: 'openrouter/moonshotai/kimi-k2.5',
           primaryProvider: 'openrouter',
           modelRoster: {},
-        } as any,
-        memoryStore: {
+        }),
+        memoryStore: fromPartial<MemoryStorePort>({
           getStats: async () => ({ total: 0, avgSalience: 0 }),
-        } as any,
-        gateway: {
+        }),
+        gateway: fromPartial<GatewayClient>({
           dims: 384,
-        } as any,
+        }),
         scheduler,
         runtimeStatusMeta,
       },
@@ -108,15 +113,15 @@ describe('buildApiHealthChecks', () => {
     });
     const checks = buildApiHealthChecks(
       {
-        config: {
+        config: fromPartial<SubstrateConfig>({
           primaryModel: 'openrouter/moonshotai/kimi-k2.5',
           primaryProvider: 'openrouter',
           modelRoster: {},
-        } as any,
-        memoryStore: {
+        }),
+        memoryStore: fromPartial<MemoryStorePort>({
           getStats: async () => ({ total: 4, avgSalience: 0.5 }),
-        } as any,
-        gateway: { dims: 384 } as any,
+        }),
+        gateway: fromPartial<GatewayClient>({ dims: 384 }),
         scheduler,
         runtimeStatusMeta,
         postgresReadiness: () => ({
@@ -153,20 +158,20 @@ describe('buildApiHealthChecks', () => {
   function buildDiscordCheck(activeMode: string) {
     const checks = buildApiHealthChecks(
       {
-        config: {
+        config: fromPartial<SubstrateConfig>({
           primaryModel: 'openrouter/moonshotai/kimi-k2.5',
           primaryProvider: 'openrouter',
           modelRoster: {},
-        } as any,
-        memoryStore: {
+        }),
+        memoryStore: fromPartial<MemoryStorePort>({
           getStats: async () => ({ total: 0, avgSalience: 0 }),
-        } as any,
-        gateway: { dims: 384 } as any,
+        }),
+        gateway: fromPartial<GatewayClient>({ dims: 384 }),
         scheduler: new Scheduler(new EventBus(), {
           tickIntervalMs: 100,
           heartbeatIntervalMs: 500,
         }),
-        runtimeStatusMeta: { ...runtimeStatusMeta, activeMode } as any,
+        runtimeStatusMeta: fromPartial<RuntimeStatusMetadata>({ ...runtimeStatusMeta, activeMode }),
       },
       { enabled: false, timeoutMs: 10_000, cacheTtlMs: 10_000 },
     );
@@ -199,7 +204,7 @@ describe('buildApiHealthChecks', () => {
   });
 
   it('reports the reasoning probe slot and resolved backend route in llm health metadata', async () => {
-    const gateway = {
+    const gateway = fromPartial<GatewayClient>({
       dims: 384,
       complete: vi.fn(async () => ({
         content: 'OK',
@@ -229,11 +234,11 @@ describe('buildApiHealthChecks', () => {
           providerWireMessages: [],
         },
       })),
-    } as any;
+    });
 
     const checks = buildApiHealthChecks(
       {
-        config: {
+        config: fromPartial<SubstrateConfig>({
           primaryModel: 'openrouter/z-ai/glm-5',
           primaryProvider: 'openrouter',
           modelRoster: {
@@ -248,10 +253,10 @@ describe('buildApiHealthChecks', () => {
               maxTokens: 4096,
             },
           },
-        } as any,
-        memoryStore: {
+        }),
+        memoryStore: fromPartial<MemoryStorePort>({
           getStats: async () => ({ total: 0, avgSalience: 0 }),
-        } as any,
+        }),
         gateway,
         scheduler: new Scheduler(new EventBus(), {
           tickIntervalMs: 100,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
 import {
   createPreToolHookGate,
@@ -86,8 +87,8 @@ describe('capability tool gating', () => {
     const denied = await commitGated.execute('call-2', {});
 
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).isError).toBe(true);
-    expect((denied.content[0] as any).text).toContain('git.write');
+    expect(fromAny(denied.details).isError).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('git.write');
   });
 
   it('enforces apprentice grants and denials', async () => {
@@ -107,8 +108,8 @@ describe('capability tool gating', () => {
     const denied = await restartGated.execute('call-2', { action: 'restart', reason: 'apply config' });
 
     expect(restart.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('lifecycle.restart');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('lifecycle.restart');
   });
 
   it('gates unified system read actions by internal.read', async () => {
@@ -120,7 +121,7 @@ describe('capability tool gating', () => {
     const denied = await deniedGated.execute('call-system-read-denied', { action: 'read', list: true });
 
     expect(system.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('internal.read');
+    expect(fromAny(denied.content[0]).text).toContain('internal.read');
 
     const allowedGated = gateToolWithCapabilities(
       system.tool,
@@ -139,7 +140,7 @@ describe('capability tool gating', () => {
       );
 
       const capabilities = await gated.execute(`capabilities-${tier}`, { action: 'capabilities' });
-      expect((capabilities.details as any).capabilityDenied).not.toBe(true);
+      expect(fromAny(capabilities.details).capabilityDenied).not.toBe(true);
       expect(selfStatus.executeSpy).toHaveBeenCalledTimes(1);
     }
 
@@ -149,7 +150,7 @@ describe('capability tool gating', () => {
       () => accessForTier('nursery'),
     );
     const denied = await snapshotGated.execute('snapshot-nursery', { action: 'snapshot' });
-    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(nurserySnapshot.executeSpy).not.toHaveBeenCalled();
   });
 
@@ -161,7 +162,7 @@ describe('capability tool gating', () => {
     );
     const denied = await nurseryGated.execute('call-1', { action: 'delete' });
     expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('memory.delete');
+    expect(fromAny(denied.content[0]).text).toContain('memory.delete');
 
     const apprenticeGated = gateToolWithCapabilities(
       memoryDelete.tool,
@@ -169,7 +170,7 @@ describe('capability tool gating', () => {
     );
     const apprenticeDenied = await apprenticeGated.execute('call-2', { action: 'restore' });
     expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
-    expect((apprenticeDenied.content[0] as any).text).toContain('memory.delete');
+    expect(fromAny(apprenticeDenied.content[0]).text).toContain('memory.delete');
 
     const autonomousGated = gateToolWithCapabilities(
       memoryDelete.tool,
@@ -187,7 +188,7 @@ describe('capability tool gating', () => {
     );
     const denied = await nurseryGated.execute('call-1b', { action: 'redact' });
     expect(memory.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('memory.delete');
+    expect(fromAny(denied.content[0]).text).toContain('memory.delete');
 
     const apprenticeGated = gateToolWithCapabilities(
       memory.tool,
@@ -195,7 +196,7 @@ describe('capability tool gating', () => {
     );
     const apprenticeDenied = await apprenticeGated.execute('call-2b', { action: 'redact' });
     expect(memory.executeSpy).not.toHaveBeenCalled();
-    expect((apprenticeDenied.content[0] as any).text).toContain('memory.delete');
+    expect(fromAny(apprenticeDenied.content[0]).text).toContain('memory.delete');
 
     const autonomousGated = gateToolWithCapabilities(
       memory.tool,
@@ -213,7 +214,7 @@ describe('capability tool gating', () => {
     );
     const searchDenied = await searchGated.execute('call-search', { action: 'search' });
     expect(memorySearch.executeSpy).not.toHaveBeenCalled();
-    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(searchDenied.content[0]).text).toContain('identity.read');
 
     const memoryWrite = createTool('memory');
     const writeGated = gateToolWithCapabilities(
@@ -222,11 +223,11 @@ describe('capability tool gating', () => {
     );
     const writeDenied = await writeGated.execute('call-write', { action: 'write' });
     expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
-    expect((writeDenied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(writeDenied.content[0]).text).toContain('memory.write');
 
     const patchDenied = await writeGated.execute('call-patch', { action: 'patch' });
     expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
-    expect((patchDenied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(patchDenied.content[0]).text).toContain('memory.write');
 
     const memoryTimeline = createTool('memory');
     const timelineGated = gateToolWithCapabilities(
@@ -235,7 +236,7 @@ describe('capability tool gating', () => {
     );
     const timelineDenied = await timelineGated.execute('call-timeline', { action: 'timeline' });
     expect(memoryTimeline.executeSpy).not.toHaveBeenCalled();
-    expect((timelineDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(timelineDenied.content[0]).text).toContain('identity.read');
 
     const memoryCensus = createTool('memory');
     const censusGated = gateToolWithCapabilities(
@@ -244,7 +245,7 @@ describe('capability tool gating', () => {
     );
     const censusDenied = await censusGated.execute('call-census', { action: 'census' });
     expect(memoryCensus.executeSpy).not.toHaveBeenCalled();
-    expect((censusDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(censusDenied.content[0]).text).toContain('identity.read');
 
     const memoryExists = createTool('memory');
     const existsGated = gateToolWithCapabilities(
@@ -323,8 +324,8 @@ describe('capability tool gating', () => {
     });
 
     expect(notify.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('external.companion');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('external.companion');
   });
 
   it('grants companion egress only to autonomous and explicit custom tiers', () => {
@@ -357,8 +358,8 @@ describe('capability tool gating', () => {
     const denied = await gated.execute('notify-lane-escape', params);
 
     expect(notify.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain(missingToken);
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain(missingToken);
   });
 
   it('denies a gated live notify Discord send when disclosure lineage cannot reach the room', async () => {
@@ -443,8 +444,8 @@ describe('capability tool gating', () => {
     });
 
     expect(journal.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('memory.write');
   });
 
   it('gates unified skill stats as read-oriented and mutations as runtime writes', async () => {
@@ -455,7 +456,7 @@ describe('capability tool gating', () => {
     );
     const statsDenied = await statsDeniedGated.execute('call-skill-stats-denied', { action: 'stats' });
     expect(skillStats.executeSpy).not.toHaveBeenCalled();
-    expect((statsDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(statsDenied.content[0]).text).toContain('identity.read');
 
     const statsAllowedGated = gateToolWithCapabilities(
       skillStats.tool,
@@ -471,7 +472,7 @@ describe('capability tool gating', () => {
     );
     const updateDenied = await updateDeniedGated.execute('call-skill-update-denied', { action: 'update' });
     expect(skillUpdate.executeSpy).not.toHaveBeenCalled();
-    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(updateDenied.content[0]).text).toContain('identity.write.runtime');
   });
 
   it('fails closed for retired model-facing split aliases without executable policy', () => {
@@ -499,7 +500,7 @@ describe('capability tool gating', () => {
     );
     const listDenied = await listGated.execute('call-north-star-list', { action: 'list' });
     expect(northStarList.executeSpy).not.toHaveBeenCalled();
-    expect((listDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(listDenied.content[0]).text).toContain('identity.read');
 
     const northStarUpdate = createTool('north_star');
     const updateGated = gateToolWithCapabilities(
@@ -508,7 +509,7 @@ describe('capability tool gating', () => {
     );
     const updateDenied = await updateGated.execute('call-north-star-update', { action: 'update' });
     expect(northStarUpdate.executeSpy).not.toHaveBeenCalled();
-    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(updateDenied.content[0]).text).toContain('identity.write.runtime');
   });
 
   it('gates shell by repl.execute capability token', async () => {
@@ -520,7 +521,7 @@ describe('capability tool gating', () => {
     const denied = await deniedGated.execute('call-shell-denied', { action: 'exec', command: 'node' });
 
     expect(shell.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('repl.execute');
+    expect(fromAny(denied.content[0]).text).toContain('repl.execute');
 
     const allowedGated = gateToolWithCapabilities(
       shell.tool,
@@ -570,7 +571,7 @@ describe('capability tool gating', () => {
     );
     const settingsDenied = await nurserySettings.execute('settings-nursery', {});
     expect(settings.executeSpy).not.toHaveBeenCalled();
-    expect((settingsDenied.content[0] as any).text).toContain('internal.read');
+    expect(fromAny(settingsDenied.content[0]).text).toContain('internal.read');
 
     const apprenticeSettings = gateToolWithCapabilities(
       settings.tool,
@@ -586,7 +587,7 @@ describe('capability tool gating', () => {
     );
     const statusDenied = await nurseryStatus.execute('status-nursery', {});
     expect(selfStatus.executeSpy).not.toHaveBeenCalled();
-    expect((statusDenied.content[0] as any).text).toContain('internal.read');
+    expect(fromAny(statusDenied.content[0]).text).toContain('internal.read');
   });
 
   it('enforces custom tier cherry-picked tokens', async () => {
@@ -605,7 +606,7 @@ describe('capability tool gating', () => {
     );
     const denied = await memoryGated.execute('call-2', { action: 'write' });
     expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(denied.content[0]).text).toContain('memory.write');
   });
 
   it('supports dynamic per-tool requirements', async () => {
@@ -622,15 +623,15 @@ describe('capability tool gating', () => {
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(1);
 
     const denied = await nursery.execute('call-2', { layer: 'base' });
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('identity.write.base');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('identity.write.base');
 
     const apprentice = gateToolWithCapabilities(
       annotated,
       () => accessForTier('apprentice'),
     );
     const apprenticeDenied = await apprentice.execute('call-3', { layer: 'base' });
-    expect((apprenticeDenied.content[0] as any).text).toContain('identity.write.base');
+    expect(fromAny(apprenticeDenied.content[0]).text).toContain('identity.write.base');
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(1);
 
     const autonomous = gateToolWithCapabilities(
@@ -649,7 +650,7 @@ describe('capability tool gating', () => {
     );
     const readDenied = await readGated.execute('call-read', { action: 'list' });
     expect(scratchpad.executeSpy).not.toHaveBeenCalled();
-    expect((readDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(readDenied.content[0]).text).toContain('identity.read');
 
     const writeGated = gateToolWithCapabilities(
       scratchpad.tool,
@@ -657,11 +658,11 @@ describe('capability tool gating', () => {
     );
     const writeDenied = await writeGated.execute('call-write', { action: 'add' });
     expect(scratchpad.executeSpy).not.toHaveBeenCalled();
-    expect((writeDenied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(writeDenied.content[0]).text).toContain('memory.write');
 
     const replaceDenied = await writeGated.execute('call-replace', { action: 'replace' });
     expect(scratchpad.executeSpy).not.toHaveBeenCalled();
-    expect((replaceDenied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(replaceDenied.content[0]).text).toContain('memory.write');
   });
 
   it('gates orient values actions by read versus runtime-write capability tokens', async () => {
@@ -672,7 +673,7 @@ describe('capability tool gating', () => {
     );
     const listDenied = await readGated.execute('orient-values-list', { action: 'values_list' });
     expect(orient.executeSpy).not.toHaveBeenCalled();
-    expect((listDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(listDenied.content[0]).text).toContain('identity.read');
 
     const writeGated = gateToolWithCapabilities(
       orient.tool,
@@ -683,7 +684,7 @@ describe('capability tool gating', () => {
       value: 'Protect trust continuity.',
     });
     expect(orient.executeSpy).not.toHaveBeenCalled();
-    expect((addDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(addDenied.content[0]).text).toContain('identity.write.runtime');
 
     const updateDenied = await writeGated.execute('orient-values-update', {
       action: 'values_update',
@@ -691,7 +692,7 @@ describe('capability tool gating', () => {
       value: 'Protect trust continuity explicitly.',
     });
     expect(orient.executeSpy).not.toHaveBeenCalled();
-    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(updateDenied.content[0]).text).toContain('identity.write.runtime');
 
     const allowedGated = gateToolWithCapabilities(
       orient.tool,
@@ -712,15 +713,15 @@ describe('capability tool gating', () => {
     );
     const listDenied = await readGated.execute('session-list', { action: 'list' });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((listDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(listDenied.content[0]).text).toContain('identity.read');
 
     const searchDenied = await readGated.execute('session-search', { action: 'search', query: 'orion' });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(searchDenied.content[0]).text).toContain('identity.read');
 
     const grepDenied = await readGated.execute('session-grep', { action: 'grep', pattern: 'orion' });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((grepDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(grepDenied.content[0]).text).toContain('identity.read');
 
     const writeGated = gateToolWithCapabilities(
       session.tool,
@@ -728,21 +729,21 @@ describe('capability tool gating', () => {
     );
     const newDenied = await writeGated.execute('session-new', { action: 'new' });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((newDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(newDenied.content[0]).text).toContain('identity.write.runtime');
 
     const resumeDenied = await writeGated.execute('session-resume', {
       action: 'resume',
       sessionId: 'api:resume-me',
     });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(resumeDenied.content[0]).text).toContain('identity.write.runtime');
 
     const focusDenied = await writeGated.execute('session-focus', {
       action: 'start_focus',
       scope: 'Investigate continuity',
     });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((focusDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(focusDenied.content[0]).text).toContain('identity.write.runtime');
 
     const wakeReturnDenied = await writeGated.execute('session-wake-return', {
       action: 'wake_return',
@@ -750,7 +751,7 @@ describe('capability tool gating', () => {
       summary: 'Resume the visibility audit.',
     });
     expect(session.executeSpy).not.toHaveBeenCalled();
-    expect((wakeReturnDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(wakeReturnDenied.content[0]).text).toContain('identity.write.runtime');
 
     const allowedGated = gateToolWithCapabilities(
       session.tool,
@@ -768,11 +769,11 @@ describe('capability tool gating', () => {
     );
     const readDenied = await readGated.execute('vault-read', { action: 'read', name: 'Inbox' });
     expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect((readDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(readDenied.content[0]).text).toContain('identity.read');
 
     const searchDenied = await readGated.execute('vault-search', { action: 'vault_search', query: 'focus' });
     expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+    expect(fromAny(searchDenied.content[0]).text).toContain('identity.read');
 
     const writeGated = gateToolWithCapabilities(
       vault.tool,
@@ -784,16 +785,16 @@ describe('capability tool gating', () => {
       content: 'entry',
     });
     expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect((writeDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(writeDenied.content[0]).text).toContain('identity.write.runtime');
 
     const dailyDenied = await writeGated.execute('vault-daily', { action: 'daily', content: 'journal' });
     expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect((dailyDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(dailyDenied.content[0]).text).toContain('identity.write.runtime');
 
     const ambiguousDenied = await writeGated.execute('vault-ambiguous', { name: 'Inbox', query: 'focus' });
     expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect((ambiguousDenied.content[0] as any).text).toContain('identity.read');
-    expect((ambiguousDenied.content[0] as any).text).toContain('identity.write.runtime');
+    expect(fromAny(ambiguousDenied.content[0]).text).toContain('identity.read');
+    expect(fromAny(ambiguousDenied.content[0]).text).toContain('identity.write.runtime');
   });
 
   it('gates unified fs actions using git read/write capability requirements', async () => {
@@ -804,7 +805,7 @@ describe('capability tool gating', () => {
     );
     const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/agent-main.ts' });
     expect(fsTool.executeSpy).not.toHaveBeenCalled();
-    expect((readDenied.content[0] as any).text).toContain('git.read');
+    expect(fromAny(readDenied.content[0]).text).toContain('git.read');
 
     const writeGated = gateToolWithCapabilities(
       fsTool.tool,
@@ -816,7 +817,7 @@ describe('capability tool gating', () => {
       content: 'hello',
     });
     expect(fsTool.executeSpy).not.toHaveBeenCalled();
-    expect((writeDenied.content[0] as any).text).toContain('git.write');
+    expect(fromAny(writeDenied.content[0]).text).toContain('git.write');
 
     const allowedRead = gateToolWithCapabilities(
       fsTool.tool,
@@ -834,7 +835,7 @@ describe('capability tool gating', () => {
     );
     const inspectDenied = await readGated.execute('repo-inspect', { action: 'inspect', target: 'status' });
     expect(repoTool.executeSpy).not.toHaveBeenCalled();
-    expect((inspectDenied.content[0] as any).text).toContain('git.read');
+    expect(fromAny(inspectDenied.content[0]).text).toContain('git.read');
 
     const writeGated = gateToolWithCapabilities(
       repoTool.tool,
@@ -846,7 +847,7 @@ describe('capability tool gating', () => {
       content: 'patched',
     });
     expect(repoTool.executeSpy).not.toHaveBeenCalled();
-    expect((patchDenied.content[0] as any).text).toContain('git.write');
+    expect(fromAny(patchDenied.content[0]).text).toContain('git.write');
 
     const allowedRead = gateToolWithCapabilities(
       repoTool.tool,
@@ -864,7 +865,7 @@ describe('capability tool gating', () => {
     );
     const readyDenied = await readyGated.execute('beads-ready', { action: 'ready' });
     expect(beads.executeSpy).not.toHaveBeenCalled();
-    expect((readyDenied.content[0] as any).text).toContain('issue.read');
+    expect(fromAny(readyDenied.content[0]).text).toContain('issue.read');
 
     const implicitReadyGated = gateToolWithCapabilities(
       beads.tool,
@@ -879,7 +880,7 @@ describe('capability tool gating', () => {
     );
     const createDenied = await createGated.execute('beads-create', { action: 'create', title: 'Tracked work' });
     expect(beads.executeSpy).toHaveBeenCalledTimes(1);
-    expect((createDenied.content[0] as any).text).toContain('issue.write');
+    expect(fromAny(createDenied.content[0]).text).toContain('issue.write');
 
     const updateGated = gateToolWithCapabilities(
       beads.tool,
@@ -965,10 +966,10 @@ describe('undeclared capability fail-closed (02-M2)', () => {
     const denied = await gated.execute('call-rogue', { action: 'anything' });
 
     expect(rogue.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).isError).toBe(true);
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.details as any).capabilityUndeclared).toBe(true);
-    expect((denied.content[0] as any).text).toContain('declares no capability requirement');
+    expect(fromAny(denied.details).isError).toBe(true);
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.details).capabilityUndeclared).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('declares no capability requirement');
   });
 
   it('resolveToolCapabilityRequirement marks unknown tools undeclared and known tools declared', () => {
@@ -997,7 +998,7 @@ describe('undeclared capability fail-closed (02-M2)', () => {
     expect(resolveToolCapabilityRequirement(annotatedNone, {})).toEqual({ declared: true, tokens: [] });
     const annotatedGated = gateToolWithCapabilities(annotatedNone, () => accessForTier('nursery'));
     const annotatedResult = await annotatedGated.execute('call-annotated-none', {});
-    expect((annotatedResult.details as any)?.capabilityUndeclared).toBeUndefined();
+    expect(fromAny(annotatedResult.details)?.capabilityUndeclared).toBeUndefined();
   });
 
   it('assertToolCapabilityRequirementDeclared throws for undeclared, passes for declared', () => {
@@ -1028,7 +1029,7 @@ describe('undeclared capability fail-closed (02-M2)', () => {
       content: 'hello',
     });
     expect(journal.executeSpy).not.toHaveBeenCalled();
-    expect((writeDenied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(writeDenied.content[0]).text).toContain('memory.write');
 
     const readAllowedGated = gateToolWithCapabilities(
       journal.tool,
@@ -1072,8 +1073,8 @@ describe('world capability gating', () => {
 
     const denied = await gated.execute('world-control', { action: 'control', affordanceId: 'lr_lights', command: 'on' });
     expect(world.executeSpy).toHaveBeenCalledTimes(2);
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('world.control');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('world.control');
   });
 
   it('refuses world.read for nursery (no world.read token)', async () => {
@@ -1081,7 +1082,7 @@ describe('world capability gating', () => {
     const gated = gateToolWithCapabilities(world.tool, () => accessForTier('nursery'));
     const denied = await gated.execute('world-perceive-nursery', { action: 'perceive', placeId: 'place.living-room' });
     expect(world.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('world.read');
+    expect(fromAny(denied.content[0]).text).toContain('world.read');
   });
 
   it('allows control only when world.control is granted via a custom tier', async () => {
@@ -1137,10 +1138,10 @@ describe('egress tool guard (htm9.3)', () => {
     );
     const result = await gated.execute('shell-egress-denied', { command: 'curl https://example.test' });
     expect(shell.executeSpy).not.toHaveBeenCalled();
-    expect((result.content[0] as any).text).toBe('held aside for review');
-    expect((result.details as any).egressGated).toBe(true);
-    expect((result.details as any).policyDenied).toBe(true);
-    expect((result.details as any).isError).toBe(true);
+    expect(fromAny(result.content[0]).text).toBe('held aside for review');
+    expect(fromAny(result.details).egressGated).toBe(true);
+    expect(fromAny(result.details).policyDenied).toBe(true);
+    expect(fromAny(result.details).isError).toBe(true);
     expect(seenTokens[0]).toContain('repl.execute');
   });
 
@@ -1180,7 +1181,7 @@ describe('egress tool guard (htm9.3)', () => {
       () => ({ evaluate: guardSpy }),
     );
     const denied = await gated.execute('repo-commit-nursery', { message: 'test' });
-    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     expect(guardSpy).not.toHaveBeenCalled();
   });
@@ -1248,10 +1249,10 @@ describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
 
     const denied = await gated.execute('shell-hook-block', { command: 'rm -rf /' });
     expect(shell.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).hookBlocked).toBe(true);
-    expect((denied.details as any).policyDenied).toBe(true);
-    expect((denied.details as any).blockingHook).toBe('guard-shell');
-    expect((denied.content[0] as any).text).toContain('shell rm -rf is not allowed');
+    expect(fromAny(denied.details).hookBlocked).toBe(true);
+    expect(fromAny(denied.details).policyDenied).toBe(true);
+    expect(fromAny(denied.details).blockingHook).toBe('guard-shell');
+    expect(fromAny(denied.content[0]).text).toContain('shell rm -rf is not allowed');
   });
 
   it('(2) a modified input flows to tool.execute', async () => {
@@ -1290,8 +1291,8 @@ describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
 
     const denied = await gated.execute('shell-hook-modify-invalid', { command: 'ls' });
     expect(shell.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).hookModifiedInputInvalid).toBe(true);
-    expect((denied.details as any).hookBlocked).toBe(true);
+    expect(fromAny(denied.details).hookModifiedInputInvalid).toBe(true);
+    expect(fromAny(denied.details).hookBlocked).toBe(true);
   });
 
   it('(3) additional_context reaches the result path', async () => {
@@ -1334,8 +1335,8 @@ describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
 
     const denied = await gated.execute('memory-hook-escalate', { action: 'exists', query: 'topic' });
     expect(memory.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).capabilityDenied).toBe(true);
-    expect((denied.content[0] as any).text).toContain('memory.write');
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('memory.write');
   });
 
   it('(5) telemetry is redacted — the audit carries no argument or context contents', async () => {
@@ -1380,7 +1381,7 @@ describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
     );
 
     const denied = await gated.execute('repo-commit-nursery-hook', { message: 'test' });
-    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     // The hook gate must not even run once the capability gate has denied.
     expect(evaluateSpy).not.toHaveBeenCalled();
@@ -1434,8 +1435,8 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
 
     const denied = await gated.execute('shell-e2e-block', { command: 'rm -rf /' });
     expect(shell.executeSpy).not.toHaveBeenCalled();
-    expect((denied.details as any).hookBlocked).toBe(true);
-    expect((denied.content[0] as any).text).toContain('destructive shell command refused');
+    expect(fromAny(denied.details).hookBlocked).toBe(true);
+    expect(fromAny(denied.content[0]).text).toContain('destructive shell command refused');
     // Telemetry captured, redacted (no command contents).
     expect(audits).toHaveLength(1);
     expect(audits[0]!.outcome).toBe('block');

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import {
   chargeSurface,
@@ -354,14 +355,14 @@ describe('createSelfStatusTool', () => {
         now: undefined,
       });
 
-      expect((payload.charge as any).lanes.interactive).toMatchObject({
+      expect(fromAny(payload.charge).lanes.interactive).toMatchObject({
         quota: 10,
         rollingWindowSpent: 1,
         rollingWindowRemaining: 9,
         currentRunSpent: 1,
         currentRunRemaining: 9,
       });
-      expect((payload.charge as any).currentRun).toMatchObject({
+      expect(fromAny(payload.charge).currentRun).toMatchObject({
         lane: 'interactive',
         lineage: {
           runId: 'run-status-test',

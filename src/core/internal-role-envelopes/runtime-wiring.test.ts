@@ -2,7 +2,12 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { composeSessionRuntimeAsync } from '../../app/startup/composition/composition.js';
+import { fromPartial } from '@total-typescript/shoehorn';
+import {
+  composeSessionRuntimeAsync,
+  type SessionCompositionOptions,
+} from '../../app/startup/composition/composition.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   resolveInternalRoleEnvelopeLedgerPath,
   resolveInternalRoleEnvelopesDir,
@@ -59,14 +64,16 @@ describe('internal role envelope runtime wiring', () => {
 
   it('wires the companion-data ledger into shared session runtime composition', async () => {
     const companionDataDir = join(rootDir, 'companion-data');
-    const composition = await composeSessionRuntimeAsync({
-      config: {
-        companionDataDir,
-        dataDir: companionDataDir,
-        persistenceBackend: 'postgres',
-        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
-      } as any,
-    });
+    const composition = await composeSessionRuntimeAsync(
+      fromPartial<SessionCompositionOptions>({
+        config: fromPartial<SubstrateConfig>({
+          companionDataDir,
+          dataDir: companionDataDir,
+          persistenceBackend: 'postgres',
+          postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+        }),
+      }),
+    );
 
     expect(existsSync(resolveInternalRoleEnvelopesDir(companionDataDir))).toBe(true);
     expect(composition.internalRoleEnvelopeLedger.getChannelLedgerPath('api:session-1')).toBe(

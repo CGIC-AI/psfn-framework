@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -100,13 +101,13 @@ describe('focus tools', () => {
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-session' },
       () => tool.execute('focus-start-1', { action: 'start_focus', scope: 'Investigate flaky test timeout' }),
     );
-    expect(toolText(first as any)).toContain('start_focus: tracking');
+    expect(toolText(fromAny(first))).toContain('start_focus: tracking');
 
     const second = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-session' },
       () => tool.execute('focus-start-2', { action: 'start_focus', scope: 'Duplicate scope should fail' }),
     );
-    expect(toolText(second as any)).toContain('focus session already active');
+    expect(toolText(fromAny(second))).toContain('focus session already active');
     expect((second.details as { isError?: boolean }).isError).toBe(true);
   });
 
@@ -168,7 +169,7 @@ describe('focus tools', () => {
       }),
     );
 
-    expect(toolText(completed as any)).toContain('complete_focus: persisted knowledge block');
+    expect(toolText(fromAny(completed))).toContain('complete_focus: persisted knowledge block');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toBe('context');
     const completionDetails = completed.details as {
       channelId: string;
@@ -178,11 +179,11 @@ describe('focus tools', () => {
     expect(completionDetails.channelId).toBe('api:focus-context');
     expect(completionDetails.rangeStartId).toBe(2);
     expect(completionDetails.rangeEndId).toBe(3);
-    const storedBlock = (manager as any).focusKnowledgeStore.listByChannel('api:focus-context')[0];
+    const storedBlock = fromAny(manager).focusKnowledgeStore.listByChannel('api:focus-context')[0];
     expect(storedBlock).toBeDefined();
     expect(storedBlock.rangeStartId).toBe(2);
     expect(storedBlock.rangeEndId).toBe(3);
-    expect((manager as any).getFocusCompactionRanges('api:focus-context')).toEqual([
+    expect(fromAny(manager).getFocusCompactionRanges('api:focus-context')).toEqual([
       { startEntryId: 2, endEntryId: 3 },
     ]);
 
@@ -246,7 +247,7 @@ describe('focus tools', () => {
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project' },
       () => tool.execute('focus-start-2', { action: 'start_focus', scope: '  memory workflow overhaul  ' }),
     );
-    expect(toolText(resumed as any)).toContain('Resuming project context with 1 prior distilled block.');
+    expect(toolText(fromAny(resumed))).toContain('Resuming project context with 1 prior distilled block.');
 
     store.append({
       channelId: 'api:focus-project',
@@ -258,7 +259,7 @@ describe('focus tools', () => {
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project', requestId: 'focus-project-2' },
       () => tool.execute('focus-complete-2', { action: 'complete_focus' }),
     );
-    expect(toolText(secondCompletion as any)).toContain('Project context now has 2 distilled blocks.');
+    expect(toolText(fromAny(secondCompletion))).toContain('Project context now has 2 distilled blocks.');
 
     const context = await manager.buildContext('api:focus-project', 'System prompt', '');
     expect((context.systemPrompt.match(/\[memory workflow overhaul\]/gi) ?? [])).toHaveLength(1);

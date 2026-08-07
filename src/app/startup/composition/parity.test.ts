@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,14 +7,19 @@ import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { ReflectionPolicyStore } from '../../../core/scheduler/reflection-policy.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../core/self-model/state.js';
+import { SessionManager } from '../../../core/session/manager.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   wireFilesystemToolsRuntime,
   wireReflectionRuntime,
   wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
+  type FilesystemToolRuntimeTarget,
+  type PromptRuntimeTarget,
 } from './parity.js';
 import {
   resolveReflectionPolicyPath,
@@ -73,7 +79,7 @@ describe('wireSessionToolsRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
-    const sessionManager = {
+    const sessionManager = fromPartial<SessionManager>({
       initializeExplicitSession: vi.fn(),
       listRecentSessions: vi.fn(() => []),
       searchTranscripts: vi.fn(() => []),
@@ -89,8 +95,8 @@ describe('wireSessionToolsRuntime', () => {
       })),
       getFocusSessionContext: vi.fn(() => null),
       completeFocusSession: vi.fn(),
-    } as any;
-    const llmProvider = {
+    });
+    const llmProvider = fromPartial<LLMProviderPort>({
       stream: vi.fn(),
       complete: vi.fn(async () => ({
         content: 'focus summary',
@@ -100,7 +106,7 @@ describe('wireSessionToolsRuntime', () => {
         outputTokens: 1,
         stopReason: 'stop',
       })),
-    } as any;
+    });
 
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
@@ -159,7 +165,7 @@ describe('wireSettingsRuntime', () => {
       })),
     };
 
-    wireSettingsRuntime(target as any, {} as any);
+    wireSettingsRuntime(fromPartial<ToolRegistrarTarget>(target), fromPartial<SubstrateConfig>({}));
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.map(([tool]) => tool.name)).toEqual(['system']);
@@ -184,7 +190,7 @@ describe('wirePromptRuntime', () => {
       registerTool: vi.fn(),
     };
 
-    wirePromptRuntime(target as any, tempDir, 'Base prompt', {
+    wirePromptRuntime(fromPartial<PromptRuntimeTarget>(target), tempDir, 'Base prompt', {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     });
 
@@ -211,7 +217,7 @@ describe('wireFilesystemToolsRuntime', () => {
       registerTool: vi.fn(),
     };
 
-    wireFilesystemToolsRuntime(target as any, tempDir, { fsReadMaxBytes: 125_000 });
+    wireFilesystemToolsRuntime(fromPartial<FilesystemToolRuntimeTarget>(target), tempDir, { fsReadMaxBytes: 125_000 });
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);

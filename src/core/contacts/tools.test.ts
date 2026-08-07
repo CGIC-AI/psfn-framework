@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import type { ContactStorePort } from './contact-store-port.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import { createApprovalQueuePortFromConfirmationQueue } from '../../system/capabilities/approval-queue-port.js';
@@ -56,10 +57,10 @@ describe('contact tools', () => {
       expect(tool.name).toBe('contact');
       expect(tool.label).toBe('contact');
       expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.contact);
-      expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
-      expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const))
+      expect(fromAny(tool.parameters).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
+      expect(fromAny(tool.parameters).properties.action.anyOf.map((entry: { const: string }) => entry.const))
         .toEqual(expect.arrayContaining(['set_relationship', 'propose_relationship']));
-      expect((tool.parameters as any).properties.query.description).toContain('Required for action=search');
+      expect(fromAny(tool.parameters).properties.query.description).toContain('Required for action=search');
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe('function');
     });
@@ -972,7 +973,7 @@ describe('contact tools', () => {
       const contact = await store.upsert({ displayName: 'Lookup Target' });
       const tool = createContactLookupTool(store);
 
-      const result = await tool.execute('contact-lookup-missing-id', {} as any);
+      const result = await tool.execute('contact-lookup-missing-id', fromPartial<Record<string, unknown>>({}));
       const text = resultText(result);
 
       expect(text).toContain('Missing required field "contactId" for action=lookup');
@@ -1140,7 +1141,7 @@ describe('contact tools', () => {
         contactId: contact.id,
         channel: 'api',
         channelUserId: 'privacy-api',
-        privacyLevel: 'super-private' as any,
+        privacyLevel: fromAny('super-private'),
       });
 
       expect(resultText(result)).toContain('Invalid channel privacy level');

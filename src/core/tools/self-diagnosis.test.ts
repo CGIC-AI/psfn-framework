@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import {
   buildSelfDiagnosisReport,
@@ -203,7 +204,7 @@ describe('buildSelfDiagnosisReport', () => {
     expect(report.schemaVersion).toBe(1);
     expect(report.action).toBe('diagnose');
 
-    const deployment = report.deployment as any;
+    const deployment = fromAny(report.deployment);
     expect(deployment.status).toBe('available');
     expect(deployment.imageTag).toBe('0.1.0-kube');
     expect(deployment.gitCommit).toBe('current1111');
@@ -216,7 +217,7 @@ describe('buildSelfDiagnosisReport', () => {
       expect.arrayContaining(['psfn-framework-ay73', 'psfn-framework-gexb']),
     );
 
-    const repository = report.repository as any;
+    const repository = fromAny(report.repository);
     expect(repository.imageSnapshot).toMatchObject({ status: 'available', isImageSnapshot: true });
     expect(repository.sourceCheckout).toMatchObject({
       status: 'available',
@@ -226,7 +227,7 @@ describe('buildSelfDiagnosisReport', () => {
       dirty: false,
     });
 
-    const tooling = report.tooling as any;
+    const tooling = fromAny(report.tooling);
     expect(tooling.binaries).toEqual({
       bd: '/usr/local/bin/bd',
       rg: '/usr/bin/rg',
@@ -234,7 +235,7 @@ describe('buildSelfDiagnosisReport', () => {
     });
     expect(tooling.beads).toMatchObject({ enabled: true, markerPresent: true });
 
-    const storage = report.storage as any;
+    const storage = fromAny(report.storage);
     expect(storage.mounts.systemData).toMatchObject({
       status: 'available',
       writable: true,
@@ -242,19 +243,19 @@ describe('buildSelfDiagnosisReport', () => {
       totalBytes: 20_000_000_000,
     });
 
-    const routing = report.modelRouting as any;
+    const routing = fromAny(report.modelRouting);
     expect(routing.status).toBe('available');
     expect(routing.inspectedCount).toBe(2);
     expect(routing.mismatchCount).toBe(1);
     expect(routing.flagged).toBe(true);
     expect(routing.calls[0]).toMatchObject({ providerMismatch: true, servedProvider: 'openrouter' });
 
-    const policy = report.policy as any;
+    const policy = fromAny(report.policy);
     expect(policy.beads).toEqual({ value: true, source: 'env' });
     expect(policy.shellExec).toEqual({ value: false, source: 'settings.json' });
     expect(policy.shellExecAllowlist).toEqual({ value: [], source: 'settings.json' });
 
-    const conformance = report.toolConformance as any;
+    const conformance = fromAny(report.toolConformance);
     expect(conformance).toMatchObject({ status: 'available', recorded: true, total: 3, passCount: 2, failCount: 1 });
     expect(conformance.failing[0]).toMatchObject({ toolName: 'memory', action: 'search', classification: 'policy_blocked' });
   });
@@ -265,11 +266,11 @@ describe('buildSelfDiagnosisReport', () => {
     world.gitRepos.delete(CHECKOUT);
     const report = await buildSelfDiagnosisReport(makeDeps(world));
 
-    const repository = report.repository as any;
+    const repository = fromAny(report.repository);
     expect(repository.sourceCheckout.status).toBe('unavailable');
     expect(repository.sourceCheckout.reason).toContain('no authoritative source checkout');
 
-    const deployment = report.deployment as any;
+    const deployment = fromAny(report.deployment);
     expect(deployment.fixesShipped.status).toBe('unavailable');
     expect(deployment.fixesShipped.reason).toContain('no authoritative source checkout');
     // Image-snapshot commit still surfaces as the running build commit.
@@ -281,7 +282,7 @@ describe('buildSelfDiagnosisReport', () => {
     const deps = makeDeps(world);
     delete (deps.env as Record<string, string | undefined>).PSFN_PREVIOUS_GIT_COMMIT;
     const report = await buildSelfDiagnosisReport(deps);
-    expect((report.deployment as any).fixesShipped).toMatchObject({
+    expect(fromAny(report.deployment).fixesShipped).toMatchObject({
       status: 'unavailable',
       reason: expect.stringContaining('PSFN_PREVIOUS_GIT_COMMIT'),
     });
@@ -291,7 +292,7 @@ describe('buildSelfDiagnosisReport', () => {
     const world = baseWorld();
     const deps = makeDeps(world, { env: { PATH: '/usr/bin', PSFN_REPOSITORY_DIR: CHECKOUT } });
     const report = await buildSelfDiagnosisReport(deps);
-    const deployment = report.deployment as any;
+    const deployment = fromAny(report.deployment);
     expect(deployment.imageTag).toMatchObject({ status: 'unavailable' });
     // Falls back to the image-snapshot commit even without PSFN_GIT_COMMIT.
     expect(deployment.gitCommit).toBe('image00000000');
@@ -306,7 +307,7 @@ describe('buildSelfDiagnosisReport', () => {
       env: { PATH: '/usr/bin', PSFN_REPOSITORY_DIR: CHECKOUT },
     });
     const report = await buildSelfDiagnosisReport(deps);
-    const tooling = report.tooling as any;
+    const tooling = fromAny(report.tooling);
     expect(tooling.binaries).toEqual({ bd: null, rg: null, psql: null });
     expect(tooling.beads).toMatchObject({ enabled: false, markerPresent: false });
     expect(tooling.beads.reason).toContain('no .beads marker');
@@ -316,7 +317,7 @@ describe('buildSelfDiagnosisReport', () => {
     const world = baseWorld();
     world.existing.delete(LOGS);
     const report = await buildSelfDiagnosisReport(makeDeps(world));
-    const storage = report.storage as any;
+    const storage = fromAny(report.storage);
     expect(storage.mounts.logs).toMatchObject({ status: 'unavailable' });
     expect(storage.mounts.logs.reason).toContain('does not exist');
   });
@@ -338,7 +339,7 @@ describe('buildSelfDiagnosisReport', () => {
       }),
     }));
     expect(report.modelRouting).toMatchObject({ status: 'error' });
-    expect((report.modelRouting as any).reason).toContain('model-usage query failed');
+    expect(fromAny(report.modelRouting).reason).toContain('model-usage query failed');
   });
 
   it('reports policy flags as unset when env is absent', async () => {
@@ -346,7 +347,7 @@ describe('buildSelfDiagnosisReport', () => {
     const report = await buildSelfDiagnosisReport(makeDeps(world, {
       env: { PATH: '/usr/bin', PSFN_REPOSITORY_DIR: CHECKOUT },
     }));
-    const policy = report.policy as any;
+    const policy = fromAny(report.policy);
     expect(policy.beads).toEqual({ value: null, source: 'unset' });
     expect(policy.web).toEqual({ value: null, source: 'gateway-enforced' });
   });
@@ -366,7 +367,7 @@ describe('buildSelfDiagnosisReport', () => {
     world.files.set(CONFORMANCE_PATH, JSON.stringify({ schemaVersion: 2, ranAt: 1, results: [] }));
     const report = await buildSelfDiagnosisReport(makeDeps(world));
     expect(report.toolConformance).toMatchObject({ status: 'error' });
-    expect((report.toolConformance as any).reason).toContain('schemaVersion');
+    expect(fromAny(report.toolConformance).reason).toContain('schemaVersion');
   });
 
   it('rejects conformance results with malformed entries', async () => {
@@ -378,7 +379,7 @@ describe('buildSelfDiagnosisReport', () => {
     }));
     const report = await buildSelfDiagnosisReport(makeDeps(world));
     expect(report.toolConformance).toMatchObject({ status: 'error' });
-    expect((report.toolConformance as any).reason).toContain('required');
+    expect(fromAny(report.toolConformance).reason).toContain('required');
   });
 
   it('rejects a conformance file that is not valid JSON', async () => {
@@ -386,7 +387,7 @@ describe('buildSelfDiagnosisReport', () => {
     world.files.set(CONFORMANCE_PATH, '{ not json');
     const report = await buildSelfDiagnosisReport(makeDeps(world));
     expect(report.toolConformance).toMatchObject({ status: 'error' });
-    expect((report.toolConformance as any).reason).toContain('not valid JSON');
+    expect(fromAny(report.toolConformance).reason).toContain('not valid JSON');
   });
 
   it('redacts secrets that leak into the assembled report', async () => {
@@ -400,7 +401,7 @@ describe('buildSelfDiagnosisReport', () => {
     }));
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('supersecretpassword');
-    expect((report.policy as any).gitRepoRoot.value).toContain('[REDACTED]');
+    expect(fromAny(report.policy).gitRepoRoot.value).toContain('[REDACTED]');
   });
 });
 
@@ -419,14 +420,14 @@ describe('redaction helpers', () => {
   });
 
   it('redacts values under secret-named keys', () => {
-    const out = redactDeep({ token: 'abcd1234', nested: { password: 'hunter2', safe: 'value' } }) as any;
+    const out = fromAny(redactDeep({ token: 'abcd1234', nested: { password: 'hunter2', safe: 'value' } }));
     expect(out.token).toBe('[REDACTED]');
     expect(out.nested.password).toBe('[REDACTED]');
     expect(out.nested.safe).toBe('value');
   });
 
   it('does not over-redact benign key-like field names', () => {
-    const out = redactDeep({ slotKey: 'slot-a', dayKey: '2026-07-06' }) as any;
+    const out = fromAny(redactDeep({ slotKey: 'slot-a', dayKey: '2026-07-06' }));
     expect(out.slotKey).toBe('slot-a');
     expect(out.dayKey).toBe('2026-07-06');
   });

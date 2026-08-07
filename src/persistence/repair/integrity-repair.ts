@@ -70,6 +70,13 @@ interface RepairParams {
   backupDir: string;
   keyring: SessionHmacKeyring;
   /**
+   * Optional exact channel allowlist for a bounded repair. `undefined` retains
+   * the existing all-channel maintenance mode; an explicitly empty or
+   * unresolved set fails closed so an operator typo can never widen a targeted
+   * background-work recovery repair to every session journal.
+   */
+  targetChannelIds?: readonly string[];
+  /**
    * Required operator reason for this run (fail closed on blank). Recorded in
    * the durable audit event so every re-sign carries its justification.
    */
@@ -81,6 +88,17 @@ interface RepairParams {
    * failure alike (attempt + outcome).
    */
   audit?: SessionIntegrityRepairAuditSink;
+}
+
+function normalizeTargetChannelIds(
+  targetChannelIds: readonly string[] | undefined,
+): Set<string> | null {
+  if (targetChannelIds === undefined) return null;
+  const normalized = targetChannelIds.map(channelId => channelId.trim());
+  if (normalized.length === 0 || normalized.some(channelId => channelId.length === 0)) {
+    throw new Error('Target channel ids must contain at least one non-empty channel id');
+  }
+  return new Set(normalized);
 }
 
 function syncFileDurable(filePath: string): void {
@@ -434,6 +452,7 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     // durable audit record is never anonymous.
     throw new Error('Session integrity repair requires a non-empty operator reason');
   }
+  const targetChannelIds = normalizeTargetChannelIds(params.targetChannelIds);
 
   // Accumulators declared before the work so the audit record captures partial
   // progress even when a later chain aborts the run.
@@ -461,25 +480,45 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
       modifiedEntries: journalReport.modifiedEntries,
       quarantinedRows: journalReport.quarantinedRows,
       rebuiltChannelIndex,
+      ...(targetChannelIds ? { targetChannelIds: [...targetChannelIds] } : {}),
       ...extra,
     });
   };
 
   try {
-    // The timestamped backup root is created once per run; make the creation
-    // itself durable before any file beneath it is relied on as evidence.
+    const discovered = discoverSessionFileChains(params.sessionsDir);
+    const incompleteChains = targetChannelIds
+      ? discovered.incompleteChains.filter(chain => targetChannelIds.has(chain.channelId))
+      : discovered.incompleteChains;
+    if (incompleteChains.length > 0) {
+      throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(incompleteChains)}`);
+    }
+    const repairChains = targetChannelIds
+      ? discovered.chains.filter(chain => targetChannelIds.has(chain.channelId))
+      : discovered.chains;
+    if (targetChannelIds) {
+      const resolvedChannelIds = new Set(repairChains.map(chain => chain.channelId));
+      const missingChannelIds = [...targetChannelIds]
+        .filter(channelId => !resolvedChannelIds.has(channelId));
+      if (missingChannelIds.length > 0) {
+        throw new Error(
+          `Target channel ids have no complete L0 journal chain: ${missingChannelIds.join(', ')}`,
+        );
+      }
+    }
+
+    // The timestamped backup root is created once per validated run; make the
+    // creation itself durable before any file beneath it is relied on as
+    // evidence. Target validation happens first so a typo creates no repair
+    // artifact and, critically, never falls back to an all-channel mutation.
     mkdirDurable(params.backupDir);
 
-    const discovered = discoverSessionFileChains(params.sessionsDir);
-    if (discovered.incompleteChains.length > 0) {
-      throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(discovered.incompleteChains)}`);
-    }
-    for (const chain of discovered.chains) {
+    for (const chain of repairChains) {
       if (chain.channelId) channelIds.add(chain.channelId);
     }
-    journalReport.scannedFiles = discovered.chains.flatMap(chain => chain.filePaths).length;
+    journalReport.scannedFiles = repairChains.flatMap(chain => chain.filePaths).length;
 
-    for (const chain of discovered.chains) {
+    for (const chain of repairChains) {
       const modified = rewriteJournalChain(
         chain.filePaths,
         params.keyring,

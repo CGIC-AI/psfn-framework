@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
-import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
+import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../runtime-layout-mode.js';
 import {
   cloneAppCacheStats,
   createEmptyAppCacheStats,

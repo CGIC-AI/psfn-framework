@@ -37,15 +37,6 @@ import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings
 import { assertModelPurposeSelectionResolvable } from '../../../system/config/model-selection-config.js';
 import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-export type {
-  RuntimeVoiceConnectorBinding,
-  RuntimeVoiceProviderGate,
-  RuntimeVoiceProviderGateOptions,
-  RuntimeVoiceSttConnectorOptions,
-  RuntimeVoiceSttProvider,
-  RuntimeVoiceTtsConnectorOptions,
-  RuntimeVoiceTtsProvider,
-} from './voice-provider-runtime.js';
 export {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -53,7 +44,7 @@ export {
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProviderOrder,
-} from './voice-provider-runtime.js';
+} from '../../../channels/backplane/voice-provider-runtime.js';
 
 export interface StartupConfigHydrationDiagnostics {
   legacySettingsKeys: string[];

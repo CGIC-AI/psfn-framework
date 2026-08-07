@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChannelAdapterRegistry } from '../../../channels/backplane/registry-port.js';
-import type { ChannelAdapterPort } from '../../../channels/backplane/types.js';
+import { ChannelAdapterRegistry } from './registry-port.js';
+import type { ChannelAdapterPort } from './types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
   type EligibilityDecision,
-} from '../../../system/capabilities/eligibility.js';
+} from '../../system/capabilities/eligibility.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,

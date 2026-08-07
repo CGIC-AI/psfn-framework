@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { EventBus } from '../event-bus.js';
-import { appendJsonLine } from '../../persistence/jsonl.js';
+import { appendJsonLine } from '../utils/jsonl.js';
 import type {
   FatigueBudgetDecision,
   FatigueBudgetEvent,

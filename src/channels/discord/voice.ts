@@ -30,7 +30,7 @@ import {
   createRuntimeVoiceSttConnector,
   type RuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProvider,
-} from '../../app/startup/support/bootstrap-helpers.js';
+} from '../backplane/voice-provider-runtime.js';
 import type { StreamingSttConnector } from '../../primitives/voice/connectors/stt/index.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type {

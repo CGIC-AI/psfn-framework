@@ -26,12 +26,12 @@ import {
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
-} from '../../app/startup/composition/channel-runtime.js';
+} from '../../channels/backplane/channel-runtime.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
   type RuntimeChannelLifecycleLogger,
-} from '../../app/startup/support/channel-lifecycle.js';
+} from '../../channels/backplane/channel-lifecycle.js';
 
 /** One per-companion discord bot account surface (multi-companion W1-P2). */
 export interface GatewayDiscordAccountSurface {

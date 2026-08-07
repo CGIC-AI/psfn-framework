@@ -3,7 +3,7 @@ import type { Client, VoiceBasedChannel } from 'discord.js';
 import type { Readable } from 'node:stream';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { RuntimeVoiceTtsProvider } from '../../app/startup/support/bootstrap-helpers.js';
+import type { RuntimeVoiceTtsProvider } from '../backplane/voice-provider-runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
 import type { StreamingTtsConnector, TtsSynthesisSession } from '../../primitives/voice/connectors/tts/index.js';

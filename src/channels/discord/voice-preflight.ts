@@ -4,7 +4,7 @@ import {
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceTtsProviderOrder,
-} from '../../app/startup/support/bootstrap-helpers.js';
+} from '../backplane/voice-provider-runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { StreamingTtsConnector, StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';

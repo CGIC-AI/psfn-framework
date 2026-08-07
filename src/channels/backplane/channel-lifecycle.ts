@@ -1,15 +1,15 @@
 import type {
   ChannelAdapterFactoryPort,
   ChannelAdapterPort,
-} from '../../../channels/backplane/types.js';
+} from './types.js';
 import type {
   ChannelAdapterRegistryPort,
   MutableChannelAdapterRegistryPort,
-} from '../../../channels/backplane/registry-port.js';
+} from './registry-port.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
-} from '../../../system/capabilities/eligibility.js';
+} from '../../system/capabilities/eligibility.js';
 import {
   requirePluginActivationEligibility,
   wrapChannelAdapterWithEligibility,

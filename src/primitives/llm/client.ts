@@ -1,7 +1,5 @@
 import {
-  streamSimple,
   completeSimple,
-  type AssistantMessage as PiAssistantMessage,
   type Context as PiContext,
 } from '@mariozechner/pi-ai';
 import { randomUUID } from 'node:crypto';
@@ -72,19 +70,14 @@ import type {
 import { resolveModelUsageChargeLane } from '../../shared/telemetry/model-usage-attribution.js';
 import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
-import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
 import {
   type CircuitBreakerTransition,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
 import { classifyLLMError } from './error-classify.js';
 import {
-  assertNoProviderResponsePrefixArtifact,
   assertUsableProviderResponse,
-  createProviderResponseTerminatorFilter,
   extractCompletionToolCalls,
-  extractToolCallsFromContentBlocks,
-  isPotentialProviderResponsePrefixArtifact,
   normalizeContent,
   normalizeLLMUsageDetails,
   normalizeSharedRouteKey,
@@ -111,6 +104,10 @@ import {
   type IcpConversationChargePolicyResolver,
 } from './icp-conversation-cost-breaker.js';
 import { LLMRequestCapability } from './client-request-capability.js';
+import {
+  runLLMStreamAttempt,
+  type StreamUsageRecord,
+} from './client-stream-capability.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -163,16 +160,6 @@ export interface LLMClientRuntimeOptions {
   icpConversationChargePolicyResolver?: IcpConversationChargePolicyResolver;
   providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
-}
-
-function hasSubstantiveToolCallIdentity(
-  partial: PiAssistantMessage,
-  contentIndex: number,
-): boolean {
-  const block = partial.content.at(contentIndex);
-  return block?.type === 'toolCall'
-    && block.id.trim().length > 0
-    && block.name.trim().length > 0;
 }
 
 export class SensitiveImportRoutePolicyError extends Error {
@@ -951,361 +938,42 @@ export class LLMClient {
             attempt: (attemptIndex) => withRetry(async () => {
             physicalAttempt += 1;
             const usageAttempt = physicalAttempt;
-            const attemptStartedAtMs = Date.now();
-            await this.reserveIcpConversationCost(
-              streamRoutingPurpose,
-              candidateTarget,
-              accountingInputTokens,
-              correlation,
-              logicalCallId,
-              usageAttempt,
-              promptCaching?.engaged === true,
-            );
-            let attemptFirstTokenAtMs: number | undefined;
-            const markFirstOutput = (kind: 'text' | 'thinking' | 'tool'): void => {
-              if (attemptFirstTokenAtMs !== undefined) return;
-              const timestampMs = Date.now();
-              attemptFirstTokenAtMs = timestampMs;
-              callbacks?.onFirstOutput?.({
-                kind,
-                monotonicAtMs: monotonicEpochNowMs(),
-                timestampMs,
-              });
-            };
-            const eventStream = streamSimple(
+            return runLLMStreamAttempt({
               model,
-              piContext,
+              context: piContext,
               requestOptions,
-            );
-
-            let content = '';
-            let reasoning = '';
-            const toolCalls: ToolCall[] = [];
-            let response: LLMResponse | null = null;
-            let emittedData = false;
-            let processedTextLength = 0;
-            let sawTextDelta = false;
-            let providerCompleted = false;
-            let rawUsageEvidence: unknown;
-            const responseTerminatorFilter = createProviderResponseTerminatorFilter(candidateTarget);
-            // gu8m: total raw tool-argument-fragment bytes observed across the whole
-            // stream. Lets us classify empty final tool arguments as provider_emitted_empty
-            // (no fragments ever arrived) vs stream_parse_dropped (fragments arrived but the
-            // accumulator lost them) — response-level, since the pre-patch bug orphaned
-            // fragments onto a *different* content block than the named call.
-            let toolArgumentFragmentBytes = 0;
-
-            try {
-              for await (const event of eventStream) {
-                switch (event.type) {
-                  case 'text_delta':
-                    if (event.delta.length > 0) markFirstOutput('text');
-                    sawTextDelta = true;
-                    content += event.delta;
-                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
-                    if (isPotentialProviderResponsePrefixArtifact(content)) {
-                      break;
-                    }
-                    {
-                      const unprocessed = content.slice(processedTextLength);
-                      processedTextLength = content.length;
-                      const visibleDelta = responseTerminatorFilter.push(unprocessed);
-                      if (visibleDelta) {
-                        emittedData = true;
-                        callbacks?.onText?.(visibleDelta);
-                      }
-                    }
-                    break;
-
-                  case 'thinking_delta':
-                    if (event.delta.length > 0) markFirstOutput('thinking');
-                    emittedData = true;
-                    reasoning += event.delta;
-                    break;
-
-                  case 'toolcall_start':
-                    if (hasSubstantiveToolCallIdentity(event.partial, event.contentIndex)) {
-                      markFirstOutput('tool');
-                    }
-                    break;
-
-                  case 'toolcall_delta': {
-                    const fragment = (event as { delta?: unknown }).delta;
-                    const hasArgumentBytes = typeof fragment === 'string' && fragment.length > 0;
-                    if (
-                      hasArgumentBytes
-                      || hasSubstantiveToolCallIdentity(event.partial, event.contentIndex)
-                    ) {
-                      markFirstOutput('tool');
-                    }
-                    if (hasArgumentBytes) {
-                      toolArgumentFragmentBytes += fragment.length;
-                    }
-                    break;
-                  }
-
-                  case 'toolcall_end':
-                    markFirstOutput('tool');
-                    emittedData = true;
-                    toolCalls.push({
-                      id: event.toolCall.id,
-                      name: event.toolCall.name,
-                      input: event.toolCall.arguments,
-                    });
-                    callbacks?.onToolCall?.(event.toolCall.name, event.toolCall.arguments);
-                    break;
-
-                  case 'done': {
-                    providerCompleted = true;
-                    rawUsageEvidence = event.message.usage;
-                    const contentBlocks = event.message.content as unknown[];
-                    const finalTextContent = extractTextContent(contentBlocks);
-                    // If text_delta events didn't fire, extract text from content blocks
-                    if (!content || (isPotentialProviderResponsePrefixArtifact(content) && finalTextContent)) {
-                      content = finalTextContent;
-                    }
-                    // Extract reasoning from content blocks if thinking_delta didn't fire
-                    if (!reasoning) {
-                      reasoning = extractReasoningContent(contentBlocks);
-                    }
-                    const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
-                    // Normalize away stringified content block arrays from streaming
-                    content = normalizeContent(content);
-                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
-                    if (sawTextDelta && content.length > processedTextLength) {
-                      const unprocessed = content.slice(processedTextLength);
-                      processedTextLength = content.length;
-                      const visibleDelta = responseTerminatorFilter.push(unprocessed);
-                      if (visibleDelta) {
-                        emittedData = true;
-                        callbacks?.onText?.(visibleDelta);
-                      }
-                    }
-                    if (sawTextDelta) {
-                      const visibleTail = responseTerminatorFilter.finish();
-                      if (visibleTail) {
-                        emittedData = true;
-                        callbacks?.onText?.(visibleTail);
-                      }
-                    }
-                    content = stripProviderResponseTerminatorArtifact(content, candidateTarget);
-                    const usageDetails = normalizeLLMUsageDetails(
-                      event.message.usage,
-                      event.message.usage.input,
-                      event.message.usage.output,
-                    );
-                    response = {
-                      content,
-                      ...(reasoning ? { reasoning } : {}),
-                      providerObservability,
-                      toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
-                      model: event.message.model,
-                      inputTokens: usageDetails.input,
-                      outputTokens: usageDetails.output,
-                      usageDetails,
-                      stopReason: event.reason,
-                    };
-                    break;
-                  }
-
-                  case 'error': {
-                    const error = new Error(event.error.errorMessage ?? 'LLM stream error');
-                    if (emittedData) {
-                      markErrorAsNonRetryable(error);
-                    }
-                    throw error;
-                  }
-                }
-              }
-            } catch (error) {
-              const withheldText = responseTerminatorFilter.flush();
-              if (withheldText) {
-                emittedData = true;
-                callbacks?.onText?.(withheldText);
-              }
-              const err = error instanceof Error ? error : new Error(String(error));
-              if (emittedData) {
-                markErrorAsNonRetryable(err);
-              }
-              const partialOutput = `${content}${reasoning}`;
-              const partialUsage = emittedData && !providerCompleted
-                ? normalizeLLMUsageDetails(
-                    undefined,
-                    accountingInputTokens,
-                    Math.max(1, countMessageTokens([{ role: 'assistant', content: partialOutput }])),
-                  )
-                : undefined;
-              await this.recordUsage(
-                streamRoutingPurpose,
-                'chat',
-                candidateTarget,
-                partialUsage?.input ?? 0,
-                partialUsage?.output ?? 0,
-                correlation,
-                partialUsage,
-                {
-                  startedAtMs: attemptStartedAtMs,
-                  completedAtMs: Date.now(),
-                  ...(attemptFirstTokenAtMs !== undefined
-                    ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
-                    : {}),
-                  attempt: usageAttempt,
-                  logicalCallId,
-                  requestedProvider: requestedProvider ?? candidateTarget.provider,
-                  requestedModel: requestedModel ?? candidateTarget.model,
-                  status: 'failure',
-                  settlement: providerCompleted ? 'complete' : emittedData ? 'partial' : 'unknown',
-                  error: err,
-                  providerObservability,
-                  metadata: {
-                    emptyToolArgsAttempt: attemptIndex,
-                    emptyArgsRetries: attemptIndex,
-                    partialOutputChars: partialOutput.length,
-                    ...(providerCompleted ? { malformedRawUsage: rawUsageEvidence } : {}),
-                  },
-                },
-              );
-              throw err;
-            }
-
-            // i24ax: same resolve-under-abort seam as the completion path — a
-            // completed stream produced billable tokens, so record + settle
-            // before surfacing the abort rather than dropping the usage event.
-            const cancelledAfterCompletion = transportSignal.aborted;
-            if (response) {
-              try {
-                assertUsableProviderResponse(response, candidateTarget);
-              } catch (error) {
-                const err = error instanceof Error ? error : new Error(String(error));
-                await this.recordUsage(
-                  streamRoutingPurpose,
-                  'chat',
-                  candidateTarget,
-                  response.inputTokens,
-                  response.outputTokens,
-                  correlation,
-                  response.usageDetails,
-                  {
-                    startedAtMs: attemptStartedAtMs,
-                    completedAtMs: Date.now(),
-                    ...(attemptFirstTokenAtMs !== undefined
-                      ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
-                      : {}),
-                    attempt: usageAttempt,
-                    logicalCallId,
-                    requestedProvider: requestedProvider ?? candidateTarget.provider,
-                    requestedModel: requestedModel ?? candidateTarget.model,
-                    status: 'failure',
-                    settlement: 'complete',
-                    error: err,
-                    providerObservability,
-                    metadata: {
-                      emptyToolArgsAttempt: attemptIndex,
-                      emptyArgsRetries: attemptIndex,
-                    },
-                  },
-                );
-                throw err;
-              }
-              logEmptyToolArgumentProvenance(
-                response.toolCalls,
-                toolArgumentFragmentBytes,
-                candidateTarget,
-                correlation,
-                attemptIndex,
-              );
-              await this.recordUsage(
-                streamRoutingPurpose,
-                'chat',
-                candidateTarget,
-                response.inputTokens,
-                response.outputTokens,
-                correlation,
-                response.usageDetails,
-                {
-                  startedAtMs: attemptStartedAtMs,
-                  completedAtMs: Date.now(),
-                  ...(attemptFirstTokenAtMs !== undefined
-                    ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
-                    : {}),
-                  attempt: usageAttempt,
-                  logicalCallId,
-                  requestedProvider: requestedProvider ?? candidateTarget.provider,
-                  requestedModel: requestedModel ?? candidateTarget.model,
-                  status: 'success',
-                  settlement: 'complete',
-                  stopReason: response.stopReason,
-                  providerObservability,
-                  metadata: {
-                    emptyToolArgsAttempt: attemptIndex,
-                    emptyArgsRetries: attemptIndex,
-                    toolCallCount: response.toolCalls.length,
-                    ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
-                  },
-                },
-              );
-              // i24ax: recorded + settled; now surface the cancellation.
-              throwIfTransportAborted(transportSignal);
-              return response;
-            }
-
-            const visibleTail = responseTerminatorFilter.finish();
-            if (visibleTail) {
-              emittedData = true;
-              callbacks?.onText?.(visibleTail);
-            }
-            content = stripProviderResponseTerminatorArtifact(content, candidateTarget);
-            log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
-            const incompleteUsage = normalizeLLMUsageDetails(
-              undefined,
+              candidate: candidateTarget,
+              callbacks,
               accountingInputTokens,
-              Math.max(1, countMessageTokens([{ role: 'assistant', content: `${content}${reasoning}` }])),
-            );
-            const incompleteResponse = {
-              content,
-              ...(reasoning ? { reasoning } : {}),
+              transportSignal,
+              attemptIndex,
+              usageAttempt,
+              logicalCallId,
+              requestedProvider: requestedProvider ?? candidateTarget.provider,
+              requestedModel: requestedModel ?? candidateTarget.model,
               providerObservability,
-              toolCalls,
-              model: String(model.id),
-              inputTokens: incompleteUsage.input,
-              outputTokens: incompleteUsage.output,
-              usageDetails: incompleteUsage,
-              stopReason: 'unknown',
-            };
-            assertUsableProviderResponse(incompleteResponse, candidateTarget);
-            await this.recordUsage(
-              streamRoutingPurpose,
-              'chat',
-              candidateTarget,
-              incompleteUsage.input,
-              incompleteUsage.output,
               correlation,
-              incompleteUsage,
-              {
-                startedAtMs: attemptStartedAtMs,
-                completedAtMs: Date.now(),
-                ...(attemptFirstTokenAtMs !== undefined
-                  ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
-                  : {}),
-                attempt: usageAttempt,
+              reserveCost: async () => await this.reserveIcpConversationCost(
+                streamRoutingPurpose,
+                candidateTarget,
+                accountingInputTokens,
+                correlation,
                 logicalCallId,
-                requestedProvider: requestedProvider ?? candidateTarget.provider,
-                requestedModel: requestedModel ?? candidateTarget.model,
-                status: 'success',
-                settlement: 'partial',
-                stopReason: 'unknown',
-                providerObservability,
-                metadata: {
-                  emptyToolArgsAttempt: attemptIndex,
-                  emptyArgsRetries: attemptIndex,
-                  partialOutputChars: content.length + reasoning.length,
-                  ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
-                },
-              },
-            );
-            // i24ax: recorded + settled; surface a mid-stream cancellation.
-            throwIfTransportAborted(transportSignal);
-            return incompleteResponse;
+                usageAttempt,
+                promptCaching?.engaged === true,
+              ),
+              recordUsage: async (record: StreamUsageRecord) => await this.recordUsage(
+                streamRoutingPurpose,
+                'chat',
+                candidateTarget,
+                record.inputTokens,
+                record.outputTokens,
+                correlation,
+                record.usageDetails,
+                record.options,
+              ),
+              throwIfAborted: () => throwIfTransportAborted(transportSignal),
+            });
           }, streamRetryConfig, {
             circuitBreaker: {
               breaker: this.circuitBreaker,

@@ -1,4 +1,4 @@
-export type Awaitable<T> = T | Promise<T>;
+import type { Awaitable } from '../../shared/utils/types.js';
 import type {
   PendingFollowUp,
   PendingFollowUpActivateOptions,
@@ -6,6 +6,8 @@ import type {
   PendingFollowUpDampenOptions,
   PendingFollowUpListOptions,
 } from './pending-follow-up-types.js';
+
+export type { Awaitable } from '../../shared/utils/types.js';
 
 export interface PendingFollowUpQuarantineInput {
   reason: string;

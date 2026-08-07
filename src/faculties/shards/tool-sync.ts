@@ -15,13 +15,11 @@ import {
   SHARD_SYNC_POLICY_VERSION,
   type ShardContextPackHelper,
 } from './context-pack.js';
-import type { ShardRuntimeRecord } from './types.js';
+import type { ShardAuditTrail, ShardRuntimeRecord } from './types.js';
+
+export type { ShardAuditTrail } from './types.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-
-export interface ShardAuditTrail {
-  append(event: string, details?: Record<string, unknown>): unknown;
-}
 
 export interface ShardToolSyncHelperDeps {
   auditTrail?: ShardAuditTrail | null;

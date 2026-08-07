@@ -27,6 +27,9 @@ import type {
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
+import type {
+  ShardAuditTrail,
+} from './types.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import {
   ShardExecutionError,
@@ -45,6 +48,7 @@ export {
 export type {
   ActiveShard,
   SatelliteDelegationRequest,
+  ShardAuditTrail,
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
@@ -206,10 +210,8 @@ export interface ShardToolCatalog {
   extended: readonly AgentTool<any>[];
 }
 
-export interface ShardAuditTrail {
-  append(event: string, details?: Record<string, unknown>): unknown;
-}
-
+// ShardAuditTrail is canonically owned by ./types.ts and re-exported above.
+// Manager consumers retain their existing public import path without a second declaration.
 export interface ShardManagerDeps {
   eventBus: EventBus;
   llmProvider: LLMProviderPort;

@@ -18,6 +18,9 @@ import {
 } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { isStrictSubpath } from '../layout.js';
+import type { FleetRestoreDatabaseOperation } from './fleet-restore-database-marker.js';
+
+export type { FleetRestoreDatabaseOperation } from './fleet-restore-database-marker.js';
 
 export type FleetRestoreKind = 'companion' | 'cluster' | 'group';
 export type FleetRestoreFaultStage =
@@ -75,11 +78,6 @@ export interface FleetRestoreTransactionOptions extends FleetRestoreFaultInjecti
   removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
   restoreDatabase: () => Promise<void>;
   rollbackDatabase: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
-}
-
-export interface FleetRestoreDatabaseOperation {
-  operationId: string;
-  operationIdentity: string;
 }
 
 export type FleetRestoreDatabaseOperationState = 'absent' | 'prepared' | 'committed' | 'foreign';

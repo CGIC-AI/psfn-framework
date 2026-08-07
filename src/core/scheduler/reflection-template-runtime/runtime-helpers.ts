@@ -5,6 +5,7 @@ import {
 } from '../reflection-policy.js';
 import type { ReflectionRuntimeOptions } from '../reflection-runtime-contracts.js';
 import type { DeterministicGateDefinition } from '../../../shared/gating/deterministic-gate.js';
+import type { ReflectionExecutionSource } from '../../../persistence/journals/reflection-substrate.js';
 import {
   hasAssertionHeavyIntrospectiveOutput,
   type ReflectionMetacognitiveFlag,
@@ -19,7 +20,7 @@ export const REFLECTION_NOVELTY_GATE_LANE = 'reflection.template.novelty';
 export const REFLECTION_NOVELTY_WATERMARK_PROCESSOR = 'reflection_template_novelty';
 export const REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT = 50;
 
-export type ReflectionExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
+export type { ReflectionExecutionSource } from '../../../persistence/journals/reflection-substrate.js';
 
 export function getReflectionTemplateAuditProfile(
   _template: ReflectionTemplate,

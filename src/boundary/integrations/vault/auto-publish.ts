@@ -4,18 +4,13 @@
 // reflection pipeline when Obsidian auto-publish is enabled in settings.json.
 
 import type { VaultOperations } from './ops.js';
+import type { ReflectionPublishInput } from '../reflection-publish-input.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 
 const log = createComponentLogger('VaultAutoPublish');
 
-export interface ReflectionPublishInput {
-  templateId: string;
-  templateName: string;
-  reflection: string;
-  mode: 'agent' | 'deliberation';
-  createdAt: Date;
-}
+export type { ReflectionPublishInput } from '../reflection-publish-input.js';
 
 /** Maps template ID patterns to vault folder paths */
 const FOLDER_MAP: Array<[RegExp, string]> = [

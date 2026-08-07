@@ -1,16 +1,11 @@
 import type { JournalOperations } from './ops.js';
+import type { ReflectionPublishInput } from '../reflection-publish-input.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 
 const log = createComponentLogger('JournalAutoPublish');
 
-export interface ReflectionPublishInput {
-  templateId: string;
-  templateName: string;
-  reflection: string;
-  mode: 'agent' | 'deliberation';
-  createdAt: Date;
-}
+export type { ReflectionPublishInput } from '../reflection-publish-input.js';
 
 const FOLDER_MAP: Array<[RegExp, string]> = [
   [/^musing$/i, 'reflections/musings'],

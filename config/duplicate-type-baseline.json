@@ -2,15 +2,6 @@
   "schemaVersion": 1,
   "entries": [
     {
-      "name": "ActiveConcernRow",
-      "kind": "collision",
-      "files": [
-        "src/core/intention/concerns.ts",
-        "src/core/intention/postgres-adapters/shared.ts"
-      ],
-      "note": "New finding beyond the 2026-08-05 audit. postgres-adapters/shared.ts declares the raw Postgres row (salience number|string|null; evidence_refs/formation_vad unknown pre-parse) while concerns.ts declares the narrower normalized row shape. Genuinely different shapes under one name; rename one (e.g. ActiveConcernPgRow) or derive the raw row from the canonical one."
-    },
-    {
       "name": "AdminTaskCadence",
       "kind": "identical",
       "files": [
@@ -38,42 +29,6 @@
       "note": "Audit lane 2 (m9): protocol.ts hand-writes the union while enablement.ts derives it from ALL_BEADS_ACTIONS (whose header claims single-source-of-truth). Values match today; the scanner flags the spelling difference as a collision, so this is a drift risk, not a true semantic conflict. Fix: protocol.ts imports the type from enablement.ts (no cycle risk)."
     },
     {
-      "name": "CogSecCompactionInvalidationResult",
-      "kind": "collision",
-      "files": [
-        "src/core/cogsec/revocation.ts",
-        "src/persistence/sessions/store.ts"
-      ],
-      "note": "Audit lane 2 (c1): different shapes (number[] ids plus caseId/channelId vs composite string[] ids) bridged by a deliberate adapter in operator/garden/services/session-service.ts. The identical name for pre- and post-mapping shapes is the defect. Fix: rename the revocation-side type (e.g. CogSecCompactionRevocationOutcome)."
-    },
-    {
-      "name": "ConcernCandidateExtractionContext",
-      "kind": "collision",
-      "files": [
-        "src/core/intention/concern-candidate-types.ts",
-        "src/faculties/memory/extraction/types.ts"
-      ],
-      "note": "Reviewed by audit lane 2 and deliberately left unflagged: concern-candidate-types.ts is a plain alias (`= MemoryConcernCandidateExtractionContext`) to the canonical interface in memory/extraction/types.ts. The scanner classifies alias-vs-interface as a collision by spelling; this is name reuse for a single definition, not duplication."
-    },
-    {
-      "name": "EchoStreamingTtsConfig",
-      "kind": "collision",
-      "files": [
-        "src/primitives/voice/connectors/tts/echo-stream.ts",
-        "src/primitives/voice/connectors/tts/index.ts"
-      ],
-      "note": "Audit lane 2 (m11): the pair has already drifted (url vs baseUrl, nullability) and index.ts `export *`s echo-stream while declaring a conflicting local export, so which type you get depends on the import path. Fix: rename the index.ts provider-settings shape (e.g. EchoTtsProviderSettings)."
-    },
-    {
-      "name": "FleetAuthRole",
-      "kind": "collision",
-      "files": [
-        "src/persistence/postgres/fleet-auth/authority-lifecycle-types.ts",
-        "src/system/config/fleet-auth-config.ts"
-      ],
-      "note": "New finding beyond the 2026-08-05 audit. Same four role values, spelled two ways: hand-written union in authority-lifecycle-types.ts vs const-derived `typeof FLEET_AUTH_ROLES[number]` in fleet-auth-config.ts. Values match today but nothing enforces it; consolidate so one side imports from the other (config owner file side should own the const)."
-    },
-    {
       "name": "FleetRestoreDatabaseOperation",
       "kind": "identical",
       "files": [
@@ -92,24 +47,6 @@
       "note": "New finding beyond the 2026-08-05 audit. Both files declare the identical alias `type LLMCompletionModelHint = LLMModelHint`. Consolidation candidate: keep the alias in one module (model-hint-routing owns hint semantics) and import it in the other."
     },
     {
-      "name": "ManagedSkillRecord",
-      "kind": "collision",
-      "files": [
-        "src/faculties/skills/store.ts",
-        "src/operator/garden/admin-contract.ts"
-      ],
-      "note": "Audit lane 2 (m12): admin-contract.ts hand-copies the store.ts fields minus absolutePath/relativePath, so added fields do not propagate. Fix: derive with `Omit<ManagedSkillRecord, 'absolutePath' | 'relativePath'>` from the canonical store type."
-    },
-    {
-      "name": "MetacognitiveFlagName",
-      "kind": "collision",
-      "files": [
-        "src/core/identity/prompt-runtime/macro-hints.ts",
-        "src/shared/contracts/self-model-contracts.ts"
-      ],
-      "note": "Audit lane 2 (m3): both sides derive from a 5-flag const; the consts are literal-for-literal identical, so values match. The scanner flags the spelling difference (METACOGNITIVE_FLAG_NAMES vs METACOGNITIVE_FLAG_HINT_NAMES) as a collision. Fix: macro-hints.ts imports the const (or at least the type) from the canonical self-model-contracts.ts."
-    },
-    {
       "name": "PolicyContext",
       "kind": "collision",
       "files": [
@@ -126,15 +63,6 @@
         "src/system/trust/policy.ts"
       ],
       "note": "Audit lane 2 (M3): trust values 'allow'|'deny'|'sanitize' vs gateway values 'ALLOW'|'DENY'|'NEEDS_APPROVAL' — different domains and casing conventions under one load-bearing name. Fix: rename the gateway pair to GatewayPolicyDecision (with GatewayPolicyContext)."
-    },
-    {
-      "name": "PromptSectionScopeResolver",
-      "kind": "collision",
-      "files": [
-        "src/core/identity/prompt-section-provenance.ts",
-        "src/core/identity/prompt-sections.ts"
-      ],
-      "note": "Reviewed by audit lane 2 and left unflagged as borderline: two function-type aliases whose return types (PromptSectionScopeProvenance vs PromptSectionTelemetry['scopeProvenance']) resolve to the same underlying shape; the provenance file documents the UI contract relationship. Rename is optional."
     },
     {
       "name": "ReflectionExecutionSource",
@@ -198,42 +126,6 @@
         "src/shared/routing/envelope.ts"
       ],
       "note": "Reviewed by audit lane 2 and deliberately left unflagged: shards/types.ts is a plain alias (`= RoutingShardCreationMode`) to the canonical union in shared/routing/envelope.ts. The scanner classifies alias-vs-union as a collision by spelling; this is name reuse for a single definition, not duplication."
-    },
-    {
-      "name": "SubagentExecutionRequest",
-      "kind": "collision",
-      "files": [
-        "src/core/agent/substrate-agent/bounded-subagent-contract.ts",
-        "src/faculties/subagents/types.ts"
-      ],
-      "note": "Re-verified against current code: the audit's 'plain alias' dismissal no longer holds. bounded-subagent-contract.ts aliases its local narrow BoundedSubagentLaunchRequest (required maxTurns, mutable string[] capabilities) while faculties/subagents/types.ts declares a wider interface (workSpec, optional maxTurns, readonly capabilities). Genuinely different shapes under one name; rename the bounded alias (e.g. BoundedSubagentExecutionRequest)."
-    },
-    {
-      "name": "TextEmotionDType",
-      "kind": "collision",
-      "files": [
-        "src/core/emotion/text-classifier.ts",
-        "src/shared/contracts/runtime-base.ts"
-      ],
-      "note": "Audit lane 2 (m2): values identical (same 9 dtypes), spelled two ways — hand-written union in runtime-base.ts vs const-derived in text-classifier.ts. The scanner flags the spelling difference as a collision. Fix per audit: add a compile-time tie (satisfies/assertion test), since shared/contracts importing from core/emotion may invert the allowed layering."
-    },
-    {
-      "name": "TurnSnapshot",
-      "kind": "collision",
-      "files": [
-        "src/core/turns/snapshot.ts",
-        "src/primitives/voice/turns/types.ts"
-      ],
-      "note": "Audit lane 2 (c2): voice state-machine snapshot vs persisted turn record snapshot — unrelated domains, both legitimately named. The audit did not flag this as a defect; a rename is optional. Baselined so the gate stays green while the names are deliberate."
-    },
-    {
-      "name": "WebSocketVoiceSession",
-      "kind": "collision",
-      "files": [
-        "src/channels/api/voice-websocket.ts",
-        "src/primitives/voice/transports/websocket/types.ts"
-      ],
-      "note": "Audit lane 2 (m13): the channels/api type is the primitives type minus connectionId. Low drift stakes. Fix: derive with `Omit<WebSocketVoiceSession, 'connectionId'>` from the primitives transport type."
     }
   ]
 }

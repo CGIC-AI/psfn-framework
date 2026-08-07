@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createDefaultAccountingState } from '$lib/accounting/query-state';
-  import { formatInteger, shortId } from '$lib/accounting/format';
+  import { formatInteger } from '$lib/accounting/format';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
   import {
     fetchFleetModelUsageProjection,
     resolveFleetUsageViewState,
@@ -17,6 +21,9 @@
   let loading = $state(true);
   let errorMessage = $state('');
   let controller: AbortController | null = null;
+  const displayCompanions = $derived(Object.entries(companionNames).map(
+    ([companionId, displayName]) => ({ companionId, displayName }),
+  ));
   const viewState = $derived(resolveFleetUsageViewState({
     loading,
     errorMessage,
@@ -119,7 +126,11 @@
           {#each projection.companions as companion (companion.companionId)}
             <tr>
               <th scope="row" class="px-4 py-3 text-left font-medium text-shadow-900">
-                {companionNames[companion.companionId] ?? shortId(companion.companionId)}
+                <p>{companionDisplayLabel(displayCompanions, companion.companionId)}</p>
+                <details class="mt-1 text-xs font-normal text-shadow-500">
+                  <summary class="cursor-pointer">Technical details</summary>
+                  <p class="mt-1 break-all font-mono">{companionTechnicalLabel(companion.companionId)}</p>
+                </details>
               </th>
               <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(companion.usage.calls)}</td>
               <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(companion.usage.totalTokens)}</td>

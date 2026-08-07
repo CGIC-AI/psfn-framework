@@ -2,6 +2,10 @@
   import type { FleetModelUsageData } from '$lib/api/endpoints/fleet-model-usage';
   import UsageMetricCards from '$lib/components/accounting/UsageMetricCards.svelte';
   import TokenCompositionChart from '$lib/components/accounting/TokenCompositionChart.svelte';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
   interface Props {
     data: FleetModelUsageData | null;
     loading: boolean;
@@ -17,11 +21,18 @@
     companionNames,
     retry,
   }: Props = $props();
-  const unavailableCompanionNames = $derived(
+  const displayCompanions = $derived(Object.entries(companionNames).map(
+    ([companionId, displayName]) => ({ companionId, displayName }),
+  ));
+  const unavailableCompanions = $derived(
     data?.perCompanion
       .filter(companion => companion.status === 'unavailable')
-      .map(companion => companionNames[companion.companionId] ?? companion.companionId)
       ?? [],
+  );
+  const unavailableCompanionNames = $derived(
+    unavailableCompanions.map(companion => (
+      companionDisplayLabel(displayCompanions, companion.companionId)
+    )),
   );
 </script>
 
@@ -50,6 +61,19 @@
           Unavailable: {unavailableCompanionNames.join(', ')}.
         {/if}
       </p>
+      {#if unavailableCompanions.length > 0}
+        <ul class="mt-2 space-y-2 text-sm text-shadow-600">
+          {#each unavailableCompanions as companion (companion.companionId)}
+            <li>
+              <p>{companionDisplayLabel(displayCompanions, companion.companionId)}</p>
+              <details class="mt-1 text-xs text-shadow-500">
+                <summary class="cursor-pointer">Technical details</summary>
+                <p class="mt-1 break-all font-mono">{companionTechnicalLabel(companion.companionId)}</p>
+              </details>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
   {/if}
 

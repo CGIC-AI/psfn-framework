@@ -2,10 +2,19 @@
   import { onDestroy, onMount } from 'svelte';
   import { getRoomArbiterData, type RoomArbiterData } from '$lib/api/endpoints/room-arbiter';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
+  import {
+    companionDisplayLabel,
+    companionTechnicalLabel,
+  } from '$lib/fleet/companion-display';
+  import {
+    fetchFleetPortalProjection,
+    type FleetPortalCompanion,
+  } from '$lib/fleet/portal';
 
   let data = $state<RoomArbiterData | null>(null);
   let loading = $state(true);
   let error = $state('');
+  let displayCompanions = $state<readonly FleetPortalCompanion[]>([]);
 
   const available = $derived(data?.available ?? false);
 
@@ -32,16 +41,16 @@
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  function shortId(value: string | null): string {
-    if (!value) return '--';
-    return value.length > 12 ? `${value.slice(0, 12)}…` : value;
-  }
-
   async function loadData(): Promise<void> {
     loading = true;
     error = '';
     try {
-      data = await getRoomArbiterData();
+      const [nextData, projection] = await Promise.all([
+        getRoomArbiterData(),
+        fetchFleetPortalProjection().catch(() => null),
+      ]);
+      data = nextData;
+      if (projection) displayCompanions = projection.companions;
     } catch (loadError) {
       error = loadError instanceof Error
         ? loadError.message
@@ -153,8 +162,12 @@
                         <div class="space-y-0.5">
                           {#each episode.participants as participant (participant.companionId)}
                             <div class="text-xs text-shadow-600">
-                              <span class="font-mono">{shortId(participant.companionId)}</span>
+                              <span>{companionDisplayLabel(displayCompanions, participant.companionId)}</span>
                               &middot; {participant.speakCount} spoke &middot; {formatRelative(participant.lastSpokeAtMs)}
+                              <details class="mt-0.5 text-shadow-500">
+                                <summary class="cursor-pointer">Technical details</summary>
+                                <span class="break-all font-mono">{companionTechnicalLabel(participant.companionId)}</span>
+                              </details>
                             </div>
                           {/each}
                         </div>
@@ -188,7 +201,7 @@
                 <tbody>
                   {#each data.reservations as reservation (reservation.reservationId)}
                     <tr class="border-t border-bark-200">
-                      <td class="px-3 py-2 font-mono text-xs">{shortId(reservation.companionId)}</td>
+                      <td class="px-3 py-2 text-xs"><p>{companionDisplayLabel(displayCompanions, reservation.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="break-all font-mono">{companionTechnicalLabel(reservation.companionId)}</p></details></td>
                       <td class="px-3 py-2">{reservation.status}</td>
                       <td class="px-3 py-2 text-xs text-shadow-600">{reservation.reason ?? '--'}</td>
                       <td class="px-3 py-2 text-xs text-shadow-500">{formatRelative(reservation.reservedAtMs)}</td>
@@ -219,7 +232,7 @@
                 <tbody>
                   {#each data.leases as lease (lease.leaseId)}
                     <tr class="border-t border-bark-200">
-                      <td class="px-3 py-2 font-mono text-xs">{shortId(lease.companionId)}</td>
+                      <td class="px-3 py-2 text-xs"><p>{companionDisplayLabel(displayCompanions, lease.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="break-all font-mono">{companionTechnicalLabel(lease.companionId)}</p></details></td>
                       <td class="px-3 py-2">{lease.status}</td>
                       <td class="px-3 py-2 text-xs text-shadow-600">{lease.reason ?? '--'}</td>
                       <td class="px-3 py-2 tabular-nums text-xs">{lease.chargedUnits}</td>
@@ -252,7 +265,7 @@
                 <tbody>
                   {#each data.participation as row (row.companionId)}
                     <tr class="border-t border-bark-200">
-                      <td class="px-3 py-2 font-mono text-xs">{shortId(row.companionId)}</td>
+                      <td class="px-3 py-2 text-xs"><p>{companionDisplayLabel(displayCompanions, row.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="break-all font-mono">{companionTechnicalLabel(row.companionId)}</p></details></td>
                       <td class="px-3 py-2 tabular-nums">{row.episodeCount}</td>
                       <td class="px-3 py-2 tabular-nums">{row.totalSpeakCount}</td>
                       <td class="px-3 py-2 text-xs text-shadow-500">{formatRelative(row.lastSpokeAtMs)}</td>

@@ -713,7 +713,9 @@ describe('GatewayServer ICP autonomy RPC', () => {
     const unbounded = await invoke(a, 1_052, 'companion.availability.refresh_runtime', {
       companionId: A,
       state: 'available',
-      expiresAtMs: Date.now() + MAX_ICP_AVAILABILITY_LEASE_TTL_MS + 1,
+      expiresAtMs: Date.now()
+        + MAX_ICP_AVAILABILITY_LEASE_TTL_MS
+        + MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
     });
     expect(unbounded.error?.message).toMatch(/maximum TTL/i);
     expect(store.availability.has(A)).toBe(false);

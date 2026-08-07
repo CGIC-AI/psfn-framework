@@ -209,6 +209,126 @@ When the operator selects the Pi review lane, new reviews use the exact model
 selector `zai-coding-cn/glm-5.2`. Do not redo historical or already in-flight
 reviews solely to update that selector.
 
+### CLI delegation: Kimi first pass and Pi review
+
+Run either CLI from the worktree it owns. Before invoking it, resolve the Bead,
+branch, immutable base, and current head yourself; do not ask the model to infer
+its assignment from the backlog. Prompts must name the outcome, owned files or
+seam, acceptance criteria, allowed validation, prohibited actions, and the exact
+handoff format.
+
+Use Kimi Code with the exact `kimi-code/kimi-for-coding` selector for a bounded
+implementation pass. The orchestrator claims and updates the Bead; Kimi owns only
+the named worktree and branch:
+
+```bash
+BEAD_ID="psfn-framework-..."
+WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<lane>"
+BASE_SHA="<full-base-sha>"
+
+cd "$WORKTREE_PATH"
+test "$(git rev-parse HEAD)" = "$BASE_SHA"
+kimi --auto --model kimi-code/kimi-for-coding --prompt "
+Read AGENTS.md and the complete Bead $BEAD_ID before editing.
+You own only this worktree and its current non-main branch.
+
+Outcome: <one concrete implementation outcome>.
+Owned seam/files: <paths or symbols>.
+Acceptance: <paste the relevant checkable clauses>.
+Validation: run focused tests and changed-file checks only.
+
+Do not work another Bead, mutate Beads/Dolt, open a PR, merge, deploy, touch live
+state, or run broad gates. Preserve unrelated changes. Implement the smallest
+coherent solution, commit it, push the current branch, and stop.
+
+Return exactly: branch and full head SHA; implemented behavior; focused commands
+and results; remaining concrete risk or blocker; next action for the orchestrator.
+"
+```
+
+When the operator explicitly requests the two-model review sequence, Kimi is the
+first-pass reviewer. Run it against a clean immutable head and save its output.
+The prompt is read-only even though Kimi needs normal tool access to inspect the
+repository and run a focused reproduction:
+
+```bash
+BEAD_ID="psfn-framework-..."
+WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<review-lane>"
+BASE_SHA="<full-base-sha>"
+HEAD_SHA="<full-head-sha>"
+REVIEW_OUT="/tmp/${BEAD_ID}-kimi-review.txt"
+
+set -o pipefail
+cd "$WORKTREE_PATH"
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test -z "$(git status --short)"
+kimi --auto --model kimi-code/kimi-for-coding --prompt "
+Perform a read-only first-pass review of Bead $BEAD_ID over the immutable range
+$BASE_SHA..$HEAD_SHA. Read AGENTS.md, the complete diff, and the affected
+production path and tests.
+
+Acceptance: <paste the complete relevant Bead clauses>.
+
+Look only for concrete correctness, security, isolation, data-loss, or acceptance
+blockers introduced by this range. You may run a focused reproduction. Do not edit
+files, mutate Git or Beads, open or inspect PRs, read prior model-review output, or
+run the broad gate.
+
+Return VERDICT: PASS or VERDICT: BLOCK. For every blocker give severity, file and
+line, violated acceptance clause, causal path, and a reproducible check. Separate
+nonblocking observations. State every command you actually ran.
+" | tee "$REVIEW_OUT"
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test -z "$(git status --short)"
+```
+
+The implementer verifies and fixes accepted Kimi blockers. Then freeze the new
+head and give Pi a blind independent review; do not include the Kimi transcript or
+verdict in the Pi prompt. Every new Pi review uses
+`zai-coding-cn/glm-5.2` exactly:
+
+```bash
+BEAD_ID="psfn-framework-..."
+WORKTREE_PATH="$HOME/ai/dev/worktrees/psfn-framework/<review-lane>"
+BASE_SHA="<full-base-sha>"
+HEAD_SHA="<full-final-head-sha>"
+REVIEW_OUT="/tmp/${BEAD_ID}-glm52-review.txt"
+
+set -o pipefail
+cd "$WORKTREE_PATH"
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test -z "$(git status --short)"
+pi --approve --no-extensions --no-skills --no-prompt-templates \
+  --model zai-coding-cn/glm-5.2 --thinking medium \
+  --name "${BEAD_ID}-glm52-review" \
+  --tools read,grep,find,ls,bash --print "
+Independently review Bead $BEAD_ID over immutable range $BASE_SHA..$HEAD_SHA.
+Read AGENTS.md, the complete diff, and the affected production path and tests.
+
+Acceptance: <paste the complete relevant Bead clauses>.
+
+This is a blind review: do not read Agent Bus, Bead notes, prior model output, PR
+discussion, or review artifacts.
+
+Look only for concrete correctness, security, isolation, data-loss, or acceptance
+blockers introduced by this range. You may run a focused reproduction. Do not edit
+files, mutate Git or Beads, open a PR, merge, deploy, touch live state, or run the
+broad gate.
+
+Return VERDICT: PASS or VERDICT: BLOCK. For every blocker give severity, file and
+line, violated acceptance clause, causal path, and a reproducible check. Separate
+nonblocking observations. State every command you actually ran.
+" | tee "$REVIEW_OUT"
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test -z "$(git status --short)"
+```
+
+If either post-run integrity check fails, the review is invalid: preserve the
+unexpected changes for inspection and do not treat its verdict as independent
+evidence. Do not automatically rerun Kimi after a fix or commission a third
+reviewer. Verify the accepted blocker locally, add its focused regression, and
+continue unless the operator explicitly asks for another review.
+
 A second model reviewer is exceptional. It requires either an explicit operator
 request or one concrete high-impact claim that remains materially ambiguous after
 the first review and local reproduction. Never use two reviewers merely because

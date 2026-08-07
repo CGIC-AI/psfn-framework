@@ -400,3 +400,8 @@ Do not install or operate an embedding model, run duplicate sweeps, or produce
 per-command traffic unless the run's size has created an observed retrieval
 problem. Bus maintenance must never delay implementation, validation, or PR
 publication.
+
+**Frame the external claims.** Run `frame-claims <file>` on any shipped document — PR body,
+release notes, onboarding doc. It lists the sentences that assert something the work cannot
+establish on its own (citations, version numbers, CVE ids, attributions, settled claims), each
+a thing to fetch rather than recall. `frame-claims test` self-checks the patterns.

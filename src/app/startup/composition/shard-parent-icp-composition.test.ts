@@ -7,6 +7,7 @@ import { resolveInstalledAgentTurnTools } from '../../../boundary/pi-agent/agent
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import type {
   AgentResponse,
@@ -88,6 +89,10 @@ class ParentAgentProbe {
 
   getToolCatalog(): { core: readonly AgentTool<unknown>[]; extended: readonly AgentTool<unknown>[] } {
     return { core: this.tools, extended: [] };
+  }
+
+  getActiveTurnIntakeEnvelopes(): readonly IntakeEnvelopeSnapshot[] {
+    return [];
   }
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {

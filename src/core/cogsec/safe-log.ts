@@ -57,7 +57,7 @@ export interface CogSecAgentVisibleEvent {
   personaMutationAttempt?: CogSecPersonaMutationAttemptProjection;
 }
 
-export interface CogSecPersonaMutationAttemptProjection {
+interface CogSecPersonaMutationAttemptProjection {
   companionId: string;
   tool: 'fs.write' | 'fs.edit' | 'shell.exec';
   pathClass: PersonaOwnerPathClass;

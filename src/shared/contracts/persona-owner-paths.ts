@@ -1,4 +1,4 @@
-export const PERSONA_OWNER_PATH_CLASSES = [
+const PERSONA_OWNER_PATH_CLASSES = [
   'character_card',
   'character_card_history',
   'prompt_layers',

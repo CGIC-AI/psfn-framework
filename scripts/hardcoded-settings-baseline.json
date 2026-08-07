@@ -5760,16 +5760,6 @@
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_HISTORY_SUMMARY_ITEM_CHARS",
-      "value": "160"
-    },
-    {
-      "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_HISTORY_SUMMARY_ITEMS",
-      "value": "6"
-    },
-    {
-      "file": "src/core/session/manager-primitives.ts",
       "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
       "value": "6"
     },
@@ -6374,17 +6364,17 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L982",
+      "name": "notifyToolParameters.contact_id.minLength@L971",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L982; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L971; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L994",
+      "name": "notifyToolParameters.contact_id.minLength@L983",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L994; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L983; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",

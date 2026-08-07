@@ -77,7 +77,7 @@ interface ManagedForegroundWorkLease extends ForegroundWorkLease {
   readonly controller: AbortController;
 }
 
-export class ForegroundWorkLeaseLostError extends Error {
+class ForegroundWorkLeaseLostError extends Error {
   constructor() {
     super('Foreground work lease ownership was lost');
     this.name = 'ForegroundWorkLeaseLostError';
@@ -104,7 +104,7 @@ class BackgroundWorkEffectOutcomeUnknownError extends Error {
  * leave the row running for the pre-boundary requeue sweep instead of failing
  * it. It is never thrown once the boundary has been crossed.
  */
-export class BackgroundWorkShutdownRequeueError extends Error {
+class BackgroundWorkShutdownRequeueError extends Error {
   constructor() {
     super('Background work interrupted before its effect boundary by shutdown');
     this.name = 'BackgroundWorkShutdownRequeueError';
@@ -125,7 +125,7 @@ export class BackgroundWorkDeferredError extends Error {
   }
 }
 
-export class BackgroundWorkStaleError extends Error {
+class BackgroundWorkStaleError extends Error {
   constructor(readonly reasonCode: 'superseded') {
     super(`Background work stale: ${reasonCode}`);
     this.name = 'BackgroundWorkStaleError';

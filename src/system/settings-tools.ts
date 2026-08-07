@@ -104,24 +104,6 @@ export function executeSystemReadAction(
   );
 }
 
-export function createSettingsGetTool(config: SubstrateConfig): SubstrateAgentTool {
-  return {
-    name: 'settings_get',
-    label: 'settings_get',
-    description:
-      'Read runtime settings safely. Use list=true to view available keys, key="name" for one value, or keys=[...] for a subset.',
-    parameters: Type.Object({
-      key: Type.Optional(Type.String({ description: 'Single settings key to retrieve.' })),
-      keys: Type.Optional(Type.Array(Type.String(), { description: 'Subset of settings keys to retrieve.' })),
-      list: Type.Optional(Type.Boolean({ description: 'Return available safe keys.' })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: SettingsGetParams,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => executeSystemReadAction(config, params),
-  };
-}
-
 export function createPromotedToolsListTool(
   manager: PromotedExtendedToolsManager,
 ): SubstrateAgentTool {

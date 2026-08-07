@@ -74,7 +74,7 @@ export function percentile(sorted: number[], p: number): number {
   return sorted[Math.max(0, Math.min(sorted.length - 1, index))] ?? 0;
 }
 
-export function summarizeDurations(values: number[]): TtftMetricSummary | null {
+function summarizeDurations(values: number[]): TtftMetricSummary | null {
   if (values.length === 0) {
     return null;
   }

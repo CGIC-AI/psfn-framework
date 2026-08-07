@@ -8,11 +8,6 @@ export function resolveWorkspaceRoot(workspacePath: string): string {
   return resolve(normalize(workspacePath));
 }
 
-export function resolveWorkspaceFsPath(path: string, workspacePath: string): string {
-  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
-  return resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
-}
-
 export function resolveWorkspaceFsPathFromRoot(path: string, workspaceRoot: string): string {
   const normalizedPath = normalize(path);
   if (isAbsolute(normalizedPath)) {

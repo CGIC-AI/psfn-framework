@@ -163,17 +163,6 @@ export function createGatewayRoutingEnvelope(
   };
 }
 
-export function cloneGatewayRoutingEnvelope(
-  envelope: GatewayRoutingEnvelope | undefined,
-): GatewayRoutingEnvelope | undefined {
-  if (!envelope) return undefined;
-  return createGatewayRoutingEnvelope({
-    companionId: envelope.companionId,
-    shard: envelope.shard,
-    subagentAddress: envelope.subagentAddress,
-  });
-}
-
 export function deriveShardRoutingEnvelope(
   input: DeriveShardRoutingEnvelopeInput,
 ): GatewayRoutingEnvelope {

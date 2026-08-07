@@ -663,4 +663,3 @@ export class PostgresModelUsageQueries {
     return rows.map(mapEventRow);
   }
 }
-

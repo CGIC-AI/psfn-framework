@@ -235,4 +235,3 @@ export function createPostgresModelUsageStoreFromConfig(
   }
   return PostgresModelUsageStore.connect(databaseUrl, { companionId }, connection);
 }
-

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import {
   PromptRegistryStore,
   EXTRACTION_PROMPT_KEY,
+  GROUP_EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
   RECENT_SESSION_SUMMARY_PROMPT_KEY,
   SESSION_SEARCH_SUMMARY_PROMPT_KEY,
@@ -73,6 +74,7 @@ describe('PromptRegistryStore', () => {
     // which sort after the core prompts.
     expect(seeded.list().map(entry => entry.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
+      GROUP_EXTRACTION_PROMPT_KEY,
       PROFILE_SYNTHESIS_PROMPT_KEY,
       SLEEPTIME_ORIENTATION_PROMPT_KEY,
       WIKI_PASS_PROMPT_KEY,
@@ -84,7 +86,7 @@ describe('PromptRegistryStore', () => {
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
   });
 
-  it('seeds the extraction prompt with group-room name and macro hygiene guidance', () => {
+  it('seeds the ordinary extraction prompt with participant and macro hygiene guidance', () => {
     const prompt = getDefaultPromptText(EXTRACTION_PROMPT_KEY);
 
     expect(prompt).toContain('human participant(s), named speakers, and relevant relationships');
@@ -95,15 +97,36 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('address_mode');
     expect(prompt).toContain('direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api');
     expect(prompt).toContain('[mentioned_targets: ...]');
-    expect(prompt).toContain('[reply_to_message_id: ...]');
+    expect(prompt).toContain('[reply_target: ...]');
+    expect(prompt).not.toContain('[reply_to_message_id: ...]');
     expect(prompt).toContain('Visibility in a shared room is not evidence of direct address');
-    expect(prompt).toContain('name the actual mentioned target');
+    expect(prompt).toContain('name the actual mentioned or replied-to target');
     expect(prompt).toContain('Never output raw character-card macros');
     expect(prompt).toContain('{{user}}');
     expect(prompt).toContain('{{char}}');
     expect(prompt).not.toContain('extract important facts about the user');
     expect(prompt).not.toContain('Only extract durable, user-centric facts');
     expect(prompt).not.toMatch(/the primary user/i);
+  });
+
+  it('seeds a distinct group memory-automaton prompt that resolves who said what to whom', () => {
+    const prompt = getDefaultPromptText(GROUP_EXTRACTION_PROMPT_KEY);
+
+    expect(prompt).not.toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
+    expect(prompt).toContain('group-room memory automaton');
+    expect(prompt).toContain('who said what to whom');
+    expect(prompt).toContain('[platform_source: discord]');
+    expect(prompt).toContain('[author: ... (author_id=...)]');
+    expect(prompt).toContain('[observer: ... (author_id=...)]');
+    expect(prompt).toContain('[channel_scope: group]');
+    expect(prompt).toContain('[channel_id: ...]');
+    expect(prompt).toContain('[thread_id: ...]');
+    expect(prompt).toContain('[mentioned_targets: ...]');
+    expect(prompt).toContain('[reply_target: ...]');
+    expect(prompt).toContain('[resolved_addressee: ...]');
+    expect(prompt).toContain('Every fact must include source_message_ids, source_speaker_name, subject_name, and address_mode');
+    expect(prompt).toContain('emotional and episodic facts as strictly as relational facts');
+    expect(prompt).toContain('Never rewrite another participant\'s directed or relational memory as the observer\'s');
   });
 
   it('seeds the profile synthesis prompt with target-aware attribution rules', () => {

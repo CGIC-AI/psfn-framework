@@ -133,9 +133,17 @@ describe('chunk-compose extraction transcript filtering', () => {
       metadata,
     }])).toBe(
       '[message_id:5] '
+      + '[platform_source: discord] '
+      + '[author: Operator (author_id=operator-1)] '
+      + '[observer: Lyra (author_id=lyra-bot)] '
+      + '[channel_scope: group] '
+      + '[channel_id: discord-room] '
+      + '[thread_id: discord-thread] '
       + '[mentioned_targets: Other Companion (author_id=other-companion), '
       + 'Second Companion (author_id=second-companion)] '
-      + '[reply_to_message_id: discord-parent-1] '
+      + '[reply_target: message_id=discord-parent-1, Other Companion (author_id=other-companion)] '
+      + '[resolved_addressee: Other Companion (author_id=other-companion; evidence=mention+reply), '
+      + 'Second Companion (author_id=second-companion; evidence=mention)] '
       + 'Operator: <@other-companion> hello there',
     );
   });

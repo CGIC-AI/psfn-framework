@@ -65,20 +65,64 @@ export function formatExtractionTranscript(
         speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }
       const addressing = parseSessionMessageAddressing(entry.metadata);
+      const platformSource = addressing
+        ? `[platform_source: ${addressing.source}] `
+        : '';
+      const author = addressing
+        ? `[author: ${addressing.author.authorName} (author_id=${addressing.author.authorId})] `
+        : '';
+      const observer = addressing
+        ? `[observer: ${addressing.observer.authorName} (author_id=${addressing.observer.authorId})] `
+        : '';
+      const channelScope = addressing
+        ? `[channel_scope: ${addressing.channel.scope}] `
+        : '';
+      const channel = addressing
+        ? `[channel_id: ${addressing.channel.channelId}] `
+        : '';
+      const thread = addressing?.channel.threadId
+        ? `[thread_id: ${addressing.channel.threadId}] `
+        : '';
       const mentionedTargets = addressing?.mentionedTargets.length
         ? `[mentioned_targets: ${addressing.mentionedTargets
           .map(target => `${target.authorName} (author_id=${target.authorId})`)
           .join(', ')}] `
         : '';
-      const replyToMessageId = entry.metadata?.includes('"replyToMessageId"')
+      const turnReplyToMessageId = entry.metadata?.includes('"replyToMessageId"')
         ? resolveSessionEntryTurnContext(entry).replyToMessageId
         : undefined;
-      const replyLineage = replyToMessageId
-        ? `[reply_to_message_id: ${replyToMessageId}] `
+      const replyTarget = addressing?.replyTarget;
+      const replyLineage = replyTarget
+        ? `[reply_target: message_id=${replyTarget.messageId}${replyTarget.author
+          ? `, ${replyTarget.author.authorName} (author_id=${replyTarget.author.authorId})`
+          : ', author=unresolved'}] `
+        : turnReplyToMessageId
+          ? `[reply_target: message_id=${turnReplyToMessageId}, author=unresolved] `
         : '';
-      return `[message_id:${entry.id}] ${mentionedTargets}${replyLineage}${speaker}: ${entry.content}`;
+      const resolvedAddressee = addressing
+        ? `[resolved_addressee: ${formatResolvedAddressee(addressing.resolvedAddressee)}] `
+        : '';
+      return `[message_id:${entry.id}] ${platformSource}${author}${observer}${channelScope}${channel}${thread}${mentionedTargets}${replyLineage}${resolvedAddressee}${speaker}: ${entry.content}`;
     })
     .join('\n');
+}
+
+function formatResolvedAddressee(
+  addressee: NonNullable<ReturnType<typeof parseSessionMessageAddressing>>['resolvedAddressee'],
+): string {
+  if (addressee.kind === 'participants') {
+    return addressee.participants
+      .map(participant => (
+        `${participant.authorName} (author_id=${participant.authorId}; evidence=${participant.evidence.join('+')})`
+      ))
+      .join(', ');
+  }
+  if (addressee.kind === 'unresolved_reply') {
+    return `unresolved_reply (message_id=${addressee.messageId})`;
+  }
+  return addressee.threadId
+    ? `room (channel_id=${addressee.channelId}; thread_id=${addressee.threadId})`
+    : `room (channel_id=${addressee.channelId})`;
 }
 
 export function mergeExtractedFactGroups(

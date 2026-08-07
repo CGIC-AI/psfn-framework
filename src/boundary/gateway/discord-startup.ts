@@ -1,4 +1,4 @@
-import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import { backoffMs, sleep as defaultSleep } from '../../shared/utils/timing.js';
 import { toError } from '../../shared/utils/errors.js';
 
 export const DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS = 2_000;
@@ -78,12 +78,6 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
   return parsed > 0 ? parsed : fallback;
 }
 
-function backoffDelayMs(baseDelayMs: number, maxDelayMs: number, attempt: number): number {
-  const rawDelay = baseDelayMs * (2 ** Math.max(0, attempt - 1));
-  if (!Number.isFinite(rawDelay)) return maxDelayMs;
-  return Math.min(maxDelayMs, rawDelay);
-}
-
 export function isRetryableDiscordStartError(error: Error): boolean {
   const statusCode = parseStatusCode(error);
   if (statusCode === 408 || statusCode === 429) return true;
@@ -126,7 +120,7 @@ export async function startDiscordWithRetry(
       const canRetry = maxAttempts <= 0 || attempt < maxAttempts;
       if (!retryable || !canRetry) throw err;
 
-      const delayMs = backoffDelayMs(baseDelayMs, maxDelayMs, attempt);
+      const delayMs = backoffMs(baseDelayMs, attempt - 1, maxDelayMs);
       await options.onRetry?.({
         attempt,
         maxAttempts,

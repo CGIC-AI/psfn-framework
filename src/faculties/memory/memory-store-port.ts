@@ -385,7 +385,7 @@ export interface MemoryListOptions {
   offset?: number;
 }
 
-export type ActiveMemoryWindowScope =
+type ActiveMemoryWindowScope =
   | { kind: 'companion' }
   | { kind: 'conversation'; conversationId: string }
   | { kind: 'contact'; contactId: string; conversationId: string };

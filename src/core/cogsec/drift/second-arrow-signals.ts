@@ -134,8 +134,9 @@ export interface SecondArrowClusterReport {
   concernText?: string;
 }
 
+import { clampUnit } from '../../../shared/utils/numeric.js';
+
 const round4 = (value: number): number => Math.round(value * 10_000) / 10_000;
-const clampUnit = (value: number): number => Math.min(1, Math.max(0, value));
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;

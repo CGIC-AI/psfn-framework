@@ -5,6 +5,7 @@ import {
   clampUnit,
   positiveIntegerOr,
   requirePositiveInteger,
+  toFlooredPositiveInteger,
   toPositiveInteger,
 } from './numeric.js';
 
@@ -64,6 +65,28 @@ describe('toPositiveInteger', () => {
     expect(toPositiveInteger('abc')).toBeUndefined();
     expect(toPositiveInteger(null)).toBeUndefined();
     expect(toPositiveInteger(undefined)).toBeUndefined();
+  });
+});
+
+describe('toFlooredPositiveInteger', () => {
+  it('accepts finite positive numbers and floors them', () => {
+    expect(toFlooredPositiveInteger(1)).toBe(1);
+    expect(toFlooredPositiveInteger(42)).toBe(42);
+    expect(toFlooredPositiveInteger(1.9)).toBe(1);
+    expect(toFlooredPositiveInteger(2.1)).toBe(2);
+  });
+
+  it('rejects non-positive and non-finite values', () => {
+    expect(toFlooredPositiveInteger(0)).toBeUndefined();
+    expect(toFlooredPositiveInteger(-1)).toBeUndefined();
+    expect(toFlooredPositiveInteger(NaN)).toBeUndefined();
+    expect(toFlooredPositiveInteger(Infinity)).toBeUndefined();
+    expect(toFlooredPositiveInteger(-Infinity)).toBeUndefined();
+  });
+
+  it('does not parse strings', () => {
+    expect(toFlooredPositiveInteger('7')).toBeUndefined();
+    expect(toFlooredPositiveInteger('')).toBeUndefined();
   });
 });
 

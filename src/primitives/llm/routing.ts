@@ -11,6 +11,7 @@ import type {
   PromptCacheStrategy,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { toFlooredPositiveInteger } from '../../shared/utils/numeric.js';
 
 export type RoutingPurpose = CanonicalModelPurpose | 'context';
 
@@ -196,11 +197,6 @@ function toUnitInterval(value: unknown): number | undefined {
   return numeric;
 }
 
-function toPositiveInteger(value: unknown): number | undefined {
-  const numeric = toPositiveNumber(value);
-  if (numeric === undefined) return undefined;
-  return Math.floor(numeric);
-}
 
 function resolveThinkingEffort(value: unknown): ModelThinkingEffort | undefined {
   switch (value) {
@@ -354,7 +350,7 @@ function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
   const thinkingEffort = resolveThinkingEffort(tuning.thinkingEffort);
   const temperature = toFiniteNumber(tuning.temperature);
   const topP = toUnitInterval(tuning.topP);
-  const topK = toPositiveInteger(tuning.topK);
+  const topK = toFlooredPositiveInteger(tuning.topK);
   const frequencyPenalty = toFiniteNumber(tuning.frequencyPenalty);
   const repetitionPenalty = toFiniteNumber(tuning.repetitionPenalty);
 

@@ -108,8 +108,9 @@ export interface DriftSignalReport {
   shouldRaiseCard: boolean;
 }
 
+import { clampUnit } from '../../../shared/utils/numeric.js';
+
 const round4 = (value: number): number => Math.round(value * 10_000) / 10_000;
-const clampUnit = (value: number): number => Math.min(1, Math.max(0, value));
 
 // ── Signal 1: emotional-valence trajectory velocity ──
 

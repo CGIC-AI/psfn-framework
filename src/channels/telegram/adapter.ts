@@ -254,7 +254,7 @@ export function parseTelegramCommand(content: string): TelegramCommand | null {
   if (!match) return null;
 
   return {
-    command: match[1].toLowerCase(),
+    command: (match[1] ?? '').toLowerCase(),
     args: (((match[2] as string | undefined) ?? '')).trim(),
     raw: normalized,
   };
@@ -1537,6 +1537,9 @@ export class TelegramAdapter implements ChannelAdapterPort {
 
     if (message.photo && message.photo.length > 0) {
       const photo = message.photo[message.photo.length - 1];
+      if (!photo) {
+        throw new Error('Telegram photo array was unexpectedly empty');
+      }
       attachments.push(await this.resolveInlineImageAttachment({
         url: `${TELEGRAM_FILE_URL_PREFIX}${photo.file_id}`,
         contentType: 'image/jpeg',
@@ -1687,6 +1690,9 @@ export class TelegramAdapter implements ChannelAdapterPort {
 
     if (message.photo && message.photo.length > 0) {
       const photo = message.photo[message.photo.length - 1];
+      if (!photo) {
+        throw new Error('Telegram photo array was unexpectedly empty');
+      }
       attachments.push({
         url: `telegram://file/${photo.file_id}`,
         contentType: 'image/jpeg',

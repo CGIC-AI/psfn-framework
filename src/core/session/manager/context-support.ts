@@ -120,14 +120,18 @@ function interleaveMirrorEntriesChronologically(entries: readonly SessionEntry[]
     const insertionPoint = firstLaterEntryIndex < 0
       ? appendOrderedEntries.length
       : firstLaterEntryIndex;
-    mirrorsByInsertionPoint[insertionPoint].push(mirror);
+    const bucket = mirrorsByInsertionPoint[insertionPoint];
+    if (!bucket) continue;
+    bucket.push(mirror);
   }
 
   const interleaved: SessionEntry[] = [];
   for (let index = 0; index < appendOrderedEntries.length; index += 1) {
-    interleaved.push(...mirrorsByInsertionPoint[index], appendOrderedEntries[index]);
+    const entry = appendOrderedEntries[index];
+    if (!entry) continue;
+    interleaved.push(...(mirrorsByInsertionPoint[index] ?? []), entry);
   }
-  interleaved.push(...mirrorsByInsertionPoint[appendOrderedEntries.length]);
+  interleaved.push(...(mirrorsByInsertionPoint[appendOrderedEntries.length] ?? []));
   return interleaved;
 }
 
@@ -441,7 +445,7 @@ export function entriesToMessages(
   }
 
   // Drop any leading assistant response without preceding user/system context.
-  if (!preserveLeadingAssistant && messages.length > 0 && messages[0].role === 'assistant') {
+  if (!preserveLeadingAssistant && messages.length > 0 && messages[0]?.role === 'assistant') {
     messages.shift();
   }
 

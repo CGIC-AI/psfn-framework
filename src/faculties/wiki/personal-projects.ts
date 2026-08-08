@@ -122,8 +122,8 @@ export interface ProjectManifestV2MigrationReport {
 
 const MIGRATION_REPORT_SAMPLE_LIMIT = 50;
 
-const PROJECT_TAGS = ['psfn:personal-project'] satisfies readonly string[];
-const WARDROBE_TAGS = ['psfn:named-look'] satisfies readonly string[];
+const PROJECT_TAGS = ['psfn:personal-project'] as const;
+const WARDROBE_TAGS = ['psfn:named-look'] as const;
 
 function slugFromName(value: string): string {
   const slug = value
@@ -365,6 +365,7 @@ export class PersonalProjectLibrary {
     // broaden its audience beyond `self` is rejected until the artifact is
     // re-grounded (its metadata re-derived by the runtime).
     const target = current.artifacts[artifactIndex];
+    if (!target) throw new Error(`artifact index resolved to nothing for ${current.ref}: ${artifactRef}`);
     if (target.metadataLineage === 'legacy_unverified' && input.audience !== 'self') {
       throw new Error(
         `${artifactRef} has unverified legacy disclosure metadata (bible §9.5) and must be `
@@ -435,7 +436,7 @@ export class PersonalProjectLibrary {
       // by index; the raw entry is the source of truth for whether the stored
       // document carried a lineage marker before this run.
       const quarantinedIndexes = new Set<number>();
-      manifest.artifacts.forEach((_artifact, index) => {
+      manifest.artifacts.forEach((artifact, index) => {
         scannedArtifacts += 1;
         const rawEntry = rawArtifacts[index];
         const rawLineage = isRecord(rawEntry) ? rawEntry.metadataLineage : undefined;
@@ -446,7 +447,7 @@ export class PersonalProjectLibrary {
         quarantinedArtifacts += 1;
         quarantinedIndexes.add(index);
         if (entries.length < QUARANTINE_REPORT_SAMPLE_LIMIT) {
-          entries.push({ projectRef: manifest.ref, artifactRef: manifest.artifacts[index].ref });
+          entries.push({ projectRef: manifest.ref, artifactRef: artifact.ref });
         }
       });
 

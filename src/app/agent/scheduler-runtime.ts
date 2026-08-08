@@ -229,9 +229,10 @@ export function registerAgentDatabaseBackupLane(
         kubernetesHelmRecovery: Boolean(kubernetesHelm),
       });
     } else {
+      const leader = fleet.companions[0];
       log.info('Fleet backup delegated to leader companion; no backup lane registered in this follower process', {
         companionId: options.config.companionId,
-        leaderCompanionId: fleet.companions[0].companionId,
+        leaderCompanionId: leader?.companionId ?? 'unknown',
       });
     }
     return;
@@ -352,9 +353,10 @@ export function buildAgentSchedulerRuntime(
           options.schedulerConfig.backgroundMaintenance.sharedWorldWikiCaretaker.batchSize,
       });
     } else {
+      const leader = fleet.companions[0];
       log.info('Shared-world wiki caretaker maintenance delegated to fleet leader', {
         companionId: options.config.companionId,
-        leaderCompanionId: fleet.companions[0].companionId,
+        leaderCompanionId: leader?.companionId ?? 'unknown',
       });
     }
   }

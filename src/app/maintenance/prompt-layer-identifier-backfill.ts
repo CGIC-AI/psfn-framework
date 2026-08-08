@@ -179,6 +179,7 @@ export function backfillPromptLayerIdentifiers(
   const planned: PlannedInsertion[] = [];
   for (let index = 0; index < parsed.length; index += 1) {
     const layer = parsed[index];
+    if (!layer) continue;
     if (layer.type !== 'base') continue;
 
     const identifier = layer.identifier;
@@ -191,9 +192,15 @@ export function backfillPromptLayerIdentifiers(
       );
     }
 
+    const range = ranges[index];
+    if (!range) {
+      throw new Error(
+        `Could not locate source range for prompt layer ${String(index)} (${layersPath}); nothing was changed`,
+      );
+    }
     planned.push({
       ...description,
-      ...buildIdentifierInsertion(source, ranges[index], layersPath),
+      ...buildIdentifierInsertion(source, range, layersPath),
     });
   }
 
@@ -208,6 +215,9 @@ export function backfillPromptLayerIdentifiers(
   const apply = options.apply === true;
   if (apply && planned.length > 0) {
     const insertion = planned[0];
+    if (!insertion) {
+      throw new Error(`Missing planned insertion for ${layersPath}; nothing was changed`);
+    }
     const updatedSource = source.slice(0, insertion.offset)
       + insertion.text
       + source.slice(insertion.offset);

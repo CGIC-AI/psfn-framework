@@ -55,6 +55,9 @@ export function loadRuntimeSettingsContractDefaults(
       throw new Error(`Canonical settings default "${key}" has no settings contract field`);
     }
     const field = contractData.fields[key];
+    if (!field) {
+      throw new Error(`Canonical settings default "${key}" has no settings contract field`);
+    }
     if (field.ownerFile !== SETTINGS_FILE_NAME || field.ownerSubsystem !== 'runtime') {
       throw new Error(
         `Canonical settings default "${key}" is owned by ${field.ownerFile}, not ${SETTINGS_FILE_NAME}`,

@@ -426,7 +426,8 @@ export interface IcpSingleCompanionFeatureOffHarness {
 function deterministicEmbedding(text: string): Float32Array {
   const values = new Float32Array(CERTIFICATION_EMBEDDING_DIMS);
   for (let index = 0; index < text.length; index += 1) {
-    values[index % values.length] += (text.charCodeAt(index) % 31) / 31;
+    const slot = index % values.length;
+    values[slot] = (values[slot] ?? 0) + (text.charCodeAt(index) % 31) / 31;
   }
   return values;
 }
@@ -824,6 +825,7 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     async restartAgent(index) {
       const previous = agents[index];
+      if (!previous) throw new Error(`No agent at index ${String(index)} to restart`);
       await previous.stop().catch(() => previous.forceStop());
       const replacement = await IcpCertificationAgentProcess.start(
         input.fixture.companions[index],
@@ -883,6 +885,7 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     async stopAgent(index) {
       const agent = agents[index];
+      if (!agent) throw new Error(`No agent at index ${String(index)} to stop`);
       await agent.stop().catch(() => agent.forceStop());
     },
     async stop() {

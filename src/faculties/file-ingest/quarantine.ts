@@ -161,8 +161,7 @@ export interface AttachmentQuarantineDecision {
 }
 
 export function normalizeAttachmentContentType(value: string | null | undefined): string {
-  return (value ?? '')
-    .split(';')[0]
+  return ((value ?? '').split(';')[0] ?? '')
     .trim()
     .toLowerCase();
 }
@@ -279,7 +278,7 @@ function isProbablyText(bytes: Uint8Array): boolean {
   const sampleLength = Math.min(bytes.byteLength, 4096);
   for (let index = 0; index < sampleLength; index += 1) {
     const byte = bytes[index];
-    if (byte === 0) return false;
+    if (byte === undefined || byte === 0) return false;
     const isAllowedControl = byte === 0x09 || byte === 0x0a || byte === 0x0d;
     const isPrintableAscii = byte >= 0x20 && byte <= 0x7e;
     const isUtf8ContinuationOrHigh = byte >= 0x80;

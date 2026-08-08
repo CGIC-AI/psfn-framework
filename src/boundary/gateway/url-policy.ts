@@ -157,23 +157,26 @@ function parseHostAllowlistEntry(raw: string): HostAllowlistEntry | null {
 
   const bracketWithPort = value.match(/^\[([^\]]+)\]:(\d{1,5})$/);
   if (bracketWithPort) {
-    return { host: bracketWithPort[1], port: String(Number.parseInt(bracketWithPort[2], 10)) };
+    return {
+      host: bracketWithPort[1] ?? '',
+      port: String(Number.parseInt(bracketWithPort[2] ?? '0', 10)),
+    };
   }
   const bracketOnly = value.match(/^\[([^\]]+)\]$/);
   if (bracketOnly) {
-    return { host: bracketOnly[1] };
+    return { host: bracketOnly[1] ?? '' };
   }
 
   const colonCount = (value.match(/:/g) ?? []).length;
   if (colonCount === 1) {
     const [host, port] = value.split(':');
-    if (!host || !/^\d{1,5}$/.test(port)) {
+    if (!host || !/^\d{1,5}$/.test(port ?? '')) {
       // Malformed host:port entry. Keep it as a never-matching literal host
       // (hostnames cannot contain ':') so the allowlist stays non-empty and
       // enforcement remains active — dropping it would fail open.
       return { host: value };
     }
-    return { host, port: String(Number.parseInt(port, 10)) };
+    return { host, port: String(Number.parseInt(port ?? '0', 10)) };
   }
 
   // Zero colons: plain hostname/IPv4. Multiple colons: bare IPv6 literal.

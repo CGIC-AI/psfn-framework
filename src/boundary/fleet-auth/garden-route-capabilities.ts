@@ -430,6 +430,7 @@ function matchPattern(
   const params: Record<string, string> = {};
   for (let index = 0; index < expected.length; index += 1) {
     const expectedPart = expected[index];
+    if (expectedPart === undefined) return null;
     if (expectedPart.startsWith('*')) {
       if (index !== expected.length - 1 || actual.length <= index) return null;
       params[expectedPart.slice(1)] = actual.slice(index).map(decodeURIComponent).join('/');

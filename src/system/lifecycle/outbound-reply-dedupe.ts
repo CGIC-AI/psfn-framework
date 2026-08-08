@@ -117,6 +117,7 @@ export class OutboundReplyDeduper implements OutboundReplyGuardPort {
     const candidateHash = this.hash(input.content);
     for (let index = records.length - 1; index >= 0; index -= 1) {
       const record = records[index];
+      if (!record) continue;
       if (record.hash === candidateHash) {
         return {
           hash: candidateHash,

@@ -562,7 +562,7 @@ documented in full in
 - `PSFN_FLEET_AUTH` — launcher wiring assertion. The one cluster Garden accepts
   companion-bound Cluster Auth capabilities; the launcher rejects a cluster
   topology that would fall back
-  to shared admin-token authority. Runtime enablement itself is decided solely
+  to standalone admin-token authority. Runtime enablement itself is decided solely
   by the presence of the system-owned `fleet-auth.json`: when that file is
   present, cluster auth is enabled and the flag cannot disable it (setting it to
   `0` only produces a loud startup warning); when the file is absent and the
@@ -726,12 +726,12 @@ set `FLEET_SSO_COMPANION_UI_COMPANION_ID` to one exact registered UUID. It is
 then available only at authenticated `/companion-ui/`; the configured origin is
 internal wiring, never a second browser edge.
 
-### Garden operator surface + public API
+### Cluster-authenticated Garden operator surface + public API
 
 ```dotenv
 ADMIN_HOST=127.0.0.1
 ADMIN_PORT=3001
-ADMIN_TOKEN=...
+# ADMIN_TOKEN is rejected in cluster-auth mode; leave it unset.
 
 API_HOST=127.0.0.1
 API_PORT=3000
@@ -749,6 +749,32 @@ canonical gateway HTTPS origin. `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are
 rejected on that operator process. The repo launcher scrubs those retired
 variables from the gateway and keeps proxy trust gateway-owned; child
 agent/operator allowlists do not inherit them.
+
+### Standalone token Garden operator surface
+
+For local testing and non-Kubernetes single-user installations, leave
+`fleet-auth.json` absent and start the operator surface directly with
+`ADMIN_TOKEN`:
+
+```dotenv
+ADMIN_HOST=127.0.0.1
+ADMIN_PORT=3001
+ADMIN_TOKEN=...
+
+API_HOST=127.0.0.1
+API_PORT=3000
+API_KEY=...
+
+# optional private agent/operator transport override
+ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
+```
+
+In this mode the Garden operator surface listens on `ADMIN_HOST:ADMIN_PORT` and
+authenticates browser requests with `ADMIN_TOKEN`. `ADMIN_ALLOW_INSECURE=true` is
+supported only on loopback and is forbidden in production. This standalone-token
+mode is mutually exclusive with fleet-principal admission; once `fleet-auth.json`
+is present the operator surface selects fleet-principal admission and rejects
+`ADMIN_TOKEN`/`ADMIN_ALLOW_INSECURE` before listen.
 
 Fleet deployment checklist item — **do not set `ALLOW_INSECURE_LOCAL_API=true`
 in a `PSFN_FLEET_AUTH` cluster.** Fleet auth forces the no-auth local API

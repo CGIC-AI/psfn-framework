@@ -16,7 +16,7 @@ import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 import {
   admitFleetGardenRequest,
-  isLegacyTokenGardenAdmission,
+  isStandaloneTokenGardenAdmission,
   readFleetGardenBody,
   resolveGardenAdmissionMode,
   type GardenAdmissionMode,
@@ -64,7 +64,7 @@ export class AdminServer implements Lifecycle {
     );
     this.routes = buildAdminRoutes({
       token: this.token,
-      legacySessionRoutes: isLegacyTokenGardenAdmission(this.admission),
+      standaloneSessionRoutes: isStandaloneTokenGardenAdmission(this.admission),
       services: config.services,
       config: config.config,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
@@ -78,7 +78,7 @@ export class AdminServer implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    if (isLegacyTokenGardenAdmission(this.admission)) {
+    if (isStandaloneTokenGardenAdmission(this.admission)) {
       validateAdminAuthStartupPolicy({
         host: this.host,
         port: this.port,
@@ -109,9 +109,9 @@ export class AdminServer implements Lifecycle {
         if (this.admission.kind === 'fleet-principal') {
           log.info('Fleet principal Garden admission enabled');
         } else if (this.token) {
-          log.info('Admin authentication enabled');
+          log.info('Standalone token Garden admission enabled');
         } else {
-          log.warn('Admin authentication disabled by explicit ADMIN_ALLOW_INSECURE=true');
+          log.warn('Standalone token Garden admission disabled by explicit ADMIN_ALLOW_INSECURE=true');
         }
         resolve();
       });

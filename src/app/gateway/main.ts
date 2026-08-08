@@ -69,7 +69,7 @@ import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/tu
 import { initializeGatewayFleetAuthPersistence } from './fleet-auth-persistence.js';
 import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
 import { requireFleetSsoFleetManifest } from '../../boundary/fleet-auth/fleet-sso-transport.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { grantFleetModelUsageReadAccess } from '../../persistence/postgres/model-usage-access.js';
@@ -141,7 +141,7 @@ function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecisi
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadConfig();
-  assertFleetAuthLegacySurfacesUnavailable({
+  assertFleetAuthStandaloneSurfacesUnavailable({
     fleetAuthEnabled: config.fleetAuth !== undefined,
     processMode: 'gateway',
     env,

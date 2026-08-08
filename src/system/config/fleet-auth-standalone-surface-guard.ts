@@ -29,7 +29,7 @@ export function warnIfInsecureLocalApiIgnoredUnderFleetAuth(options: {
   return true;
 }
 
-export function assertFleetAuthLegacySurfacesUnavailable(options: {
+export function assertFleetAuthStandaloneSurfacesUnavailable(options: {
   fleetAuthEnabled: boolean;
   processMode: 'gateway' | 'operator';
   env: NodeJS.ProcessEnv;
@@ -39,17 +39,17 @@ export function assertFleetAuthLegacySurfacesUnavailable(options: {
   if (!options.fleetAuthEnabled) return;
   const exposesGatewayApi = options.processMode === 'gateway'
     && Boolean(options.env.API_PORT?.trim());
-  const exposesLegacyGardenCredentials = options.principalAuthenticationWired !== true
+  const exposesStandaloneGardenCredentials = options.principalAuthenticationWired !== true
     && (Boolean(options.env.ADMIN_TOKEN?.trim())
       || options.env.ADMIN_ALLOW_INSECURE === 'true');
   const exposesUnprotectedOperator = options.processMode === 'operator'
     && options.principalAuthenticationWired !== true;
   const gatewayApiProtected = options.principalAuthenticationWired === true
     || options.fleetAuthBootstrapRoutesWired === true;
-  if (exposesLegacyGardenCredentials || exposesUnprotectedOperator
+  if (exposesStandaloneGardenCredentials || exposesUnprotectedOperator
     || (exposesGatewayApi && !gatewayApiProtected)) {
     throw new Error(
-      'Fleet auth enabled mode rejects legacy Garden/API token, cookie, HTTP, and WebSocket '
+      'Fleet auth enabled mode rejects standalone Garden/API token, cookie, HTTP, and WebSocket '
       + 'surfaces before listen until bootstrap-only routes or principal authentication are wired',
     );
   }

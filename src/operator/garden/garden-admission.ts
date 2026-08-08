@@ -70,8 +70,8 @@ const FLEET_CALLER_AUTHORITY_HEADERS = Object.freeze([
   GARDEN_CAPABILITY_CONTEXT_HEADER,
 ] as const);
 
-export interface LegacyTokenGardenAdmission {
-  readonly kind: 'legacy-token';
+export interface StandaloneTokenGardenAdmission {
+  readonly kind: 'standalone-token';
   readonly token?: string;
 }
 
@@ -84,13 +84,13 @@ export interface FleetPrincipalGardenAdmission {
   readonly testingHarness?: { readonly enabled: true };
 }
 
-export type GardenAdmissionMode = LegacyTokenGardenAdmission | FleetPrincipalGardenAdmission;
+export type GardenAdmissionMode = StandaloneTokenGardenAdmission | FleetPrincipalGardenAdmission;
 
-export function isLegacyTokenGardenAdmission(
+export function isStandaloneTokenGardenAdmission(
   mode: GardenAdmissionMode,
-): mode is LegacyTokenGardenAdmission {
+): mode is StandaloneTokenGardenAdmission {
   switch (mode.kind) {
-    case 'legacy-token': return true;
+    case 'standalone-token': return true;
     case 'fleet-principal': return false;
   }
 }
@@ -207,7 +207,7 @@ export function resolveGardenAdmissionMode(input: {
   replay?: RequestCapabilityReplayPort;
 }): GardenAdmissionMode {
   if (!input.fleetAuthVerifier) {
-    return Object.freeze({ kind: 'legacy-token', ...(input.token ? { token: input.token } : {}) });
+    return Object.freeze({ kind: 'standalone-token', ...(input.token ? { token: input.token } : {}) });
   }
   const companionId = createCompanionId(input.companionId);
   return Object.freeze({

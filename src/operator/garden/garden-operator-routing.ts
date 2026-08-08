@@ -108,8 +108,8 @@ export class GardenOperatorRouting {
     return this.fleetRouter !== undefined || this.admission?.kind === 'fleet-principal';
   }
 
-  isLegacyToken(): boolean {
-    return this.admission?.kind === 'legacy-token';
+  isStandaloneToken(): boolean {
+    return this.admission?.kind === 'standalone-token';
   }
 
   transportMode(): 'fleet' | GardenAdminTransportClientEndpoint['mode'] {

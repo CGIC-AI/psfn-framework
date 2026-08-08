@@ -14,7 +14,7 @@ import {
   resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
 import { createGardenFleetChildAssertionClient } from '../../operator/garden/fleet-child-assertion-client.js';
 import { resolveFleetSsoGardenTls } from '../../boundary/fleet-auth/fleet-sso-transport.js';
@@ -45,7 +45,7 @@ ensureActiveTimezone();
 async function main(): Promise<void> {
   const config = hydrateJsonBackedRuntimeConfig(loadOperatorConfig());
   const lifecycleKubernetes = requireLifecycleKubernetesSettings(config);
-  assertFleetAuthLegacySurfacesUnavailable({
+  assertFleetAuthStandaloneSurfacesUnavailable({
     fleetAuthEnabled: config.fleetAuthVerifier !== undefined,
     processMode: 'operator',
     env: process.env,
@@ -96,6 +96,14 @@ async function main(): Promise<void> {
       'Fleet Garden startup requires GATEWAY_OPERATOR_API_BASE_URL for child assertions',
     );
   }
+  const admissionMode = config.fleetAuthVerifier
+    ? 'fleet-principal'
+    : (process.env.ADMIN_TOKEN?.trim() ? 'standalone-token' : 'standalone-insecure');
+  log.info('Garden operator admission mode selected', {
+    mode: admissionMode,
+    host: process.env.ADMIN_HOST || '127.0.0.1',
+    port: adminPort,
+  });
   const surface = new GardenOperatorSurface({
     port: adminPort,
     host: process.env.ADMIN_HOST || undefined,

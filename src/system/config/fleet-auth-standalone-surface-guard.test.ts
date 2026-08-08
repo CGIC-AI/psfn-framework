@@ -1,36 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  assertFleetAuthLegacySurfacesUnavailable,
+  assertFleetAuthStandaloneSurfacesUnavailable,
   warnIfInsecureLocalApiIgnoredUnderFleetAuth,
-} from './fleet-auth-legacy-surface-guard.js';
+} from './fleet-auth-standalone-surface-guard.js';
 
-describe('fleet auth legacy surface startup guard', () => {
+describe('fleet auth standalone surface startup guard', () => {
   it.each([
     ['gateway HTTP/API/WebSocket', 'gateway' as const, { API_PORT: '8787' }],
     ['gateway-admin Garden cookie/token', 'gateway' as const, {
       ADMIN_PORT: '8790',
-      ADMIN_TOKEN: 'legacy-admin-token',
+      ADMIN_TOKEN: 'standalone-admin-token',
     }],
     ['operator Garden cookie/token', 'operator' as const, {
       ADMIN_PORT: '8790',
-      ADMIN_TOKEN: 'legacy-admin-token',
+      ADMIN_TOKEN: 'standalone-admin-token',
     }],
   ])('rejects %s before a listener can start', (_label, processMode, env) => {
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode,
       env,
-    })).toThrow(/fleet auth.*legacy.*before listen/i);
+    })).toThrow(/fleet auth.*standalone.*before listen/i);
   });
 
-  it('preserves feature-off startup and does not mutate legacy credentials', () => {
+  it('preserves feature-off startup and does not mutate standalone credentials', () => {
     const env = {
       API_PORT: '8787',
       ADMIN_PORT: '8790',
-      ADMIN_TOKEN: 'legacy-admin-token',
+      ADMIN_TOKEN: 'standalone-admin-token',
     };
     const before = { ...env };
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: false,
       processMode: 'gateway',
       env,
@@ -39,7 +39,7 @@ describe('fleet auth legacy surface startup guard', () => {
   });
 
   it('distinguishes bootstrap-only OAuth routes from a future principal resolver', () => {
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
       env: { API_PORT: '8787', API_KEY: 'machine-api-key' },
@@ -47,24 +47,24 @@ describe('fleet auth legacy surface startup guard', () => {
       principalAuthenticationWired: false,
     })).not.toThrow();
 
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
       env: { API_PORT: '8787' },
       principalAuthenticationWired: false,
     })).toThrow(/before listen/i);
 
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
-      env: { API_PORT: '8787', ADMIN_TOKEN: 'legacy-admin-token' },
+      env: { API_PORT: '8787', ADMIN_TOKEN: 'standalone-admin-token' },
       fleetAuthBootstrapRoutesWired: true,
       principalAuthenticationWired: false,
-    })).toThrow(/legacy/i);
+    })).toThrow(/standalone/i);
   });
 
-  it('allows configured legacy material only when principal admission is fully wired', () => {
-    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+  it('allows configured standalone material only when principal admission is fully wired', () => {
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'operator',
       env: {

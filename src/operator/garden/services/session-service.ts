@@ -163,7 +163,11 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
   }
 
   if (classified.role === 'custom') {
-    if (classified.type === 'mirror') {
+    // pi-agent-core 0.84.1 harness adds a generic CustomMessage<{ customType }>
+    // alongside repo-owned custom message types. Only repo types carry the
+    // `type` discriminator used here; treat harness custom messages as system
+    // notes with no message class.
+    if ('type' in classified && classified.type === 'mirror') {
       return {
         sessionEntryId: entry.id,
         transportRole: entry.role,
@@ -180,21 +184,27 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
       transportRole: entry.role,
       promptRole: 'custom',
       semanticType: 'systemNote',
-      messageClass: classified.messageClass,
+      messageClass: 'type' in classified && typeof classified.messageClass === 'string'
+        ? classified.messageClass
+        : null,
       promptVisibility: 'operator_only',
       displayLabel: 'System note',
     };
   }
 
-  return {
-    sessionEntryId: entry.id,
-    transportRole: entry.role,
-    promptRole: classified.role,
-    semanticType: 'outwardSpeech',
-    messageClass: resolveMessageClass('messageClass' in classified ? classified.messageClass : undefined),
-    promptVisibility: 'prompt_visible',
-    displayLabel: 'Outward speech',
-  };
+  if (classified.role === 'user' || classified.role === 'assistant') {
+    return {
+      sessionEntryId: entry.id,
+      transportRole: entry.role,
+      promptRole: classified.role,
+      semanticType: 'outwardSpeech',
+      messageClass: resolveMessageClass('messageClass' in classified ? classified.messageClass : undefined),
+      promptVisibility: 'prompt_visible',
+      displayLabel: 'Outward speech',
+    };
+  }
+
+  throw new Error(`Unsupported session message role "${classified.role}"`);
 }
 
 function normalizeSearchLimit(value: number | undefined): number {

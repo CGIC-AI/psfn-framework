@@ -1,6 +1,6 @@
 import { Agent, type AgentMessage } from '../../../../boundary/pi-agent/index.js';
 import { installAgentToolSchedulerPatch } from '../../../../boundary/pi-agent/agent-loop-patch.js';
-import type { AssistantMessage, Model, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, Model, UserMessage } from '@earendil-works/pi-ai';
 import { describe, expect, it, vi } from 'vitest';
 
 const ZERO_USAGE = {

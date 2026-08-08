@@ -5,7 +5,7 @@ import type {
   ImageContent,
   Model,
   SimpleStreamOptions,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
 import type { ProviderRuntime } from '../llm/provider-runtime.js';
@@ -134,7 +134,6 @@ function normalizeQuestion(input: ImageVisionReviewRequest): string {
 function resolveApiKey(
   model: Model<any>,
   config: SubstrateConfig,
-  runtime: ProviderRuntime,
 ): string | undefined {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   if (litellmBaseUrl) {
@@ -143,10 +142,10 @@ function resolveApiKey(
 
   const modelProvider = (model as { provider?: unknown }).provider;
   if (typeof modelProvider === 'string' && modelProvider.trim().length > 0) {
-    return resolveProviderApiKey(modelProvider, config, process.env, runtime);
+    return resolveProviderApiKey(modelProvider, config, process.env);
   }
 
-  return resolveProviderApiKey(config.primaryProvider, config, process.env, runtime);
+  return resolveProviderApiKey(config.primaryProvider, config, process.env);
 }
 
 function validateFetchedImage(payload: {
@@ -347,7 +346,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       model,
       context as unknown as PiContext,
       {
-        apiKey: resolveApiKey(model, this.config, this.runtime),
+        apiKey: resolveApiKey(model, this.config),
         maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),
       },
     );

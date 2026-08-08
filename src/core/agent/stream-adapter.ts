@@ -12,7 +12,7 @@ import type {
   SimpleStreamOptions,
   StopReason,
   ThinkingLevel,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
 import type {
   CorrelationMetadata,

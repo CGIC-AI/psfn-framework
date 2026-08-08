@@ -8,7 +8,7 @@ import type {
   UserMessage,
   AssistantMessage as PiAssistantMessage,
   ToolResultMessage,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 import { parseToolObservationMetadata } from '../session/tool-observation.js';
@@ -117,7 +117,7 @@ function createInternalAssistantMessage(
 // bump, confirm upstream still exposes the `CustomAgentMessages` extension
 // hook (see src/boundary/pi-agent/index.ts).
 
-declare module '@mariozechner/pi-agent-core' {
+declare module '@earendil-works/pi-agent-core' {
   interface CustomAgentMessages {
     compaction: CompactionMessage;
     systemNote: SystemNoteMessage;
@@ -132,7 +132,7 @@ declare module '@mariozechner/pi-agent-core' {
 /** Narrow AgentMessage to a record so we can check arbitrary properties without `as any`. */
 function hasCustomRole(m: AgentMessage): m is AgentMessage & { role: 'custom'; type: string } {
   const record = m as unknown as Record<string, unknown>;
-  return record.role === 'custom';
+  return record.role === 'custom' && typeof record.type === 'string';
 }
 
 export function isCompactionMessage(m: AgentMessage): m is CompactionMessage {
@@ -238,7 +238,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       } else if (standardRole === 'user' || standardRole === 'assistant') {
         result.push(tagMessageClass(msg, resolveStandardMessageClass(msg)) as Message);
       } else {
-        result.push(msg as Message);
+        throw new Error(`Unsupported agent message role "${String(standardRole)}"`);
       }
     }
   }

@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, Model, UserMessage } from '@earendil-works/pi-ai';
 import { describe, expect, it, vi } from 'vitest';
 import { Agent } from '../../boundary/pi-agent/index.js';
 import {

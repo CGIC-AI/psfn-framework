@@ -8,9 +8,9 @@
 // upstream Agent source and the `PatchedAgent` shape below:
 //   runPromptMessages / runContinuation / createLoopConfig / processEvents /
 //   activeRun / _state (model, systemPrompt, messages, tools, isStreaming,
-//   streamingMessage, pendingToolCalls, errorMessage) / streamFn.
+//   streamingMessage, pendingToolCalls, errorMessage) / streamFunction.
 
-import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@earendil-works/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
@@ -65,7 +65,7 @@ export function resolveInstalledAgentTurnTools(agent: Agent): readonly AgentTool
 type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
 
 /**
- * Private pi-agent-core Agent internals (0.73.x) the scheduler graft relies on.
+ * Private pi-agent-core Agent internals (0.84.1) the scheduler graft relies on.
  *
  * `prompt()` and `continue()` both funnel into `runPromptMessages` /
  * `runContinuation`; overriding those two methods swaps the stock agent loop
@@ -101,7 +101,7 @@ type PatchedAgent = {
      */
     userFacingBoundaryIndex?: number | null;
   };
-  streamFn: Parameters<typeof agentLoopWithScheduler>[4];
+  streamFunction: Parameters<typeof agentLoopWithScheduler>[4];
 };
 
 export type AgentRunAbortResult =
@@ -236,7 +236,7 @@ export function installAgentToolSchedulerPatch(
             context,
             config,
             abortController.signal,
-            this.streamFn,
+            this.streamFunction,
             schedulerOptions,
             continuationFuse,
           )
@@ -244,7 +244,7 @@ export function installAgentToolSchedulerPatch(
             context,
             config,
             abortController.signal,
-            this.streamFn,
+            this.streamFunction,
             schedulerOptions,
             continuationFuse,
           );

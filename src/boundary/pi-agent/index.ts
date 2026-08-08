@@ -1,7 +1,7 @@
 // ── pi-agent-core Version-Coupling Boundary ──
 //
 // This directory is the ONLY place in the repo allowed to import from
-// `@mariozechner/pi-agent-core` directly (enforced by the
+// `@earendil-works/pi-agent-core` directly (enforced by the
 // `no-restricted-imports` rule in eslint.config.js). Every other module
 // imports the symbols it needs from this index, so a pi-agent-core version
 // bump is contained to `src/boundary/pi-agent/` instead of rippling across
@@ -19,7 +19,7 @@
 //      `AgentTool`'s execute signature; confirm mutual assignability with
 //      `AgentTool<any>` still holds.
 //   4. The module augmentation in `src/core/agent/messages.ts`
-//      (`declare module '@mariozechner/pi-agent-core'` extending
+//      (`declare module '@earendil-works/pi-agent-core'` extending
 //      `CustomAgentMessages`). Augmentations must target the real package
 //      name, so that block is a sanctioned coupling site — it is not an
 //      import and the lint rule does not apply to it — but it breaks if
@@ -32,7 +32,7 @@
 // If new code needs an additional pi-agent-core symbol, re-export it here —
 // do not import the package directly elsewhere.
 
-export { Agent } from '@mariozechner/pi-agent-core';
+export { Agent } from '@earendil-works/pi-agent-core';
 export type {
   AgentContext,
   AgentEvent,
@@ -42,7 +42,8 @@ export type {
   AgentToolResult,
   AgentToolUpdateCallback,
   StreamFn,
-} from '@mariozechner/pi-agent-core';
+} from '@earendil-works/pi-agent-core';
+export type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 // Repo-owned tool contract (validated-params variant of AgentTool).
 export type { SubstrateAgentTool } from './substrate-agent-tool.js';

@@ -3,7 +3,7 @@ import { Type } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
-import type { TextContent } from '@mariozechner/pi-ai';
+import type { TextContent } from '@earendil-works/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import type { SessionManager } from '../session/manager.js';

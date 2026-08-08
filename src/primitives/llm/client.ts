@@ -1,4 +1,4 @@
-import type { Context as PiContext } from '@mariozechner/pi-ai';
+import type { Context as PiContext } from '@earendil-works/pi-ai';
 import { randomUUID } from 'node:crypto';
 import type { ProviderRuntime } from './provider-runtime.js';
 import { PiProviderRuntime } from './provider-runtime.js';

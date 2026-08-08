@@ -1,4 +1,4 @@
-import { EventStream, type AssistantMessage, type ToolCall, type ToolResultMessage } from '@mariozechner/pi-ai';
+import { EventStream, type AssistantMessage, type ToolCall, type ToolResultMessage } from '@earendil-works/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';

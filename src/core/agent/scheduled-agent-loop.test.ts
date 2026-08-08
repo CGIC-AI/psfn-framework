@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { fromAny, fromPartial } from '@total-typescript/shoehorn';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
 import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-loop.js';

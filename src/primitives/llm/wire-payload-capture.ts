@@ -6,7 +6,7 @@ import { normalizeJsonValueForSerialization } from '../../shared/utils/json-seri
  * Capture the true provider wire body as-sent (bead hgw3-80f6).
  *
  * pi-ai exposes the outbound provider request body through `StreamOptions.onPayload`
- * (`node_modules/@mariozechner/pi-ai/dist/types.d.ts`). The body is the JSON that
+ * (`node_modules/@earendil-works/pi-ai/dist/types.d.ts`). The body is the JSON that
  * actually goes over the network — it already carries the tool schemas (each once),
  * `cache_control` breakpoints, and provider-specific transforms that the pre-call
  * `providerWireMessages` reconstructions omit. This module turns that raw payload

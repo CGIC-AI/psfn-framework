@@ -172,7 +172,7 @@ npm run e2e                       # integration tests
 |-----------|-----------|
 | Language | TypeScript (strict) |
 | Runtime | Node.js 22+ |
-| LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
+| LLM | `@earendil-works/pi-ai@0.84.1` + `@earendil-works/pi-agent-core@0.84.1` |
 | Database | PostgreSQL 17 + pgvector (no SQLite) |
 | Garden UI | Svelte 5 |
 | Companion PWA | React + Vite |

@@ -1,4 +1,4 @@
-import type { ImageContent, UserMessage } from '@mariozechner/pi-ai';
+import type { ImageContent, UserMessage } from '@earendil-works/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../contracts.js';
 import type { ToolWiringValidationMode } from '../tool-wiring-validator.js';

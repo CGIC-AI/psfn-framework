@@ -3,7 +3,7 @@ import type {
   Model,
   SimpleStreamOptions,
   ThinkingLevel,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type {
   LLMCallAccountingContext,
   LLMContext,
@@ -125,7 +125,7 @@ export class LLMRequestCapability {
     }
     return {
       model,
-      apiKey: resolveProviderApiKey(candidate.provider, this.config, process.env, this.runtime),
+      apiKey: resolveProviderApiKey(candidate.provider, this.config, process.env),
     };
   }
 

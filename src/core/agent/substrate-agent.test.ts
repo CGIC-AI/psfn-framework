@@ -1022,7 +1022,7 @@ describe('SubstrateAgent construction', () => {
       { runtimeMode: 'gateway' },
     );
 
-    const streamFn = ((fromAny(agent)).agent as { streamFn: (...args: any[]) => Promise<AsyncIterable<unknown>> }).streamFn;
+    const streamFn = ((fromAny(agent)).agent as { streamFunction: (...args: any[]) => Promise<AsyncIterable<unknown>> }).streamFunction;
     const stream = await streamFn(
       {
         id: 'openrouter/deepseek/deepseek-v3.2',

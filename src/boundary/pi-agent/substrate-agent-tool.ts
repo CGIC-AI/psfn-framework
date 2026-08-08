@@ -20,7 +20,7 @@ import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from '@mariozechner/pi-agent-core';
+} from '@earendil-works/pi-agent-core';
 
 export type SubstrateAgentTool<TDetails = any> = Omit<AgentTool<any, TDetails>, 'execute'> & {
   /**

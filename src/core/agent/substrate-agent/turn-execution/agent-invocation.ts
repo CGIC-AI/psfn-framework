@@ -1,5 +1,5 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, UserMessage } from '@earendil-works/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../../identity/prompt-composer.js';
 import {
   formatAttributedSystemContent,

@@ -19,7 +19,7 @@
 // on any system-note path, the golden output changes and the test fails.
 
 import { describe, it, expect, vi } from 'vitest';
-import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, UserMessage } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import {
   convertToLlm,

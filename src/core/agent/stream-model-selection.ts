@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from '@mariozechner/pi-ai';
+import type { ModelThinkingEffort } from '../../shared/contracts/runtime.js';
 import type { LLMModelHint } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -68,6 +68,6 @@ export function buildStreamTransportModelHint(
     ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
     ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
     ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
-    ...(typeof reasoning === 'string' ? { thinkingEffort: reasoning as ThinkingLevel } : {}),
+    ...(typeof reasoning === 'string' ? { thinkingEffort: reasoning as ModelThinkingEffort } : {}),
   };
 }

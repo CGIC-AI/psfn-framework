@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { streamSimple } from '@mariozechner/pi-ai';
 import { createModel } from './models.js';
+import { PiProviderRuntime } from './provider-runtime.js';
 
 // ── gu8m regression: streamed tool-call argument accumulation ──
 // Live Purrsephone (z-ai/glm-5.2 via OpenRouter, interleaved reasoning) intermittently
@@ -43,10 +43,11 @@ async function streamToolCalls(chunks: WireChunk[]): Promise<Array<{ name: strin
 
   const baseUrl = 'http://pi-ai-streaming-toolcall-accumulation.test/v1';
   const model = createModel(baseUrl, 'z-ai/glm-5.2', 4096, 131072, 'openai-completions', { reasoning: true });
-  const stream = streamSimple(model as never, {
+  const runtime = new PiProviderRuntime();
+  const stream = runtime.stream(model, {
     systemPrompt: 'system',
     messages: [{ role: 'user', content: 'do it' }],
-  } as never, { apiKey: 'test-key' } as never);
+  }, { apiKey: 'test-key' });
 
   let done: { message: { content: Array<Record<string, unknown>> } } | undefined;
   for await (const event of stream as AsyncIterable<{ type: string } & Record<string, unknown>>) {

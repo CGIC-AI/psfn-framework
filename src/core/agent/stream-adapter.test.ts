@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '../../boundary/pi-agent/index.js';
 import type { AgentEvent } from '../../boundary/pi-agent/index.js';
-import { validateToolArguments, type Context } from '@mariozechner/pi-ai';
+import { validateToolArguments, type Context } from '@earendil-works/pi-ai';
 import { Type } from '@sinclair/typebox';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

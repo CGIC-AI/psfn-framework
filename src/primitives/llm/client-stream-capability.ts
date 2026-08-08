@@ -2,7 +2,7 @@ import type {
   AssistantMessage as PiAssistantMessage,
   Context as PiContext,
   Model,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type {
   LLMProviderObservability,
   LLMResponse,

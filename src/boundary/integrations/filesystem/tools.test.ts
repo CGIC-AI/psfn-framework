@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '../../pi-agent/index.js';
-import type { TextContent } from '@mariozechner/pi-ai';
+import type { TextContent } from '@earendil-works/pi-ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { createFsTool } from './tools.js';

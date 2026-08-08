@@ -3,7 +3,7 @@
 // Persistent subscription — set/clear channel around each prompt call.
 
 import type { Agent, AgentEvent } from '../../boundary/pi-agent/index.js';
-import type { ToolCall } from '@mariozechner/pi-ai';
+import type { ToolCall } from '@earendil-works/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';

@@ -9,7 +9,7 @@ import {
 } from './turn-records.js';
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { executeToolCallsWithScheduler } from '../tool-call-scheduler.js';
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@earendil-works/pi-ai';
 
 const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
 const AUDIT_REQUEST_ID = 'request-audit-privacy';

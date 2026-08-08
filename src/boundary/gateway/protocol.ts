@@ -22,7 +22,7 @@ import type {
   TextContent,
   ThinkingContent,
   ToolCall,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,

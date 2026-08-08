@@ -1157,7 +1157,7 @@ function printHumanOutput(config, normalized, providerResults, summary) {
     const minTokens = promptTokenValues.length > 0 ? Math.min(...promptTokenValues) : null;
     const maxTokens = promptTokenValues.length > 0 ? Math.max(...promptTokenValues) : null;
     if (minTokens !== null && maxTokens !== null) {
-      console.log(`Approx prompt size with filler: ${minTokens === maxTokens ? minTokens : `${minTokens}-${maxTokens}`} tokens`);
+      console.info(`Approx prompt size with filler: ${minTokens === maxTokens ? minTokens : `${minTokens}-${maxTokens}`} tokens`);
     }
   }
 

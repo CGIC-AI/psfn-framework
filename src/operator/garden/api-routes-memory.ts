@@ -100,9 +100,9 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
 
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
   if (dateOnly) {
-    const year = Number.parseInt(dateOnly[1], 10);
-    const monthIndex = Number.parseInt(dateOnly[2], 10) - 1;
-    const day = Number.parseInt(dateOnly[3], 10);
+    const year = Number.parseInt(dateOnly[1] ?? '', 10);
+    const monthIndex = Number.parseInt(dateOnly[2] ?? '', 10) - 1;
+    const day = Number.parseInt(dateOnly[3] ?? '', 10);
     const validatedDate = new Date(Date.UTC(year, monthIndex, day));
     if (
       validatedDate.getUTCFullYear() !== year
@@ -286,6 +286,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/scopes/', 'scopeKey', '/detail'),
       handle: (req, res, { scopeKey }, context) => {
+        if (!scopeKey) {
+          sendJson(res, 400, { error: 'scopeKey is required' });
+          return;
+        }
         const separator = scopeKey.indexOf(':');
         const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
         const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
@@ -501,6 +505,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/reveal'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Memory id is required' });
+          return;
+        }
         const sessionKey = context?.kind === 'standalone_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
@@ -529,6 +537,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Memory id is required' });
+          return;
+        }
         bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryLinks(id).then(
           (links) => sendJson(res, 200, { links }),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory links') }),
@@ -539,6 +551,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'PATCH',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/patch'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Memory id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -597,6 +613,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Memory id is required' });
+          return;
+        }
         bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryDetail(id).then(
           (detail) => {
             if (!detail) {
@@ -617,6 +637,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Memory id is required' });
+          return;
+        }
         bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).supersedeMemory(id).then(
           (result) => {
             if (!result.ok) {

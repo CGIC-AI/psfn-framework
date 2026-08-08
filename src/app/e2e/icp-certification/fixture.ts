@@ -327,8 +327,8 @@ export function createIcpCertificationFixture(input: {
   const gatewaySocketPath = join(socketDir, 'gateway.sock');
   const seedDir = resolve(input.seedDir ?? 'config');
   const supportContract = loadSupportFixtureContract(SUPPORT_FIXTURE_TEMPLATE_PATH);
-  const companionAContract = supportContract.companions[0];
-  const companionBContract = supportContract.companions[1];
+  const companionAContract = supportContract.companions[0]!;
+  const companionBContract = supportContract.companions[1]!;
   if (
     companionAContract.companionId !== CERTIFICATION_COMPANION_A
     || companionAContract.postgresSchema !== CERTIFICATION_SCHEMA_A

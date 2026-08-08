@@ -266,6 +266,7 @@ function deriveFlywheelTarget(
 ): AdminIntakeQuarantineFlywheelTarget | null {
   // Envelope validation guarantees at least the origin hop.
   const originHop = entry.envelope.provenance[0];
+  if (originHop === undefined) return null;
   const host = extractHostFromOriginRef(originHop.ref);
   if (host) return { kind: 'site', pattern: host };
   if (entry.canonicalContactId?.trim()) {
@@ -291,6 +292,9 @@ function toIso(atMs: number): string {
 function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQuarantineItemView {
   // Envelope validation guarantees at least the origin hop.
   const originHop = entry.envelope.provenance[0];
+  if (originHop === undefined) {
+    throw new Error(`Intake quarantine entry ${entry.id} is missing provenance origin hop`);
+  }
   const fields = entry.envelope.extractedFields;
   // Extracted fields are an open record; these keys may be absent.
   const extractedField = (key: string): string | undefined => (

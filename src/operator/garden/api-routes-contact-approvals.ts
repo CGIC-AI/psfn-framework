@@ -70,6 +70,10 @@ export function buildAdminContactApprovalRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/approve'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact approval id is required' });
+          return;
+        }
         handleMutation(res, pendingContactsService.approvePendingContact(id, context));
       },
     },
@@ -77,6 +81,10 @@ export function buildAdminContactApprovalRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/deny'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact approval id is required' });
+          return;
+        }
         handleMutation(res, pendingContactsService.denyPendingContact(id, context));
       },
     },
@@ -84,6 +92,10 @@ export function buildAdminContactApprovalRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/reset'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact approval id is required' });
+          return;
+        }
         handleMutation(res, pendingContactsService.resetPendingContactDecision(id, context));
       },
     },

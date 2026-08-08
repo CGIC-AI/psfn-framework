@@ -725,9 +725,11 @@ export class SessionManager implements SessionManagerTypeSurface {
       // short-circuits before the entries[0] read); a full page whose oldest
       // entry predates the cutoff already spans the in-window region. Either way,
       // and at the ceiling, no in-window partner turn exists.
+      const oldestEntry = entries[0];
       if (
         entries.length < pageSize
-        || entries[0].timestamp < cutoffMs
+        || oldestEntry === undefined
+        || oldestEntry.timestamp < cutoffMs
         || pageSize >= RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_CEILING
       ) {
         return false;
@@ -1970,6 +1972,7 @@ export class SessionManager implements SessionManagerTypeSurface {
     const recent = this.store.getRecent(resolvedChannelId, 50);
     for (let i = recent.length - 1; i >= 0; i -= 1) {
       const entry = recent[i];
+      if (entry === undefined) continue;
       if (entry.role !== 'user') continue;
       userId = entry.authorId?.trim() || undefined;
       channelVisibility = entry.channelVisibility;

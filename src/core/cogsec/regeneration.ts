@@ -170,6 +170,7 @@ function failure(
 function safeFailureDetails(failures: readonly CogSecRegenerationFailure[]): string | undefined {
   if (failures.length === 0) return undefined;
   const first = failures[0];
+  if (first === undefined) return undefined;
   const id = first.artifactId ? ` ${first.artifactId}` : '';
   return `CogSec regeneration recorded ${failures.length} failure(s). First failure: ${first.artifactClass}${id} ${first.operation} ${first.reason}.`;
 }

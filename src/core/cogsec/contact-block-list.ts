@@ -344,8 +344,9 @@ export class ContactBlockListStore {
   get(channelType: string, contactId: string): ContactBlockEntry | null {
     this.reloadIfChanged();
     const key = entryKey(requireString(channelType, 'channelType'), requireString(contactId, 'contactId'));
-    if (!Object.prototype.hasOwnProperty.call(this.state.entries, key)) return null;
-    return cloneEntry(this.state.entries[key]);
+    const entry = this.state.entries[key];
+    if (entry === undefined) return null;
+    return cloneEntry(entry);
   }
 
   list(): ContactBlockEntry[] {
@@ -370,10 +371,10 @@ export class ContactBlockListStore {
     const channelType = requireString(input.channelType, 'channelType');
     const contactId = requireString(input.contactId, 'contactId');
     const key = entryKey(channelType, contactId);
-    if (!Object.prototype.hasOwnProperty.call(this.state.entries, key)) {
+    const entry = this.state.entries[key];
+    if (entry === undefined) {
       return { action: 'allow' };
     }
-    const entry = this.state.entries[key];
     const appliesToDm = entry.scope === 'dm' || entry.scope === 'all';
     const appliesToGroup = entry.scope === 'group' || entry.scope === 'all';
     if (input.isDirectMessage) {

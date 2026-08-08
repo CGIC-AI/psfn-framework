@@ -215,6 +215,10 @@ export function buildAdminConcernRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/arcs'),
       handle: (req, res, { concernId }) => {
+        if (!concernId) {
+          sendJson(res, 400, { error: 'concernId is required' });
+          return;
+        }
         if (!concernService?.listConcernArcs) {
           sendJson(res, 503, { error: 'Concern arc query backend unavailable' });
           return;
@@ -280,6 +284,10 @@ export function buildAdminConcernRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/resolve'),
       handle: (req, res, { concernId }, context) => {
+        if (!concernId) {
+          sendJson(res, 400, { error: 'concernId is required' });
+          return;
+        }
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
@@ -302,6 +310,10 @@ export function buildAdminConcernRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/suppress'),
       handle: (req, res, { concernId }, context) => {
+        if (!concernId) {
+          sendJson(res, 400, { error: 'concernId is required' });
+          return;
+        }
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;
@@ -324,6 +336,10 @@ export function buildAdminConcernRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/transition'),
       handle: (req, res, { concernId }, context) => {
+        if (!concernId) {
+          sendJson(res, 400, { error: 'concernId is required' });
+          return;
+        }
         if (!concernService) {
           sendJson(res, 503, { error: 'Concern management backend unavailable' });
           return;

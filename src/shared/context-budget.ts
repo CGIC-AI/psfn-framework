@@ -3,7 +3,7 @@ import type {
   ContextBudgetModelSelectionLike,
   ContextBudgetModelSlotLike,
 } from './context-budget-contracts.js';
-import { clamp, toPositiveInteger } from './utils/numeric.js';
+import { clamp, toFlooredPositiveInteger } from './utils/numeric.js';
 
 export interface ContextBudgetConfigLike {
   defaultContextWindow: number;
@@ -275,7 +275,7 @@ function isCompanionContextBudgetTurn(
 }
 
 function resolvePct(value: number | undefined, fallback: number, range: PercentageRange): number {
-  const normalized = toPositiveInteger(value);
+  const normalized = toFlooredPositiveInteger(value);
   if (normalized === undefined) return fallback;
   return clamp(normalized, range.min, range.max);
 }
@@ -285,7 +285,7 @@ function resolveTokenFloor(
   fallback: number,
   contextWindow: number,
 ): number {
-  const normalized = toPositiveInteger(value) ?? fallback;
+  const normalized = toFlooredPositiveInteger(value) ?? fallback;
   return clamp(normalized, 1, contextWindow);
 }
 
@@ -329,10 +329,10 @@ function resolvePurposeChain(purpose: string | undefined): string[] {
 function modelSlotFromCatalogEntry(entry: ContextBudgetModelCatalogEntryLike | undefined): ContextBudgetModelSlotLike | undefined {
   if (!entry) return undefined;
 
-  const maxTokens = toPositiveInteger(entry.overrides?.maxTokens)
-    ?? toPositiveInteger(entry.defaults?.maxTokens);
-  const contextWindow = toPositiveInteger(entry.overrides?.contextWindow)
-    ?? toPositiveInteger(entry.defaults?.contextWindow);
+  const maxTokens = toFlooredPositiveInteger(entry.overrides?.maxTokens)
+    ?? toFlooredPositiveInteger(entry.defaults?.maxTokens);
+  const contextWindow = toFlooredPositiveInteger(entry.overrides?.contextWindow)
+    ?? toFlooredPositiveInteger(entry.defaults?.contextWindow);
   const contextBudget = entry.overrides?.contextBudget
     ?? entry.defaults?.contextBudget;
 
@@ -418,7 +418,7 @@ export function resolveContextBudgetModelSlot(
       ?? resolveModelRosterSlot(config.modelRoster, normalizedPurpose);
   }
 
-  const contextWindow = toPositiveInteger(selection?.contextWindow);
+  const contextWindow = toFlooredPositiveInteger(selection?.contextWindow);
   return {
     ...(resolvedSlot ?? {}),
     ...(normalizedProvider !== undefined ? { provider: normalizedProvider } : {}),
@@ -435,9 +435,9 @@ export function resolveChatContextWindow(
   options: Pick<ContextBudgetResolutionOptions, 'turn'> = {},
 ): number {
   const resolvedSlot = resolveContextBudgetModelSlot(config, options);
-  const fromResolvedSlot = toPositiveInteger(resolvedSlot.contextWindow);
+  const fromResolvedSlot = toFlooredPositiveInteger(resolvedSlot.contextWindow);
   if (fromResolvedSlot !== undefined) return fromResolvedSlot;
-  return toPositiveInteger(config.defaultContextWindow) ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
+  return toFlooredPositiveInteger(config.defaultContextWindow) ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
 }
 
 export function resolveSessionHistoryBudgetPct(
@@ -627,8 +627,8 @@ export function resolveSessionHistoryBudget(
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
   const resolvedSlot = resolveContextBudgetModelSlot(config, options);
-  const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
-    ?? toPositiveInteger(config.defaultContextWindow)
+  const contextWindow = toFlooredPositiveInteger(resolvedSlot.contextWindow)
+    ?? toFlooredPositiveInteger(config.defaultContextWindow)
     ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
   const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
   const budgetPct = adaptiveProfile.sessionHistoryBudgetPct;
@@ -658,8 +658,8 @@ export function resolveMemoryRetrievalBudget(
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
   const resolvedSlot = resolveContextBudgetModelSlot(config, options);
-  const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
-    ?? toPositiveInteger(config.defaultContextWindow)
+  const contextWindow = toFlooredPositiveInteger(resolvedSlot.contextWindow)
+    ?? toFlooredPositiveInteger(config.defaultContextWindow)
     ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
   const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
   const budgetPct = adaptiveProfile.memoryRetrievalBudgetPct;

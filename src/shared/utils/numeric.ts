@@ -42,6 +42,20 @@ export function toPositiveInteger(value: unknown): number | undefined {
 }
 
 /**
+ * Coerce a finite positive number to a positive integer by flooring it, or
+ * return `undefined` when the value is not a finite positive number.
+ *
+ * Unlike {@link toPositiveInteger}, this accepts non-integer positive numbers
+ * and floors them (e.g. `1.9` becomes `1`). It does not parse strings.
+ */
+export function toFlooredPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+/**
  * Return a positive integer coerced from `value`, or `fallback` when the value
  * is missing or not a positive integer.
  */

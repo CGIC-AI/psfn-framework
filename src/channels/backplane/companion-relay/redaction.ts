@@ -17,6 +17,7 @@ import type {
 } from '../../../shared/contracts/companion-relay.js';
 import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 import { ACAC_AXES, type AcacAxis } from '../../../shared/contracts/emotion-contracts.js';
+import { clampSigned, clampUnit } from '../../../shared/utils/numeric.js';
 import type {
   ApprovalAttribution,
   ApprovalGrantMode,
@@ -287,14 +288,10 @@ function redactEmotionVector(
   vector: { valence: number; arousal: number; dominance: number },
   fieldName: string,
 ): CompanionEmotionSnapshotPayload['vad'] {
-  const clamp = (value: unknown, axis: string): number => {
-    const rounded = roundEmotionValue(value, `${fieldName}.${axis}`);
-    return Math.min(1, Math.max(-1, rounded));
-  };
   return {
-    valence: clamp(vector.valence, 'valence'),
-    arousal: clamp(vector.arousal, 'arousal'),
-    dominance: clamp(vector.dominance, 'dominance'),
+    valence: clampSigned(roundEmotionValue(vector.valence, `${fieldName}.valence`)),
+    arousal: clampSigned(roundEmotionValue(vector.arousal, `${fieldName}.arousal`)),
+    dominance: clampSigned(roundEmotionValue(vector.dominance, `${fieldName}.dominance`)),
   };
 }
 
@@ -304,7 +301,7 @@ function redactDiscreteScores(discrete: Record<string, number>): CompanionEmotio
       const label = clampText(rawLabel, MAX_EMOTION_DISCRETE_LABEL_LENGTH).toLowerCase();
       if (!label) return null;
       const rounded = roundEmotionValue(rawScore, `discrete.${label}`);
-      const score = Math.min(1, Math.max(0, rounded));
+      const score = clampUnit(rounded);
       return { label, score };
     })
     .filter((entry): entry is CompanionEmotionDiscreteScore => entry !== null)
@@ -322,7 +319,7 @@ function redactAcacAxisScores(
     const raw = scores[axis];
     if (raw === undefined) continue;
     const rounded = roundEmotionValue(raw, `acac.${axis}`);
-    redacted.push({ axis, score: Math.min(1, Math.max(0, rounded)) });
+    redacted.push({ axis, score: clampUnit(rounded) });
   }
   return redacted;
 }
@@ -346,7 +343,7 @@ export function redactEmotionSnapshot(input: {
   acacAxisScores?: Partial<Record<AcacAxis, number>>;
   timestampMs: number;
 }): CompanionEmotionSnapshotPayload {
-  const confidence = Math.min(1, Math.max(0, roundEmotionValue(input.confidence, 'confidence')));
+  const confidence = clampUnit(roundEmotionValue(input.confidence, 'confidence'));
   const acacAxes = input.acacAxisScores
     ? redactAcacAxisScores(input.acacAxisScores)
     : [];

@@ -6,6 +6,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { toFlooredPositiveInteger } from '../../shared/utils/numeric.js';
 import { toFiniteNumber } from './client-response-helpers.js';
 import {
   findRegistryEntryByModelId,
@@ -125,15 +126,15 @@ export function normalizeModelHint(
   const rawModel = modelHint.model?.trim();
   const provider = modelHint.provider?.trim().toLowerCase();
   const slotKey = modelHint.slotKey?.trim();
-  const maxTokens = toPositiveInteger(modelHint.maxTokens);
-  const contextWindow = toPositiveInteger(modelHint.contextWindow);
+  const maxTokens = toFlooredPositiveInteger(modelHint.maxTokens);
+  const contextWindow = toFlooredPositiveInteger(modelHint.contextWindow);
   const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
     ? modelHint.thinkingEnabled
     : undefined;
   const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
   const temperature = toFiniteNumber(modelHint.temperature);
   const topP = toUnitInterval(modelHint.topP);
-  const topK = toPositiveInteger(modelHint.topK);
+  const topK = toFlooredPositiveInteger(modelHint.topK);
   const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
   const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
   const pin = modelHint.pin === true || (options.preserveFalsePin && modelHint.pin === false)
@@ -269,10 +270,10 @@ function resolveModelHintCandidate(
   // The hinted model's own catalog output cap beats the base candidate's:
   // inheriting a roster default above the target model's maximum is a guaranteed
   // 400 from the provider.
-  const registryMaxTokens = toPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
-    ?? toPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
-  const registryContextWindow = toPositiveInteger(registryEntry?.tuning?.contextWindow)
-    ?? toPositiveInteger(registryEntry?.capabilities?.contextWindow);
+  const registryMaxTokens = toFlooredPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
+    ?? toFlooredPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
+  const registryContextWindow = toFlooredPositiveInteger(registryEntry?.tuning?.contextWindow)
+    ?? toFlooredPositiveInteger(registryEntry?.capabilities?.contextWindow);
   let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
   const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
   const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
@@ -506,12 +507,6 @@ export function resolveCandidates(
   }
 
   return dedupeCandidates([hintedCandidate, ...candidates]);
-}
-
-function toPositiveInteger(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric <= 0) return undefined;
-  return Math.floor(numeric);
 }
 
 function toUnitInterval(value: unknown): number | undefined {

@@ -88,13 +88,14 @@ export function readKubernetesHelmRecoveryDescriptorFile(
   if (!isRecord(parsed.release) || !isRecord(parsed.chart) || !isRecord(parsed.images) || !isRecord(parsed.exclusions)) {
     throw new Error(`Invalid Kubernetes Helm recovery descriptor: ${descriptorPath}`);
   }
+  const images = parsed.images;
   assertExactKeys(
     parsed.release,
     ['name', 'namespace', ...(parsed.release.revision !== undefined ? ['revision'] : [])],
     'release',
   );
   assertExactKeys(parsed.chart, ['name', 'version', 'appVersion', 'path', 'contentSha256'], 'chart');
-  assertExactKeys(parsed.images, ['agent', 'gateway', 'garden'], 'images');
+  assertExactKeys(images, ['agent', 'gateway', 'garden'], 'images');
   assertExactKeys(parsed.exclusions, ['liveHelmValues', 'kubernetesSecrets'], 'exclusions');
 
   const releaseRevision = parsed.release.revision;
@@ -125,7 +126,7 @@ export function readKubernetesHelmRecoveryDescriptorFile(
   assertHelmMetadataToken(chartVersion, 'chart version');
   assertHelmMetadataToken(appVersion, 'app version');
   const readImage = (workload: 'agent' | 'gateway' | 'garden'): KubernetesHelmWorkloadImage => {
-    const image = parsed.images[workload];
+    const image = images[workload];
     if (!isRecord(image)) {
       throw new Error(`Invalid Kubernetes Helm recovery images.${workload}`);
     }

@@ -409,6 +409,10 @@ export class WikiPgvectorProjectionStore implements WikiProjectionPort {
       .sort((left, right) => right.score - left.score || left.documentId.localeCompare(right.documentId))
       .slice(0, docLimit);
   }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
 }
 
 export async function createWikiPgvectorProjectionStore(

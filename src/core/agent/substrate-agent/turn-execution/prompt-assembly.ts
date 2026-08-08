@@ -518,7 +518,7 @@ export async function assembleTurnPrompt(input: {
   if (!sessionContextSnapshot) {
     throw new Error('Turn prompt assembly requires a captured session-context snapshot');
   }
-  sessionContextSnapshot.autoCompactionEligible = context.manifest.compaction.eligible === true;
+  sessionContextSnapshot.autoCompactionEligible = context.manifest?.compaction.eligible === true;
   if (currentSessionEntryId !== null && context.messages.some(contextMessage => (
     contextMessage.provenance?.sourceEntryIds?.includes(currentSessionEntryId) === true
   ))) {

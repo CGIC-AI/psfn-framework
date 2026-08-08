@@ -485,7 +485,7 @@ export class SocialGraphBuilderWorker {
     const edges = await this.contacts.listSocialRelationshipEdges({
       entityId: sourceEntity.id,
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     const between = edges.filter(edge => (
       (edge.sourceEntityId === sourceEntity.id && edge.targetEntityId === targetEntity.id)

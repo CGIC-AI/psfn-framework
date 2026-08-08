@@ -271,7 +271,7 @@ export async function prepareTurnIdentityState(input: {
   turnId: TurnID;
   requestId: string;
   turnCorrelationBase: CorrelationMetadata;
-  observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage'>;
+  observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage' | 'emitPerformanceStage'>;
   deferSessionEntryPersistence?: boolean;
   skipSessionEntryPersistence?: boolean;
 }): Promise<PreparedTurnIdentityState> {

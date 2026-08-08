@@ -718,7 +718,8 @@ export async function handleMessageForTurn(
           turnId,
         });
     if (fatigueDecision) {
-      if (message.routing?.icpCorrelation) {
+      const icpCorrelation = message.routing?.icpCorrelation;
+      if (icpCorrelation) {
         const finalFatigueDecision = fatigueDecision.metadata.decision === 'suppressed_hard_exhausted'
           ? 'suppress'
           : fatigueDecision.metadata.decision === 'overcharge_charged'
@@ -727,15 +728,15 @@ export async function handleMessageForTurn(
         message.routing = {
           ...message.routing,
           icpCorrelation: {
-            ...message.routing.icpCorrelation,
+            ...icpCorrelation,
             fatigueDecision: finalFatigueDecision,
             chargeLane: fatigueDecision.metadata.socialRegulation.chargeLane,
           },
         };
         turnCorrelationBase = {
           ...turnCorrelationBase,
-          icpCorrelation: message.routing.icpCorrelation,
-          chargeLane: message.routing.icpCorrelation.chargeLane,
+          icpCorrelation,
+          chargeLane: icpCorrelation.chargeLane,
         };
       }
       if (fatigueDecision.shouldRecordSpend && message.routing?.icpCorrelation) {
@@ -962,7 +963,7 @@ export async function handleMessageForTurn(
           viewerRequestContext,
           baseVisionToolRequestContext,
           toolTurnOutcome,
-          turnSnapshot,
+          turnSnapshot: turnSnapshot!,
           templateVariables: promptAssembly.templateVariables,
           speakerRole,
           mutableState: invocationState,
@@ -1616,7 +1617,6 @@ export async function handleMessageForTurn(
       firstTokenAt,
       turnUsage,
       context: promptAssembly.context,
-      turnCallType,
       taskKind,
       turnCorrelationBase,
       userSessionEntryId,
@@ -1630,7 +1630,7 @@ export async function handleMessageForTurn(
       speakerRole,
       canonicalContactKey,
       continuitySubjectKey,
-      turnSnapshot,
+      turnSnapshot: turnSnapshot!,
       internalStateSnapshotRef,
       internalState,
       templateVariables: promptAssembly.templateVariables,

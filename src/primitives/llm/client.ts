@@ -531,7 +531,7 @@ export class LLMClient {
         provider: candidate.provider,
         model: candidate.model,
         purpose,
-        ...toCorrelationLogFields(correlation, purpose),
+        ...toCorrelationLogFields(correlation),
       });
     }
     if (preflight.blockedEvent) {

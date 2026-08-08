@@ -93,7 +93,10 @@ async function lockProviderCompanionContactScope(
 
 export async function prepareProviderLifecycleMutation(
   client: PoolClient,
-  decision: Extract<VerifiedFleetAuthLifecycleDecision, { action: `provider.${string}` }>,
+  decision: Extract<
+    VerifiedFleetAuthLifecycleDecision,
+    { action: 'provider.add' | 'provider.relink' | 'provider.replace' | 'provider.unlink' }
+  >,
 ): Promise<PreparedLifecycleMutation> {
   const targetId = decision.target.principalId;
   if (decision.actor.principalId !== targetId) {
@@ -137,6 +140,11 @@ export async function prepareProviderLifecycleMutation(
         ]);
       },
     };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- narrowing guard keeps the union narrow across the await above
+  if (decision.action !== 'provider.replace' && decision.action !== 'provider.unlink') {
+    throw new Error('Unexpected provider lifecycle action after narrowing');
   }
 
   await lockCurrentLifecycleProvider(

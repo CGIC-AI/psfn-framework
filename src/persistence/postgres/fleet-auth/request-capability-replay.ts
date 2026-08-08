@@ -33,8 +33,8 @@ function parseConsumeResult(value: unknown): RequestCapabilityConsumeResult {
     || !DIGEST_PATTERN.test(value.parentDigest)
     || typeof value.authorityVersionsDigest !== 'string'
     || !DIGEST_PATTERN.test(value.authorityVersionsDigest)
-    || !Number.isSafeInteger(value.expiresAt)
-    || value.expiresAt < 1) {
+    || !Number.isSafeInteger(value.expiresAt as number)
+    || (value.expiresAt as number) < 1) {
     throw new Error('Request capability replay procedure returned an invalid result');
   }
   return Object.freeze({
@@ -47,7 +47,7 @@ function parseConsumeResult(value: unknown): RequestCapabilityConsumeResult {
     companionId: value.companionId,
     parentDigest: value.parentDigest,
     authorityVersionsDigest: value.authorityVersionsDigest,
-    expiresAt: value.expiresAt,
+    expiresAt: value.expiresAt as number,
   });
 }
 
@@ -73,8 +73,8 @@ function parseRecoveryConsumeResult(value: unknown): TrustedHostRecoveryConsumeR
     || !DIGEST_PATTERN.test(value.credentialId)
     || typeof value.authorityFloorDigest !== 'string'
     || !DIGEST_PATTERN.test(value.authorityFloorDigest)
-    || !Number.isSafeInteger(value.expiresAt)
-    || value.expiresAt < 1) {
+    || !Number.isSafeInteger(value.expiresAt as number)
+    || (value.expiresAt as number) < 1) {
     throw new Error('Trusted-host recovery replay procedure returned an invalid result');
   }
   return Object.freeze({
@@ -92,7 +92,7 @@ function parseRecoveryConsumeResult(value: unknown): TrustedHostRecoveryConsumeR
     reasonDigest: value.reasonDigest,
     credentialId: value.credentialId,
     authorityFloorDigest: value.authorityFloorDigest,
-    expiresAt: value.expiresAt,
+    expiresAt: value.expiresAt as number,
   });
 }
 

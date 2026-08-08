@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import {
+  isLifecycleOAuthAction,
   lifecycleOAuthKindFor,
   type LifecycleOAuthProofRole,
 } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
@@ -36,6 +37,7 @@ export async function lockAndValidateLifecycleProviderProofs(
   client: PoolClient,
   decision: VerifiedFleetAuthLifecycleDecision,
 ): Promise<void> {
+  if (!isLifecycleOAuthAction(decision.action)) return;
   for (const { role, proof } of lifecycleProviderProofs(decision)) {
     const result = await client.query<{ transaction_id: string }>(`
       SELECT transaction.transaction_id

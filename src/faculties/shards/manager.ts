@@ -324,7 +324,18 @@ export class ShardManager implements ShardExecutionPort {
     this.shardDirectory = new LiveShardDirectory({
       parentCompanionId: () => resolveCoreCompanionIdFromConfig(deps.config),
       refreshDeployments: () => this.refreshShardHealth(),
-      deployments: () => [...this.activeShards.values()],
+      deployments: () => [...this.activeShards.values()].map(shard => ({
+        id: shard.id,
+        name: shard.name,
+        task: shard.task,
+        startedAt: shard.startedAt,
+        state: shard.state,
+        health: shard.health === 'healthy'
+          ? 'healthy' as const
+          : shard.health === 'stale'
+            ? 'degraded' as const
+            : 'offline' as const,
+      })),
       intakeScreening: deps.sessionManager?.intakeScreening ?? null,
     });
     this.shardParentIcp = new LiveShardParentIcpRuntime(

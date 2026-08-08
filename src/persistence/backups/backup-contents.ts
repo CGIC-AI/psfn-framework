@@ -120,7 +120,7 @@ export function verifyBackupContentsManifest(backupDir: string): BackupContentsM
       }
       const lines = bytes.toString('utf8').split('\n');
       for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index].trim();
+        const line = lines[index]?.trim() ?? '';
         if (!line) continue;
         try {
           JSON.parse(line);

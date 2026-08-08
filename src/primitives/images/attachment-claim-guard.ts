@@ -166,8 +166,8 @@ function splitSentenceUnits(responseText: string): string[] {
   let unitStart = 0;
 
   for (let index = 0; index < responseText.length; index += 1) {
-    const character = responseText[index];
-    const nextCharacter = responseText[index + 1];
+    const character = responseText[index]!;
+    const nextCharacter = responseText[index + 1] ?? '';
     const endsSentence = (
       (character === '.' || character === '!' || character === '?')
       && (index === responseText.length - 1 || /\s/u.test(nextCharacter))

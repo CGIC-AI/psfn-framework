@@ -125,7 +125,7 @@ export async function prepareFleetSharedSchemaRuntime(options: {
     const companionConnections = [];
     for (let index = 0; index < companionDatabases.length; index += 1) {
       const connection = await connectPreflightPool(
-        companionDatabases[index].databaseUrl,
+        companionDatabases[index]!.databaseUrl,
         `fleet-shared-schema-companion-${index}-preflight`,
       );
       connections.push(connection);
@@ -166,8 +166,8 @@ export async function prepareFleetSharedSchemaRuntime(options: {
     }
 
     for (let index = 0; index < companionConnections.length; index += 1) {
-      const entry = companionDatabases[index];
-      const connection = companionConnections[index];
+      const entry = companionDatabases[index]!;
+      const connection = companionConnections[index]!;
       await assertFleetAuthRolesAreSafe(connection.client, mappedRoles, entry.role);
       const target = await readDatabaseTargetIdentity(connection.client);
       if (JSON.stringify(target) !== JSON.stringify(expectedTarget)) {

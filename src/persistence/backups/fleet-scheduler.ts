@@ -61,6 +61,11 @@ function deriveScratchSchemaOwnerDatabaseUrls(options: {
   const scratchOwnerUrls: Record<string, string> = {};
   for (const contract of options.contracts) {
     const sourceUrl = options.schemaOwnerDatabaseUrls[contract.schema];
+    if (!sourceUrl) {
+      throw new Error(
+        `Fleet auth verifyRestore owner credential missing for ${contract.schema}`,
+      );
+    }
     const source = parseExactPostgresCredential(
       sourceUrl,
       `Fleet auth verifyRestore owner credential for ${contract.schema}`,
@@ -127,7 +132,11 @@ export function isFleetBackupLeader(
       `Multi-companion fleet backup: this process's companion id "${id}" is not present in the fleet manifest — refusing to run with an inconsistent fleet`,
     );
   }
-  return fleet.companions[0].companionId === id;
+  const leader = fleet.companions[0];
+  if (!leader) {
+    throw new Error('Fleet backup leader election requires at least one companion');
+  }
+  return leader.companionId === id;
 }
 
 /**
@@ -185,10 +194,10 @@ export function resolveGroupCompanionDataDir(
     throw new Error('Group fleet backup requires at least one companion data dir');
   }
   const split = companionDataDirs.map(dir => resolve(dir).split(sep));
-  let common = split[0];
+  let common = split[0]!;
   for (const parts of split.slice(1)) {
     let i = 0;
-    while (i < common.length && i < parts.length && common[i] === parts[i]) {
+    while (i < common.length && i < parts.length && common[i]! === parts[i]!) {
       i += 1;
     }
     common = common.slice(0, i);

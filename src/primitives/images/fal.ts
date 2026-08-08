@@ -196,13 +196,13 @@ function normalizeFalImages(payload: FalImageOutput): ImageResultAsset[] {
 function normalizeCreateModel(model: string | undefined): FalCreateModel {
   return (FAL_CREATE_MODELS as readonly string[]).includes(model ?? '')
     ? model as FalCreateModel
-    : FAL_CREATE_MODELS[0];
+    : FAL_CREATE_MODELS[0]!;
 }
 
 function normalizeEditModel(model: string | undefined): FalEditModel {
   return (FAL_EDIT_MODELS as readonly string[]).includes(model ?? '')
     ? model as FalEditModel
-    : FAL_EDIT_MODELS[0];
+    : FAL_EDIT_MODELS[0]!;
 }
 
 export class FalApiError extends Error {

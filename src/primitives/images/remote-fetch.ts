@@ -12,7 +12,7 @@ export interface RemoteImageBinary {
 }
 
 function normalizeContentType(value: string | null | undefined): string {
-  return (value ?? '').split(';')[0].trim().toLowerCase();
+  return ((value ?? '').split(';')[0] ?? '').trim().toLowerCase();
 }
 
 function resolveUrlPolicyConfig(config: ImageRuntimeConfig): UrlPolicyConfig {
@@ -145,7 +145,7 @@ export async function fetchRemoteImageBinary(
     }
 
     const contentType = normalizeContentType(match[1] || 'image/png');
-    const encoded = match[3];
+    const encoded = match[3] ?? '';
     const bytes = match[2]
       ? Uint8Array.from(Buffer.from(encoded, 'base64'))
       : Uint8Array.from(Buffer.from(decodeURIComponent(encoded), 'utf8'));

@@ -84,7 +84,7 @@ function escapeRegExpCharacter(character: string): string {
 function encodedCredentialPattern(encoded: string): RegExp {
   let pattern = '';
   for (let index = 0; index < encoded.length; index += 1) {
-    const character = encoded[index];
+    const character = encoded[index]!;
     if (character === '%' && /^[0-9A-F]{2}$/u.test(encoded.slice(index + 1, index + 3))) {
       const hex = encoded.slice(index + 1, index + 3);
       pattern += `%${[...hex].map(digit => (

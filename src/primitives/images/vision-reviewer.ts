@@ -61,9 +61,9 @@ const EMBODIMENT_MARKER = /EMBODIMENT:\s*(same_me|drifted|different_person)\b\s*
 function parseDataUrlImageContent(dataUrl: string): ImageContent | null {
   const match = /^data:([^;,]+);base64,(.+)$/is.exec(dataUrl.trim());
   if (!match) return null;
-  const mimeType = match[1].trim().toLowerCase();
+  const mimeType = match[1]!.trim().toLowerCase();
   if (!mimeType.startsWith('image/')) return null;
-  return { type: 'image', data: match[2].trim(), mimeType };
+  return { type: 'image', data: match[2]!.trim(), mimeType };
 }
 
 function parseEmbodimentConsistency(
@@ -72,9 +72,9 @@ function parseEmbodimentConsistency(
 ): ImageEmbodimentConsistency | undefined {
   const match = EMBODIMENT_MARKER.exec(summary);
   if (!match) return undefined;
-  const verdict = match[1].toLowerCase() as EmbodimentConsistencyVerdict;
+  const verdict = match[1]!.toLowerCase() as EmbodimentConsistencyVerdict;
   if (!EMBODIMENT_VERDICTS.includes(verdict)) return undefined;
-  const note = match[2].trim();
+  const note = match[2]!.trim();
   const description = reference.description.trim();
   return {
     verdict,
@@ -148,8 +148,7 @@ function validateFetchedImage(payload: {
   mimeType: string;
   sizeBytes: number;
 }): ImageContent {
-  const mimeType = payload.mimeType
-    .split(';')[0]
+  const mimeType = (payload.mimeType.split(';')[0] ?? '')
     .trim()
     .toLowerCase();
   if (!mimeType.startsWith('image/')) {

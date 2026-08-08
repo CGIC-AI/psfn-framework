@@ -37,7 +37,7 @@ export interface SessionSegmentFilename {
 
 export function parseSessionSegmentFilename(filename: string): SessionSegmentFilename {
   const rolled = ROLLED_SESSION_FILENAME.exec(filename);
-  if (!rolled) {
+  if (!rolled || rolled[1] === undefined || rolled[2] === undefined) {
     return { rootFilename: filename, segmentNumber: 1 };
   }
   return {

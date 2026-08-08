@@ -419,7 +419,7 @@ export class ImageService implements ImageOperations {
         result = await this.runProviderAttempt(
           context,
           'fal',
-          params.model ?? (mode === 'create' ? DEFAULT_FAL_CREATE_MODEL_CHAIN[0] : DEFAULT_FAL_EDIT_MODEL_CHAIN[0]),
+          params.model ?? (mode === 'create' ? DEFAULT_FAL_CREATE_MODEL_CHAIN[0]! : DEFAULT_FAL_EDIT_MODEL_CHAIN[0]!),
           async () => mode === 'create'
             ? await falClient.create(params as ImageCreateParams)
             : await falClient.edit(params as ImageEditParams),
@@ -595,7 +595,7 @@ export class ImageService implements ImageOperations {
           throw new Error(`download failed with ${response.status}`);
         }
 
-        const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
+        const contentType = (response.headers.get('content-type')?.split(';')[0] ?? '').trim().toLowerCase()
           || asset.contentType
           || 'image/png';
         if (!contentType.startsWith('image/')) {

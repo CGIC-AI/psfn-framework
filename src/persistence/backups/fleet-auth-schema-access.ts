@@ -91,13 +91,15 @@ export function validateFleetAuthSchemaAccessContracts(
   if (shared.length !== 1 || companions.length === 0) {
     throw new Error('Fleet auth family restore requires companion mappings and exactly one shared mapping');
   }
+  const sharedContract = shared[0]!;
   const companionRuntimeRoles = companions.map((contract, index) => {
-    if (contract.runtimeRoles.length !== 1 || contract.ownerRole !== contract.runtimeRoles[0]) {
+    const runtimeRole = contract.runtimeRoles[0];
+    if (contract.runtimeRoles.length !== 1 || !runtimeRole || contract.ownerRole !== runtimeRole) {
       throw new Error(
         `Fleet auth family restore companion schema access contract ${index} must have one matching runtime owner`,
       );
     }
-    return contract.runtimeRoles[0];
+    return runtimeRole;
   });
   if (new Set(companionRuntimeRoles).size !== companionRuntimeRoles.length) {
     throw new Error('Fleet auth family restore refuses to map one companion role across sibling schemas');
@@ -105,13 +107,13 @@ export function validateFleetAuthSchemaAccessContracts(
   if (companions.some(contract => contract.ownerRole === fleetAuthRoles.sharedMigration)) {
     throw new Error('Fleet auth family restore shared migration role must not own a companion schema');
   }
-  if (shared[0].ownerRole !== fleetAuthRoles.sharedMigration) {
+  if (sharedContract.ownerRole !== fleetAuthRoles.sharedMigration) {
     throw new Error(
       `Fleet auth family restore shared schema must be owned by configured migration role ${fleetAuthRoles.sharedMigration}`,
     );
   }
   const expectedSharedRoles = [...companionRuntimeRoles].sort();
-  if (JSON.stringify(shared[0].runtimeRoles) !== JSON.stringify(expectedSharedRoles)) {
+  if (JSON.stringify(sharedContract.runtimeRoles) !== JSON.stringify(expectedSharedRoles)) {
     throw new Error('Fleet auth family restore shared access must name every companion runtime role exactly');
   }
   return validated.sort((left, right) => left.schema.localeCompare(right.schema));
@@ -149,7 +151,13 @@ async function assertSchemaIsolation(
   contracts: readonly FleetAuthSchemaAccessContract[],
 ): Promise<void> {
   const companionContracts = contracts.filter(contract => contract.kind === 'companion');
-  const companionRoles = companionContracts.map(contract => contract.runtimeRoles[0]);
+  const companionRoles = companionContracts.map((contract) => {
+    const role = contract.runtimeRoles[0];
+    if (!role) {
+      throw new Error('Fleet auth schema access isolation companion contract is missing its runtime role');
+    }
+    return role;
+  });
   const schemas = contracts.map(contract => contract.schema);
   const privileges = await client.query<{
     role_name: string;
@@ -334,12 +342,18 @@ export async function resolveFleetAuthSchemaAccessContracts(options: {
       }
       const companionRoles = companionSchemas.map(schema => ownerBySchema.get(schema)!);
       const contracts = validateFleetAuthSchemaAccessContracts([
-        ...companionSchemas.map((schema, index) => ({
-          kind: 'companion' as const,
-          schema,
-          ownerRole: companionRoles[index],
-          runtimeRoles: [companionRoles[index]],
-        })),
+        ...companionSchemas.map((schema, index) => {
+          const ownerRole = companionRoles[index];
+          if (!ownerRole) {
+            throw new Error('Fleet auth schema access discovery missing companion schema owner');
+          }
+          return {
+            kind: 'companion' as const,
+            schema,
+            ownerRole,
+            runtimeRoles: [ownerRole],
+          };
+        }),
         {
           kind: 'shared' as const,
           schema: sharedSchema,
@@ -383,7 +397,13 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
         client,
         options.contracts
           .filter(contract => contract.kind === 'companion')
-          .map(contract => contract.runtimeRoles[0]),
+          .map((contract) => {
+            const role = contract.runtimeRoles[0];
+            if (!role) {
+              throw new Error('Fleet auth family restore companion contract is missing its runtime role');
+            }
+            return role;
+          }),
       );
       const target = await client.query<{ database_name: string; system_identifier: string }>(`
         SELECT current_database() AS database_name,
@@ -393,6 +413,9 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
       if (!expectedTarget) throw new Error('Fleet auth family restore could not identify its target database');
       for (const contract of options.contracts) {
         const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
+        if (!ownerDatabaseUrl) {
+          throw new Error(`Fleet auth family restore owner credential missing for ${contract.schema}`);
+        }
         parseExactPostgresCredential(
           ownerDatabaseUrl,
           `Fleet auth family restore owner credential for ${contract.schema}`,
@@ -453,7 +476,13 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   ))].sort();
   const mappedRuntimeGrantees = mappedRuntimeRoles.map(quoteIdentifier).join(', ');
   for (const contract of options.contracts) {
-    const pool = createPostgresPool(options.ownerDatabaseUrls[contract.schema], {
+    const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
+    if (!ownerDatabaseUrl) {
+      throw new Error(
+        `Fleet auth family restore owner credential missing for ${contract.schema}`,
+      );
+    }
+    const pool = createPostgresPool(ownerDatabaseUrl, {
       applicationName: 'fleet-auth-schema-access-restore',
       max: 1,
     });
@@ -563,7 +592,7 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
       if (unexpectedGrantees.rows.length > 0) {
         throw new Error(
           `Fleet auth family restore schema ${contract.schema} has unexpected PostgreSQL grantees: `
-          + unexpectedGrantees.rows.map(row => row.role_name).join(', '),
+          + unexpectedGrantees.rows.map(row => row.role_name).filter(Boolean).join(', '),
         );
       }
       await client.query('COMMIT');

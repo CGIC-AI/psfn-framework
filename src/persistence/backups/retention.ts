@@ -172,14 +172,16 @@ export function applyTieredRetention(
     .reverse()
     .filter(dir => !protected_.has(dir));
   for (let i = 0; i < Math.min(maxRotatingBackups, rotating.length); i++) {
-    protected_.add(rotating[i]);
+    const dir = rotating[i];
+    if (dir !== undefined) protected_.add(dir);
   }
 
   // Fail-closed invariant: the single newest backup always survives pruning,
   // even if every tier count (including rotating) is zero. This guarantees at
   // least one recent recovery point can never be rotated away. `dirs` is sorted
   // oldest-first, so the final entry is the newest.
-  protected_.add(dirs[dirs.length - 1]);
+  const newestDir = dirs[dirs.length - 1];
+  if (newestDir !== undefined) protected_.add(newestDir);
 
   const kept: string[] = [];
   const pruned: string[] = [];

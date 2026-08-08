@@ -128,9 +128,9 @@ function assertNoOverlappingRoots(
 ): void {
   const entries = Object.entries(roots);
   for (let i = 0; i < entries.length; i += 1) {
-    const [firstLabel, firstPath] = entries[i];
+    const [firstLabel, firstPath] = entries[i]!;
     for (let j = i + 1; j < entries.length; j += 1) {
-      const [secondLabel, secondPath] = entries[j];
+      const [secondLabel, secondPath] = entries[j]!;
       if (isStrictSubpath(firstPath, secondPath) || isStrictSubpath(secondPath, firstPath)) {
         throw new Error(
           `Runtime layout paths "${firstLabel}" (${firstPath}) and "${secondLabel}" (${secondPath}) ` +

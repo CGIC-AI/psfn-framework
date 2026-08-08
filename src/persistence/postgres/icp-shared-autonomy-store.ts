@@ -310,7 +310,7 @@ function normalizeFence(
   if (entries[0]?.companionId !== pair[0] || entries[1]?.companionId !== pair[1]) {
     throw new Error('expectedInvalidationFence does not match permit participants');
   }
-  return { companions: [entries[0], entries[1]] };
+  return { companions: [entries[0]!, entries[1]!] };
 }
 
 function requireNonNegativeInteger(value: unknown, field: string): number {

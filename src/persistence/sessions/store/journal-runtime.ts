@@ -199,7 +199,9 @@ export class SessionJournalRuntime {
     const nextHmacCandidates: Array<string | null> = [];
     for (let index = 0; index < verificationResults.length; index++) {
       const previousHmac = candidateList[index] ?? null;
-      for (const candidate of resolveJournalIntegrityChainCandidates(verificationResults[index], previousHmac)) {
+      const verification = verificationResults[index];
+      if (!verification) continue;
+      for (const candidate of resolveJournalIntegrityChainCandidates(verification, previousHmac)) {
         appendUniqueHmacCandidate(nextHmacCandidates, candidate);
       }
     }
@@ -746,15 +748,16 @@ export class SessionJournalRuntime {
 
     const messageIndexes: number[] = [];
     for (let index = 0; index < window.entries.length; index += 1) {
-      if (window.entries[index].type === 'message') messageIndexes.push(index);
+      if (window.entries[index]?.type === 'message') messageIndexes.push(index);
     }
     if (messageIndexes.length === 0) return [];
 
     const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - boundedMessageLimit)];
+    if (oldestMessageIndex === undefined) return [];
     let previousHmacCandidates: Array<string | null> = [null];
     if (oldestMessageIndex > 0) {
       const boundaryEntry = window.entries[oldestMessageIndex - 1];
-      previousHmacCandidates = typeof boundaryEntry._hmac === 'string'
+      previousHmacCandidates = boundaryEntry && typeof boundaryEntry._hmac === 'string'
         ? [boundaryEntry._hmac]
         : [null];
     }
@@ -762,7 +765,7 @@ export class SessionJournalRuntime {
     const messages: SessionEntry[] = [];
     let verificationFailed = false;
     for (let index = oldestMessageIndex; index < window.entries.length; index += 1) {
-      const rawEntry = window.entries[index];
+      const rawEntry = window.entries[index]!;
       const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
       previousHmacCandidates = normalized.nextHmacCandidates;
       verificationFailed = verificationFailed || !normalized.verified;

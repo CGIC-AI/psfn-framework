@@ -194,7 +194,7 @@ function verifyJsonlSnapshot(path: string): { lineCount: number } {
   const lines = readFileSync(path, 'utf-8').split('\n');
   let lineCount = 0;
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
+    const line = lines[index]?.trim() ?? '';
     if (!line) continue;
     try {
       JSON.parse(line);

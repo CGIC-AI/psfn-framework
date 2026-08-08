@@ -1,29 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createLiteLLMModel,
-  createModel,
   createOpenAICompatibleEndpointModel,
   resolveSystemRoleCapabilityMetadata,
 } from './models.js';
 import { normalizeContent } from './client.js';
 
-describe('createLiteLLMModel', () => {
+describe('createOpenAICompatibleEndpointModel', () => {
   it('creates a model with correct baseUrl and api type', () => {
-    const model = createLiteLLMModel({
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'z-ai/glm-5',
+      provider: 'shared-router',
     });
 
     expect(model.id).toBe('z-ai/glm-5');
     expect(model.api).toBe('openai-completions');
     expect(model.baseUrl).toBe('http://localhost:4000/v1');
-    expect(model.provider).toBe('litellm');
+    expect(model.provider).toBe('shared-router');
   });
 
-  it('sets compat flags for LiteLLM proxy', () => {
-    const model = createLiteLLMModel({
+  it('sets compat flags for OpenAI-compatible endpoints', () => {
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
+      provider: 'shared-router',
     });
 
     expect(model.compat).toBeDefined();
@@ -32,9 +32,10 @@ describe('createLiteLLMModel', () => {
   });
 
   it('uses provided maxTokens and contextWindow', () => {
-    const model = createLiteLLMModel({
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
+      provider: 'shared-router',
       maxTokens: 8192,
       contextWindow: 200_000,
     });
@@ -44,34 +45,36 @@ describe('createLiteLLMModel', () => {
   });
 
   it('defaults contextWindow to 128k and maxTokens to 4096', () => {
-    const model = createLiteLLMModel({
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'unknown-model',
+      provider: 'shared-router',
     });
 
     expect(model.contextWindow).toBe(128_000);
     expect(model.maxTokens).toBe(4096);
   });
-});
 
-describe('createModel', () => {
   it('uses caller-provided token and context values', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 16_384, 128_000);
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'z-ai/glm-5',
+      provider: 'shared-router',
+      maxTokens: 16_384,
+      contextWindow: 128_000,
+    });
 
     expect(model.id).toBe('z-ai/glm-5');
     expect(model.maxTokens).toBe(16_384);
     expect(model.contextWindow).toBe(128_000);
   });
 
-  it('allows maxTokens override without model-specific fallback table', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 8192, 128_000);
-
-    expect(model.maxTokens).toBe(8_192);
-    expect(model.contextWindow).toBe(128_000);
-  });
-
   it('retains generic defaults when caller omits explicit routing metadata', () => {
-    const model = createModel('http://localhost:4000/v1', 'some/new-model', undefined, undefined);
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'some/new-model',
+      provider: 'shared-router',
+    });
 
     expect(model.id).toBe('some/new-model');
     expect(model.api).toBe('openai-completions');
@@ -80,24 +83,25 @@ describe('createModel', () => {
   });
 
   it('can preserve routed vision capability when the registry marks the model as vision-capable', () => {
-    const model = createModel(
-      'http://localhost:4000/v1',
-      'openrouter/google/gemini-3-flash-preview',
-      16_384,
-      1_048_576,
-      'openai-completions',
-      { supportsVision: true },
-    );
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'openrouter/google/gemini-3-flash-preview',
+      provider: 'shared-router',
+      maxTokens: 16_384,
+      contextWindow: 1_048_576,
+      supportsVision: true,
+    });
 
     expect(model.input).toEqual(['text', 'image']);
   });
 });
 
 describe('resolveSystemRoleCapabilityMetadata', () => {
-  it('marks LiteLLM OpenAI-compatible proxies as developer-role capable when reasoning is enabled', () => {
-    const model = createLiteLLMModel({
+  it('marks OpenAI-compatible endpoints as developer-role capable when reasoning is enabled', () => {
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
+      provider: 'shared-router',
       reasoning: true,
     });
 
@@ -110,9 +114,10 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
   });
 
   it('keeps non-reasoning OpenAI-compatible models on the system role', () => {
-    const model = createLiteLLMModel({
+    const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
+      provider: 'shared-router',
       reasoning: false,
     });
 

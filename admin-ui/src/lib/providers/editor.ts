@@ -42,8 +42,7 @@ export function providerRegistryIsDirty(
 
 export function providerTypeSummary(type: CanonicalProviderType): string {
   if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
-  if (type === 'litellm_proxy') return 'LiteLLM gateway routing + OpenAI-compatible model catalog';
-  if (type === 'generic_openai') return 'OpenAI-compatible backend';
+  if (type === 'generic_openai') return 'OpenAI-compatible backend (shared router or direct)';
   return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
 }
 
@@ -53,8 +52,8 @@ export function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
     roles.push('import routing');
     roles.push('catalog discovery');
   }
-  if (entry.type === 'litellm_proxy') {
-    roles.push('proxy routing');
+  if (entry.type === 'generic_openai') {
+    roles.push('shared router routing');
     roles.push('catalog discovery');
   }
   if (!providerIsEnabled(entry)) {
@@ -157,7 +156,6 @@ export function validateProviderRegistry(registry: CanonicalProviderRegistry): s
   const errors: string[] = [];
   const seenIds = new Set<string>();
   let enabledOpenRouterCount = 0;
-  let enabledLiteLLMCount = 0;
 
   for (const [index, entry] of registry.providers.entries()) {
     const label = entry.id || `provider #${index + 1}`;
@@ -180,16 +178,10 @@ export function validateProviderRegistry(registry: CanonicalProviderRegistry): s
     if (providerIsEnabled(entry) && entry.type === 'openrouter') {
       enabledOpenRouterCount += 1;
     }
-    if (providerIsEnabled(entry) && entry.type === 'litellm_proxy') {
-      enabledLiteLLMCount += 1;
-    }
   }
 
   if (enabledOpenRouterCount > 1) {
     errors.push('Only one enabled OpenRouter provider is supported.');
-  }
-  if (enabledLiteLLMCount > 1) {
-    errors.push('Only one enabled LiteLLM proxy provider is supported.');
   }
 
   return errors;

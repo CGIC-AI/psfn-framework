@@ -180,7 +180,6 @@ ports:
   companionUiTest: 8080
   postgres: 5432
   redis: 6379
-  liteLlm: 4000
   emosimHttp: 17342
   emosimTcp: 17341
 
@@ -384,7 +383,6 @@ secrets:
     extraSatelliteApiKeys: ""
     openRouterApiKey: ""
     openAiApiKey: ""
-    liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
     backupEncryptionKey: CHANGE_ME_BACKUP_ENCRYPTION_KEY
     embeddingApiKey: ""
     hfToken: ""
@@ -407,7 +405,6 @@ secrets:
     satelliteApiKeys: API_SATELLITE_KEYS
     openRouterApiKey: OPENROUTER_API_KEY
     openAiApiKey: OPENAI_API_KEY
-    liteLlmApiKey: LITELLM_API_KEY
     backupEncryptionKey: PSFN_BACKUP_ENCRYPTION_KEY
     embeddingApiKey: EMBEDDING_API_KEY
     hfToken: HF_TOKEN
@@ -510,75 +507,6 @@ emosim:
     # provides the wall-clock downtime catch-up on recovery.
     size: 1Gi
   resources: {}
-
-liteLlm:
-  enabled: true
-  mode: internal
-  replicaCount: 1
-  image:
-    repository: ghcr.io/berriai/litellm
-    tag: v1.74.9-stable
-    digest: sha256:f78c763d6f2289305a3acc3a003c6170f797bdda70c56e75776fbab670e663cc
-    pullPolicy: IfNotPresent
-  command: ["litellm"]
-  resources: {}
-  config:
-    existingConfigMap: ""
-    key: config.yaml
-    path: /etc/litellm/config.yaml
-    yaml: |-
-      # The wildcard route alone does NOT serve PSFN: the runtime requests
-      # unprefixed model names (e.g. "z-ai/glm-5.2"), which fail the
-      # "openrouter/*" group and silently fall back to direct OpenRouter.
-      # Every model referenced by a models.json slot needs an explicit
-      # unprefixed route here (2026-07-06 incident, bead psfn-framework-oylk).
-      model_list:
-        - model_name: "openrouter/*"
-          litellm_params:
-            model: "openrouter/*"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "z-ai/glm-5.2"
-          litellm_params:
-            # Route via OpenRouter ':exacto' variant, which orders upstream
-            # providers by measured tool-call reliability. Flaky vLLM-family
-            # upstreams intermittently return literal '{}' tool-call arguments;
-            # z-ai/glm-5.2:exacto evaluated 10/10 clean (bead psfn-framework-mihm).
-            # Keep model_name unprefixed so models.json/settings are unchanged.
-            model: "openrouter/z-ai/glm-5.2:exacto"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "z-ai-glm-5.2-nitro"
-          litellm_params:
-            # LiteLLM treats the colon variant in a requested model name as a
-            # model-group separator. Keep the public alias colon-free while
-            # preserving OpenRouter's throughput-prioritized Nitro variant in
-            # the upstream model ID (bead psfn-framework-z82t).
-            model: "openrouter/z-ai/glm-5.2:nitro"
-            reasoning_effort: "none"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "moonshotai/kimi-k2.6"
-          litellm_params:
-            model: "openrouter/moonshotai/kimi-k2.6"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "deepseek/deepseek-v4-pro"
-          litellm_params:
-            model: "openrouter/deepseek/deepseek-v4-pro"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "google/gemini-3.1-flash-lite"
-          litellm_params:
-            model: "openrouter/google/gemini-3.1-flash-lite"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-        - model_name: "openai/gpt-5.4-mini"
-          litellm_params:
-            model: "openrouter/openai/gpt-5.4-mini"
-            api_key: "os.environ/OPENROUTER_API_KEY"
-      litellm_settings:
-        drop_params: true
-      general_settings:
-        master_key: "os.environ/LITELLM_MASTER_KEY"
-  external:
-    baseUrl: ""
-  extraEnv: []
-  extraEnvFrom: []
 
 embeddings:
   provider: transformers
@@ -699,8 +627,6 @@ networkPolicy:
   modelPrefetch:
     allowExternalHttpsEgress: true
   satelliteHub:
-    allowExternalEgress: true
-  liteLlm:
     allowExternalEgress: true
 
 ingress:

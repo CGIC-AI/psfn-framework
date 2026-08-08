@@ -67,12 +67,6 @@ const PROVIDER_TYPE_METADATA: Record<string, Omit<ProviderTypeInfo, 'type'>> = {
     requiresModelsApiUrl: false,
     defaultApiKeyEnvName: 'MISTRAL_API_KEY',
   },
-  litellm_proxy: {
-    label: 'LiteLLM-compatible endpoint (legacy bundled proxy; configure a generic OpenAI-compatible endpoint for a shared external router instead)',
-    requiresApiBaseUrl: true,
-    requiresModelsApiUrl: false,
-    defaultApiKeyEnvName: 'LITELLM_API_KEY',
-  },
   generic_openai: {
     label: 'Generic OpenAI-compatible endpoint (shared/external router)',
     requiresApiBaseUrl: true,

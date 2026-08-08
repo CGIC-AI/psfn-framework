@@ -838,7 +838,6 @@ write_app_secret_env() {
     printf 'GATEWAY_COMPANION_AUTH_TOKEN=%s\n' "$COMPANION_AUTH_TOKEN"
     printf 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN=%s\n' "$SESSION_INTEGRITY_AUTH_TOKEN"
     printf 'PSFN_BACKUP_ENCRYPTION_KEY=%s\n' "${PSFN_BACKUP_ENCRYPTION_KEY:-$(random_secret)}"
-    printf 'LITELLM_API_KEY=%s\n' "${LITELLM_API_KEY:-$(random_secret)}"
     printf 'OPENROUTER_API_KEY=%s\n' "${OPENROUTER_API_KEY:-}"
     printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY:-}"
     printf 'EMBEDDING_API_KEY=%s\n' "${EMBEDDING_API_KEY:-}"

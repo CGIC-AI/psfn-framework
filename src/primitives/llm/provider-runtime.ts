@@ -101,14 +101,11 @@ function registerOpenAICompatibleEndpointProvider(
 }
 
 /**
- * Register the OpenAI-compatible endpoint providers that PSFN historically
- * routed by model `provider` id. These have no static catalog; models are
- * supplied per-request through {@link createModel} / {@link createOpenAICompatibleEndpointModel}.
- * This preserves explicit configured endpoint behavior while the migration to
- * typed generic providers proceeds in later beads.
+ * Register the OpenAI-compatible endpoint providers that PSFN routes by model
+ * `provider` id when no static catalog applies. Models are supplied per-request
+ * through {@link createOpenAICompatibleEndpointModel}.
  */
 function registerLegacyEndpointProviders(models: MutableModels): void {
-  registerOpenAICompatibleEndpointProvider(models, 'litellm', 'LiteLLM', ['LITELLM_API_KEY']);
   registerOpenAICompatibleEndpointProvider(models, 'local_endpoint', 'Local endpoint', []);
 }
 

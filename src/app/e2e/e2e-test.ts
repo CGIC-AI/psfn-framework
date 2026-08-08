@@ -3,7 +3,7 @@
 // Run: npx tsx src/app/e2e/e2e-test.ts
 //
 // Requirements:
-//   - LiteLLM proxy running (npm run proxy:up)
+//   - An LLM provider configured via providers.json (OpenRouter or a shared OpenAI-compatible router)
 //   - Embedding provider configured via EMBEDDING_PROVIDER (defaults to Ollama)
 //   - .env configured
 

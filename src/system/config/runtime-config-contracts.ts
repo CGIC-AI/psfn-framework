@@ -301,8 +301,6 @@ export interface SubstrateConfig {
   modelPurposeSelection?: ModelPurposeSelection;
   providerRegistry?: CanonicalProviderRegistry;
   credentialVault?: CredentialVaultPort;
-  litellmBaseUrl?: string;
-  litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
   /**
@@ -523,7 +521,6 @@ export const CORE_SECRET_BEARING_CONFIG_KEYS = [
   'gatewaySessionIntegrityAuthToken',
   'postgresDatabaseUrl',
   'fleetAuth',
-  'litellmApiKeyRef',
   'openRouterApiKeyRef',
   'deepgramApiKey',
   'elevenLabsApiKey',
@@ -540,7 +537,6 @@ export interface CoreSubstrateConfig extends SubstrateConfig {
   gatewaySessionIntegrityAuthToken?: never;
   postgresDatabaseUrl?: never;
   fleetAuth?: never;
-  litellmApiKeyRef?: never;
   openRouterApiKeyRef?: never;
   deepgramApiKey?: never;
   elevenLabsApiKey?: never;
@@ -556,7 +552,6 @@ export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstr
     gatewaySessionIntegrityAuthToken: _gatewaySessionIntegrityAuthToken,
     postgresDatabaseUrl: _postgresDatabaseUrl,
     fleetAuth: _fleetAuth,
-    litellmApiKeyRef: _litellmApiKeyRef,
     openRouterApiKeyRef: _openRouterApiKeyRef,
     deepgramApiKey: _deepgramApiKey,
     elevenLabsApiKey: _elevenLabsApiKey,

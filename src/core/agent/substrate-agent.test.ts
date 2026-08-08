@@ -260,6 +260,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   const config: SubstrateConfig = {
     primaryModel: 'deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
+    openRouterApiBaseUrl: 'http://localhost:4000/v1',
     extractionModel: 'deepseek/deepseek-v3.2',
     extractionProvider: 'openrouter',
     primaryMaxTokens: 16384,
@@ -631,7 +632,6 @@ function makeActiveMemorySnapshot(overrides: Record<string, unknown> = {}): any 
 // tests, whose failures otherwise leak global agent-runtime state.
 describe('SubstrateAgent real-SessionManager turn (B1 regression)', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('assembles the prompt through the captured facade during a real-SessionManager turn', async () => {
@@ -740,7 +740,6 @@ describe('SubstrateAgent real-SessionManager turn (B1 regression)', () => {
 
 describe('SubstrateAgent construction', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('constructs without error', () => {
@@ -978,7 +977,7 @@ describe('SubstrateAgent construction', () => {
     expect(setModelSpy.mock.calls.length).toBeGreaterThan(callCountBeforeRefresh);
 
     const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
-    expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
+    expect(refreshedModel.id).toBe('moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
   });
 
@@ -1492,7 +1491,6 @@ describe('SubstrateAgent.registerTool', () => {
   }
 
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('accepts AgentTool-shaped objects', () => {
@@ -1796,7 +1794,6 @@ describe('SubstrateAgent.registerTool', () => {
 
 describe('SubstrateAgent persona adaptation', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('resolves trust level from contact store', () => {
@@ -1822,7 +1819,6 @@ describe('SubstrateAgent persona adaptation', () => {
 
 describe('SubstrateAgent.handleMessage', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('emits agent.turn.start event', async () => {
@@ -3055,7 +3051,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
     expect(response.channelId).toBe('test-channel');
-    expect(response.metadata.model).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect(response.metadata.model).toBe('deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -5616,13 +5612,12 @@ describe('SubstrateAgent.handleMessage', () => {
     config.modelRegistry = buildRegistryFromConfig(config);
 
     const response = await agent.handleMessage(makeMessage({ id: 'msg-2', content: 'turn two' }));
-    expect(response.metadata.model).toBe('openrouter/moonshotai/kimi-k2.5');
+    expect(response.metadata.model).toBe('moonshotai/kimi-k2.5');
   });
 });
 
 describe('SubstrateAgent steering + follow-up', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   it('exposes isStreaming from agent state', () => {
@@ -7093,7 +7088,6 @@ describe('SubstrateAgent internal state persistence', () => {
 
 describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
   beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
 
   // Hang the mocked inner prompt so the turn stays "active" while we probe

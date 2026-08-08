@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ── PSFN Certificate Setup ──
 # Automates TLS certificate issuance via ACME DNS-01 challenge for the
-# LiteLLM proxy and gateway. Uses acme.sh (preferred) or certbot.
+# gateway and TLS-terminated services. Uses acme.sh (preferred) or certbot.
 #
 # Usage:
 #   ./scripts/cert-setup.sh --domain proxy.example.com --provider cloudflare
@@ -62,11 +62,11 @@ Examples:
     ./scripts/cert-setup.sh -d proxy.psfn.ai -p route53
 
   # Self-signed for local development:
-  ./scripts/cert-setup.sh --self-signed -d litellm.local
+  ./scripts/cert-setup.sh --self-signed -d gateway.local
 
 After issuing, add to your .env:
   GATEWAY_TLS_CA_PATH=./certs/<domain>/ca.pem
-  # For LiteLLM proxy, mount cert/key into docker-compose — see docs/operations.md
+  # For a shared router service, mount cert/key into its compose/deploy — see docs/operations.md
 EOF
   exit 0
 }
@@ -172,7 +172,7 @@ if [ "$SELF_SIGNED" = true ]; then
   echo "Add to your .env:"
   echo "  GATEWAY_TLS_CA_PATH=${CA_CERT}"
   echo ""
-  echo "For LiteLLM proxy (docker-compose.yml), mount the server cert/key:"
+  echo "For a shared router service, mount the server cert/key:"
   echo "  volumes:"
   echo "    - ${SERVER_CERT}:/certs/cert.pem:ro"
   echo "    - ${SERVER_KEY}:/certs/key.pem:ro"
@@ -275,7 +275,7 @@ echo ""
 echo "Add to your .env:"
 echo "  GATEWAY_TLS_CA_PATH=${DOMAIN_CERT_DIR}/ca.pem"
 echo ""
-echo "For LiteLLM proxy (docker-compose.yml), mount the server cert/key:"
+echo "For a shared router service, mount the server cert/key:"
 echo "  volumes:"
 echo "    - ${DOMAIN_CERT_DIR}/fullchain.pem:/certs/cert.pem:ro"
 echo "    - ${DOMAIN_CERT_DIR}/key.pem:/certs/key.pem:ro"

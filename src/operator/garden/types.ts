@@ -253,8 +253,6 @@ export interface EnvInfo {
   apiKey: string;
   adminToken: string;
   openrouterApiKey: string;
-  litellmBaseUrl: string;
-  litellmApiKey: string;
   importProcessingLocalApiKey: string;
   falApiKey: string;
   telegramBotToken: string;

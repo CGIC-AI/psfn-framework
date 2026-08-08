@@ -1175,9 +1175,9 @@ function printHumanOutput(config, normalized, providerResults, summary) {
 
   const bestTags = summary.recommendedProviderOrder;
   if (bestTags.length > 0) {
-    console.log(`LiteLLM/OpenRouter pinning hint: provider:{order:${JSON.stringify(bestTags)},allow_fallbacks:false}`);
+    console.log(`OpenRouter provider-order pinning hint: provider:{order:${JSON.stringify(bestTags)},allow_fallbacks:false}`);
   } else {
-    console.log('LiteLLM/OpenRouter pinning hint: no fully reliable provider order found in this run.');
+    console.log('OpenRouter provider-order pinning hint: no fully reliable provider order found in this run.');
   }
 }
 

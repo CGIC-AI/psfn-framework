@@ -80,11 +80,11 @@ describe('prepareAgentStartupContext', () => {
           id: 'primary',
           rank: 50,
           identity: {
-            provider: 'litellm',
+            provider: 'shared-router',
             model: 'openrouter/z-ai/glm-5.1',
             source: {
-              type: 'litellm_proxy',
-              label: 'LiteLLM',
+              type: 'generic_openai',
+              label: 'Shared Router',
               baseUrl: 'https://inference.local.vega.nyc/v1',
             },
           },
@@ -162,14 +162,14 @@ describe('prepareAgentStartupContext', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
+          id: 'shared-router',
+          type: 'generic_openai',
           enabled: true,
-          label: 'LiteLLM',
+          label: 'Shared Router',
           apiBaseUrl: 'https://inference.local.vega.nyc/v1',
           apiKeyRef: {
             kind: 'env',
-            envName: 'LITELLM_API_KEY',
+            envName: 'SHARED_ROUTER_API_KEY',
           },
         },
         {
@@ -202,7 +202,7 @@ describe('prepareAgentStartupContext', () => {
     delete process.env.POSTGRES_DATABASE_URL;
     process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
-    process.env.LITELLM_API_KEY = 'test-litellm-key';
+    process.env.SHARED_ROUTER_API_KEY = 'test-shared-router-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
     process.env.PSFN_BACKUP_ENCRYPTION_KEY = 'test-backup-secret';
 
@@ -220,7 +220,7 @@ describe('prepareAgentStartupContext', () => {
       expect(context.config.modelRoster.vision?.model).toBe('openrouter/google/gemini-3.1-flash-lite-preview');
       expect(context.coreConfig.primaryModel).toBe('openrouter/z-ai/glm-5.1');
       expect(context.coreConfig.modelRoster.vision?.model).toBe('openrouter/google/gemini-3.1-flash-lite-preview');
-      expect(context.coreConfig.modelRoster.chat?.provider).toBe('litellm');
+      expect(context.coreConfig.modelRoster.chat?.provider).toBe('shared-router');
       expect(process.env.POSTGRES_DATABASE_URL).toBeUndefined();
       expect(Object.values(process.env).join('\n')).not.toContain('file-secret');
       expect(context.config.postgresDatabaseUrl)

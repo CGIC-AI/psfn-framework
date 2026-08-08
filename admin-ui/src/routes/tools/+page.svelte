@@ -72,7 +72,7 @@
     },
     {
       title: 'Providers',
-      detail: 'Edit LiteLLM, OpenRouter, and direct backend provider wiring.',
+      detail: 'Edit shared router, OpenRouter, and direct backend provider wiring.',
       href: `${base}/settings#settings-providers`,
     },
   ] as const;

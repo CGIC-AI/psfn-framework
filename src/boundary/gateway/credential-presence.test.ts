@@ -37,11 +37,9 @@ describe('resolveGatewayCredentialPresence', () => {
   it('returns booleans only while retaining every Garden status signal', () => {
     const result = resolveGatewayCredentialPresence({
       config: {
-        litellmBaseUrl: 'http://litellm.test/v1',
         falApiKey: 'fal-secret',
       } as SubstrateConfig,
       channelsConfig: channels(),
-      providerEnv: { LITELLM_API_KEY: 'litellm-secret' },
       env: {
         LOCAL_API_KEY: 'local-secret',
         ADMIN_TOKEN: 'admin-secret',
@@ -55,8 +53,6 @@ describe('resolveGatewayCredentialPresence', () => {
       apiKey: true,
       adminToken: true,
       openrouterApiKey: true,
-      litellmBaseUrl: true,
-      litellmApiKey: true,
       importProcessingLocalApiKey: true,
       falApiKey: true,
       telegramBotToken: true,

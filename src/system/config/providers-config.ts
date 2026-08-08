@@ -15,7 +15,6 @@ export const PROVIDERS_SEED_FILE_NAME = 'providers.seed.json';
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const KNOWN_PROVIDER_TYPES = new Set<CanonicalProviderType>([
-  'litellm_proxy',
   'openrouter',
   'openai',
   'anthropic',
@@ -38,8 +37,6 @@ export interface OpenRouterWebToolsConfig {
 
 export interface ProvidersRuntimeConfig {
   registry: CanonicalProviderRegistry;
-  litellmBaseUrl?: string;
-  litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
   openRouterModelsApiUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
@@ -141,9 +138,6 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
     `${field}.reservedForegroundSlots`,
   );
 
-  if (type === 'litellm_proxy' && !apiBaseUrl) {
-    throw new Error(`Invalid providers config: ${field}.apiBaseUrl is required for litellm_proxy`);
-  }
   if (type === 'openrouter') {
     if (!apiBaseUrl) {
       throw new Error(`Invalid providers config: ${field}.apiBaseUrl is required for openrouter`);
@@ -229,7 +223,7 @@ export function normalizeCanonicalProviderRegistry(
     return normalized;
   });
 
-  for (const singletonType of ['litellm_proxy', 'openrouter'] as const) {
+  for (const singletonType of ['openrouter'] as const) {
     if ((enabledTypeCounts.get(singletonType) ?? 0) > 1) {
       throw new Error(`Invalid providers config at ${sourcePath}: only one enabled ${singletonType} provider is supported`);
     }
@@ -263,13 +257,10 @@ function projectOpenRouterWebTools(
 }
 
 function projectProvidersRuntimeConfig(registry: CanonicalProviderRegistry): ProvidersRuntimeConfig {
-  const litellm = registry.providers.find((entry) => entry.enabled && entry.type === 'litellm_proxy');
   const openrouter = registry.providers.find((entry) => entry.enabled && entry.type === 'openrouter');
   const openRouterWebTools = projectOpenRouterWebTools(openrouter);
   return {
     registry,
-    ...(litellm?.apiBaseUrl ? { litellmBaseUrl: litellm.apiBaseUrl } : {}),
-    ...(litellm?.apiKeyRef ? { litellmApiKeyRef: litellm.apiKeyRef } : {}),
     ...(openrouter?.apiBaseUrl ? { openRouterApiBaseUrl: openrouter.apiBaseUrl } : {}),
     ...(openrouter?.modelsApiUrl ? { openRouterModelsApiUrl: openrouter.modelsApiUrl } : {}),
     ...(openrouter?.apiKeyRef ? { openRouterApiKeyRef: openrouter.apiKeyRef } : {}),
@@ -318,8 +309,6 @@ export function applyProvidersRuntimeConfig(
   providers: ProvidersRuntimeConfig,
 ): void {
   config.providerRegistry = providers.registry;
-  config.litellmBaseUrl = providers.litellmBaseUrl;
-  config.litellmApiKeyRef = providers.litellmApiKeyRef;
   config.openRouterApiBaseUrl = providers.openRouterApiBaseUrl;
   config.openRouterApiKeyRef = providers.openRouterApiKeyRef;
   config.openRouterWebTools = providers.openRouterWebTools;
@@ -328,8 +317,3 @@ export function applyProvidersRuntimeConfig(
   }
 }
 
-export function resolveConfiguredLiteLLMBaseUrl(config: SubstrateConfig): string | null {
-  const configured = toNonEmptyString(config.litellmBaseUrl);
-  if (configured) return configured;
-  return toNonEmptyString(process.env.LITELLM_BASE_URL) ?? null;
-}

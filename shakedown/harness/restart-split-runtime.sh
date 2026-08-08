@@ -114,8 +114,8 @@ sleep 2
 ensure_garden_ui_build
 
 # tmux inherits the current (sourced) environment, so every secret and path
-# already exported by the shakedown env — POSTGRES_DATABASE_URL, LITELLM_*,
-# DISCORD_*, layout dirs — is passed straight through to `npm run split`.
+# already exported by the shakedown env — POSTGRES_DATABASE_URL,
+# OPENROUTER_API_KEY, DISCORD_*, layout dirs — is passed straight through to `npm run split`.
 tmux new-session -d -s "$TMUX_SESSION" \
   "cd \"$REPO_ROOT\" && npm run split > \"$LOG_PATH\" 2>&1"
 

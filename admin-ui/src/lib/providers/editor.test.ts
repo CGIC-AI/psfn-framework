@@ -103,23 +103,21 @@ describe('provider editor helpers', () => {
   });
 
   it('exposes stable provider summaries and runtime roles', () => {
-    expect(providerTypeSummary('generic_openai')).toBe('OpenAI-compatible backend');
-    expect(providerTypeSummary('litellm_proxy')).toBe(
-      'LiteLLM gateway routing + OpenAI-compatible model catalog',
-    );
+    expect(providerTypeSummary('generic_openai')).toBe('OpenAI-compatible backend (shared router or direct)');
+    expect(providerTypeSummary('openrouter')).toBe('Model discovery + routed OpenRouter traffic');
     expect(providerRuntimeRole({
-      id: 'proxy',
-      type: 'litellm_proxy',
+      id: 'shared-router',
+      type: 'generic_openai',
       enabled: false,
-    })).toEqual(['proxy routing', 'catalog discovery', 'disabled']);
+    })).toEqual(['shared router routing', 'catalog discovery', 'disabled']);
   });
 
-  it('keeps LiteLLM model catalog URLs when switching provider types', () => {
+  it('keeps shared-router model catalog URLs when switching provider types', () => {
     let registry: CanonicalProviderRegistry = {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
+          id: 'shared-router',
           type: 'openai',
           enabled: true,
           apiBaseUrl: 'http://127.0.0.1:4000/v1',
@@ -128,7 +126,7 @@ describe('provider editor helpers', () => {
       ],
     };
 
-    registry = setProviderType(registry, 0, 'litellm_proxy');
+    registry = setProviderType(registry, 0, 'generic_openai');
     expect(registry.providers[0]?.modelsApiUrl).toBe('http://127.0.0.1:4000/v1/models');
 
     registry = setProviderType(registry, 0, 'anthropic');

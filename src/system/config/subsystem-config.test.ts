@@ -895,14 +895,14 @@ describe('subsystem config round-trip', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
+          id: 'shared-router',
+          type: 'generic_openai',
           enabled: true,
-          label: 'LiteLLM Proxy',
-          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          label: 'Shared Router',
+          apiBaseUrl: 'https://router.example.test/v1',
           apiKeyRef: {
             kind: 'env',
-            envName: 'LITELLM_API_KEY',
+            envName: 'SHARED_ROUTER_API_KEY',
           },
         },
         {
@@ -922,11 +922,6 @@ describe('subsystem config round-trip', () => {
 
     const saved = saveProvidersConfig(dataDir, expected);
     expect(saved.registry).toEqual(expected);
-    expect(saved.litellmBaseUrl).toBe('http://127.0.0.1:4000/v1');
-    expect(saved.litellmApiKeyRef).toEqual({
-      kind: 'env',
-      envName: 'LITELLM_API_KEY',
-    });
     expect(saved.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(readJsonFile(join(dataDir, PROVIDERS_FILE_NAME))).toEqual(expected);
     expect(loadProvidersConfig(dataDir).registry).toEqual(expected);
@@ -969,12 +964,12 @@ describe('subsystem config round-trip', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
+          id: 'shared-router',
+          type: 'generic_openai',
           enabled: true,
-          label: 'LiteLLM Proxy',
-          apiBaseUrl: 'http://127.0.0.1:4000/v1',
-          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          label: 'Shared Router',
+          apiBaseUrl: 'https://router.example.test/v1',
+          apiKeyRef: { kind: 'env', envName: 'SHARED_ROUTER_API_KEY' },
           capacity: 2,
           reservedForegroundSlots: 1,
         },
@@ -994,10 +989,10 @@ describe('subsystem config round-trip', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
-          apiBaseUrl: 'http://127.0.0.1:4000/v1',
-          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          id: 'shared-router',
+          type: 'generic_openai',
+          apiBaseUrl: 'https://router.example.test/v1',
+          apiKeyRef: { kind: 'env', envName: 'SHARED_ROUTER_API_KEY' },
           capacity: 0,
         },
       ],
@@ -1011,10 +1006,10 @@ describe('subsystem config round-trip', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
-          apiBaseUrl: 'http://127.0.0.1:4000/v1',
-          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          id: 'shared-router',
+          type: 'generic_openai',
+          apiBaseUrl: 'https://router.example.test/v1',
+          apiKeyRef: { kind: 'env', envName: 'SHARED_ROUTER_API_KEY' },
           capacity: 2,
           reservedForegroundSlots: 2,
         },

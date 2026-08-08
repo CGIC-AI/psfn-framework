@@ -50,6 +50,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   const config: SubstrateConfig = {
     primaryModel: 'deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
+    openRouterApiBaseUrl: 'http://localhost:4000/v1',
     extractionModel: 'deepseek/deepseek-v3.2',
     extractionProvider: 'openrouter',
     primaryMaxTokens: 16384,
@@ -729,7 +730,6 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('falls back to the next configured chat candidate when the primary stream errors before output commits', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;
     const config = makeConfig({
@@ -879,12 +879,11 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('falls back to the next configured chat candidate when the primary response has no text', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       primaryModel: 'ChatGPTN',
-      primaryProvider: 'litellm',
+      primaryProvider: 'openrouter',
       modelRoster: {
-        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        chat: { model: 'ChatGPTN', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       },
       modelRegistry: {
@@ -894,9 +893,9 @@ describe('createSubstrateStreamFn', () => {
             id: 'chatgptn-primary',
             rank: 10,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'ChatGPTN',
-              source: { type: 'litellm' },
+              source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'chat', primary: true }],
             capabilities: {
@@ -979,7 +978,6 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('routes tool-side reasoning streams through the reasoning candidate instead of the mounted chat model', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
@@ -1023,7 +1021,6 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('fails closed for tool-side reasoning streams when no reasoning candidate is configured', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRegistry: {
         schemaVersion: 1,
@@ -1068,7 +1065,6 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('emits a terminal failure hook when all configured candidates fail', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;
     const config = makeConfig({
@@ -1125,9 +1121,7 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('passes model hints through the injected transport without local API-key resolution', async () => {
-    const config = makeConfig({
-      litellmBaseUrl: 'http://localhost:4000/v1',
-    });
+    const config = makeConfig();
 
     streamAdapterMocks.transportStream.mockResolvedValue({
       content: 'ok',
@@ -1157,7 +1151,6 @@ describe('createSubstrateStreamFn', () => {
   });
 
   it('does not switch candidates after output has already started streaming', async () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;
     const config = makeConfig({
@@ -1220,28 +1213,24 @@ describe('createSubstrateStreamFn', () => {
 
 describe('resolveModel', () => {
   beforeEach(() => {
-    // Clear LITELLM_BASE_URL unless a test is explicitly exercising LiteLLM routing.
-    delete process.env.LITELLM_BASE_URL;
+
   });
 
   it('resolves chat model from roster', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config, makeRuntime(), 'chat');
-    expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect(model.id).toBe('deepseek/deepseek-v3.2');
     expect(model.api).toBe('openai-completions');
     expect(model.baseUrl).toBe('http://localhost:4000/v1');
   });
 
   it('resolves background model from roster', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config, makeRuntime(), 'background');
-    expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect(model.id).toBe('deepseek/deepseek-v3.2');
   });
 
   it('resolves vision model from roster', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
@@ -1254,7 +1243,6 @@ describe('resolveModel', () => {
   });
 
   it('resolves context purpose through longContext canonical routing', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
@@ -1275,7 +1263,7 @@ describe('resolveModel', () => {
             id: 'pi-live-chat',
             rank: 1,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'z-ai/glm-5.2',
               source: {
                 type: 'openrouter',
@@ -1305,7 +1293,6 @@ describe('resolveModel', () => {
   });
 
   it('fails closed when a configured vision slot targets a text-only model', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
@@ -1357,7 +1344,6 @@ describe('resolveModel', () => {
   });
 
   it('fails closed when no eligible model exists for a requested purpose', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRegistry: {
         schemaVersion: 1,
@@ -1382,7 +1368,6 @@ describe('resolveModel', () => {
   });
 
   it('resolves reasoning model from canonical registry purpose tags', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
@@ -1394,7 +1379,6 @@ describe('resolveModel', () => {
   });
 
   it('resolves background model from canonical registry purpose tags', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({ modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'background-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
@@ -1404,7 +1388,6 @@ describe('resolveModel', () => {
   });
 
   it('resolves vision model from canonical registry purpose tags', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({ modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
@@ -1414,8 +1397,7 @@ describe('resolveModel', () => {
     expect(model.input).toContain('image');
   });
 
-  it('normalizes OpenRouter vendor-qualified model IDs for LiteLLM wildcard routing', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+  it('preserves OpenRouter vendor-qualified model IDs without wildcard normalization', () => {
     const config = makeConfig({
       modelRoster: {
         chat: {
@@ -1427,11 +1409,10 @@ describe('resolveModel', () => {
       },
     });
     const model = resolveModel(config, makeRuntime(), 'chat');
-    expect(model.id).toBe('openrouter/google/gemini-3-flash-preview');
+    expect(model.id).toBe('google/gemini-3-flash-preview');
   });
 
-  it('keeps non vendor-qualified OpenRouter aliases unchanged in LiteLLM mode', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+  it('keeps non vendor-qualified OpenRouter aliases unchanged', () => {
     const config = makeConfig({
       modelRoster: {
         chat: {
@@ -1457,18 +1438,16 @@ describe('resolveModel', () => {
   });
 
   it('model can be set on Agent', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config);
     const agent = new Agent({ streamFn: makeStreamFn(config) });
     agent.state.model = model;
-    expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect(agent.state.model.id).toBe('deepseek/deepseek-v3.2');
   });
 });
 
 describe('Agent integration', () => {
   it('accepts streamFn + model + system prompt', () => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const streamFn = makeStreamFn(config);
     const model = resolveModel(config);
@@ -1480,7 +1459,7 @@ describe('Agent integration', () => {
     agent.state.tools = [];
 
     expect(agent.state.systemPrompt).toContain(companionName);
-    expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect(agent.state.model.id).toBe('deepseek/deepseek-v3.2');
     expect(agent.state.tools).toEqual([]);
     expect(agent.state.messages).toEqual([]);
     expect(agent.state.isStreaming).toBe(false);
@@ -1569,7 +1548,6 @@ describe('resolveModel — direct-provider path', () => {
   const savedEnv = { ...process.env };
 
   beforeEach(() => {
-    delete process.env.LITELLM_BASE_URL;
   });
 
   afterEach(() => {
@@ -1593,6 +1571,7 @@ describe('resolveModel — direct-provider path', () => {
     const spy = vi.spyOn(models, 'resolveRegisteredModel').mockReturnValue(fakeModel);
 
     const config = makeConfig({
+      openRouterApiBaseUrl: undefined,
       modelRoster: {
         chat: { model: 'test-model', provider: 'openrouter', maxTokens: 4096 },
       },

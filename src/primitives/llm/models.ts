@@ -2,12 +2,12 @@
 // Creates pi-ai Model objects for OpenAI-compatible routed endpoints.
 // LiteLLM is one supported backend, not the generic abstraction itself.
 
-import { getModels, getProviders } from '@mariozechner/pi-ai';
 import type { Api, KnownProvider, Model } from '@mariozechner/pi-ai';
 import type {
   LLMSystemPromptTransport,
   LLMSystemRoleCapabilityMetadata,
 } from '../../shared/contracts/runtime.js';
+import type { ProviderRuntime } from './provider-runtime.js';
 
 export type OpenAICompatibleApi = 'openai-completions' | 'openai-responses';
 
@@ -34,14 +34,18 @@ export interface OpenAICompatibleEndpointModelConfig {
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
 
-function isKnownProvider(provider: string): provider is KnownProvider {
-  const providers = getProviders();
+function isKnownProvider(runtime: ProviderRuntime, provider: string): provider is KnownProvider {
+  const providers = runtime.getProviders();
   return Array.isArray(providers) && providers.some((knownProvider) => knownProvider === provider);
 }
 
-export function resolveRegisteredModel(provider: string, modelId: string): Model<Api> | null {
-  if (!isKnownProvider(provider)) return null;
-  return getModels(provider).find((model) => model.id === modelId) ?? null;
+export function resolveRegisteredModel(
+  runtime: ProviderRuntime,
+  provider: string,
+  modelId: string,
+): Model<Api> | null {
+  if (!isKnownProvider(runtime, provider)) return null;
+  return runtime.getModels(provider).find((model) => model.id === modelId) ?? null;
 }
 
 /**

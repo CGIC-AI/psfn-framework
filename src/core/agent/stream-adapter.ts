@@ -59,6 +59,7 @@ import {
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderStreamOptions } from './contracts.js';
+import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -1166,10 +1167,11 @@ function resolveModelProvider(model: Model<any>): string | undefined {
  */
 export function resolveModel(
   config: CoreSubstrateConfig,
+  runtime: ProviderRuntime,
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  const selection = resolveModelSelection(config, purpose);
+  const selection = resolveModelSelection(config, runtime, purpose);
 
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
@@ -1197,7 +1199,7 @@ export function resolveModel(
 
   // Direct provider mode — use pi-ai's built-in registry.
   // resolveRegisteredModel() handles the string→KnownProvider type boundary safely.
-  const model = resolveRegisteredModel(selection.provider, selection.model);
+  const model = resolveRegisteredModel(runtime, selection.provider, selection.model);
   if (!model) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
@@ -1211,6 +1213,7 @@ export function resolveModel(
 
 export function resolveModelSelection(
   config: CoreSubstrateConfig,
+  _runtime: ProviderRuntime,
   purpose: ModelPurpose = 'chat',
 ): RoutingCandidate {
   const routingPurpose = toRoutingPurpose(purpose);
@@ -1227,6 +1230,7 @@ export function resolveModelSelection(
 
 export function resolveExplicitModel(
   config: CoreSubstrateConfig,
+  runtime: ProviderRuntime,
   selection: MessageModelOverride,
 ): Model<any> {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
@@ -1237,7 +1241,7 @@ export function resolveExplicitModel(
     return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
-  const registered = resolveRegisteredModel(selection.provider, selection.model);
+  const registered = resolveRegisteredModel(runtime, selection.provider, selection.model);
   if (!registered) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +

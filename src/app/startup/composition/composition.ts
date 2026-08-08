@@ -95,6 +95,7 @@ import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-r
 import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
@@ -349,6 +350,7 @@ export function composeIdentity(config: SubstrateConfig): IdentityComposition {
 export interface SubstrateAgentCompositionOptions {
   eventBus: EventBus;
   llmProvider: LLMProviderPort;
+  runtime?: ProviderRuntime;
   sessionManager: SessionManager;
   systemPrompt: string;
   characterName?: string;
@@ -396,6 +398,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.fatigueRegulationReservations
         ? { fatigueRegulationReservations: options.fatigueRegulationReservations }
         : {}),
+      ...(options.runtime ? { runtime: options.runtime } : {}),
       ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),

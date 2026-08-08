@@ -1,6 +1,10 @@
 import type { SubstrateConfig } from './runtime-config-contracts.js';
 import { LLMClient, type LLMClientRuntimeOptions } from '../../primitives/llm/client.js';
 import {
+  PiProviderRuntime,
+  type ProviderRuntime,
+} from '../../primitives/llm/provider-runtime.js';
+import {
   createEmbeddingProviderFromConfig,
   type EmbeddingRuntimeProvider,
 } from '../../faculties/memory/embedding.js';
@@ -13,6 +17,7 @@ import {
 } from '../../persistence/postgres/model-usage-store.js';
 
 export interface ProviderRuntimeServices {
+  runtime: ProviderRuntime;
   llmClient: LLMClient;
   embeddingProvider: EmbeddingRuntimeProvider;
   modelUsageStore?: PostgresModelUsageStore;
@@ -29,6 +34,7 @@ export function createProviderRuntimeServices(
   options: ProviderRuntimeFactoryOptions,
 ): ProviderRuntimeServices {
   const providerEnv = options.providerEnv ?? process.env;
+  const runtime = options.llmOptions?.runtime ?? new PiProviderRuntime();
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(
     options.config,
     options.modelUsageScope,
@@ -46,6 +52,7 @@ export function createProviderRuntimeServices(
   const llmOptions = modelUsageStore
     ? {
         ...(options.llmOptions ?? {}),
+        runtime,
         usageRecorder: options.llmOptions?.usageRecorder ?? modelUsageStore,
         usageBudgetQuery: options.llmOptions?.usageBudgetQuery ?? modelUsageStore,
         ...(
@@ -59,8 +66,12 @@ export function createProviderRuntimeServices(
             : {}
         ),
       }
-    : options.llmOptions;
+    : {
+        ...(options.llmOptions ?? {}),
+        runtime,
+      };
   return {
+    runtime,
     llmClient: new LLMClient(options.config, llmOptions),
     embeddingProvider: modelUsageStore
       ? withEmbeddingUsageAccounting(embeddingProvider, modelUsageStore, {

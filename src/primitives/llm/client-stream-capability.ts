@@ -1,8 +1,7 @@
-import {
-  streamSimple,
-  type AssistantMessage as PiAssistantMessage,
-  type Context as PiContext,
-  type Model,
+import type {
+  AssistantMessage as PiAssistantMessage,
+  Context as PiContext,
+  Model,
 } from '@mariozechner/pi-ai';
 import type {
   LLMProviderObservability,
@@ -14,6 +13,7 @@ import type {
 import type { ResolvedCorrelationMetadata } from './correlation.js';
 import type { RoutingCandidate } from './routing.js';
 import type { LLMRequestOptions } from './client-request-capability.js';
+import type { ProviderRuntime } from './provider-runtime.js';
 import {
   extractReasoningContent,
   extractTextContent,
@@ -60,6 +60,7 @@ export interface StreamUsageRecord {
 }
 
 export interface RunLLMStreamAttemptInput {
+  runtime: ProviderRuntime;
   model: Model<any>;
   context: PiContext;
   requestOptions: LLMRequestOptions;
@@ -124,7 +125,7 @@ export async function runLLMStreamAttempt(
     ...inputOptions,
   });
 
-  const eventStream = streamSimple(
+  const eventStream = input.runtime.stream(
     input.model,
     input.context,
     input.requestOptions,

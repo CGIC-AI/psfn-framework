@@ -1,14 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import {
-  completeSimple,
-  type Context as PiContext,
-  type ImageContent,
-  type Model,
-  type SimpleStreamOptions,
+import type {
+  Context as PiContext,
+  ImageContent,
+  Model,
+  SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
+import type { ProviderRuntime } from '../llm/provider-runtime.js';
+import { PiProviderRuntime } from '../llm/provider-runtime.js';
 import { getRequestContext } from '../llm/request-context.js';
 import {
   normalizeCorrelationValue,
@@ -103,6 +104,7 @@ type BinaryFetcher = (
 export interface ImageVisionReviewerOptions {
   binaryFetcher?: BinaryFetcher;
   llmProvider?: LLMProviderPort;
+  runtime?: ProviderRuntime;
   /** Loads the active identity reference for embodiment-consistency reviews. */
   referenceResolver?: VisionReviewReferenceResolver;
   completeImpl?: (
@@ -129,7 +131,11 @@ function normalizeQuestion(input: ImageVisionReviewRequest): string {
   return `${modeLine}\n${promptLine}`;
 }
 
-function resolveApiKey(model: Model<any>, config: SubstrateConfig): string | undefined {
+function resolveApiKey(
+  model: Model<any>,
+  config: SubstrateConfig,
+  runtime: ProviderRuntime,
+): string | undefined {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   if (litellmBaseUrl) {
     return resolveConfiguredLiteLLMApiKey(config);
@@ -137,10 +143,10 @@ function resolveApiKey(model: Model<any>, config: SubstrateConfig): string | und
 
   const modelProvider = (model as { provider?: unknown }).provider;
   if (typeof modelProvider === 'string' && modelProvider.trim().length > 0) {
-    return resolveProviderApiKey(modelProvider, config);
+    return resolveProviderApiKey(modelProvider, config, process.env, runtime);
   }
 
-  return resolveProviderApiKey(config.primaryProvider, config);
+  return resolveProviderApiKey(config.primaryProvider, config, process.env, runtime);
 }
 
 function validateFetchedImage(payload: {
@@ -227,13 +233,15 @@ function buildVisionReviewCorrelation(): CorrelationMetadata {
 }
 
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
+  private readonly runtime: ProviderRuntime;
   private readonly completeImpl: NonNullable<ImageVisionReviewerOptions['completeImpl']>;
 
   constructor(
     private readonly config: SubstrateConfig,
     private readonly options: ImageVisionReviewerOptions = {},
   ) {
-    this.completeImpl = options.completeImpl ?? completeSimple;
+    this.runtime = options.runtime ?? new PiProviderRuntime();
+    this.completeImpl = options.completeImpl ?? this.runtime.complete.bind(this.runtime);
   }
 
   async analyze(input: ImageVisionReviewRequest): Promise<ImageVisionReview> {
@@ -334,12 +342,12 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       }
     }
 
-    const model = resolveModel(sanitizeCoreSubstrateConfig(this.config), 'vision');
+    const model = resolveModel(sanitizeCoreSubstrateConfig(this.config), this.runtime, 'vision');
     const response = await this.completeImpl(
       model,
       context as unknown as PiContext,
       {
-        apiKey: resolveApiKey(model, this.config),
+        apiKey: resolveApiKey(model, this.config, this.runtime),
         maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),
       },
     );

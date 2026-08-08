@@ -43,6 +43,7 @@ import type { NotificationPort } from '../../../boundary/gateway/notification-po
 import type { Attachment } from '../../../shared/contracts/runtime.js';
 import type { ArtifactEgressDestination } from '../../artifacts/sensitivity-egress.js';
 import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
+import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -166,6 +167,7 @@ export interface TurnExecutionAdapterOptions {
   /** Cross-companion presence (W5a); absent/null skips presence writes. */
   companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
+  runtime: ProviderRuntime;
   imageVisionReviewer: ImageVisionReviewer | null;
   /** htm9.8 vision intake screener; null when the firewall is not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null;
@@ -218,6 +220,7 @@ export function createTurnExecutionRuntimeAdapter(
     satellitePresence: options.satellitePresence,
     companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,
+    runtime: options.runtime,
     imageVisionReviewer: options.imageVisionReviewer,
     visionIntakeScreener: options.visionIntakeScreener,
     cogSecMode: options.cogSecMode,

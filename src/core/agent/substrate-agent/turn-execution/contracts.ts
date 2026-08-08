@@ -66,6 +66,7 @@ import type { NotificationPort } from '../../../../boundary/gateway/notification
 import type { ArtifactEgressDestination } from '../../../artifacts/sensitivity-egress.js';
 import type { PromptCacheTurnRuntime } from './prompt-cache-runtime.js';
 import type { CompletionNoticeBuffer } from '../../completion-notices.js';
+import type { ProviderRuntime } from '../../../../primitives/llm/provider-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
 import type { ConversationScopeSpeaker } from '../../../session/conversation-scope.js';
 import type { IntakeFirewallMode } from '../../../../system/config/intake-policy-config.js';
@@ -108,6 +109,7 @@ export interface TurnExecutionRuntime {
    */
   companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
+  runtime: ProviderRuntime;
   imageVisionReviewer: ImageVisionReviewer | null;
   /** htm9.8 vision intake screener; null when the firewall is not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null;

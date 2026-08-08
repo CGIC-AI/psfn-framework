@@ -50,6 +50,8 @@ import {
   type SubstrateStreamTransport,
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
+import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
+import { PiProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import {
   abortActiveAgentRun,
@@ -231,6 +233,7 @@ export interface SelfModelRuntimeWiring {
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
   streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'transport'>;
+  runtime?: ProviderRuntime;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -298,6 +301,7 @@ export class SubstrateAgent {
   private agent: Agent;
   private eventBus: EventBus;
   private llmClient: LLMProviderPort;
+  private runtime: ProviderRuntime;
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private characterName: string;
@@ -554,6 +558,7 @@ export class SubstrateAgent {
       : null;
     this.eventBus = eventBus;
     this.llmClient = llmClient;
+    this.runtime = options.runtime ?? new PiProviderRuntime();
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
     this.characterName = options.characterName?.trim()
@@ -1021,6 +1026,7 @@ export class SubstrateAgent {
     const nextState = refreshModelFromConfigForRuntime({
       reason,
       config: this.config,
+      runtime: this.runtime,
       state: {
         modelResolved: this.modelResolved,
         modelSignature: this.modelSignature,
@@ -1581,6 +1587,7 @@ export class SubstrateAgent {
       satellitePresence: this.satellitePresencePort,
       companionPresence: this.companionPresence,
       llmClient: this.llmClient,
+      runtime: this.runtime,
       imageVisionReviewer: this.imageVisionReviewer,
       visionIntakeScreener: this.visionIntakeScreener,
       cogSecMode: this.cogSecMode,

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import {
   DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
@@ -344,14 +345,14 @@ describe('validateToolWiring', () => {
             exclusivityKey: undefined,
             exclusivityKeyPolicy: 'none',
           }),
-          // explicit any-casts verify validator fail-closed behavior for invalid metadata
-          interruptibility: 'invalid' as any,
+          // explicit casts verify validator fail-closed behavior for invalid metadata
+          interruptibility: fromAny<ToolConcurrencyMeta['interruptibility']>('invalid'),
         },
       }),
       makeTool('repo_diff', {
         concurrency: makeConcurrencyMeta('read_only', {
           maxParallel: 0,
-          exclusivityKeyPolicy: 'static_key' as any,
+          exclusivityKeyPolicy: fromAny<ToolConcurrencyMeta['exclusivityKeyPolicy']>('static_key'),
           exclusivityKey: 'extended:repo_diff',
           eligibility: { foreground: false, background: false },
         }),

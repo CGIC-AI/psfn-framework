@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import http from 'node:http';
 import net from 'node:net';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,6 +39,7 @@ import {
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
 import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
 import { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
@@ -772,14 +774,14 @@ describe('AdminServer JSON API routes', () => {
       cardVersionStore,
       adaptiveToolsStateProvider,
       toolHealthProvider,
-      skillsRuntime: {
+      skillsRuntime: fromPartial<SkillsRuntime>({
         getSnapshot: () => null,
         listManaged: async () => ({ managed: [], skipped: [] }),
         createSkill: vi.fn(),
         updateSkill: vi.fn(),
         deleteSkill: vi.fn(),
         invalidate: invalidateSkillsSpy,
-      } as any,
+      }),
     });
     server = new AdminServer({
       port,

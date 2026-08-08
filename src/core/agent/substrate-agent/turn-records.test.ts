@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   buildTurnRecord,
   recordToolObservations,
@@ -6,6 +7,7 @@ import {
   sanitizePersistedReasoningText,
   type TurnSessionWriteManager,
 } from './turn-records.js';
+import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { executeToolCallsWithScheduler } from '../tool-call-scheduler.js';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 
@@ -50,7 +52,7 @@ function buildFallbackToolRecord(toolResult: Record<string, unknown>) {
         durationMs: 250,
       },
     },
-    turnMessages: [toolResult as any],
+    turnMessages: fromAny<AgentMessage[]>([toolResult]),
     promptMode: 'default',
     promptText: 'system prompt',
     contextMessageCount: 1,

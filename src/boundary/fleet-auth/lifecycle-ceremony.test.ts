@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
+import type { Pool } from 'pg';
 import {
   GatewayFleetAuthLifecycleCeremonyService,
   FleetAuthLifecycleCeremonyError,
@@ -72,13 +74,13 @@ function harness(options: {
     grant_version: '1',
     policy_version: '1',
   };
-  const pool = {
+  const pool = fromPartial<Pool>({
     query: vi.fn(async (sql: string) => (
       sql.includes('browser_sessions')
         ? { rowCount: 1, rows: [session] }
         : { rowCount: 1, rows: [target] }
     )),
-  };
+  });
   const execute = vi.fn(async (decision: any) => ({
     decisionId: decision.decisionId,
     action: decision.action,
@@ -103,7 +105,7 @@ function harness(options: {
   }));
   const recordDenial = vi.fn(async () => undefined);
   const service = new GatewayFleetAuthLifecycleCeremonyService({
-    pool: pool as any,
+    pool,
     sessionPepper: 'session-pepper',
     canonicalOrigin: ORIGIN,
     lifecycle: { execute },

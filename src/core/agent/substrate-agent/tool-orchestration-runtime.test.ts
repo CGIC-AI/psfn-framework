@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { resolveActiveTools } from './tool-orchestration-runtime.js';
 import { buildToolUsageRanking } from '../tool-surface/usage-ranking.js';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 
 function makeTool(name: string) {
-  return {
+  return fromPartial<AgentTool<any>>({
     name,
     description: `${name} description`,
     parameters: {},
@@ -11,7 +13,7 @@ function makeTool(name: string) {
       role: 'tool',
       content: [{ type: 'text', text: 'ok' }],
     }),
-  } as any;
+  });
 }
 
 describe('resolveActiveTools', () => {

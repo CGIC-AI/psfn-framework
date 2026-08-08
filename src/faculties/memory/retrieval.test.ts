@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import {
   MemoryRetriever,
   RetrievalIntegrityError,
@@ -2689,7 +2690,7 @@ describe('MemoryRetriever basic behavior', () => {
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
-    const contactStore = {
+    const contactStore = fromPartial<ContactStorePort>({
       getEmotionalSnapshot: vi.fn().mockReturnValue({
         baselineValence: 0.22,
         moodValence: 0.37,
@@ -2699,7 +2700,7 @@ describe('MemoryRetriever basic behavior', () => {
       }),
       getEmotionalTimeSeries: vi.fn().mockReturnValue([]),
       getById: vi.fn(),
-    } as any;
+    });
 
     const retriever = new MemoryRetriever(
       store,

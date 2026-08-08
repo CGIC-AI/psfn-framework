@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { JSONRPCServerAndClient } from 'json-rpc-2.0';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { requestAgentVoiceStream } from './voice-stream-request.js';
 
@@ -31,7 +33,7 @@ describe('shared-satellite structured silence transport', () => {
     });
 
     await expect(requestAgentVoiceStream({
-      client: { request } as any,
+      client: fromPartial<JSONRPCServerAndClient>({ request }),
       message: {
         id: 'message-1',
         channelId: 'satellite:voice:session-1',

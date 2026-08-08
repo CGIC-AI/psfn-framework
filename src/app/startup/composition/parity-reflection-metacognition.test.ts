@@ -70,7 +70,7 @@ describe('wireReflectionRuntime reflection metacognition journal', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireReflectionRuntime(target as any, scheduler, agentLoop as any, sender, tempDir);
+    void wireReflectionRuntime(target, scheduler, agentLoop, sender, tempDir);
 
     const runTool = target.registerTool.mock.calls
       .map(call => call[0])

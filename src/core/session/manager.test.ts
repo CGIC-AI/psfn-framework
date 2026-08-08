@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { createInMemoryTranscriptProjection } from '../../test-support/in-memory-transcript-projection.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { parseContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
+import type { PreCompactionExtractionHandler } from './manager/contracts.js';
 import { HISTORY_STAMP_PREFIX_RE } from './manager/context-support.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -2001,11 +2003,11 @@ describe('SessionManager', () => {
       }),
     } as unknown as LLMProviderPort;
     const memoryStore = new InMemoryMemoryStore().asPort();
-    const embeddingService = {
+    const embeddingService = fromPartial<EmbeddingProviderPort>({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
     const extractor = new MemoryExtractor(
       extractionLLM,
       mgr,
@@ -2018,7 +2020,7 @@ describe('SessionManager', () => {
     // the session token) and arg[5] is extractionSourceSessionId. Both encode
     // which session A's facts get attributed to.
     const processFactSpy = vi.fn(async () => ({ action: 'created', memory: { id: 'memory:kyoto' } }));
-    (extractor as any).processFact = processFactSpy;
+    (extractor as unknown as { processFact: typeof processFactSpy }).processFact = processFactSpy;
 
     const sessionReads = mgr.createCapturedSessionReads({
       logicalSessionId: sessionA,
@@ -3923,17 +3925,13 @@ describe('SessionManager', () => {
     const mgr = new SessionManager(store, config);
 
     const callOrder: string[] = [];
-    const preCompactionFlush = vi.fn(async ({
-      entries,
-    }: {
-      entries: Array<{ content: string }>;
-    }) => {
+    const preCompactionFlush = vi.fn<PreCompactionExtractionHandler>(async ({ entries }) => {
       callOrder.push('flush');
       expect(entries).toHaveLength(6);
       expect(entries[0].content).toContain('User 4');
       expect(entries[entries.length - 1].content).toContain('Assistant 6');
     });
-    mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
+    mgr.setPreCompactionExtractionHandler(preCompactionFlush);
 
     const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (_context, purpose, options) => {
       expect(purpose).toBe('background');
@@ -4193,11 +4191,11 @@ describe('SessionManager', () => {
       }),
       complete: compactionComplete,
     };
-    const embeddingService = {
+    const embeddingService = fromPartial<EmbeddingProviderPort>({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
     const memoryStore = new InMemoryMemoryStore().asPort();
     const extractor = new MemoryExtractor(

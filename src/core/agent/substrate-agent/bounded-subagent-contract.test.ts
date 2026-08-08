@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import {
   buildBoundedSubagentLaunchEnvelope,
   isBoundedSubagentLaunchToolName,
   MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS,
   normalizeBoundedSubagentLaunchRequest,
+  type EmbodimentPresenceMetadata,
 } from './bounded-subagent-contract.js';
 
 describe('bounded subagent contract', () => {
@@ -107,11 +109,11 @@ describe('bounded subagent contract', () => {
       task: 'task',
       sourceContext: {
         channelId: 'api:source',
-        embodimentContext: {
+        embodimentContext: fromPartial<EmbodimentPresenceMetadata>({
           kind: 'embodiment',
           embodimentId: '   ',
           companionId: 'companion-test',
-        } as any,
+        }),
       },
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
   });

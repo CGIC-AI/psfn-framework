@@ -316,7 +316,7 @@ describe('ReflectionPolicyStore', () => {
   });
 
   it('returns defaults for corrupt file', () => {
-    store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
+    store.save({ templates: fromAny<ReflectionTemplate[]>('bad'), version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
     expect(policy.templates).toHaveLength(3);

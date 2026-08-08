@@ -147,6 +147,7 @@ function findRecentNamedSpeaker(
 ): string | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
+    if (entry === undefined) continue;
     if (entry.role !== role) continue;
     const authorName = normalizeTrimmed(entry.authorName);
     if (!authorName || isGenericLabel(authorName, genericLabels)) continue;
@@ -177,8 +178,8 @@ function applyParticipantReplacement(
 
 function hasOrdinaryNounFollower(text: string, offset: number, matchLength: number): boolean {
   const remainder = text.slice(offset + matchLength);
-  const nextWord = /^\s+([A-Za-z][A-Za-z'-]*)\b/.exec(remainder)?.[1].toLowerCase();
-  return nextWord !== undefined && ORDINARY_LABEL_NOUN_FOLLOWERS.has(nextWord);
+  const nextWord = /^\s+([A-Za-z][A-Za-z'-]*)\b/.exec(remainder)?.[1]?.toLowerCase() ?? '';
+  return ORDINARY_LABEL_NOUN_FOLLOWERS.has(nextWord);
 }
 
 function applyParticipantMacroReplacement(text: string, names: ExtractionParticipantNames): string {
@@ -217,7 +218,7 @@ export function detectDurableMemoryParticipantPlaceholders(
 
   PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
   for (const match of text.matchAll(PARTICIPANT_MACRO_PATTERN)) {
-    const macroName = match[1].toLowerCase();
+    const macroName = match[1]?.toLowerCase();
     if (macroName === 'user') {
       userMacros.push(match[0]);
     } else if (macroName) {

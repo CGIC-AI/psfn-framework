@@ -43,16 +43,16 @@ export async function resolveEmotionalSnapshot(
   if (!contact?.emotionalBaseline) return undefined;
 
   const baselineRaw = contact.emotionalBaseline;
-  const baselineValence = clamp(baselineRaw.valenceBaseline, -1, 1);
-  const moodValence = clamp(baselineRaw.moodValence, -1, 1);
-  const moodDrift = Number.isFinite(baselineRaw.moodDrift)
-    ? clamp(baselineRaw.moodDrift, -1, 1)
+  const baselineValence = clamp(baselineRaw.valenceBaseline ?? 0, -1, 1);
+  const moodValence = clamp(baselineRaw.moodValence ?? 0, -1, 1);
+  const moodDrift = Number.isFinite(baselineRaw.moodDrift ?? NaN)
+    ? clamp(baselineRaw.moodDrift ?? 0, -1, 1)
     : clamp(moodValence - baselineValence, -1, 1);
-  const moodSamples = Number.isFinite(baselineRaw.moodSamples)
-    ? Math.max(0, Math.floor(baselineRaw.moodSamples))
+  const moodSamples = Number.isFinite(baselineRaw.moodSamples ?? NaN)
+    ? Math.max(0, Math.floor(baselineRaw.moodSamples ?? 0))
     : 0;
-  const lastMoodUpdateEpochMs = Number.isFinite(baselineRaw.lastMoodUpdateEpochMs)
-    ? Math.max(0, Math.floor(baselineRaw.lastMoodUpdateEpochMs))
+  const lastMoodUpdateEpochMs = Number.isFinite(baselineRaw.lastMoodUpdateEpochMs ?? NaN)
+    ? Math.max(0, Math.floor(baselineRaw.lastMoodUpdateEpochMs ?? 0))
     : undefined;
 
   if (
@@ -178,6 +178,7 @@ export async function attachEvolutionChains(
   const selectedIds = new Set(expanded.map(item => item.memory.id));
   for (let index = 0; index < Math.min(expanded.length, EVOLUTION_CHAIN_SELECTED_LIMIT); index++) {
     const item = expanded[index];
+    if (item === undefined) continue;
     const links = (await memoryStore.getEvolutionLinksForSourceMemory(item.memory.id))
       .slice(0, EVOLUTION_CHAIN_PER_MEMORY_LIMIT);
     // Resolve every chain target for this source in one authorized batch rather

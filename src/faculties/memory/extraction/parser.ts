@@ -17,11 +17,13 @@ export function parseFactsXml(xml: string): ExtractedFact[] {
   if (!responseMatch) return [];
 
   const inner = responseMatch[1];
+  if (inner === undefined) return [];
   const factBlocks = inner.matchAll(/<fact>([\s\S]*?)<\/fact>/g);
   const facts: ExtractedFact[] = [];
 
   for (const match of factBlocks) {
     const block = match[1];
+    if (block === undefined) continue;
     const fact = parseFactBlock(block);
     if (fact) facts.push(fact);
   }
@@ -70,7 +72,7 @@ function parseFactBlock(block: string): ExtractedFact | null {
 
 function extractTag(block: string, tag: string): string | null {
   const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
-  return match ? match[1] : null;
+  return match ? (match[1] ?? null) : null;
 }
 
 function parseFactAttribution(block: string): ExtractedFactAttribution | undefined {

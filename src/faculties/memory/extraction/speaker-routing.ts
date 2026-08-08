@@ -252,7 +252,10 @@ function resolveStructuredFactRouting(
     return { status: 'skip', reason: 'ambiguous_source_message_ids' };
   }
 
-  const sourceSpeaker = sourceSpeakers[0];
+  const sourceSpeaker = sourceSpeakers.at(0);
+  if (!sourceSpeaker) {
+    return { status: 'skip', reason: 'ambiguous_source_message_ids' };
+  }
   if (
     attribution.sourceSpeakerName
     && normalizeSpeakerPhrase(attribution.sourceSpeakerName) !== sourceSpeaker.normalizedName
@@ -554,9 +557,11 @@ function resolveClearSourceSpeaker(
 ): { speaker: TranscriptSpeaker; reason: ExtractionFactRoutingReason } | undefined {
   const prefixMatches = speakers.filter(speaker => factHasSpeakerAttributionPrefix(fact.text, speaker));
   if (prefixMatches.length === 1) {
-    if (factMentionsOtherSpeaker(fact.text, prefixMatches[0], speakers)) return undefined;
+    const matched = prefixMatches.at(0);
+    if (!matched) return undefined;
+    if (factMentionsOtherSpeaker(fact.text, matched, speakers)) return undefined;
     return {
-      speaker: prefixMatches[0],
+      speaker: matched,
       reason: 'speaker_name_prefix',
     };
   }
@@ -673,11 +678,11 @@ function resolveTranscriptContentSpeaker(
         || right.ratio - left.ratio
         || left.speaker.key.localeCompare(right.speaker.key)
     ));
-  const best = scores[0];
-  if (best.overlap < 3 || best.ratio < 0.45) return undefined;
+  const best = scores.at(0);
+  if (!best || best.overlap < 3 || best.ratio < 0.45) return undefined;
 
-  const second = scores[1];
-  if (best.overlap - second.overlap < 2) return undefined;
+  const second = scores.at(1);
+  if (!second || best.overlap - second.overlap < 2) return undefined;
 
   return best.speaker;
 }

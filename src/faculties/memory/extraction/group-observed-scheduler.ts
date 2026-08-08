@@ -181,7 +181,8 @@ export class ObservedGroupMemoryScheduler {
       settings,
       ...(this.estimateEntryTokens ? { estimateEntryTokens: this.estimateEntryTokens } : {}),
     });
-    if (plan.chunks.length === 0) {
+    const chunk = plan.chunks[0];
+    if (chunk === undefined) {
       return {
         status: 'skipped',
         channelId: message.channelId,
@@ -189,7 +190,6 @@ export class ObservedGroupMemoryScheduler {
         watermarkLagMessageIds: plan.watermarkLagMessageIds,
       };
     }
-    const chunk = plan.chunks[0];
 
     const now = this.nowMs();
     if (!this.firstPendingObservedAtByChannel.has(message.channelId)) {

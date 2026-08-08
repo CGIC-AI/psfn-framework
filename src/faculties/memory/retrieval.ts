@@ -1224,8 +1224,8 @@ export class MemoryRetriever implements MemoryProvider {
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
 
       if (memories.length > 0) {
-        telemetry.topSimilarity = memories[0].similarity;
-        telemetry.bottomSimilarity = memories[memories.length - 1].similarity;
+        telemetry.topSimilarity = memories[0]?.similarity;
+        telemetry.bottomSimilarity = memories[memories.length - 1]?.similarity;
       }
 
         const diagnostics: RetrievalDecisionDiagnostics = {
@@ -1410,8 +1410,8 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.rankedCount = ranked.length;
 
       if (ranked.length > 0) {
-        telemetry.topScore = ranked[0].score;
-        telemetry.bottomScore = ranked[ranked.length - 1].score;
+        telemetry.topScore = ranked[0]?.score;
+        telemetry.bottomScore = ranked[ranked.length - 1]?.score;
       }
 
       if (ranked.length === 0) {

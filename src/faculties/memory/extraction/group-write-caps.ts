@@ -101,7 +101,8 @@ export function selectGroupMemoryWriteCandidates<
       options.settings,
       state.coveredKeys,
     );
-    const candidate = remaining.splice(nextIndex, 1)[0];
+    const [candidate] = remaining.splice(nextIndex, 1);
+    if (candidate === undefined) continue;
     const cap = findBlockingCap(candidate, state, options);
     if (cap) {
       skippedCandidates.push(candidate);
@@ -166,11 +167,13 @@ function pickNextCandidateIndex<TCandidate extends GroupMemoryWriteCandidate>(
       settings,
       coveredKeys,
     );
+    const currentBest = candidates[bestIndex];
     if (
       score > bestScore
       || (
         score === bestScore
-        && compareCandidateTieBreakers(candidate, candidates[bestIndex]) < 0
+        && currentBest !== undefined
+        && compareCandidateTieBreakers(candidate, currentBest) < 0
       )
     ) {
       bestIndex = index;

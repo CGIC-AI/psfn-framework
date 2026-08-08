@@ -131,7 +131,11 @@ abstract class HttpEmbeddingProvider implements EmbeddingRuntimeProvider {
 
   async embed(text: string, options: EmbedOptions = {}): Promise<Float32Array> {
     const results = await this.embedBatch([text], options);
-    return results[0];
+    const result = results[0];
+    if (!result) {
+      throw new Error(`${this.kind} embed returned empty result for single text`);
+    }
+    return result;
   }
 
   async embedBatch(texts: string[], options: EmbedOptions = {}): Promise<Float32Array[]> {
@@ -352,7 +356,11 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
 
   async embed(text: string, options: EmbedOptions = {}): Promise<Float32Array> {
     const results = await this.embedBatch([text], options);
-    return results[0];
+    const result = results[0];
+    if (!result) {
+      throw new Error(`${this.kind} embed returned empty result for single text`);
+    }
+    return result;
   }
 
   async embedBatch(texts: string[], options: EmbedOptions = {}): Promise<Float32Array[]> {
@@ -370,6 +378,10 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
     const tensorData = output.data as Float32Array;
     const embeddingDim = output.dims[1];
     const count = output.dims[0];
+
+    if (count === undefined || embeddingDim === undefined) {
+      throw new Error('transformers embedding output missing shape dimensions');
+    }
 
     if (count !== texts.length) {
       throw new Error(

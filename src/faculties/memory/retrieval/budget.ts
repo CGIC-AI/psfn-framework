@@ -77,19 +77,22 @@ export function selectWithinRelevanceAndTokenBudget(
     };
   }
 
+  const topScore = scored[0]?.score ?? RELEVANCE_TERMINATION_ABSOLUTE_FLOOR;
   const relevanceScoreFloor = Math.max(
     RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
-    scored[0].score * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
+    topScore * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
   );
   let usedTokens = 0;
   const selected: ScoredMemory[] = [];
   let stopReason: RetrievalSelectionDecision['stopReason'] = 'exhausted';
-  let relevanceStoppedCount = 0;
-  let budgetCappedCount = 0;
+  let relevanceStoppedCount = 0, budgetCappedCount = 0;
   const selectedTypeCounts = new Map<string, number>();
 
   for (let index = 0; index < scored.length; index++) {
     const item = scored[index];
+    if (item === undefined) {
+      continue;
+    }
     const selectionCap = resolveMemorySelectionCap(policy, item.memory.type);
     if (
       selectionCap !== undefined

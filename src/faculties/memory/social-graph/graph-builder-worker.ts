@@ -215,8 +215,10 @@ function buildCoPresenceCandidates(
       const authorIds = [...authors.keys()];
       for (let i = 0; i < authorIds.length; i += 1) {
         for (let j = i + 1; j < authorIds.length; j += 1) {
-          const [a, b] = [authorIds[i], authorIds[j]].sort();
-          if (a === b) continue;
+          const rawA = authorIds[i];
+          const rawB = authorIds[j];
+          if (!rawA || !rawB || rawA === rawB) continue;
+          const [a, b]: [string, string] = rawA < rawB ? [rawA, rawB] : [rawB, rawA];
           const key = `${a}${b}`;
           const entry = pairs.get(key) ?? { a, b, windowKeys: new Set<string>(), memories: new Map<string, PurrMemory>() };
           pairs.set(key, entry);

@@ -333,7 +333,16 @@ const MEAN_DAYS_PER_MONTH = 30.44;
 // Day index of a moment on the active-timezone calendar, so today/yesterday
 // boundaries follow the companion's clock rather than UTC.
 function activeCalendarDayIndex(atMs: number): number {
-  const [year, month, day] = formatActiveDate(new Date(atMs)).split('-').map(Number);
+  const parts = formatActiveDate(new Date(atMs)).split('-');
+  if (parts.length !== 3) {
+    throw new Error(`Invalid active date format for timestamp ${atMs}`);
+  }
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) {
+    throw new Error(`Invalid active date format for timestamp ${atMs}`);
+  }
   return Math.floor(Date.UTC(year, month - 1, day) / MS_PER_DAY);
 }
 

@@ -122,20 +122,26 @@ export function parseTopicSegments(content: string, entryCount: number): TopicSe
     throw new Error('segmentation response must contain a non-empty segments array');
   }
   const segments = raw.segments.map((entry, position) => parseSegmentEntry(entry, entryCount, position));
-
-  if (segments[0].startIndex !== 0) {
+  const [firstSegment, ...restSegments] = segments;
+  if (firstSegment === undefined) {
+    throw new Error('segmentation response must contain a non-empty segments array');
+  }
+  if (firstSegment.startIndex !== 0) {
     throw new Error('segments must start at entry index 0');
   }
-  for (let index = 1; index < segments.length; index++) {
-    if (segments[index].startIndex !== segments[index - 1].endIndex + 1) {
-      throw new Error(`segments must be contiguous; segment ${index} leaves a gap or overlap`);
+
+  let previous = firstSegment;
+  for (const [index, segment] of restSegments.entries()) {
+    if (segment.startIndex !== previous.endIndex + 1) {
+      throw new Error(`segments must be contiguous; segment ${index + 1} leaves a gap or overlap`);
     }
+    previous = segment;
   }
-  if (segments[segments.length - 1].endIndex !== entryCount - 1) {
+  if (previous.endIndex !== entryCount - 1) {
     throw new Error(`segments must cover every entry through index ${entryCount - 1}`);
   }
-  for (let index = 0; index < segments.length - 1; index++) {
-    if (segments[index].status === 'open') {
+  for (const [index, segment] of segments.slice(0, -1).entries()) {
+    if (segment.status === 'open') {
       throw new Error(`segment ${index} is marked open but only the final segment may be open`);
     }
   }
@@ -164,6 +170,9 @@ export async function proposeTopicSegments(
   }
   const first = request.entries[0];
   const last = request.entries[request.entries.length - 1];
+  if (first === undefined || last === undefined) {
+    throw new Error('segmentation requires a non-empty chunk');
+  }
   const requestPrompt = [
     'Transcript chunk:',
     formatSegmentationTranscript(request.entries),

@@ -341,6 +341,7 @@ export class EpisodeArcWeaver {
     const episodesById = new Map(episodes.map(episode => [episode.id, episode]));
     for (let index = 0; index < proposals.length; index += 1) {
       const proposal = proposals[index];
+      if (!proposal) continue;
       if (result.writtenArcs >= this.maxArcsPerRun) {
         log.info('Arc cap reached for this pass; remaining proposals deferred', {
           maxArcsPerRun: this.maxArcsPerRun,
@@ -366,8 +367,11 @@ export class EpisodeArcWeaver {
         return (leftEpisode?.startedAt ?? '').localeCompare(rightEpisode?.startedAt ?? '');
       });
       for (let index = 0; index + 1 < ordered.length; index += 1) {
-        const source = episodesById.get(ordered[index]);
-        const target = episodesById.get(ordered[index + 1]);
+        const sourceEpisodeId = ordered[index];
+        const targetEpisodeId = ordered[index + 1];
+        if (!sourceEpisodeId || !targetEpisodeId) continue;
+        const source = episodesById.get(sourceEpisodeId);
+        const target = episodesById.get(targetEpisodeId);
         if (!source || !target) continue;
         const arcExists = await this.arcAlreadyExists(source.id, target.id);
         if (!arcExists) {

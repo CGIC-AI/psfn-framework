@@ -9645,51 +9645,10 @@
     },
     {
       "file": "src/persistence/sessions/store.ts",
-      "name": "MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES",
-      "value": "512",
-      "note": "Code-owned lock-set safety ceiling preventing one post-turn effect from acquiring unbounded eligibility fences."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
       "name": "SessionStore.DEFAULT_HOT_CHANNEL_LIMIT",
       "value": "1000",
       "form": "class-field",
       "note": "Existing mutable policy candidate SessionStore.DEFAULT_HOT_CHANNEL_LIMIT; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "SessionStore.RECOVERY_AUTHORITY_LIMITS.maxActionBytes",
-      "value": "256 * 1024",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS.maxActionBytes; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "SessionStore.RECOVERY_AUTHORITY_LIMITS.maxActions",
-      "value": "4_096",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS.maxActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "SessionStore.RECOVERY_AUTHORITY_LIMITS.maxResultBytes",
-      "value": "2 * 1024 * 1024",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS.maxResultBytes; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "SessionStore.RECOVERY_AUTHORITY_LIMITS.maxRowBytes",
-      "value": "32 * 1024 * 1024",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS.maxRowBytes; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "SessionStore.RECOVERY_AUTHORITY_LIMITS.maxTombstones",
-      "value": "4_096",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS.maxTombstones; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/persistence/sessions/store.ts",
@@ -9775,6 +9734,46 @@
       "file": "src/persistence/sessions/store/session-journal-write-lock.ts",
       "name": "JOURNAL_WRITE_LOCK_TIMEOUT_MS",
       "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES",
+      "value": "512"
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "RECOVERY_AUTHORITY_LIMITS.maxActionBytes",
+      "value": "256 * 1024",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS moved during psfn-framework-aicg6.27 slice 2; explicitly baselined as named migration debt and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "RECOVERY_AUTHORITY_LIMITS.maxActions",
+      "value": "4_096",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS moved during psfn-framework-aicg6.27 slice 2; explicitly baselined as named migration debt and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "RECOVERY_AUTHORITY_LIMITS.maxResultBytes",
+      "value": "2 * 1024 * 1024",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS moved during psfn-framework-aicg6.27 slice 2; explicitly baselined as named migration debt and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "RECOVERY_AUTHORITY_LIMITS.maxRowBytes",
+      "value": "32 * 1024 * 1024",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS moved during psfn-framework-aicg6.27 slice 2; explicitly baselined as named migration debt and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/turn-record-operations.ts",
+      "name": "RECOVERY_AUTHORITY_LIMITS.maxTombstones",
+      "value": "4_096",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate SessionStore.RECOVERY_AUTHORITY_LIMITS moved during psfn-framework-aicg6.27 slice 2; explicitly baselined as named migration debt and not approved as immutable code ownership."
     },
     {
       "file": "src/persistence/sessions/turn-record-recovery.ts",

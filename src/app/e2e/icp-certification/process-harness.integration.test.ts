@@ -633,8 +633,8 @@ describe('ICP certification real process harness', () => {
   }, TIMEOUT_MS);
 
   it.each([
-    ['lowered_warning', 'warning_closeout_reserve_only', 0.0001, 0.0001, 0.0003],
-    ['lowered_hard', 'hard_limit_exceeded', 0.00015, 0.00015, 0.0002],
+    ['lowered_warning', 'warning_closeout_reserve_only', 0.00001, 0.0001, 0.0003],
+    ['lowered_hard', 'hard_limit_exceeded', 0.00002, 0.00015, 0.0002],
   ] as const)(
     'stops the second companion at its companion-bound %s cost boundary',
     async (

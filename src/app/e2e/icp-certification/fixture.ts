@@ -410,7 +410,10 @@ export function createIcpCertificationFixture(input: {
       );
       let outputPer1MUsd = 0;
       if (chatCapable) {
-        if (costProfile === 'lowered_hard') outputPer1MUsd = 15;
+        // pi-ai 0.84 honors the one-token closeout work cap. Keep the hard
+        // profile's next ten-token turn above the hard limit while the settled
+        // closeout call remains below it.
+        if (costProfile === 'lowered_hard') outputPer1MUsd = 20;
         else if (costProfile === 'lowered_warning') outputPer1MUsd = 10;
         else if (boundedRoomContinuity) outputPer1MUsd = 10;
       }

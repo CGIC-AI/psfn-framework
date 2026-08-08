@@ -3,6 +3,7 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 import type {
   IcpFatigueRegulationReservationPort,
   IcpFatigueReservationInput,
+  IcpFatigueReservationOutcome,
   IcpFatigueReservationResult,
   IcpInitiationPressureInput,
   IcpInitiationPressureSnapshot,
@@ -248,7 +249,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
                 "replayed",
                 correlation.turnId,
               )),
-              reservationOutcome: existing.outcome,
+              reservationOutcome: existing.outcome as IcpFatigueReservationOutcome,
             },
             keepLease: existing.outcome === "pending",
           };

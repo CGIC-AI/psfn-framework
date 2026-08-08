@@ -1,5 +1,8 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import { collectGeneratedImageAttachments } from '../../../../primitives/images/generated-media.js';
+import {
+  collectGeneratedImageAttachments,
+  type GeneratedImageGalleryContext,
+} from '../../../../primitives/images/generated-media.js';
 import { emitCompanionArtifactCreatedEvents } from '../../../../channels/backplane/companion-relay/artifact-emission.js';
 import type {
   AgentResponse,
@@ -47,19 +50,11 @@ export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
   turnMessages: AgentMessage[];
   paidDeliverables?: readonly PendingPaidDeliverable[];
-  galleryContext?: {
-    channelId?: string;
-    channelType?: string;
-    turnId?: string;
-    requestId?: string;
-    sourceMessageId?: string;
-    userSessionEntryId?: number;
-    assistantSessionEntryId?: number;
-  };
+  galleryContext?: GeneratedImageGalleryContext;
 }): Promise<NonNullable<AgentResponse['attachments']>> {
   const attachments = await collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
-    personalFilesDir: input.runtime.config.workspacePath,
+    personalFilesDir: input.runtime.config.workspacePath ?? '',
     paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
   });

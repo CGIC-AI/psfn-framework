@@ -430,7 +430,7 @@ export function executeSystemOwnerFleetMigration(
       preflight: (directories) => {
         validateRecordedArtifacts({
           receipt,
-          receiptDirectory,
+          receiptDirectory: receiptDirectory!,
           quarantineDirectory: directories.quarantineDirectory,
           destinationPins: directories.destinationPins,
         });

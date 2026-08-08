@@ -163,11 +163,14 @@ function imageResultFromPendingDeliverable(
     message: {
       role: 'toolResult',
       toolName,
-      ...(deliverable.toolCallId?.trim() ? { toolCallId: deliverable.toolCallId.trim() } : {}),
+      timestamp: Date.now(),
+      ...(deliverable.toolCallId?.trim()
+        ? { toolCallId: deliverable.toolCallId.trim() }
+        : {}),
       content: [],
       details: { imageResult: result },
       isError: false,
-    },
+    } as CollectedImageGenerationResult['message'],
     result,
   };
 }

@@ -1,6 +1,6 @@
 import type {
   Episode,
-  EpisodeArcWriteInput,
+  EpisodeArc,
   EpisodeArtifactRef,
   EpisodeMachineSignals,
   EpisodeSpanRef,
@@ -9,6 +9,11 @@ import type {
   EpisodeCreateInput,
   FirstPersonPreservingEpisodeUpdateInput,
 } from '../store-port.js';
+
+type EpisodeArcWriteInput = Omit<
+  EpisodeArc,
+  'schemaVersion' | 'createdAt' | 'updatedAt'
+>;
 
 interface EpisodeCandidateInput extends EpisodeCreateInput {
   id: string;

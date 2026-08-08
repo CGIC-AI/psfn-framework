@@ -1,4 +1,4 @@
-import rawImageModelCatalog from './model-catalog.json';
+import rawImageModelCatalog from './model-catalog.json' with { type: 'json' };
 import { isRecord } from '../../shared/utils/types.js';
 
 interface ImageModelCatalog {

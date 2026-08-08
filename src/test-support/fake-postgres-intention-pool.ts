@@ -636,7 +636,9 @@ export class FakeIntentionPool {
       const limit = Number(values[2]);
       const rows = grouped
         .filter(row => row.resolved_count >= minResolvedCount)
-        .sort((left, right) => right.average_outcome - left.average_outcome || right.resolved_count - left.resolved_count || left.strategy.localeCompare(right.strategy))
+        .sort((left, right) => (right.average_outcome ?? 0) - (left.average_outcome ?? 0)
+          || right.resolved_count - left.resolved_count
+          || left.strategy.localeCompare(right.strategy))
         .slice(0, limit)
         .map(row => row as Row);
       return { rows };
@@ -646,7 +648,7 @@ export class FakeIntentionPool {
       const [contactId, strategy] = values as [string, string];
       const row = [...this.behavioralPatternEvents.values()]
         .filter(event => event.contact_id === contactId && event.strategy === strategy && event.promoted_at !== null)
-        .sort((left, right) => (left.promoted_at ?? '').localeCompare(right.promoted_at ?? '')).at(0);
+        .sort((left, right) => left.promoted_at!.localeCompare(right.promoted_at!)).at(0);
       return { rows: row ? [{ promoted_memory_id: row.promoted_memory_id } as Row] : [] };
     }
 
@@ -721,7 +723,7 @@ function groupBehavioralEvents(rows: BehavioralPatternRow[]): Array<{
       summary.outcome_samples += 1;
       if (row.outcome_score > 0.1) summary.positive_count += 1;
       if (row.outcome_score < -0.1) summary.negative_count += 1;
-      if (!summary.last_outcome_at || row.outcome_observed_at > summary.last_outcome_at) {
+      if (row.outcome_observed_at && (!summary.last_outcome_at || row.outcome_observed_at > summary.last_outcome_at)) {
         summary.last_outcome_at = row.outcome_observed_at;
       }
     }

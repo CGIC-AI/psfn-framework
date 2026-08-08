@@ -36,16 +36,17 @@ export function createShardParentIcpTool(
         description: 'The status update or question for the parent companion.',
       }),
     }, { additionalProperties: false }),
-    execute: async (_toolCallId: string, params: ShardParentIcpToolParams) => {
-      const content = params.content.trim();
-      if (!content) {
+    execute: async (_toolCallId: string, params: unknown) => {
+      const { content } = params as ShardParentIcpToolParams;
+      const trimmedContent = content.trim();
+      if (!trimmedContent) {
         return textResultWithError(
           'shard_parent_icp failed: content must be non-empty.',
           true,
         );
       }
       try {
-        const response = await port.sendShardParentIcp(shardId, content);
+        const response = await port.sendShardParentIcp(shardId, trimmedContent);
         return textResult(`Parent reply: ${response}`);
       } catch (error) {
         return textResultWithError(

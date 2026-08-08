@@ -135,7 +135,7 @@ function parseAssignmentScalar(rawValue: string): unknown {
     maxAliasCount: 0,
     prettyErrors: true,
     uniqueKeys: true,
-  });
+  } as Parameters<typeof parseDocument>[1]);
   if (document.errors.length > 0) return Symbol('invalid-assignment-scalar');
   return document.toJS({ maxAliasCount: 0 }) as unknown;
 }
@@ -399,7 +399,7 @@ function parseYamlDocuments(text: string, path: string): unknown[] {
     maxAliasCount: 0,
     prettyErrors: true,
     uniqueKeys: true,
-  });
+  } as Parameters<typeof parseAllDocuments>[1]);
   const errors = documents.flatMap(document => document.errors);
   if (errors.length > 0) {
     throw new Error(`Kubernetes Helm chart contains invalid YAML at ${path}: ${errors[0].message}`);
@@ -667,7 +667,7 @@ export function readKubernetesHelmChartMetadata(
     maxAliasCount: 0,
     prettyErrors: true,
     uniqueKeys: true,
-  });
+  } as Parameters<typeof parseDocument>[1]);
   if (document.errors.length > 0) {
     throw new Error(`Kubernetes Helm chart metadata is invalid: ${document.errors[0].message}`);
   }

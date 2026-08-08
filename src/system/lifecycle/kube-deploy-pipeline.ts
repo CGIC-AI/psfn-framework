@@ -11,6 +11,7 @@ import {
   type KubeSelfManagementAction,
   type KubeSelfManagementExecutionResult,
   type KubeSelfManagementExecutor,
+  type KubeSelfManagementMutationRequest,
   type KubeSelfManagementRequest,
 } from './kube-self-management.js';
 import {
@@ -751,7 +752,8 @@ export function createKubeDeployPipelineExecutor(
       if (!isDeployPipelineAction(request.action)) {
         throw new Error('Kube deploy pipeline executor received an unsupported action.');
       }
-      const details = options.resolvePlan({ ...request, action: request.action });
+      const mutationRequest = request as KubeSelfManagementMutationRequest;
+      const details = options.resolvePlan({ ...mutationRequest, action: request.action });
       const plan: DeployPipelinePlan = {
         action: request.action,
         namespace: request.namespace,

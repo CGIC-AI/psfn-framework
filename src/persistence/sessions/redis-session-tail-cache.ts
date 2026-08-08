@@ -56,7 +56,7 @@ function escapeRedisGlobLiteral(value: string): string {
 }
 
 function normalizeScannedKeys(item: string | readonly string[]): string[] {
-  const keys = typeof item === 'string' ? [item] : item;
+  const keys = typeof item === 'string' ? [item] : [...item];
   for (const key of keys) {
     if (typeof key !== 'string') {
       throw new Error('Redis session tail SCAN returned a non-string key');

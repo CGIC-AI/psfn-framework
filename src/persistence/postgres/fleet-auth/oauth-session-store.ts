@@ -260,7 +260,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         idleExpiresAt,
         absoluteExpiresAt: current.absolute_expires_at,
         globalAuthEpoch: safeInteger(current.global_auth_epoch, 'global_auth_epoch'),
-        providerSubjectId: current.provider_subject_id,
+        providerSubjectId: current.provider_subject_id ?? '',
       });
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions

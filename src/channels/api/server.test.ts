@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
@@ -921,7 +922,7 @@ describe('ApiServer', () => {
       });
       expect(res.status).toBe(200);
 
-      const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+      const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
       expect(call.authorId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
       expect(call.authorName).toBe('Local API Principal');
     });
@@ -948,7 +949,7 @@ describe('ApiServer', () => {
       });
       expect(res.status).toBe(200);
 
-      const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
+      const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0] as SubstrateMessage;
       expect(call.routing?.modelOverride).toEqual({
         provider: 'anthropic',
         model: 'claude-opus-4',
@@ -980,7 +981,7 @@ describe('ApiServer', () => {
       });
       expect(res.status).toBe(200);
 
-      const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
+      const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0] as SubstrateMessage;
       expect(call.routing?.channelPrivacy).toBe('public');
       expect(call.isDirectMessage).toBe(false);
     });
@@ -2773,7 +2774,7 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
 
     const principalId = deriveApiKeyPrincipalId('test-secret-key');
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.authorId).toBe(principalId);
     expect(call.authorName).toBe('API Principal');
     expect(call.channelId).toBe(`api:${principalId}:identity-session`);
@@ -2810,7 +2811,7 @@ describe('ApiServer with auth', () => {
     });
     expect(res.status).toBe(200);
 
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.channelId).toBe('psfn-amica:test:display');
     expect(call.channelType).toBe('psfn-amica');
     expect(call.authorId).toBe('primary-user');
@@ -2848,7 +2849,7 @@ describe('ApiServer with auth', () => {
     });
     expect(res.status).toBe(200);
 
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.channelId).toBe('satellite:android-mobile:weekend-walk');
     expect(call.channelType).toBe('api');
     expect(call.authorId).toBe('primary-user');
@@ -2961,7 +2962,7 @@ describe('ApiServer with auth', () => {
     });
     expect(res.status).toBe(200);
 
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.channelId).toBe('psfn-amica:test:display');
     expect(call.channelType).toBe('psfn-amica');
     expect(call.authorId).toBe('primary-user');
@@ -3117,12 +3118,12 @@ describe('ApiServer with auth', () => {
   });
 
   it('rejects telemetry payloads that fail schema validation', async () => {
-    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', fromAny({
       source: 'sensor-a',
       eventType: 'external.telemetry.heartbeat',
       timestamp: new Date().toISOString(),
       payload: { status: 'ok' },
-    } as any, {
+    }), {
       Authorization: 'Bearer test-secret-key',
     });
 
@@ -3602,7 +3603,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
     const own = await request(port, 'POST', '/v1/chat/completions', chatBody,
       claimHeaders(KEY_A, 'sat-a', 'endpoint-a', 'claim-a'));
     expect(own.status).toBe(200);
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.authorId).toBe('user-a');
     expect(call.routing?.satellite?.auth?.principalId).toBe(PRINCIPAL_A);
 
@@ -3611,7 +3612,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
       claimHeaders(KEY_A, 'sat-b', 'endpoint-b', 'claim-b'));
     expect(swapped.status).toBe(403);
     expect(JSON.parse(swapped.body).error.type).toBe('satellite_principal_not_allowed');
-    expect((mockAgent.handleMessage as any).mock.calls).toHaveLength(1);
+    expect((fromAny(mockAgent.handleMessage)).mock.calls).toHaveLength(1);
   });
 
   it('confines satellite-scoped keys to satellite surfaces (H4)', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { registerMemoryTools } from './runtime-wiring.js';
 import type {
   MemoryDeletionApprovalPort,
@@ -34,8 +35,8 @@ describe('registerMemoryTools', () => {
     registerMemoryTools(
       { registerTool },
       {
-        writer: {} as any,
-        memoryStore: {} as any,
+        writer: fromAny({}),
+        memoryStore: fromAny({}),
         memoryDeletionProposalStore,
         memoryDeletionApprovalPort,
         memoryDeletionPolicy: {

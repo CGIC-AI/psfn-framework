@@ -6,6 +6,7 @@
 // hook (a held reply) propagates instead of delivering content.
 
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { requestAgentVoiceStream } from './voice-stream-request.js';
@@ -79,7 +80,7 @@ describe('voice stream request reply-canary seam (d269)', () => {
     });
 
     const result = await requestAgentVoiceStream({
-      client: client as any,
+      client: fromAny(client),
       message: { ...MESSAGE },
       wyomingShardRouting: WYOMING_ROUTING,
       companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
@@ -106,7 +107,7 @@ describe('voice stream request reply-canary seam (d269)', () => {
     });
     const held = new JSONRPCErrorException('held', GatewayErrors.EGRESS_HELD);
     await expect(requestAgentVoiceStream({
-      client: client as any,
+      client: fromAny(client),
       message: { ...MESSAGE },
       wyomingShardRouting: WYOMING_ROUTING,
       companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
@@ -143,7 +144,7 @@ describe('voice stream request reply-canary seam (d269)', () => {
     });
 
     const result = await requestAgentVoiceStream({
-      client: { request } as any,
+      client: fromAny({ request }),
       message: { ...MESSAGE },
       wyomingShardRouting: WYOMING_ROUTING,
       companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),

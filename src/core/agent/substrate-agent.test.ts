@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -139,11 +140,11 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
-    api: '' as any,
-    provider: '' as any,
+    api: fromAny(''),
+    provider: fromAny(''),
     model: '',
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: 'stop' as any,
+    stopReason: fromAny('stop'),
     timestamp: Date.now(),
   });
 });
@@ -153,8 +154,8 @@ function mockAssistantResponse(text: string): void {
     this.state.messages.push({
       role: 'assistant',
       content: [{ type: 'text' as const, text }],
-      api: '' as any,
-      provider: '' as any,
+      api: fromAny(''),
+      provider: fromAny(''),
       model: '',
       usage: {
         input: 0,
@@ -164,7 +165,7 @@ function mockAssistantResponse(text: string): void {
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: 'stop' as any,
+      stopReason: fromAny('stop'),
       timestamp: Date.now(),
     });
   });
@@ -179,8 +180,8 @@ function captureActiveTurnToolsOnNextPrompt(
     this.state.messages.push({
       role: 'assistant',
       content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
-      api: '' as any,
-      provider: '' as any,
+      api: fromAny(''),
+      provider: fromAny(''),
       model: '',
       usage: {
         input: 0,
@@ -190,7 +191,7 @@ function captureActiveTurnToolsOnNextPrompt(
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: 'stop' as any,
+      stopReason: fromAny('stop'),
       timestamp: Date.now(),
     });
   });
@@ -201,8 +202,8 @@ function mockAssistantErrorResponse(errorMessage: string): void {
     this.state.messages.push({
       role: 'assistant',
       content: [],
-      api: '' as any,
-      provider: '' as any,
+      api: fromAny(''),
+      provider: fromAny(''),
       model: '',
       usage: {
         input: 0,
@@ -212,7 +213,7 @@ function mockAssistantErrorResponse(errorMessage: string): void {
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: 'error' as any,
+      stopReason: fromAny('error'),
       errorMessage,
       timestamp: Date.now(),
     });
@@ -574,7 +575,7 @@ function makeExtendedProbeTool(name: string): AgentTool<any> {
     name,
     label: name,
     description: `${name} test probe`,
-    parameters: {} as any,
+    parameters: fromAny({}),
     execute: vi.fn(async () => ({
       content: [{ type: 'text', text: 'ok' }],
       details: {},
@@ -956,7 +957,7 @@ describe('SubstrateAgent construction', () => {
     const agent = new SubstrateAgent(
       eventBus, llmClient, sessionManager, 'System prompt', config,
     );
-    const setModelSpy = spyOnAgentStateSet<{ id: string }>((agent as any).agent, 'model');
+    const setModelSpy = spyOnAgentStateSet<{ id: string }>((fromAny(agent)).agent, 'model');
 
     expect(agent).toBeDefined();
     expect(config.runtimeHooks?.refreshModels).toBeTypeOf('function');
@@ -1021,7 +1022,7 @@ describe('SubstrateAgent construction', () => {
       { runtimeMode: 'gateway' },
     );
 
-    const streamFn = ((agent as any).agent as { streamFn: (...args: any[]) => Promise<AsyncIterable<unknown>> }).streamFn;
+    const streamFn = ((fromAny(agent)).agent as { streamFn: (...args: any[]) => Promise<AsyncIterable<unknown>> }).streamFn;
     const stream = await streamFn(
       {
         id: 'openrouter/deepseek/deepseek-v3.2',
@@ -1045,8 +1046,8 @@ describe('SubstrateAgent construction', () => {
       events.push(event);
     }
 
-    expect((llmClient.stream as any)).toHaveBeenCalledTimes(1);
-    expect((llmClient.stream as any).mock.calls[0]?.[0]).toMatchObject({
+    expect((fromAny(llmClient.stream))).toHaveBeenCalledTimes(1);
+    expect((fromAny(llmClient.stream)).mock.calls[0]?.[0]).toMatchObject({
       systemPrompt: 'System prompt',
       messages: [],
       modelHint: expect.objectContaining({
@@ -1330,7 +1331,7 @@ describe('production ICP candidate control-plane reachability', () => {
       await new Promise(resolve => setImmediate(resolve));
       expect(ordinaryTurnSettled).toBe(false);
       expect(ordinaryTurnToolNames).toHaveLength(0);
-      expect(((agent as any).agent as Agent).state.tools.map(tool => tool.name))
+      expect(((fromAny(agent)).agent as Agent).state.tools.map(tool => tool.name))
         .not.toContain('notify');
 
       releaseCandidatePrompt();
@@ -1467,13 +1468,13 @@ describe('SubstrateAgent.registerTool', () => {
       callIndex += 1;
       const partial = JSON.parse(JSON.stringify(template));
       const final = JSON.parse(JSON.stringify(template));
-      return {
+      return fromAny({
         async *[Symbol.asyncIterator]() {
           yield { type: 'start', partial };
           yield { type: 'done' };
         },
         result: async () => final,
-      } as any;
+      });
     });
   }
 
@@ -1510,7 +1511,7 @@ describe('SubstrateAgent.registerTool', () => {
     };
 
     // Should not throw
-    agent.registerTool(tool as any);
+    agent.registerTool(fromAny(tool));
   });
 
   it('attaches fail-closed concurrency metadata to registered tools', () => {
@@ -1519,43 +1520,43 @@ describe('SubstrateAgent.registerTool', () => {
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
 
-    agent.registerTool({
+    agent.registerTool(fromAny({
       name: 'repo_status',
       label: 'repo_status',
       description: 'read-only git status',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
-    } as any, 'extended');
+    }), 'extended');
 
-    agent.registerTool({
+    agent.registerTool(fromAny({
       name: 'subagent',
       label: 'subagent',
       description: 'unified bounded subagent control surface',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
-    } as any, 'core');
+    }), 'core');
 
-    agent.registerTool({
+    agent.registerTool(fromAny({
       name: 'stateful_write_probe',
       label: 'stateful_write_probe',
       description: 'stateful write tool',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
-    } as any, 'core');
+    }), 'core');
 
-    agent.registerTool({
+    agent.registerTool(fromAny({
       name: 'schedule_task',
       label: 'schedule_task',
       description: 'scheduler tool',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
-    } as any, 'extended');
+    }), 'extended');
 
     const catalog = agent.getToolCatalog();
-    const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
-    const subagent = [...catalog.core].find(tool => tool.name === 'subagent') as any;
-    const memoryWrite = [...catalog.core].find(tool => tool.name === 'stateful_write_probe') as any;
-    const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
+    const repoStatus = fromAny([...catalog.extended].find(tool => tool.name === 'repo_status'));
+    const subagent = fromAny([...catalog.core].find(tool => tool.name === 'subagent'));
+    const memoryWrite = fromAny([...catalog.core].find(tool => tool.name === 'stateful_write_probe'));
+    const scheduleTask = fromAny([...catalog.extended].find(tool => tool.name === 'schedule_task'));
 
     expect(repoStatus?.wiringMeta?.concurrency).toMatchObject({
       class: 'read_only',
@@ -1602,13 +1603,13 @@ describe('SubstrateAgent.registerTool', () => {
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
 
-    expect((agent as any).agent.__psfnToolSchedulerPatched).toBe(true);
+    expect((fromAny(agent)).agent.__psfnToolSchedulerPatched).toBe(true);
   });
 
   it('runs sibling subagent tool calls with overlap in one parent-loop assistant turn', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const subagent = {
+    const subagent = fromAny({
       name: 'subagent',
       label: 'subagent',
       description: 'spawn subagents through the canonical subagent surface',
@@ -1634,7 +1635,7 @@ describe('SubstrateAgent.registerTool', () => {
           },
         },
       },
-    } as any;
+    });
 
     const streamFn = makeLoopStreamFn([
       makeAssistantToolCallMessage([
@@ -1647,12 +1648,12 @@ describe('SubstrateAgent.registerTool', () => {
     const events: any[] = [];
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'fan out' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'fan out' }] })],
+      fromAny({
         systemPrompt: 'test system',
         messages: [],
         tools: [subagent],
-      } as any,
+      }),
       makeLoopConfig(),
       new AbortController().signal,
       streamFn,
@@ -1672,7 +1673,7 @@ describe('SubstrateAgent.registerTool', () => {
   it('keeps non-shard tools sequential in the same parent-loop scheduling path', async () => {
     const starts: number[] = [];
     const ends: number[] = [];
-    const makeStatusProbe = (name: string) => ({
+    const makeStatusProbe = (name: string) => (fromAny({
       name,
       label: name,
       description: 'status read',
@@ -1698,17 +1699,17 @@ describe('SubstrateAgent.registerTool', () => {
           },
         },
       },
-    } as any);
+    }));
     const statusProbeA = makeStatusProbe('status_probe_a');
     const statusProbeB = makeStatusProbe('status_probe_b');
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'status twice' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'status twice' }] })],
+      fromAny({
         systemPrompt: 'test system',
         messages: [],
         tools: [statusProbeA, statusProbeB],
-      } as any,
+      }),
       makeLoopConfig(),
       new AbortController().signal,
       makeLoopStreamFn([
@@ -1728,7 +1729,7 @@ describe('SubstrateAgent.registerTool', () => {
   });
 
   it('fails closed when subagent rejects due to shard limit or health guard', async () => {
-    const subagent = {
+    const subagent = fromAny({
       name: 'subagent',
       label: 'subagent',
       description: 'spawn subagents through the canonical subagent surface',
@@ -1759,16 +1760,16 @@ describe('SubstrateAgent.registerTool', () => {
           },
         },
       },
-    } as any;
+    });
 
     const events: any[] = [];
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'fan out with guard' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'fan out with guard' }] })],
+      fromAny({
         systemPrompt: 'test system',
         messages: [],
         tools: [subagent],
-      } as any,
+      }),
       makeLoopConfig(),
       new AbortController().signal,
       makeLoopStreamFn([
@@ -1851,7 +1852,7 @@ describe('SubstrateAgent.handleMessage', () => {
       '</summary_data>',
       '</untrusted_compaction_summary>',
     ].join('\n');
-    (sessionManager.buildContext as any).mockResolvedValue({
+    (fromAny(sessionManager.buildContext)).mockResolvedValue({
       systemPrompt: `Base system prompt.\n\n${compactionSummaryBlock}`,
       sessionPromptBlocks: [
         { id: 'session.compaction_summary', content: compactionSummaryBlock },
@@ -1867,7 +1868,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'test',
       config,
     );
-    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((fromAny(agent)).agent, 'systemPrompt');
     try {
       await agent.handleMessage(makeMessage());
 
@@ -1925,7 +1926,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const captured: Record<string, any> = {};
     eventBus.on('agent.turn.start', (payload) => { captured.start = payload; });
     eventBus.on('agent.turn.usage', (payload) => { captured.usage = payload; });
-    (eventBus as any).on('agent.turn.stage', (payload: any) => {
+    (fromAny(eventBus)).on('agent.turn.stage', (payload: any) => {
       if (payload.stage === 'trust') captured.stage = payload;
     });
 
@@ -2047,7 +2048,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
     const manifest = makeContextManifestFixture();
-    (sessionManager.buildContext as any).mockResolvedValue({
+    (fromAny(sessionManager.buildContext)).mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [
         { role: 'user', content: 'Hello' },
@@ -2106,7 +2107,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const stages: string[] = [];
     const payloads: any[] = [];
-    (eventBus as any).on('agent.turn.stage', (data: any) => {
+    (fromAny(eventBus)).on('agent.turn.stage', (data: any) => {
       stages.push(data.stage);
       payloads.push(data);
     });
@@ -2136,8 +2137,8 @@ describe('SubstrateAgent.handleMessage', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: {
           input: 0,
@@ -2147,7 +2148,7 @@ describe('SubstrateAgent.handleMessage', () => {
           totalTokens: 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     });
@@ -2157,7 +2158,7 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     const firstTokenStages: any[] = [];
-    (eventBus as any).on('agent.turn.stage', (data: any) => {
+    (fromAny(eventBus)).on('agent.turn.stage', (data: any) => {
       if (data.stage === 'first-token') firstTokenStages.push(data);
     });
 
@@ -2177,8 +2178,8 @@ describe('SubstrateAgent.handleMessage', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: {
           input: 100,
@@ -2188,22 +2189,22 @@ describe('SubstrateAgent.handleMessage', () => {
           totalTokens: 120,
           cost: { input: 0.001, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
         },
-        stopReason: 'toolUse' as any,
+        stopReason: fromAny('toolUse'),
         timestamp: Date.now(),
       });
-      this.state.messages.push({
+      this.state.messages.push(fromAny({
         role: 'toolResult',
         toolCallId: 'tool-1',
         toolName: 'analysis_workbench',
         content: [{ type: 'text', text: 'ok' }],
         isError: false,
         timestamp: Date.now(),
-      } as any);
+      }));
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text', text: 'Final response' }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: {
           input: 130,
@@ -2213,7 +2214,7 @@ describe('SubstrateAgent.handleMessage', () => {
           totalTokens: 160,
           cost: { input: 0.002, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.002 },
         },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     });
@@ -2567,8 +2568,8 @@ describe('SubstrateAgent.handleMessage', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: {
           input: 10,
@@ -2578,22 +2579,22 @@ describe('SubstrateAgent.handleMessage', () => {
           totalTokens: 12,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-        stopReason: 'toolUse' as any,
+        stopReason: fromAny('toolUse'),
         timestamp: Date.now(),
       });
-      this.state.messages.push({
+      this.state.messages.push(fromAny({
         role: 'toolResult',
         toolCallId: 'tool-1',
         toolName: 'analysis_workbench',
         content: [{ type: 'text', text: 'sandbox conclusion' }],
         isError: false,
         timestamp: Date.now(),
-      } as any);
+      }));
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text', text: 'Final response' }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: {
           input: 12,
@@ -2603,7 +2604,7 @@ describe('SubstrateAgent.handleMessage', () => {
           totalTokens: 15,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     });
@@ -2647,14 +2648,14 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage({ id: 'msg-turn-record' }));
 
-    const userOptions = (sessionManager.recordUserMessage as any).mock.calls[0][6];
-    const assistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5];
+    const userOptions = (fromAny(sessionManager.recordUserMessage)).mock.calls[0][6];
+    const assistantOptions = (fromAny(sessionManager.recordAssistantMessage)).mock.calls[0][5];
     expect(isTurnId(userOptions.turnId)).toBe(true);
     expect(assistantOptions.turnId).toBe(userOptions.turnId);
     expect(assistantOptions.requestId).toBe('msg-turn-record');
     expect(startPayload.turnId).toBe(userOptions.turnId);
 
-    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    const record = (fromAny(sessionManager.recordTurn)).mock.calls[0][0];
     expect(record).toMatchObject({
       schemaVersion: 1,
       turnId: userOptions.turnId,
@@ -2678,7 +2679,7 @@ describe('SubstrateAgent.handleMessage', () => {
   it('passes captured turn snapshots through context build and persisted turn metadata', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager() as any;
+    const sessionManager = fromAny(makeMockSessionManager());
     let snapshotPayload: any = null;
     eventBus.on('agent.turn.snapshot', (payload) => { snapshotPayload = payload; });
     sessionManager.captureTurnSessionContext = vi.fn().mockResolvedValue({
@@ -2713,7 +2714,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage({ id: 'msg-snapshot-record' }));
 
     expect(sessionManager.captureTurnSessionContext).toHaveBeenCalledTimes(1);
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[7]).toMatchObject({
       versionPointer: 'session-snapshot-v1',
       compactionPromptText: 'Compaction prompt snapshot',
@@ -2727,7 +2728,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(mockMemory.getActiveMemoryContext).toHaveBeenCalledTimes(1);
     expect(mockMemory.refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
 
-    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    const record = (fromAny(sessionManager.recordTurn)).mock.calls[0][0];
     expect(record.versionPointers).toMatchObject({
       promptStack: expect.any(String),
       sessionState: 'session-snapshot-v1',
@@ -2800,7 +2801,7 @@ describe('SubstrateAgent.handleMessage', () => {
       }),
     );
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[4]).toBe('contact-canonical-1');
     expect(buildCall[6]).toEqual(['api-user-1', 'discord-user-1']);
     expect(buildCall[9]).toMatchObject({
@@ -2863,7 +2864,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
   it('enriches active memory refresh with recent same-session context', async () => {
     const config = makeConfig();
-    const sessionManager = makeMockSessionManager() as any;
+    const sessionManager = fromAny(makeMockSessionManager());
     sessionManager.captureTurnSessionContext = vi.fn().mockResolvedValue({
       channelId: 'test-channel',
       recentEntries: [
@@ -3006,12 +3007,12 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
-    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(TEST_COMPANION_ID);
-    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
-    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
+    expect((fromAny(sessionManager.recordSystemMessage)).mock.calls[0][5]).toBe(TEST_COMPANION_ID);
+    expect((fromAny(sessionManager.buildContext)).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
+    expect((fromAny(sessionManager.recordAssistantMessage)).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
     expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).toContain('<internal_turn_context>');
     expect(prompt).toContain(`<kind>${channelId.includes('reflection') ? 'reflection' : 'heartbeat'}</kind>`);
     // The scheduler/whisper runtime source must not be presented as the
@@ -3066,9 +3067,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     try {
       const agent = new SubstrateAgent(
@@ -3092,7 +3093,7 @@ describe('SubstrateAgent.handleMessage', () => {
       });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3104,9 +3105,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3144,7 +3145,7 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3156,9 +3157,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       marker: boolean;
@@ -3194,7 +3195,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(llmProvider.webFetchBinary).toHaveBeenCalledTimes(1);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3206,9 +3207,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3246,7 +3247,7 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3258,9 +3259,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3298,7 +3299,7 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3310,9 +3311,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3344,7 +3345,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(llmProvider.webFetchBinary).toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3356,9 +3357,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     try {
       const agent = new SubstrateAgent(
@@ -3387,7 +3388,7 @@ describe('SubstrateAgent.handleMessage', () => {
       });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3399,9 +3400,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     try {
       const agent = new SubstrateAgent(
@@ -3426,7 +3427,7 @@ describe('SubstrateAgent.handleMessage', () => {
       });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3438,9 +3439,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3479,7 +3480,7 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3491,9 +3492,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3538,7 +3539,7 @@ describe('SubstrateAgent.handleMessage', () => {
         finalContentEmpty: false,
       });
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3550,9 +3551,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3600,7 +3601,7 @@ describe('SubstrateAgent.handleMessage', () => {
         finalContentEmpty: false,
       });
     } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3612,9 +3613,9 @@ describe('SubstrateAgent.handleMessage', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const originalFetch = (globalThis as any).fetch;
+    const originalFetch = (fromAny(globalThis)).fetch;
     const fetchMock = vi.fn();
-    (globalThis as any).fetch = fetchMock;
+    (fromAny(globalThis)).fetch = fetchMock;
 
     const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
@@ -3668,7 +3669,7 @@ describe('SubstrateAgent.handleMessage', () => {
         attempts: 3,
       });
   } finally {
-      (globalThis as any).fetch = originalFetch;
+      (fromAny(globalThis)).fetch = originalFetch;
     }
   });
 
@@ -3677,7 +3678,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
-    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((fromAny(agent)).agent, 'systemPrompt');
 
     try {
       mockAssistantResponse('The clock is off, that cannot be right.');
@@ -3712,7 +3713,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
-    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((fromAny(agent)).agent, 'systemPrompt');
 
     try {
       mockAssistantResponse('Time is wrong. Are you sure this is right?');
@@ -3802,7 +3803,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const response = await agent.handleMessage(makeMessage());
 
     expect(promptSpy.mock.calls.length).toBe(promptCallsBefore + 1);
-    expect((llmProvider.complete as any).mock.calls.length).toBe(0);
+    expect((fromAny(llmProvider.complete)).mock.calls.length).toBe(0);
     expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
   });
 
@@ -3848,7 +3849,7 @@ describe('SubstrateAgent.handleMessage', () => {
       staticLayerIds: ['layer-1'],
       dynamicLayerIds: [],
     });
-    agent.promptComposer = { composeSplit } as any;
+    agent.promptComposer = fromAny({ composeSplit });
 
     await agent.handleMessage(makeMessage({
       channelId: 'internal:heartbeat',
@@ -3961,7 +3962,7 @@ describe('SubstrateAgent.handleMessage', () => {
       staticLayerIds: ['layer-1'],
       dynamicLayerIds: [],
     });
-    agent.promptComposer = { composeSplit } as any;
+    agent.promptComposer = fromAny({ composeSplit });
 
     await agent.handleMessage(makeMessage({
       channelId: 'discord-channel-1',
@@ -3996,7 +3997,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'scheduled reflection run',
     }));
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).not.toContain('Appearance context: Cat ears and tail with human hands.');
   });
 
@@ -4017,7 +4018,7 @@ describe('SubstrateAgent.handleMessage', () => {
       staticLayerIds: ['layer-1'],
       dynamicLayerIds: [],
     });
-    agent.promptComposer = { composeSplit } as any;
+    agent.promptComposer = fromAny({ composeSplit });
 
     const discordDock: ChannelPromptDock = {
       id: 'discord',
@@ -4056,7 +4057,7 @@ describe('SubstrateAgent.handleMessage', () => {
       staticLayerIds: ['layer-1'],
       dynamicLayerIds: [],
     });
-    agent.promptComposer = { composeSplit } as any;
+    agent.promptComposer = fromAny({ composeSplit });
 
     const apiDock: ChannelPromptDock = {
       id: 'api',
@@ -4103,7 +4104,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     // buildContext should carry deterministic relationship facts without a prose trust/persona block.
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[1]).toContain('Base prompt');
     expect(buildCall[1]).toContain('<conversation_state>');
     expect(buildCall[1]).toContain('trust="primary"');
@@ -4124,7 +4125,7 @@ describe('SubstrateAgent.handleMessage', () => {
       channelType: 'api',
     }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('<style>expressive</style>');
@@ -4155,9 +4156,9 @@ describe('SubstrateAgent.handleMessage', () => {
       channelType: 'telegram',
     }));
 
-    const guildPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    const voicePrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    const telegramPrompt = (sessionManager.buildContext as any).mock.calls[2][1] as string;
+    const guildPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+    const voicePrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
+    const telegramPrompt = (fromAny(sessionManager.buildContext)).mock.calls[2][1] as string;
 
     expect(guildPrompt).toContain('<response_style_guidance>');
     expect(voicePrompt).toContain('<response_style_guidance>');
@@ -4183,7 +4184,7 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     }));
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).toContain('<style>concise</style>');
     expect(prompt).toContain('<voice_delivery>This is a voice channel.');
     expect(prompt).toContain('do not narrate or emote actions');
@@ -4207,7 +4208,7 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     }));
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('<style>concise</style>');
     expect(prompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
@@ -4233,7 +4234,7 @@ describe('SubstrateAgent.handleMessage', () => {
       channelType: 'api',
     }));
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('<style>concise</style>');
     expect(prompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
@@ -4253,7 +4254,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage({ authorName: 'PrimaryUser' }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[1]).toContain(TEST_SYSTEM_PROMPT);
     expect(buildCall[1]).toContain('Address PrimaryUser by name.');
     expect(buildCall[1]).not.toContain('{{char}}');
@@ -4273,7 +4274,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage({ authorName: 'PrimaryUser' }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[1]).toContain('Identity: ConfigCompanion.');
     expect(buildCall[1]).not.toContain('Identity: Assistant.');
     expect(buildCall[1]).not.toContain('{{char}}');
@@ -4317,8 +4318,8 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     expect(characterPromptVariablesProvider).toHaveBeenCalledTimes(2);
-    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+    const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('Foundation:\nCompanion helps PrimaryUser with focus.');
     expect(secondPrompt).toContain('Foundation:\nCompanion Prime now aligns with PrimaryUser in every turn.');
     expect(secondPrompt).not.toContain('Companion helps PrimaryUser with focus.');
@@ -4374,8 +4375,8 @@ describe('SubstrateAgent.handleMessage', () => {
       authorName: '5635268079',
     }));
 
-    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+    const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('Address V by name.');
     expect(secondPrompt).toContain('Address V by name.');
     expect(firstPrompt).toContain('<current_message_author name="discord-user" id="discord-user" trust="primary" relationship="friend" />');
@@ -4494,13 +4495,13 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(invalidName.ok).toBe(false);
     expect(invalidName.errorCode).toBe('tool_not_extended');
 
-    const deniedTool = {
+    const deniedTool = fromAny({
       name: 'repo_commit',
       label: 'repo_commit',
       description: 'commit test tool',
       parameters: {} as any,
       execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
-    } as any;
+    });
     agent.registerTool(deniedTool, 'extended');
 
     const denied = await agent.addPromotedExtendedTool('repo_commit');
@@ -4566,7 +4567,7 @@ describe('SubstrateAgent.handleMessage', () => {
         layerCount: 2,
         layerIds: ['layer-static', 'layer-dynamic'],
       });
-      agent.promptComposer = { composeSplit } as any;
+      agent.promptComposer = fromAny({ composeSplit });
 
       vi.setSystemTime(new Date('2026-02-26T00:00:00.000Z'));
       await agent.handleMessage(makeMessage({ id: 'msg-static-1', authorName: 'PrimaryUser' }));
@@ -4574,8 +4575,8 @@ describe('SubstrateAgent.handleMessage', () => {
       vi.setSystemTime(new Date('2026-02-26T00:10:00.000Z'));
       await agent.handleMessage(makeMessage({ id: 'msg-static-2', authorName: 'PrimaryUser' }));
 
-      const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+      const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+      const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
 
       expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-25T19:00:00.000-05:00');
       expect(firstPrompt).toContain('[DYNAMIC] 2026-02-25T19:00:00.000-05:00');
@@ -4624,7 +4625,7 @@ describe('SubstrateAgent.handleMessage', () => {
           layerCount: 1,
           layerIds: ['layer-static'],
         });
-      agent.promptComposer = { composeSplit } as any;
+      agent.promptComposer = fromAny({ composeSplit });
 
       vi.setSystemTime(new Date('2026-02-26T01:00:00.000Z'));
       await agent.handleMessage(makeMessage({ id: 'msg-hash-1' }));
@@ -4632,7 +4633,7 @@ describe('SubstrateAgent.handleMessage', () => {
       vi.setSystemTime(new Date('2026-02-26T01:05:00.000Z'));
       await agent.handleMessage(makeMessage({ id: 'msg-hash-2' }));
 
-      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+      const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
       expect(secondPrompt).toContain('[STATIC-v2] 2026-02-25T20:05:00.000-05:00');
     } finally {
       vi.useRealTimers();
@@ -4661,7 +4662,7 @@ describe('SubstrateAgent.handleMessage', () => {
       layerCount: 1,
       layerIds: ['layer-static'],
     });
-    agent.promptComposer = { composeSplit } as any;
+    agent.promptComposer = fromAny({ composeSplit });
 
     await agent.handleMessage(makeMessage({
       id: 'msg-settings-1',
@@ -4674,8 +4675,8 @@ describe('SubstrateAgent.handleMessage', () => {
       authorName: 'Nyx',
     }));
 
-    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+    const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('[STATIC] PrimaryUser');
     expect(secondPrompt).toContain('[STATIC] PrimaryUser');
     expect(secondPrompt).toContain('<current_message_author name="Nyx" id="same-user" trust="regular" />');
@@ -4691,14 +4692,14 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.skillsRuntime = {
+    agent.skillsRuntime = fromAny({
       getPromptXml: vi.fn().mockResolvedValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
       getCachedPromptXml: vi.fn().mockReturnValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
-    } as any;
+    });
 
     await agent.handleMessage(makeMessage());
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[1]).toContain('<skills_index>');
     expect(buildCall[1]).toContain('<skill name="conversation" />');
   });
@@ -4713,7 +4714,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.setActiveConcernProvider({
+    agent.setActiveConcernProvider(fromAny({
       getActiveConcerns: vi.fn().mockReturnValue([{
         id: 'concern-1',
         text: 'Check whether V ate today.',
@@ -4723,13 +4724,13 @@ describe('SubstrateAgent.handleMessage', () => {
         expiresAt: '2026-02-03T10:00:00.000Z',
         contactId: 'user-123',
       }]),
-    } as any);
+    }));
 
     await agent.handleMessage(makeMessage({
       authorId: 'user-123',
     }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(prompt).toContain('<open_threads>');
     expect(prompt).toContain('Check whether V ate today');
@@ -4758,7 +4759,7 @@ describe('SubstrateAgent.handleMessage', () => {
       authorId: 'user-123',
     }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(getBehavioralNotes).toHaveBeenCalled();
     expect(prompt).toContain('<behavioral_notes>');
@@ -4776,7 +4777,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.scratchpadProvider = {
+    agent.scratchpadProvider = fromAny({
       listScratchpadEntries: vi.fn().mockReturnValue([
         {
           id: 'sp-1',
@@ -4785,11 +4786,11 @@ describe('SubstrateAgent.handleMessage', () => {
           updatedAt: 1_700_000_010_000,
         },
       ]),
-    } as any;
+    });
 
     await agent.handleMessage(makeMessage());
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[1]).toContain('[Scratchpad]');
     expect(buildCall[1]).not.toContain('sp-1');
     expect(buildCall[1]).toContain('confirm backup status');
@@ -4805,7 +4806,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.scratchpadProvider = {
+    agent.scratchpadProvider = fromAny({
       listScratchpadEntries: vi.fn().mockReturnValue(
         Array.from({ length: 12 }, (_, index) => ({
           id: `sp-${index}`,
@@ -4814,11 +4815,11 @@ describe('SubstrateAgent.handleMessage', () => {
           updatedAt: 1_700_000_000_000 + index,
         })),
       ),
-    } as any;
+    });
 
     await agent.handleMessage(makeMessage());
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     const prompt = buildCall[1] as string;
     const injectedEntries = prompt
       .split('\n')
@@ -4854,7 +4855,7 @@ describe('SubstrateAgent.handleMessage', () => {
         config,
         {
           emotionRuntime: {
-            observer: emotionObserver as any,
+            observer: fromAny(emotionObserver),
             state: new EmotionState(),
             requireWiring: true,
           },
@@ -4875,16 +4876,16 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(emotionObserver.observe).toHaveBeenNthCalledWith(1, 'I feel great today', 0);
       expect(emotionObserver.observe).toHaveBeenNthCalledWith(2, 'Now I am frustrated', 4);
 
-      const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+      const firstPrompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
+      const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
       expect(firstPrompt).not.toContain('<internal_state>');
       expect(firstPrompt).not.toContain('joy and trust present');
       expect(secondPrompt).not.toContain('Current affect:');
       expect(secondPrompt).not.toContain('anger');
       expect(secondPrompt).not.toContain('Metacognitive flags:');
 
-      const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
-      const secondAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[1][5] as { metadata?: string };
+      const firstAssistantOptions = (fromAny(sessionManager.recordAssistantMessage)).mock.calls[0][5] as { metadata?: string };
+      const secondAssistantOptions = (fromAny(sessionManager.recordAssistantMessage)).mock.calls[1][5] as { metadata?: string };
       expect(firstAssistantOptions.metadata).toBeTypeOf('string');
       expect(secondAssistantOptions.metadata).toBeTypeOf('string');
       const firstSnapshot = parseSessionEmotionState(firstAssistantOptions.metadata);
@@ -4907,19 +4908,19 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
       {
         emotionRuntime: {
-          observer: {
+          observer: fromAny({
             observe: vi.fn().mockResolvedValue({
               vad: { valence: 0.5, arousal: 0.2, dominance: 0.15 },
               discrete: { joy: 0.8, trust: 0.6 },
               confidence: 0.9,
             }),
-          } as any,
+          }),
           state: new EmotionState(),
         },
       },
     );
 
-    agent.activeConcernProvider = {
+    agent.activeConcernProvider = fromAny({
       getActiveConcerns: vi.fn().mockReturnValue([
         {
           id: 'concern-1',
@@ -4930,7 +4931,7 @@ describe('SubstrateAgent.handleMessage', () => {
           expiresAt: '2026-01-02T00:00:00.000Z',
         },
       ]),
-    } as any;
+    });
 
     agent.contactStore = {
       resolveChannelIdentity: vi.fn().mockResolvedValue({
@@ -4984,14 +4985,14 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     });
 
-    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    const record = (fromAny(sessionManager.recordTurn)).mock.calls[0][0];
     expect(record.internalStateSnapshotRef).toContain(
       `self:${response.metadata.internalStateSnapshotRef}`,
     );
     expect(agent.getCurrentInternalState()).toEqual(response.metadata.internalState);
     expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
 
-    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const prompt = (fromAny(sessionManager.buildContext)).mock.calls[0][1] as string;
     expect(prompt).not.toContain('<internal_state>');
     expect(prompt).not.toContain('Relationship baseline: trusted trust');
     expect(prompt).toContain('<open_threads>');
@@ -5027,18 +5028,18 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
       {
         emotionRuntime: {
-          observer: {
+          observer: fromAny({
             observe: vi.fn().mockResolvedValue({
               vad: { valence: 0.2, arousal: 0.1, dominance: 0.1 },
               discrete: {},
               confidence: 0,
             }),
-          } as any,
+          }),
           state: new EmotionState(),
         },
       },
     );
-    agent.activeConcernProvider = {
+    agent.activeConcernProvider = fromAny({
       getActiveConcerns: vi.fn().mockReturnValue([
         {
           id: 'concern-rollbacks',
@@ -5049,7 +5050,7 @@ describe('SubstrateAgent.handleMessage', () => {
           expiresAt: '2026-01-02T00:00:00.000Z',
         },
       ]),
-    } as any;
+    });
 
     mockAssistantResponse('The migration status update is complete and stable.');
     const firstResponse = await agent.handleMessage(makeMessage({
@@ -5072,7 +5073,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'Any update?',
     }));
 
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(secondPrompt).not.toContain('<internal_state>');
     expect(secondPrompt).not.toContain('Metacognitive flags:');
     expect(secondPrompt).not.toContain('<metacognitive_persona_guidance>');
@@ -5108,7 +5109,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
       {
         emotionRuntime: {
-          observer: emotionObserver as any,
+          observer: fromAny(emotionObserver),
           state: new EmotionState(),
           requireWiring: true,
         },
@@ -5125,7 +5126,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'Checking in again.',
     }));
 
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(completeSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.any(String),
@@ -5158,7 +5159,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
       {
         emotionRuntime: {
-          observer: { observe: vi.fn().mockResolvedValue(emotionObservation) } as any,
+          observer: fromAny({ observe: vi.fn().mockResolvedValue(emotionObservation) }),
           state: new EmotionState(),
         },
       },
@@ -5189,7 +5190,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
       {
         emotionRuntime: {
-          observer: { observe: vi.fn().mockResolvedValue(emotionObservation) } as any,
+          observer: fromAny({ observe: vi.fn().mockResolvedValue(emotionObservation) }),
           state: new EmotionState(),
         },
       },
@@ -5214,8 +5215,8 @@ describe('SubstrateAgent.handleMessage', () => {
     await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));
     await publicAgent.handleMessage(makeMessage({ id: 'affect-public-turn' }));
 
-    const primaryPrompt = (primarySessionManager.buildContext as any).mock.calls[0][1] as string;
-    const publicPrompt = (publicSessionManager.buildContext as any).mock.calls[0][1] as string;
+    const primaryPrompt = (fromAny(primarySessionManager.buildContext)).mock.calls[0][1] as string;
+    const publicPrompt = (fromAny(publicSessionManager.buildContext)).mock.calls[0][1] as string;
 
     expect(primaryPrompt).not.toContain('<emotional_affect>');
     expect(primaryPrompt).not.toContain('Trust gate: honne (genuine)');
@@ -5262,7 +5263,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
     // Force buildContext to throw
-    (sessionManager.buildContext as any).mockRejectedValue(new Error('context build failed'));
+    (fromAny(sessionManager.buildContext)).mockRejectedValue(new Error('context build failed'));
 
     const agent = new SubstrateAgent(
       eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
@@ -5303,7 +5304,7 @@ describe('SubstrateAgent.handleMessage', () => {
         turnId: expect.any(String),
       }),
     );
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[5]).toEqual({ isDirectMessage: true });
   });
 
@@ -5390,7 +5391,7 @@ describe('SubstrateAgent.handleMessage', () => {
         channelId: 'api:admin-broadcast',
         channelMeta: {},
       }));
-      const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+      const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
       expect(buildCall[5]).toEqual({});
       expect(response.content).toBe('');
       expect(response.metadata.broadcastSafety).toMatchObject({
@@ -5456,7 +5457,7 @@ describe('SubstrateAgent.handleMessage', () => {
         turnId: expect.any(String),
       }),
     );
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[5]).toEqual({
       broadcastApprovalToken: 'approve:operator-12345678',
     });
@@ -5564,7 +5565,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'share an update',
     }));
 
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const buildCall = (fromAny(sessionManager.buildContext)).mock.calls[0];
     expect(buildCall[8]).toMatchObject({
       reason: 'ok',
       retrievalSource: 'embedding',
@@ -6110,11 +6111,11 @@ describe('SubstrateAgent steering + follow-up', () => {
       target.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     };
@@ -6479,11 +6480,11 @@ describe('SubstrateAgent steering + follow-up', () => {
       target.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: content }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     };
@@ -7108,11 +7109,11 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'ok' }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     });

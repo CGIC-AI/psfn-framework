@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { runRLMLoop } from './loop.js';
 import { createAnalysisWorkbenchTool } from './tools.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
@@ -230,11 +231,11 @@ describe('runRLMLoop', () => {
       'FINAL("done")',
     ]);
     const emitted: Array<[string, Record<string, unknown>]> = [];
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
         emitted.push([eventName, payload]);
       }),
-    } as any;
+    });
 
     const result = await runRLMLoop('Iteration charge test', makeDeps(llm, {
       chargePolicy: makeChargePolicy(),
@@ -244,8 +245,8 @@ describe('runRLMLoop', () => {
     expect(result.iterations).toBe(2);
     expect(emitted).toHaveLength(1);
     expect(emitted[0][0]).toBe('agent.charge');
-    expect((emitted[0][1] as any).surface).toBe('analysisWorkbenchExtensionBand');
-    expect((emitted[0][1] as any).lineage.runId).toBeDefined();
+    expect((fromAny(emitted[0][1])).surface).toBe('analysisWorkbenchExtensionBand');
+    expect((fromAny(emitted[0][1])).lineage.runId).toBeDefined();
   });
 
   it('refuses the next iteration when analysis workbench charge quota is exhausted before the extension band', async () => {
@@ -1423,18 +1424,18 @@ describe('runRLMLoop', () => {
     const deps = makeDeps(llm, {
       config: cfg,
       chargePolicy: makeChargePolicy(),
-      eventBus: {
+      eventBus: fromAny({
         emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
           emitted.push([eventName, payload]);
         }),
-      } as any,
+      }),
     });
 
     const result = await runRLMLoop('subquery-cost', deps);
 
     expect(result.budgetStatus.sessionCostUsd).toBeCloseTo(0.00009, 8);
     expect(result.budgetStatus.dayCostUsd).toBeCloseTo(0.00009, 8);
-    const consultEvents = emitted.filter(([eventName, payload]) => eventName === 'agent.charge' && (payload as any).surface === 'externalModelConsult');
+    const consultEvents = emitted.filter(([eventName, payload]) => eventName === 'agent.charge' && (fromAny(payload)).surface === 'externalModelConsult');
     expect(consultEvents.length).toBeGreaterThanOrEqual(1);
   });
 });

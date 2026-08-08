@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
@@ -593,7 +594,7 @@ describe('tool-call-scheduler', () => {
       async () => {
         steeringPollCount += 1;
         return steeringPollCount >= 1
-          ? [{ role: 'user', content: [{ type: 'text', text: 'interrupt' }], timestamp: Date.now() } as any]
+          ? [fromAny({ role: 'user', content: [{ type: 'text', text: 'interrupt' }], timestamp: Date.now() })]
           : [];
       },
       { stream: { push: () => undefined } },
@@ -635,13 +636,13 @@ describe('tool-call-scheduler', () => {
     const result = await executeToolCallsWithScheduler(
       [issueShow],
       makeAssistantMessage(['issue_show', 'issue_show']),
-      async () => [{
+      async () => [fromAny({
         role: 'custom',
         type: 'systemNote',
         messageClass: 'system_note',
         content: '[SYSTEM: Runtime] Queue a private follow-up reminder.',
         timestamp: Date.now(),
-      } as any],
+      })],
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 1, onTelemetry: telemetry },
     );
@@ -678,13 +679,13 @@ describe('tool-call-scheduler', () => {
     const result = await executeToolCallsWithScheduler(
       [issueShow],
       makeAssistantMessage(['issue_show', 'issue_show']),
-      async () => [{
+      async () => [fromAny({
         role: 'custom',
         type: 'internalWhisper',
         messageClass: 'internal_whisper',
         content: 'Keep the answer concrete and grounded.',
         timestamp: Date.now(),
-      } as any],
+      })],
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 1, onTelemetry: telemetry },
     );

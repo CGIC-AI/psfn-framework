@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createSubagentTool } from './tools.js';
 import type { SubagentControlPort } from './port.js';
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
@@ -158,8 +159,8 @@ describe('createSubagentTool', () => {
   it('advertises sixteen turns for background-model worker tasks', () => {
     const tool = createSubagentTool(createPort());
 
-    expect((tool.parameters as any).properties.max_turns.maximum).toBe(16);
-    expect((tool.parameters as any).properties).not.toHaveProperty('toolset');
+    expect((fromAny(tool.parameters)).properties.max_turns.maximum).toBe(16);
+    expect((fromAny(tool.parameters)).properties).not.toHaveProperty('toolset');
     expect(tool.description).not.toContain('toolset');
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent);
   });

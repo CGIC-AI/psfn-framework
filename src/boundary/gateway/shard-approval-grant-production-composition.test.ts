@@ -20,6 +20,7 @@
  * allowed by the bead contract.
  */
 import { EventEmitter } from 'node:events';
+import { fromAny } from '@total-typescript/shoehorn';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -197,9 +198,9 @@ function homeAssistantOpsFor(conn: MockConnection) {
     return response.result;
   };
   return {
-    getStates: (params: unknown) => request('home_assistant.get_states', params ?? {}) as any,
+    getStates: (params: unknown) => fromAny(request('home_assistant.get_states', params ?? {})),
     callService: (params: HomeAssistantCallServiceParams) =>
-      request('home_assistant.call_service', params) as any,
+      fromAny(request('home_assistant.call_service', params)),
   };
 }
 
@@ -248,10 +249,10 @@ async function startServer(options: GatewayServerOptions): Promise<{
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return {
+    return fromAny({
       close: vi.fn((onClosed?: () => void) => onClosed?.()),
       listen: vi.fn(),
-    } as any;
+    });
   });
   server.start();
   const conn = createMockConnection();

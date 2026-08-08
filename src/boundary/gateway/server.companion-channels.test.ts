@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import { GatewayErrors } from './protocol.js';
@@ -78,7 +79,7 @@ function createMockConnection(
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
-      onSend?.(data as any, (response) => emitter.emit('message', response));
+      onSend?.(fromAny(data), (response) => emitter.emit('message', response));
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -123,12 +124,12 @@ function createMockAuditStore(): GatewayAuditStorePort {
 function createMinimalOptions(): GatewayServerOptions {
   return {
     socketPath: '/tmp/test.sock',
-    llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
-    embeddingService: { embed: vi.fn(), embedBatch: vi.fn(), dims: 1024 } as any,
-    discordAdapter: {
+    llmProvider: fromAny({ stream: vi.fn(), complete: vi.fn() }),
+    embeddingService: fromAny({ embed: vi.fn(), embedBatch: vi.fn(), dims: 1024 }),
+    discordAdapter: fromAny({
       id: 'discord',
       outbound: { textChunkLimit: 2000, sendText: vi.fn() },
-    } as any,
+    }),
     policyConfig: { workspacePath: '/workspace' },
     intakeScreeningMode: 'off',
     intakeScreeningProvider: () => null,
@@ -176,7 +177,7 @@ async function setupServer(options: GatewayServerOptions): Promise<{
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return { close: vi.fn(), listen: vi.fn() } as any;
+    return fromAny({ close: vi.fn(), listen: vi.fn() });
   });
   server.start();
   return {

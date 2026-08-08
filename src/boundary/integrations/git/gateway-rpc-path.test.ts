@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fromAny } from '@total-typescript/shoehorn';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,22 +22,22 @@ function createServerOptions(
 ): GatewayServerOptions {
   return {
     socketPath,
-    llmProvider: {
+    llmProvider: fromAny({
       stream: vi.fn(),
       complete: vi.fn(),
-    } as any,
-    embeddingService: {
+    }),
+    embeddingService: fromAny({
       embed: vi.fn(),
       embedBatch: vi.fn(),
       dims: 1024,
-    } as any,
-    discordAdapter: {
+    }),
+    discordAdapter: fromAny({
       id: 'discord',
       outbound: {
         textChunkLimit: 2000,
         sendText: vi.fn(),
       },
-    } as any,
+    }),
     gitOps,
     eventBus: new EventBus(),
     policyConfig: {

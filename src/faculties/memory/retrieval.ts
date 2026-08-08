@@ -200,7 +200,7 @@ export interface RetrievalIntegrityErrorContext {
 
 export class RetrievalIntegrityError extends Error {
   readonly context: RetrievalIntegrityErrorContext;
-  readonly cause: unknown;
+  override readonly cause: unknown;
 
   constructor(message: string, context: RetrievalIntegrityErrorContext, cause: unknown) {
     super(message);

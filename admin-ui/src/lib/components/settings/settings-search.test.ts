@@ -1,8 +1,8 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { GardenSettingsSectionId } from '../../../../../src/shared/contracts/settings-garden-contract.ts';
 import {
   SETTINGS_GARDEN_FIELD_EXPOSURE,
   SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
@@ -20,12 +20,14 @@ import {
   humanizeSettingFieldKey,
   resolveSettingsFieldRoute,
   settingsSearchResultKey,
+  type SettingsSearchFieldEntry,
+  type SettingsSearchResult,
 } from './settings-search.ts';
 
 const SIMPLE_SECTION_IDS = new Set(SETTINGS_SIMPLE_SECTIONS.map((s) => s.id));
 
 const FIELD_ENTRIES = buildSettingsSearchEntries().filter(
-  (e) => e.kind === 'field',
+  (e): e is SettingsSearchFieldEntry => e.kind === 'field',
 );
 
 // Fields the router deliberately drops (custom-surface, rendered nowhere on the
@@ -58,7 +60,7 @@ const CURATED_PANEL_SOURCES = [
 );
 
 test('every Garden field-exposure section maps to a real simple section', () => {
-  const gardenSectionIds = new Set(
+  const gardenSectionIds = new Set<GardenSettingsSectionId>(
     Object.values(SETTINGS_GARDEN_FIELD_EXPOSURE).map((e) => e.sectionId),
   );
   for (const gardenId of gardenSectionIds) {
@@ -72,7 +74,7 @@ test('every Garden field-exposure section maps to a real simple section', () => 
 });
 
 test('collapse keys only reference real simple sections', () => {
-  for (const sectionId of Object.keys(SETTINGS_SECTION_COLLAPSE_KEY)) {
+  for (const sectionId of Object.keys(SETTINGS_SECTION_COLLAPSE_KEY) as Array<keyof typeof SETTINGS_SECTION_COLLAPSE_KEY>) {
     assert.ok(
       SIMPLE_SECTION_IDS.has(sectionId),
       `collapse key references unknown simple section ${sectionId}`,
@@ -119,7 +121,8 @@ test('empty or whitespace query returns no results', () => {
 test('field key search resolves to its owning section', () => {
   const results = filterSettingsSearchEntries('webFetchAllowHttp');
   const field = results.find(
-    (r) => r.kind === 'field' && r.fieldKey === 'webFetchAllowHttp',
+    (r): r is Extract<SettingsSearchResult, { kind: 'field' }> =>
+      r.kind === 'field' && r.fieldKey === 'webFetchAllowHttp',
   );
   assert.ok(field, 'expected webFetchAllowHttp field result');
   assert.equal(field.sectionId, 'runtime-fetch');
@@ -161,7 +164,8 @@ test('results are ranked, deduped by kind on ties, and capped by limit', () => {
 test('compositional-only fields fall back to the All Fields section', () => {
   const results = filterSettingsSearchEntries('subagentMaxConcurrent');
   const field = results.find(
-    (r) => r.kind === 'field' && r.fieldKey === 'subagentMaxConcurrent',
+    (r): r is Extract<SettingsSearchResult, { kind: 'field' }> =>
+      r.kind === 'field' && r.fieldKey === 'subagentMaxConcurrent',
   );
   assert.ok(field, 'expected subagentMaxConcurrent result');
   assert.equal(field.sectionId, 'advanced-fields');
@@ -171,7 +175,8 @@ test('compositional-only fields fall back to the All Fields section', () => {
 
 test('every field entry jumps to a target that actually renders the field', () => {
   for (const entry of FIELD_ENTRIES) {
-    const exposure = SETTINGS_GARDEN_FIELD_EXPOSURE[entry.fieldKey];
+    const exposure =
+      SETTINGS_GARDEN_FIELD_EXPOSURE[entry.fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE];
     assert.ok(exposure, `entry ${entry.fieldKey} has no contract exposure`);
     if (entry.sectionId === 'advanced-fields') {
       // Advanced editor renders every advanced-surface field of a section.
@@ -221,8 +226,10 @@ test('custom-surface fields with no on-page editor are excluded, never misrouted
     'excluded field set drifted — a new custom-surface field needs a routing decision',
   );
   for (const key of excluded) {
+    const exposure =
+      SETTINGS_GARDEN_FIELD_EXPOSURE[key as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE];
     assert.equal(
-      SETTINGS_GARDEN_FIELD_EXPOSURE[key].surface,
+      exposure.surface,
       'custom',
       `${key} was excluded but is not custom-surface`,
     );

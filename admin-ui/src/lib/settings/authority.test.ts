@@ -1,6 +1,6 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import type { AdminSettingsData, SettingsContractData } from '../types/index.ts';
 import {
   resolveBudgetContextWindowAuthority,
   resolveSettingAuthority,
@@ -45,7 +45,7 @@ const baseData = {
     onDiskIntervalMs: 120000,
     restartRequired: true,
   },
-};
+} as unknown as AdminSettingsData;
 
 const baseSchema = {
   schemaVersion: 1,
@@ -76,7 +76,7 @@ const baseSchema = {
       type: 'integer',
     },
   },
-};
+} as unknown as SettingsContractData;
 
 test('bundled background-maintenance interval authority points at scheduler ownership', () => {
   const info = resolveSettingAuthority(baseData, baseSchema, 'backgroundMaintenanceIntervalMs');

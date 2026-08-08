@@ -112,16 +112,16 @@ function admission(
 }
 
 describe('discriminated Garden admission', () => {
-  it('keeps legacy-token startup selection separate from fleet-principal selection', () => {
-    const legacyCredential = ['must', 'be', 'ignored'].join('-');
+  it('keeps standalone-token startup selection separate from fleet-principal selection', () => {
+    const standaloneCredential = ['must', 'be', 'ignored'].join('-');
     expect(resolveGardenAdmissionMode({
       audience: 'operator',
-      token: 'legacy',
-    })).toEqual({ kind: 'legacy-token', token: 'legacy' });
+      token: 'standalone',
+    })).toEqual({ kind: 'standalone-token', token: 'standalone' });
 
     const selected = resolveGardenAdmissionMode({
       audience: 'operator',
-      token: legacyCredential,
+      token: standaloneCredential,
       companionId: COMPANION_ID,
       fleetAuthVerifier: {
         kind: 'verifier',

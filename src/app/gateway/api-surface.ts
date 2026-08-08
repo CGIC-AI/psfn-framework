@@ -40,9 +40,9 @@ import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import {
-  assertFleetAuthLegacySurfacesUnavailable,
+  assertFleetAuthStandaloneSurfacesUnavailable,
   warnIfInsecureLocalApiIgnoredUnderFleetAuth,
-} from '../../system/config/fleet-auth-legacy-surface-guard.js';
+} from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
@@ -539,7 +539,7 @@ export async function startOptionalGatewayApiServer(
       'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
     );
   }
-  assertFleetAuthLegacySurfacesUnavailable({
+  assertFleetAuthStandaloneSurfacesUnavailable({
     fleetAuthEnabled: options.config.fleetAuth !== undefined,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },

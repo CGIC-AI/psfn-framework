@@ -26,7 +26,7 @@ import { sendGardenLoginPage } from './auth-pages.js';
 import type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
@@ -160,7 +160,7 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    assertFleetAuthLegacySurfacesUnavailable({
+    assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: this.routing.isFleetPrincipal(),
       processMode: 'operator',
       env: {
@@ -179,7 +179,7 @@ export class GardenOperatorSurface implements Lifecycle {
       if (this.config.fleetSsoTls) {
         requireMtlsPeerFileConfig(this.config.fleetSsoTls, 'Fleet SSO Garden server TLS');
       }
-    } else if (this.routing.isLegacyToken()) {
+    } else if (this.routing.isStandaloneToken()) {
       validateAdminAuthStartupPolicy({
         host,
         port: this.config.port,

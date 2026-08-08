@@ -35,6 +35,13 @@ Last updated: 2026-08-07.
 - Authorized companion navigation always uses
   `/companions/<companion-uuid>/garden/...`; the immutable URL target is the
   sole browser authority for page, API, download, and WebSocket traffic.
+- **Standalone token admission** is a permanent supported mode for local testing
+  and for single-user, non-Kubernetes installations. When `fleet-auth.json` is
+  absent, the Garden operator surface admits browser requests with `ADMIN_TOKEN`
+  or the explicit loopback-only `ADMIN_ALLOW_INSECURE=true` bypass. This mode is
+  mutually exclusive with fleet-principal admission; a deployment with
+  `fleet-auth.json` enabled rejects `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE`
+  before listen.
 - The former unauthenticated raw cluster-status listener and its
   `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` wiring are retired. The public
   origin does not expose `/fleet/status.json` or complete cluster-operational

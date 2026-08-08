@@ -397,17 +397,23 @@ export class GatewayFleetAuthLifecycleCeremonyService {
     }
     let target: PrincipalAuthorityClaim;
     try {
-      target = request.action === 'binding.activate'
-        ? await this.readPrincipal(request.targetPrincipalId, 'pending')
-        : request.action.startsWith('role.')
-          ? await this.readPrincipal(request.targetPrincipalId, 'active')
-          : claim(session);
+      if (request.action === 'binding.activate') {
+        target = await this.readPrincipal(request.targetPrincipalId, 'pending');
+      } else if (request.action === 'role.grant'
+        || request.action === 'role.change'
+        || request.action === 'role.revoke') {
+        target = await this.readPrincipal(request.targetPrincipalId, 'active');
+      } else {
+        target = claim(session);
+      }
     } catch (error) {
       await this.auditDenial(request, 'target_unavailable');
       throw error;
     }
     let contactAuthority: VerifiedDiscordContactAuthoritySnapshot | undefined;
-    if (request.action.startsWith('provider.')) {
+    if (request.action === 'provider.add'
+      || request.action === 'provider.relink'
+      || request.action === 'provider.replace') {
       if (request.contactId !== session.contact_id
         || (request.action === 'provider.replace'
           && request.currentProvider.subjectId !== session.provider_subject_id)) {
@@ -418,7 +424,10 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         );
       }
     }
-    if (request.action === 'binding.activate' || request.action.startsWith('provider.')) {
+    if (request.action === 'binding.activate'
+      || request.action === 'provider.add'
+      || request.action === 'provider.relink'
+      || request.action === 'provider.replace') {
       contactAuthority = await this.options.contactAuthority.read({
         companionId: request.companionId,
         contactId: request.contactId,

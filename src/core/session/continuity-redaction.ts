@@ -73,6 +73,11 @@ function sourceEntryMatchesContinuity(
 }
 
 function withRedactedContinuityContent(value: unknown): SessionEntry {
+  if (!isRecord(value)) {
+    return {
+      content: REDACTED_SESSION_ENTRY_PLACEHOLDER,
+    } as unknown as SessionEntry;
+  }
   const entry = toRecordView(value);
   return {
     ...entry,

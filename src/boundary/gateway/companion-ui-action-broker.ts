@@ -134,7 +134,7 @@ export class GatewayCompanionUiActionBroker {
     if (shardId) {
       const storedOwner = await this.options.shardDeployment?.ownerOfLiveShard(
         shardId,
-        context.companionId,
+        input.companionId,
       );
       if (storedOwner !== context.companionId) {
         throw new CompanionUiActionDeniedError();

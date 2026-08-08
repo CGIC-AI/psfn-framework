@@ -9,6 +9,8 @@ import type { CorrelationMetadata } from '../../shared/contracts/runtime-base.js
 import type { SessionEntry } from '../session/types.js';
 import { detectCompressionFailureSignal } from '../session/compression-guideline.js';
 import { deriveContextCoherenceSessionContext } from './context-coherence-session-context.js';
+import { parseTurnId } from '../turns/id.js';
+import type { TurnID } from '../../shared/contracts/turn-contracts.js';
 
 interface ContextCoherenceMonitorOptions {
   eventBus: EventBus;
@@ -126,8 +128,9 @@ function buildMissingTurnCorrelation(pending: PendingMissingTurn | undefined): C
 }
 
 function resolveTurnCorrelation(payload: EventMap['agent.turn.end']): Partial<CorrelationMetadata> {
+  const turnId = payload.turnId ? parseTurnId(payload.turnId) : null;
   return {
-    ...(payload.turnId ? { turnId: payload.turnId } : {}),
+    ...(turnId ? { turnId } : {}),
     ...(payload.requestId ? { requestId: payload.requestId } : {}),
     ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
   };
@@ -180,7 +183,7 @@ export function installContextCoherenceMonitor(options: ContextCoherenceMonitorO
         timestamp: now(),
         channelId: payload.message.channelId,
         ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
-        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation.turnId ? { turnId: correlation.turnId as TurnID } : {}),
         ...(requestId ? { requestId } : {}),
         detail: signal.detail,
         groundTruth: signal.groundTruth,

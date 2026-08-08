@@ -701,7 +701,9 @@ class DefaultSensorCognitionBridge implements SensorCognitionBridge {
         ...(input.event.channelId ? { channelId: input.event.channelId } : {}),
         ...(satelliteId ? { satelliteId } : {}),
         ...(placeId ? { placeId } : {}),
-        ...(input.perception ? { perceptionKind: input.perception.kind } : {}),
+        ...(input.perception && input.perception.kind !== 'location'
+          ? { perceptionKind: input.perception.kind }
+          : {}),
         timestamp: this.now(),
       });
     } catch (error) {

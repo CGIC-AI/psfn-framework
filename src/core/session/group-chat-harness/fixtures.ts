@@ -652,7 +652,7 @@ export function resolveHarnessAuthorContext(
   return resolveAuthorContext({
     message,
     contactStore: makeAuthorContextContactStore(),
-    logger: { warn: () => undefined, debug: () => undefined, info: () => undefined },
+    logger: { warn: () => undefined, debug: () => undefined },
     companionIdentityKey: 'companion-self',
     companionDisplayName: 'Companion',
   });

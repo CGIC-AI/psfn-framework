@@ -89,7 +89,7 @@ export class DiscordEvidenceObserver {
         continue;
       }
       const permissionChannel = requested.isThread()
-        ? await this.client.channels.fetch(requested.parentId, { force: true })
+        ? await this.client.channels.fetch(requested.parentId!, { force: true })
         : requested;
       if (!permissionChannel || permissionChannel.isDMBased()
         || permissionChannel.isThread() || permissionChannel.guildId !== guild.id) {

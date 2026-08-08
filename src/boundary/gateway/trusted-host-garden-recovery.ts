@@ -283,6 +283,12 @@ export class GatewayTrustedHostGardenRecoveryService {
           'Trusted-host recovery retry did not match the first request bytes',
         );
       }
+      if (!('result' in replay)) {
+        throw new TrustedHostGardenRecoveryError(
+          'recovery_replay_mismatch',
+          'Trusted-host recovery replay outcome is missing its result',
+        );
+      }
       return replay.result;
     });
   }

@@ -273,6 +273,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
   credentialVault?: CredentialVaultPort;
+  /** Value-free provider/channel credential inventory for the Garden status UI. */
+  credentialPresence?: GatewayCredentialPresenceResult;
   /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
   intakeScreening?: IntakeScreeningService;
   /**
@@ -373,7 +375,10 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   /** Durable shared-schema authority for the content-free ICP autonomy broker. */
   icpAutonomyStore?: IcpSharedAutonomyStorePort;
   /** Canonical gateway-owned deterministic policy authority for ICP initiation. */
-  icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
+  icpInitiationPolicyAuthority?: Pick<
+    GatewayIcpInitiationPolicyAuthority,
+    'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+  >;
   /** Shared clock for companion room delivery/reply boundary tests. */
   companionChannelNow?: () => number;
   /**
@@ -434,7 +439,7 @@ export class GatewayServer {
   private readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
   private readonly shardWorkloadRegistrar: GatewayShardWorkloadRegistrar | undefined;
   private readonly approvalBoundary: ApprovalBoundaryService;
-  private readonly canaryEgressGuard: CanaryEgressGuard | null;
+  private readonly canaryEgressGuard: CanaryEgressGuard | undefined;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
   private readonly apiStreamListeners = new Map<
     string,
@@ -518,7 +523,9 @@ export class GatewayServer {
           store: options.icpAutonomyStore,
           fleetCompanionIds: this.fleetCompanionIds,
           companionChannels: options.companionChannels,
-          isCompanionReady: companionId => this.resolveReadyCompanionConnection(companionId) !== null,
+          isCompanionReady: companionId => this.resolveReadyCompanionConnection(
+            createCompanionId(companionId, 'isCompanionReady companionId'),
+          ) !== null,
           readCompanionFatiguePosture: companionId => {
             const exactCompanionId = createCompanionId(
               companionId,
@@ -623,7 +630,7 @@ export class GatewayServer {
     });
     const cogSecMode = options.intakeScreeningMode;
     this.canaryEgressGuard = cogSecMode === 'off'
-      ? null
+      ? undefined
       : createCanaryEgressGuard({
           mode: cogSecMode,
           ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
@@ -1050,14 +1057,14 @@ export class GatewayServer {
     return this.sharedWorkspaceReader;
   }
 
-  private listSharedWorkspaceArtifacts(conn: GatewayRpcConnection, params: unknown) {
+  private async listSharedWorkspaceArtifacts(conn: GatewayRpcConnection, params: unknown) {
     if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
       throw new Error('shared.workspace.list accepts no parameters or identity assertions');
     }
     return { artifacts: this.requireSharedWorkspaceReader(conn).listArtifacts() };
   }
 
-  private readSharedWorkspaceArtifact(conn: GatewayRpcConnection, params: unknown) {
+  private async readSharedWorkspaceArtifact(conn: GatewayRpcConnection, params: unknown) {
     if (!isRecord(params)
       || Object.keys(params).length !== 1
       || typeof params.artifactPath !== 'string') {
@@ -1529,7 +1536,9 @@ export class GatewayServer {
         GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
       );
     }
-    if (initiation && !resolution.recipients.includes(initiation.recipientCompanionId)) {
+    if (initiation && !resolution.recipients.includes(
+      createCompanionId(initiation.recipientCompanionId, 'ICP initiation recipientCompanionId'),
+    )) {
       throw new JSONRPCErrorException(
         'ICP initiation recipient is outside the current channel delivery window',
         GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
@@ -1806,7 +1815,9 @@ export class GatewayServer {
   ): void {
     this.refreshConnectionHealth();
     if (this.multiCompanion.enabled) {
-      const conn = this.resolveReadyCompanionConnection(companionId);
+      const conn = this.resolveReadyCompanionConnection(
+        createCompanionId(companionId, 'garden queue change companionId'),
+      );
       if (!conn) {
         log.warn('Garden queue change owner has no healthy ready agent connection', {
           companionId,
@@ -2575,9 +2586,9 @@ export class GatewayServer {
     })();
     const pending: PendingIcpInvalidation = {
       reasonCode,
-      completion: attempt.then<IcpInvalidationAttemptOutcome>(
-        (revokedCount) => ({ ok: true, revokedCount }),
-        (error: unknown) => ({ ok: false, error }),
+      completion: attempt.then(
+        (revokedCount): IcpInvalidationAttemptOutcome => ({ ok: true, revokedCount }),
+        (error: unknown): IcpInvalidationAttemptOutcome => ({ ok: false, error }),
       ),
     };
     this.pendingIcpInvalidations.set(companionId, pending);

@@ -244,7 +244,7 @@ export class DiscordEvidenceLifecycleCoordinator {
       this.schedule(entry);
       return { status: 'admitted' };
     } catch (error) {
-      await this.failEntry(entry, 'provider_evidence_unavailable', error);
+      return await this.failEntry(entry, 'provider_evidence_unavailable', error);
     }
   }
 

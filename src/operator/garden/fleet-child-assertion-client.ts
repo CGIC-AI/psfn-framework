@@ -93,6 +93,8 @@ function parseResponse(
     jti: expected.parentVerified.jti,
     targetDigest: expected.parentVerified.targetDigest,
   };
+  const versions = isRecord(value) ? value.versions : undefined;
+  const parent = isRecord(value) ? value.parent : undefined;
   if (!isRecord(value)
     || !hasExactKeys(value, [
       'schemaVersion',
@@ -111,16 +113,16 @@ function parseResponse(
     || value.audience !== expected.expectedAgentAudience
     || value.requestId !== expected.requestId
     || value.targetDigest !== expected.target.targetDigest
-    || !isRecord(value.versions)
-    || !hasExactKeys(value.versions, VERSION_KEYS)
-    || !isRecord(value.parent)
-    || !hasExactKeys(value.parent, PARENT_KEYS)
+    || !isRecord(versions)
+    || !hasExactKeys(versions, VERSION_KEYS)
+    || !isRecord(parent)
+    || !hasExactKeys(parent, PARENT_KEYS)
     || typeof value.requestId !== 'string'
     || typeof value.decisionId !== 'string'
     || value.decisionId.length < 1
     || value.decisionId.length > 256
-    || VERSION_KEYS.some(key => value.versions[key] !== expected.parentVerified.versions[key])
-    || PARENT_KEYS.some(key => value.parent[key] !== expectedParent[key])) {
+    || VERSION_KEYS.some(key => versions[key] !== expected.parentVerified.versions[key])
+    || PARENT_KEYS.some(key => parent[key] !== expectedParent[key])) {
     throw new Error('Fleet child assertion response was invalid');
   }
   return Object.freeze({
@@ -128,8 +130,8 @@ function parseResponse(
     context: Object.freeze({
       requestId: value.requestId,
       decisionId: value.decisionId,
-      versions: value.versions as unknown as GardenCapabilityContext['versions'],
-      parent: value.parent as unknown as NonNullable<GardenCapabilityContext['parent']>,
+      versions: versions as unknown as GardenCapabilityContext['versions'],
+      parent: parent as unknown as NonNullable<GardenCapabilityContext['parent']>,
     }),
   });
 }

@@ -236,7 +236,8 @@ export class CompanionEventRelay {
     if (envelope.kind === 'approval.resolved') {
       const payload = envelope.payload as CompanionApprovalResolvedPayload;
       const binding = this.approvalBindingOf?.(payload.id);
-      return binding?.companionId === envelope.companionId
+      return binding !== undefined
+        && binding.companionId === envelope.companionId
         && binding.shardId === envelope.shardId
         && payload.shardId === envelope.shardId;
     }

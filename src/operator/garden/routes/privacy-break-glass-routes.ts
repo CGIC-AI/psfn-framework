@@ -87,6 +87,7 @@ function routePair(input: {
           unavailable(res);
           return;
         }
+        const service = input.service;
         input.withBody(req, res, body => {
           const parsed = parseAdminJsonBody(body);
           let request: PrivacyBreakGlassConfirmRequest;
@@ -122,7 +123,7 @@ function routePair(input: {
             sendJson(res, 403, { error: 'Privacy break-glass denied' }, NO_STORE);
             return;
           }
-          void input.service.begin({
+          void service.begin({
             resourceKind: input.resourceKind,
             resourceId: id,
             request,
@@ -187,6 +188,7 @@ function routePair(input: {
           unavailable(res);
           return;
         }
+        const decideService = input.service;
         input.withBody(req, res, body => {
           const parsed = parseAdminJsonBody(body);
           let request: PrivacyBreakGlassDecideRequest;
@@ -222,7 +224,7 @@ function routePair(input: {
             sendJson(res, 403, { error: 'Privacy break-glass denied' }, NO_STORE);
             return;
           }
-          void input.service.decide({
+          void decideService.decide({
             resourceKind: input.resourceKind,
             resourceId: id,
             request,

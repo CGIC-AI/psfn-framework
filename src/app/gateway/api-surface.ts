@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
+  SatelliteRegistryConfig,
   SatelliteRegistryProvider,
 } from '../../shared/contracts/satellite-registry.js';
 import { ApiServer } from '../../channels/api/server.js';
@@ -117,11 +118,13 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'resolveCompanionUiApproval'
     | 'getFleetConnectionSnapshot'
     | 'requestCompanionAgent'
+    | 'recordSharedSatelliteObservationAudit'
   >;
   /** Exact gateway topology posture after fleet/single configuration resolution. */
   multiCompanion: boolean;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistryProvider: SatelliteRegistryProvider;
+  satelliteRegistry?: SatelliteRegistryConfig;
   /**
    * htm9.9: intake screening for voice transcripts (sourceClass
    * 'audio_transcript') — a transcript becomes prompt text, so audio is a

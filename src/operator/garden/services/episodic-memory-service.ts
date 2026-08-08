@@ -177,7 +177,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
    * predicate. Member/guest roles stay bound to their authenticated contact;
    * owner/admin roles carry the same signed D1 access mode and audited
    * escalation seam as AdminMemoryDataService. Arcs require both endpoints to
-   * be visible. Legacy/public contexts keep the unpartitioned
+   * be visible. Standalone/public contexts keep the unpartitioned
    * single-companion behavior unchanged. Fails closed for any fleet context
    * without an exact request-local subject relation.
    */
@@ -229,7 +229,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
         ? {
           withheldBySubjectAuthorizationCount: candidates.length - episodes.length,
         }
-        : context === undefined || context.kind === 'legacy_token'
+        : context === undefined || context.kind === 'standalone_token'
           ? { withheldBySubjectAuthorizationCount: 0 }
           : {}),
       pagination: {

@@ -1182,7 +1182,7 @@ describe('Garden operator surface', () => {
         'providers',
         providersJson,
         expect.objectContaining({
-          kind: 'legacy_token',
+          kind: 'standalone_token',
           action: 'settings.write',
           resource: expect.objectContaining({ routeId: 'POST /api/admin/settings/:key' }),
         }),

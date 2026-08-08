@@ -193,12 +193,12 @@ describe('trusted-host Garden recovery HTTP E2E', () => {
     expect(JSON.parse(mismatch.body).error.type).toBe('recovery_replay_mismatch');
   });
 
-  it('rejects browser, proxy, legacy-auth, query, and non-dedicated route access', async () => {
+  it('rejects browser, proxy, standalone-auth, query, and non-dedicated route access', async () => {
     for (const headers of [
       { Origin: 'https://fleet.example.test' },
       { Forwarded: 'for=127.0.0.1' },
-      { Authorization: 'Bearer legacy-token' },
-      { Cookie: 'session=legacy' },
+      { Authorization: 'Bearer standalone-token' },
+      { Cookie: 'session=standalone' },
       { Host: 'attacker.example.test' },
     ]) {
       const response = await post(FLEET_AUTH_RECOVERY_ISSUE_PATH, JSON.stringify(scope()), headers);

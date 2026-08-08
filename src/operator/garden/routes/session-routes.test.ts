@@ -284,7 +284,7 @@ describe('admin session CogSec routes', () => {
       type: 'content_poisoning',
       severity: 'high',
       reason: 'operator-selected contaminated row',
-      actor: 'legacy-token:operator',
+      actor: 'standalone-token:operator',
       cutEpoch: false,
     });
   });

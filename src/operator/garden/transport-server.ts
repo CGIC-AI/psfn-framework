@@ -49,7 +49,7 @@ import {
 } from './garden-admission.js';
 import {
   createFleetGardenRequestContext,
-  createLegacyGardenRequestContext,
+  createStandaloneGardenRequestContext,
   type GardenRequestContext,
 } from './garden-request-context.js';
 import {
@@ -82,7 +82,7 @@ function dispatchAdminApiRoute(
     const params = route.match(path);
     if (!params) continue;
     bindRequestForResponse(res, req);
-    const requestContext = context ?? createLegacyGardenRequestContext({
+    const requestContext = context ?? createStandaloneGardenRequestContext({
       authorization: route.capability.authorization,
       routeId: route.capability.id,
       ...(companionId ? { companionId } : {}),

@@ -41,9 +41,9 @@ export interface FleetGardenActorContext {
   readonly accessMode: 'sole_admin' | 'multi_admin';
 }
 
-export interface LegacyGardenActorContext {
-  readonly kind: 'legacy_operator';
-  readonly actorId: 'legacy-token:operator';
+export interface StandaloneGardenActorContext {
+  readonly kind: 'standalone_operator';
+  readonly actorId: 'standalone-token:operator';
 }
 
 export interface PublicGardenActorContext {
@@ -53,7 +53,7 @@ export interface PublicGardenActorContext {
 
 export type GardenActorContext =
   | FleetGardenActorContext
-  | LegacyGardenActorContext
+  | StandaloneGardenActorContext
   | PublicGardenActorContext;
 
 interface GardenRequestContextBase {
@@ -76,12 +76,12 @@ export interface FleetGardenRequestContext extends GardenRequestContextBase {
   readonly actor: FleetGardenActorContext;
 }
 
-export interface LegacyGardenRequestContext extends GardenRequestContextBase {
-  readonly kind: 'legacy_token';
+export interface StandaloneGardenRequestContext extends GardenRequestContextBase {
+  readonly kind: 'standalone_token';
   readonly requestId: null;
   readonly decisionId: null;
   readonly versions: null;
-  readonly actor: LegacyGardenActorContext;
+  readonly actor: StandaloneGardenActorContext;
 }
 
 export interface PublicGardenRequestContext extends GardenRequestContextBase {
@@ -94,7 +94,7 @@ export interface PublicGardenRequestContext extends GardenRequestContextBase {
 
 export type GardenRequestContext =
   | FleetGardenRequestContext
-  | LegacyGardenRequestContext
+  | StandaloneGardenRequestContext
   | PublicGardenRequestContext;
 
 export const FLEET_GARDEN_CONTACT_OPERATOR_ACTOR = 'operator:fleet-garden';
@@ -201,15 +201,15 @@ export function createPublicGardenRequestContext(
   });
 }
 
-export function createLegacyGardenRequestContext(input: {
+export function createStandaloneGardenRequestContext(input: {
   authorization: GardenRouteAuthorization;
   routeId: string;
   companionId?: string;
   pathParams: Readonly<Record<string, string>>;
   query: Readonly<Record<string, readonly string[]>>;
-}): LegacyGardenRequestContext {
+}): StandaloneGardenRequestContext {
   return Object.freeze({
-    kind: 'legacy_token',
+    kind: 'standalone_token',
     requestId: null,
     decisionId: null,
     versions: null,
@@ -226,7 +226,7 @@ export function createLegacyGardenRequestContext(input: {
     }),
     subjectRelation: input.authorization.subjectRelation,
     authorization: input.authorization,
-    actor: Object.freeze({ kind: 'legacy_operator', actorId: 'legacy-token:operator' }),
+    actor: Object.freeze({ kind: 'standalone_operator', actorId: 'standalone-token:operator' }),
   });
 }
 

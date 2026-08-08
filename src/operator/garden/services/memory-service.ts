@@ -246,14 +246,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   forRequest(
     context: GardenRequestContext | undefined,
-    legacySessionKey: AdminMemorySessionKey = null,
+    sessionKey: AdminMemorySessionKey = null,
   ): AdminMemorySessionService {
-    if (!context || context.kind !== 'fleet_principal') return this.forSession(legacySessionKey);
+    if (!context || context.kind !== 'fleet_principal') return this.forSession(sessionKey);
     if (context.resource.area !== 'memory'
       || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')) {
       throw new Error('Garden memory access requires an exact request-local subject relation');
     }
-    const sessionKey = [
+    const fleetSessionKey = [
       'fleet',
       context.actor.principalId,
       context.actor.sessionRecordId,
@@ -269,7 +269,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ...this.deps,
       memoryStore: this.fleetStoreForRequest(context),
     }, this.bodyGate, context);
-    const service = scoped.forSession(sessionKey);
+    const service = scoped.forSession(fleetSessionKey);
     const fleetSafeService: AdminMemorySessionService = Object.freeze({
       ...service,
       getBodyElevationStatus: () => ({ elevated: false, ttlMs: 0 }),
@@ -486,7 +486,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return {
       memories: await Promise.all(memories.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       ...((this.requestContext === undefined
-        || this.requestContext.kind === 'legacy_token'
+        || this.requestContext.kind === 'standalone_token'
         || (this.requestContext.kind === 'fleet_principal'
           && this.requestContext.actor.role === 'owner'))
         ? {
@@ -749,7 +749,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const embedding = await embeddingService.embed(query);
     // Operator admin memory search. For fleet principals `memoryStore` is the
     // subject-authorized projection (see forRequest), which enforces regardless
-    // of this stance; the legacy operator session uses the raw store behind the
+    // of this stance; the standalone operator session uses the raw store behind the
     // body-elevation gate, so this is an explicit, auditable system-internal
     // opt-out rather than a product-recall path.
     const results = (await this.deps.memoryStore

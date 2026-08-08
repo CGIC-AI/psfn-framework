@@ -190,7 +190,7 @@ export interface AdminMemoryService {
   /** Bind one immutable admitted request; fleet identity never comes from cookies. */
   forRequest(
     context: GardenRequestContext | undefined,
-    legacySessionKey?: AdminMemorySessionKey,
+    sessionKey?: AdminMemorySessionKey,
   ): AdminMemorySessionService;
   /**
    * Binds the per-request admin session identity. Body-gate grants

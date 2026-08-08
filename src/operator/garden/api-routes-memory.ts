@@ -60,11 +60,11 @@ function ensureAdminMemorySessionKey(req: IncomingMessage, res: ServerResponse):
 function bindMemoryRequest(
   service: AdminMemoryService,
   context: GardenRequestContext | undefined,
-  legacySessionKey: AdminMemorySessionKey,
+  sessionKey: AdminMemorySessionKey,
 ): AdminMemorySessionService {
   return typeof service.forRequest === 'function'
-    ? service.forRequest(context, legacySessionKey)
-    : service.forSession(legacySessionKey);
+    ? service.forRequest(context, sessionKey)
+    : service.forSession(sessionKey);
 }
 
 function toMemoryType(value: string | null): MemoryType | undefined {
@@ -246,7 +246,7 @@ export function buildAdminMemoryRoutes(options: {
       method: 'POST',
       match: exactPath('/api/admin/memory/elevation'),
       handle: (req, res, _params, context) => {
-        const sessionKey = context?.kind === 'legacy_token'
+        const sessionKey = context?.kind === 'standalone_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
         try {
@@ -501,7 +501,7 @@ export function buildAdminMemoryRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/reveal'),
       handle: (req, res, { id }, context) => {
-        const sessionKey = context?.kind === 'legacy_token'
+        const sessionKey = context?.kind === 'standalone_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
         withBody(req, res, () => {

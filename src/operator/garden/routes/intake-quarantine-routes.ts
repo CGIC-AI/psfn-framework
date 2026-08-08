@@ -128,6 +128,10 @@ export function buildAdminIntakeQuarantineReadRoutes(options: {
         exclude: (path) => path.endsWith('/confirm') || path.endsWith('/decide'),
       }),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         try {
           const item = quarantineService.getItem(id, context);
           if (!item) {
@@ -182,6 +186,10 @@ export function buildAdminIntakeQuarantineRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', '/confirm'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         const appendQuarantineAudit = (
           decision: AdminAuditDecision,
           narrative: string,
@@ -255,6 +263,10 @@ export function buildAdminIntakeQuarantineRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', '/decide'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         const appendQuarantineAudit = (
           decision: AdminAuditDecision,
           narrative: string,

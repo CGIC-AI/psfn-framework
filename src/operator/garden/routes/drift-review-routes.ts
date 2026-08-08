@@ -105,6 +105,10 @@ export function buildAdminDriftReviewRoutes(options: {
         exclude: (path) => path.endsWith('/resolve'),
       }),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         try {
           const card = driftReviewService.getCard(id);
           if (!card) {
@@ -121,6 +125,10 @@ export function buildAdminDriftReviewRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(ADMIN_DRIFT_REVIEW_ITEM_PREFIX, 'id', '/resolve'),
       handle: (req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {

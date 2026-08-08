@@ -606,6 +606,9 @@ export function createInProcessGardenAdminContract(
       }
       // Envelope validation guarantees at least the origin hop.
       const originHop = input.envelope.provenance[0];
+      if (!originHop) {
+        return { delivered: false, reason: 'held item is missing provenance origin hop' };
+      }
       const text = formatIntakeReleaseNotice({
         sourceClass: input.envelope.sourceClass,
         originRef: originHop.ref,

@@ -65,6 +65,10 @@ export function buildAdminSchedulerRoutes(options: {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/scheduler/tasks/', 'taskId'),
       handle: (req, res, { taskId }) => {
+        if (!taskId) {
+          sendJson(res, 400, { ok: false, message: 'taskId is required' });
+          return;
+        }
         if (!scheduler?.updateTask) {
           sendJson(res, 400, { ok: false, message: 'Scheduler mutation not available' });
           return;
@@ -117,6 +121,10 @@ export function buildAdminSchedulerRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/scheduler/tasks/', 'taskId'),
       handle: (_req, res, { taskId }) => {
+        if (!taskId) {
+          sendJson(res, 400, { ok: false, message: 'taskId is required' });
+          return;
+        }
         if (!scheduler?.removeTask) {
           sendJson(res, 400, { ok: false, message: 'Scheduler mutation not available' });
           return;
@@ -129,6 +137,10 @@ export function buildAdminSchedulerRoutes(options: {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/scheduler/reflections/', 'reflectionId'),
       handle: (req, res, { reflectionId }) => {
+        if (!reflectionId) {
+          sendJson(res, 400, { ok: false, message: 'reflectionId is required' });
+          return;
+        }
         if (!scheduler?.updateReflection) {
           sendJson(res, 400, { ok: false, message: 'Reflection mutation not available' });
           return;

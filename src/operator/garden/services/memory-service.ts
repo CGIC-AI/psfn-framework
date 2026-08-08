@@ -108,7 +108,7 @@ function parseDateFilter(value: string | null | undefined, boundary: 'start' | '
   if (!trimmed) return undefined;
 
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
-  if (dateOnly) {
+  if (dateOnly && dateOnly[1] !== undefined && dateOnly[2] !== undefined && dateOnly[3] !== undefined) {
     const year = Number.parseInt(dateOnly[1], 10);
     const monthIndex = Number.parseInt(dateOnly[2], 10) - 1;
     const day = Number.parseInt(dateOnly[3], 10);

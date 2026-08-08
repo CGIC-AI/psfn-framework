@@ -92,66 +92,78 @@ export function buildAdminSharedWorkspaceRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shared-workspace/reviews/', 'reviewId', '/cogsec'),
-      handle: (req, res, { reviewId }, context) => options.withBody(req, res, (body) => {
-        const parsed = parseAdminJsonBody(body);
-        if (!parsed.ok || !isRecord(parsed.value)) {
-          sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
+      handle: (req, res, { reviewId }, context) => {
+        if (!reviewId) {
+          sendJson(res, 400, { error: 'reviewId is required' });
           return;
         }
-        const value = parsed.value;
-        if (!hasOnlyKeys(value, ['decision', 'note'])
-          || (value.decision !== 'approved' && value.decision !== 'rejected')
-          || (value.note !== undefined && typeof value.note !== 'string')) {
-          sendJson(res, 400, {
-            error: 'decision must be approved or rejected; note must be a string; identity claims are forbidden',
-          });
-          return;
-        }
-        try {
-          sendJson(res, 201, options.service.recordCogSecDecision(
-            context,
-            {
-              reviewId,
-              decision: value.decision,
-              ...(value.note ? { note: value.note } : {}),
-            },
-          ));
-        } catch (error) {
-          sendActionError(res, error);
-        }
-      }),
+        options.withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok || !isRecord(parsed.value)) {
+            sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
+            return;
+          }
+          const value = parsed.value;
+          if (!hasOnlyKeys(value, ['decision', 'note'])
+            || (value.decision !== 'approved' && value.decision !== 'rejected')
+            || (value.note !== undefined && typeof value.note !== 'string')) {
+            sendJson(res, 400, {
+              error: 'decision must be approved or rejected; note must be a string; identity claims are forbidden',
+            });
+            return;
+          }
+          try {
+            sendJson(res, 201, options.service.recordCogSecDecision(
+              context,
+              {
+                reviewId,
+                decision: value.decision,
+                ...(value.note ? { note: value.note } : {}),
+              },
+            ));
+          } catch (error) {
+            sendActionError(res, error);
+          }
+        });
+      },
     },
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shared-workspace/reviews/', 'reviewId', '/decision'),
-      handle: (req, res, { reviewId }, context) => options.withBody(req, res, (body) => {
-        const parsed = parseAdminJsonBody(body);
-        if (!parsed.ok || !isRecord(parsed.value)) {
-          sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
+      handle: (req, res, { reviewId }, context) => {
+        if (!reviewId) {
+          sendJson(res, 400, { error: 'reviewId is required' });
           return;
         }
-        const value = parsed.value;
-        if (!hasOnlyKeys(value, ['decision', 'note'])
-          || (value.decision !== 'approve' && value.decision !== 'reject')
-          || (value.note !== undefined && typeof value.note !== 'string')) {
-          sendJson(res, 400, {
-            error: 'decision must be approve or reject; note must be a string; identity claims are forbidden',
-          });
-          return;
-        }
-        try {
-          sendJson(res, 200, options.service.review(
-            context,
-            {
-              reviewId,
-              decision: value.decision,
-              ...(value.note ? { note: value.note } : {}),
-            },
-          ));
-        } catch (error) {
-          sendActionError(res, error);
-        }
-      }),
+        options.withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok || !isRecord(parsed.value)) {
+            sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
+            return;
+          }
+          const value = parsed.value;
+          if (!hasOnlyKeys(value, ['decision', 'note'])
+            || (value.decision !== 'approve' && value.decision !== 'reject')
+            || (value.note !== undefined && typeof value.note !== 'string')) {
+            sendJson(res, 400, {
+              error: 'decision must be approve or reject; note must be a string; identity claims are forbidden',
+            });
+            return;
+          }
+          try {
+            sendJson(res, 200, options.service.review(
+              context,
+              {
+                reviewId,
+                decision: value.decision,
+                ...(value.note ? { note: value.note } : {}),
+              },
+            ));
+          } catch (error) {
+            sendActionError(res, error);
+          }
+        });
+      },
     },
   ];
 }

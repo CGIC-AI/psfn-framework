@@ -49,6 +49,10 @@ export function buildAdminRoomRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/rooms/', 'channelId', '/roster'),
       handle: (req, res, { channelId }) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         const url = parseRequestUrl(req, '/api/admin/rooms');
         roomsService.getRoomRoster(channelId, url.searchParams).then(
           (data) => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),

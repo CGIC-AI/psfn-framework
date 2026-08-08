@@ -60,7 +60,7 @@ function selectWireEncoding(req: IncomingMessage): WireEncoding | null {
 
   const accepted = new Map<string, number>();
   for (const part of header.split(',')) {
-    const [rawEncoding, ...rawParams] = part.trim().split(';');
+    const [rawEncoding = '', ...rawParams] = part.trim().split(';');
     const encoding = rawEncoding.trim().toLowerCase();
     if (!encoding) continue;
     const qParam = rawParams

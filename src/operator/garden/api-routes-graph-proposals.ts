@@ -99,6 +99,10 @@ export function buildAdminGraphProposalRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/graph-proposals/', 'id', '/approve'),
       handle: (req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdjustedType(body);
           if (!parsed.ok) {
@@ -113,6 +117,10 @@ export function buildAdminGraphProposalRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/graph-proposals/', 'id', '/reject'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         handleMutation(res, graphProposalsService.rejectGraphProposal(id));
       },
     },

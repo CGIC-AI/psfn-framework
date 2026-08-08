@@ -53,10 +53,10 @@ function isStructuredPromptSectionKey(value: string): value is StructuredPromptS
 
 function trimSurroundingBlankLines(lines: string[]): string {
   let start = 0;
-  while (start < lines.length && lines[start].trim() === '') start += 1;
+  while (start < lines.length && lines[start]?.trim() === '') start += 1;
 
   let end = lines.length;
-  while (end > start && lines[end - 1].trim() === '') end -= 1;
+  while (end > start && lines[end - 1]?.trim() === '') end -= 1;
 
   return lines.slice(start, end).join('\n');
 }
@@ -102,12 +102,13 @@ export function decomposePromptContent(content: string): DecomposedPromptContent
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    if (line === undefined) continue;
     const headingMatch = line.trim().match(STRUCTURED_HEADING_PATTERN);
 
     if (headingMatch) {
       sawHeading = true;
       const sectionName = headingMatch[1];
-      if (!isStructuredPromptSectionKey(sectionName)) {
+      if (sectionName === undefined || !isStructuredPromptSectionKey(sectionName)) {
         errors.push(`Line ${index + 1}: unknown structured section "${sectionName}".`);
         currentSection = null;
         continue;

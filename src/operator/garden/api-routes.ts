@@ -567,6 +567,10 @@ export function buildAdminApiRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shards/', 'shardId', '/review'),
       handle: (req, res, { shardId }, context) => {
+        if (!shardId) {
+          sendJson(res, 400, { error: 'shardId is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -622,6 +626,10 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/shards/', 'shardId', '/configuration'),
       handle: (_req, res, { shardId }, context) => {
+        if (!shardId) {
+          sendJson(res, 400, { error: 'shardId is required' });
+          return;
+        }
         shardFoldReviewService.getShardConfiguration(shardId, context).then(
           (snapshot) => {
             if (!snapshot) {
@@ -643,6 +651,10 @@ export function buildAdminApiRoutes(options: {
       method: 'PATCH',
       match: paramWithSuffix('/api/admin/shards/', 'shardId', '/configuration'),
       handle: (req, res, { shardId }, context) => {
+        if (!shardId) {
+          sendJson(res, 400, { error: 'shardId is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -677,6 +689,10 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/shards/', 'shardId'),
       handle: (_req, res, { shardId }, context) => {
+        if (!shardId) {
+          sendJson(res, 400, { error: 'shardId is required' });
+          return;
+        }
         shardFoldReviewService.getShardFoldReview(shardId, context).then(
           (review) => {
             if (!review) {
@@ -866,6 +882,10 @@ export function buildAdminApiRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/group-memory/', 'channelId', '/backfill'),
       handle: (req, res, { channelId }) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
@@ -892,6 +912,10 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/group-memory/', 'channelId'),
       handle: (_req, res, { channelId }, context) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
@@ -968,6 +992,10 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/wiki/', 'id'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'id is required' });
+          return;
+        }
         if (!wikiService) {
           sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
           return;
@@ -1162,6 +1190,10 @@ export function buildAdminApiRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/skills/', 'name'),
       handle: (_req, res, { name }) => {
+        if (!name) {
+          sendJson(res, 400, { error: 'name is required' });
+          return;
+        }
         if (!skillsRuntime) {
           sendJson(res, 400, { error: 'Skills runtime not available' });
           return;

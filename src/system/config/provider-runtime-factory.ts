@@ -34,7 +34,7 @@ export function createProviderRuntimeServices(
   options: ProviderRuntimeFactoryOptions,
 ): ProviderRuntimeServices {
   const providerEnv = options.providerEnv ?? process.env;
-  const runtime = options.llmOptions?.runtime ?? new PiProviderRuntime();
+  const runtime = options.llmOptions?.runtime ?? new PiProviderRuntime(undefined, options.config);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(
     options.config,
     options.modelUsageScope,

@@ -194,6 +194,44 @@
       "purposes": [{ "purpose": "chat", "primary": false }],
       "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
       "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "shared-router-exacto-example",
+      "enabled": false,
+      "rank": 900,
+      "apiKind": "openai-responses",
+      "identity": {
+        "provider": "shared-router-example",
+        "model": "exacto/test-model",
+        "source": { "type": "configured" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": {
+        "maxOutputTokens": 8192,
+        "contextWindow": 128000,
+        "supportsReasoning": true
+      },
+      "tuning": { "maxOutputTokens": 8192 },
+      "routing": { "providerOrder": ["provider-a", "provider-b"] },
+      "cost": { "inputPer1MUsd": 1, "outputPer1MUsd": 2 }
+    },
+    {
+      "id": "shared-router-nitro-example",
+      "enabled": false,
+      "rank": 901,
+      "apiKind": "openai-completions",
+      "identity": {
+        "provider": "shared-router-example",
+        "model": "nitro/test-model",
+        "source": { "type": "configured" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": {
+        "maxOutputTokens": 4096,
+        "contextWindow": 64000,
+        "supportsReasoning": true
+      },
+      "tuning": { "maxOutputTokens": 4096, "thinkingEnabled": false }
     }
   ]
 }

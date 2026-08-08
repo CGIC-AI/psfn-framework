@@ -1396,6 +1396,13 @@ export interface ModelRegistryCostMetadata {
   [key: string]: unknown;
 }
 
+export type ModelApiKind = 'openai-completions' | 'openai-responses';
+
+export interface ModelRegistryRoutingMetadata {
+  providerOrder?: string[];
+  zdrOnly?: boolean;
+}
+
 export interface ModelRegistryBudgetPolicy {
   enabled: boolean;
   dailyUsdLimit: number;
@@ -1449,10 +1456,12 @@ export interface ModelRegistryEntry {
   id: string;
   enabled?: boolean;
   rank: number;
+  apiKind?: ModelApiKind;
   identity: ModelRegistryIdentityMetadata;
   purposes: ModelRegistryPurposeTag[];
   capabilities?: ModelRegistryCapabilityMetadata;
   tuning?: ModelRegistryTuningMetadata;
+  routing?: ModelRegistryRoutingMetadata;
   cost?: ModelRegistryCostMetadata;
   metadata?: Record<string, unknown>;
 }

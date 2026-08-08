@@ -18,11 +18,8 @@ import type {
 } from '../../../channels/api/types.js';
 import type { CompanionRelayPublishParams } from '../../../channels/backplane/companion-relay/relay.js';
 import {
-  parseIcpLocalPolicyAcquireParams,
   parseIcpLocalPolicyAcquireResult,
-  parseIcpLocalPolicyInspectParams,
   parseIcpLocalPolicyInspectResult,
-  parseIcpLocalPolicyReleaseParams,
   parseIcpLocalPolicyReleaseResult,
   type IcpLocalPolicyAcquireParams,
   type IcpLocalPolicyAcquireResult,
@@ -35,7 +32,6 @@ import { captureReplyCanary, getReplyCanaryCaptureToken } from '../../../core/co
 import { CANARY_CARRIER_PARAM_KEY, getActiveCanaryToken } from '../../../core/cogsec/canary/canary-token.js';
 import { CHANNEL_TYPES, type SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
-  parseContactAuthoritySnapshotRequest,
   parseVerifiedDiscordContactAuthoritySnapshot,
   type ContactAuthoritySnapshotRequest,
   type VerifiedDiscordContactAuthoritySnapshot,
@@ -43,8 +39,8 @@ import {
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import { parseGatewayRoutingEnvelope } from '../../../shared/routing/envelope.js';
-import { parseTurnPerformanceEvent, type TurnPerformanceEvent } from '../../../shared/telemetry/turn-performance.js';
-import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
+import type { TurnPerformanceEvent } from '../../../shared/telemetry/turn-performance.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from '../backpressure.js';
 import {
   GatewayErrors,
@@ -55,6 +51,7 @@ import {
   type MemoryDeletionResolveParams,
   type MemoryDeletionResolveResult,
   type RpcSubstrateMessage,
+  type TurnPerformanceIngestParams,
   type TurnPerformanceIngestResult,
   type VoiceHandleMessageResult,
   type VoiceStreamAckResult,
@@ -63,6 +60,7 @@ import {
   type VoiceStreamChunkParams,
   type VoiceStreamEndParams,
   type VoiceStreamEndResult,
+  type VoiceStreamStartParams,
 } from '../protocol.js';
 import { registerReverseGatewayMethods } from '../reverse-methods.js';
 
@@ -242,52 +240,37 @@ export class GatewayClientReverseRpcRuntime {
   }
 
   private async handleIcpLocalPolicyInspect(params: IcpLocalPolicyInspectParams): Promise<IcpLocalPolicyInspectResult> {
-    const request = parseIcpLocalPolicyInspectParams(params);
     const authority = this.requireIcpAuthority(false);
-    if (!this.icpReady) return { role: request.role, ready: false };
-    return parseIcpLocalPolicyInspectResult(await authority.inspect(request));
+    if (!this.icpReady) return { role: params.role, ready: false };
+    return parseIcpLocalPolicyInspectResult(await authority.inspect(params));
   }
 
   private async handleIcpLocalPolicyAcquire(params: IcpLocalPolicyAcquireParams): Promise<IcpLocalPolicyAcquireResult> {
-    const request = parseIcpLocalPolicyAcquireParams(params);
-    return parseIcpLocalPolicyAcquireResult(await this.requireIcpAuthority(true).acquire(request));
+    return parseIcpLocalPolicyAcquireResult(await this.requireIcpAuthority(true).acquire(params));
   }
 
   private async handleIcpLocalPolicyRelease(params: IcpLocalPolicyReleaseParams): Promise<IcpLocalPolicyReleaseResult> {
-    const request = parseIcpLocalPolicyReleaseParams(params);
-    return parseIcpLocalPolicyReleaseResult(await this.requireIcpAuthority(true).release(request));
+    return parseIcpLocalPolicyReleaseResult(await this.requireIcpAuthority(true).release(params));
   }
 
   private async handleMemoryDeletionPartnerAlerted(params: MemoryDeletionPartnerAlertedParams): Promise<MemoryDeletionPartnerAlertedResult> {
     const handler = this.requireHandler(this.memoryDeletionPartnerAlertedHandler, 'memory.deletion.partner_alerted');
-    if (!isRecord(params)) throw new Error('memory.deletion.partner_alerted params must be an object');
-    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.partner_alerted params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) throw new Error('memory.deletion.partner_alerted proposalId must be a non-empty string');
-    return handler({ proposalId: params.proposalId.trim() });
+    return handler(params);
   }
 
   private async handleMemoryDeletionProposalSnapshot(params: MemoryDeletionProposalSnapshotParams): Promise<MemoryDeletionProposalSnapshotResult> {
     const handler = this.requireHandler(this.memoryDeletionProposalSnapshotHandler, 'memory.deletion.snapshot');
-    if (!isRecord(params)) throw new Error('memory.deletion.snapshot params must be an object');
-    assertNoUnknownKeys(params, ['proposalId'], 'memory.deletion.snapshot params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) throw new Error('memory.deletion.snapshot proposalId must be a non-empty string');
-    return handler({ proposalId: params.proposalId.trim() });
+    return handler(params);
   }
 
   private async handleMemoryDeletionResolve(params: MemoryDeletionResolveParams): Promise<MemoryDeletionResolveResult> {
     const handler = this.requireHandler(this.memoryDeletionResolveHandler, 'memory.deletion.resolve');
-    if (!isRecord(params)) throw new Error('memory.deletion.resolve params must be an object');
-    assertNoUnknownKeys(params, ['proposalId', 'decision', 'operatorId'], 'memory.deletion.resolve params');
-    if (typeof params.proposalId !== 'string' || !params.proposalId.trim()) throw new Error('memory.deletion.resolve proposalId must be a non-empty string');
-    const decision: unknown = params.decision;
-    if (decision !== 'approve' && decision !== 'deny') throw new Error('memory.deletion.resolve decision must be approve or deny');
-    if (typeof params.operatorId !== 'string' || !params.operatorId.trim()) throw new Error('memory.deletion.resolve operatorId must be a non-empty string');
-    return handler({ proposalId: params.proposalId.trim(), decision, operatorId: params.operatorId.trim() });
+    return handler(params);
   }
 
   private async handleContactAuthoritySnapshot(params: ContactAuthoritySnapshotRequest): Promise<VerifiedDiscordContactAuthoritySnapshot | null> {
     const handler = this.requireHandler(this.contactAuthoritySnapshotHandler, 'contact.authority.snapshot');
-    const snapshot = await handler(parseContactAuthoritySnapshotRequest(params));
+    const snapshot = await handler(params);
     return snapshot ? parseVerifiedDiscordContactAuthoritySnapshot(snapshot) : null;
   }
 
@@ -317,28 +300,22 @@ export class GatewayClientReverseRpcRuntime {
     return captureReplyCanary(() => handler(params));
   }
 
-  private async handleTurnPerformance(params: unknown): Promise<TurnPerformanceIngestResult> {
-    if (!isRecord(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'event')) throw new Error('telemetry.turn.performance requires exactly params.event');
+  private async handleTurnPerformance(params: TurnPerformanceIngestParams): Promise<TurnPerformanceIngestResult> {
     const handler = this.requireHandler(this.turnPerformanceHandler, 'telemetry.turn.performance');
-    await handler(parseTurnPerformanceEvent(params.event));
+    await handler(params.event);
     return { accepted: true };
   }
 
-  private handleVoiceStreamStart(params: unknown): VoiceStreamAckResult {
-    if (!isRecord(params)) throw new Error('voice.stream.start params must be an object');
-    const correlationId = typeof params.correlationId === 'string' ? params.correlationId.trim() : '';
-    const streamId = typeof params.streamId === 'string' ? params.streamId.trim() : '';
-    if (!correlationId || correlationId !== params.correlationId) throw new Error('voice.stream.start params.correlationId must be a canonical non-empty string');
-    if (!streamId || streamId !== params.streamId) throw new Error('voice.stream.start params.streamId must be a canonical non-empty string');
-    if (typeof params.sequence !== 'number' || !Number.isSafeInteger(params.sequence) || params.sequence < 0) throw new Error('voice.stream.start params.sequence must be a non-negative safe integer');
-    if (params.metadata !== undefined && !isRecord(params.metadata)) throw new Error('voice.stream.start params.metadata must be an object when provided');
-    if (!Object.hasOwn(params, 'message')) throw new Error('voice.stream.start params.message is required');
+  private handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult {
     const message = this.deserializeMessage(params.message, { fieldName: 'voice.stream.start params.message', allowEmptyContent: true });
-    const key = this.voiceStreamKey(correlationId, streamId);
+    const key = this.voiceStreamKey(params.correlationId, params.streamId);
     if (this.voiceStreams.has(key)) throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
     const cancellationId = typeof message.routing?.cancellationId === 'string' && message.routing.cancellationId.trim() ? message.routing.cancellationId : undefined;
     const state: VoiceStreamState = {
-      correlationId, streamId, baseMessage: message, expectedSequence: params.sequence + 1,
+      correlationId: params.correlationId,
+      streamId: params.streamId,
+      baseMessage: message,
+      expectedSequence: params.sequence + 1,
       chunkQueue: new BoundedQueue<string>({ maxSize: this.options.voiceStreamQueueSize, overflowPolicy: this.options.voiceStreamOverflowPolicy }),
       chunks: [], droppedChunks: 0, cancelled: false,
       ...(cancellationId ? { cancellationId } : {}), abortController: new AbortController(),

@@ -1169,6 +1169,13 @@
       "value": "5"
     },
     {
+      "file": "src/boundary/gateway/methods/params/schema.ts",
+      "name": "nonEmptyCanonicalString.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Structural non-emptiness guard for canonical RPC string params; not operator-tunable."
+    },
+    {
       "file": "src/boundary/gateway/methods/shell.ts",
       "name": "collectShellPathCandidates.$call:length-guard:GreaterThanToken#1",
       "value": "4096",

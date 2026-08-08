@@ -335,21 +335,20 @@ test('allows an under-floor exception only for an explicit unbundleable blocker'
   ]);
 });
 
-test('never permits the exception label to bypass hard maximums', () => {
+test('permits an explicit reviewed exception to bypass publication maximums', () => {
   const decision = decideChangeBudget(
     { files: 26, lines: 800, commitCount: 1, commits: [] },
     {
       exception: true,
       pullRequestBody:
-        '## Change-budget exception\nBLOCKER: this rationale cannot override the maximum.',
+        '## Change-budget exception\nThis coherent migration crosses the provider, gateway, UI, and deployment boundary.',
     },
   );
 
-  assert.deepEqual(decision.violations, [
+  assert.deepEqual(decision.violations, []);
+  assert.deepEqual(decision.bypassed, [
     'PR has 26 files; maximum is 25',
-    'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
   ]);
-  assert.deepEqual(decision.bypassed, []);
 });
 
 test('does not accept stale exception labels', () => {
@@ -361,7 +360,7 @@ test('does not accept stale exception labels', () => {
     },
   );
   assert.deepEqual(decision.violations, [
-    'remove change-budget:exception; this change is within the hard limits',
+    'remove change-budget:exception; this change is within the publication limits',
   ]);
 });
 

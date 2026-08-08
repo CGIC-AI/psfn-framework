@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -87,7 +88,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
     void wireReflectionRuntime(
       { registerTool: vi.fn() },
       scheduler,
-      {
+      fromAny({
         handleMessage: vi.fn(),
         followUp: vi.fn(),
         waitForIdle: vi.fn(),
@@ -95,22 +96,22 @@ describe('reflection post-turn lane split (E5.2)', () => {
           inferers.push(inferer);
           return () => {};
         }),
-      } as any,
+      }),
       { send: vi.fn() },
       tempDir,
       undefined,
       {
         eventBus,
         backgroundMaintenance,
-        postTurnActions: postTurnActions as any,
-        llmProvider: llmProvider as any,
+        postTurnActions: fromAny(postTurnActions),
+        llmProvider: fromAny(llmProvider),
         memoryWriter: { write: vi.fn() },
-        coreMemoryStore: { getSnapshot: vi.fn(), rethink: vi.fn() } as any,
-        episodicReviewStore: { searchByTime: vi.fn().mockResolvedValue([]) } as any,
-        sessionManager: {
+        coreMemoryStore: fromAny({ getSnapshot: vi.fn(), rethink: vi.fn() }),
+        episodicReviewStore: fromAny({ searchByTime: vi.fn().mockResolvedValue([]) }),
+        sessionManager: fromAny({
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: vi.fn().mockReturnValue([]),
-        } as any,
+        }),
         episodicProcessingRestWindow: {
           enabled: true,
           startLocalTime: '00:00',
@@ -133,7 +134,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
           minConversationalEntries: 2,
           minSingleEntryChars: 120,
         },
-        episodicWatermarkStore: episodicWatermarkStore as any,
+        episodicWatermarkStore: fromAny(episodicWatermarkStore),
         companionNames: ['Purrsephone'],
         companionAuthorIds: ['bot-1'],
         episodicSynthesizer,

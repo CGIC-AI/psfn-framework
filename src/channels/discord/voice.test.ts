@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { EventBus } from '../../shared/event-bus.js';
@@ -481,12 +482,12 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
 const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 
 function emitDecryptFailure(runtime: DiscordVoiceRuntime, message = 'dave decode failure'): void {
-  const error = (runtime as any).createVoiceError({
+  const error = (fromAny(runtime)).createVoiceError({
     error: new Error(message),
     stage: 'ingest',
     code: 'VOICE_DAVE_DECRYPT_FAILED',
   });
-  (runtime as any).emitVoiceError(error);
+  (fromAny(runtime)).emitVoiceError(error);
 }
 
 function makeRuntimeHarness(
@@ -494,10 +495,10 @@ function makeRuntimeHarness(
   handler: (...args: any[]) => any,
 ): { runtime: DiscordVoiceRuntime; player: { play: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> } } {
   const runtime = new DiscordVoiceRuntime({
-    client: {
+    client: fromAny({
       on: vi.fn(),
       off: vi.fn(),
-    } as any,
+    }),
     config: makeConfig(),
     eventBus,
     getHandler: () => handler,
@@ -508,7 +509,7 @@ function makeRuntimeHarness(
     stop: vi.fn(),
   };
 
-  (runtime as any).connection = {
+  (fromAny(runtime)).connection = {
     state: {
       status: voiceSdkMocks.VoiceConnectionStatus.Ready,
       subscription: { player },
@@ -522,8 +523,8 @@ function makeRuntimeHarness(
       },
     },
   };
-  (runtime as any).player = player;
-  (runtime as any).activeChannel = {
+  (fromAny(runtime)).player = player;
+  (fromAny(runtime)).activeChannel = {
     id: 'channel-1',
     guild: { id: 'guild-1' },
     members: new Map([
@@ -564,13 +565,13 @@ describe('DiscordVoiceRuntime', () => {
 
   it('passes configured DAVE join options to @discordjs/voice', async () => {
     const connection = createMockVoiceConnection();
-    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(fromAny(connection));
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig({
         voiceDaveEncryption: false,
         voiceDecryptionFailureTolerance: 9,
@@ -579,16 +580,16 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    const voiceChannel = {
+    const voiceChannel = fromAny({
       id: 'channel-1',
       guild: {
         id: 'guild-1',
         voiceAdapterCreator: vi.fn(),
       },
       members: new Map(),
-    } as any;
+    });
 
-    await (runtime as any).joinChannel(voiceChannel);
+    await (fromAny(runtime)).joinChannel(voiceChannel);
 
     expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledWith(expect.objectContaining({
       daveEncryption: false,
@@ -598,7 +599,7 @@ describe('DiscordVoiceRuntime', () => {
 
   it('reconciles target voice state on init when client is already ready', async () => {
     const readyVoiceChannel = makeVoiceChannel('channel-ready');
-    const client = {
+    const client = fromAny({
       on: vi.fn(),
       off: vi.fn(),
       isReady: vi.fn(() => true),
@@ -613,7 +614,7 @@ describe('DiscordVoiceRuntime', () => {
           },
         })),
       },
-    } as any;
+    });
 
     const runtime = new DiscordVoiceRuntime({
       client,
@@ -622,7 +623,7 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    const joinSpy = vi.spyOn(runtime as any, 'joinChannel').mockResolvedValue(undefined);
+    const joinSpy = vi.spyOn(fromAny(runtime), 'joinChannel').mockResolvedValue(undefined);
     runtime.init();
     await flushAsyncWork();
 
@@ -631,13 +632,13 @@ describe('DiscordVoiceRuntime', () => {
 
   it('uses default DAVE join options when config values are not set', async () => {
     const connection = createMockVoiceConnection();
-    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(fromAny(connection));
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig({
         voiceDaveEncryption: undefined,
         voiceDecryptionFailureTolerance: undefined,
@@ -646,16 +647,16 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    const voiceChannel = {
+    const voiceChannel = fromAny({
       id: 'channel-1',
       guild: {
         id: 'guild-1',
         voiceAdapterCreator: vi.fn(),
       },
       members: new Map(),
-    } as any;
+    });
 
-    await (runtime as any).joinChannel(voiceChannel);
+    await (fromAny(runtime)).joinChannel(voiceChannel);
 
     expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledWith(expect.objectContaining({
       daveEncryption: true,
@@ -665,26 +666,26 @@ describe('DiscordVoiceRuntime', () => {
 
   it('ignores receive-start events while bot playback is already active', async () => {
     const connection = createMockVoiceConnection();
-    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
-    voiceSdkMocks.createAudioPlayer.mockReturnValueOnce({
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(fromAny(connection));
+    voiceSdkMocks.createAudioPlayer.mockReturnValueOnce(fromAny({
       play: vi.fn(),
       stop: vi.fn(),
       state: { status: 'playing' },
-    } as any);
+    }));
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig(),
       eventBus: new EventBus(),
       getHandler: () => null,
     });
 
-    const handleUtteranceSpy = vi.spyOn(runtime as any, 'handleUtterance').mockResolvedValue(undefined);
+    const handleUtteranceSpy = vi.spyOn(fromAny(runtime), 'handleUtterance').mockResolvedValue(undefined);
 
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
     const speakingListener = connection.receiver.speaking.on.mock.calls[0]?.[1] as
       | ((userId: string) => void)
@@ -704,10 +705,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig({
         ttsProvider: 'echo',
         echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
@@ -733,10 +734,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig({
         ttsProvider: 'echo',
         echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
@@ -746,12 +747,12 @@ describe('DiscordVoiceRuntime', () => {
       eventBus: new EventBus(),
       getHandler: () => null,
     });
-    (runtime as any).player = {
+    (fromAny(runtime)).player = {
       play: vi.fn(),
       stop: vi.fn(),
     };
 
-    await (runtime as any).speakText('hello world');
+    await (fromAny(runtime)).speakText('hello world');
 
     // Echo should be the preferred provider
     expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo']);
@@ -800,9 +801,9 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const { runtime, player } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(partialEvents).toEqual([{ transcript: 'hello' }]);
     expect(finalEvents).toEqual([{ transcript: 'hello world' }]);
@@ -860,13 +861,13 @@ describe('DiscordVoiceRuntime', () => {
       },
     }));
     const { runtime, player } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).connection.state = {
+    (fromAny(runtime)).connection.state = {
       status: voiceSdkMocks.VoiceConnectionStatus.Disconnected,
       subscription: { player },
     };
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(player.play).toHaveBeenCalledOnce();
     expect(performanceStages).toContain('turn_complete');
@@ -886,9 +887,9 @@ describe('DiscordVoiceRuntime', () => {
     const turn = {
       token: Symbol('voice-turn-cancel-failure'),
       turnId: 'voice-turn-cancel-failure',
-      channel: (runtime as any).activeChannel,
-      connection: (runtime as any).connection,
-      player: (runtime as any).player,
+      channel: (fromAny(runtime)).activeChannel,
+      connection: (fromAny(runtime)).connection,
+      player: (fromAny(runtime)).player,
       abortController: new AbortController(),
       sttSession: null,
       ttsSession: {
@@ -898,20 +899,20 @@ describe('DiscordVoiceRuntime', () => {
         }),
       },
     };
-    (runtime as any).activeTurn = turn;
-    (runtime as any).activeTurnId = turn.turnId;
-    (runtime as any).capturing = true;
+    (fromAny(runtime)).activeTurn = turn;
+    (fromAny(runtime)).activeTurnId = turn.turnId;
+    (fromAny(runtime)).capturing = true;
 
-    await expect((runtime as any).cancelActiveTurn('operator-interrupt')).rejects.toThrow(
+    await expect((fromAny(runtime)).cancelActiveTurn('operator-interrupt')).rejects.toThrow(
       'Voice cancellation failed for 1 connector(s)',
     );
     await vi.waitFor(() => {
       expect(cancellationEvents).toEqual([{ outcome: 'failed' }]);
     });
     expect(turn.abortController.signal.aborted).toBe(true);
-    expect((runtime as any).activeTurn).toBeNull();
-    expect((runtime as any).activeTurnId).toBeNull();
-    expect((runtime as any).capturing).toBe(false);
+    expect((fromAny(runtime)).activeTurn).toBeNull();
+    expect((fromAny(runtime)).activeTurnId).toBeNull();
+    expect((fromAny(runtime)).capturing).toBe(false);
   });
 
   it('emits a silence observation and skips STT/TTS for short captures', async () => {
@@ -923,9 +924,9 @@ describe('DiscordVoiceRuntime', () => {
 
     const handler = vi.fn();
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(8_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(8_000));
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(observations).toEqual([{ kind: 'silence', stage: 'ingest' }]);
     expect(connectorMocks.sttConnector.startStream).not.toHaveBeenCalled();
@@ -949,9 +950,9 @@ describe('DiscordVoiceRuntime', () => {
 
     const handler = vi.fn();
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(observations).toEqual([{ kind: 'empty-transcript', stage: 'stt' }]);
     expect(handler).not.toHaveBeenCalled();
@@ -985,9 +986,9 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(observations).toEqual([{ kind: 'empty-response', stage: 'llm' }]);
     expect(handler).toHaveBeenCalledTimes(1);
@@ -1016,7 +1017,7 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
     const screen = vi.fn(async (_text: string, input: any) => ({
       effectiveText: '[screened transcript]',
@@ -1029,9 +1030,9 @@ describe('DiscordVoiceRuntime', () => {
         subject: { kind: 'body' },
       },
     }));
-    (runtime as any).intakeScreening = { mode: 'enforce', screen };
+    (fromAny(runtime)).intakeScreening = { mode: 'enforce', screen };
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     expect(screen).toHaveBeenCalledTimes(1);
     expect(screen.mock.calls[0]![0]).toBe('hello world');
@@ -1081,9 +1082,9 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => pcm);
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => pcm);
 
-    const utterancePromise = (runtime as any).handleUtterance();
+    const utterancePromise = (fromAny(runtime)).handleUtterance();
 
     // Emit a full frame that crosses MIN_PCM_BYTES while capture is still open.
     pcm.write(Buffer.alloc(40_000, 1));
@@ -1140,7 +1141,7 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
     const screen = vi.fn(async (_text: string, input: any) => ({
       effectiveText: '[withheld: quarantined]',
@@ -1153,9 +1154,9 @@ describe('DiscordVoiceRuntime', () => {
         subject: { kind: 'body' },
       },
     }));
-    (runtime as any).intakeScreening = { mode: 'enforce', screen };
+    (fromAny(runtime)).intakeScreening = { mode: 'enforce', screen };
 
-    await (runtime as any).handleUtterance();
+    await (fromAny(runtime)).handleUtterance();
 
     // The injected partial surfaced ONLY as telemetry.
     expect(partialTelemetry).toContain(injection);
@@ -1216,9 +1217,9 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    await expect((runtime as any).handleUtterance()).rejects.toThrow('tts buffer fallback failed');
+    await expect((fromAny(runtime)).handleUtterance()).rejects.toThrow('tts buffer fallback failed');
 
     expect(observations).toContainEqual({ kind: 'playback-error', stage: 'tts' });
     expect(turnErrors).toEqual([
@@ -1242,10 +1243,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig(),
       eventBus,
       getHandler: () => null,
@@ -1254,7 +1255,7 @@ describe('DiscordVoiceRuntime', () => {
     const connection = createMockVoiceConnection();
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
 
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
     connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Signalling);
     connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Signalling, voiceSdkMocks.VoiceConnectionStatus.Disconnected);
@@ -1290,10 +1291,10 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       const runtime = new DiscordVoiceRuntime({
-        client: {
+        client: fromAny({
           on: vi.fn(),
           off: vi.fn(),
-        } as any,
+        }),
         config: makeConfig({
           voiceDecryptionFailureTolerance: 1,
         }),
@@ -1307,7 +1308,7 @@ describe('DiscordVoiceRuntime', () => {
         .mockReturnValueOnce(initialConnection)
         .mockReturnValueOnce(recoveredConnection);
 
-      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+      await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
       emitDecryptFailure(runtime);
       await flushMicrotasks();
@@ -1330,8 +1331,8 @@ describe('DiscordVoiceRuntime', () => {
 
       expect(initialConnection.destroy).toHaveBeenCalledTimes(1);
       expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(2);
-      expect((runtime as any).decryptFailureCount).toBe(0);
-      expect((runtime as any).activeChannel?.id).toBe('channel-1');
+      expect((fromAny(runtime)).decryptFailureCount).toBe(0);
+      expect((fromAny(runtime)).activeChannel?.id).toBe('channel-1');
     } finally {
       vi.useRealTimers();
     }
@@ -1341,10 +1342,10 @@ describe('DiscordVoiceRuntime', () => {
     vi.useFakeTimers();
     try {
       const runtime = new DiscordVoiceRuntime({
-        client: {
+        client: fromAny({
           on: vi.fn(),
           off: vi.fn(),
-        } as any,
+        }),
         config: makeConfig({
           voiceDecryptionFailureTolerance: 0,
         }),
@@ -1358,7 +1359,7 @@ describe('DiscordVoiceRuntime', () => {
         .mockReturnValueOnce(initialConnection)
         .mockReturnValueOnce(recoveredConnection);
 
-      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+      await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
       emitDecryptFailure(runtime);
       await flushMicrotasks();
@@ -1398,10 +1399,10 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       const runtime = new DiscordVoiceRuntime({
-        client: {
+        client: fromAny({
           on: vi.fn(),
           off: vi.fn(),
-        } as any,
+        }),
         config: makeConfig({
           voiceDecryptionFailureTolerance: 0,
         }),
@@ -1419,7 +1420,7 @@ describe('DiscordVoiceRuntime', () => {
         .mockReturnValueOnce(connection3)
         .mockReturnValueOnce(connection4);
 
-      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+      await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
         emitDecryptFailure(runtime);
@@ -1444,8 +1445,8 @@ describe('DiscordVoiceRuntime', () => {
         }),
       ]);
       expect(channelErrors.some((error) => error.includes('recovery exhausted'))).toBe(true);
-      expect((runtime as any).connection).toBeNull();
-      expect((runtime as any).activeChannel).toBeNull();
+      expect((fromAny(runtime)).connection).toBeNull();
+      expect((fromAny(runtime)).activeChannel).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1459,10 +1460,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig(),
       eventBus,
       getHandler: () => null,
@@ -1472,7 +1473,7 @@ describe('DiscordVoiceRuntime', () => {
     connection.rejoin.mockReturnValue(false);
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
 
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
     connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Disconnected);
     await flushAsyncWork();
@@ -1480,9 +1481,9 @@ describe('DiscordVoiceRuntime', () => {
     expect(connection.receiver.speaking.off).toHaveBeenCalledWith('start', expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith('stateChange', expect.any(Function));
     expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect((runtime as any).connection).toBeNull();
-    expect((runtime as any).player).toBeNull();
-    expect((runtime as any).activeChannel).toBeNull();
+    expect((fromAny(runtime)).connection).toBeNull();
+    expect((fromAny(runtime)).player).toBeNull();
+    expect((fromAny(runtime)).activeChannel).toBeNull();
     expect(endReasons).toContain('connection-disconnected');
   });
 
@@ -1494,10 +1495,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig(),
       eventBus,
       getHandler: () => null,
@@ -1506,7 +1507,7 @@ describe('DiscordVoiceRuntime', () => {
     const connection = createMockVoiceConnection();
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
 
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
     connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Destroyed);
     await flushAsyncWork();
@@ -1514,9 +1515,9 @@ describe('DiscordVoiceRuntime', () => {
     expect(connection.receiver.speaking.off).toHaveBeenCalledWith('start', expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith('stateChange', expect.any(Function));
     expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect((runtime as any).connection).toBeNull();
-    expect((runtime as any).player).toBeNull();
-    expect((runtime as any).activeChannel).toBeNull();
+    expect((fromAny(runtime)).connection).toBeNull();
+    expect((fromAny(runtime)).player).toBeNull();
+    expect((fromAny(runtime)).activeChannel).toBeNull();
     expect(endReasons).toContain('connection-destroyed');
   });
 
@@ -1532,10 +1533,10 @@ describe('DiscordVoiceRuntime', () => {
     });
 
     const runtime = new DiscordVoiceRuntime({
-      client: {
+      client: fromAny({
         on: vi.fn(),
         off: vi.fn(),
-      } as any,
+      }),
       config: makeConfig(),
       eventBus,
       getHandler: () => null,
@@ -1547,8 +1548,8 @@ describe('DiscordVoiceRuntime', () => {
       .mockReturnValueOnce(firstConnection)
       .mockReturnValueOnce(secondConnection);
 
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
-    await (runtime as any).joinChannel(makeVoiceChannel('channel-2'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
+    await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-2'));
 
     firstConnection.invokeLastStateListener(
       voiceSdkMocks.VoiceConnectionStatus.Ready,
@@ -1556,8 +1557,8 @@ describe('DiscordVoiceRuntime', () => {
     );
     await flushAsyncWork();
 
-    expect((runtime as any).connection).toBe(secondConnection);
-    expect((runtime as any).activeChannel?.id).toBe('channel-2');
+    expect((fromAny(runtime)).connection).toBe(secondConnection);
+    expect((fromAny(runtime)).activeChannel?.id).toBe('channel-2');
     expect(stateEvents).toEqual([]);
     expect(endReasons).not.toContain('connection-destroyed');
   });
@@ -1580,18 +1581,18 @@ describe('DiscordVoiceRuntime', () => {
     const eventBus = new EventBus();
     const handler = vi.fn();
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-    const utterancePromise = (runtime as any).handleUtterance();
+    const utterancePromise = (fromAny(runtime)).handleUtterance();
     await waitForCondition(() => connectorMocks.sttConnector.startStream.mock.calls.length === 1);
 
-    await (runtime as any).leaveChannel('target-left');
+    await (fromAny(runtime)).leaveChannel('target-left');
     await utterancePromise.catch(() => undefined);
 
     expect(cancelStt).toHaveBeenCalled();
     expect(cancelStt.mock.calls.map((call) => call[0])).toContain('leave:target-left');
-    expect((runtime as any).capturing).toBe(false);
-    expect((runtime as any).activeTurnId).toBeNull();
+    expect((fromAny(runtime)).capturing).toBe(false);
+    expect((fromAny(runtime)).activeTurnId).toBeNull();
   });
 
   it('cancels in-flight TTS synthesis when leaving during playback', async () => {
@@ -1622,8 +1623,8 @@ describe('DiscordVoiceRuntime', () => {
       };
     });
     const { runtime } = makeRuntimeHarness(eventBus, handler);
-    (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
-    (runtime as any).playReadableAudio = vi.fn(async (_audio: unknown, turn: { abortController?: AbortController }) => {
+    (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+    (fromAny(runtime)).playReadableAudio = vi.fn(async (_audio: unknown, turn: { abortController?: AbortController }) => {
       const signal = turn.abortController?.signal;
       await new Promise<void>((resolve) => {
         if (!signal || signal.aborted) {
@@ -1634,16 +1635,16 @@ describe('DiscordVoiceRuntime', () => {
       });
     });
 
-    const utterancePromise = (runtime as any).handleUtterance();
+    const utterancePromise = (fromAny(runtime)).handleUtterance();
     await waitForCondition(() => connectorMocks.ttsConnector.synthesizeStream.mock.calls.length === 1);
 
-    await (runtime as any).leaveChannel('switch-channel');
+    await (fromAny(runtime)).leaveChannel('switch-channel');
     await utterancePromise.catch(() => undefined);
 
     expect(cancelTts).toHaveBeenCalled();
     expect(cancelTts.mock.calls.map((call) => call[0])).toContain('leave:switch-channel');
-    expect((runtime as any).capturing).toBe(false);
-    expect((runtime as any).activeTurnId).toBeNull();
+    expect((fromAny(runtime)).capturing).toBe(false);
+    expect((fromAny(runtime)).activeTurnId).toBeNull();
   });
 
   it('guards stale turn cleanup from clearing current capture state', () => {
@@ -1654,15 +1655,15 @@ describe('DiscordVoiceRuntime', () => {
     const staleTurn = { token: Symbol('stale') };
     const currentTurn = { token: Symbol('current') };
 
-    (runtime as any).activeTurn = currentTurn;
-    (runtime as any).activeTurnId = 'voice-turn-current';
-    (runtime as any).capturing = true;
+    (fromAny(runtime)).activeTurn = currentTurn;
+    (fromAny(runtime)).activeTurnId = 'voice-turn-current';
+    (fromAny(runtime)).capturing = true;
 
-    (runtime as any).resetTurnStateIfCurrent(staleTurn);
+    (fromAny(runtime)).resetTurnStateIfCurrent(staleTurn);
 
-    expect((runtime as any).activeTurn).toBe(currentTurn);
-    expect((runtime as any).activeTurnId).toBe('voice-turn-current');
-    expect((runtime as any).capturing).toBe(true);
+    expect((fromAny(runtime)).activeTurn).toBe(currentTurn);
+    expect((fromAny(runtime)).activeTurnId).toBe('voice-turn-current');
+    expect((fromAny(runtime)).capturing).toBe(true);
   });
 
   describe('Discord voice TTS provider config', () => {
@@ -1670,7 +1671,7 @@ describe('DiscordVoiceRuntime', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       const runtime = new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           ttsProvider: 'echo',
           echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
@@ -1680,7 +1681,7 @@ describe('DiscordVoiceRuntime', () => {
         getHandler: () => null,
       });
 
-      expect((runtime as any).preferredTtsProviderId).toBe('echo');
+      expect((fromAny(runtime)).preferredTtsProviderId).toBe('echo');
       const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
       const providers = calls.map((call) => call[0]);
       expect(providers[0]).toBe('echo');
@@ -1690,7 +1691,7 @@ describe('DiscordVoiceRuntime', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       expect(() => new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           ttsProvider: undefined,
         }),
@@ -1710,7 +1711,7 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       const runtime = new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           elevenLabsVoiceId: '',
         }),
@@ -1719,14 +1720,14 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       // Voice ID is empty, so no elevenlabs connector — runtime should be disabled
-      expect((runtime as any).enabled).toBe(false);
+      expect((fromAny(runtime)).enabled).toBe(false);
     });
 
     it('uses explicit voice ID when configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           elevenLabsVoiceId: 'custom-voice-id',
         }),
@@ -1745,7 +1746,7 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       const runtime = new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           elevenLabsApiKey: '',
           elevenLabsVoiceId: '',
@@ -1754,14 +1755,14 @@ describe('DiscordVoiceRuntime', () => {
         getHandler: () => null,
       });
 
-      expect((runtime as any).enabled).toBe(false);
+      expect((fromAny(runtime)).enabled).toBe(false);
     });
 
     it('builds only the explicitly selected echo connector when both providers are configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig({
           ttsProvider: 'echo',
           echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
@@ -1813,8 +1814,8 @@ describe('DiscordVoiceRuntime', () => {
 
     it('keeps voice runtime enabled but disables receive when opus decoder is unavailable', () => {
       // Temporarily make prism.opus.Decoder throw to simulate missing opus
-      const originalDecoder = (prism as any).opus.Decoder;
-      (prism as any).opus.Decoder = class ThrowingDecoder {
+      const originalDecoder = (fromAny(prism)).opus.Decoder;
+      (fromAny(prism)).opus.Decoder = class ThrowingDecoder {
         constructor() {
           throw new Error('Could not find an Opus module');
         }
@@ -1822,23 +1823,23 @@ describe('DiscordVoiceRuntime', () => {
 
       try {
         const runtime = new DiscordVoiceRuntime({
-          client: { on: vi.fn(), off: vi.fn() } as any,
+          client: fromAny({ on: vi.fn(), off: vi.fn() }),
           config: makeConfig(),
           eventBus: new EventBus(),
           getHandler: () => null,
         });
 
-        expect((runtime as any).enabled).toBe(true);
-        expect((runtime as any).opusAvailable).toBe(false);
-        expect((runtime as any).receiveEnabled).toBe(false);
+        expect((fromAny(runtime)).enabled).toBe(true);
+        expect((fromAny(runtime)).opusAvailable).toBe(false);
+        expect((fromAny(runtime)).receiveEnabled).toBe(false);
       } finally {
-        (prism as any).opus.Decoder = originalDecoder;
+        (fromAny(prism)).opus.Decoder = originalDecoder;
       }
     });
 
     it('still joins voice channel when opus decoder is unavailable', async () => {
-      const originalDecoder = (prism as any).opus.Decoder;
-      (prism as any).opus.Decoder = class ThrowingDecoder {
+      const originalDecoder = (fromAny(prism)).opus.Decoder;
+      (fromAny(prism)).opus.Decoder = class ThrowingDecoder {
         constructor() {
           throw new Error('Could not find an Opus module');
         }
@@ -1846,26 +1847,26 @@ describe('DiscordVoiceRuntime', () => {
 
       try {
         const connection = createMockVoiceConnection();
-        voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+        voiceSdkMocks.joinVoiceChannel.mockReturnValue(fromAny(connection));
         const runtime = new DiscordVoiceRuntime({
-          client: { on: vi.fn(), off: vi.fn() } as any,
+          client: fromAny({ on: vi.fn(), off: vi.fn() }),
           config: makeConfig(),
           eventBus: new EventBus(),
           getHandler: () => null,
         });
 
-        await (runtime as any).joinChannel(makeVoiceChannel('channel-opusless'));
+        await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-opusless'));
 
         expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
         expect(connection.receiver.speaking.on).not.toHaveBeenCalled();
       } finally {
-        (prism as any).opus.Decoder = originalDecoder;
+        (fromAny(prism)).opus.Decoder = originalDecoder;
       }
     });
 
     it('checkOpusAvailability returns unavailable when decoder throws', () => {
-      const originalDecoder = (prism as any).opus.Decoder;
-      (prism as any).opus.Decoder = class ThrowingDecoder {
+      const originalDecoder = (fromAny(prism)).opus.Decoder;
+      (fromAny(prism)).opus.Decoder = class ThrowingDecoder {
         constructor() {
           throw new Error('Could not find an Opus module');
         }
@@ -1877,7 +1878,7 @@ describe('DiscordVoiceRuntime', () => {
         expect(result.error).toContain('Could not find an Opus module');
         expect(result.backend).toBeNull();
       } finally {
-        (prism as any).opus.Decoder = originalDecoder;
+        (fromAny(prism)).opus.Decoder = originalDecoder;
       }
     });
   });
@@ -1893,7 +1894,7 @@ describe('DiscordVoiceRuntime', () => {
       const { runtime } = makeRuntimeHarness(eventBus, handler);
 
       // Simulate a decode/receive stream error surfaced to the STT pump.
-      (runtime as any).decodeOpusToPcmStream = vi.fn(() =>
+      (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() =>
         makeErroringPcmStream(new Error('DecryptionFailed(UnencryptedWhenPassthroughDisabled)')),
       );
 
@@ -1903,7 +1904,7 @@ describe('DiscordVoiceRuntime', () => {
         turnErrors.push({ stage: event.stage, code: event.code });
       });
 
-      await expect((runtime as any).handleUtterance()).rejects.toThrow();
+      await expect((fromAny(runtime)).handleUtterance()).rejects.toThrow();
       expect(turnErrors.length).toBeGreaterThan(0);
     });
 
@@ -1931,10 +1932,10 @@ describe('DiscordVoiceRuntime', () => {
         });
 
         const runtime = new DiscordVoiceRuntime({
-          client: {
+          client: fromAny({
             on: vi.fn(),
             off: vi.fn(),
-          } as any,
+          }),
           config: makeConfig(),
           eventBus,
           getHandler: () => null,
@@ -1948,17 +1949,17 @@ describe('DiscordVoiceRuntime', () => {
           .mockReturnValueOnce(recoveredConnectionA)
           .mockReturnValueOnce(recoveredConnectionB);
 
-        await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+        await (fromAny(runtime)).joinChannel(makeVoiceChannel('channel-1'));
 
         // Threshold breach 1 -> should detect degradation + execute recovery.
         for (let i = 0; i < 10; i++) {
-          (runtime as any).recordStreamError('user-1');
+          (fromAny(runtime)).recordStreamError('user-1');
         }
         await flushMicrotasks();
 
         // Threshold breach 2 during in-flight recovery -> detect only, no overlapping recovery.
         for (let i = 0; i < 10; i++) {
-          (runtime as any).recordStreamError('user-1');
+          (fromAny(runtime)).recordStreamError('user-1');
         }
         await flushMicrotasks();
 
@@ -1983,7 +1984,7 @@ describe('DiscordVoiceRuntime', () => {
 
         // Threshold breach 3 after first recovery completes -> recovery should run again.
         for (let i = 0; i < 10; i++) {
-          (runtime as any).recordStreamError('user-1');
+          (fromAny(runtime)).recordStreamError('user-1');
         }
         await flushMicrotasks();
         await flushMicrotasks();
@@ -2011,14 +2012,14 @@ describe('DiscordVoiceRuntime', () => {
 
       // Record errors for different users
       for (let i = 0; i < 5; i++) {
-        (runtime as any).recordStreamError('user-a');
+        (fromAny(runtime)).recordStreamError('user-a');
       }
       for (let i = 0; i < 3; i++) {
-        (runtime as any).recordStreamError('user-b');
+        (fromAny(runtime)).recordStreamError('user-b');
       }
 
-      expect((runtime as any).streamErrorCounts.get('user-a')).toBe(5);
-      expect((runtime as any).streamErrorCounts.get('user-b')).toBe(3);
+      expect((fromAny(runtime)).streamErrorCounts.get('user-a')).toBe(5);
+      expect((fromAny(runtime)).streamErrorCounts.get('user-b')).toBe(3);
     });
 
     it('resets stream error counts when joining a new channel', async () => {
@@ -2026,13 +2027,13 @@ describe('DiscordVoiceRuntime', () => {
       const handler = vi.fn();
       const { runtime } = makeRuntimeHarness(eventBus, handler);
 
-      (runtime as any).recordStreamError('user-1');
-      (runtime as any).recordStreamError('user-1');
-      expect((runtime as any).streamErrorCounts.size).toBe(1);
+      (fromAny(runtime)).recordStreamError('user-1');
+      (fromAny(runtime)).recordStreamError('user-1');
+      expect((fromAny(runtime)).streamErrorCounts.size).toBe(1);
 
       // leaveChannel should reset stream error counts
-      await (runtime as any).leaveChannel('test-reset');
-      expect((runtime as any).streamErrorCounts.size).toBe(0);
+      await (fromAny(runtime)).leaveChannel('test-reset');
+      expect((fromAny(runtime)).streamErrorCounts.size).toBe(0);
     });
 
     it('handles decoder creation failure gracefully in decodeOpusToPcmStream', () => {
@@ -2041,8 +2042,8 @@ describe('DiscordVoiceRuntime', () => {
       const { runtime } = makeRuntimeHarness(eventBus, handler);
 
       // Temporarily make Decoder throw
-      const originalDecoder = (prism as any).opus.Decoder;
-      (prism as any).opus.Decoder = class ThrowingDecoder {
+      const originalDecoder = (fromAny(prism)).opus.Decoder;
+      (fromAny(prism)).opus.Decoder = class ThrowingDecoder {
         constructor() {
           throw new Error('Could not find an Opus module');
         }
@@ -2051,16 +2052,16 @@ describe('DiscordVoiceRuntime', () => {
       try {
         const fakeStream = new PassThrough();
         // Decoder creation failure fails closed synchronously before any stream is returned.
-        expect(() => (runtime as any).decodeOpusToPcmStream(fakeStream)).toThrow('Opus decoder unavailable');
+        expect(() => (fromAny(runtime)).decodeOpusToPcmStream(fakeStream)).toThrow('Opus decoder unavailable');
       } finally {
-        (prism as any).opus.Decoder = originalDecoder;
+        (fromAny(prism)).opus.Decoder = originalDecoder;
       }
     });
 
     it('double-fault containment prevents process crash when emitVoiceError throws', () => {
       const eventBus = new EventBus();
       const runtime = new DiscordVoiceRuntime({
-        client: { on: vi.fn(), off: vi.fn() } as any,
+        client: fromAny({ on: vi.fn(), off: vi.fn() }),
         config: makeConfig(),
         eventBus,
         getHandler: () => null,
@@ -2079,7 +2080,7 @@ describe('DiscordVoiceRuntime', () => {
 
       // This should NOT throw -- double fault should be caught
       expect(() => {
-        (runtime as any).emitVoiceError(new Error('test error'));
+        (fromAny(runtime)).emitVoiceError(new Error('test error'));
       }).not.toThrow();
     });
 
@@ -2111,9 +2112,9 @@ describe('DiscordVoiceRuntime', () => {
             metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
           }));
           const { runtime } = makeRuntimeHarness(eventBus, handler);
-          (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+          (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-          await (runtime as any).handleUtterance();
+          await (fromAny(runtime)).handleUtterance();
 
           expect(handler).not.toHaveBeenCalled();
           // stop/interrupt speak nothing back — no synthesis at all.
@@ -2130,9 +2131,9 @@ describe('DiscordVoiceRuntime', () => {
           metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
         }));
         const { runtime } = makeRuntimeHarness(eventBus, handler);
-        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+        (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
-        await (runtime as any).handleUtterance();
+        await (fromAny(runtime)).handleUtterance();
 
         // Ordinary content still reaches the model exactly once.
         expect(handler).toHaveBeenCalledTimes(1);
@@ -2160,15 +2161,15 @@ describe('DiscordVoiceRuntime', () => {
           metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
         }));
         const { runtime } = makeRuntimeHarness(eventBus, handler);
-        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+        (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
         // First turn: a real reply, spoken and remembered.
-        await (runtime as any).handleUtterance();
+        await (fromAny(runtime)).handleUtterance();
         expect(handler).toHaveBeenCalledTimes(1);
         expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
 
         // Second turn: spoken "repeat that" replays the last reply, NO model call.
-        await (runtime as any).handleUtterance();
+        await (fromAny(runtime)).handleUtterance();
         expect(handler).toHaveBeenCalledTimes(1);
         expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(2);
         const replayCall = connectorMocks.ttsConnector.synthesizeStream.mock.calls[1]![0] as { text: string };
@@ -2196,21 +2197,21 @@ describe('DiscordVoiceRuntime', () => {
           metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
         }));
         const { runtime } = makeRuntimeHarness(eventBus, handler);
-        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+        (fromAny(runtime)).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
 
         // First visit: a real reply is spoken and remembered.
-        await (runtime as any).handleUtterance();
+        await (fromAny(runtime)).handleUtterance();
         expect(handler).toHaveBeenCalledTimes(1);
         expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
-        expect((runtime as any).lastAssistantUtterance).toBe('the time is noon');
+        expect((fromAny(runtime)).lastAssistantUtterance).toBe('the time is noon');
 
         // Leave the channel: the remembered utterance must be cleared.
-        await (runtime as any).leaveChannel('leave-rejoin-test');
-        expect((runtime as any).lastAssistantUtterance).toBeNull();
+        await (fromAny(runtime)).leaveChannel('leave-rejoin-test');
+        expect((fromAny(runtime)).lastAssistantUtterance).toBeNull();
 
         // Rejoin: restore the transport surface the harness wires up on join.
         const player = { play: vi.fn(), stop: vi.fn() };
-        (runtime as any).connection = {
+        (fromAny(runtime)).connection = {
           state: {
             status: voiceSdkMocks.VoiceConnectionStatus.Ready,
             subscription: { player },
@@ -2221,8 +2222,8 @@ describe('DiscordVoiceRuntime', () => {
             speaking: { on: vi.fn(), off: vi.fn() },
           },
         };
-        (runtime as any).player = player;
-        (runtime as any).activeChannel = {
+        (fromAny(runtime)).player = player;
+        (fromAny(runtime)).activeChannel = {
           id: 'channel-1',
           guild: { id: 'guild-1' },
           members: new Map([
@@ -2232,7 +2233,7 @@ describe('DiscordVoiceRuntime', () => {
 
         // Second visit: spoken "repeat that" has nothing to replay — no model
         // call, no synthesis of the stale pre-leave reply.
-        await (runtime as any).handleUtterance();
+        await (fromAny(runtime)).handleUtterance();
         expect(handler).toHaveBeenCalledTimes(1);
         expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
       });

@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,9 +19,9 @@ function actionTool(name: string, description: string, actions: readonly string[
   return {
     name,
     description,
-    parameters: Type.Object({
+    parameters: fromAny(Type.Object({
       action: Type.Union(actions.map(action => Type.Literal(action))),
-    }) as any,
+    })),
     execute: vi.fn(),
   };
 }
@@ -62,14 +63,14 @@ describe('createToolSearchTool', () => {
   it('returns long-form documentation for core and extended tools without changing callability', async () => {
     const emitTelemetry = vi.fn();
     const toolSearch = createToolSearchTool({
-      getCoreTools: () => [sessionTool] as any,
-      getExtendedTools: () => [imageTool] as any,
+      getCoreTools: () => fromAny([sessionTool]),
+      getExtendedTools: () => fromAny([imageTool]),
       getToolHealthStatusByName: () => new Map([['generate_image', 'degraded']]),
       resolveCapabilityAccess: () => capabilityAccess(),
       emitTelemetry,
     });
 
-    const result = await (toolSearch as any).execute('search-1', {
+    const result = await (fromAny(toolSearch)).execute('search-1', {
       query: 'image prompt',
       limit: 5,
     });
@@ -110,13 +111,13 @@ describe('createToolSearchTool', () => {
     const before = [...access.getGrantedTokens()];
     const toolSearch = createToolSearchTool({
       getCoreTools: () => [],
-      getExtendedTools: () => [notifyTool] as any,
+      getExtendedTools: () => fromAny([notifyTool]),
       getToolHealthStatusByName: () => new Map(),
       resolveCapabilityAccess: () => access,
       emitTelemetry: vi.fn(),
     });
 
-    const result = await (toolSearch as any).execute('search-2', { query: 'notify' });
+    const result = await (fromAny(toolSearch)).execute('search-2', { query: 'notify' });
     const match = result.details?.toolSearch?.matches?.[0];
 
     expect(match).toMatchObject({
@@ -137,13 +138,13 @@ describe('createToolSearchTool', () => {
     };
     const toolSearch = createToolSearchTool({
       getCoreTools: () => [],
-      getExtendedTools: () => [imageTool, retired] as any,
+      getExtendedTools: () => fromAny([imageTool, retired]),
       getToolHealthStatusByName: () => new Map(),
       resolveCapabilityAccess: () => capabilityAccess(),
       emitTelemetry: vi.fn(),
     });
 
-    const result = await (toolSearch as any).execute('search-3', { limit: 20 });
+    const result = await (fromAny(toolSearch)).execute('search-3', { limit: 20 });
     expect(result.details?.toolSearch?.matches.map((match: { name: string }) => match.name))
       .toEqual(['generate_image']);
   });
@@ -152,8 +153,8 @@ describe('createToolSearchTool', () => {
 describe('createToolsetTool', () => {
   function createToolset(overrides: Partial<Parameters<typeof createToolsetTool>[0]> = {}) {
     return createToolsetTool({
-      getCoreTools: () => [sessionTool] as any,
-      getExtendedTools: () => [imageTool] as any,
+      getCoreTools: () => fromAny([sessionTool]),
+      getExtendedTools: () => fromAny([imageTool]),
       getAdaptiveToolRuntimeState: () => runtimeState(),
       resolveCapabilityAccess: () => capabilityAccess([
         'identity.read',
@@ -184,16 +185,16 @@ describe('createToolsetTool', () => {
     const toolset = createToolset();
 
     expect(toolset.description).toContain('already callable without activation');
-    expect(Value.Check((toolset as any).parameters, { action: 'activate', tools: ['generate_image'] }))
+    expect(Value.Check((fromAny(toolset)).parameters, { action: 'activate', tools: ['generate_image'] }))
       .toBe(false);
-    expect(Value.Check((toolset as any).parameters, { action: 'pin', tool: 'generate_image' }))
+    expect(Value.Check((fromAny(toolset)).parameters, { action: 'pin', tool: 'generate_image' }))
       .toBe(true);
-    expect((toolset as any).parameters.properties.tools).toBeUndefined();
+    expect((fromAny(toolset)).parameters.properties.tools).toBeUndefined();
   });
 
   it('lists unpinned extended tools as directly callable', async () => {
     const toolset = createToolset();
-    const result = await (toolset as any).execute('list-1', { action: 'list' });
+    const result = await (fromAny(toolset)).execute('list-1', { action: 'list' });
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
     expect(payload).toMatchObject({
@@ -219,7 +220,7 @@ describe('createToolsetTool', () => {
       applyActiveToolsToAgent,
     });
 
-    const result = await (toolset as any).execute('suggest-1', {
+    const result = await (fromAny(toolset)).execute('suggest-1', {
       action: 'suggest',
       intent: 'generate a new image',
     });
@@ -240,7 +241,7 @@ describe('createToolsetTool', () => {
     const access = capabilityAccess(['identity.read']);
     const toolset = createToolset({
       getCoreTools: () => [],
-      getExtendedTools: () => [notifyTool] as any,
+      getExtendedTools: () => fromAny([notifyTool]),
       getAdaptiveToolRuntimeState: () => runtimeState({
         coreTools: [],
         extendedTools: ['notify'],
@@ -249,7 +250,7 @@ describe('createToolsetTool', () => {
       resolveCapabilityAccess: () => access,
     });
 
-    const result = await (toolset as any).execute('suggest-2', {
+    const result = await (fromAny(toolset)).execute('suggest-2', {
       action: 'suggest',
       intent: 'notify the operator',
     });
@@ -272,7 +273,7 @@ describe('createToolsetTool', () => {
     const toolset = createToolset({
       // Registered as a core tool but repl.execute is absent for this tier, so
       // it is capability-denied and must not be suggested as directly callable.
-      getCoreTools: () => [workbench] as any,
+      getCoreTools: () => fromAny([workbench]),
       getExtendedTools: () => [],
       getAdaptiveToolRuntimeState: () => runtimeState({
         coreTools: ['analysis_workbench'],
@@ -282,7 +283,7 @@ describe('createToolsetTool', () => {
       resolveCapabilityAccess: () => access,
     });
 
-    const result = await (toolset as any).execute('suggest-workbench', {
+    const result = await (fromAny(toolset)).execute('suggest-workbench', {
       action: 'suggest',
       intent: 'execute code in a sandbox to analyze data',
     });
@@ -293,7 +294,7 @@ describe('createToolsetTool', () => {
 
   it('describes canonical actions and identifies lookup as documentation-only', async () => {
     const toolset = createToolset();
-    const result = await (toolset as any).execute('describe-1', {
+    const result = await (fromAny(toolset)).execute('describe-1', {
       action: 'describe',
       tool: 'generate_image',
     });
@@ -333,11 +334,11 @@ describe('createToolsetTool', () => {
     }));
     const toolset = createToolset({ addPromotedExtendedTool, removePromotedExtendedTool });
 
-    const pin = await (toolset as any).execute('pin-1', {
+    const pin = await (fromAny(toolset)).execute('pin-1', {
       action: 'pin',
       tool: 'generate_image',
     });
-    const unpin = await (toolset as any).execute('unpin-1', {
+    const unpin = await (fromAny(toolset)).execute('unpin-1', {
       action: 'unpin',
       tool: 'generate_image',
     });
@@ -360,11 +361,11 @@ describe('createToolsetTool', () => {
     const addPromotedExtendedTool = vi.fn();
     const toolset = createToolset({ addPromotedExtendedTool });
 
-    const pin = await (toolset as any).execute('pin-retired', {
+    const pin = await (fromAny(toolset)).execute('pin-retired', {
       action: 'pin',
       tool: 'media',
     });
-    const describe = await (toolset as any).execute('describe-retired', {
+    const describe = await (fromAny(toolset)).execute('describe-retired', {
       action: 'describe',
       tool: 'media',
     });

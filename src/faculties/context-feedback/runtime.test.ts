@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../../core/agent/substrate-agent.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
@@ -205,8 +206,8 @@ describe('wireContextFeedbackRuntime', () => {
     wireContextFeedbackRuntime({
       agentLoop,
       postTurnActions,
-      llmProvider: llmProvider as any,
-      sessionStore: sessionStore as any,
+      llmProvider: fromAny(llmProvider),
+      sessionStore: fromAny(sessionStore),
       eventBus,
     });
 
@@ -218,7 +219,7 @@ describe('wireContextFeedbackRuntime', () => {
       message,
       response,
       turnMessages: [],
-      turnId: 'turn-ctx-1' as any,
+      turnId: fromAny('turn-ctx-1'),
       completedAt: 1_700_000_010_000,
       contextManifest: makeManifest(),
       canonicalContactKey: 'contact:primary',
@@ -298,13 +299,13 @@ describe('wireContextFeedbackRuntime', () => {
     wireContextFeedbackRuntime({
       agentLoop,
       postTurnActions,
-      llmProvider: {
+      llmProvider: fromAny({
         stream: vi.fn(),
         complete: vi.fn(),
-      } as any,
-      sessionStore: {
+      }),
+      sessionStore: fromAny({
         getRecent: vi.fn().mockReturnValue([]),
-      } as any,
+      }),
       eventBus,
     });
 

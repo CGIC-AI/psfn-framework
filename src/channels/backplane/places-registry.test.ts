@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -81,7 +82,7 @@ describe('parsePlacesRegistryConfig', () => {
 
   it('rejects an unknown affordance kind naming the field path', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].affordances[0].kind = 'teleporter';
+    (fromAny(raw.places))[0].affordances[0].kind = 'teleporter';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(
       /places\[0\]\.affordances\[0\]\.kind contains unknown affordance kind "teleporter"/u,
     );
@@ -89,37 +90,37 @@ describe('parsePlacesRegistryConfig', () => {
 
   it('rejects an unknown affordance backend', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].affordances[0].backend = 'zigbee';
+    (fromAny(raw.places))[0].affordances[0].backend = 'zigbee';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/backend must be one of: ha, satellite, vr/u);
   });
 
   it('rejects an unknown place kind', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].kind = 'astral';
+    (fromAny(raw.places))[0].kind = 'astral';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/kind must be one of: physical, virtual/u);
   });
 
   it('rejects a duplicate affordanceId within a place', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].affordances[1].affordanceId = 'lr_lights';
+    (fromAny(raw.places))[0].affordances[1].affordanceId = 'lr_lights';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/duplicate affordanceId "lr_lights"/u);
   });
 
   it('rejects a duplicate placeId', () => {
     const raw = exampleRegistry();
-    (raw.places as any).push({ ...(raw.places as any)[0] });
+    (fromAny(raw.places)).push({ ...(fromAny(raw.places))[0] });
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/duplicate placeId "living_room"/u);
   });
 
   it('rejects a duplicate siteId', () => {
     const raw = exampleRegistry();
-    (raw.sites as any).push({ siteId: 'home', displayName: 'Home 2', kind: 'physical' });
+    (fromAny(raw.sites)).push({ siteId: 'home', displayName: 'Home 2', kind: 'physical' });
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/duplicate siteId "home"/u);
   });
 
   it('rejects a place referencing an unknown siteId', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].siteId = 'ghost_site';
+    (fromAny(raw.places))[0].siteId = 'ghost_site';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(
       /references unknown siteId "ghost_site"/u,
     );
@@ -127,19 +128,19 @@ describe('parsePlacesRegistryConfig', () => {
 
   it('rejects an unknown key on a place naming the key (H9/T1)', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].privicy = 'private'; // typo for privacy
+    (fromAny(raw.places))[0].privicy = 'private'; // typo for privacy
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "privicy"/u);
   });
 
   it('rejects an unknown key on a site', () => {
     const raw = exampleRegistry();
-    (raw.sites as any)[0].displyName = 'Home'; // typo
+    (fromAny(raw.sites))[0].displyName = 'Home'; // typo
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "displyName"/u);
   });
 
   it('rejects an unknown key on an affordance', () => {
     const raw = exampleRegistry();
-    (raw.places as any)[0].affordances[0].entiyId = 'light.x'; // typo
+    (fromAny(raw.places))[0].affordances[0].entiyId = 'light.x'; // typo
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "entiyId"/u);
   });
 
@@ -161,7 +162,7 @@ describe('twin links (mirrorsPlaceId, vinz.29)', () => {
         { siteId: 'home_mindspace', displayName: 'Home Mindspace', kind: 'virtual' },
       ],
     });
-    (raw.places as any).push({
+    (fromAny(raw.places)).push({
       placeId: 'living_room_twin',
       siteId: 'home_mindspace',
       displayName: 'Living Room (Twin)',
@@ -170,7 +171,7 @@ describe('twin links (mirrorsPlaceId, vinz.29)', () => {
       affordances: [],
     });
     if (overrides.extraTwin) {
-      (raw.places as any).push({
+      (fromAny(raw.places)).push({
         placeId: 'living_room_twin_2',
         siteId: 'home_mindspace',
         displayName: 'Living Room (Second Twin)',
@@ -210,14 +211,14 @@ describe('twin links (mirrorsPlaceId, vinz.29)', () => {
 
   it('fails closed when the twin target is not a physical place', () => {
     const raw = twinRegistry();
-    (raw.places as any).push({
+    (fromAny(raw.places)).push({
       placeId: 'tavern',
       siteId: 'home_mindspace',
       displayName: 'Tavern',
       kind: 'virtual',
       affordances: [],
     });
-    (raw.places as any).find((p: any) => p.placeId === 'living_room_twin').mirrorsPlaceId = 'tavern';
+    (fromAny(raw.places)).find((p: any) => p.placeId === 'living_room_twin').mirrorsPlaceId = 'tavern';
     expect(() => parsePlacesRegistryConfig(raw)).toThrow(
       /mirrors "tavern" which is not a physical place/u,
     );

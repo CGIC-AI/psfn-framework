@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,7 @@ describe('writeStartupSessionMetadata', () => {
       }),
     };
 
-    writeStartupSessionMetadata(sessionManager as any, dir, 'reuse_latest_session');
+    writeStartupSessionMetadata(fromAny(sessionManager), dir, 'reuse_latest_session');
     await flushLastActiveWrite();
 
     expect(sessionManager.getMessageCount).toHaveBeenCalledWith('api:persisted');
@@ -66,7 +67,7 @@ describe('writeStartupSessionMetadata', () => {
       })),
     };
 
-    writeStartupSessionMetadata(sessionManager as any, dir, 'reuse_latest_session');
+    writeStartupSessionMetadata(fromAny(sessionManager), dir, 'reuse_latest_session');
     await flushLastActiveWrite();
 
     expect(sessionManager.resolveStartupSessionMetadata).toHaveBeenCalledWith('reuse_latest_session');
@@ -92,17 +93,17 @@ describe('createSessionActivityTracker', () => {
     tempDirs.push(dir);
 
     const tracker = createSessionActivityTracker(
-      {
+      fromAny({
         resolveSessionChannelId: vi.fn(() => 'api:tracked'),
-      } as any,
+      }),
       dir,
     );
 
-    tracker({
+    tracker(fromAny({
       channelId: 'api:tracked',
       channelType: 'api',
       timestamp: new Date(789),
-    } as any);
+    }));
     await flushLastActiveWrite();
 
     expect(readLastActiveSession(dir)).toMatchObject({

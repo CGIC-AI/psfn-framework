@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { describe, expect, it, vi } from 'vitest';
 import type { PolicyConfig } from '../policy.js';
@@ -36,14 +37,14 @@ function createHarness(policyConfig: PolicyConfig): {
   };
 
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromAny({}),
+    embeddingService: fromAny({}),
+    discordAdapter: fromAny({}),
     policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
@@ -59,7 +60,7 @@ function createHarness(policyConfig: PolicyConfig): {
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: ({ method, handler }) => async (params) => {
         const decision = evaluatePolicy(
           { method, params: params as Record<string, unknown> },
@@ -70,7 +71,7 @@ function createHarness(policyConfig: PolicyConfig): {
         }
         return handler(params);
       },
-    } as any,
+    }),
   };
 
   registerVaultMethods(runtime);

@@ -486,6 +486,12 @@ export function tokenizeForExplicitMatch(value: string): string[] {
     .filter(token => token.length >= 4);
 }
 
+/**
+ * Local clamp retained intentionally: it maps both `NaN` and non-finite values
+ * (e.g. `Infinity`) to the midpoint. The shared `clampWithMidpointNaN` only maps
+ * `NaN`, so adopting it here would change behavior for infinite inputs and is not
+ * part of this slice.
+ */
 export function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));

@@ -6,7 +6,7 @@ import {
 } from '../../../shared/gating/deterministic-gate.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ExtractedFact } from '../types.js';
-import { clamp } from './config.js';
+import { clampWithMidpointNaN } from '../../../shared/utils/numeric.js';
 import type {
   AcceptedFactCandidate,
   EmotionalSignal,
@@ -324,7 +324,7 @@ function isLowSignalFact(text: string): boolean {
 
 export function computeFactValueScore(fact: ExtractedFact, novelty: number): number {
   const typeBoost = fact.type === 'boundary' ? 1.6 : 1;
-  return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1) * typeBoost;
+  return clampWithMidpointNaN(fact.importance, 0, 1) * clampWithMidpointNaN(fact.confidence, 0, 1) * clampWithMidpointNaN(novelty, 0, 1) * typeBoost;
 }
 
 export function deriveEmotionalSignal(
@@ -338,14 +338,14 @@ export function deriveEmotionalSignal(
   if (factSignal && !transcriptSignal) return factSignal;
   if (!factSignal || !transcriptSignal) return transcriptSignal;
 
-  const combinedConfidence = clamp(
+  const combinedConfidence = clampWithMidpointNaN(
     (factSignal.confidence * 0.7) + (transcriptSignal.confidence * 0.3),
     0,
     1,
   );
   const denominator = factSignal.confidence + transcriptSignal.confidence;
   const combinedValence = denominator > 0
-    ? clamp(
+    ? clampWithMidpointNaN(
       (
         (factSignal.valence * factSignal.confidence)
         + (transcriptSignal.valence * transcriptSignal.confidence)
@@ -373,17 +373,17 @@ function deriveFactEmotionalSignal(facts: ExtractedFact[]): EmotionalSignal | nu
   let confidenceSum = 0;
 
   for (const fact of emotionalFacts) {
-    const weight = clamp((fact.importance * 0.6) + (fact.confidence * 0.4), 0.1, 1);
-    weightedValence += clamp(fact.emotionalValence, -1, 1) * weight;
+    const weight = clampWithMidpointNaN((fact.importance * 0.6) + (fact.confidence * 0.4), 0.1, 1);
+    weightedValence += clampWithMidpointNaN(fact.emotionalValence, -1, 1) * weight;
     totalWeight += weight;
-    confidenceSum += clamp(fact.confidence, 0, 1);
+    confidenceSum += clampWithMidpointNaN(fact.confidence, 0, 1);
   }
 
   if (totalWeight <= 0) return null;
 
   return {
-    valence: clamp(weightedValence / totalWeight, -1, 1),
-    confidence: clamp(confidenceSum / emotionalFacts.length, 0.4, 1),
+    valence: clampWithMidpointNaN(weightedValence / totalWeight, -1, 1),
+    confidence: clampWithMidpointNaN(confidenceSum / emotionalFacts.length, 0.4, 1),
   };
 }
 
@@ -406,8 +406,8 @@ function deriveTranscriptEmotionalSignal(entries: SessionEntry[]): EmotionalSign
   if (signalCount === 0) return null;
 
   return {
-    valence: clamp(valenceSum / signalCount, -1, 1),
-    confidence: clamp(0.35 + (Math.min(signalCount, 4) * 0.1), 0, 0.75),
+    valence: clampWithMidpointNaN(valenceSum / signalCount, -1, 1),
+    confidence: clampWithMidpointNaN(0.35 + (Math.min(signalCount, 4) * 0.1), 0, 0.75),
   };
 }
 
@@ -430,7 +430,7 @@ function scoreTranscriptEmotionalValence(content: string): number | null {
   }
 
   if (hits === 0) return null;
-  return clamp(score / Math.max(2, hits), -1, 1);
+  return clampWithMidpointNaN(score / Math.max(2, hits), -1, 1);
 }
 
 export function compareAcceptedFactCandidates(left: AcceptedFactCandidate, right: AcceptedFactCandidate): number {
@@ -463,7 +463,7 @@ export function computeNoveltyScore(text: string, existingTexts: string[]): numb
     if (maxSimilarity >= 1) break;
   }
 
-  return clamp(1 - maxSimilarity, 0, 1);
+  return clampWithMidpointNaN(1 - maxSimilarity, 0, 1);
 }
 
 export function computeProfileNovelty(summary: string, existingSummary: string): number {

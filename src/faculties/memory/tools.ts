@@ -25,6 +25,7 @@ import {
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { clampWithMidpointNaN } from '../../shared/utils/numeric.js';
 import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
 import {
   TRUST_LEVELS,
@@ -104,11 +105,6 @@ const MEMORY_EPISODE_GET_LIMITS = {
   maxSiblings: 25,
 } as const;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
-
-function clamp(val: number, min: number, max: number): number {
-  if (isNaN(val)) return (min + max) / 2;
-  return Math.max(min, Math.min(max, val));
-}
 
 function clampInt(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
@@ -463,9 +459,9 @@ export function createMemoryWriteTool(
           );
         }
 
-        const importance = normalizedParams.importance !== undefined ? clamp(Number(normalizedParams.importance), 0, 1) : undefined;
-        const emotionalValence = normalizedParams.emotional_valence !== undefined ? clamp(Number(normalizedParams.emotional_valence), -1, 1) : undefined;
-        const confidence = normalizedParams.confidence !== undefined ? clamp(Number(normalizedParams.confidence), 0, 1) : undefined;
+        const importance = normalizedParams.importance !== undefined ? clampWithMidpointNaN(Number(normalizedParams.importance), 0, 1) : undefined;
+        const emotionalValence = normalizedParams.emotional_valence !== undefined ? clampWithMidpointNaN(Number(normalizedParams.emotional_valence), -1, 1) : undefined;
+        const confidence = normalizedParams.confidence !== undefined ? clampWithMidpointNaN(Number(normalizedParams.confidence), 0, 1) : undefined;
 
         const tags = parseTags(normalizedParams.tags);
         const formationVAD = options.getFormationVAD?.();
@@ -590,9 +586,9 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
           records.push({
             text: text.trim(),
             type,
-            importance: r.importance !== undefined ? clamp(Number(r.importance), 0, 1) : undefined,
-            emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
-            confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
+            importance: r.importance !== undefined ? clampWithMidpointNaN(Number(r.importance), 0, 1) : undefined,
+            emotionalValence: r.emotional_valence !== undefined ? clampWithMidpointNaN(Number(r.emotional_valence), -1, 1) : undefined,
+            confidence: r.confidence !== undefined ? clampWithMidpointNaN(Number(r.confidence), 0, 1) : undefined,
             tags: parseTags(r.tags),
             sourceRef: sourceContext.sourceRef,
             sourceType: sourceContext.sourceType,
@@ -671,10 +667,10 @@ export function createMemoryPatchTool(writer: MemoryWriter): SubstrateAgentTool 
         const result = await writer.patchMemory({
           memoryId,
           ...(params.text !== undefined ? { text: params.text } : {}),
-          ...(params.importance !== undefined ? { importance: clamp(Number(params.importance), 0, 1) } : {}),
-          ...(params.confidence !== undefined ? { confidence: clamp(Number(params.confidence), 0, 1) } : {}),
+          ...(params.importance !== undefined ? { importance: clampWithMidpointNaN(Number(params.importance), 0, 1) } : {}),
+          ...(params.confidence !== undefined ? { confidence: clampWithMidpointNaN(Number(params.confidence), 0, 1) } : {}),
           ...(params.emotional_valence !== undefined
-            ? { emotionalValence: clamp(Number(params.emotional_valence), -1, 1) }
+            ? { emotionalValence: clampWithMidpointNaN(Number(params.emotional_valence), -1, 1) }
             : {}),
           ...(params.formation_vad !== undefined ? { formationVAD: params.formation_vad } : {}),
           ...(params.clear_formation_vad !== undefined ? { clearFormationVAD: params.clear_formation_vad } : {}),
@@ -1003,12 +999,12 @@ export function createMemoryTool(
             const result = await writer.write({
               text,
               type,
-              importance: normalizedParams.importance !== undefined ? clamp(Number(normalizedParams.importance), 0, 1) : undefined,
+              importance: normalizedParams.importance !== undefined ? clampWithMidpointNaN(Number(normalizedParams.importance), 0, 1) : undefined,
               emotionalValence: normalizedParams.emotional_valence !== undefined
-                ? clamp(Number(normalizedParams.emotional_valence), -1, 1)
+                ? clampWithMidpointNaN(Number(normalizedParams.emotional_valence), -1, 1)
                 : undefined,
               formationVAD: options.getFormationVAD?.(),
-              confidence: normalizedParams.confidence !== undefined ? clamp(Number(normalizedParams.confidence), 0, 1) : undefined,
+              confidence: normalizedParams.confidence !== undefined ? clampWithMidpointNaN(Number(normalizedParams.confidence), 0, 1) : undefined,
               tags: parseTags(normalizedParams.tags),
               sourceRef: sourceContext.sourceRef,
               sourceType: sourceContext.sourceType,
@@ -1276,11 +1272,11 @@ export function createMemoryTool(
               records.push({
                 text,
                 type,
-                importance: record.importance !== undefined ? clamp(Number(record.importance), 0, 1) : undefined,
+                importance: record.importance !== undefined ? clampWithMidpointNaN(Number(record.importance), 0, 1) : undefined,
                 emotionalValence: record.emotional_valence !== undefined
-                  ? clamp(Number(record.emotional_valence), -1, 1)
+                  ? clampWithMidpointNaN(Number(record.emotional_valence), -1, 1)
                   : undefined,
-                confidence: record.confidence !== undefined ? clamp(Number(record.confidence), 0, 1) : undefined,
+                confidence: record.confidence !== undefined ? clampWithMidpointNaN(Number(record.confidence), 0, 1) : undefined,
                 tags: parseTags(record.tags),
                 sourceRef: sourceContext.sourceRef,
                 sourceType: sourceContext.sourceType,
@@ -1312,10 +1308,10 @@ export function createMemoryTool(
             const result = await writer.patchMemory({
               memoryId,
               ...(normalizedParams.text !== undefined ? { text: normalizedParams.text } : {}),
-              ...(normalizedParams.importance !== undefined ? { importance: clamp(Number(normalizedParams.importance), 0, 1) } : {}),
-              ...(normalizedParams.confidence !== undefined ? { confidence: clamp(Number(normalizedParams.confidence), 0, 1) } : {}),
+              ...(normalizedParams.importance !== undefined ? { importance: clampWithMidpointNaN(Number(normalizedParams.importance), 0, 1) } : {}),
+              ...(normalizedParams.confidence !== undefined ? { confidence: clampWithMidpointNaN(Number(normalizedParams.confidence), 0, 1) } : {}),
               ...(normalizedParams.emotional_valence !== undefined
-                ? { emotionalValence: clamp(Number(normalizedParams.emotional_valence), -1, 1) }
+                ? { emotionalValence: clampWithMidpointNaN(Number(normalizedParams.emotional_valence), -1, 1) }
                 : {}),
               ...(normalizedParams.formation_vad !== undefined ? { formationVAD: normalizedParams.formation_vad } : {}),
               ...(normalizedParams.clear_formation_vad !== undefined ? { clearFormationVAD: normalizedParams.clear_formation_vad } : {}),

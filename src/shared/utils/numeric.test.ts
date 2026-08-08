@@ -3,6 +3,7 @@ import {
   clamp,
   clampSigned,
   clampUnit,
+  clampWithMidpointNaN,
   positiveIntegerOr,
   requirePositiveInteger,
   toFlooredPositiveInteger,
@@ -41,6 +42,25 @@ describe('clampSigned', () => {
     expect(clampSigned(0.5)).toBe(0.5);
     expect(clampSigned(5)).toBe(1);
     expect(clampSigned(-5)).toBe(-1);
+  });
+});
+
+describe('clampWithMidpointNaN', () => {
+  it('clamps finite numbers between min and max', () => {
+    expect(clampWithMidpointNaN(5, 0, 10)).toBe(5);
+    expect(clampWithMidpointNaN(-5, 0, 10)).toBe(0);
+    expect(clampWithMidpointNaN(15, 0, 10)).toBe(10);
+  });
+
+  it('maps NaN to the midpoint of the range', () => {
+    expect(clampWithMidpointNaN(Number.NaN, 0, 1)).toBe(0.5);
+    expect(clampWithMidpointNaN(Number.NaN, -1, 1)).toBe(0);
+    expect(clampWithMidpointNaN(Number.NaN, 10, 20)).toBe(15);
+  });
+
+  it('clamps finite bounds for non-NaN infinities', () => {
+    expect(clampWithMidpointNaN(Number.POSITIVE_INFINITY, 0, 1)).toBe(1);
+    expect(clampWithMidpointNaN(Number.NEGATIVE_INFINITY, 0, 1)).toBe(0);
   });
 });
 

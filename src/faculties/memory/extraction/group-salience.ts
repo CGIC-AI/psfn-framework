@@ -4,7 +4,7 @@ import {
   type GroupMemorySalienceReasonWeights,
   type GroupMemorySettings,
 } from '../../../system/config/group-memory-config.js';
-import { clamp } from './config.js';
+import { clampWithMidpointNaN } from '../../../shared/utils/numeric.js';
 import type { GroupMemoryRangeChunk } from './group-ranges.js';
 
 const GROUP_MEMORY_SALIENCE_REASON_CODES = [
@@ -274,7 +274,7 @@ function scoreEntry(params: {
   return {
     entry,
     entryIndex: params.entryIndex,
-    score: roundScore(clamp(score, 0, 10)),
+    score: roundScore(clampWithMidpointNaN(score, 0, 10)),
     reasons,
     skipReasons,
   };

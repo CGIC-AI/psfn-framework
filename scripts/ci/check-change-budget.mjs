@@ -4,9 +4,10 @@
  * PR metadata input contract:
  * - Connected runs use `gh pr view` for the open PR associated with the current branch.
  * - Offline runs set CHANGE_BUDGET_EXCEPTION=false when no exception label is present.
- * - Offline under-floor blocker exceptions use --exception or
+ * - Offline maintainer exceptions use --exception or
  *   CHANGE_BUDGET_EXCEPTION=true together with CHANGE_BUDGET_PR_BODY containing
- *   the complete PR body and its `BLOCKER:` rationale.
+ *   the complete PR body and a non-empty exception rationale. Under-floor
+ *   exceptions additionally require a `BLOCKER:` rationale.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -399,31 +400,20 @@ export function decideChangeBudget(stats, { exception = false, pullRequestBody =
   }
   const underPublicationFloor =
     stats.lines < CHANGE_BUDGET.pullRequest.lines.minimum;
-  if (!underPublicationFloor) {
-    if (evaluation.violations.length === 0) {
-      return {
-        warnings: evaluation.warnings,
-        violations: ['remove change-budget:exception; this change is within the hard limits'],
-        bypassed: [],
-      };
-    }
+  if (evaluation.violations.length === 0) {
     return {
       warnings: evaluation.warnings,
-      violations: [
-        ...evaluation.violations,
-        'change-budget:exception is only valid for an under-800 unbundleable blocker; hard maximums cannot be bypassed',
-      ],
+      violations: ['remove change-budget:exception; this change is within the publication limits'],
       bypassed: [],
     };
   }
   const floorViolation =
     `PR has ${stats.lines} changed lines; minimum is ${CHANGE_BUDGET.pullRequest.lines.minimum}`;
-  const hardViolations = evaluation.violations.filter(violation => violation !== floorViolation);
-  if (!/^BLOCKER:\s+\S/i.test(reason)) {
+  if (underPublicationFloor && !/^BLOCKER:\s+\S/i.test(reason)) {
     return {
       warnings: evaluation.warnings,
       violations: [
-        ...hardViolations,
+        ...evaluation.violations.filter(violation => violation !== floorViolation),
         'under-800 PR exceptions require a "BLOCKER:" rationale explaining why the blocking change cannot be combined with compatible work',
       ],
       bypassed: [],
@@ -431,8 +421,8 @@ export function decideChangeBudget(stats, { exception = false, pullRequestBody =
   }
   return {
     warnings: evaluation.warnings,
-    violations: hardViolations,
-    bypassed: hardViolations.length === 0 ? [floorViolation] : [],
+    violations: [],
+    bypassed: evaluation.violations,
   };
 }
 

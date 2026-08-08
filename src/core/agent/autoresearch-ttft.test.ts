@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 
+import EventEmitter from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
@@ -290,12 +291,12 @@ describe('TTFT benchmark', () => {
       let firstTokenTtftMs: number | null = null;
       let promptStageObserved = false;
 
-      const unsubscribeStream = (eventBus as any).on('agent.stream.delta', (data: { channelId: string }) => {
+      const unsubscribeStream = (eventBus as unknown as EventEmitter).on('agent.stream.delta', (data: { channelId: string }) => {
         if (data.channelId === message.channelId) {
           agentStreamDeltas += 1;
         }
       });
-      const unsubscribeStage = (eventBus as any).on(
+      const unsubscribeStage = (eventBus as unknown as EventEmitter).on(
         'agent.turn.stage',
         (data: { channelId?: string; stage: string; source?: string; ttftMs?: number }) => {
           if (data.channelId !== undefined && data.channelId !== message.channelId) {

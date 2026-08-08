@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,6 +11,7 @@ import { GatewayCapabilityTierResolver } from '../../../boundary/gateway/capabil
 import { CapabilityRuntime } from '../../../system/capabilities/runtime.js';
 import type { ResolvedCompanionsFleetConfig } from '../../../system/config/companions-config.js';
 import { saveCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { registerStreamingSttProvider } from '../../../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../../primitives/voice/connectors/tts/index.js';
 import { createRuntimeVoiceSttConnector } from './bootstrap-helpers.js';
@@ -109,17 +111,17 @@ function registerExternalWebTts() {
   return { createConnector };
 }
 
-const STT_CONFIG = {
+const STT_CONFIG = fromPartial<SubstrateConfig>({
   sttProvider: 'plugin-stt',
   pluginSttToken: 'stt-key',
   pluginSttEndpoint: 'wss://plugin-stt.invalid',
-} as any;
+});
 
-const TTS_CONFIG = {
+const TTS_CONFIG = fromPartial<SubstrateConfig>({
   ttsProvider: 'plugin-tts',
   pluginTtsToken: 'tts-key',
   pluginTtsEndpoint: 'https://plugin-tts.invalid',
-} as any;
+});
 
 describe('per-account Discord voice eligibility resolves the account companion tier (an52.5)', () => {
   it('allows the autonomous account companion and denies the nursery account companion', () => {

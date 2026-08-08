@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import {
@@ -391,7 +392,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       );
 
       const catalogNotify = facade.getToolCatalog().extended.find(tool => tool.name === 'notify')!;
-      expect(Object.keys((catalogNotify.parameters as any).properties).sort()).toEqual([
+      expect(Object.keys(fromAny<{ properties: Record<string, unknown> }>(catalogNotify.parameters).properties).sort()).toEqual([
         'action',
         'contact_id',
         'initiation_permit',
@@ -1308,7 +1309,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       retryable: false,
       companionMessage: expect.stringContaining('read-only introspection'),
     });
-    expect((denied.details as any).rawDiagnostic).toContain('maintenance_turn_allowlist');
+    expect(fromAny<{ rawDiagnostic: string }>(denied.details).rawDiagnostic).toContain('maintenance_turn_allowlist');
     expect(denied.content[0]).toMatchObject({
       type: 'text',
     });

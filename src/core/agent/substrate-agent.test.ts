@@ -4499,7 +4499,7 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'repo_commit',
       label: 'repo_commit',
       description: 'commit test tool',
-      parameters: {} as any,
+      parameters: {},
       execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
     });
     agent.registerTool(deniedTool, 'extended');

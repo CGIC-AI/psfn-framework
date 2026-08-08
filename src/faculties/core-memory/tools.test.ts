@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   createOrientTool,
 } from './tools.js';
@@ -336,7 +337,7 @@ describe('orient tool', () => {
       callType: 'tool',
       purpose: 'test',
       channelId: 'discord:room-a',
-    }, async () => tool.execute(`call-reorient-missing-${field}`, args as any));
+    }, async () => tool.execute(`call-reorient-missing-${field}`, fromAny<Record<string, unknown>>(args)));
 
     expect(resultText(result)).toContain(`${field} must be a string for action=reorient`);
     expect(result.details?.isError).toBe(true);

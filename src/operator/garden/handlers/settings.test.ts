@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
+import type { ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
 import { AdminSettingsHandlers } from './settings.js';
 
 function createHandler(modelDiscovery?: {
   getAvailableModels: () => Promise<DiscoveredModel[]>;
   invalidateCache: () => void;
 }) {
-  const legacy = {
+  const legacy = fromPartial<{ modelDiscovery: ModelDiscoveryBackend | null }>({
     modelDiscovery: modelDiscovery ?? null,
-  } as any;
+  });
   return new AdminSettingsHandlers(legacy);
 }
 

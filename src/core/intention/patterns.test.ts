@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import {
   createBehavioralPatternMemoryPromotionHook,
   type BehavioralPatternContextProvider,
   type BehavioralPatternPromotionCandidate,
 } from './patterns.js';
+import type { MemoryWriter } from '../../faculties/memory/writer.js';
 import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 
@@ -211,7 +213,7 @@ describe('createBehavioralPatternMemoryPromotionHook', () => {
       action: 'created',
       memory: { id: 'mem-123' },
     });
-    const hook = createBehavioralPatternMemoryPromotionHook({ write } as any);
+    const hook = createBehavioralPatternMemoryPromotionHook(fromPartial<Pick<MemoryWriter, 'write'>>({ write }));
     const result = await hook({
       contactId: 'contact-z',
       strategy: 'empathy',

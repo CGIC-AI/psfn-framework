@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type { MemoryStorePort, MemoryMaintenanceReviewState } from './memory-store-port.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';
 import { MemoryWriter } from './writer.js';
@@ -333,11 +334,11 @@ describe('Memory maintenance review state', () => {
       kind: 'near_duplicate',
       subjectMemoryId: 'memory-1',
       candidateMemoryIds: ['memory-2'],
-      state: {
+      state: fromPartial<MemoryMaintenanceReviewState>({
         schemaVersion: 99,
         kind: 'near_duplicate',
         status: 'pending',
-      } as any,
+      }),
       createdAt: 1,
       updatedAt: 1,
     });

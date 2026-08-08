@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Agent } from '../../boundary/pi-agent/index.js';
+import { fromAny } from '@total-typescript/shoehorn';
+import { Agent, type StreamFn } from '../../boundary/pi-agent/index.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { createEventBridge } from './event-bridge.js';
 
@@ -20,7 +21,10 @@ describe('createEventBridge', () => {
 
   beforeEach(() => {
     lastSubscriber = null;
-    agent = new Agent({ streamFn: vi.fn() as any, convertToLlm: (m) => m as any });
+    agent = new Agent(fromAny<ConstructorParameters<typeof Agent>[0]>({
+      streamFn: vi.fn<NonNullable<StreamFn>>(),
+      convertToLlm: (m) => m,
+    }));
     eventBus = new EventBus();
   });
 

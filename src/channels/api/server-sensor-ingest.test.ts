@@ -1,8 +1,11 @@
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventBus } from '../../shared/event-bus.js';
 import { ApiServer } from './server.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { SessionManager } from '../../core/session/manager.js';
 
 const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -79,9 +82,9 @@ describe('ApiServer sensor ingest wiring', () => {
     server = new ApiServer({
       port,
       companionId: TEST_COMPANION_ID,
-      agentLoop: {} as any,
+      agentLoop: fromAny<SubstrateAgent>({}),
       eventBus,
-      sessionManager: {} as any,
+      sessionManager: fromAny<SessionManager>({}),
       apiKey: 'test-secret-key',
       sensorIngest,
     });

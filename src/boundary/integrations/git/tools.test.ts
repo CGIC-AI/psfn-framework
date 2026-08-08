@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { GitCommitResult, GitDiffResult, GitOperations, GitStatusResult } from './ops.js';
 import {
   CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
@@ -11,14 +12,14 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 }
 
 function createMockGitOps(): Record<string, ReturnType<typeof vi.fn>> & GitOperations {
-  return {
+  return fromPartial<GitOperations>({
     status: vi.fn(),
     diff: vi.fn(),
     createBranch: vi.fn(),
     applyPatch: vi.fn(),
     commit: vi.fn(),
     openPR: vi.fn(),
-  } as any;
+  }) as Record<string, ReturnType<typeof vi.fn>> & GitOperations;
 }
 
 describe('repo tool', () => {

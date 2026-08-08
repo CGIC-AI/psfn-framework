@@ -19,6 +19,8 @@ import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
+import { fromPartial } from '@total-typescript/shoehorn';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -477,7 +479,7 @@ async function createHarness(options: {
     scheduler,
     shardManager,
     eventBus,
-    contactStore: contactStore as any,
+    contactStore: fromPartial<ContactStorePort>(contactStore),
     characterCard: testCard,
     config,
     embeddingService: null,

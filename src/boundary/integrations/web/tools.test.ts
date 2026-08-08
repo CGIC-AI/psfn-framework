@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createWebFetchTool, createWebTool } from './tools.js';
 
 describe('web tools', () => {
@@ -153,8 +154,8 @@ describe('web tools', () => {
       retryHint: 'try_alternative_input',
       retryable: false,
     });
-    expect((result.details as any).rawDiagnostic).toContain('cloud metadata');
-    expect((result.details as any).rawDiagnostic).not.toContain('secret-value');
+    expect(fromAny<{ rawDiagnostic: string }>(result.details).rawDiagnostic).toContain('cloud metadata');
+    expect(fromAny<{ rawDiagnostic: string }>(result.details).rawDiagnostic).not.toContain('secret-value');
     expect((result.content[0] as { text: string }).text).toContain('web_fetch failed: Blocked by runtime policy');
     expect((result.content[0] as { text: string }).text).not.toContain('secret-value');
   });

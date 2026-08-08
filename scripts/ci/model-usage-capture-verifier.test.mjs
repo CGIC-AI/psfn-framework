@@ -10,6 +10,7 @@ test('limits direct model transport to the canonical LLM capability boundary', (
       'src/primitives/llm/client-request-capability.ts',
       'src/primitives/llm/client-stream-capability.ts',
       'src/primitives/llm/client.ts',
+      'src/primitives/llm/provider-runtime.ts',
     ],
   );
 });

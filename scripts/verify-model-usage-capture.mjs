@@ -11,6 +11,7 @@ const EXCLUDED_PREFIXES = [
 ];
 
 export const CANONICAL_LLM_TRANSPORT_FILES = new Set([
+  'src/primitives/llm/provider-runtime.ts',
   'src/primitives/llm/client.ts',
   'src/primitives/llm/client-request-capability.ts',
   'src/primitives/llm/client-stream-capability.ts',

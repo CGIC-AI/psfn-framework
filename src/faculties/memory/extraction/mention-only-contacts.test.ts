@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { MemoryExtractor } from '../extraction.js';
@@ -228,22 +229,22 @@ describe('MemoryExtractor mention-only contacts', () => {
     });
 
     const extractor = new MemoryExtractor(
-      { complete: vi.fn() } as any,
-      { characterName: 'Aster' } as any,
+      fromAny({ complete: vi.fn() }),
+      fromAny({ characterName: 'Aster' }),
       memoryStore.asPort(),
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
         dims: EMBEDDING_DIMS,
-      } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval: 5 },
       null,
       null,
       contactStore,
     );
 
-    await (extractor as any).processFact(
+    await (fromAny(extractor)).processFact(
       makeFact("Avery's sister Alex is moving to Seattle", { tags: ['family'] }),
       'api:mention-contact:1',
 	      primary.id,
@@ -261,7 +262,7 @@ describe('MemoryExtractor mention-only contacts', () => {
     const priorMemoryId = memoryStore.getMemoriesByContact(primary.id, 10)[0]!.id;
     const recordRelinkedMemory = vi.fn();
 
-    const secondWrite = await (extractor as any).processFact(
+    const secondWrite = await (fromAny(extractor)).processFact(
       makeFact('Alex called before dinner with the family', { tags: ['family'] }),
       'api:mention-contact:2',
 	      primary.id,
@@ -300,22 +301,22 @@ describe('MemoryExtractor mention-only contacts', () => {
     });
 
     const extractor = new MemoryExtractor(
-      { complete: vi.fn() } as any,
-      { characterName: 'Aster' } as any,
+      fromAny({ complete: vi.fn() }),
+      fromAny({ characterName: 'Aster' }),
       memoryStore.asPort(),
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
         dims: EMBEDDING_DIMS,
-      } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval: 5 },
       null,
       null,
       contactStore,
     );
 
-    await (extractor as any).processFact(
+    await (fromAny(extractor)).processFact(
       makeFact("Avery's coworker Jordan likes this cafe", { tags: ['coworker'] }),
       'api:mention-contact:3',
 	      primary.id,
@@ -370,7 +371,7 @@ describe('MemoryExtractor group-room speaker ownership', () => {
       },
     ];
     const extractor = new MemoryExtractor(
-      {
+      fromAny({
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
@@ -381,18 +382,18 @@ describe('MemoryExtractor group-room speaker ownership', () => {
 </fact>
 </response>`,
         }),
-      } as any,
-      {
+      }),
+      fromAny({
         characterName: 'Aster',
         getRecentMessages: vi.fn().mockReturnValue(entries),
-      } as any,
+      }),
       memoryStore.asPort(),
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
         dims: EMBEDDING_DIMS,
-      } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval: 5 },
       null,
       null,
@@ -562,7 +563,7 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     const result = await resolveInterlocutorRelationshipRatchet({
       fact: makeFact('Juno considers Aster their closest friend'),
       interlocutorContactId: 'contact-stub',
-      contactStore: stubStore as any,
+      contactStore: fromAny(stubStore),
       canonicalContactName: 'Juno',
       companionName: 'Aster',
     });
@@ -587,15 +588,15 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
 
   function makeExtractor(): MemoryExtractor {
     return new MemoryExtractor(
-      { complete: vi.fn() } as any,
-      { characterName: 'Aster' } as any,
+      fromAny({ complete: vi.fn() }),
+      fromAny({ characterName: 'Aster' }),
       memoryStore.asPort(),
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
         dims: EMBEDDING_DIMS,
-      } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval: 5 },
       null,
       null,
@@ -611,7 +612,7 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
 
     const extractor = makeExtractor();
 
-    await (extractor as any).processFact(
+    await (fromAny(extractor)).processFact(
       makeFact('Juno considers Aster their closest friend'),
       'discord:juno-dm:1',
       juno.id,
@@ -633,7 +634,7 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
 
     const extractor = makeExtractor();
 
-    await (extractor as any).processFact(
+    await (fromAny(extractor)).processFact(
       makeFact("Juno's friend Sam stopped by the studio"),
       'discord:juno-dm:2',
       juno.id,

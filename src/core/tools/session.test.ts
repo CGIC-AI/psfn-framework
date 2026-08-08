@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fromPartial } from '@total-typescript/shoehorn';
+import { fromPartial, fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -92,7 +92,7 @@ describe('session tool action=new', () => {
         switched: boolean;
       };
 
-      expect(toolText(result as any)).toContain('session action="new": active context switched');
+      expect(toolText(fromAny(result))).toContain('session action="new": active context switched');
       expect(details.action).toBe('new');
       expect(details.previousSessionId).toBe('discord:old-session');
       expect(details.newSessionId).toBe('api:session-test-01');
@@ -153,7 +153,7 @@ describe('session tool action=new', () => {
       });
 
       const result = await tool.execute('call-internal-error', { action: 'new' });
-      const text = toolText(result as any);
+      const text = toolText(fromAny(result));
 
       expect(text).toContain('[System notice]');
       expect(text).toContain('internal runtime problem');
@@ -184,7 +184,7 @@ describe('session tool action=new', () => {
         () => tool.execute('call-bg-1', { action: 'new' }),
       );
 
-      expect(toolText(result as any)).toContain('session action="new" is unavailable during background continuation execution');
+      expect(toolText(fromAny(result))).toContain('session action="new" is unavailable during background continuation execution');
       expect((result.details as { isError?: boolean }).isError).toBe(true);
       expect(setActiveSession).not.toHaveBeenCalled();
     } finally {
@@ -512,8 +512,8 @@ class InMemoryTranscriptSearch {
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session);
     expect(tool.description).toMatch(/action=new[^.]*optional: metadata/u);
     expect(tool.description).not.toMatch(/action=new[^.]*\breason\b/u);
-    expect(Value.Check((tool as any).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
-    expect(Value.Check((tool as any).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
+    expect(Value.Check((fromAny(tool)).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
+    expect(Value.Check((fromAny(tool)).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 
     const listed = await tool.execute('session-list', {});
     const listedPayload = JSON.parse(toolText(listed)) as {
@@ -609,7 +609,7 @@ class InMemoryTranscriptSearch {
       now: () => Date.parse('2026-04-01T12:00:00.000Z'),
     });
 
-    expect(Value.Check((tool as any).parameters, {
+    expect(Value.Check((fromAny(tool)).parameters, {
       action: 'wake_return',
       summary: 'Paused mid-refactor with tests still pending.',
       nextAnchor: 'Resume with the runtime-context test.',
@@ -783,7 +783,7 @@ class InMemoryTranscriptSearch {
         scope: 'Diagnose context compaction behavior',
       }),
     );
-    expect(toolText(started as any)).toContain('start_focus: tracking');
+    expect(toolText(fromAny(started))).toContain('start_focus: tracking');
 
     store.append({
       channelId: 'api:focus-context',
@@ -806,7 +806,7 @@ class InMemoryTranscriptSearch {
         conclusion: 'Persist the durable finding and compact the raw focused range.',
       }),
     );
-    expect(toolText(completed as any)).toContain('complete_focus: persisted knowledge block');
+    expect(toolText(fromAny(completed))).toContain('complete_focus: persisted knowledge block');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 });

@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,9 +47,9 @@ describe('gateway contact block gate', () => {
       content: '', channelId: 'telegram', model: '', durationMs: 0,
     }));
     wireGatewayChannelMessages({
-      discord: { onMessage: (h) => { discordHandler = h as any; } } as any,
-      telegram: { onMessage: (h) => { telegramHandler = h as any; } } as any,
-      gateway: { notifyChannelMessage, requestAgentVoiceStream } as any,
+      discord: fromAny({ onMessage: (h) => { discordHandler = fromAny(h); } }),
+      telegram: fromAny({ onMessage: (h) => { telegramHandler = fromAny(h); } }),
+      gateway: fromAny({ notifyChannelMessage, requestAgentVoiceStream }),
       serializeMessage: (m) => ({ ...m }),
       blockGate,
     });

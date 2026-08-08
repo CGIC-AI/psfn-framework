@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,14 +55,14 @@ function createHarness(
     ...(options.personaMutationAttemptGuard
       ? { personaMutationAttemptGuard: options.personaMutationAttemptGuard }
       : {}),
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromAny({}),
+    embeddingService: fromAny({}),
+    discordAdapter: fromAny({}),
     policyConfig,
     workspacePath: options.workspacePath ?? process.cwd(),
     sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test-shell-secret' } },
@@ -75,12 +76,12 @@ function createHarness(
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
     authenticatedCompanionId: () => 'companion-a',
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: gateOptions => async params => {
         gateOptions.prePolicyGuard?.(params);
         return gateOptions.handler(params);
       },
-    } as any,
+    }),
   };
   registerShellMethods(runtime);
   const method = methods.get('shell.exec');
@@ -101,7 +102,7 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: { enabled: true, allowlist: ['bash'], allowedCwd: [process.cwd()] },
     }, {
-      personaMutationAttemptGuard: { inspectShellMutation } as any,
+      personaMutationAttemptGuard: fromAny({ inspectShellMutation }),
     });
 
     await expect(harness.invoke({ command: 'bash', args: ['-lc', 'rm protected.json'] }))

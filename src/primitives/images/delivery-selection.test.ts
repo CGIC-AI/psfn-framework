@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it } from 'vitest';
 import {
   GENERATED_IMAGE_ATTACHMENT_LIMIT,
@@ -30,10 +31,10 @@ describe('selectGeneratedImageAssetsForDelivery', () => {
 
     const selected = selectGeneratedImageAssetsForDelivery({
       imageResults,
-      turnMessages: [{
+      turnMessages: [fromAny({
         role: 'assistant',
         content: [{ type: 'text', text: 'Here are the images I settled on.' }],
-      } as any],
+      })],
     });
 
     expect([...selected].map(asset => asset.fileName)).toEqual([
@@ -53,10 +54,10 @@ describe('selectGeneratedImageAssetsForDelivery', () => {
 
     const selected = selectGeneratedImageAssetsForDelivery({
       imageResults,
-      turnMessages: [{
+      turnMessages: [fromAny({
         role: 'assistant',
         content: [{ type: 'text', text: reply }],
-      } as any],
+      })],
     });
 
     expect([...selected].map(asset => asset.fileName)).toEqual([
@@ -73,10 +74,10 @@ describe('selectGeneratedImageAssetsForDelivery', () => {
 
     const selected = selectGeneratedImageAssetsForDelivery({
       imageResults: [first, latest],
-      turnMessages: [{
+      turnMessages: [fromAny({
         role: 'assistant',
         content: [{ type: 'text', text: 'I picked `output.png`.' }],
-      } as any],
+      })],
     });
 
     expect([...selected]).toEqual([latest.result.images[0]]);
@@ -88,10 +89,10 @@ describe('selectGeneratedImageAssetsForDelivery', () => {
 
     const selected = selectGeneratedImageAssetsForDelivery({
       imageResults: [olderRecovered, newerTranscript],
-      turnMessages: [{
+      turnMessages: [fromAny({
           role: 'assistant',
           content: [{ type: 'text', text: 'This one feels right.' }],
-      } as any],
+      })],
     });
 
     expect([...selected]).toEqual([newerTranscript.result.images[0]]);

@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createDiscordReverseRpcVoiceModule,
@@ -21,9 +22,9 @@ describe('createDiscordReverseRpcVoiceModule', () => {
     };
 
     await createDiscordReverseRpcVoiceModule().register?.({
-      gateway: gateway as any,
-      discord: discord as any,
-      eventBus: {} as any,
+      gateway: fromAny(gateway),
+      discord: fromAny(discord),
+      eventBus: fromAny({}),
     });
 
     const response = await voiceHandler?.({

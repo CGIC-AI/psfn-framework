@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import { createShellTool } from './tools.js';
 
@@ -34,9 +35,9 @@ describe('createShellTool', () => {
       maxOutputChars: 1024,
       envVars: ['OPENAI_API_KEY'],
     });
-    expect((result.content[0] as any).text).toContain('"action": "exec"');
-    expect((result.content[0] as any).text).toContain('"exit_code": 0');
-    expect((result.details as any).isError).toBeUndefined();
+    expect((fromAny(result.content[0])).text).toContain('"action": "exec"');
+    expect((fromAny(result.content[0])).text).toContain('"exit_code": 0');
+    expect((fromAny(result.details)).isError).toBeUndefined();
   });
 
   it('defaults to exec when action is omitted', async () => {
@@ -83,13 +84,13 @@ describe('createShellTool', () => {
     });
 
     expect(ops.exec).not.toHaveBeenCalled();
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(result.details).toMatchObject({
       errorClass: 'invalid_input',
       retryHint: 'try_alternative_input',
       retryable: false,
     });
-    expect((result.content[0] as any).text).toContain('Supported actions: exec');
+    expect((fromAny(result.content[0])).text).toContain('Supported actions: exec');
   });
 
   it('annotates shell allowlist policy failures with structured metadata', async () => {
@@ -114,6 +115,6 @@ describe('createShellTool', () => {
       retryable: false,
       rawDiagnostic: 'shell.exec command not allowlisted: rm',
     });
-    expect((result.content[0] as any).text).toContain('shell failed: Blocked by runtime policy');
+    expect((fromAny(result.content[0])).text).toContain('shell failed: Blocked by runtime policy');
   });
 });

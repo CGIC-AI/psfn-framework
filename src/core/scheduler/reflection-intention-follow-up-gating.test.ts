@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -94,29 +95,29 @@ function wire(
   void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
-    {
+    fromAny({
       handleMessage: vi.fn(),
       followUp,
       waitForIdle: vi.fn(),
       registerPostTurnActionInferer: vi.fn(() => () => {}),
-    } as any,
+    }),
     { send: vi.fn() },
     tempDir,
     undefined,
     {
       eventBus,
-      postTurnActions: postTurnActions as any,
-      llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
-      sessionManager: {
+      postTurnActions: fromAny(postTurnActions),
+      llmProvider: fromAny({ stream: vi.fn(), complete: vi.fn() }),
+      sessionManager: fromAny({
         resolveSessionChannelId: (channelId: string) => channelId,
         getRecentMessages: vi.fn().mockReturnValue([]),
-      } as any,
-      pendingFollowUpStore: pendingFollowUpStore as any,
+      }),
+      pendingFollowUpStore: fromAny(pendingFollowUpStore),
       onIntentionFollowUpActivated,
-      icpIntentionCandidateAdapter: {
+      icpIntentionCandidateAdapter: fromAny({
         submit: vi.fn(),
         getLinkedCandidateStatus: vi.fn().mockResolvedValue(linkedCandidateStatus),
-      } as any,
+      }),
     },
   );
 

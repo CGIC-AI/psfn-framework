@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   mkdtempSync,
   readFileSync,
@@ -33,7 +34,7 @@ describe('journal tool', () => {
       title: 'Mood Repair Notes',
       content: 'A durable reflection about the repair.',
     });
-    expect(resultText(written as any)).toContain('mood-repair-notes.md');
+    expect(resultText(fromAny(written))).toContain('mood-repair-notes.md');
 
     await tool.execute('append-1', {
       action: 'append',
@@ -42,13 +43,13 @@ describe('journal tool', () => {
     });
 
     const listed = await tool.execute('list-1', { action: 'list' });
-    expect(resultText(listed as any)).toContain('- mood-repair-notes.md');
+    expect(resultText(fromAny(listed))).toContain('- mood-repair-notes.md');
 
     const read = await tool.execute('read-1', { action: 'read', path: 'mood-repair-notes.md' });
-    expect(resultText(read as any)).toContain('Second line with specific context.');
+    expect(resultText(fromAny(read))).toContain('Second line with specific context.');
 
     const searched = await tool.execute('search-1', { action: 'search', query: 'specific context' });
-    expect(resultText(searched as any)).toContain('mood-repair-notes.md');
+    expect(resultText(fromAny(searched))).toContain('mood-repair-notes.md');
     expect(readFileSync(join(root, 'mood-repair-notes.md'), 'utf8')).toContain('durable reflection');
   });
 
@@ -60,8 +61,8 @@ describe('journal tool', () => {
       content: 'bad',
     });
 
-    expect((result.details as any).isError).toBe(true);
-    expect(resultText(result as any)).toContain('must stay inside the journal root');
+    expect((fromAny(result.details)).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('must stay inside the journal root');
   });
 
   it('returns explicit byte progress for paged reads', async () => {
@@ -69,18 +70,18 @@ describe('journal tool', () => {
     const tool = createJournalTool(new JournalOps(root));
 
     const first = await tool.execute('read-1', { action: 'read', path: 'large.md' });
-    const firstText = resultText(first as any);
+    const firstText = resultText(fromAny(first));
     expect(firstText).toContain('offset_bytes: 0');
     expect(firstText).toContain('next_offset_bytes: 12000');
     expect(firstText).toContain('eof: false');
     expect(firstText).not.toContain('tail');
 
-    const second = await tool.execute('read-2', {
+    const second = await tool.execute('read-2', fromAny({
       action: 'read',
       path: 'large.md',
       offset_bytes: 12_000,
-    } as any);
-    const secondText = resultText(second as any);
+    }));
+    const secondText = resultText(fromAny(second));
     expect(secondText).toContain('offset_bytes: 12000');
     expect(secondText).toContain('next_offset_bytes: null');
     expect(secondText).toContain('eof: true');
@@ -94,11 +95,11 @@ describe('journal tool', () => {
 
     const result = await tool.execute('search-1', { action: 'search', query: 'needle' });
 
-    expect((result.details as any).isError).not.toBe(true);
-    expect(resultText(result as any)).toContain('Search complete: false');
-    expect(resultText(result as any)).toContain('scanned 1 of 2 notes');
-    expect(resultText(result as any)).toContain('Skipped oversized notes: oversized.md');
-    expect(resultText(result as any)).toContain('first.md');
+    expect((fromAny(result.details)).isError).not.toBe(true);
+    expect(resultText(fromAny(result))).toContain('Search complete: false');
+    expect(resultText(fromAny(result))).toContain('scanned 1 of 2 notes');
+    expect(resultText(fromAny(result))).toContain('Skipped oversized notes: oversized.md');
+    expect(resultText(fromAny(result))).toContain('first.md');
   });
 
   it('surfaces truncated list and file-count-limited search metadata', async () => {
@@ -108,15 +109,15 @@ describe('journal tool', () => {
     const tool = createJournalTool(new JournalOps(root));
 
     const listed = await tool.execute('list-1', { action: 'list' });
-    const listText = resultText(listed as any);
+    const listText = resultText(fromAny(listed));
     expect(listText).toContain('Journal notes (200 of 205)');
     expect(listText).toContain('List truncated: true');
     expect(listText).toContain('- note-199.md');
     expect(listText).not.toContain('- note-200.md');
 
     const searched = await tool.execute('search-1', { action: 'search', query: 'needle' });
-    const searchText = resultText(searched as any);
-    expect((searched.details as any).isError).not.toBe(true);
+    const searchText = resultText(fromAny(searched));
+    expect((fromAny(searched.details)).isError).not.toBe(true);
     expect(searchText).toContain('Search complete: false');
     expect(searchText).toContain('scanned 200 of 205 notes');
   });

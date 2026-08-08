@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { ShardDirectoryOperationalError } from '../../shared/contracts/shard-directory.js';
@@ -82,27 +83,27 @@ function shardDirectory(handleMessage: () => Promise<never>): LiveShardDirectory
   });
   directory.register(SHARD_ID, {
     channelId: `shard:${SHARD_ID}:human`,
-    agentLoop: {
+    agentLoop: fromAny({
       handleMessage,
       cancelTurn: vi.fn(),
-    } as any,
+    }),
   });
   return directory;
 }
 
 function backend(directory: LiveShardDirectory): AgentApiBackend {
   const instance = new AgentApiBackend({
-    agentLoop: { handleMessage: vi.fn(), abort: vi.fn() } as any,
+    agentLoop: fromAny({ handleMessage: vi.fn(), abort: vi.fn() }),
     eventBus: new EventBus(),
-    sessionManager: {
+    sessionManager: fromAny({
       getMessageCount: vi.fn(() => 0),
       recordUserMessage: vi.fn(),
       recordAssistantMessage: vi.fn(),
-    } as any,
+    }),
     companionId: PARENT,
     shardDirectory: directory,
   });
-  vi.spyOn(instance as any, 'compileVerifiedCompanionUiCapability').mockReturnValue({
+  vi.spyOn(fromAny(instance), 'compileVerifiedCompanionUiCapability').mockReturnValue({
     frame: {
       schemaVersion: 1,
       requestId: 'signed-shard-request',
@@ -123,9 +124,9 @@ function params() {
     principal: { id: 'gateway-principal', mode: 'api_key' as const },
     headers: {},
     ...attached,
-    companionUiCapability: {
+    companionUiCapability: fromAny({
       frame: { resource: 'shards.interact' },
-    } as any,
+    }),
   };
 }
 

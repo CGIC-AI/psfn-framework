@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,8 +118,8 @@ describe('image tools', () => {
     expect(tool.name).toBe('generate_image');
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.generate_image);
-    expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
-    expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
+    expect((fromAny(tool.parameters)).properties.prompt.description).toContain('Required for action=generate');
+    expect((fromAny(tool.parameters)).properties.input_urls.description).toContain('Required for action=edit');
   });
 
   it('keeps selfie_create self-image-only and cross-references generate_image for everything else', () => {
@@ -129,8 +130,8 @@ describe('image tools', () => {
 
     expect(tool.name).toBe('selfie_create');
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.selfie_create);
-    expect((tool.parameters as any).properties.edit_model.description.length).toBeLessThan(220);
-    expect((tool.parameters as any).properties.edit_model.description).not.toContain('gpt-image-2');
+    expect((fromAny(tool.parameters)).properties.edit_model.description.length).toBeLessThan(220);
+    expect((fromAny(tool.parameters)).properties.edit_model.description).not.toContain('gpt-image-2');
   });
 
   it('rejects an unknown fal model with an error listing the valid models', async () => {
@@ -144,7 +145,7 @@ describe('image tools', () => {
       action: 'generate',
       prompt: 'a lighthouse at dusk',
       model: 'not-a-real-model',
-    }, undefined as any);
+    }, fromAny(undefined));
 
     expect(create).not.toHaveBeenCalled();
     expect(result.details?.isError).toBe(true);
@@ -298,11 +299,11 @@ describe('image tools', () => {
       }),
     };
     const emitted: Array<[string, Record<string, unknown>]> = [];
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
         emitted.push([eventName, payload]);
       }),
-    } as any;
+    });
 
     const tool = createGenerateImageTool(ops, reviewer);
     const result = await runWithChargeContext({
@@ -334,7 +335,7 @@ describe('image tools', () => {
       mode: 'create',
       compareToReference: true,
     });
-    expect(emitted.map(([eventName, payload]) => [eventName, (payload as any).surface])).toEqual([
+    expect(emitted.map(([eventName, payload]) => [eventName, (fromAny(payload)).surface])).toEqual([
       ['agent.charge', 'paidImageGeneration'],
       ['agent.charge', 'externalModelConsult'],
     ]);
@@ -395,11 +396,11 @@ describe('image tools', () => {
       edit: vi.fn(),
     };
     const emitted: Array<[string, Record<string, unknown>]> = [];
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
         emitted.push([eventName, payload]);
       }),
-    } as any;
+    });
 
     const tool = createGenerateImageTool(ops);
     await runWithChargeContext({
@@ -537,11 +538,11 @@ describe('image tools', () => {
       edit: vi.fn(),
     };
     const emitted: Array<[string, Record<string, unknown>]> = [];
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
         emitted.push([eventName, payload]);
       }),
-    } as any;
+    });
 
     const tool = createGenerateImageTool(ops);
     const result = await runWithChargeContext({

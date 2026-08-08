@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import {
   contextMessagesToPiMessages,
@@ -25,12 +26,12 @@ describe('contextMessagesToPiMessages', () => {
       stopReason: 'stop',
       timestamp: 1000,
     });
-    expect((result[1] as any).content).toEqual([{ type: 'text', text: 'world' }]);
+    expect((fromAny(result[1])).content).toEqual([{ type: 'text', text: 'world' }]);
   });
 
   it('preserves structured assistant and tool-result messages as legal pi-ai history', () => {
     const result = contextMessagesToPiMessages([
-      {
+      fromAny({
         role: 'assistant',
         content: [
           { type: 'thinking', thinking: 'trace', thinkingSignature: 'sig-1' },
@@ -52,15 +53,15 @@ describe('contextMessagesToPiMessages', () => {
         },
         stopReason: 'toolUse',
         timestamp: 1000,
-      } as any,
-      {
+      }),
+      fromAny({
         role: 'toolResult',
         toolCallId: 'call-1',
         toolName: 'lookup',
         content: [{ type: 'text', text: 'done' }],
         isError: false,
         timestamp: 1001,
-      } as any,
+      }),
     ], () => 9999);
 
     expect(result).toHaveLength(2);
@@ -149,8 +150,8 @@ describe('contextMessagesToPiMessages', () => {
       { role: 'assistant', content: 'two' },
     ]);
 
-    expect((result[0] as any).timestamp).toBe(10);
-    expect((result[1] as any).timestamp).toBe(11);
+    expect((fromAny(result[0])).timestamp).toBe(10);
+    expect((fromAny(result[1])).timestamp).toBe(11);
     expect(nowSpy).toHaveBeenCalledTimes(2);
 
     nowSpy.mockRestore();
@@ -165,7 +166,7 @@ describe('contextMessagesToPiMessages', () => {
     ]);
 
     expect(result).toHaveLength(1);
-    expect((result[0] as any).timestamp).toBe(77);
+    expect((fromAny(result[0])).timestamp).toBe(77);
     expect(nowSpy).toHaveBeenCalledTimes(1);
 
     nowSpy.mockRestore();

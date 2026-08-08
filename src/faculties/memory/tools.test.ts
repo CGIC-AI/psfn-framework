@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { TestingSessionMemoryWriteError } from './writer.js';
@@ -335,13 +336,13 @@ describe('createMemoryTool', () => {
       },
     );
 
-    const result = await tool.execute('memory-call-missing-justification', {
+    const result = await tool.execute('memory-call-missing-justification', fromAny({
       action: 'delete',
       memory_id: 'mem-1',
       ...fields,
-    } as any);
+    }));
 
-    expect(resultText(result as any)).toContain(message);
+    expect(resultText(fromAny(result))).toContain(message);
     expect(result.details?.isError).toBe(true);
     expect(proposalStore.createMemoryDeletionProposal).not.toHaveBeenCalled();
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
@@ -375,7 +376,7 @@ describe('createMemoryTool', () => {
       explanation: 'I feel embarrassed and dislike remembering this.',
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('discomfort');
     expect(text).toContain('negative valence alone');
     expect(result.details?.isError).toBe(true);
@@ -493,22 +494,22 @@ describe('createMemoryTool', () => {
         toolCallId: 'memory-call-patch',
       },
     }));
-    expect(resultText(result as any)).toContain('Memory patched');
+    expect(resultText(fromAny(result))).toContain('Memory patched');
   });
 
   it('rejects retired helper action names on canonical memory', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    const result = await tool.execute('memory-call-retired-alias', {
+    const result = await tool.execute('memory-call-retired-alias', fromAny({
       action: 'memory_write',
       text: 'Alias write',
       type: 'semantic',
-    } as any);
+    }));
 
     expect(writer.write).not.toHaveBeenCalled();
-    expect(resultText(result as any)).toContain('invalid action');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('invalid action');
+    expect((fromAny(result.details)).isError).toBe(true);
   });
 
   it('describes required fields for model-facing memory actions', () => {
@@ -532,9 +533,9 @@ describe('createMemoryTool', () => {
     });
 
     expect(store.searchByText).toHaveBeenCalledWith('direct answers', 2);
-    expect(resultText(result as any)).toContain('Memory search results (1)');
-    expect(resultText(result as any)).toContain('mem-search-1');
-    expect(resultText(result as any)).toContain('similarity=0.82');
+    expect(resultText(fromAny(result))).toContain('Memory search results (1)');
+    expect(resultText(fromAny(result))).toContain('mem-search-1');
+    expect(resultText(fromAny(result))).toContain('similarity=0.82');
   });
 
   it('census reports public-channel visible counts and companion-readable withheld context without protected text', async () => {
@@ -573,7 +574,7 @@ describe('createMemoryTool', () => {
       channel_visibility: 'public',
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Memory census:');
     expect(text).toContain('Visible memories: 2');
     expect(text).toContain('By type: episodic: 1, semantic: 1.');
@@ -620,7 +621,7 @@ describe('createMemoryTool', () => {
       canonical_contact_id: 'contact:primary',
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Result: yes, 1 visible matching memory found.');
     expect(text).toContain('By contact scope: contact:primary: 1.');
     expect(text).toContain('By scope ref: contact:contact:primary: 1.');
@@ -650,7 +651,7 @@ describe('createMemoryTool', () => {
       channel_visibility: 'public',
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Result: yes, matching memory exists, but none is visible in this channel.');
     expect(text).toContain('Withheld context: 1 candidate memory was present');
     expect(text).toContain('Withheld categories: procedural: 1.');
@@ -679,7 +680,7 @@ describe('createMemoryTool', () => {
       channel_visibility: 'public',
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Result: no matching memories found for the requested topic and filters.');
     expect(text).toContain('No memory text returned.');
     expect(text).not.toContain('Visible unrelated memory');
@@ -735,7 +736,7 @@ describe('createMemoryTool', () => {
       to: '2026-03-30T23:59:59.999Z',
       limit: 200,
     });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Episodic timeline for date 2026-03-30');
     expect(text).toContain('Midnight handoff');
     expect(text).toContain('Noon garden plan');
@@ -758,7 +759,7 @@ describe('createMemoryTool', () => {
       to: '2026-03-30T13:00:00.000Z',
       limit: 200,
     });
-    const rangeText = resultText(rangeResult as any);
+    const rangeText = resultText(fromAny(rangeResult));
     expect(rangeText).toContain('Noon garden plan');
     expect(rangeText).not.toContain('Midnight handoff');
     expect(rangeText).not.toContain('Late-day wrap');
@@ -800,7 +801,7 @@ describe('createMemoryTool', () => {
       limit: 10,
     });
 
-    const lines = resultText(result as any).split('\n');
+    const lines = resultText(fromAny(result)).split('\n');
     // Exactly one marker: her authored episode keeps its meaning and gains no
     // marker, while the meaning-less one must never render as her lived past.
     const markerLines = lines.filter(line => line.includes('unreviewed: machine-drafted summary'));
@@ -855,7 +856,7 @@ describe('createMemoryTool', () => {
       limit: 10,
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Visible same-channel episode');
     expect(text).not.toContain('Confidential off-channel episode');
     expect(text).not.toContain('Other contact hidden episode');
@@ -883,7 +884,7 @@ describe('createMemoryTool', () => {
       channel_visibility: 'private',
     });
 
-    expect(resultText(result as any)).toBe('No visible episodic memories found for date 2026-04-02.');
+    expect(resultText(fromAny(result))).toBe('No visible episodic memories found for date 2026-04-02.');
   });
 
   it('includes visible graph-linked continuation episodes without leaking hidden linked episodes', async () => {
@@ -948,7 +949,7 @@ describe('createMemoryTool', () => {
       limit: 4,
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Garden repair begins');
     expect(text).toContain('Garden repair continues');
     expect(text).toContain('linked continuation episode');
@@ -992,7 +993,7 @@ describe('createMemoryTool', () => {
       to: '2026-03-30T23:59:59.999Z',
       limit: 517,
     });
-    expect(resultText(result as any)).toContain('Policy-threaded episode');
+    expect(resultText(fromAny(result))).toContain('Policy-threaded episode');
   });
 
   it('honors an explicit limit param over the policy timelineLimit (zet.2)', async () => {
@@ -1023,7 +1024,7 @@ describe('createMemoryTool', () => {
       limit: 2,
     });
 
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Limited episode 0');
     expect(text).toContain('Limited episode 1');
     expect(text).not.toContain('Limited episode 2');
@@ -1089,7 +1090,7 @@ describe('createMemoryTool', () => {
       records: [{ text: 'Bad date', type: 'semantic', occurred_at: 'not-a-date' }],
     });
 
-    expect(resultText(result as any)).toContain('invalid occurred_at');
+    expect(resultText(fromAny(result))).toContain('invalid occurred_at');
     expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
@@ -1104,7 +1105,7 @@ describe('createMemoryTool', () => {
       records: [{ text: 'Future fact', type: 'semantic', occurred_at: future }],
     });
 
-    expect(resultText(result as any)).toContain('is in the future');
+    expect(resultText(fromAny(result))).toContain('is in the future');
     expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
@@ -1125,12 +1126,12 @@ describe('createMemoryTool', () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    const result = await tool.execute('memory-call-import-wrong-shape', {
+    const result = await tool.execute('memory-call-import-wrong-shape', fromAny({
       action: 'import',
       entries: [{ text: 'Legacy shape', type: 'semantic' }],
-    } as any);
+    }));
 
-    expect(resultText(result as any)).toContain('records must be a non-empty array for action=import');
+    expect(resultText(fromAny(result))).toContain('records must be a non-empty array for action=import');
     expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
@@ -1156,7 +1157,7 @@ describe('createMemoryTool', () => {
     });
 
     expect(redact).not.toHaveBeenCalled();
-    expect(resultText(result as any)).toContain('action=redact is retired');
+    expect(resultText(fromAny(result))).toContain('action=redact is retired');
     expect(result.details?.isError).toBe(true);
   });
 
@@ -1216,9 +1217,9 @@ describe('createMemoryTool', () => {
       explanation: 'The source was conclusively retracted.',
     });
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
-    expect(resultText(proposed as any)).toContain('proposal-1');
-    expect(resultText(proposed as any)).toContain('pending Operator validation');
-    expect(resultText(proposed as any)).toContain('memory remains active');
+    expect(resultText(fromAny(proposed))).toContain('proposal-1');
+    expect(resultText(fromAny(proposed))).toContain('pending Operator validation');
+    expect(resultText(fromAny(proposed))).toContain('memory remains active');
   });
 
   it('restores an approved proposal delete through action=restore', async () => {
@@ -1238,7 +1239,7 @@ describe('createMemoryTool', () => {
       restoredBy: 'tool:memory|action:restore',
       actorRole: 'Companion',
     });
-    expect(resultText(restored as any)).toContain('Memory restored');
+    expect(resultText(fromAny(restored))).toContain('Memory restored');
   });
 
   it('accepts id alias for unified action=delete proposal', async () => {
@@ -1274,12 +1275,12 @@ describe('createMemoryTool', () => {
       },
     });
 
-    const deleted = await tool.execute('memory-call-delete-alias', {
+    const deleted = await tool.execute('memory-call-delete-alias', fromAny({
       action: 'delete',
       id: 'mem-alias',
       justification_category: 'factually_incorrect',
       explanation: 'The source was retracted.',
-    } as any);
+    }));
 
     expect(proposalStore.createMemoryDeletionProposal).toHaveBeenCalledWith({
       memoryId: 'mem-alias',
@@ -1288,7 +1289,7 @@ describe('createMemoryTool', () => {
       proposedBy: 'Companion',
     });
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
-    expect(resultText(deleted as any)).toContain('proposal-alias');
+    expect(resultText(fromAny(deleted))).toContain('proposal-alias');
   });
 
   it('accepts deleteId alias for unified action=restore', async () => {
@@ -1301,16 +1302,16 @@ describe('createMemoryTool', () => {
     }));
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    const restored = await tool.execute('memory-call-restore-alias', {
+    const restored = await tool.execute('memory-call-restore-alias', fromAny({
       action: 'restore',
       deleteId: 'del-alias',
-    } as any);
+    }));
 
     expect(store.undoSoftDelete).toHaveBeenCalledWith('del-alias', {
       restoredBy: 'tool:memory|action:restore',
       actorRole: 'Companion',
     });
-    expect(resultText(restored as any)).toContain('Memory restored');
+    expect(resultText(fromAny(restored))).toContain('Memory restored');
   });
 
   it('accepts shard provenance overrides for unified write/import while redaction stays retired', async () => {
@@ -1326,22 +1327,22 @@ describe('createMemoryTool', () => {
       store as unknown as MemoryStorePort,
     );
 
-    await tool.execute('memory-call-7', {
+    await tool.execute('memory-call-7', fromAny({
       action: 'write',
       text: 'Shard write',
       type: 'semantic',
       __psfnShardSource: 'shard:shard-1',
-    } as any);
-    await tool.execute('memory-call-8', {
+    }));
+    await tool.execute('memory-call-8', fromAny({
       action: 'import',
       records: [{ text: 'Shard import', type: 'semantic' }],
       __psfnShardSource: 'shard:shard-1',
-    } as any);
-    const redaction = await tool.execute('memory-call-9', {
+    }));
+    const redaction = await tool.execute('memory-call-9', fromAny({
       action: 'redact',
       memory_id: 'mem-8',
       __psfnShardSource: 'shard:shard-1',
-    } as any);
+    }));
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       sourceRef: 'source:shard:shard-1|tool:memory|action:write|invocation:memory-call-7',
@@ -1361,7 +1362,7 @@ describe('createMemoryTool', () => {
       }),
     ]);
     expect(redact).not.toHaveBeenCalled();
-    expect(resultText(redaction as any)).toContain('action=redact is retired');
+    expect(resultText(fromAny(redaction))).toContain('action=redact is retired');
   });
 
   it('preserves structured subagent provenance for unified writes and imports', async () => {
@@ -1414,21 +1415,21 @@ describe('createMemoryTool', () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    const missingQuery = await tool.execute('memory-call-10', { action: 'search' } as any);
-    expect(resultText(missingQuery as any)).toContain('query is required for action=search');
-    expect(resultText(missingQuery as any)).toContain('Missing required field "query"');
-    expect(resultText(missingQuery as any)).toContain('Minimal valid JSON: {"action":"search","query":"topic"}');
-    expect(resultText(missingQuery as any)).toContain('Do not retry action=search without a non-empty query');
-    expect((missingQuery.details as any).isError).toBe(true);
+    const missingQuery = await tool.execute('memory-call-10', fromAny({ action: 'search' }));
+    expect(resultText(fromAny(missingQuery))).toContain('query is required for action=search');
+    expect(resultText(fromAny(missingQuery))).toContain('Missing required field "query"');
+    expect(resultText(fromAny(missingQuery))).toContain('Minimal valid JSON: {"action":"search","query":"topic"}');
+    expect(resultText(fromAny(missingQuery))).toContain('Do not retry action=search without a non-empty query');
+    expect((fromAny(missingQuery.details)).isError).toBe(true);
 
-    const blankQuery = await tool.execute('memory-call-10b', { action: 'search', query: '   ' } as any);
-    expect(resultText(blankQuery as any)).toContain('Missing required field "query"');
-    expect((blankQuery.details as any).isError).toBe(true);
+    const blankQuery = await tool.execute('memory-call-10b', fromAny({ action: 'search', query: '   ' }));
+    expect(resultText(fromAny(blankQuery))).toContain('Missing required field "query"');
+    expect((fromAny(blankQuery.details)).isError).toBe(true);
     expect(store.searchByText).not.toHaveBeenCalled();
 
-    const badAction = await tool.execute('memory-call-11', { action: 'purge' } as any);
-    expect(resultText(badAction as any)).toContain('invalid action');
-    expect((badAction.details as any).isError).toBe(true);
+    const badAction = await tool.execute('memory-call-11', fromAny({ action: 'purge' }));
+    expect(resultText(fromAny(badAction))).toContain('invalid action');
+    expect((fromAny(badAction.details)).isError).toBe(true);
   });
 });
 
@@ -1622,11 +1623,11 @@ describe('createMemoryWriteTool', () => {
   it('accepts internal shard provenance overrides for orchestration wrappers', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute('call-13b', {
+    await tool.execute('call-13b', fromAny({
       text: 'Shard reintegration finding',
       type: 'semantic',
       __psfnShardSource: 'shard:shard-abc',
-    } as any);
+    }));
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       sourceRef: 'source:shard:shard-abc|tool:memory_write|invocation:call-13b',
@@ -1681,12 +1682,12 @@ describe('createMemoryWriteTool', () => {
   it('normalizes malformed text/content payloads onto the exact memory text', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute('call-15b', {
+    await tool.execute('call-15b', fromAny({
       text: ': "matrix-secret-2026-04-10T04-49-43-076Z", "type": "semantic", "sensitivity": "personal"}',
       content: 'matrix-secret-2026-04-10T04-49-43-076Z',
       type: 'semantic',
       sensitivity: 'personal',
-    } as any);
+    }));
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       text: 'matrix-secret-2026-04-10T04-49-43-076Z',
@@ -1697,12 +1698,12 @@ describe('createMemoryWriteTool', () => {
   it('normalizes placeholder text/step_text payloads onto the exact memory text', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute('call-15c', {
+    await tool.execute('call-15c', fromAny({
       text: '.',
       step_text: 'matrix-secret-2026-04-10T05-00-06-862Z',
       type: 'semantic',
       sensitivity: 'personal',
-    } as any);
+    }));
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       text: 'matrix-secret-2026-04-10T05-00-06-862Z',
@@ -1842,10 +1843,10 @@ describe('createMemoryImportTool', () => {
   it('accepts internal shard provenance for imported memory batches', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute('call-3b', {
+    await tool.execute('call-3b', fromAny({
       records: [{ text: 'from shard', type: 'semantic' }],
       __psfnShardSource: 'shard:shard-xyz',
-    } as any);
+    }));
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sourceRef).toBe(
@@ -1867,7 +1868,7 @@ describe('createMemoryImportTool', () => {
   it('returns error for missing records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute('call-5', {} as any);
+    const result = await tool.execute('call-5', fromAny({}));
 
     expect(resultText(result)).toContain('Error: records must be a non-empty array');
     expect(result.details?.isError).toBe(true);
@@ -1891,12 +1892,12 @@ describe('createMemoryImportTool', () => {
   it('validates individual records have valid type', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute('call-7', {
+    const result = await tool.execute('call-7', fromAny({
       records: [
         { text: 'Valid', type: 'semantic' },
         { text: 'Invalid type', type: 'bogus' },
       ],
-    } as any);
+    }));
 
     expect(resultText(result)).toContain('Error: record[1] has invalid type "bogus"');
     expect(result.details?.isError).toBe(true);
@@ -2023,8 +2024,8 @@ describe('createMemoryPatchTool', () => {
       reason: 'corrected source',
     });
 
-    expect(resultText(result as any)).toContain('Memory patched');
-    expect(resultText(result as any)).toContain('patch-1');
+    expect(resultText(fromAny(result))).toContain('Memory patched');
+    expect(resultText(fromAny(result))).toContain('patch-1');
     expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
       memoryId: 'mem-1',
       confidence: 0.9,
@@ -2058,8 +2059,8 @@ describe('createMemoryPatchTool', () => {
       append_tags: 'c',
     });
 
-    expect(resultText(result as any)).toContain('either tags or append_tags');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('either tags or append_tags');
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(writer.patchMemory).not.toHaveBeenCalled();
   });
 });
@@ -2080,8 +2081,8 @@ describe('createMemoryRedactTool', () => {
       reason: 'consent request',
     });
 
-    expect(resultText(result as any)).toContain('memory_redact is retired');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('memory_redact is retired');
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(writer.redact).not.toHaveBeenCalled();
   });
 });
@@ -2121,8 +2122,8 @@ describe('memory_delete and undo_memory_delete tools', () => {
       reason: 'stale',
     });
 
-    expect(resultText(result as any)).toContain('memory_delete is retired');
-    expect(resultText(result as any)).toContain('Partner-alerted proposal');
+    expect(resultText(fromAny(result))).toContain('memory_delete is retired');
+    expect(resultText(fromAny(result))).toContain('Partner-alerted proposal');
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
@@ -2134,8 +2135,8 @@ describe('memory_delete and undo_memory_delete tools', () => {
       memory_id: '   ',
     });
 
-    expect(resultText(result as any)).toContain('memory_delete is retired');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('memory_delete is retired');
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
@@ -2145,8 +2146,8 @@ describe('memory_delete and undo_memory_delete tools', () => {
     const tool = createMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-3', { memory_id: 'missing' });
-    expect(resultText(result as any)).toContain('memory_delete is retired');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('memory_delete is retired');
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(store.softDeleteMemory).not.toHaveBeenCalled();
   });
 
@@ -2161,8 +2162,8 @@ describe('memory_delete and undo_memory_delete tools', () => {
     const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-4', { delete_id: 'del-restore' });
-    expect(resultText(result as any)).toContain('Memory restored');
-    expect(resultText(result as any)).toContain('mem-restore');
+    expect(resultText(fromAny(result))).toContain('Memory restored');
+    expect(resultText(fromAny(result))).toContain('mem-restore');
     expect(store.undoSoftDelete).toHaveBeenCalledWith('del-restore', {
       restoredBy: 'tool:undo_memory_delete',
     });
@@ -2174,8 +2175,8 @@ describe('memory_delete and undo_memory_delete tools', () => {
     const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-5', { delete_id: 'unknown' });
-    expect(resultText(result as any)).toContain('Delete checkpoint not found');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('Delete checkpoint not found');
+    expect((fromAny(result.details)).isError).toBe(true);
   });
 });
 
@@ -2215,8 +2216,8 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
 
     const listed = await tool.execute('scratchpad-list', { action: 'list' });
-    expect(resultText(listed as any)).toContain('24h ephemeral working context');
-    expect(resultText(listed as any)).toContain('durable reminders');
+    expect(resultText(fromAny(listed))).toContain('24h ephemeral working context');
+    expect(resultText(fromAny(listed))).toContain('durable reminders');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
 
     const appended = await tool.execute('scratchpad-append', {
@@ -2224,7 +2225,7 @@ describe('scratchpad tools', () => {
       id: 'sp-1',
       content: 'extra detail',
     });
-    expect(resultText(appended as any)).toContain('Scratchpad entry appended');
+    expect(resultText(fromAny(appended))).toContain('Scratchpad entry appended');
     expect(store.appendScratchpadEntry).toHaveBeenCalledWith('sp-1', 'extra detail');
   });
 
@@ -2232,16 +2233,16 @@ describe('scratchpad tools', () => {
     const store = mockScratchpadStore();
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
 
-    const missingAddContent = await tool.execute('scratchpad-add', { action: 'add' } as any);
-    expect(resultText(missingAddContent as any)).toContain('content is required for action=add');
-    expect((missingAddContent.details as any).isError).toBe(true);
+    const missingAddContent = await tool.execute('scratchpad-add', fromAny({ action: 'add' }));
+    expect(resultText(fromAny(missingAddContent))).toContain('content is required for action=add');
+    expect((fromAny(missingAddContent.details)).isError).toBe(true);
 
-    const missingAppendId = await tool.execute('scratchpad-append', {
+    const missingAppendId = await tool.execute('scratchpad-append', fromAny({
       action: 'append',
       content: 'x',
-    } as any);
-    expect(resultText(missingAppendId as any)).toContain('id is required for action=append');
-    expect((missingAppendId.details as any).isError).toBe(true);
+    }));
+    expect(resultText(fromAny(missingAppendId))).toContain('id is required for action=append');
+    expect((fromAny(missingAppendId.details)).isError).toBe(true);
   });
 
   it('rejects retired read helper action names on canonical scratchpad', async () => {
@@ -2249,13 +2250,13 @@ describe('scratchpad tools', () => {
     store.listScratchpadEntries.mockReturnValue([]);
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
 
-    const result = await tool.execute('scratchpad-read-alias', {
+    const result = await tool.execute('scratchpad-read-alias', fromAny({
       action: 'scratchpad_read',
       limit: 4,
-    } as any);
+    }));
 
-    expect(resultText(result as any)).toContain('invalid action');
-    expect((result.details as any).isError).toBe(true);
+    expect(resultText(fromAny(result))).toContain('invalid action');
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(store.listScratchpadEntries).not.toHaveBeenCalled();
   });
 
@@ -2265,7 +2266,7 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-1', {});
-    expect(resultText(result as any)).toContain('Scratchpad is empty');
+    expect(resultText(fromAny(result))).toContain('Scratchpad is empty');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
   });
 
@@ -2282,7 +2283,7 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-2', { limit: 3 });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Scratchpad entries (1)');
     expect(text).toContain('sp-1');
     expect(text).toContain('2023-11-14T22:15:00.000Z');
@@ -2307,7 +2308,7 @@ describe('scratchpad tools', () => {
       operation: 'add',
       content: 'Take a breath before responding',
     });
-    expect(resultText(result as any)).toContain('Scratchpad entry added');
+    expect(resultText(fromAny(result))).toContain('Scratchpad entry added');
     expect(store.addScratchpadEntry).toHaveBeenCalledWith('Take a breath before responding');
   });
 
@@ -2326,7 +2327,7 @@ describe('scratchpad tools', () => {
       id: 'sp-2',
       content: 'Updated note',
     });
-    expect(resultText(result as any)).toContain('Scratchpad entry replaced');
+    expect(resultText(fromAny(result))).toContain('Scratchpad entry replaced');
     expect(store.replaceScratchpadEntry).toHaveBeenCalledWith('sp-2', 'Updated note');
   });
 
@@ -2339,7 +2340,7 @@ describe('scratchpad tools', () => {
       operation: 'remove',
       id: 'sp-3',
     });
-    expect(resultText(result as any)).toContain('Scratchpad entry removed');
+    expect(resultText(fromAny(result))).toContain('Scratchpad entry removed');
     expect(store.removeScratchpadEntry).toHaveBeenCalledWith('sp-3');
   });
 
@@ -2348,20 +2349,20 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
 
     const missingAddContent = await tool.execute('call-6', { operation: 'add' });
-    expect(resultText(missingAddContent as any)).toContain('content is required for add');
-    expect((missingAddContent.details as any).isError).toBe(true);
+    expect(resultText(fromAny(missingAddContent))).toContain('content is required for add');
+    expect((fromAny(missingAddContent.details)).isError).toBe(true);
 
     const missingReplaceId = await tool.execute('call-7', {
       operation: 'replace',
       content: 'x',
     });
-    expect(resultText(missingReplaceId as any)).toContain('id is required for replace');
-    expect((missingReplaceId.details as any).isError).toBe(true);
+    expect(resultText(fromAny(missingReplaceId))).toContain('id is required for replace');
+    expect((fromAny(missingReplaceId.details)).isError).toBe(true);
 
     const missingRemoveId = await tool.execute('call-8', {
       operation: 'remove',
     });
-    expect(resultText(missingRemoveId as any)).toContain('id is required for remove');
-    expect((missingRemoveId.details as any).isError).toBe(true);
+    expect(resultText(fromAny(missingRemoveId))).toContain('id is required for remove');
+    expect((fromAny(missingRemoveId.details)).isError).toBe(true);
   });
 });

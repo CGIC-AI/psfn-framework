@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 // ── E3.4 contact-tracking policy gate: extraction behavior ──
 // AC2: memories from untracked speakers keep speaker-name provenance but
 // create zero contact-keyed records; the mention-only contact path respects
@@ -39,15 +40,15 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
 
   function makeExtractor(isAutoContactCreationAllowed?: (channelId: string) => boolean): MemoryExtractor {
     return new MemoryExtractor(
-      { complete: vi.fn() } as any,
-      { characterName: 'Purrsephone' } as any,
+      fromAny({ complete: vi.fn() }),
+      fromAny({ characterName: 'Purrsephone' }),
       memoryStore.asPort(),
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(new Float32Array(EMBEDDING_DIMS)),
         embedBatch: vi.fn(),
         dims: EMBEDDING_DIMS,
-      } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval: 5 },
       null,
       null,
@@ -68,7 +69,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
       "Avery's sister Alex is moving to Seattle",
       'Alex called before dinner with the family',
     ].entries()) {
-      await (extractor as any).processFact(
+      await (fromAny(extractor)).processFact(
         makeFact(text, { tags: ['family'] }),
         `${APPROVAL_CHANNEL}:${index}`,
         primary.id,
@@ -93,7 +94,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
   it('AC2: an untracked speaker fact keeps speaker-name provenance with zero contact-keyed rows', async () => {
     const extractor = makeExtractor(() => false);
 
-    const result = await (extractor as any).processFact(
+    const result = await (fromAny(extractor)).processFact(
       makeFact('Vtubegooner69 said the room loves karaoke night', { type: 'episodic', tags: ['room'] }),
       `${APPROVAL_CHANNEL}:untracked`,
       undefined, // no canonical contact — the speaker is untracked
@@ -137,7 +138,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
       "Avery's sister Alex is moving to Seattle",
       'Alex called before dinner with the family',
     ].entries()) {
-      await (extractor as any).processFact(
+      await (fromAny(extractor)).processFact(
         makeFact(text, { tags: ['family'] }),
         `api:auto-room:${index}`,
         primary.id,

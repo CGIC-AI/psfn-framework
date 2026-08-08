@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import {
   extractReasoningContent,
@@ -38,8 +39,8 @@ describe('llm conversion helpers', () => {
     expect(context.systemPrompt).toBe('system');
     expect(context.messages).toHaveLength(2);
     expect(context.tools).toHaveLength(1);
-    expect((context.messages[0] as any).role).toBe('user');
-    expect((context.messages[1] as any).role).toBe('assistant');
+    expect((fromAny(context.messages[0])).role).toBe('user');
+    expect((fromAny(context.messages[1])).role).toBe('assistant');
   });
 
   it('toPiMessages keeps order and toPiTools maps schema fields', () => {
@@ -51,10 +52,10 @@ describe('llm conversion helpers', () => {
       { name: 'x', description: 'desc', inputSchema: { type: 'object' } },
     ]);
 
-    expect((messages[0] as any).content).toBe('first');
-    expect((messages[1] as any).content[0].text).toBe('second');
+    expect((fromAny(messages[0])).content).toBe('first');
+    expect((fromAny(messages[1])).content[0].text).toBe('second');
     expect(tools[0].name).toBe('x');
-    expect((tools[0] as any).parameters).toEqual({ type: 'object' });
+    expect((fromAny(tools[0])).parameters).toEqual({ type: 'object' });
   });
 
   it('toPiMessages keeps a fixed timestamp across converted messages', () => {
@@ -65,8 +66,8 @@ describe('llm conversion helpers', () => {
       { role: 'assistant', content: 'second' },
     ]);
 
-    expect((messages[0] as any).timestamp).toBe(4242);
-    expect((messages[1] as any).timestamp).toBe(4242);
+    expect((fromAny(messages[0])).timestamp).toBe(4242);
+    expect((fromAny(messages[1])).timestamp).toBe(4242);
     expect(nowSpy).toHaveBeenCalledTimes(1);
 
     nowSpy.mockRestore();
@@ -89,7 +90,7 @@ describe('llm conversion helpers', () => {
       '</session_context>',
     ].join('\n\n'));
     expect(context.messages).toHaveLength(2);
-    expect((context.messages[0] as any).role).toBe('user');
-    expect((context.messages[1] as any).role).toBe('assistant');
+    expect((fromAny(context.messages[0])).role).toBe('user');
+    expect((fromAny(context.messages[1])).role).toBe('assistant');
   });
 });

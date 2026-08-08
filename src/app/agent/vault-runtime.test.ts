@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
@@ -33,7 +34,7 @@ describe('agent vault runtime', () => {
     const runtimeTarget = target();
     expect(wireAgentVaultRuntime({
       target: runtimeTarget,
-      gateway: gateway() as any,
+      gateway: fromAny(gateway()),
       config: { obsidianVaultName: 'Companion' },
       env: {},
     })).toBe(false);
@@ -43,7 +44,7 @@ describe('agent vault runtime', () => {
   it('fails closed when enabled without an owner-file vault name', () => {
     expect(() => wireAgentVaultRuntime({
       target: target(),
-      gateway: gateway() as any,
+      gateway: fromAny(gateway()),
       config: {},
       env: { VAULT_TOOLS_ENABLED: 'true' },
     })).toThrow(/obsidianVaultName is not configured/u);
@@ -54,7 +55,7 @@ describe('agent vault runtime', () => {
     const gatewayClient = gateway();
     expect(wireAgentVaultRuntime({
       target: runtimeTarget,
-      gateway: gatewayClient as any,
+      gateway: fromAny(gatewayClient),
       config: { obsidianVaultName: 'Companion' },
       env: { VAULT_TOOLS_ENABLED: 'true' },
     })).toBe(true);
@@ -82,7 +83,7 @@ describe('agent vault runtime', () => {
     const gatewayClient = gateway();
     wireAgentVaultRuntime({
       target: runtimeTarget,
-      gateway: gatewayClient as any,
+      gateway: fromAny(gatewayClient),
       config: { obsidianVaultName: 'Companion' },
       env: { VAULT_TOOLS_ENABLED: 'true' },
     });

@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildMoaPrompt, runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
@@ -113,7 +114,7 @@ describe('runMoaTurn', () => {
     await runMoaTurn({
       prompt: buildMoaPrompt(context, { role: 'user', content: 'current turn' }),
       authoritativeSystemPrompt: context.systemPrompt,
-      llmClient: {} as any,
+      llmClient: fromAny({}),
       context,
       message: { channelId: 'api:test' } as SubstrateMessage,
       settings,
@@ -198,7 +199,7 @@ describe('runMoaTurn', () => {
     await runMoaTurn({
       prompt: 'current turn',
       authoritativeSystemPrompt: 'You are a helper.',
-      llmClient: {} as any,
+      llmClient: fromAny({}),
       context: {
         systemPrompt: 'You are a helper.',
         messages: [],
@@ -221,7 +222,7 @@ describe('runMoaTurn', () => {
     });
 
     const chargeEvents = emitted.filter(([eventName]) => eventName === 'agent.charge');
-    expect(chargeEvents.map(([, payload]) => (payload as any).surface)).toEqual([
+    expect(chargeEvents.map(([, payload]) => (fromAny(payload)).surface)).toEqual([
       'moaRoundBase',
       'externalModelConsult',
       'externalModelConsult',
@@ -273,7 +274,7 @@ describe('runMoaTurn', () => {
     const result = await runMoaTurn({
       prompt: 'current turn',
       authoritativeSystemPrompt: 'You are a helper.',
-      llmClient: {} as any,
+      llmClient: fromAny({}),
       context: {
         systemPrompt: 'You are a helper.',
         messages: [],
@@ -306,7 +307,7 @@ describe('runMoaTurn', () => {
     expect(result.stopReason).toBe('charge quota');
     expect(result.output).toContain('next charge could be applied');
     expect(mockedRunDeliberation).toHaveBeenCalledTimes(1);
-    expect(emitted.some(([eventName, payload]) => eventName === 'agent.moa.turn' && (payload as any).stopReason === 'charge quota')).toBe(true);
+    expect(emitted.some(([eventName, payload]) => eventName === 'agent.moa.turn' && (fromAny(payload)).stopReason === 'charge quota')).toBe(true);
   });
 
   it('keeps the configured MoA round ceiling authoritative when charge quota is available', async () => {
@@ -351,7 +352,7 @@ describe('runMoaTurn', () => {
     await runMoaTurn({
       prompt: 'current turn',
       authoritativeSystemPrompt: 'You are a helper.',
-      llmClient: {} as any,
+      llmClient: fromAny({}),
       context: {
         systemPrompt: 'You are a helper.',
         messages: [],

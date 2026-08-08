@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fromPartial } from '@total-typescript/shoehorn';
+import { fromPartial, fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import {
   createSystemTool,
@@ -173,7 +173,7 @@ describe('system action=restart', () => {
     const result = await tool.execute('call-3', { action: 'restart', reason: '   ' });
 
     expect(resultText(result)).toContain('reason is required');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
   });
 
@@ -198,12 +198,12 @@ describe('system action=restart', () => {
 
     const cooldownBlocked = await tool.execute('call-5', { action: 'restart', reason: 'second' });
     expect(resultText(cooldownBlocked)).toContain('cooldown');
-    expect((cooldownBlocked.details as any).isError).toBe(true);
+    expect((fromAny(cooldownBlocked.details)).isError).toBe(true);
 
     now = 61_000;
     const hourlyBlocked = await tool.execute('call-6', { action: 'restart', reason: 'third' });
     expect(resultText(hourlyBlocked)).toContain('hourly limit');
-    expect((hourlyBlocked.details as any).isError).toBe(true);
+    expect((fromAny(hourlyBlocked.details)).isError).toBe(true);
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -214,7 +214,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({ runRestartCommand });
@@ -257,7 +257,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
     const tool = makeTool({
       prepareRestartCommand: retryablePreparation,
@@ -295,7 +295,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
     const tool = createSystemTool(makeConfig(), {
       notifier: mockNotifier,
@@ -346,7 +346,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({ runRestartCommand });
@@ -369,7 +369,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({
@@ -405,7 +405,7 @@ describe('system action=restart', () => {
 
     expect(resultText(result)).toContain('Restart blocked');
     expect(resultText(result)).toContain('current process was left running');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
     expect(runRestartCommand).not.toHaveBeenCalled();
@@ -430,7 +430,7 @@ describe('system action=restart', () => {
 
     expect(resultText(result)).toContain('Restart blocked');
     expect(resultText(result)).toContain('durable preparation boundary');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
@@ -444,7 +444,7 @@ describe('system action=restart', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({
@@ -547,7 +547,7 @@ describe('system action=rebuild', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({
@@ -572,7 +572,7 @@ describe('system action=rebuild', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({ runBuildCommand, runRestartCommand });
@@ -596,7 +596,7 @@ describe('system action=rebuild', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
       void fn();
-      return 0 as any;
+      return fromAny(0);
     }) as typeof setImmediate;
 
     const tool = makeTool({ runBuildCommand, runRestartCommand });
@@ -624,7 +624,7 @@ describe('system action=rebuild', () => {
     const result = await tool.execute('call-6', { action: 'rebuild', reason: '   ' });
 
     expect(resultText(result)).toContain('reason is required');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
   });
 
@@ -634,7 +634,7 @@ describe('system action=rebuild', () => {
 
     expect(resultText(result)).toContain('Rebuild blocked');
     expect(resultText(result)).toContain('no lifecycle rebuild command is configured');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
     expect(runRestartCommand).not.toHaveBeenCalled();
@@ -700,7 +700,7 @@ describe('createSystemTool', () => {
     const result = await tool.execute('system-no-runtime', { action: 'restart', reason: 'no runtime hooks' });
 
     expect(resultText(result)).toContain('system action=restart is not available');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
   });
 
   it('fails closed through system action=restart when the runtime restart strategy is unsupported', async () => {
@@ -721,7 +721,7 @@ describe('createSystemTool', () => {
 
     expect(resultText(result)).toContain('Restart blocked');
     expect(resultText(result)).toContain('current process was left running');
-    expect((result.details as any).isError).toBe(true);
+    expect((fromAny(result.details)).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
     expect(runRestartCommand).not.toHaveBeenCalled();
@@ -820,7 +820,7 @@ describe('deferred lifecycle execution', () => {
           details: {},
         },
       ]),
-      turnId: 'turn-1' as any,
+      turnId: fromAny('turn-1'),
       completedAt: 1_700_000_000_100,
     });
 
@@ -891,7 +891,7 @@ describe('deferred lifecycle execution', () => {
           details: {},
         },
       ]),
-      turnId: 'turn-structured' as any,
+      turnId: fromAny('turn-structured'),
       completedAt: 1_700_000_000_100,
     });
 
@@ -953,7 +953,7 @@ describe('deferred lifecycle execution', () => {
           details: {},
         },
       ]),
-      turnId: 'turn-structured-restart' as any,
+      turnId: fromAny('turn-structured-restart'),
       completedAt: 1_700_000_000_100,
     });
 
@@ -1014,7 +1014,7 @@ describe('deferred lifecycle execution', () => {
           details: {},
         },
       ]),
-      turnId: 'turn-system-restart' as any,
+      turnId: fromAny('turn-system-restart'),
       completedAt: 1_700_000_000_100,
     });
 

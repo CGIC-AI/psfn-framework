@@ -9633,18 +9633,6 @@
     },
     {
       "file": "src/persistence/sessions/store.ts",
-      "name": "ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS.retries",
-      "value": "2",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS.retries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "MAX_RECENT_ENTRY_CACHE_LIMITS",
-      "value": "8"
-    },
-    {
-      "file": "src/persistence/sessions/store.ts",
       "name": "SessionStore.DEFAULT_HOT_CHANNEL_LIMIT",
       "value": "1000",
       "form": "class-field",
@@ -9682,6 +9670,19 @@
       "value": "117",
       "form": "truncation",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/persistence/sessions/store/cursor-operations.ts",
+      "name": "ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS.retries",
+      "value": "2",
+      "form": "object-member",
+      "note": "Async bounded-read revalidation retry cap for stale journal authority; a fail-closed protocol constant carried over from the store.ts extraction, not a mutable user-facing setting."
+    },
+    {
+      "file": "src/persistence/sessions/store/cursor-operations.ts",
+      "name": "MAX_RECENT_ENTRY_CACHE_LIMITS",
+      "value": "8",
+      "note": "Per-cache recent-entry limit carried over from store.ts extraction; tied to in-memory cache shape, not a mutable user-facing setting."
     },
     {
       "file": "src/persistence/sessions/store/journal-chain-runtime.ts",

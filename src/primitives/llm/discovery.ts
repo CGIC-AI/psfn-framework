@@ -1,5 +1,8 @@
 // ── Model Discovery ──
-// Fetches available models from LiteLLM proxy and enriches with OpenRouter metadata.
+// Provider-driven discovery. Enumerates configured discovery sources
+// (OpenRouter metadata/ZDR, configured generic OpenAI-compatible external
+// routers, and deterministic catalog models) and joins authoritative catalogs
+// with optional OpenRouter enrichment. No LiteLLM URL prerequisite.
 // Admin-only — not a runtime dependency. 5-minute cache.
 
 import { createComponentLogger } from '../../shared/logger.js';
@@ -21,13 +24,6 @@ export interface DiscoveredModel {
   zdrProviderNames?: string[];
 }
 
-export interface ModelDiscoveryOptions {
-  fetchFn?: typeof fetch;
-  allowDirectNetworkEgress?: boolean;
-  openRouterModelsApiUrl: string;
-  openRouterZdrEndpointsApiUrl?: string;
-}
-
 export interface ModelDiscoveryBackend {
   getAvailableModels(): Promise<DiscoveredModel[]>;
   invalidateCache(): void;
@@ -38,17 +34,71 @@ export interface GatewayModelDiscoveryTransport {
   invalidateModelDiscoveryCache(): Promise<void>;
 }
 
-interface LiteLLMModelEntry {
-  id: string;
-  object?: string;
-  provider?: string;
-  litellm_provider?: string;
-  owned_by?: string;
-  model_info?: {
-    provider?: string;
-    litellm_provider?: string;
-    providers?: string[];
-  };
+/**
+ * Auth presence for a discovery source. Carried in cache/in-flight identity so
+ * two credential states never share a fetch, but the secret value itself is
+ * never part of any key.
+ */
+export type ModelDiscoveryAuthPresence = 'present' | 'none';
+
+/**
+ * Credential handle for a discovery source. `authPresence` is computed once at
+ * construction (so it can key caches) and the value is resolved lazily at fetch
+ * time; the resolved secret is never stored on the handle.
+ */
+export interface ModelDiscoveryCredential {
+  readonly authPresence: ModelDiscoveryAuthPresence;
+  resolve(): string | undefined;
+}
+
+/**
+ * Authoritative OpenRouter source. The OpenRouter models API is the
+ * authoritative catalog for OpenRouter-routed models and also supplies the ZDR
+ * endpoint enrichment and the global metadata map used to enrich other sources.
+ */
+export interface OpenRouterDiscoverySource {
+  readonly kind: 'openrouter';
+  readonly providerId: string;
+  readonly modelsApiUrl: string;
+  readonly zdrEndpointsApiUrl?: string;
+  readonly credential?: ModelDiscoveryCredential;
+  readonly label?: string;
+}
+
+/**
+ * Configured generic OpenAI-compatible external router. Its `/v1/models` catalog
+ * is authoritative for the models that endpoint serves; entries are enriched
+ * with OpenRouter metadata/ZDR when OpenRouter is also configured. The router's
+ * implementation identity is operational detail, never inferred from the URL.
+ */
+export interface GenericOpenAiDiscoverySource {
+  readonly kind: 'generic-openai-compatible';
+  readonly providerId: string;
+  readonly modelsApiUrl: string;
+  readonly credential?: ModelDiscoveryCredential;
+  readonly label?: string;
+}
+
+/**
+ * Deterministic catalog source with no network egress. Used for tests and for
+ * configured providers whose models are known statically (e.g. direct
+ * built-in providers registered in the pi-ai runtime).
+ */
+export interface CatalogDiscoverySource {
+  readonly kind: 'catalog';
+  readonly providerId: string;
+  readonly models: readonly DiscoveredModel[];
+  readonly label?: string;
+}
+
+export type ModelDiscoverySource =
+  | OpenRouterDiscoverySource
+  | GenericOpenAiDiscoverySource
+  | CatalogDiscoverySource;
+
+export interface ModelDiscoveryOptions {
+  fetchFn?: typeof fetch;
+  allowDirectNetworkEgress?: boolean;
 }
 
 interface OpenRouterModelEntry {
@@ -85,7 +135,18 @@ interface OpenRouterZdrEndpointSummary {
   providerNames: string[];
 }
 
-const MODEL_ID_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
+/**
+ * Minimal OpenAI-compatible `/v1/models` entry (`{ id, object, owned_by }`).
+ * Generic external routers speak this shape; richer metadata comes from
+ * OpenRouter enrichment when available.
+ */
+interface GenericModelEntry {
+  id: string;
+  object?: string;
+  owned_by?: string;
+}
+
+const MODEL_ID_WRAPPER_PREFIXES = new Set(['openrouter']);
 
 function providerFromModelId(modelId: string): string | undefined {
   const [prefix] = modelId.split('/');
@@ -138,20 +199,6 @@ function normalizeProviderHints(values: Array<string | undefined>): string[] {
       .map(value => (typeof value === 'string' ? value.trim() : ''))
       .filter(Boolean),
   )];
-}
-
-function providerHintsFromLiteLLM(entry: LiteLLMModelEntry): string[] {
-  const modelInfoProviders = Array.isArray(entry.model_info?.providers)
-    ? entry.model_info.providers
-    : [];
-  return normalizeProviderHints([
-    entry.provider,
-    entry.litellm_provider,
-    entry.owned_by,
-    entry.model_info?.provider,
-    entry.model_info?.litellm_provider,
-    ...modelInfoProviders,
-  ]);
 }
 
 function normalizePricing(pricing: OpenRouterModelEntry['pricing']): Record<string, string> | undefined {
@@ -290,18 +337,6 @@ function inferDiscoveryTextModel(meta: OpenRouterModelEntry): boolean {
   return auxiliaryModalities.every(modality => modality === 'image' || modality === 'file');
 }
 
-function buildLiteLLMModelMap(litellmModels: LiteLLMModelEntry[]): Map<string, LiteLLMModelEntry> {
-  const modelMap = new Map<string, LiteLLMModelEntry>();
-  for (const model of litellmModels) {
-    for (const key of expandModelLookupKeys(model.id)) {
-      if (!modelMap.has(key)) {
-        modelMap.set(key, model);
-      }
-    }
-  }
-  return modelMap;
-}
-
 function pushUnique(target: string[], value: string | undefined): void {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!trimmed || target.includes(trimmed)) return;
@@ -326,27 +361,41 @@ function buildOpenRouterZdrEndpointMap(
   return endpointMap;
 }
 
-function findLiteLLMModel(
-  meta: OpenRouterModelEntry,
-  litellmModelMap: Map<string, LiteLLMModelEntry>,
-): LiteLLMModelEntry | undefined {
-  for (const key of [
-    ...expandModelLookupKeys(meta.id),
-    ...expandModelLookupKeys(meta.canonical_slug),
-  ]) {
-    const matched = litellmModelMap.get(key);
+function buildOpenRouterMetaMap(
+  metas: readonly OpenRouterModelEntry[],
+): Map<string, OpenRouterModelEntry> {
+  const metaMap = new Map<string, OpenRouterModelEntry>();
+  for (const meta of metas) {
+    for (const key of [
+      ...expandModelLookupKeys(meta.id),
+      ...expandModelLookupKeys(meta.canonical_slug),
+    ]) {
+      if (!metaMap.has(key)) {
+        metaMap.set(key, meta);
+      }
+    }
+  }
+  return metaMap;
+}
+
+function findOpenRouterMeta(
+  modelId: string,
+  metaMap: Map<string, OpenRouterModelEntry>,
+): OpenRouterModelEntry | undefined {
+  for (const key of expandModelLookupKeys(modelId)) {
+    const matched = metaMap.get(key);
     if (matched) return matched;
   }
   return undefined;
 }
 
 function findOpenRouterZdrEndpointSummary(
-  litellmId: string,
+  modelId: string,
   meta: OpenRouterModelEntry | undefined,
   endpointMap: Map<string, OpenRouterZdrEndpointSummary>,
 ): OpenRouterZdrEndpointSummary | undefined {
   for (const key of [
-    ...expandModelLookupKeys(litellmId),
+    ...expandModelLookupKeys(modelId),
     ...expandModelLookupKeys(meta?.id),
     ...expandModelLookupKeys(meta?.canonical_slug),
   ]) {
@@ -356,20 +405,31 @@ function findOpenRouterZdrEndpointSummary(
   return undefined;
 }
 
+function withZdrSummary(
+  base: Omit<DiscoveredModel, 'zdrAvailable' | 'zdrEndpointCount' | 'zdrProviderTags' | 'zdrProviderNames'>,
+  summary: OpenRouterZdrEndpointSummary | undefined,
+): DiscoveredModel {
+  if (!summary) return base;
+  return {
+    ...base,
+    zdrAvailable: true,
+    zdrEndpointCount: summary.count,
+    ...(summary.providerTags.length > 0 ? { zdrProviderTags: summary.providerTags } : {}),
+    ...(summary.providerNames.length > 0 ? { zdrProviderNames: summary.providerNames } : {}),
+  };
+}
+
 function discoveredModelFromOpenRouterMeta(
   meta: OpenRouterModelEntry,
-  litellmModelMap: Map<string, LiteLLMModelEntry>,
-  endpointMap: Map<string, OpenRouterZdrEndpointSummary>,
+  zdrMap: Map<string, OpenRouterZdrEndpointSummary>,
 ): DiscoveredModel {
-  const litellmModel = findLiteLLMModel(meta, litellmModelMap);
-  const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(litellmModel?.id ?? meta.id, meta, endpointMap);
+  const zdrSummary = findOpenRouterZdrEndpointSummary(meta.id, meta, zdrMap);
   const providerHints = normalizeProviderHints([
     'openrouter',
-    ...(litellmModel ? providerHintsFromLiteLLM(litellmModel) : []),
     providerFromModelId(meta.canonical_slug ?? meta.id),
   ]);
 
-  return {
+  return withZdrSummary({
     id: meta.id,
     description: meta.description ?? meta.name,
     ...(providerHints.length > 0 ? { providerHints } : {}),
@@ -378,19 +438,46 @@ function discoveredModelFromOpenRouterMeta(
     pricing: normalizePricing(meta.pricing),
     ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
     ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
-    ...(zdrEndpointSummary
-      ? {
-          zdrAvailable: true,
-          zdrEndpointCount: zdrEndpointSummary.count,
-          ...(zdrEndpointSummary.providerTags.length > 0
-            ? { zdrProviderTags: zdrEndpointSummary.providerTags }
-            : {}),
-          ...(zdrEndpointSummary.providerNames.length > 0
-            ? { zdrProviderNames: zdrEndpointSummary.providerNames }
-            : {}),
-        }
-      : {}),
-  };
+  }, zdrSummary);
+}
+
+/**
+ * Build a discovered model from a generic OpenAI-compatible `/v1/models` entry.
+ * When OpenRouter metadata is available for the same id, the rich pricing/
+ * capability/context metadata is adopted; otherwise a minimal id-only entry is
+ * returned. Provider hints reflect the serving endpoint, not OpenRouter.
+ */
+function discoveredModelFromGenericEntry(
+  entry: GenericModelEntry,
+  source: GenericOpenAiDiscoverySource,
+  openRouterMetaMap: Map<string, OpenRouterModelEntry>,
+  zdrMap: Map<string, OpenRouterZdrEndpointSummary>,
+): DiscoveredModel {
+  const meta = findOpenRouterMeta(entry.id, openRouterMetaMap);
+  const zdrSummary = findOpenRouterZdrEndpointSummary(entry.id, meta, zdrMap);
+  const providerHints = normalizeProviderHints([
+    source.providerId,
+    entry.owned_by,
+    providerFromModelId(entry.id),
+  ]);
+
+  if (meta) {
+    return withZdrSummary({
+      id: entry.id,
+      description: meta.description ?? meta.name,
+      ...(providerHints.length > 0 ? { providerHints } : {}),
+      contextLength: meta.top_provider?.context_length ?? meta.context_length,
+      maxCompletionTokens: meta.top_provider?.max_completion_tokens,
+      pricing: normalizePricing(meta.pricing),
+      ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
+      ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
+    }, zdrSummary);
+  }
+
+  return withZdrSummary({
+    id: entry.id,
+    ...(providerHints.length > 0 ? { providerHints } : {}),
+  }, zdrSummary);
 }
 
 function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): string {
@@ -405,18 +492,64 @@ function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): str
   }
 }
 
+/**
+ * Derive the standards-based OpenAI-compatible models endpoint from a base URL.
+ * This is the well-known `/models` path, not an inference about router software.
+ */
+export function deriveGenericOpenAiModelsApiUrl(apiBaseUrl: string | undefined): string | undefined {
+  if (!apiBaseUrl) return undefined;
+  const trimmed = apiBaseUrl.trim().replace(/\/+$/u, '');
+  return trimmed.length > 0 ? `${trimmed}/models` : undefined;
+}
+
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
-type ModelDiscoveryFetchProvider = 'litellm' | 'openrouter';
 type ModelDiscoveryFetchPurpose = 'models' | 'zdr-endpoints';
 
 function buildInFlightFetchKey(
-  provider: ModelDiscoveryFetchProvider,
+  kind: ModelDiscoverySource['kind'],
+  providerId: string,
   purpose: ModelDiscoveryFetchPurpose,
   endpoint: string,
-  configScope: string,
+  authPresence: ModelDiscoveryAuthPresence,
 ): string {
-  return JSON.stringify([provider, purpose, endpoint, configScope]);
+  return JSON.stringify([kind, providerId, purpose, endpoint, authPresence]);
+}
+
+function isOpenRouterSource(source: ModelDiscoverySource): source is OpenRouterDiscoverySource {
+  return source.kind === 'openrouter';
+}
+
+function isGenericSource(source: ModelDiscoverySource): source is GenericOpenAiDiscoverySource {
+  return source.kind === 'generic-openai-compatible';
+}
+
+function isCatalogSource(source: ModelDiscoverySource): source is CatalogDiscoverySource {
+  return source.kind === 'catalog';
+}
+
+function assertSourceUrl(source: ModelDiscoverySource): string {
+  if (source.kind === 'catalog') return '';
+  const url = source.modelsApiUrl.trim();
+  if (!url) {
+    throw new Error(
+      `Model discovery ${source.kind} source "${source.providerId}" requires a non-empty modelsApiUrl`,
+    );
+  }
+  return url;
 }
 
 function isGatewayAgentEntrypoint(): boolean {
@@ -426,11 +559,29 @@ function isGatewayAgentEntrypoint(): boolean {
   return entrypoint.endsWith('/agent-main.ts') || entrypoint.endsWith('/agent-main.js');
 }
 
+/**
+ * Create a discovery credential handle. `authPresence` is computed once from a
+ * value-free presence probe; the resolver is retained for lazy resolution at
+ * fetch time. The resolved secret is never stored on the handle and never
+ * appears in a cache/in-flight key.
+ */
+export function createModelDiscoveryCredential(
+  resolveKey: () => string | undefined,
+  options: { presenceProbe?: () => string | undefined } = {},
+): ModelDiscoveryCredential {
+  const probe = options.presenceProbe ?? resolveKey;
+  const authPresence: ModelDiscoveryAuthPresence = probe() ? 'present' : 'none';
+  return {
+    authPresence,
+    resolve: resolveKey,
+  };
+}
+
 export class ModelDiscovery implements ModelDiscoveryBackend {
-  private litellmBaseUrl: string;
-  private litellmApiKey?: string;
-  private openRouterModelsApiUrl: string;
-  private openRouterZdrEndpointsApiUrl: string;
+  private readonly sources: readonly ModelDiscoverySource[];
+  private readonly openRouterSource?: OpenRouterDiscoverySource;
+  private readonly genericSources: readonly GenericOpenAiDiscoverySource[];
+  private readonly catalogSources: readonly CatalogDiscoverySource[];
   private fetchFn?: typeof fetch;
   private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
@@ -438,20 +589,17 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
   private readonly inFlightFetches = new Map<string, Promise<unknown>>();
 
   constructor(
-    litellmBaseUrl: string,
-    litellmApiKey: string | undefined,
-    options: ModelDiscoveryOptions,
+    sources: readonly ModelDiscoverySource[],
+    options: ModelDiscoveryOptions = {},
   ) {
-    // Strip trailing /v1 if present — we add our own paths
-    this.litellmBaseUrl = litellmBaseUrl.replace(/\/v1\/?$/, '');
-    this.litellmApiKey = litellmApiKey;
-    const openRouterModelsApiUrl = options.openRouterModelsApiUrl.trim();
-    if (!openRouterModelsApiUrl) {
-      throw new Error('Model discovery requires openRouterModelsApiUrl');
+    this.sources = sources;
+    // Validate network source URLs eagerly (fail closed) without mutating input.
+    for (const source of sources) {
+      assertSourceUrl(source);
     }
-    this.openRouterModelsApiUrl = openRouterModelsApiUrl;
-    this.openRouterZdrEndpointsApiUrl = options.openRouterZdrEndpointsApiUrl?.trim()
-      || deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl);
+    this.openRouterSource = sources.find(isOpenRouterSource);
+    this.genericSources = sources.filter(isGenericSource);
+    this.catalogSources = sources.filter(isCatalogSource);
     this.fetchFn = options.fetchFn;
     this.allowDirectNetworkEgress = options.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }
@@ -461,16 +609,51 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
       return this.cache;
     }
 
-    const [litellmModels, openRouterMeta, openRouterZdrEndpoints] = await Promise.all([
-      this.fetchLiteLLMForEnrichment(),
-      this.fetchOpenRouterMeta(),
-      this.fetchOpenRouterZdrEndpoints(),
-    ]);
+    let openRouterMetas: OpenRouterModelEntry[] = [];
+    let openRouterZdrEndpoints: OpenRouterZdrEndpointEntry[] = [];
+    if (this.openRouterSource) {
+      [openRouterMetas, openRouterZdrEndpoints] = await Promise.all([
+        this.fetchOpenRouterMeta(this.openRouterSource),
+        this.fetchOpenRouterZdrEndpoints(this.openRouterSource),
+      ]);
+    }
+    const genericCatalogs = await Promise.all(
+      this.genericSources.map(source => this.fetchGenericCatalog(source)),
+    );
 
-    const textModels = openRouterMeta.filter(inferDiscoveryTextModel);
-    const litellmModelMap = buildLiteLLMModelMap(litellmModels);
-    const zdrEndpointMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
-    const models = textModels.map(meta => discoveredModelFromOpenRouterMeta(meta, litellmModelMap, zdrEndpointMap));
+    const zdrMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
+    const openRouterMetaMap = buildOpenRouterMetaMap(openRouterMetas);
+
+    // Merge sources into a single id-keyed catalog. Configured serving endpoints
+    // (generic routers) take precedence over the OpenRouter direct catalog and
+    // deterministic catalog models, so a model routed through a shared external
+    // router is reported under the endpoint the operator actually uses rather
+    // than duplicated under OpenRouter.
+    const byId = new Map<string, DiscoveredModel>();
+    const addUnique = (model: DiscoveredModel): void => {
+      if (!byId.has(model.id)) byId.set(model.id, model);
+    };
+
+    this.genericSources.forEach((source, index) => {
+      for (const entry of genericCatalogs[index]) {
+        addUnique(discoveredModelFromGenericEntry(entry, source, openRouterMetaMap, zdrMap));
+      }
+    });
+
+    if (this.openRouterSource) {
+      const textModels = openRouterMetas.filter(inferDiscoveryTextModel);
+      for (const meta of textModels) {
+        addUnique(discoveredModelFromOpenRouterMeta(meta, zdrMap));
+      }
+    }
+
+    for (const source of this.catalogSources) {
+      for (const model of source.models) {
+        addUnique(model);
+      }
+    }
+
+    const models = [...byId.values()];
 
     this.cache = models;
     this.cacheTime = Date.now();
@@ -508,84 +691,85 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     return promise;
   }
 
-  private fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
-    const url = `${this.litellmBaseUrl}/v1/models`;
-    const key = buildInFlightFetchKey(
-      'litellm',
-      'models',
-      url,
-      this.litellmApiKey ? 'auth:present' : 'auth:none',
-    );
-    const headers: Record<string, string> = {};
-    if (this.litellmApiKey) {
-      headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
-    }
-
-    return this.coalesceInFlightFetch(key, async () => {
-      try {
-        const res = await this.resolveFetch()(url, { headers });
-        if (!res.ok) {
-          throw new Error(`LiteLLM /v1/models returned ${res.status}`);
-        }
-        const data = await res.json() as { data?: LiteLLMModelEntry[] };
-        if (!Array.isArray(data.data)) {
-          throw new Error('LiteLLM /v1/models returned invalid payload');
-        }
-        return data.data;
-      } catch (err) {
-        log.warn('Failed to fetch LiteLLM models', { error: String(err) });
-        throw err instanceof Error ? err : new Error(String(err));
-      }
-    });
+  private buildAuthHeaders(credential: ModelDiscoveryCredential | undefined): Record<string, string> {
+    if (!credential || credential.authPresence !== 'present') return {};
+    const key = credential.resolve();
+    return key ? { Authorization: `Bearer ${key}` } : {};
   }
 
-  private async fetchLiteLLMForEnrichment(): Promise<LiteLLMModelEntry[]> {
-    try {
-      return await this.fetchLiteLLM();
-    } catch {
-      return [];
-    }
-  }
-
-  private fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
-    const key = buildInFlightFetchKey('openrouter', 'models', this.openRouterModelsApiUrl, 'auth:none');
+  private fetchOpenRouterMeta(source: OpenRouterDiscoverySource): Promise<OpenRouterModelEntry[]> {
+    const authPresence = source.credential?.authPresence ?? 'none';
+    const key = buildInFlightFetchKey('openrouter', source.providerId, 'models', source.modelsApiUrl, authPresence);
+    const headers = this.buildAuthHeaders(source.credential);
     return this.coalesceInFlightFetch(key, async () => {
       try {
-        const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
+        const res = await this.resolveFetch()(source.modelsApiUrl, { headers });
         if (!res.ok) {
-          throw new Error(`OpenRouter /api/v1/models returned ${res.status}`);
+          throw new Error(`OpenRouter models API at ${redactUrl(source.modelsApiUrl)} returned ${res.status}`);
         }
         const data = await res.json() as { data?: OpenRouterModelEntry[] };
         if (!Array.isArray(data.data)) {
-          throw new Error('OpenRouter /api/v1/models returned invalid payload');
+          throw new Error(`OpenRouter models API at ${redactUrl(source.modelsApiUrl)} returned an invalid catalog`);
         }
         return data.data;
       } catch (err) {
-        log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
+        log.warn('Failed to fetch OpenRouter metadata', {
+          providerId: source.providerId,
+          error: String(err),
+        });
         throw err instanceof Error ? err : new Error(String(err));
       }
     });
   }
 
-  private fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
-    const key = buildInFlightFetchKey(
-      'openrouter',
-      'zdr-endpoints',
-      this.openRouterZdrEndpointsApiUrl,
-      'auth:none',
-    );
+  private fetchOpenRouterZdrEndpoints(source: OpenRouterDiscoverySource): Promise<OpenRouterZdrEndpointEntry[]> {
+    const url = source.zdrEndpointsApiUrl?.trim()
+      || deriveOpenRouterZdrEndpointsApiUrl(source.modelsApiUrl);
+    const key = buildInFlightFetchKey('openrouter', source.providerId, 'zdr-endpoints', url, 'none');
     return this.coalesceInFlightFetch(key, async () => {
       try {
-        const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
+        const res = await this.resolveFetch()(url);
         if (!res.ok) {
-          log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+          log.warn(`OpenRouter ZDR endpoints API at ${redactUrl(url)} returned ${res.status}`);
           return [];
         }
         const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
         return data.data ?? [];
       } catch (err) {
-        log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
+        log.warn('Failed to fetch OpenRouter ZDR endpoints', {
+          providerId: source.providerId,
+          error: String(err),
+        });
         return [];
+      }
+    });
+  }
+
+  private fetchGenericCatalog(source: GenericOpenAiDiscoverySource): Promise<GenericModelEntry[]> {
+    const authPresence = source.credential?.authPresence ?? 'none';
+    const key = buildInFlightFetchKey('generic-openai-compatible', source.providerId, 'models', source.modelsApiUrl, authPresence);
+    const headers = this.buildAuthHeaders(source.credential);
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(source.modelsApiUrl, { headers });
+        if (!res.ok) {
+          throw new Error(
+            `Provider "${source.providerId}" models API at ${redactUrl(source.modelsApiUrl)} returned ${res.status}`,
+          );
+        }
+        const data = await res.json() as { data?: GenericModelEntry[] };
+        if (!Array.isArray(data.data)) {
+          throw new Error(
+            `Provider "${source.providerId}" models API at ${redactUrl(source.modelsApiUrl)} returned an invalid catalog`,
+          );
+        }
+        return data.data;
+      } catch (err) {
+        log.warn('Failed to fetch generic provider models catalog', {
+          providerId: source.providerId,
+          error: String(err),
+        });
+        throw err instanceof Error ? err : new Error(String(err));
       }
     });
   }

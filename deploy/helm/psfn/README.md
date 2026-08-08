@@ -14,13 +14,13 @@ contains one companion; larger clusters use the same values shape with more
 - Garden Deployment and internal-only ClusterIP Service
 - bundled Postgres + pgvector StatefulSet, or external Postgres Secret reference
 - bundled Redis StatefulSet for app cache, or external Redis Secret reference
-- bundled LiteLLM Deployment/Service for provider routing, or external LiteLLM URL
+- gateway-owned pi-ai provider dispatch to direct or external OpenAI-compatible endpoints
 - optional emo_sim observer-eval engine Deployment/Service/PVC (`emosim.enabled`)
 - optional internal companion-ui test web Deployment/Service serving the PWA
   static build (`companionUiTest.enabled`)
 - PVC-backed system-data, companion-data, workspace, runtime, and model-cache roots
 - cert-manager Issuer/Certificate resources for internal SPIFFE mTLS
-- default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis/LiteLLM flows
+- default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis flows
 
 The chart is in `deploy/helm/psfn`. Runtime app behavior still comes from the
 repo-owned entrypoints: `dist/gateway-main.js`, `dist/agent-main.js`, and
@@ -512,7 +512,7 @@ hostPorts:
 ```
 
 This binds the Gateway API and Garden/admin UI directly on the node while
-keeping Gateway RPC, agent admin transport, Postgres, Redis, and LiteLLM
+keeping Gateway RPC, agent admin transport, Postgres, and Redis
 cluster-internal. Use it only when those node ports are reserved for PSFN; the
 old systemd app services must remain stopped to avoid port and Discord login
 conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
@@ -715,13 +715,13 @@ The chart renders default deny plus workload policies for:
 - Garden -> agent admin transport
 - gateway and agent -> Postgres
 - agent -> Redis
-- gateway -> LiteLLM, when internal LiteLLM is enabled
+- gateway -> external HTTPS provider endpoints, when enabled
 - optional satellite hub -> gateway API
 - optional companion-ui test surface: ingress -> port 8080, egress denied
 
 The agent policy does not contain broad `0.0.0.0/0` egress and the chart does
-not set `ALLOW_AGENT_OUTBOUND_NETWORK=true`. The agent policy also has no
-LiteLLM egress rule; provider routing remains a gateway responsibility.
+not set `ALLOW_AGENT_OUTBOUND_NETWORK=true`. Provider routing and external
+provider egress remain gateway responsibilities.
 
 ## Embeddings
 

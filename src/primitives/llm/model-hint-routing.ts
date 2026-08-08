@@ -14,6 +14,7 @@ import {
 } from './model-budget.js';
 import {
   applyGlobalPromptCachePolicy,
+  resolveCandidateTuning,
   resolveGlobalPromptCachePolicy,
   resolveRoutingCandidateForRegistryEntry,
   resolveRoutingCandidates,
@@ -276,13 +277,19 @@ function resolveModelHintCandidate(
     ?? toFlooredPositiveInteger(registryEntry?.capabilities?.contextWindow);
   let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
   const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
-  const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
-  const thinkingEffort = modelHint.thinkingEffort ?? baseCandidate.thinkingEffort;
-  const temperature = modelHint.temperature ?? baseCandidate.temperature;
-  const topP = modelHint.topP ?? baseCandidate.topP;
-  const topK = modelHint.topK ?? baseCandidate.topK;
-  const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
-  const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
+  // Per-model tuning must come from the matched registry entry, not the lane's
+  // primary base candidate: a provider+model hint otherwise inherits an
+  // unrelated model's thinking/sampling knobs (conformance gap surfaced by the
+  // same-runtime traffic-class harness). modelHint still wins; baseCandidate is
+  // the final fallback for unregistered explicit overrides.
+  const registryTuning = registryEntry ? resolveCandidateTuning(registryEntry) : {};
+  const thinkingEnabled = modelHint.thinkingEnabled ?? registryTuning.thinkingEnabled ?? baseCandidate.thinkingEnabled;
+  const thinkingEffort = modelHint.thinkingEffort ?? registryTuning.thinkingEffort ?? baseCandidate.thinkingEffort;
+  const temperature = modelHint.temperature ?? registryTuning.temperature ?? baseCandidate.temperature;
+  const topP = modelHint.topP ?? registryTuning.topP ?? baseCandidate.topP;
+  const topK = modelHint.topK ?? registryTuning.topK ?? baseCandidate.topK;
+  const frequencyPenalty = modelHint.frequencyPenalty ?? registryTuning.frequencyPenalty ?? baseCandidate.frequencyPenalty;
+  const repetitionPenalty = modelHint.repetitionPenalty ?? registryTuning.repetitionPenalty ?? baseCandidate.repetitionPenalty;
   const hasExplicitIdentityHint = hintedModel !== undefined || modelHint.provider !== undefined;
   const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
     ? registryEntry.capabilities.supportsVision
@@ -308,6 +315,13 @@ function resolveModelHintCandidate(
     provider,
     model,
     maxTokens: Math.floor(maxTokens),
+    // The hinted candidate must inherit the matched registry entry's wire API
+    // kind: an explicit provider+model override otherwise silently dispatches
+    // an openai-responses model through the openai-completions default
+    // (conformance gap surfaced by the same-runtime traffic-class harness).
+    ...(registryEntry?.apiKind
+      ? { apiKind: registryEntry.apiKind }
+      : (baseCandidate.apiKind ? { apiKind: baseCandidate.apiKind } : {})),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(supportsVision !== undefined ? { supportsVision } : {}),
     ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),

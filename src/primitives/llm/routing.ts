@@ -330,7 +330,7 @@ export function applyGlobalPromptCachePolicy(
   };
 }
 
-function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
+export function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
   RoutingCandidate,
   'thinkingEnabled'
   | 'thinkingEffort'

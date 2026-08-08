@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { GitOps, type GitOpsConfig } from './ops.js';
 import { REPO_ALLOWED_PATHS } from '../../../system/security/policy-constants.js';
 
@@ -504,7 +505,7 @@ describe('GitOps', () => {
   describe('exec error handling', () => {
     it('wraps exec errors with context', () => {
       mockedExecSync.mockImplementation(() => {
-        const err = new Error('command failed') as any;
+        const err = fromAny(new Error('command failed'));
         err.stderr = 'fatal: not a git repository';
         throw err;
       });

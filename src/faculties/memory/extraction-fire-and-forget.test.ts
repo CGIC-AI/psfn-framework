@@ -114,6 +114,8 @@ describe('MemoryExtractor emotional persistence fencing', () => {
           profileSynthesisEnabled: false,
         } as never,
       );
+      // Intentional private-property access to stub an internal method;
+      // shoehorn cannot express assignment to a non-existent property (psfn-framework-aicg6.13).
       (extractor as any).processFact = vi.fn(async () => ({
         action: 'created',
         memory: { id: 'memory-emotional' },

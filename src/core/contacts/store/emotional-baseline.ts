@@ -150,8 +150,9 @@ export function parseMoodSnapshot(
     ? clampSigned(baselineRecord.moodDrift)
     : clampSigned(moodValence - baselineValence);
   const moodSamples = normalizeCount(baselineRecord.moodSamples);
-  const lastMoodUpdateEpochMs = Number.isFinite(baselineRecord.lastMoodUpdateEpochMs)
-    ? Math.max(0, Math.floor(baselineRecord.lastMoodUpdateEpochMs))
+  const rawLastMoodUpdate = baselineRecord.lastMoodUpdateEpochMs;
+  const lastMoodUpdateEpochMs = typeof rawLastMoodUpdate === 'number' && Number.isFinite(rawLastMoodUpdate)
+    ? Math.max(0, Math.floor(rawLastMoodUpdate))
     : undefined;
 
   return {

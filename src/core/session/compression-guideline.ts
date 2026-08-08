@@ -635,12 +635,14 @@ export class CompressionGuidelineRuntime {
       failureSummary: summarizeFailuresForPrompt(failures),
     }, null, 2);
     const requestContext = getRequestContext();
+    const firstFailure = failures[0];
+    const firstFailureChannelId = firstFailure?.channelId ?? 'unknown';
     const correlation: CorrelationMetadata = {
       ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
       requestId: requestContext?.requestId
         ? `${requestContext.requestId}:compression-guideline-update`
-        : `compression-guideline-update:${failures[0].channelId}:${this.now()}`,
-      channelId: requestContext?.channelId ?? failures[0].channelId,
+        : `compression-guideline-update:${firstFailureChannelId}:${this.now()}`,
+      channelId: requestContext?.channelId ?? firstFailureChannelId,
       callType: 'background',
       purpose: 'session.compression_guideline.update',
       originType: 'background',

@@ -11,7 +11,7 @@ export function mergeAuthenticatedJournalWithSessionTail(
   tailEntries: readonly SessionEntry[],
 ): SessionEntry[] {
   const journalMaxId = journalEntries.length > 0
-    ? journalEntries[journalEntries.length - 1].id
+    ? (journalEntries[journalEntries.length - 1]?.id ?? -1)
     : -1;
   const newer = tailEntries.filter(entry => entry.id > journalMaxId);
   if (newer.length === 0) return [...journalEntries];

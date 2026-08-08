@@ -19,7 +19,7 @@ function stripCodeBlocks(text: string): string {
 export function extractCodeBlock(text: string): string | null {
   const matches = [...text.matchAll(/```(?:repl|javascript|js)?\s*\n([\s\S]*?)```/g)];
   const match = matches.at(-1);
-  return match ? match[1].trimEnd() : null;
+  return match?.[1]?.trimEnd() ?? null;
 }
 
 /**
@@ -91,7 +91,7 @@ export function detectFinalInText(text: string): string | null {
 export function detectFinalVar(text: string): string | null {
   const stripped = stripCodeBlocks(text);
   const match = stripped.match(/FINAL_VAR\(\s*(\w+)\s*\)/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 /**

@@ -350,8 +350,12 @@ function detectRepetitionFlag(
   const tokenSets = history.map(text => tokenizeSignalTerms(text));
   let maxSimilarity = 0;
   for (let i = 0; i < tokenSets.length; i += 1) {
+    const setI = tokenSets[i];
+    if (!setI) continue;
     for (let j = i + 1; j < tokenSets.length; j += 1) {
-      maxSimilarity = Math.max(maxSimilarity, jaccardSimilarity(tokenSets[i], tokenSets[j]));
+      const setJ = tokenSets[j];
+      if (!setJ) continue;
+      maxSimilarity = Math.max(maxSimilarity, jaccardSimilarity(setI, setJ));
     }
   }
   if (maxSimilarity <= config.repetitionJaccardThreshold) return null;

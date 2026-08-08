@@ -116,8 +116,8 @@ export async function bootstrapImportedHistory(params: {
     chunkCount: chunkPlans.length,
     processedChunks,
     chunks: chunkPlans.map(chunk => ({
-      startId: chunk.entries[0].id,
-      endId: chunk.entries[chunk.entries.length - 1].id,
+      startId: chunk.entries[0]?.id ?? -1,
+      endId: chunk.entries[chunk.entries.length - 1]?.id ?? -1,
       entryCount: chunk.entries.length,
       approxTokens: chunk.tokens,
     })),

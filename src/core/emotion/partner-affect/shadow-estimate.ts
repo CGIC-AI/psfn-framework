@@ -62,9 +62,13 @@ function familyEvidence(
   }
   for (const bucket of byMetric.values()) {
     for (let left = 0; left < bucket.length && !conflict; left += 1) {
+      const leftEntry = bucket[left];
+      if (!leftEntry) continue;
       for (let right = left + 1; right < bucket.length; right += 1) {
-        if (bucket[left].sourceId === bucket[right].sourceId) continue;
-        if (valuesConflict(bucket[left].value, bucket[right].value, policy.conflictValueTolerance)) {
+        const rightEntry = bucket[right];
+        if (!rightEntry) continue;
+        if (leftEntry.sourceId === rightEntry.sourceId) continue;
+        if (valuesConflict(leftEntry.value, rightEntry.value, policy.conflictValueTolerance)) {
           conflict = true;
           break;
         }

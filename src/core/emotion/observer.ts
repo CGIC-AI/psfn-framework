@@ -443,7 +443,11 @@ function deriveVadFromLabel(label: string): Readonly<VADVector> {
   if (!TEXT_EMOTION_LABEL_SET.has(label)) {
     throw new Error(`unsupported text emotion label: ${label}`);
   }
-  return TEXT_EMOTION_LABEL_VAD_MAP[label];
+  const vad = TEXT_EMOTION_LABEL_VAD_MAP[label];
+  if (!vad) {
+    throw new Error(`unsupported text emotion label: ${label}`);
+  }
+  return vad;
 }
 
 function normalizeEmotionLabel(label: unknown, fieldName: string): string {

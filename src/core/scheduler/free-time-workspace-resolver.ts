@@ -229,9 +229,9 @@ export interface FreeTimeWorkspaceResolverDeps {
 const PRIVATE_WANDER_SESSION_ID = `${FREE_TIME_CHANNEL_PREFIX}private`;
 
 /** The most permissive retrieval ceiling — companion-self space admits everything (§10.6). */
-const BROAD_RETRIEVAL_CEILING: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1];
+const BROAD_RETRIEVAL_CEILING: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1] ?? 'confidential';
 /** The public/broadcast retrieval ceiling for public-clean publication (§10.9). */
-const PUBLIC_RETRIEVAL_CEILING: SensitivityLevel = SENSITIVITY_LEVELS[0];
+const PUBLIC_RETRIEVAL_CEILING: SensitivityLevel = SENSITIVITY_LEVELS[0] ?? 'public';
 
 /** Normalize a `project:<id>` ref to its bare, validated id (fails closed on a bad ref). */
 function projectIdFromRef(projectRef: string): string {

@@ -23,6 +23,7 @@ export async function loadContactTrustSnapshot(
   );
   if (result.rowCount !== 1) return undefined;
   const row = result.rows[0];
+  if (!row) return undefined;
   return {
     trustLevel: normalizeTrustLevel(row.trust_level),
     version: row.trust_version,

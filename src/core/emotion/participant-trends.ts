@@ -222,7 +222,9 @@ export function maintainRoomTrends(
     );
     const overflow = trends.size - cap;
     for (let index = 0; index < overflow; index += 1) {
-      const [key] = byRecency[index];
+      const entry = byRecency[index];
+      if (!entry) continue;
+      const [key] = entry;
       trends.delete(key);
       evicted.push(key);
     }

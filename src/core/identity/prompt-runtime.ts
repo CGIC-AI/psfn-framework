@@ -122,7 +122,7 @@ export function normalizePromptMacroName(raw: string): string {
 function collectMacroNamesFromHintToken(token: string): string[] {
   const names: string[] = [];
   for (const match of token.matchAll(MACRO_NAME_IN_TOKEN_PATTERN)) {
-    names.push(normalizePromptMacroName(match[1]));
+    if (match[1]) names.push(normalizePromptMacroName(match[1]));
   }
   return names;
 }
@@ -224,7 +224,8 @@ export function isStaticVolatilityPromptVariable(key: string): boolean {
 export function collectTurnVolatilePromptMacroTokens(content: string): string[] {
   const offending = new Set<string>();
   for (const match of content.matchAll(MACRO_NAME_IN_TOKEN_PATTERN)) {
-    const name = normalizePromptMacroName(match[1]);
+    const name = normalizePromptMacroName(match[1] ?? '');
+    if (!name) continue;
     if (resolvePromptMacroManifestEntry(name)?.volatility === 'turn') {
       offending.add(name);
     }
@@ -323,10 +324,10 @@ export function collectRemovedPromptMacroReferences(content: string): RemovedPro
     }
   };
   for (const match of content.matchAll(MACRO_NAME_IN_TOKEN_PATTERN)) {
-    record(match[1]);
+    if (match[1]) record(match[1]);
   }
   for (const match of content.matchAll(new RegExp(CONDITIONAL_BLOCK_PATTERN.source, 'g'))) {
-    record(match[1]);
+    if (match[1]) record(match[1]);
   }
   return [...seen.values()];
 }
@@ -721,6 +722,7 @@ function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPro
     const defaultIndex = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.indexOf(defaultId);
     for (let index = defaultIndex + 1; index < DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.length; index += 1) {
       const nextDefaultId = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER[index];
+      if (!nextDefaultId) continue;
       const nextDefaultIndex = normalized.indexOf(nextDefaultId);
       if (nextDefaultIndex >= 0) {
         insertAt = nextDefaultIndex;
@@ -730,6 +732,7 @@ function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPro
     if (insertAt === normalized.length) {
       for (let index = defaultIndex - 1; index >= 0; index -= 1) {
         const previousDefaultId = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER[index];
+        if (!previousDefaultId) continue;
         const previousDefaultIndex = normalized.indexOf(previousDefaultId);
         if (previousDefaultIndex >= 0) {
           insertAt = previousDefaultIndex + 1;

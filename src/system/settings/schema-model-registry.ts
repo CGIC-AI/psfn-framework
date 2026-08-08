@@ -629,10 +629,10 @@ function backfillPrimaryMemoryPurpose(models: ModelRegistryEntry[]): void {
 
   const existingMemoryIndex = target.purposes.findIndex((tag) => tag.purpose === 'memory');
   if (existingMemoryIndex >= 0) {
-    target.purposes[existingMemoryIndex] = {
-      ...target.purposes[existingMemoryIndex],
-      primary: true,
-    };
+    const existing = target.purposes[existingMemoryIndex];
+    if (existing) {
+      target.purposes[existingMemoryIndex] = { ...existing, primary: true };
+    }
     return;
   }
 
@@ -714,7 +714,7 @@ export function projectCanonicalModelRegistry(
 
   const primaryByPurpose = resolvePrimaryModelIdsByPurpose(registry);
   const assignments: ModelRoleAssignments = { ...primaryByPurpose };
-  assignments.context = assignments.background;
+  assignments.context = primaryByPurpose.background;
 
   const registryById = new Map<string, ModelRegistryEntry>(registry.models.map((entry) => [entry.id, entry]));
   const chatModelId = primaryByPurpose.chat;

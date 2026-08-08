@@ -210,7 +210,7 @@ export function buildFallbackOrder(
   const preferredIndex = deduped.indexOf(preferredId);
   if (preferredIndex > 0) {
     const [preferred] = deduped.splice(preferredIndex, 1);
-    deduped.unshift(preferred);
+    if (preferred !== undefined) deduped.unshift(preferred);
   }
 
   return deduped;

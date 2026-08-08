@@ -40,8 +40,8 @@ function longestCommonContiguousLength(left: string, right: string): number {
     const current = new Uint16Array(right.length + 1);
     for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
       if (left[leftIndex - 1] !== right[rightIndex - 1]) continue;
-      current[rightIndex] = previous[rightIndex - 1] + 1;
-      longest = Math.max(longest, current[rightIndex]);
+      current[rightIndex] = (previous[rightIndex - 1] ?? 0) + 1;
+      longest = Math.max(longest, current[rightIndex] ?? 0);
     }
     previous = current;
   }

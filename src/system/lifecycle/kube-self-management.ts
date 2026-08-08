@@ -58,7 +58,9 @@ export function combineKubeSelfManagementExecutors(
           `Kube self-management action ${request.action} has no unique executor.`,
         );
       }
-      return supporters[0].execute(request);
+      const executor = supporters[0];
+      if (!executor) throw new Error(`Kube self-management action ${request.action} has no unique executor.`);
+      return executor.execute(request);
     },
   };
 }

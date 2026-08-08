@@ -684,7 +684,7 @@ export function createOrientTool(
           validateOrientCandidacy(goals, 'goals'),
         ].filter((error): error is string => Boolean(error));
         if (candidacyErrors.length > 0) {
-          return textResultWithError(candidacyErrors[0], true);
+          return textResultWithError(candidacyErrors[0] ?? '', true);
         }
         const scope = resolveCurrentCoreMemoryScope();
         if (!scope) {

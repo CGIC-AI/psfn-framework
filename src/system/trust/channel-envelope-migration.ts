@@ -134,9 +134,9 @@ function deriveEntry(
     if (observation.isDirectMessage === true) evidence.push('direct_message');
     return {
       action: 'seed',
-      label: labelFromPair(candidate.pair),
+      label: candidate ? labelFromPair(candidate.pair) : AMBIGUOUS_LABEL,
       evidence,
-      reason: `unanimous persisted evidence (${pairKey(candidate.pair)})`,
+      reason: candidate ? `unanimous persisted evidence (${pairKey(candidate.pair)})` : 'no candidate',
     };
   }
 

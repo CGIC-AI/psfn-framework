@@ -32,7 +32,8 @@ function optionalSingle(
   const values = query[field];
   if (values === undefined) return undefined;
   if (values.length !== 1) throw new Error(`Fleet model usage ${field} must occur exactly once`);
-  const value = values[0].trim();
+  const value = values[0]?.trim();
+  if (!value) throw new Error(`Fleet model usage ${field} must be non-empty`);
   if (!value) throw new Error(`Fleet model usage ${field} must be non-empty`);
   return value;
 }

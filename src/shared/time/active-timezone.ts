@@ -20,7 +20,7 @@ function normalizeOffset(raw: string): string {
     throw new Error(`Unsupported timezone offset format "${raw}"`);
   }
   const [, sign, hoursRaw, minutesRaw = '00'] = match;
-  const hours = hoursRaw.padStart(2, '0');
+  const hours = (hoursRaw ?? '00').padStart(2, '0');
   const minutes = minutesRaw.padStart(2, '0');
   return `${sign}${hours}:${minutes}`;
 }
@@ -133,7 +133,7 @@ export function formatActiveTime(now: Date): string {
 
 export function formatActiveDateTimeCompact(now: Date): string {
   const parts = resolveFormatterParts(now, resolveActiveTimezone());
-  const shortYear = parts.year.slice(-2);
+  const shortYear = (parts.year ?? '').slice(-2);
   return `${parts.month}-${parts.day}-${shortYear} ${parts.hour}:${parts.minute}`;
 }
 

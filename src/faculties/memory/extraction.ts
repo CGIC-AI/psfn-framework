@@ -1029,7 +1029,7 @@ export class MemoryExtractor {
         const contactName = resolvePreferredContactName(contact, contact.displayName);
         return normalizeContactNameKey(contactName) === speakerNameKey;
       });
-    return matches.length === 1 ? matches[0].id : undefined;
+    return matches.length === 1 ? matches[0]?.id : undefined;
   }
 
   private adjustFactImportanceByEmotion(

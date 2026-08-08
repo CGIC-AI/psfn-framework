@@ -60,7 +60,7 @@ export function parseCogSecTombstoneCaseId(input: {
   }
 
   const match = TOMBSTONE_PATTERN.exec(input.content.trim());
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 export function isCogSecTombstoneSessionEntry(input: {

@@ -91,7 +91,9 @@ async function insertManualHold(
     snapshotDigest,
     reason,
   ]);
-  return outcomeForIntentRow(inserted.rows[0]);
+  const row = inserted.rows[0];
+  if (!row) throw new Error('Contact lifecycle manual-hold insert returned no row');
+  return outcomeForIntentRow(row);
 }
 
 function exactRequest(
@@ -188,7 +190,9 @@ const postgresContactLifecycleLedgerOperations: PostgresContactOperationMap = {
           VALUES ($1, $2, $3, 'active')
         `, [request.intentId, target.kind, target.id]);
       }
-      return outcomeForIntentRow(inserted.rows[0]);
+      const row = inserted.rows[0];
+      if (!row) throw new Error('Contact lifecycle gateway-prepare insert returned no row');
+      return outcomeForIntentRow(row);
     });
   },
 
@@ -273,7 +277,9 @@ const postgresContactLifecycleLedgerOperations: PostgresContactOperationMap = {
           WHERE intent_id = $1 AND lock_state = 'active'
         `, [input.intentId]);
       }
-      return outcomeForIntentRow(updated.rows[0]);
+      const row = updated.rows[0];
+      if (!row) throw new Error('Contact lifecycle gateway-result update returned no row');
+      return outcomeForIntentRow(row);
     });
   },
 

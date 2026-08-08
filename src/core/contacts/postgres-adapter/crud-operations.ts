@@ -638,7 +638,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           [contactId],
         );
         if (result.rowCount !== 1) return false;
-        lockedRows.set(contactId, result.rows[0]);
+        const row = result.rows[0];
+        if (!row) return false;
+        lockedRows.set(contactId, row);
       }
       const sourceRow = lockedRows.get(sourceContactId);
       const targetRow = lockedRows.get(targetContactId);

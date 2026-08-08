@@ -353,7 +353,7 @@ export function selectSpeakLeastWinner(
         return statA.speakCount - statB.speakCount;
       }
       return a < b ? -1 : a > b ? 1 : 0;
-    })[0];
+    })[0] ?? null;
 }
 
 /**

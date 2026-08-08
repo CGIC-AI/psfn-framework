@@ -165,13 +165,13 @@ export function createPromptPlanBlock(input: {
 
 export function buildPromptPlanCachePlan(blocks: readonly PromptPlanBlock[]): PromptPlanCachePlan {
   let staticBoundary = 0;
-  while (staticBoundary < blocks.length && blocks[staticBoundary].volatility === 'static') {
+  while (staticBoundary < blocks.length && blocks[staticBoundary]?.volatility === 'static') {
     staticBoundary += 1;
   }
   let sessionStableBoundary = staticBoundary;
   while (
     sessionStableBoundary < blocks.length
-    && blocks[sessionStableBoundary].volatility === 'session_stable'
+    && blocks[sessionStableBoundary]?.volatility === 'session_stable'
   ) {
     sessionStableBoundary += 1;
   }

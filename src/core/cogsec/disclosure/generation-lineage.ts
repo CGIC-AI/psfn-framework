@@ -153,7 +153,7 @@ export interface DisclosureToolResultSource {
  * grants an outward destination anyway, so this only tightens the classification
  * label and (later) the egress ceiling, never over-shares.
  */
-const TOOL_RESULT_SENSITIVITY_FLOOR: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1];
+const TOOL_RESULT_SENSITIVITY_FLOOR: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1] ?? 'confidential';
 
 /**
  * Fail-loud guard: no permitted-destination constraint for an id-bearing kind

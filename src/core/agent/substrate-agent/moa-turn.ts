@@ -248,7 +248,8 @@ export async function runMoaTurn(input: {
 
   const lastRound = deliberation.rounds[deliberation.rounds.length - 1]!;
   const model = lastRound.aggregatorModel
-    ?? lastRound.voices[lastRound.voices.length - 1].model;
+    ?? lastRound.voices[lastRound.voices.length - 1]?.model
+    ?? 'unknown';
 
   for (const round of deliberation.rounds) {
     const roundBaseInspection = inspectChargeSurface('moaRoundBase');

@@ -788,7 +788,7 @@ export class ApiServer implements ChannelAdapterPort {
     const icpOperatorCancelMatch = req.method === 'POST'
       ? ICP_OPERATOR_CANCEL_PATH.exec(path)
       : null;
-    if (icpOperatorCancelMatch) {
+    if (icpOperatorCancelMatch?.[1]) {
       this.handleIcpOperatorCancel(req, res, icpOperatorCancelMatch[1]);
       return;
     }

@@ -128,6 +128,9 @@ function requireSingleCurrentClassification(
     throw new Error('Recovered artifact egress requires current sensitivity classification for every attachment');
   }
   const classification = classifications[0];
+  if (!classification) {
+    throw new Error('Recovered artifact egress requires current sensitivity classification for every attachment');
+  }
   const fingerprint = fingerprintArtifactSensitivity(classification);
   if (classifications.some(current => fingerprintArtifactSensitivity(current) !== fingerprint)) {
     throw new Error('Recovered artifact attachments have inconsistent current sensitivity classifications');

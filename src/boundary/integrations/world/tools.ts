@@ -356,7 +356,7 @@ async function runControl(
     );
   }
   const service = COMMAND_TO_SERVICE[command];
-  const domain = entityId.split('.')[0];
+  const domain = entityId.split('.')[0] ?? '';
 
   if (requesterProvenance !== 'human' && affordance.kind !== 'light') {
     throw new Error('autonomous world control is limited to registered light affordances.');

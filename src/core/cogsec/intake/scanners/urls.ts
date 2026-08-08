@@ -80,7 +80,8 @@ export function scanUrls(
   while (deniedSchemeCount < MAX_URLS_EXAMINED) {
     const match = URI_SCHEME_RUN.exec(normalized);
     if (match === null) break;
-    const scheme = match[2].toLowerCase();
+    const scheme = match[2]?.toLowerCase();
+    if (!scheme) continue;
     const action = options.schemeActions?.[scheme];
     if (action === undefined || action === 'allow') continue;
     if (action === 'deny_except_inline_image') {

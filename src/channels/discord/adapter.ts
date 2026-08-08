@@ -1658,7 +1658,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
     const recent = this.sessionStore?.getRecent(sessionChannelId, BACKFILL_DEDUP_WINDOW) ?? [];
     for (let i = recent.length - 1; i >= 0; i--) {
-      if (recent[i].discordMessageId) return recent[i].discordMessageId;
+      const entry = recent[i];
+      if (entry?.discordMessageId) return entry.discordMessageId;
     }
     return undefined;
   }

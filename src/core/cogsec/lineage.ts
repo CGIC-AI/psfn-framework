@@ -222,7 +222,7 @@ function rangesIntersect(
 
 function parseLineRange(value: string): { startEntryId?: number; endEntryId?: number } {
   const match = /^(\d+)(?:-(\d+))?$/u.exec(value.trim());
-  if (!match) return {};
+  if (!match || !match[1]) return {};
   const startEntryId = Number.parseInt(match[1], 10);
   const endEntryId = Number.parseInt(match[2] || match[1], 10);
   return {

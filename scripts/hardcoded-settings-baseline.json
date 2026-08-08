@@ -9651,11 +9651,6 @@
       "note": "Existing mutable policy candidate SessionStore.DEFAULT_HOT_CHANNEL_LIMIT; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/persistence/sessions/store.ts",
-      "name": "TAIL_DEGRADED_WARN_INTERVAL_MS",
-      "value": "30_000"
-    },
-    {
       "file": "src/persistence/sessions/store/channel-index-write-lock.ts",
       "name": "CHANNEL_INDEX_LOCK_TIMEOUT_MS",
       "value": "5_000"
@@ -9734,6 +9729,11 @@
       "file": "src/persistence/sessions/store/session-journal-write-lock.ts",
       "name": "JOURNAL_WRITE_LOCK_TIMEOUT_MS",
       "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/store/tail-operations.ts",
+      "name": "TAIL_DEGRADED_WARN_INTERVAL_MS",
+      "value": "30_000"
     },
     {
       "file": "src/persistence/sessions/store/turn-record-operations.ts",

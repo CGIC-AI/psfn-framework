@@ -361,6 +361,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
         return 'DENY';
       }
       const action = BEADS_ACTION_BY_METHOD[method];
+      if (!action) return 'DENY';
       if (action === 'close') {
         return ctx.callerClass === 'shard' ? 'ALLOW' : 'DENY';
       }
@@ -412,6 +413,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
         return 'DENY';
       }
       const action = VAULT_ACTION_BY_METHOD[method];
+      if (!action) return 'DENY';
       const allowedActions = new Set(vaultPolicy.allowActions ?? []);
       if (!allowedActions.has(action)) {
         return 'DENY';

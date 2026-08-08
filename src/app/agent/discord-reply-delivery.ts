@@ -64,6 +64,7 @@ export async function deliverDiscordReply(
   const attachments = response.attachments ?? [];
   while (checkpoint.nextAttachmentIndex < attachments.length) {
     const attachment = attachments[checkpoint.nextAttachmentIndex];
+    if (!attachment) break;
     try {
       await port.sendMedia(channelId, attachment);
     } catch (error) {

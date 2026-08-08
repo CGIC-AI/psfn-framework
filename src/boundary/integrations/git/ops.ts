@@ -122,7 +122,7 @@ export class GitOps implements GitOperations {
         const statusField = line.split(' ');
         const xy = statusField[1] ?? '';
         const filePath = parts.length > 1
-          ? parts[parts.length - 1]
+          ? (parts[parts.length - 1] ?? '')
           : statusField[statusField.length - 1] ?? '';
         if (xy.charAt(0) !== '.') staged.push(filePath);
         if (xy.charAt(1) !== '.') modified.push(filePath);

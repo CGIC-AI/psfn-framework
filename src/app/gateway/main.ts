@@ -300,6 +300,9 @@ async function main(): Promise<void> {
   } = privilegedCore;
   if (companionDatabaseTopology && companionDatabaseTopology.companions.length > 1) {
     const primary = companionDatabaseTopology.companions[0];
+    if (!primary) {
+      throw new Error('Fleet model usage startup requires a primary companion database entry');
+    }
     const modelUsageStore = privilegedServices.modelUsageStore;
     if (!modelUsageStore) {
       throw new Error('Fleet model usage startup requires its canonical gateway authority');

@@ -359,8 +359,10 @@ export function resolveCompanionUiActionClassification(
 ): { resource: CompanionUiActionResource; authorization: GardenRouteAuthorization; routeId: string } | undefined {
   if (method !== 'WS') return undefined;
   const match = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws\/actions\/([a-z_.]+)$/u.exec(canonicalPath);
-  if (!match || !isRfc4122Uuid(match[1]) || !RESOURCE_SET.has(match[2])) return undefined;
-  const resource = match[2] as CompanionUiActionResource;
+  const companionIdMatch = match?.[1];
+  const resourceMatch = match?.[2];
+  if (!companionIdMatch || !resourceMatch || !isRfc4122Uuid(companionIdMatch) || !RESOURCE_SET.has(resourceMatch)) return undefined;
+  const resource = resourceMatch as CompanionUiActionResource;
   return Object.freeze({ resource, authorization: authorizationFor(resource), routeId: companionUiActionRouteId(resource) });
 }
 

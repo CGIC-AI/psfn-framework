@@ -234,7 +234,7 @@ const VISION_CLASSIFIER_SYSTEM_PROMPT = [
 function buildImageContentPart(image: VisionIntakeImageInput): ScreenerUserContentPart {
   const dataBase64 = image.dataBase64?.trim();
   if (dataBase64) {
-    const mimeType = image.mimeType?.split(';')[0].trim().toLowerCase();
+    const mimeType = image.mimeType?.split(';')[0]?.trim().toLowerCase();
     if (!mimeType || !mimeType.startsWith('image/')) {
       throw new VisionScreenerError(
         'vision screener inline image requires an image/* mimeType alongside dataBase64',
@@ -502,7 +502,7 @@ function buildFailClosedContentRef(image: VisionIntakeImageInput, store: string)
     ref: `sha256:${sha256}`,
     sha256,
     sizeBytes: Buffer.byteLength(identity, 'utf8'),
-    mediaType: image.mimeType?.split(';')[0].trim().toLowerCase() || 'application/octet-stream',
+    mediaType: image.mimeType?.split(';')[0]?.trim().toLowerCase() || 'application/octet-stream',
   };
 }
 

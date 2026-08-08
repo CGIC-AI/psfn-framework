@@ -63,7 +63,7 @@ function isMissingAsset(error: unknown): boolean {
 function pageContentSecurityPolicy(html: string): string {
   const hashes = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/giu)]
     .map(match => match[1])
-    .filter(source => source.length > 0)
+    .filter((source): source is string => typeof source === 'string' && source.length > 0)
     .map(source => `'sha256-${createHash('sha256').update(source).digest('base64')}'`);
   return [
     "default-src 'none'",

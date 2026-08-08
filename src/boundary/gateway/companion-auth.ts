@@ -42,6 +42,7 @@ export function verifyCompanionAuthToken(
   const match = token?.trim().match(TOKEN_PATTERN);
   if (!match) return false;
   const [, keyVersion, observedDigest] = match;
+  if (!keyVersion || !observedDigest) return false;
   const key = keyring.keys[keyVersion];
   if (!key) return false;
   const expectedDigest = computeCompanionAuthDigest(companionId.trim(), role, key);

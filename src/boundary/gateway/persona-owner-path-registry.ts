@@ -105,7 +105,8 @@ export function createPersonaOwnerPathRegistry(input: {
       if (options.includeOwnerContainers) {
         const containedOwners = owners.filter(owner => pathContains(canonicalTarget, owner.canonicalPath));
         if (containedOwners.length === 1) {
-          return { pathClass: containedOwners[0].pathClass };
+          const owner = containedOwners[0];
+          return { pathClass: owner?.pathClass ?? 'persona_owner_container' };
         }
         if (containedOwners.length > 1) {
           return { pathClass: 'persona_owner_container' };

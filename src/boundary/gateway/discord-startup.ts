@@ -53,7 +53,7 @@ function parseStatusCode(error: Error): number | null {
     return maybeStatus;
   }
   const match = error.message.match(/\b(?:status|code)\s*[:=]?\s*([45]\d{2})\b/i);
-  if (match) {
+  if (match?.[1]) {
     return Number.parseInt(match[1], 10);
   }
   return null;

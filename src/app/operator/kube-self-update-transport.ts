@@ -175,7 +175,11 @@ export async function currentDeployedRevision(
   if (revisions.length === 0) {
     throw new Error('Kube self-update transport: helm history is empty; cannot resolve current revision.');
   }
-  return revisions[0];
+  const latest = revisions[0];
+  if (latest === undefined) {
+    throw new Error('Kube self-update transport: helm history resolved no current revision.');
+  }
+  return latest;
 }
 
 /**
@@ -200,7 +204,11 @@ export function createLiveRollbackTargetResolver(
     if (candidates.length === 0) {
       return { kind: 'no_previous_revision' };
     }
-    return { kind: 'target', targetRevision: candidates[0] };
+    const targetRevision = candidates[0];
+    if (targetRevision === undefined) {
+      return { kind: 'no_previous_revision' };
+    }
+    return { kind: 'target', targetRevision };
   };
 }
 

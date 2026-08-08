@@ -43,7 +43,5 @@ export type {
   AgentToolUpdateCallback,
   StreamFn,
 } from '@earendil-works/pi-agent-core';
-export type { ThinkingLevel } from '@earendil-works/pi-ai';
-
 // Repo-owned tool contract (validated-params variant of AgentTool).
 export type { SubstrateAgentTool } from './substrate-agent-tool.js';

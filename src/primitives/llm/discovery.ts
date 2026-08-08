@@ -39,7 +39,7 @@ export interface GatewayModelDiscoveryTransport {
  * two credential states never share a fetch, but the secret value itself is
  * never part of any key.
  */
-export type ModelDiscoveryAuthPresence = 'present' | 'none';
+type ModelDiscoveryAuthPresence = 'present' | 'none';
 
 /**
  * Credential handle for a discovery source. `authPresence` is computed once at

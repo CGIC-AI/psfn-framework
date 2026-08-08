@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { buildShardLineageEnvelope } from './result-lineage.js';
 
 const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
@@ -54,7 +55,7 @@ describe('buildShardLineageEnvelope', () => {
   });
 
   it('fails closed when the source message is malformed', () => {
-    expect(() => buildShardLineageEnvelope({
+    expect(() => buildShardLineageEnvelope(fromAny({
       kind: 'wyoming',
       coreCompanionId: TEST_COMPANION_ID,
       shardId: 'shard-123',
@@ -67,7 +68,7 @@ describe('buildShardLineageEnvelope', () => {
         authorName: 'Wyoming Voice User',
         timestamp: new Date('2026-03-28T12:00:00.000Z'),
       },
-    } as any)).toThrow('Shard lineage source message id cannot be empty');
+    }))).toThrow('Shard lineage source message id cannot be empty');
   });
 
   it('retains intake snapshots from the source message across foldback lineage', () => {

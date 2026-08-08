@@ -17,18 +17,21 @@ import { SalienceDecay } from './decay.js';
 import { collectRecentLexicalMemoryCandidates } from './retrieval/candidates.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 
-const postgresMocks = vi.hoisted(() => ({
-  activePool: null as any,
-  createPostgresPool: vi.fn(() => postgresMocks.activePool as never),
-  ensurePostgresSchema: vi.fn(async () => undefined),
-  executeQuery: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
-    return await postgresMocks.activePool.query(text, values);
-  }),
-  queryRows: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
-    const result = await postgresMocks.activePool.query(text, values);
-    return result.rows;
-  }),
-}));
+const postgresMocks = vi.hoisted(() => {
+  const activePool: FakeMemoryPool | null = null;
+  return {
+    activePool,
+    createPostgresPool: vi.fn(() => postgresMocks.activePool as never),
+    ensurePostgresSchema: vi.fn(async () => undefined),
+    executeQuery: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
+      return await postgresMocks.activePool.query(text, values);
+    }),
+    queryRows: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
+      const result = await postgresMocks.activePool.query(text, values);
+      return result.rows;
+    }),
+  };
+});
 
 interface MemoryRow {
   id: string;

@@ -22,10 +22,11 @@ import {
 } from '../../shared/logger.js';
 
 const discordMock = vi.hoisted(() => {
+  const createdClients: unknown[] = [];
   return {
     channelsById: new Map<string, unknown>(),
     channelsCacheById: new Map<string, unknown>(),
-    createdClients: [] as any[],
+    createdClients,
   };
 });
 

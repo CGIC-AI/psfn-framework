@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { IncomingMessage } from 'node:http';
@@ -391,8 +392,7 @@ function createBridgedGateway() {
   );
   agentConn.toHost = (data) => {
     // json-rpc-2.0 receiveAndSend() payload param is typed as `any`.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    void hostClient.receiveAndSend(data as any);
+    void hostClient.receiveAndSend(fromAny(data));
   };
   return { agentConn, gatewayClient, hostClient, sentMethods };
 }

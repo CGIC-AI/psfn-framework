@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   DEFAULT_REEXEC_RESTART_EXIT_CODE,
   RUNTIME_MODE,
@@ -50,7 +51,7 @@ describe('startup entrypoint wiring', () => {
 
   it('rejects disabled startup contracts', () => {
     expect(() => resolveRuntimeModeContract({
-      entrypoint: 'single' as any,
+      entrypoint: fromAny('single'),
     })).toThrow('Unsupported runtime entrypoint');
   });
 });

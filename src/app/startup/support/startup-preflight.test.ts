@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -83,7 +84,7 @@ describe('resolveStartupLifecycleBundle', () => {
 
   it('rejects disabled startup contracts through the shared preflight surface', () => {
     expect(() => resolveStartupLifecycleBundle({
-      entrypoint: 'single' as any,
+      entrypoint: fromAny('single'),
       env: {},
     })).toThrow('Unsupported runtime entrypoint "single"');
   });

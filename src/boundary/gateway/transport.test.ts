@@ -971,6 +971,8 @@ describe('NdjsonConnection framing', () => {
         code: 'ECONNRESET',
       });
 
+      // Intentional private-property access to the internal readline interface;
+      // shoehorn cannot express property access on a hidden field (psfn-framework-aicg6.13).
       (serverConn as any).rl.emit('error', resetError);
 
       await waitFor(() => connectionErrors.length === 1);

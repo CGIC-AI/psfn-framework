@@ -529,10 +529,10 @@ export class PostgresEpisodicStore implements
         WHERE id = $1
         LIMIT 1
       `, [arcId]);
-      if (result.rows.length === 0) {
+      const row = result.rows[0];
+      if (row === undefined) {
         throw new Error(`removeEpisodeArc references unknown arc "${arcId}"`);
       }
-      const row = result.rows[0];
       if (!isActivePostgresArcRow(row)) {
         throw new Error(`arc "${arcId}" is already retired and cannot be removed again`);
       }
@@ -636,6 +636,7 @@ export class PostgresEpisodicStore implements
       `, [row.id, newSource, newTarget])).rows;
       if (duplicates.length > 0) {
         const duplicate = duplicates[0];
+        if (duplicate === undefined) continue;
         await this.retireArc(client, row.id, duplicate.id, nowIso);
         await this.insertArcAudit(client, row.id, 'removed', audit, {
           cause: 'repoint_duplicate',
@@ -1407,10 +1408,10 @@ export class PostgresEpisodicStore implements
       WHERE id = $1
       LIMIT 1
     `, [normalizedId]);
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       throw new Error(`${field} references unknown episode "${normalizedId}"`);
     }
-    const row = result.rows[0];
     if (row.merged_into_episode_id !== null || row.superseded_by_episode_id !== null) {
       throw new Error(`${field} references episode "${normalizedId}" which is no longer live`);
     }

@@ -346,7 +346,10 @@ function inferThemes(entries: readonly SessionEntry[]): string[] {
 }
 
 function summarizeTitle(entries: readonly SessionEntry[], themes: readonly string[]): string {
-  const firstUserEntry = entries.find(entry => entry.role === 'user') ?? entries[0];
+  const firstUserEntry = entries.find(entry => entry.role === 'user') ?? entries.at(0);
+  if (!firstUserEntry) {
+    return `Conversation about ${themes.slice(0, 2).join(' and ')}`;
+  }
   const text = normalizeContent(firstUserEntry.content);
   if (text.length > 0) {
     const clipped = text.length > 72 ? `${text.slice(0, 69)}...` : text;
@@ -356,11 +359,11 @@ function summarizeTitle(entries: readonly SessionEntry[], themes: readonly strin
 }
 
 function summarizeLandmark(entries: readonly SessionEntry[], themes: readonly string[]): string {
-  if (entries.length === 0) {
+  const first = entries.at(0);
+  const last = entries.at(-1);
+  if (!first || !last) {
     throw new Error('Cannot summarize an empty episode group');
   }
-  const first = entries[0];
-  const last = entries[entries.length - 1];
   const userTurns = entries.filter(entry => entry.role === 'user').length;
   const assistantTurns = entries.filter(entry => entry.role === 'assistant').length;
   return [
@@ -429,11 +432,11 @@ function buildMachineSignals(entries: readonly SessionEntry[]): EpisodeMachineSi
 }
 
 function buildSpanRef(sessionId: string, entries: readonly SessionEntry[]): EpisodeSpanRef {
-  if (entries.length === 0) {
+  const first = entries.at(0);
+  const last = entries.at(-1);
+  if (!first || !last) {
     throw new Error('Cannot build an episode span for an empty group');
   }
-  const first = entries[0];
-  const last = entries[entries.length - 1];
   return {
     spanId: stableId('l0-session-span', [
       sessionId,
@@ -510,11 +513,11 @@ function buildEpisodeInput(
   group: EpisodeGroup,
 ): EpisodeCandidateInput {
   const entries = group.entries;
-  if (entries.length === 0) {
+  const first = entries.at(0);
+  const last = entries.at(-1);
+  if (!first || !last) {
     throw new Error('Cannot synthesize an empty episode group');
   }
-  const first = entries[0];
-  const last = entries[entries.length - 1];
 
   const themes = inferThemes(entries);
   const spanRef = buildSpanRef(sessionId, entries);
@@ -786,9 +789,10 @@ export class EpisodicSynthesizer {
 
     for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
       if (state.candidatesProcessed >= this.maxEpisodesPerRun) break;
-      const group = groups[groupIndex];
+      const group = groups.at(groupIndex);
+      if (!group) continue;
       const isFinalGroup = groupIndex === groups.length - 1;
-      const channelId = group.entries[0].channelId;
+      const channelId = group.entries.at(0)?.channelId ?? input.sessionId;
 
       let segments: TopicSegment[];
       try {
@@ -823,7 +827,8 @@ export class EpisodicSynthesizer {
       let heldForChunk = 0;
       const segmentGroups: EpisodeGroup[] = [];
       for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-        const segment = segments[segmentIndex];
+        const segment = segments.at(segmentIndex);
+        if (!segment) continue;
         const segmentEntries = group.entries.slice(segment.startIndex, segment.endIndex + 1);
         const isTrailingOpenTopic = isFinalGroup
           && segmentIndex === segments.length - 1
@@ -1282,7 +1287,10 @@ export class EpisodicSynthesizer {
     const candidateDecisionIds = candidateDecisionId
       ? mergeStringSets(previousDecisionIds, [candidateDecisionId])
       : previousDecisionIds;
-    const candidateSpan = candidate.spanRefs[0];
+    const candidateSpan = candidate.spanRefs.at(0);
+    if (!candidateSpan) {
+      throw new Error('Episode candidate must have at least one span reference');
+    }
     const watermarkCeilingMs = this.now();
     const watermarkCeiling = toIsoInstant(watermarkCeilingMs);
     const clampCandidateInstant = (instant: string): string => {

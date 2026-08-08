@@ -212,6 +212,7 @@ export function extractMentionOnlyContactCandidate(params: {
   const relationBeforeName = RELATIONSHIP_BEFORE_NAME.exec(params.fact.text);
   if (relationBeforeName) {
     const [, relationKeyword, relationName] = relationBeforeName;
+    if (!relationKeyword || !relationName) return undefined;
     const candidateName = cleanCandidateName(relationName);
     if (!isExcludedCandidateName(candidateName, excludedNames)) {
       return {
@@ -225,6 +226,7 @@ export function extractMentionOnlyContactCandidate(params: {
   const nameBeforeRelationship = NAME_BEFORE_RELATIONSHIP.exec(params.fact.text);
   if (nameBeforeRelationship) {
     const [, relationName, relationKeyword] = nameBeforeRelationship;
+    if (!relationName || !relationKeyword) return undefined;
     const candidateName = cleanCandidateName(relationName);
     if (!isExcludedCandidateName(candidateName, excludedNames)) {
       return {
@@ -237,6 +239,7 @@ export function extractMentionOnlyContactCandidate(params: {
 
   for (const match of params.fact.text.matchAll(CAPITALIZED_NAME)) {
     const [, matchedName] = match;
+    if (!matchedName) continue;
     const candidateName = cleanCandidateName(matchedName);
     if (isExcludedCandidateName(candidateName, excludedNames)) continue;
     return {

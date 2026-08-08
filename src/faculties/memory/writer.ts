@@ -522,6 +522,10 @@ export class MemoryWriter {
     if (sameTypeDups.length > 0) {
       // Duplicate found -- bump access count and salience
       const existing = sameTypeDups[0];
+      if (!existing) {
+        // Defensive invariant: the length check above guarantees a first element.
+        throw new Error('Invariant violated: sameTypeDups[0] is undefined despite length > 0');
+      }
       const updates: {
         lastAccessed: number;
         accessCount: number;
@@ -1386,9 +1390,17 @@ export class MemoryWriter {
 
     for (const [index, record] of acceptedRecords.entries()) {
       try {
-        const result = batchEmbeddings
-          ? await this.writeWithEmbedding(record, batchEmbeddings[index])
-          : await this.write(record);
+        let result: WriteResult;
+        if (batchEmbeddings !== null) {
+          const embedding = batchEmbeddings[index];
+          if (!embedding) {
+            // Defensive invariant: batch embedding lengths were validated above.
+            throw new Error(`Invariant violated: missing embedding at index ${index}`);
+          }
+          result = await this.writeWithEmbedding(record, embedding);
+        } else {
+          result = await this.write(record);
+        }
         results.push(result);
 
         switch (result.action) {

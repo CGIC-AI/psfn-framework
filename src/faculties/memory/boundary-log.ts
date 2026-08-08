@@ -96,6 +96,7 @@ function findNearestUserRequest(entries: readonly SessionEntry[], refusalIndex: 
   let checkedUsers = 0;
   for (let index = refusalIndex - 1; index >= 0; index--) {
     const candidate = entries[index];
+    if (candidate === undefined) continue;
     if (candidate.role !== 'user') continue;
 
     checkedUsers++;

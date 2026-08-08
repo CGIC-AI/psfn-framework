@@ -330,14 +330,14 @@ export async function refreshContactProfile(
 }
 
 function parseProfileSummary(response: string): string {
-  const summaryTag = response.match(/<summary>([\s\S]*?)<\/summary>/i);
-  if (summaryTag && summaryTag[1].trim().length > 0) {
-    return summaryTag[1].trim();
+  const summaryTag = response.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1]?.trim();
+  if (summaryTag && summaryTag.length > 0) {
+    return summaryTag;
   }
 
-  const profileTag = response.match(/<profile>([\s\S]*?)<\/profile>/i);
-  if (profileTag && profileTag[1].trim().length > 0) {
-    return profileTag[1]
+  const profileTag = response.match(/<profile>([\s\S]*?)<\/profile>/i)?.[1]?.trim();
+  if (profileTag && profileTag.length > 0) {
+    return profileTag
       .replace(/<\/?[^>]+>/g, ' ')
       .trim();
   }
@@ -492,7 +492,9 @@ function profileSummaryAliasesTargetToMentionedName(
   const aliasClaimPattern =
     /\b(?:this contact|the contact|contact|person|user|they|he|she|[A-Z][A-Za-z0-9_-]*)\b[^.!?\n]{0,120}\b(?:known as|also known as|goes by|called|by the name|named)\b([^.!?\n]+)/gi;
   for (const match of summary.matchAll(aliasClaimPattern)) {
-    const claimedNames = extractCapitalizedNameCandidates(match[1]);
+    const claimedNameText = match[1];
+    if (!claimedNameText) continue;
+    const claimedNames = extractCapitalizedNameCandidates(claimedNameText);
     if (claimedNames.some(name => !allowedNames.has(normalizeNameForCompare(name)))) {
       return true;
     }

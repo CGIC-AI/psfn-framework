@@ -246,6 +246,7 @@ function episodeScopeKey(episode: Episode): string {
 function sameSitting(chain: readonly Episode[], next: Episode, adjacencyGapMs: number): boolean {
   if (chain.length === 0) return false;
   const anchor = chain[0];
+  if (!anchor) return false;
   if (!sameEpisodeScope(anchor, next)) return false;
   const chainEndMs = Math.max(...chain.map(episode => parseInstant(episode.endedAt)));
   const gapMs = parseInstant(next.startedAt) - chainEndMs;
@@ -278,13 +279,16 @@ export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: n
     }
   }
   return chains.sort((left, right) => (
-    left[0]!.startedAt.localeCompare(right[0]!.startedAt)
-    || left[0]!.id.localeCompare(right[0]!.id)
+    (left[0]?.startedAt ?? '').localeCompare(right[0]?.startedAt ?? '')
+    || (left[0]?.id ?? '').localeCompare(right[0]?.id ?? '')
   ));
 }
 
 function mergeChainIntoHead(chain: readonly Episode[]): FirstPersonPreservingEpisodeUpdateInput {
   const head = chain[0];
+  if (!head) {
+    throw new Error('mergeChainIntoHead requires a non-empty chain');
+  }
   const meaningSource = chain.find(episode => episode.meaning !== undefined);
   return chain.slice(1).reduce<FirstPersonPreservingEpisodeUpdateInput>((merged, episode) => ({
     ...merged,
@@ -368,7 +372,7 @@ function mergeAffect(sources: readonly Episode[]): EpisodeAffect {
   const valenceSources = [...sources]
     .filter(episode => episode.affect.valence !== undefined)
     .sort((left, right) => right.salience.score - left.salience.score);
-  const valence = valenceSources.length > 0 ? valenceSources[0].affect.valence : undefined;
+  const valence = valenceSources.length > 0 ? valenceSources[0]?.affect.valence : undefined;
   return {
     ...(valence !== undefined ? { valence } : {}),
     ...(arousalValues.length > 0 ? { arousal: Math.max(...arousalValues) } : {}),
@@ -395,6 +399,9 @@ export function buildConsolidatedEpisodeInput(
     left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id)
   ));
   const head = ordered[0];
+  if (!head) {
+    throw new Error('a consolidated episode requires at least two source candidates');
+  }
   const spanRefs = ordered
     .map(episode => episode.spanRefs)
     .reduce((merged, refs) => mergeUnique(merged, refs, ref => ref.spanId));
@@ -763,10 +770,12 @@ export class SleepCycleEpisodeConsolidator {
     const consolidated: Episode[] = [...claimProtected];
     for (const chain of buildMergeChains(repairEligible, this.adjacencyGapMs)) {
       if (chain.length === 1) {
-        consolidated.push(chain[0]);
+        const only = chain[0];
+        if (only) consolidated.push(only);
         continue;
       }
       const head = chain[0];
+      if (!head) continue;
       const merged = await this.store.updateEpisodePreservingFirstPersonFields(
         mergeChainIntoHead(chain),
       );
@@ -959,8 +968,11 @@ export class SleepCycleEpisodeConsolidator {
     let llmBudget = this.maxConsolidationsPerRun;
     for (const cluster of clusters) {
       if (cluster.length === 1) {
-        await this.store.confirmEpisodeCanonical(cluster[0].id);
-        result.candidatesConfirmed += 1;
+        const onlyId = cluster[0]?.id;
+        if (onlyId) {
+          await this.store.confirmEpisodeCanonical(onlyId);
+          result.candidatesConfirmed += 1;
+        }
         continue;
       }
       if (llmBudget === 0) {
@@ -968,6 +980,8 @@ export class SleepCycleEpisodeConsolidator {
         continue;
       }
       llmBudget -= 1;
+      const clusterHead = cluster[0];
+      if (!clusterHead) continue;
 
       let groups: ThematicGroup[];
       try {
@@ -978,7 +992,7 @@ export class SleepCycleEpisodeConsolidator {
         result.consolidationFailures += 1;
         const failure: SleepConsolidationFailureEvent = {
           sessionId: input.sessionId,
-          scopeKey: episodeScopeKey(cluster[0]),
+          scopeKey: episodeScopeKey(clusterHead),
           candidateEpisodeIds: cluster.map(episode => episode.id),
           stage: 'thematic_grouping',
           error: error instanceof Error ? error.message : String(error),
@@ -996,11 +1010,19 @@ export class SleepCycleEpisodeConsolidator {
       const clusterById = new Map(cluster.map(episode => [episode.id, episode]));
       for (const group of groups) {
         if (group.candidateIds.length === 1) {
-          await this.store.confirmEpisodeCanonical(group.candidateIds[0]);
-          result.candidatesConfirmed += 1;
+          const onlyId = group.candidateIds[0];
+          if (onlyId) {
+            await this.store.confirmEpisodeCanonical(onlyId);
+            result.candidatesConfirmed += 1;
+          }
           continue;
         }
-        const sources = group.candidateIds.map(id => clusterById.get(id)!);
+        const sources = group.candidateIds.map(id => clusterById.get(id)).filter(
+          (episode): episode is Episode => episode !== undefined,
+        );
+        if (sources.length !== group.candidateIds.length) {
+          throw new Error('thematic group referenced candidate ids not present in the cluster');
+        }
         created.push(await this.applyThematicGroup(sources, group, input));
         result.consolidatedEpisodesCreated += 1;
         result.candidatesSuperseded += sources.length;
@@ -1082,13 +1104,17 @@ export class SleepCycleEpisodeConsolidator {
     recentEntries: readonly SessionEntry[],
     input: SleepCycleConsolidationRunInput,
   ): Promise<ThematicGroup[]> {
+    const clusterHead = cluster[0];
+    if (!clusterHead) {
+      throw new Error('groupClusterThematically requires a non-empty cluster');
+    }
     const clusterStart = cluster.reduce(
       (min, episode) => (episode.startedAt < min ? episode.startedAt : min),
-      cluster[0].startedAt,
+      clusterHead.startedAt,
     );
     const clusterEnd = cluster.reduce(
       (max, episode) => (episode.endedAt > max ? episode.endedAt : max),
-      cluster[0].endedAt,
+      clusterHead.endedAt,
     );
     const excerpt = transcriptExcerptForSpan(
       clusterStart,
@@ -1124,8 +1150,8 @@ export class SleepCycleEpisodeConsolidator {
       systemPrompt: THEMATIC_GROUPING_SYSTEM_PROMPT,
       requestPrompt,
       correlation: {
-        requestId: `sleep-consolidation:group:${input.sessionId}:${cluster[0].id}`,
-        channelId: cluster[0].channelId ?? input.sessionId,
+        requestId: `sleep-consolidation:group:${input.sessionId}:${clusterHead.id}`,
+        channelId: clusterHead.channelId ?? input.sessionId,
         callType: 'memory',
         purpose: 'memory.sleeptime.plan',
         originType: 'memory',

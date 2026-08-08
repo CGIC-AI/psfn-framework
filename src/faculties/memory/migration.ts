@@ -137,9 +137,14 @@ async function writePostgresReembeddedBatch(
   embeddings: readonly Float32Array[],
 ): Promise<void> {
   for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const embedding = embeddings[index];
+    if (row === undefined || embedding === undefined) {
+      throw new Error(`Unexpected missing row or embedding at index ${index}`);
+    }
     await client.query(
       'UPDATE l2_memories SET embedding = $2::vector WHERE id = $1',
-      [rows[index].id, toPostgresEmbeddingLiteral(embeddings[index])],
+      [row.id, toPostgresEmbeddingLiteral(embedding)],
     );
   }
 }
@@ -219,9 +224,11 @@ export async function runRetrievalValidation(
 
   const details: RetrievalValidationQueryResult[] = [];
 
-  for (let idx = 0; idx < queries.length; idx++) {
-    const query = queries[idx];
+  for (const [idx, query] of queries.entries()) {
     const embedding = queryEmbeddings[idx];
+    if (embedding === undefined) {
+      throw new Error(`Embedding missing for query at index ${idx}`);
+    }
     const rows = searchStmt.all(
       toEmbeddingBuffer(embedding),
       normalizedTopK,
@@ -310,6 +317,9 @@ export async function migratePostgresMemoryEmbeddings(
           if (batchIndex >= batches.length) return;
 
           const batch = batches[batchIndex];
+          if (batch === undefined) {
+            return;
+          }
 
           try {
             const embeddings = await embeddingService.embedBatch(batch.map(row => row.text));

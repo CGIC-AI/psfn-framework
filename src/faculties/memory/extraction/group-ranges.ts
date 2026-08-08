@@ -333,6 +333,7 @@ function chunkGroupMemoryEntries(params: {
     let estimatedTokens = 0;
     while (cursor < params.candidateEntries.length && newEntries.length < maxMessagesPerChunk) {
       const entry = params.candidateEntries[cursor];
+      if (entry === undefined) break;
       const entryTokens = Math.max(1, params.estimateEntryTokens(entry));
       if (
         newEntries.length > 0
@@ -346,13 +347,19 @@ function chunkGroupMemoryEntries(params: {
     }
     if (newEntries.length === 0) {
       const entry = params.candidateEntries[cursor];
+      if (entry === undefined) break;
       newEntries.push(entry);
       estimatedTokens = Math.max(1, params.estimateEntryTokens(entry));
       cursor += 1;
     }
 
-    const spanStartMessageId = newEntries[0].id;
-    const spanEndMessageId = newEntries[newEntries.length - 1].id;
+    const firstNewEntry = newEntries[0];
+    const lastNewEntry = newEntries[newEntries.length - 1];
+    if (firstNewEntry === undefined || lastNewEntry === undefined) {
+      break;
+    }
+    const spanStartMessageId = firstNewEntry.id;
+    const spanEndMessageId = lastNewEntry.id;
     const contextStartMessageId = Math.max(
       1,
       spanStartMessageId - params.settings.onlineExtraction.chunkOverlapMessages,

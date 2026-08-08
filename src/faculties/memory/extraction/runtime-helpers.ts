@@ -250,7 +250,7 @@ export function resolveCoveredUpToMessageId(
   }
 
   const latestEntry = sessionManager.getRecentMessages(channelId, 1)[0];
-  if (typeof latestEntry.id === 'number' && Number.isFinite(latestEntry.id)) {
+  if (latestEntry && typeof latestEntry.id === 'number' && Number.isFinite(latestEntry.id)) {
     return latestEntry.id;
   }
   return null;

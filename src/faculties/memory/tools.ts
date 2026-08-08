@@ -567,6 +567,9 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
         const records: MemoryWriteOptions[] = [];
         for (let i = 0; i < rawRecords.length; i++) {
           const r = rawRecords[i];
+          if (r === undefined) {
+            return textResultWithError(`Error: record[${i}] is missing`, true);
+          }
           const text = r.text as string;
           const type = r.type as MemoryType;
 
@@ -1248,6 +1251,9 @@ export function createMemoryTool(
             const records: MemoryWriteOptions[] = [];
             for (let i = 0; i < rawRecords.length; i++) {
               const record = rawRecords[i];
+              if (record === undefined) {
+                return textResultWithError(`Error: record[${i}] is missing`, true);
+              }
               const text = record.text.trim();
               const type = record.type;
 

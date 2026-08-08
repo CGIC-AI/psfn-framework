@@ -62,7 +62,7 @@ export interface AdminEnrollmentService {
 function actorFromRequest(context: GardenRequestContext | undefined): string {
   return context?.kind === 'fleet_principal'
     ? `fleet-principal:${context.actor.principalId}`
-    : 'legacy-token:operator';
+    : 'standalone-token:operator';
 }
 
 function toBindingView(binding: HubIdentityEnrollment): AdminEnrollmentBindingView {

@@ -249,7 +249,7 @@ interface PendingConfirmToken {
 }
 
 function decisionAuthorityBinding(context: GardenRequestContext | undefined): string {
-  if (!context || context.kind === 'legacy_token') return 'legacy-token:operator';
+  if (!context || context.kind === 'standalone_token') return 'standalone-token:operator';
   if (context.kind !== 'fleet_principal') return context.kind;
   return JSON.stringify({
     principalId: context.actor.principalId,

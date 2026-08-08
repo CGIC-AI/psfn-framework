@@ -261,7 +261,7 @@ describe('companion journal privacy break-glass gate', () => {
     },
   );
 
-  it('denies a legacy (non-fleet) operator context and audits the denial', async () => {
+  it('denies a standalone (non-fleet) operator context and audits the denial', async () => {
     const appendAudit = vi.fn();
     const routes = serviceRoutes(appendAudit);
     const route = routes.find(candidate => candidate.match('/api/admin/values/reflections/journal'));
@@ -270,7 +270,7 @@ describe('companion journal privacy break-glass gate', () => {
     const denied = await invokeRoute(
       route!,
       '/api/admin/values/reflections/journal',
-      { kind: 'legacy_token' } as unknown as GardenRequestContext,
+      { kind: 'standalone_token' } as unknown as GardenRequestContext,
     );
 
     expect(denied.status).toBe(403);

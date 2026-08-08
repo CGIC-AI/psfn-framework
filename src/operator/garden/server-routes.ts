@@ -23,7 +23,7 @@ import {
 } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 import { validateGardenRequestMetadata } from '../../boundary/fleet-auth/request-capability-target.js';
 import {
-  createLegacyGardenRequestContext,
+  createStandaloneGardenRequestContext,
   type GardenRequestContext,
 } from './garden-request-context.js';
 import { gardenRequestCompanionScopeDenial } from './garden-companion-scope.js';
@@ -70,7 +70,7 @@ export function dispatchAdminRoute(
     const params = route.match(path);
     if (!params) continue;
     bindRequestForResponse(res, req);
-    const requestContext = context ?? createLegacyGardenRequestContext({
+    const requestContext = context ?? createStandaloneGardenRequestContext({
       authorization: route.capability.authorization,
       routeId: route.capability.id,
       ...(companionId ? { companionId } : {}),
@@ -87,7 +87,7 @@ export function dispatchAdminRoute(
     // companion whose stores were captured at construction). Refuse to run any
     // companion-scoped route unless the authenticated request context names that
     // same companion, so a request for companion A can never touch companion B's
-    // schema, rows, or writes. Fails closed; legacy/public contexts are exempt.
+    // schema, rows, or writes. Fails closed; standalone/public contexts are exempt.
     const companionScopeDenial = gardenRequestCompanionScopeDenial(requestContext, companionId);
     if (companionScopeDenial) {
       sendJson(res, 403, { error: companionScopeDenial });

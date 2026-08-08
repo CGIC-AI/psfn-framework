@@ -6,7 +6,7 @@ import {
   GardenCompanionScopeError,
 } from './garden-companion-scope.js';
 import {
-  createLegacyGardenRequestContext,
+  createStandaloneGardenRequestContext,
   type FleetGardenRequestContext,
   type GardenRequestContext,
   type PublicGardenRequestContext,
@@ -102,17 +102,17 @@ describe('gardenRequestCompanionScopeDenial (invariant 11)', () => {
     );
   });
 
-  it('exempts a legacy-token context (single-companion Garden behavior unchanged)', () => {
-    const legacy: GardenRequestContext = createLegacyGardenRequestContext({
+  it('exempts a standalone-token context (single-companion Garden behavior unchanged)', () => {
+    const standalone: GardenRequestContext = createStandaloneGardenRequestContext({
       authorization: AUTHORIZATION,
       routeId: 'GET /api/admin/dashboard',
       companionId: COMPANION_A,
       pathParams: {},
       query: {},
     });
-    // Even a mismatched bound companion is irrelevant for legacy: no fleet target.
-    expect(gardenRequestCompanionScopeDenial(legacy, COMPANION_B)).toBeNull();
-    expect(gardenRequestCompanionScopeDenial(legacy, undefined)).toBeNull();
+    // Even a mismatched bound companion is irrelevant for standalone: no fleet target.
+    expect(gardenRequestCompanionScopeDenial(standalone, COMPANION_B)).toBeNull();
+    expect(gardenRequestCompanionScopeDenial(standalone, undefined)).toBeNull();
   });
 
   it('exempts a public context', () => {

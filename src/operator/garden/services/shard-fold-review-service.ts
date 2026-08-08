@@ -27,10 +27,10 @@ type ParentScope =
  * store.
  *
  * - A context that names a parent companion (every fleet principal, and any
- *   companion-bound legacy transport whose config.companionId is set) is
+ *   companion-bound standalone transport whose config.companionId is set) is
  *   `scoped`: reviews, active shards, and configuration are filtered to that
  *   parent's lineage so one parent can never see or mutate another's shards.
- * - A legacy single-companion Garden whose transport did not carry a companion
+ * - A standalone single-companion Garden whose transport did not carry a companion
  *   id is `unscoped`: that transport binds to exactly one companion's fold-review
  *   store, so there is no cross-parent surface to filter and fold review plus
  *   lineage stay visible exactly as the pre-fleet routes exposed them.
@@ -43,7 +43,7 @@ function resolveParentScope(context: GardenRequestContext | undefined): ParentSc
   if (typeof companionId === 'string' && companionId.length > 0) {
     return { kind: 'scoped', parentCompanionId: companionId };
   }
-  if (context.kind === 'legacy_token') return { kind: 'unscoped' };
+  if (context.kind === 'standalone_token') return { kind: 'unscoped' };
   return { kind: 'denied' };
 }
 

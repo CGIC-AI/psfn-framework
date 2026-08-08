@@ -574,7 +574,7 @@ export class AdminSessionDataService implements AdminSessionService {
    * - the route must carry an explicit request-local subject relation; and
    * - the actor must carry a non-empty authenticated contact binding.
    *
-   * Returns `null` for legacy/public contexts (single-companion Garden
+   * Returns `null` for standalone/public contexts (single-companion Garden
    * behavior is unchanged) and throws fail-closed for any fleet context that
    * cannot be subject-bound. Role never widens visibility.
    */
@@ -614,7 +614,7 @@ export class AdminSessionDataService implements AdminSessionService {
    * consults the mutable last-entry-author heuristic (a participant in a
    * multi-author channel could regain visibility at will by posting last)
    * and fails closed on multi-participant journals. Display paths for the
-   * legacy operator Garden keep the heuristic resolver.
+   * standalone operator Garden keep the heuristic resolver.
    */
   private resolveStableLinkedContactForRow(row: AdminSessionListRow, contacts: Contact[]) {
     return getStableLinkedContactForSession({

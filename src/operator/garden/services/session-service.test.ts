@@ -1994,9 +1994,9 @@ describe('subject-bound session projection (88u3)', () => {
     expect(fleetList.channels.map(channel => channel.channelId))
       .toEqual(['discord:dm:1111']);
 
-    // Legacy operator context keeps the unpartitioned single-companion view.
-    const legacyList = await service.listSessions();
-    expect(legacyList.channels).toHaveLength(2);
+    // Standalone operator context keeps the unpartitioned single-companion view.
+    const standaloneList = await service.listSessions();
+    expect(standaloneList.channels).toHaveLength(2);
   });
 
   it('surfaces another subject session as not found across every fleet read path', async () => {
@@ -2335,10 +2335,10 @@ describe('subject-bound session projection (88u3)', () => {
     expect(detail.turn.record.observability?.snapshot?.memory?.proactiveCandidates).toEqual([]);
     expect(JSON.stringify(detail)).not.toContain('FOREIGN_SUBJECT_SECRET');
 
-    // The legacy operator read stays unfiltered.
-    const legacy = await service.getSessionTurnDetail(channelId, turnId);
-    expect(legacy.turn.promptLoom?.subsystemOutputs.memoryWrites).toHaveLength(2);
-    expect(legacy.turn.snapshot?.memory?.semanticCandidates).toHaveLength(2);
-    expect(legacy.turn.record.observability?.snapshot?.memory?.semanticCandidates).toHaveLength(2);
+    // The standalone operator read stays unfiltered.
+    const standalone = await service.getSessionTurnDetail(channelId, turnId);
+    expect(standalone.turn.promptLoom?.subsystemOutputs.memoryWrites).toHaveLength(2);
+    expect(standalone.turn.snapshot?.memory?.semanticCandidates).toHaveLength(2);
+    expect(standalone.turn.record.observability?.snapshot?.memory?.semanticCandidates).toHaveLength(2);
   });
 });

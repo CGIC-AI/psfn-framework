@@ -389,7 +389,7 @@ normal trusted-origin provenance checks for harness traffic.
 They authenticate with `TESTING_HARNESS_API_KEY`. `PSFN_ADMIN_BASE` remains the
 direct Garden origin only for the public `/health` probe; `ADMIN_TOKEN` is no
 longer required by the kube case harness or tier-conformance sweep. Local,
-non-Fleet bootstrap keeps its legacy direct Garden transport and `ADMIN_TOKEN`.
+non-Fleet bootstrap keeps its standalone direct Garden transport and `ADMIN_TOKEN`.
 The Playwright operator UI sweep is a separate browser exercise and is not
 converted into a bearer-admin client.
 

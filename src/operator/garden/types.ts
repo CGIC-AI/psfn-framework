@@ -129,7 +129,7 @@ export type AdminAuditHistorySource = 'garden' | 'gateway' | 'charge';
 
 export interface AdminAuditRequestAttribution {
   actor: {
-    kind: 'fleet_principal' | 'legacy_operator' | 'public';
+    kind: 'fleet_principal' | 'standalone_operator' | 'public';
     principalId?: string;
     contactId?: string;
     role?: 'owner' | 'admin' | 'member' | 'guest';

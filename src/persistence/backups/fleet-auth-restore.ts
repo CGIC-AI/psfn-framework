@@ -295,10 +295,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
   if (parsed.authorityState.length !== 1) {
     throw new Error('Invalid fleet auth snapshot: authorityState must contain its singleton row');
   }
-  if (parsed.authorityState[0]?.singleton !== true) {
+  const authorityState = parsed.authorityState[0];
+  if (authorityState === undefined || authorityState.singleton !== true) {
     throw new Error('Invalid fleet auth snapshot: authorityState singleton marker is invalid');
   }
-  if (parsed.authorityState[0]?.authority_lineage_id !== value.authorityLineageId) {
+  if (authorityState.authority_lineage_id !== value.authorityLineageId) {
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {

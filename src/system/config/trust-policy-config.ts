@@ -363,11 +363,13 @@ function visibilityMapEquals(
   const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
   const expectedEntries = Object.entries(expected).sort(([a], [b]) => a.localeCompare(b));
   return actualEntries.length === expectedEntries.length
-    && actualEntries.every(([key, value], index) => (
-      key === expectedEntries[index]?.[0]
-      && value.privacy === expectedEntries[index]?.[1]?.privacy
-      && value.broadcast === expectedEntries[index]?.[1]?.broadcast
-    ));
+    && actualEntries.every(([key, value], index) => {
+      const expectedEntry = expectedEntries[index];
+      return expectedEntry !== undefined
+        && key === expectedEntry[0]
+        && value.privacy === expectedEntry[1].privacy
+        && value.broadcast === expectedEntry[1].broadcast;
+    });
 }
 
 function isKnownOldDefaultTrustPolicy(config: TrustPolicyConfig): boolean {

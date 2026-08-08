@@ -919,9 +919,11 @@ export class PromptLayerStore {
 
   private ensureFoundationLayers(systemPrompt: string): boolean {
     const currentFoundationLayers = this.layers.filter(layer => isCanonicalCharacterFoundationLayer(layer));
+    const firstLayer = currentFoundationLayers[0];
     const legacyMonolith = currentFoundationLayers.length === 1
-      && currentFoundationLayers[0]?.name === CANONICAL_CHARACTER_FOUNDATION_NAME
-      && currentFoundationLayers[0]?.identifier === 'main';
+      && firstLayer !== undefined
+      && firstLayer.name === CANONICAL_CHARACTER_FOUNDATION_NAME
+      && firstLayer.identifier === 'main';
     if (legacyMonolith) {
       return this.migrateLegacyCanonicalFoundation(systemPrompt);
     }

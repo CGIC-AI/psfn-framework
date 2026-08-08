@@ -596,7 +596,7 @@ async function main(): Promise<void> {
             completedAt: Date.now(),
             capturedSessionReads: {} as never,
           }, fixedNotifyCatalogSource);
-          const [action] = toInferredPostTurnActions(candidates, message);
+          const action = toInferredPostTurnActions(candidates, message)[0]!;
           await startup.eventBus.emit('agent.post_turn.actions.inferred', {
             message,
             response: {

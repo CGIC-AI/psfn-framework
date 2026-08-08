@@ -114,7 +114,7 @@ function parseCliArgs(argv: readonly string[]): CliOptions {
         throw new Error(`${arg} requires a value`);
       }
       const value = argv[index + 1];
-      if (value.startsWith('--')) {
+      if (value === undefined || value.startsWith('--')) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;

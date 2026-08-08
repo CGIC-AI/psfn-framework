@@ -737,6 +737,7 @@ export function registerGatewayMessageHandlers(
     let index = 0;
     while (index < discordPromptQueue.length) {
       const entry = discordPromptQueue[index];
+      if (!entry) break;
       if (entry.retryDelivery) break;
       if (entry.message.channelId === first.message.channelId) {
         if (entry.message.authorId !== first.message.authorId) break;
@@ -750,9 +751,15 @@ export function registerGatewayMessageHandlers(
   };
 
   const bundleDiscordMessages = (entries: readonly QueuedDiscordMessage[]): SubstrateMessage => {
+    if (entries.length === 0) {
+      throw new Error('bundleDiscordMessages called with empty entries');
+    }
     if (entries.length === 1) return entries[0].message;
     const messages = entries.map((entry) => entry.message);
     const newest = messages[messages.length - 1];
+    if (!newest) {
+      throw new Error('bundleDiscordMessages could not resolve newest message');
+    }
     return {
       ...newest,
       content: messages

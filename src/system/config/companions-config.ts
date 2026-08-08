@@ -312,7 +312,9 @@ function assertNoDuplicateField(
 ): void {
   const seen = new Map<string, number>();
   for (let index = 0; index < companions.length; index += 1) {
-    const value = select(companions[index]);
+    const entry = companions[index];
+    if (!entry) continue;
+    const value = select(entry);
     const previous = seen.get(value);
     if (previous !== undefined) {
       throw new Error(
@@ -326,9 +328,13 @@ function assertNoDuplicateField(
 
 function assertNoOverlappingDataDirs(companions: readonly CompanionFleetEntry[]): void {
   for (let i = 0; i < companions.length; i += 1) {
-    const first = companions[i].companionDataDir;
+    const firstEntry = companions[i];
+    if (!firstEntry) continue;
+    const first = firstEntry.companionDataDir;
     for (let j = i + 1; j < companions.length; j += 1) {
-      const second = companions[j].companionDataDir;
+      const secondEntry = companions[j];
+      if (!secondEntry) continue;
+      const second = secondEntry.companionDataDir;
       if (
         resolve(first) === resolve(second)
         || isStrictSubpath(first, second)

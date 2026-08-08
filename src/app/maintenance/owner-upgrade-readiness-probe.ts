@@ -32,7 +32,12 @@ function parseArgs(argv: string[]): CliOptions {
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];
     const value = argv[index + 1];
-    if (!name.startsWith('--') || index + 1 >= argv.length || value.startsWith('--')) {
+    if (
+      name === undefined
+      || value === undefined
+      || !name.startsWith('--')
+      || value.startsWith('--')
+    ) {
       throw new Error('Arguments must use exact --name value pairs');
     }
     if (name === '--mode') {

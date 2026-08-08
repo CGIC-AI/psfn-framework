@@ -372,7 +372,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
       );
     }
 
-    const driveValues: Record<string, number> = {};
+    const driveValues = {} as Record<(typeof SERVER_DRIVE_KEYS)[number], number>;
     for (const key of SERVER_DRIVE_KEYS) {
       driveValues[key] = expectFiniteNumber(drives[key], `agent ${this.agentName} drives.${key}`);
     }

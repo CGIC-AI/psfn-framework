@@ -578,7 +578,14 @@ export type L3ScreeningOutcome =
   };
 
 function aggregateL3Verdicts(verdicts: L3Verdict[], dual: boolean): L3AggregateVerdict {
+  if (verdicts.length === 0) {
+    throw new Error('aggregateL3Verdicts: no verdicts provided');
+  }
   const flaggedVerdict = verdicts.find((verdict) => verdict.flagged);
+  const primary = verdicts[0];
+  if (!primary) {
+    throw new Error('aggregateL3Verdicts: primary verdict missing after length check');
+  }
   const labels = new Set<IntakeRiskLabel>();
   for (const verdict of verdicts) {
     for (const label of verdict.labels) labels.add(label);
@@ -588,7 +595,7 @@ function aggregateL3Verdicts(verdicts: L3Verdict[], dual: boolean): L3AggregateV
     flagged: flaggedVerdict !== undefined,
     labels: [...labels],
     injectionConfidence: Math.max(...verdicts.map((verdict) => verdict.injectionConfidence)),
-    safeRepresentation: (flaggedVerdict ?? verdicts[0]).safeRepresentation,
+    safeRepresentation: (flaggedVerdict ?? primary).safeRepresentation,
     dual,
     models: verdicts.map((verdict) => verdict.model),
   };
@@ -723,9 +730,13 @@ export function l3ScreeningContribution(
   const modelFields = [L3_FIELD_MODEL, L3_FIELD_MODEL_SECONDARY];
   for (const [index, verdict] of outcome.verdicts.entries()) {
     if (index >= scannerIds.length) break;
-    scores[scannerIds[index]] = verdict.injectionConfidence;
-    extractedFields[verdictFields[index]] = verdict.flagged ? 'flagged' : 'clear';
-    extractedFields[modelFields[index]] = verdict.model;
+    const scannerId = scannerIds[index];
+    const verdictField = verdictFields[index];
+    const modelField = modelFields[index];
+    if (!scannerId || !verdictField || !modelField) break;
+    scores[scannerId] = verdict.injectionConfidence;
+    extractedFields[verdictField] = verdict.flagged ? 'flagged' : 'clear';
+    extractedFields[modelField] = verdict.model;
     for (const label of verdict.labels) labels.add(label);
   }
 

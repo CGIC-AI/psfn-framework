@@ -939,6 +939,9 @@ function resolveQueuedMessageAttribution(messages: readonly AgentMessage[]): Que
 
 function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: number): ToolCallDescriptor[] {
   const first = descriptors[startIndex];
+  if (!first) {
+    return [];
+  }
   if (first.metadata.class === 'exclusive') {
     return [first];
   }
@@ -946,6 +949,9 @@ function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: n
   const batch: ToolCallDescriptor[] = [first];
   for (let index = startIndex + 1; index < descriptors.length; index += 1) {
     const candidate = descriptors[index];
+    if (!candidate) {
+      break;
+    }
     if (
       batch.some((entry) => !canRunConcurrently(entry, candidate))
     ) {

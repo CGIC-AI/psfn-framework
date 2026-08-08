@@ -324,12 +324,14 @@ export function filterPersonalFactProposals(
     let overlapReason: string | null = null;
     for (let index = 0; index < guardTokenSets.length; index += 1) {
       const guardTokens = guardTokenSets[index];
-      if (guardTokens.size === 0) continue;
+      if (!guardTokens || guardTokens.size === 0) continue;
+      const guardMemory = guardMemories[index];
+      if (!guardMemory) continue;
       const shared = sharedTokenCount(proposalTokens, guardTokens);
       const ratio = shared / guardTokens.size;
       if (shared >= GUARD_MIN_SHARED_ABSOLUTE
         || (shared >= GUARD_MIN_SHARED_RATIO && ratio >= GUARD_RATIO_THRESHOLD)) {
-        overlapReason = `restates personal memory "${guardMemories[index].id}" (${String(shared)} shared terms)`;
+        overlapReason = `restates personal memory "${guardMemory.id}" (${String(shared)} shared terms)`;
         break;
       }
     }

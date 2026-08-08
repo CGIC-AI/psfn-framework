@@ -111,8 +111,8 @@ export class GitOps implements GitOperations {
       } else if (line.startsWith('# branch.ab ')) {
         const match = line.match(/\+(\d+) -(\d+)/);
         if (match) {
-          ahead = parseInt(match[1], 10);
-          behind = parseInt(match[2], 10);
+          ahead = parseInt(match[1] ?? '0', 10);
+          behind = parseInt(match[2] ?? '0', 10);
         }
       } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
         // Ordinary changed entry (1) or rename/copy (2)
@@ -124,8 +124,8 @@ export class GitOps implements GitOperations {
         const filePath = parts.length > 1
           ? parts[parts.length - 1]
           : statusField[statusField.length - 1] ?? '';
-        if (xy[0] !== '.') staged.push(filePath);
-        if (xy[1] !== '.') modified.push(filePath);
+        if (xy.charAt(0) !== '.') staged.push(filePath);
+        if (xy.charAt(1) !== '.') modified.push(filePath);
       } else if (line.startsWith('? ')) {
         untracked.push(line.slice(2));
       }
@@ -208,7 +208,7 @@ export class GitOps implements GitOperations {
     const hash = this.exec('git rev-parse --short HEAD').trim();
     const stat = this.exec('git diff --stat HEAD~1..HEAD');
     const filesMatch = stat.match(/(\d+) file/);
-    const filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+    const filesChanged = filesMatch ? parseInt(filesMatch[1] ?? '0', 10) : 0;
 
     this.appendAudit({
       timestamp: new Date().toISOString(),
@@ -336,7 +336,9 @@ export class GitOps implements GitOperations {
       startIndex < retained.length - 1
       && totalBytes > this.config.auditRotation.maxSizeBytes
     ) {
-      totalBytes -= retained[startIndex].bytes;
+      const entry = retained[startIndex];
+      if (!entry) break;
+      totalBytes -= entry.bytes;
       startIndex += 1;
     }
     if (startIndex > 0) {

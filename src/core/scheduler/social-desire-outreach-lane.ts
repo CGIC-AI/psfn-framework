@@ -135,7 +135,7 @@ export async function runSocialDesireOutreachTick(
       options.deps.consents.revoke(produced.consentId);
       throw new Error('Social-desire consent did not normalize to exactly one outbound action');
     }
-    const action = actions[0];
+    const action = actions[0]!;
     const payload = action.payload;
     const socialDesire = isRecord(payload.socialDesire) ? payload.socialDesire : null;
     if (!socialDesire

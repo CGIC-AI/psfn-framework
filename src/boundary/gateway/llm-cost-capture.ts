@@ -363,6 +363,7 @@ function latestGatewayCapturedProviderCostEvidence(
 ): GatewayCapturedLLMCost | undefined {
   for (let index = captures.length - 1; index >= 0; index -= 1) {
     const capture = captures[index];
+    if (!capture) continue;
     if (
       Object.keys(capture.providerCostEvidence).length > 0
       || capture.providerCostEvidenceConflict !== undefined

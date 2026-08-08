@@ -50,7 +50,7 @@ test('deriveDiscoveryAutofill falls back to model id prefix when hints are absen
 test('deriveDiscoveryAutofill ignores infrastructure-only hints and prefers openrouter-style ids', () => {
   const result = deriveDiscoveryAutofill({
     id: 'openrouter/deepseek/deepseek-r1',
-    providerHints: ['proxy', 'litellm'],
+    providerHints: ['proxy', 'router'],
     contextLength: 163_840,
     maxCompletionTokens: 8_192,
     pricing: {

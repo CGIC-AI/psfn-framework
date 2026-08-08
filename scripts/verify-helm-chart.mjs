@@ -838,7 +838,6 @@ for (const envName of [
   'POSTGRES_DATABASE_URL',
   'POSTGRES_DATABASE_URL_FILE',
   'PSFN_REDIS_URL',
-  'LITELLM_BASE_URL',
   'GATEWAY_RPC_ENDPOINT',
   'ADMIN_TRANSPORT_URL',
 ]) {
@@ -1159,7 +1158,6 @@ assertIncludes(appSecret, 'kind: Secret', 'app secret kind');
 assertIncludes(appSecret, 'API_KEY:', 'API key secret');
 assertIncludes(appSecret, 'ADMIN_TOKEN:', 'admin token secret');
 assertIncludes(appSecret, 'GATEWAY_SESSION_HMAC_KEY:', 'session HMAC secret');
-assertIncludes(appSecret, 'LITELLM_API_KEY:', 'LiteLLM API key secret');
 const credentialSecrets = parseAllDocuments(rendered)
   .map(document => document.toJS())
   .filter(document => document?.kind === 'Secret');
@@ -1198,9 +1196,6 @@ assertIncludes(
 );
 assertIncludes(gatewayDeployment, 'name: psfn-postgres', 'gateway Postgres startup wait secret name');
 assertIncludes(gatewayDeployment, 'key: postgres-database-url', 'gateway Postgres startup wait secret key');
-assertIncludes(gatewayDeployment, 'name: LITELLM_BASE_URL', 'gateway LiteLLM endpoint env');
-assertIncludes(gatewayDeployment, 'value: "http://psfn-litellm.psfn-test.svc:4000/v1"', 'gateway in-cluster LiteLLM base URL');
-assertIncludes(gatewayDeployment, 'name: LITELLM_API_KEY', 'gateway LiteLLM credential env');
 assertIncludes(gatewayDeployment, 'name: PSFN_INJECTION_MODEL_DIR', 'gateway intake classifier model env');
 assertIncludes(
   gatewayDeployment,
@@ -2594,65 +2589,28 @@ try {
   rmSync(freshInstallRoot, { recursive: true, force: true });
 }
 
-const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
-assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');
-assertIncludes(
-  liteLlmConfig,
-  'model_name: "z-ai-glm-5.2-nitro"',
-  'LiteLLM colon-free GLM 5.2 Nitro alias',
-);
-assertIncludes(
-  liteLlmConfig,
-  'model: "openrouter/z-ai/glm-5.2:nitro"',
-  'LiteLLM GLM 5.2 Nitro upstream variant',
-);
-assertIncludes(liteLlmConfig, 'reasoning_effort: "none"', 'LiteLLM Nitro reasoning disabled');
-assertIncludes(liteLlmConfig, 'api_key: "os.environ/OPENROUTER_API_KEY"', 'LiteLLM provider key env reference');
-assertIncludes(liteLlmConfig, 'master_key: "os.environ/LITELLM_MASTER_KEY"', 'LiteLLM master key env reference');
-
-const liteLlmService = findDocumentByKindName(rendered, 'Service', 'psfn-litellm');
-assertIncludes(liteLlmService, 'name: http-proxy', 'LiteLLM Service port name');
-assertIncludes(liteLlmService, 'port: 4000', 'LiteLLM Service port value');
-assertIncludes(liteLlmService, 'targetPort: http-proxy', 'LiteLLM Service target port');
-assertIncludes(liteLlmService, 'app.kubernetes.io/component: litellm', 'LiteLLM Service selector');
-
-const liteLlmDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-litellm');
-assertIncludes(
-  liteLlmDeployment,
-  'image: "ghcr.io/berriai/litellm:v1.74.9-stable@sha256:f78c763d6f2289305a3acc3a003c6170f797bdda70c56e75776fbab670e663cc"',
-  'LiteLLM pinned image',
-);
-assertIncludes(liteLlmDeployment, '- litellm', 'LiteLLM command');
-assertIncludes(liteLlmDeployment, '- "/etc/litellm/config.yaml"', 'LiteLLM config command path');
-assertIncludes(liteLlmDeployment, '- --port', 'LiteLLM port arg');
-assertIncludes(liteLlmDeployment, '- "4000"', 'LiteLLM port arg value');
-assertIncludes(liteLlmDeployment, 'containerPort: 4000', 'LiteLLM container port');
-assertIncludes(liteLlmDeployment, 'name: LITELLM_MASTER_KEY', 'LiteLLM master key env');
-assertIncludes(liteLlmDeployment, 'key: LITELLM_API_KEY', 'LiteLLM master key secret key');
-assertIncludes(liteLlmDeployment, 'name: OPENROUTER_API_KEY', 'LiteLLM OpenRouter env');
-assertIncludes(liteLlmDeployment, 'mountPath: /etc/litellm', 'LiteLLM config mount');
-assertIncludes(liteLlmDeployment, 'runAsUser: 999', 'LiteLLM numeric user');
+// No bundled LiteLLM workload renders: the proxy was removed in favor of
+// generic OpenAI-compatible provider configuration. Assert its absence across
+// every chart render so a regression cannot silently re-introduce it.
+assertNotIncludes(rendered, 'name: psfn-litellm\n', 'no bundled LiteLLM Service/Deployment');
+assertNotIncludes(rendered, 'component: litellm', 'no bundled LiteLLM selectors/labels');
+assertNotIncludes(rendered, 'psfn-litellm-config', 'no bundled LiteLLM ConfigMap');
+assertNotIncludes(rendered, 'LITELLM_BASE_URL', 'no LiteLLM endpoint env');
+assertNotIncludes(rendered, 'LITELLM_API_KEY', 'no LiteLLM credential env');
+assertNotIncludes(rendered, 'LITELLM_MASTER_KEY', 'no LiteLLM master key env');
+assertNotIncludes(appSecret, 'LITELLM_API_KEY:', 'no LiteLLM secret key material');
 
 const gatewayPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-gateway');
-assertIncludes(gatewayPolicy, 'component: litellm', 'gateway policy LiteLLM egress');
-assertIncludes(gatewayPolicy, 'port: 4000', 'gateway policy LiteLLM port');
 // x5rt.10: operator confirmation resolution ingress comes from the Garden
 // operator process, not the agent.
 assertIncludes(gatewayPolicy, 'component: garden', 'gateway policy garden operator API ingress');
 assertIncludes(gatewayPolicy, 'port: 10053', 'gateway policy garden operator API ingress port');
+assertNotIncludes(gatewayPolicy, 'component: litellm', 'gateway policy has no LiteLLM egress');
 
 const gardenPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-garden');
 assertIncludes(gardenPolicy, 'component: agent', 'garden policy agent admin transport egress');
 assertIncludes(gardenPolicy, 'component: gateway', 'garden policy gateway operator API egress');
 assertIncludes(gardenPolicy, 'port: 10053', 'garden policy gateway operator API egress port');
-
-const liteLlmPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-litellm');
-assertIncludes(liteLlmPolicy, 'component: litellm', 'LiteLLM policy selector');
-assertIncludes(liteLlmPolicy, 'component: gateway', 'LiteLLM policy gateway ingress');
-assertNotIncludes(liteLlmPolicy, 'component: agent', 'LiteLLM policy agent ingress');
-assertIncludes(liteLlmPolicy, 'k8s-app: kube-dns', 'LiteLLM DNS egress');
-assertIncludes(liteLlmPolicy, 'cidr: 0.0.0.0/0', 'LiteLLM provider egress');
-assertIncludes(liteLlmPolicy, 'port: 443', 'LiteLLM HTTPS egress port');
 
 const strictSecretRendered = render([
   '--set',
@@ -2689,25 +2647,6 @@ assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup
 const strictAgent = findDocumentByKindName(strictSecretRendered, 'Deployment', 'psfn-agent');
 assertIncludes(strictAgent, 'name: PSFN_BACKUP_ENCRYPTION_KEY', 'agent backup encryption env');
 assertIncludes(strictAgent, 'key: PSFN_BACKUP_ENCRYPTION_KEY', 'agent backup encryption secret key');
-
-const externalLiteLlmRendered = render([
-  '--set',
-  'liteLlm.mode=external',
-  '--set',
-  'liteLlm.external.baseUrl=https://litellm.example.test/v1',
-]);
-const externalLiteLlmGateway = findDocumentByKindName(externalLiteLlmRendered, 'Deployment', 'psfn-gateway');
-assertIncludes(externalLiteLlmGateway, 'value: "https://litellm.example.test/v1"', 'external LiteLLM gateway URL');
-assertNotIncludes(externalLiteLlmRendered, 'name: psfn-litellm\n', 'external LiteLLM bundled Service/Deployment');
-assertNotIncludes(externalLiteLlmRendered, 'component: litellm', 'external LiteLLM bundled selectors');
-
-const disabledLiteLlmRendered = render([
-  '--set',
-  'liteLlm.enabled=false',
-]);
-assertNotIncludes(disabledLiteLlmRendered, 'LITELLM_BASE_URL', 'disabled LiteLLM gateway env');
-assertNotIncludes(disabledLiteLlmRendered, 'name: psfn-litellm\n', 'disabled LiteLLM bundled Service/Deployment');
-assertNotIncludes(disabledLiteLlmRendered, 'component: litellm', 'disabled LiteLLM selectors');
 
 const externalRendered = render([
   '--set',
@@ -3347,39 +3286,6 @@ assertRenderFails(
 assertRenderFails(
   ['--set', 'redis.mode=external', '--set', 'redis.external.passwordSecret.name=external-redis-secret'],
   'redis.external.url is required when redis.mode=external',
-);
-assertRenderFails(
-  ['--set', 'liteLlm.mode=external'],
-  'liteLlm.external.baseUrl is required when liteLlm.mode=external',
-);
-assertRenderFails(
-  ['--set', 'liteLlm.mode=sidecar'],
-  'liteLlm.mode must be internal or external',
-);
-assertRenderFails(
-  ['--set', 'liteLlm.image.tag=latest'],
-  'liteLlm.image.tag must be pinned',
-);
-assertRenderFails(
-  ['--set-string', 'liteLlm.image.digest=deadbeef'],
-  'liteLlm.image.digest must start with sha256:',
-);
-assertRenderFails(
-  [
-    '--set',
-    'secrets.allowMissingRequired=false',
-    '--set-string',
-    'secrets.values.apiKey=verify-api-key',
-    '--set-string',
-    'secrets.values.adminToken=verify-admin-token',
-    '--set-string',
-    'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
-    '--set-string',
-    'secrets.values.backupEncryptionKey=verify-backup-key',
-    '--set-string',
-    'secrets.values.liteLlmApiKey=',
-  ],
-  'secrets.values.liteLlmApiKey is required for liteLlm.enabled=true',
 );
 assertRenderFails(
   ['--set', 'satelliteHub.enabled=true'],

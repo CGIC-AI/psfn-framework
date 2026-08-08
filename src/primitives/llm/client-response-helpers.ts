@@ -540,17 +540,6 @@ function isPotentialProviderResponseHeaderArtifact(normalizedContent: string): b
   return normalizedContent.length <= PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS;
 }
 
-export function normalizeProxyModelId(provider: string, modelId: string): string {
-  const normalizedProvider = provider.trim().toLowerCase();
-  const normalizedModelId = modelId.trim();
-  if (!normalizedModelId) return normalizedModelId;
-  if (normalizedProvider !== 'openrouter') return normalizedModelId;
-  if (normalizedModelId.startsWith('openrouter/')) return normalizedModelId;
-  return normalizedModelId.includes('/')
-    ? `openrouter/${normalizedModelId}`
-    : normalizedModelId;
-}
-
 // ── Content normalization ──
 // pi-ai + LiteLLM sometimes delivers content block arrays as stringified text via streaming,
 // e.g. [{'type': 'text', 'text': 'actual response'}]. This strips the wrapping to prevent

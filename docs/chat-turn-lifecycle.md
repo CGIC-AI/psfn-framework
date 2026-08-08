@@ -233,7 +233,7 @@ action silently ran as `list`/`status`. Every affected tool call recorded
 
 Root cause was in the vendored provider's streaming accumulator
 (`@mariozechner/pi-ai` `openai-completions.js`, api `openai-completions`, used
-by BOTH OpenRouter-direct and the LiteLLM proxy). It routed streamed tool-call
+by BOTH OpenRouter-direct and a configured OpenAI-compatible router). It routed streamed tool-call
 argument fragments by "whichever content block is current" and the fragment's
 `id`, ignoring the OpenAI wire `index`. Models that interleave reasoning deltas
 *between* a tool call's name chunk and its argument fragments (z-ai/glm-5.2 with

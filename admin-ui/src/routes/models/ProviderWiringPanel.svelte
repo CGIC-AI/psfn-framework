@@ -57,7 +57,7 @@
   <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
     <div>
       <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Wiring</h2>
-      <p class="text-sm text-shadow-600">Models target canonical provider ids from <span class="font-mono">providers.json</span>. Manage LiteLLM, OpenRouter, and direct provider endpoints here instead of hunting through Settings.</p>
+      <p class="text-sm text-shadow-600">Models target canonical provider ids from <span class="font-mono">providers.json</span>. Manage shared router, OpenRouter, and direct provider endpoints here instead of hunting through Settings.</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
@@ -162,7 +162,7 @@
               value={entry.label ?? ''}
               oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
               class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
-              placeholder="LiteLLM primary"
+              placeholder="shared-router primary"
             />
           </div>
           <div>
@@ -184,7 +184,7 @@
               value={entry.modelsApiUrl ?? ''}
               oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
               class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
-              placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for LiteLLM/OpenRouter catalogs'}
+              placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for shared-router/OpenRouter catalogs'}
               disabled={!providerSupportsModelsApi(entry.type)}
             />
           </div>
@@ -196,7 +196,7 @@
               value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
               oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
               class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
-              placeholder="LITELLM_API_KEY"
+              placeholder="SHARED_ROUTER_API_KEY"
             />
           </div>
         </div>
@@ -205,7 +205,7 @@
   </div>
   {#if providerRegistry.providers.length === 0}
     <div class="rounded-2xl border border-dashed border-bark-300 bg-bark-50/60 p-5 text-sm text-shadow-600">
-      No providers configured yet. Add LiteLLM, OpenRouter, or direct backend providers here before wiring models.
+      No providers configured yet. Add a shared router, OpenRouter, or direct backend providers here before wiring models.
     </div>
   {/if}
   <div class="flex flex-wrap items-center gap-3 pt-1">

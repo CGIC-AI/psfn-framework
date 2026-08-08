@@ -1411,7 +1411,6 @@ export interface ModelRegistryBudgetPolicy {
 }
 
 export const CANONICAL_PROVIDER_TYPES = [
-  'litellm_proxy',
   'openrouter',
   'openai',
   'anthropic',

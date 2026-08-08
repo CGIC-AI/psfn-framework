@@ -89,8 +89,6 @@ function buildConfig(
     modelRoleAssignments: models.modelRoleAssignments,
     modelRegistry: models.modelRegistry,
     providerRegistry: providers.registry,
-    litellmBaseUrl: providers.litellmBaseUrl,
-    litellmApiKeyRef: providers.litellmApiKeyRef,
     openRouterApiBaseUrl: providers.openRouterApiBaseUrl,
     openRouterModelsApiUrl: providers.openRouterModelsApiUrl,
     openRouterApiKeyRef: providers.openRouterApiKeyRef,
@@ -675,8 +673,6 @@ describe('AdminSettingsDataService', () => {
       apiKey: true,
       adminToken: true,
       openrouterApiKey: true,
-      litellmBaseUrl: true,
-      litellmApiKey: true,
       importProcessingLocalApiKey: true,
       falApiKey: true,
       telegramBotToken: true,
@@ -688,8 +684,6 @@ describe('AdminSettingsDataService', () => {
     expect(env.apiKey).toBe('[set]');
     expect(env.adminToken).toBe('[set]');
     expect(env.openrouterApiKey).toBe('[set]');
-    expect(env.litellmBaseUrl).toBe('[set]');
-    expect(env.litellmApiKey).toBe('[set]');
     expect(env.importProcessingLocalApiKey).toBe('[set]');
     expect(env.falApiKey).toBe('[set]');
     expect(env.telegramBotToken).toBe('[set]');
@@ -1623,13 +1617,13 @@ describe('AdminSettingsDataService', () => {
       schemaVersion: 1,
       providers: [
         {
-          id: 'litellm',
-          type: 'litellm_proxy',
+          id: 'shared-router',
+          type: 'generic_openai',
           enabled: true,
           apiBaseUrl: 'http://127.0.0.1:4100/v1',
           apiKeyRef: {
             kind: 'env',
-            envName: 'LITELLM_API_KEY',
+            envName: 'SHARED_ROUTER_API_KEY',
           },
         },
         {
@@ -1659,13 +1653,11 @@ describe('AdminSettingsDataService', () => {
     });
     expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
     expect(loadProvidersConfig(root).registry).toEqual(payload);
-    expect(config.litellmBaseUrl).toBe('http://127.0.0.1:4100/v1');
     expect(JSON.parse(service.getSubConfigJson('providers') ?? '{}')).toEqual(payload);
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.providers).toEqual(expect.objectContaining({
       registry: payload,
-      litellmBaseUrl: 'http://127.0.0.1:4100/v1',
     }));
   });
 });

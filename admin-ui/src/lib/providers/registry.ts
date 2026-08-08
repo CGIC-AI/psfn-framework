@@ -7,7 +7,6 @@ import type {
 } from '$lib/types';
 
 export const PROVIDER_TYPES = [
-  'litellm_proxy',
   'openrouter',
   'openai',
   'anthropic',
@@ -17,7 +16,6 @@ export const PROVIDER_TYPES = [
 ] as const satisfies readonly CanonicalProviderType[];
 
 export const PROVIDER_TYPE_LABELS: Record<CanonicalProviderType, string> = {
-  litellm_proxy: 'LiteLLM Proxy',
   openrouter: 'OpenRouter',
   openai: 'OpenAI',
   anthropic: 'Anthropic',
@@ -104,8 +102,6 @@ export function normalizeProvidersRuntimeConfig(value: unknown): ProvidersRuntim
   const raw = isRecord(value) ? value : {};
   return {
     registry: normalizeProviderRegistry(isRecord(raw.registry) ? raw.registry : raw),
-    ...(toOptionalString(raw.litellmBaseUrl) ? { litellmBaseUrl: toOptionalString(raw.litellmBaseUrl) } : {}),
-    ...(normalizeCredentialReference(raw.litellmApiKeyRef) ? { litellmApiKeyRef: normalizeCredentialReference(raw.litellmApiKeyRef) } : {}),
     ...(toOptionalString(raw.openRouterApiBaseUrl) ? { openRouterApiBaseUrl: toOptionalString(raw.openRouterApiBaseUrl) } : {}),
     ...(toOptionalString(raw.openRouterModelsApiUrl) ? { openRouterModelsApiUrl: toOptionalString(raw.openRouterModelsApiUrl) } : {}),
     ...(normalizeCredentialReference(raw.openRouterApiKeyRef) ? { openRouterApiKeyRef: normalizeCredentialReference(raw.openRouterApiKeyRef) } : {}),
@@ -131,7 +127,7 @@ export function createEmptyProviderEntry(index: number): ProviderRegistryEntry {
 }
 
 export function providerSupportsModelsApi(type: CanonicalProviderType): boolean {
-  return type === 'openrouter' || type === 'litellm_proxy';
+  return type === 'openrouter' || type === 'generic_openai';
 }
 
 export function providerIsEnabled(entry: { enabled?: boolean }): boolean {

@@ -75,7 +75,7 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
   every cluster agent
 - `secrets.values.backupEncryptionKey` -> `PSFN_BACKUP_ENCRYPTION_KEY`, consumed by app workloads
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
-  `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,
+  `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,
   `ELEVENLABS_API_KEY`, `FAL_API_KEY`, `NTFY_TOKEN`
 - `satelliteHub.elevenLabsVoiceId` when `satelliteHub.enabled=true`
 - optional embedding/Hugging Face secrets: `EMBEDDING_API_KEY`, `HF_TOKEN`
@@ -575,38 +575,25 @@ The external Secret must contain `postgres-database-url` unless you override
 Backup/restore validation still requires PG17 client tools and pgvector present
 in the scratch restore database.
 
-## LiteLLM
+## LLM provider configuration
 
-`liteLlm.enabled=true` and `liteLlm.mode=internal` render a dedicated LiteLLM
-Deployment and ClusterIP Service at:
+PSFN no longer bundles a LiteLLM proxy workload. All LLM traffic crosses the
+gateway trust boundary and dispatches through the in-process pi-ai provider
+runtime, configured entirely by canonical owner files. A shared external
+OpenAI-compatible router (such as a separately-operated LiteLLM instance) is
+configured as an ordinary `generic_openai` provider in `providers.json`; the
+chart renders no Deployment, Service, ConfigMap, secret key, env var, or
+NetworkPolicy for a bundled proxy.
 
-```text
-http://<release>-litellm.<namespace>.svc:4000/v1
-```
+Only the gateway receives provider credential env and holds external HTTPS
+egress. The agent reaches providers only through the gateway over the existing
+mTLS RPC transport and has no direct provider egress. With NetworkPolicy
+enforcement, gateway external HTTPS egress is allowed and agent provider egress
+is denied.
 
-Only the gateway receives `LITELLM_BASE_URL` and provider credential env. The
-agent keeps talking to the gateway over the existing mTLS RPC transport and does
-not receive direct LiteLLM endpoint or API-key wiring. With NetworkPolicy
-enforcement, gateway egress to LiteLLM is allowed and agent egress to LiteLLM is
-not.
-
-External LiteLLM mode keeps the same gateway-owned route while omitting the
-bundled pod:
-
-```bash
-helm template psfn deploy/helm/psfn \
-  --set liteLlm.mode=external \
-  --set liteLlm.external.baseUrl=https://litellm.example/v1
-```
-
-Set `liteLlm.enabled=false` for direct-provider-only deployments. Model routing
-still follows `providers.json` and `models.json`; OpenRouter-sourced model
-entries can intentionally bypass LiteLLM through their direct source route.
-
-The bundled LiteLLM config is a replaceable ConfigMap. The default config
-contains an OpenRouter wildcard route and reads secrets from environment
-variables, not ConfigMaps. Use `liteLlm.config.existingConfigMap` when you need a
-custom LiteLLM config.
+Model routing follows `providers.json` and `models.json`; OpenRouter-sourced
+model entries route through their direct source route, and any configured
+`generic_openai` provider contributes its `/v1/models` catalog to discovery.
 
 ## emo_sim Observer-Eval Engine (optional)
 

@@ -12,7 +12,7 @@ and every external service.
   yellow nodes are pinned third-party libraries; purple is deployment topology.
 - Source of truth: `src/app/{gateway,agent,operator}/main.ts`,
   `src/app/startup/composition/`, `src/{core,faculties,boundary,primitives,system,persistence,operator}/`,
-  `deploy/helm/psfn/`, `proxy/litellm_config.yaml`, root `package.json`.
+  `deploy/helm/psfn/`, `config/providers.seed.json`, root `package.json`.
 - Complements (does not replace) the prose topology in `docs/architecture.md`
   and the compact runtime view in `docs/architecture-diagram.mmd`.
 
@@ -55,14 +55,13 @@ flowchart LR
     K8S_GARDEN["Deployment: garden"]
     K8S_HUB["Deployment: satellite-hub"]
     K8S_CUI["Deployment: companion-ui-test"]
-    K8S_LITELLM["Deployment: litellm v1.72.6-stable\nvirtual keys; real provider keys stay here"]
     K8S_TEI["Deployment: tei\nHF text-embeddings-inference cpu-1.6.0"]
     K8S_PG["StatefulSet: postgres 17 + pgvector"]
     K8S_REDIS["StatefulSet: redis"]
     K8S_EMOSIM["Deployment: emosim (observer-eval sidecar)\nHTTP 17342 / TCP 17341 · netpol-isolated · SHA-pinned image"]
     K8S_CERT["cert-manager Issuers\ncertificates.yaml (@peculiar/x509)"]
     K8S_PVC["PVCs\ncompanion-data · system-data · workspace\npostgres-data · model caches"]
-    K8S_NETPOL["NetworkPolicies\npsfn-egress · litellm · tei/postgres isolation"]
+    K8S_NETPOL["NetworkPolicies\npsfn-egress · tei/postgres isolation"]
     K8S_PREFETCH["Job: model-prefetch"]
   end
 
@@ -236,9 +235,8 @@ flowchart LR
   GW_SERVER --> GW_METHODS
   GW_METHODS --> GW_LLM
   GW_LLM --> GW_ROUTE
-  GW_ROUTE -- "OpenAI-compatible endpoint" --> K8S_LITELLM
-  K8S_LITELLM --> EXT_OPENROUTER
-  K8S_LITELLM --> EXT_FAL
+  GW_ROUTE -- "OpenAI-compatible endpoint" --> EXT_OPENROUTER
+  GW_ROUTE --> EXT_FAL
   GW_LLM --> GW_COST --> DB_PG
   GW_SERVER -- "deltas stream back" --> AG_CLIENT
   AG_CLIENT -- "stream adapter" --> AG_LOOP
@@ -399,7 +397,7 @@ flowchart LR
 
   class EXT_OPERATOR,EXT_PARTNER,EXT_DISCORD,EXT_TELEGRAM,EXT_OPENROUTER,EXT_FAL,EXT_DEEPGRAM,EXT_ELEVEN,EXT_HF,EXT_NTFY,EXT_MCP ext
   class UI_SAT,UI_HUB,UI_COMPANION,UI_ADMIN client
-  class K8S_GW,K8S_AGENT,K8S_GARDEN,K8S_HUB,K8S_CUI,K8S_LITELLM,K8S_TEI,K8S_PG,K8S_REDIS,K8S_EMOSIM,K8S_CERT,K8S_PVC,K8S_NETPOL,K8S_PREFETCH k8s
+  class K8S_GW,K8S_AGENT,K8S_GARDEN,K8S_HUB,K8S_CUI,K8S_TEI,K8S_PG,K8S_REDIS,K8S_EMOSIM,K8S_CERT,K8S_PVC,K8S_NETPOL,K8S_PREFETCH k8s
   class GW_MAIN,GW_CORE,GW_SERVER,GW_METHODS,GW_LLM,GW_ROUTE,GW_EMBED,GW_COST,GW_CHAN,GW_FLEET,GW_VOICE,GW_MCP,AG_MAIN,AG_PERSIST,AG_COMPOSE,AG_CLIENT,AG_LOOP,AG_TOOLS,AG_CTX,AG_PROMPT,AG_HOOK,AG_MEMW,AG_MEMR,AG_MEMX,AG_EPIS,AG_COREMEM,AG_WIKI,AG_SHARD,AG_SUB,AG_BENCH,AG_ICP,AG_INTENT,AG_EMO,AG_SELF,AG_SCHED,AG_TASKS,AG_LANES,AG_API,AG_ADMIN,OP_MAIN,OP_SURFACE,OP_ROUTES,OP_FLEET proc
   class GW_POLICY,GW_SANDBOX,IN_L0,IN_L1,IN_L15,IN_L2,IN_L25,IN_L3,AG_SINK,AG_COGSEC,GW_DROP sec
   class LIB_AGENT,LIB_DISCORD,LIB_PG,LIB_HF,LIB_NET,LIB_SCHEMA,LIB_MISC,LIB_MCP lib

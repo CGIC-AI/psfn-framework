@@ -15,7 +15,6 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { ResolvedCorrelationMetadata } from './correlation.js';
 import type { RoutingCandidate } from './routing.js';
 import {
-  createModel,
   createOpenAICompatibleEndpointModel,
   resolveRegisteredModel,
   resolveSystemRoleCapabilityMetadata,
@@ -32,19 +31,15 @@ import {
 } from './client-prompt-cache.js';
 import { captureProviderWirePayload } from './wire-payload-capture.js';
 import {
-  type CredentialReference,
   envCredential,
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
-import { CONFIGURED_ENDPOINT_ROUTE_KIND } from '../../shared/telemetry/route-kind.js';
-import { normalizeProxyModelId } from './client-response-helpers.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('LLMClient');
 
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set([
   'openrouter',
-  'litellm',
   'local_endpoint',
 ]);
 
@@ -62,8 +57,6 @@ export interface LLMRequestOptions extends SimpleStreamOptions {
 export class LLMRequestCapability {
   constructor(
     private readonly config: SubstrateConfig,
-    private readonly litellmBaseUrl: string | null,
-    private readonly litellmApiKeyRef: CredentialReference | undefined,
     private readonly runtime: ProviderRuntime,
   ) {}
 
@@ -71,9 +64,7 @@ export class LLMRequestCapability {
     model: Model<any>;
     apiKey: string | undefined;
   } {
-    const modelId = this.shouldNormalizeProxyModelId(candidate)
-      ? normalizeProxyModelId(candidate.provider, candidate.model)
-      : candidate.model;
+    const modelId = candidate.model;
     const routedModelOptions = {
       reasoning: candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
       supportsVision: candidate.supportsVision ?? false,
@@ -98,27 +89,6 @@ export class LLMRequestCapability {
           supportsVision: routedModelOptions.supportsVision,
           api: this.resolveOpenAICompatibleApi(candidate),
         }),
-        apiKey,
-      };
-    }
-
-    if (this.litellmBaseUrl) {
-      // The configured shared endpoint credential resolves solely through the
-      // gateway credential vault from the configured reference. There is no
-      // LITELLM_API_KEY default: a missing configured reference leaves the
-      // endpoint unauthenticated and the provider call fails closed.
-      const apiKey = this.litellmApiKeyRef
-        ? resolveOptionalCredentialReference(this.config.credentialVault, this.litellmApiKeyRef)
-        : undefined;
-      return {
-        model: createModel(
-          this.litellmBaseUrl,
-          modelId,
-          candidate.maxTokens,
-          candidate.contextWindow,
-          this.resolveOpenAICompatibleApi(candidate),
-          routedModelOptions,
-        ),
         apiKey,
       };
     }
@@ -196,9 +166,6 @@ export class LLMRequestCapability {
     correlation: ResolvedCorrelationMetadata | undefined,
     accounting?: LLMCallAccountingContext,
   ): LLMContext {
-    const hintModel = this.shouldNormalizeProxyModelId(candidate)
-      ? normalizeProxyModelId(candidate.provider, candidate.model)
-      : candidate.model;
     return {
       systemPrompt: context.systemPrompt,
       messages: context.messages,
@@ -207,7 +174,7 @@ export class LLMRequestCapability {
         ? { promptCacheBoundaries: context.promptCacheBoundaries }
         : {}),
       modelHint: {
-        model: hintModel,
+        model: candidate.model,
         provider: candidate.provider,
         pin: true,
         maxTokens: candidate.maxTokens,
@@ -235,10 +202,6 @@ export class LLMRequestCapability {
     };
   }
 
-  shouldNormalizeProxyModelId(candidate: RoutingCandidate): boolean {
-    return !candidate.requestBaseUrl && this.litellmBaseUrl !== null;
-  }
-
   buildPiContext(context: LLMContext): PiContext {
     return {
       systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
@@ -249,7 +212,6 @@ export class LLMRequestCapability {
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {
     if (candidate.requestBaseUrl) return 'request_base_url';
-    if (this.litellmBaseUrl) return CONFIGURED_ENDPOINT_ROUTE_KIND;
     return 'registered_model';
   }
 
@@ -314,8 +276,7 @@ export class LLMRequestCapability {
 
   private supportsFullKnobPassthrough(candidate: RoutingCandidate): boolean {
     return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
-      || !!candidate.requestBaseUrl
-      || this.litellmBaseUrl !== null;
+      || !!candidate.requestBaseUrl;
   }
 
   private resolveOpenAICompatibleApi(candidate: RoutingCandidate): OpenAICompatibleApi {

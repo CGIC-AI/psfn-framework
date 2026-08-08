@@ -28,6 +28,7 @@ import { startOfDashboardUtcDay } from '../../operator/garden/services/dashboard
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { LLMClient } from '../../primitives/llm/client.js';
+import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { createGenerateImageTool } from '../../primitives/images/tools.js';
 import {
@@ -627,6 +628,7 @@ function makeVisionConfig(dataDir: string): SubstrateConfig {
     companionId: 'companion-a',
     primaryModel: 'vision-model',
     primaryProvider: 'openrouter',
+    openRouterApiBaseUrl: 'http://litellm.test/v1',
     modelRegistry: {
       schemaVersion: 1,
       models: [{
@@ -1482,20 +1484,40 @@ describe('PostgresModelUsageStore reconciliation', () => {
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       const providerSurfaces: Array<string | undefined> = [];
       const providerChargeEventIds: Array<string | undefined> = [];
-      piMocks.completeSimple.mockImplementation(async () => {
-        providerSurfaces.push(getRunChargeSnapshot()?.surface);
-        providerChargeEventIds.push(getRunChargeSnapshot()?.chargeEventId);
-        return {
-          content: [{ type: 'text', text: 'The image is clear and consistent.' }],
-          model: 'vision-model',
-          usage: { input: 10, output: 5, totalTokens: 15 },
-          stopReason: 'stop',
-        };
-      });
-      const llmClient = new LLMClient(config, {
-        litellmBaseUrl: 'http://litellm.test/v1',
-        usageRecorder: store,
-      });
+      const mockRuntime: ProviderRuntime = {
+        getProviders: () => ['openrouter'],
+        getModels: () => [{
+          id: 'vision-model',
+          provider: 'openrouter',
+          name: 'vision-model',
+          api: 'openai-completions',
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 16_384,
+          maxTokens: 1024,
+        }],
+        getModel: () => undefined,
+        getAuth: async () => undefined,
+        resolveProviderApiKey: () => undefined,
+        complete: async () => {
+          providerSurfaces.push(getRunChargeSnapshot()?.surface);
+          providerChargeEventIds.push(getRunChargeSnapshot()?.chargeEventId);
+          return {
+            content: [{ type: 'text', text: 'The image is clear and consistent.' }],
+            model: 'vision-model',
+            usage: { input: 10, output: 5, totalTokens: 15 },
+            stopReason: 'stop',
+          } as never;
+        },
+        stream: async function* () { /* unused */ },
+      } as ProviderRuntime;
+      const llmClient = new LLMClient(
+        { ...config, openRouterApiBaseUrl: undefined },
+        {
+          usageRecorder: store,
+          runtime: mockRuntime,
+        },
+      );
       const reviewer = new DefaultImageVisionReviewer(config, {
         llmProvider: llmClient,
         binaryFetcher: vi.fn(async () => ({

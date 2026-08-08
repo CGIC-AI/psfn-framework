@@ -36,7 +36,6 @@ describe('sanitizeCoreSubstrateConfig', () => {
         },
       },
       credentialVault: { resolve: () => undefined },
-      litellmApiKeyRef: { env: 'LITELLM_API_KEY' },
       openRouterApiKeyRef: { env: 'OPENROUTER_API_KEY' },
       deepgramApiKey: 'deepgram-secret',
       elevenLabsApiKey: 'eleven-secret',
@@ -57,7 +56,6 @@ describe('sanitizeCoreSubstrateConfig', () => {
       kind: 'verifier',
       canonicalOrigin: 'https://fleet.example.test',
     });
-    expect(sanitized.litellmApiKeyRef).toBeUndefined();
     expect(sanitized.openRouterApiKeyRef).toBeUndefined();
     expect(sanitized.deepgramApiKey).toBeUndefined();
     expect(sanitized.elevenLabsApiKey).toBeUndefined();

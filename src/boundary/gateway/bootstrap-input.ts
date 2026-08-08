@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CanonicalProviderRegistry } from '../../shared/contracts/runtime.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
 import {
   assertDiscordAccountTokensConfigured,
@@ -55,6 +56,7 @@ import {
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
 import { resolveGatewayCredentialPresence } from './credential-presence.js';
+import { deriveGenericOpenAiModelsApiUrl } from '../../primitives/llm/discovery.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import {
@@ -178,34 +180,29 @@ function normalizeConfiguredHttpUrl(raw: string | undefined): string | null {
   }
 }
 
-function resolveLiteLLMDiscoveryModelsUrl(rawBaseUrl: string | undefined): string | null {
-  const normalizedBaseUrl = normalizeConfiguredHttpUrl(rawBaseUrl);
-  if (!normalizedBaseUrl) return null;
-
-  const parsed = new URL(normalizedBaseUrl);
-  const basePath = parsed.pathname
-    .replace(/\/+$/, '')
-    .replace(/\/v1$/i, '');
-  parsed.pathname = `${basePath}/v1/models`.replace(/\/{2,}/g, '/');
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.toString();
-}
-
 function resolveDiscoveryLaneConfig(input: {
-  litellmBaseUrl: string | undefined;
+  providerRegistry: CanonicalProviderRegistry | undefined;
   openRouterModelsApiUrl: string | undefined;
 }): { enabled: true; allowHttp: boolean; urlAllowlist: string[] } | undefined {
-  const litellmModelsUrl = resolveLiteLLMDiscoveryModelsUrl(input.litellmBaseUrl);
-  if (!litellmModelsUrl) {
-    return undefined;
-  }
+  const urls: string[] = [];
 
   const openRouterUrl = normalizeConfiguredHttpUrl(input.openRouterModelsApiUrl);
-  const urlAllowlist = [...new Set(
-    [litellmModelsUrl, openRouterUrl]
-      .filter((value): value is string => Boolean(value)),
-  )];
+  if (openRouterUrl) {
+    urls.push(openRouterUrl);
+  }
+
+  for (const provider of input.providerRegistry?.providers ?? []) {
+    if (!provider.enabled) continue;
+    if (provider.type !== 'generic_openai') continue;
+    const modelsApiUrl = provider.modelsApiUrl?.trim()
+      ?? deriveGenericOpenAiModelsApiUrl(provider.apiBaseUrl);
+    const normalized = normalizeConfiguredHttpUrl(modelsApiUrl);
+    if (normalized) {
+      urls.push(normalized);
+    }
+  }
+
+  const urlAllowlist = [...new Set(urls)];
   if (urlAllowlist.length === 0) {
     return undefined;
   }
@@ -277,7 +274,7 @@ function buildGatewayPolicyConfig(
 ): PolicyConfig {
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(env, codebaseRoot);
   const discoveryLaneConfig = resolveDiscoveryLaneConfig({
-    litellmBaseUrl: config.litellmBaseUrl ?? undefined,
+    providerRegistry: config.providerRegistry,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
   // Internal runtime derivation (never operator-configurable): the read-only
@@ -473,7 +470,6 @@ export function resolveGatewayBootstrapInput(
       credentialPresence: resolveGatewayCredentialPresence({
         config,
         channelsConfig,
-        providerEnv,
         env,
       }),
       ...(ntfy ? { ntfy } : {}),

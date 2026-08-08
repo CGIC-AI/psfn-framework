@@ -132,10 +132,6 @@ spec:
             - name: PSFN_INJECTION_MODEL_DIR
               value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
             {{- end }}
-            {{- if .Values.liteLlm.enabled }}
-            - name: LITELLM_BASE_URL
-              value: {{ include "psfn.liteLlmBaseUrl" . | quote }}
-            {{- end }}
             - name: API_HOST
               value: 0.0.0.0
             - name: API_PORT

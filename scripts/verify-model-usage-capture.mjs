@@ -100,7 +100,7 @@ allowOnly(
   'image gateway operations are constructed outside the accounted agent entrypoint',
 );
 allowOnly(
-  /\bcreate(?:OpenAICompatibleEndpointModel|LiteLLMModel|Model)\s*\(/g,
+  /\bcreateOpenAICompatibleEndpointModel\s*\(/g,
   new Set([
     ...CANONICAL_LLM_TRANSPORT_FILES,
     'src/primitives/llm/models.ts',

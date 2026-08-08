@@ -143,8 +143,6 @@
               ['API_KEY', env.apiKey],
               ['ADMIN_TOKEN', env.adminToken],
               ['OPENROUTER_API_KEY', env.openrouterApiKey],
-              ['LITELLM_BASE_URL', env.litellmBaseUrl],
-              ['LITELLM_API_KEY', env.litellmApiKey],
             ] as pair}
               <tr class="border-b border-bark-200">
                 <td class="py-2 font-mono text-shadow-700">{pair[0]}</td>

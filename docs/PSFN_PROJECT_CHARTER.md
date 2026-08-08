@@ -120,12 +120,14 @@ Rules:
 
 Some dependencies are foundational. Others are deliberately swappable.
 
-LiteLLM is in the swappable category.
+The in-process pi-ai provider runtime is the sole LLM gateway. A shared
+external OpenAI-compatible router is configured as an ordinary `generic_openai`
+provider in `providers.json`, never as a bundled PSFN-owned workload.
 
 Rules:
 
-- LiteLLM may be used as the current provider-routing and credential-isolation backend.
-- LiteLLM must not become a conceptual center of gravity for the architecture.
+- No bundled proxy workload is part of PSFN; all LLM traffic crosses the gateway trust boundary and dispatches in-process.
+- Provider routing and credential isolation stay behind the provider-registry seams so any upstream can be swapped without architectural change.
 - If a better dependency exists later, it should be replaceable behind the same architectural seams.
 
 ## 4. Core Architectural Laws

@@ -1665,7 +1665,7 @@ memory extraction. See [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md)
 
 ## TLS And Proxy Trust
 
-For the LiteLLM proxy and custom CAs:
+For a shared external router and custom CAs:
 
 ```bash
 ./scripts/cert-setup.sh --help
@@ -1770,7 +1770,7 @@ requests (a **standalone** gate, never wired into `ci-required`) and weekly so
 the bundled misconfiguration checks stay fresh.
 
 The current baseline is **clean** at HIGH/CRITICAL: the first-party app
-containers (agent, gateway, Garden, LiteLLM, and their init containers) run with
+containers (agent, gateway, Garden, and their init containers) run with
 `readOnlyRootFilesystem: true` (the `/app` image is read-only by design; a writable
 `/tmp` emptyDir backs incidental temp writes), and Postgres/Redis carry an
 explicit hardened container security context (`allowPrivilegeEscalation: false`,

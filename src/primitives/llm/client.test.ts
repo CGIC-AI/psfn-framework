@@ -169,6 +169,7 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const config: SubstrateConfig = {
     primaryModel: 'z-ai/glm-5',
     primaryProvider: 'openrouter',
+    openRouterApiBaseUrl: 'http://litellm.test/v1',
     extractionModel: 'deepseek/deepseek-v3.2',
     extractionProvider: 'openrouter',
     primaryMaxTokens: 4096,
@@ -276,6 +277,7 @@ describe('LLMClient ICP conversation cost admission', () => {
     const config = makeConfig({
       retryMaxAttempts: 0,
       retryBaseDelayMs: 0,
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       chargePolicy: {
         ...makeModelChargePolicy(),
         icpCostBreaker: policy,
@@ -355,7 +357,6 @@ describe('LLMClient ICP conversation cost admission', () => {
       getIcpConversationCostProjection: vi.fn(async () => projection(0)),
     };
     const client = new LLMClient(makeIcpConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
       icpConversationCostAccounting: accounting,
       onIcpConversationCostDecision: onDecision,
@@ -487,7 +488,6 @@ describe('LLMClient ICP conversation cost admission', () => {
       },
     }));
     const client = new LLMClient(makeIcpConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       icpConversationCostAccounting: {
         reserveIcpConversationCost,
         getIcpConversationCostProjection: vi.fn(async () => projection(2)),
@@ -541,7 +541,6 @@ describe('LLMClient ICP conversation cost admission', () => {
       },
     }));
     const client = new LLMClient(makeIcpConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       icpConversationCostAccounting: {
         reserveIcpConversationCost,
         getIcpConversationCostProjection: vi.fn(async () => projection(2)),
@@ -615,7 +614,6 @@ describe('LLMClient ICP conversation cost admission', () => {
       },
     }));
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       icpConversationCostAccounting: {
         reserveIcpConversationCost,
         getIcpConversationCostProjection: vi.fn(async () => projection(2)),
@@ -830,7 +828,6 @@ describe('LLMClient import-processing routing policy', () => {
         importProcessingLocalModel: 'qwen2.5-coder:14b',
       });
       const client = new LLMClient(config, {
-        litellmBaseUrl: 'http://litellm.test/v1',
       });
 
       mocks.completeSimple.mockResolvedValue({
@@ -878,6 +875,7 @@ describe('LLMClient provider observability', () => {
     const config = makeConfig({
       primaryModel: 'moonshotai/kimi-k3',
       primaryProvider: 'openrouter',
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
         chat: {
           model: 'moonshotai/kimi-k3',
@@ -934,7 +932,6 @@ describe('LLMClient provider observability', () => {
 
   it('removes the recorded kimi-k3 end-message token from API-streamed and Discord-shared final text', async () => {
     const client = new LLMClient(makeKimiConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
     const recordedDeltas = [
       'A grounded reply.',
@@ -1003,7 +1000,6 @@ describe('LLMClient provider observability', () => {
     },
   ])('reconciles $caseName when a kimi-k3 stream ends without a done frame', async ({ deltas, expected }) => {
     const client = new LLMClient(makeKimiConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
     mocks.streamSimple.mockImplementation(async function* kimiStreamWithoutDone() {
       for (const delta of deltas) {
@@ -1037,7 +1033,7 @@ describe('LLMClient provider observability', () => {
   });
 
   it('attaches provider observability and reasoning to streaming responses', async () => {
-    const client = new LLMClient(makeConfig());
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }));
     const onFirstOutput = vi.fn();
     mocks.streamSimple.mockImplementation(async function* () {
       yield { type: 'thinking_delta', delta: 'trace' };
@@ -1332,7 +1328,7 @@ describe('LLMClient provider observability', () => {
   });
 
   it('attaches provider observability and reasoning to completion responses', async () => {
-    const client = new LLMClient(makeConfig());
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }));
     mocks.completeSimple.mockResolvedValue({
       model: 'z-ai/glm-5',
       usage: { input: 13, output: 5 },
@@ -1364,7 +1360,7 @@ describe('LLMClient provider observability', () => {
   });
 
   it('moves system context into provider system prompt observability instead of chat history', async () => {
-    const client = new LLMClient(makeConfig());
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }));
     mocks.completeSimple.mockResolvedValue({
       model: 'z-ai/glm-5',
       usage: { input: 9, output: 4 },
@@ -1858,6 +1854,7 @@ describe('LLMClient prompt caching', () => {
 
   it('routes prompt-cached completions through openai-responses and exposes engaged observability', async () => {
     const client = new LLMClient(makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRegistry: {
         schemaVersion: 1,
         models: [
@@ -1884,7 +1881,7 @@ describe('LLMClient prompt caching', () => {
           },
         ],
       },
-    }), 'http://litellm.test/v1');
+    }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'cached ok' }],
       model: 'summary/cached',
@@ -1913,7 +1910,7 @@ describe('LLMClient prompt caching', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string; api: string };
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { cacheRetention?: string; sessionId?: string };
-    expect(model.id).toBe('openrouter/summary/cached');
+    expect(model.id).toBe('summary/cached');
     expect(model.api).toBe('openai-responses');
     expect(requestOptions).toMatchObject({
       cacheRetention: 'long',
@@ -1934,6 +1931,7 @@ describe('LLMClient prompt caching', () => {
 
   it('fails closed on cache engagement when a channel-scoped cache key cannot be derived', async () => {
     const client = new LLMClient(makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRegistry: {
         schemaVersion: 1,
         models: [
@@ -1960,7 +1958,7 @@ describe('LLMClient prompt caching', () => {
           },
         ],
       },
-    }), 'http://litellm.test/v1');
+    }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'cached ok' }],
       model: 'summary/cached',
@@ -2059,7 +2057,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     if (options.enabled === false) {
       delete (registry as { promptCaching?: unknown }).promptCaching;
     }
-    const client = new LLMClient(makeConfig({ modelRegistry: registry }), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ modelRegistry: registry, openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'ok' }],
       model,
@@ -2176,7 +2174,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
 
   it('captures the true wire body (tools counted once) onto providerObservability (bead hgw3-80f6)', async () => {
     const model = 'anthropic/claude-sonnet-4.5';
-    const client = new LLMClient(makeConfig({ modelRegistry: makeRegistry(model) }), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ modelRegistry: makeRegistry(model), openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     const wireBody = {
       model,
       max_tokens: 1024,
@@ -2252,7 +2250,7 @@ describe('LLMClient completion model hints', () => {
   });
 
   it('prioritizes explicit model hints for completion routing', async () => {
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'hinted response' }],
       model: 'anthropic/claude-3.7-sonnet',
@@ -2274,11 +2272,11 @@ describe('LLMClient completion model hints', () => {
 
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
-    expect(model.id).toBe('openrouter/anthropic/claude-3.7-sonnet');
+    expect(model.id).toBe('anthropic/claude-3.7-sonnet');
   });
 
   it('honors max-token model hints even without explicit model overrides', async () => {
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'token cap response' }],
       model: 'z-ai/glm-5',
@@ -2304,19 +2302,19 @@ describe('LLMClient completion model hints', () => {
   });
 
   it('caps hinted-model output at the registry entry maxOutputTokens', async () => {
-    const config = makeConfig();
+    const config = makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' });
     config.modelRegistry!.models.push({
       id: 'claude-opus-3',
       rank: 200,
       identity: {
-        provider: 'anthropic',
+        provider: 'openrouter',
         model: 'anthropic/claude-3-opus-20240229',
-        source: { type: 'litellm' },
+        source: { type: 'openrouter' },
       },
       purposes: [{ purpose: 'moa', primary: false }],
       capabilities: { maxOutputTokens: 4096, contextWindow: 200_000 },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const client = new LLMClient(config);
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'capped response' }],
       model: 'anthropic/claude-3-opus-20240229',
@@ -2333,7 +2331,7 @@ describe('LLMClient completion model hints', () => {
       {
         disableRetry: true,
         modelHint: {
-          provider: 'anthropic',
+          provider: 'openrouter',
           model: 'anthropic/claude-3-opus-20240229',
           pin: true,
         },
@@ -2346,7 +2344,7 @@ describe('LLMClient completion model hints', () => {
   });
 
   it('fails closed when modelHint.model references a legacy slot key', async () => {
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'should not run' }],
       model: 'z-ai/glm-5',
@@ -2369,11 +2367,11 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
 
-  it('uses provider-configured LiteLLM routing when runtime options do not override it', async () => {
+  it('uses provider-configured endpoint routing when runtime options do not override it', async () => {
     process.env.CUSTOM_LITELLM_KEY = 'provider-key';
     const client = new LLMClient(makeConfig({
-      litellmBaseUrl: 'http://provider-config.test/v1',
-      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
+      openRouterApiBaseUrl: 'http://provider-config.test/v1',
+      openRouterApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
     }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'provider-config response' }],
@@ -2399,10 +2397,10 @@ describe('LLMClient completion model hints', () => {
     delete process.env.CUSTOM_LITELLM_KEY;
   });
 
-  it('uses the credential vault for provider-configured LiteLLM routing', async () => {
+  it('uses the credential vault for provider-configured endpoint routing', async () => {
     const client = new LLMClient(makeConfig({
-      litellmBaseUrl: 'http://provider-config.test/v1',
-      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
+      openRouterApiBaseUrl: 'http://provider-config.test/v1',
+      openRouterApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
       credentialVault: createEnvCredentialVault({
         CUSTOM_LITELLM_KEY: 'vault-provider-key',
       }),
@@ -2425,29 +2423,6 @@ describe('LLMClient completion model hints', () => {
 
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
     expect(requestOptions.apiKey).toBe('vault-provider-key');
-  });
-
-  it('normalizes openrouter model ids for LiteLLM-backed routing', async () => {
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
-    mocks.completeSimple.mockResolvedValue({
-      content: [{ type: 'text', text: 'provider-config response' }],
-      model: 'openrouter/z-ai/glm-5',
-      usage: { input: 12, output: 6 },
-      stopReason: 'stop',
-    });
-
-    await client.complete(
-      {
-        systemPrompt: 'System',
-        messages: [{ role: 'user', content: 'Reply' }],
-      },
-      'summary',
-      { disableRetry: true },
-    );
-
-    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
-    const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
-    expect(model.id).toBe('openrouter/z-ai/glm-5');
   });
 
   it('preserves OpenRouter model ids for direct OpenRouter endpoint routing', async () => {
@@ -2512,6 +2487,7 @@ describe('LLMClient completion model hints', () => {
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;
     const config = makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRegistry: {
         ...baseRegistry,
         models: [
@@ -2537,7 +2513,7 @@ describe('LLMClient completion model hints', () => {
         ],
       },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const client = new LLMClient(config);
 
     const candidates = (fromAny(client)).resolveCandidates('chat', {
       model: 'moonshotai/kimi-k2.5',
@@ -2579,7 +2555,7 @@ describe('LLMClient model knob plumbing', () => {
   });
 
   it('applies configured registry tuning knobs to stream request options (smoke)', async () => {
-    const config = makeConfig();
+    const config = makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' });
     const registry = config.modelRegistry!;
     config.modelRegistry = {
       ...registry,
@@ -2603,7 +2579,7 @@ describe('LLMClient model knob plumbing', () => {
           : entry
       )),
     };
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const client = new LLMClient(config);
 
     mocks.streamSimple.mockImplementation(() => (async function* streamOk() {
       yield {
@@ -2712,7 +2688,7 @@ describe('LLMClient model knob plumbing', () => {
   });
 
   it('maps model-hint thinking disable to no reasoning option even when effort is set', async () => {
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
       model: 'z-ai/glm-5',
@@ -2768,6 +2744,7 @@ describe('LLMClient context routing', () => {
 
   it('routes legacy context completions to longContext primary before fallbacks', async () => {
     const client = new LLMClient(makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
         chat: {
           model: 'chat-model',
@@ -2788,7 +2765,7 @@ describe('LLMClient context routing', () => {
           contextWindow: 256_000,
         },
       },
-    }), 'http://litellm.test/v1');
+    }));
 
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'context response' }],
@@ -2843,7 +2820,6 @@ describe('LLMClient eligibility gate', () => {
       has: () => false,
     }));
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       eligibilityGate: gate,
     });
 
@@ -2960,7 +2936,6 @@ describe('LLMClient eligibility gate', () => {
 
   it('allows the token-gated purpose for a companion whose own tier grants it', async () => {
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       eligibilityGate: makeStrictFleetEligibilityGate({ companionBTierFile: true }),
     });
     mocks.completeSimple.mockResolvedValue({
@@ -3017,7 +2992,7 @@ describe('LLMClient correlation metadata', () => {
 
   it('passes normalized correlation metadata to fallback execution', async () => {
     const runSpy = vi.spyOn(FallbackRunner.prototype, 'run');
-    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: 'http://litellm.test/v1' }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'ok' }],
       model: 'z-ai/glm-5',
@@ -3160,7 +3135,6 @@ describe('LLMClient correlation metadata', () => {
     });
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple.mockResolvedValue({
@@ -3184,7 +3158,7 @@ describe('LLMClient correlation metadata', () => {
 
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
-    expect(model.id).toBe('openrouter/memory/model');
+    expect(model.id).toBe('memory/model');
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1536);
 
@@ -3199,8 +3173,9 @@ describe('LLMClient correlation metadata', () => {
     }));
   });
 
-  it('preserves image input when a background completion is hinted through litellm to a vision-capable routed model', async () => {
+  it('preserves image input when a background completion is hinted to a vision-capable routed model', async () => {
     const config = makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRegistry: {
         schemaVersion: 1,
         models: [
@@ -3235,7 +3210,7 @@ describe('LLMClient correlation metadata', () => {
         ],
       },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const client = new LLMClient(config);
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'cat' }],
       model: 'openrouter/google/gemini-3-flash-preview',
@@ -3255,7 +3230,7 @@ describe('LLMClient correlation metadata', () => {
         }]),
         modelHint: {
           model: 'openrouter/google/gemini-3-flash-preview',
-          provider: 'litellm',
+          provider: 'openrouter',
           maxTokens: 4096,
         },
       }),
@@ -3271,6 +3246,7 @@ describe('LLMClient correlation metadata', () => {
 
   it('routes vision completions through the configured vision-purpose candidate', async () => {
     const config = makeConfig({
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRegistry: {
         schemaVersion: 1,
         models: [
@@ -3305,7 +3281,7 @@ describe('LLMClient correlation metadata', () => {
         ],
       },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const client = new LLMClient(config);
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'visible image summary' }],
       model: 'openrouter/vision/model',
@@ -3324,7 +3300,7 @@ describe('LLMClient correlation metadata', () => {
 
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string; input: string[] };
-    expect(model.id).toBe('openrouter/vision/model');
+    expect(model.id).toBe('vision/model');
     expect(model.input).toContain('image');
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1024);
@@ -3358,7 +3334,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('cost-accounts companion-private calls without persisting source correlation', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple.mockResolvedValue({
@@ -3402,7 +3377,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('uses propagated logical identity and disables nested retries when the caller owns retry sequencing', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 3, retryBaseDelayMs: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.streamSimple.mockImplementation(async function* () {
@@ -3435,7 +3409,6 @@ describe('LLMClient model budget gates and usage metering', () => {
 
   it('records adapter fallback attempts under one logical call through the production gateway stack', async () => {
     const config = makeConfig({
-      litellmBaseUrl: 'http://litellm.test/v1',
       retryMaxAttempts: 0,
       retryBaseDelayMs: 0,
     });
@@ -3460,7 +3433,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const usageEvents: ModelUsageEventInput[] = [];
     const gatewayLlmClient = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder: {
         async recordUsageEvent(event) {
           usageEvents.push(event);
@@ -3598,7 +3570,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ companionId: 'gateway-default' }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
 
@@ -3642,7 +3613,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       inputTokens: 176,
       outputTokens: 2,
       providerObservability: {
-        routeKind: 'configured_endpoint',
+        routeKind: 'request_base_url',
         backendBaseUrl: 'http://litellm.test/v1',
       },
       usageDetails: {
@@ -3672,8 +3643,8 @@ describe('LLMClient model budget gates and usage metering', () => {
       providerCostUsd: 0.95,
       costSource: 'provider',
       metadata: expect.objectContaining({
-        routeKind: 'configured_endpoint',
-        backendProvider: 'litellm',
+        routeKind: 'request_base_url',
+        backendProvider: 'openrouter',
         backendBaseUrl: 'http://litellm.test/v1',
         providerCost: { total: 0.95, currency: 'USD' },
         rawUsage: expect.objectContaining({
@@ -3687,7 +3658,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('persists the charged provider surface without caller-supplied correlation metadata', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ companionId: 'companion-a' }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.streamSimple.mockImplementation(async function* () {
@@ -3730,7 +3700,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('normalizes raw OpenRouter streaming usage without double-counting reasoning tokens or cache writes', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
 
@@ -3786,7 +3755,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('normalizes OpenRouter completion usage accounting into provider cost telemetry', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
 
@@ -3833,15 +3801,15 @@ describe('LLMClient model budget gates and usage metering', () => {
       providerCostUsd: 0.123,
       costSource: 'provider',
       metadata: expect.objectContaining({
-        routeKind: 'configured_endpoint',
-        backendProvider: 'litellm',
+        routeKind: 'request_base_url',
+        backendProvider: 'openrouter',
         backendBaseUrl: 'http://litellm.test/v1',
       }),
     }));
   });
 
   it('records failed and successful fallback attempts under one logical call', async () => {
-    const config = makeConfig({ retryMaxAttempts: 0 });
+    const config = makeConfig({ retryMaxAttempts: 0, openRouterApiBaseUrl: 'http://litellm.test/v1' });
     config.modelRegistry = {
       schemaVersion: 1,
       models: [
@@ -3849,9 +3817,9 @@ describe('LLMClient model budget gates and usage metering', () => {
           id: 'requested-primary',
           rank: 10,
           identity: {
-            provider: 'litellm',
+            provider: 'openrouter',
             model: 'primary-model',
-            source: { type: 'litellm' },
+            source: { type: 'openrouter' },
           },
           purposes: [{ purpose: 'background', primary: true }],
           capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
@@ -3887,7 +3855,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple
@@ -3921,9 +3888,9 @@ describe('LLMClient model budget gates and usage metering', () => {
       attempt: 1,
       status: 'failure',
       settlement: 'unknown',
-      provider: 'litellm',
+      provider: 'openrouter',
       model: 'primary-model',
-      requestedProvider: 'litellm',
+      requestedProvider: 'openrouter',
       requestedModel: 'primary-model',
       costSource: 'none',
     });
@@ -3933,7 +3900,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       settlement: 'complete',
       provider: 'openrouter',
       model: 'fallback-model',
-      requestedProvider: 'litellm',
+      requestedProvider: 'openrouter',
       requestedModel: 'primary-model',
       providerCost: { total: 0.25, currency: 'USD' },
       effectiveCost: { total: 0.25, currency: 'USD' },
@@ -3953,7 +3920,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('settles a stream failure after emitted text as one partial attempt', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.streamSimple.mockImplementation(async function* () {
@@ -3998,7 +3964,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('records a completed provider response with malformed usage as failed unknown economics', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple.mockResolvedValue({
@@ -4032,7 +3997,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('settles late gateway-captured provider cost into the durable attempt', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
       providerCostResolver: () => ({
         providerCost: { total: 0.42, currency: 'USD' },
@@ -4065,7 +4029,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('quarantines contradictory response and gateway-captured cost from durable totals', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
       providerCostResolver: () => ({
         providerCost: { total: 0.42, currency: 'USD' },
@@ -4112,7 +4075,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('keeps malformed gateway cost evidence unresolved instead of estimating a complete attempt', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
       providerCostResolver: () => ({
         providerCostEvidence: {},
@@ -4143,7 +4105,6 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('quarantines malformed direct-provider response cost instead of settling a complete estimate', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple.mockResolvedValue({
@@ -4227,7 +4188,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const blockedEvents: Array<Record<string, unknown>> = [];
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
       usageBudgetQuery: {
         async getModelBudgetSpend() {
@@ -4271,7 +4231,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(response.content).toBe('ok');
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
     const selectedModel = mocks.streamSimple.mock.calls[0]?.[0] as { id: string };
-    expect(selectedModel.id).toBe('openrouter/openai/gpt-4.1-mini');
+    expect(selectedModel.id).toBe('openai/gpt-4.1-mini');
     expect(blockedEvents).toHaveLength(1);
     expect(blockedEvents[0]).toMatchObject({
       reason: 'daily_budget_exceeded',
@@ -4329,7 +4289,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const blockedEvents: Array<Record<string, unknown>> = [];
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       onBudgetBlocked: event => blockedEvents.push(event as unknown as Record<string, unknown>),
     });
 
@@ -4346,9 +4305,10 @@ describe('LLMClient model budget gates and usage metering', () => {
   it('falls back to a secondary chat candidate when the primary stream returns no text', async () => {
     const config = makeConfig({
       primaryModel: 'ChatGPTN',
-      primaryProvider: 'litellm',
+      primaryProvider: 'openrouter',
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
-        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        chat: { model: 'ChatGPTN', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       },
       modelRegistry: {
@@ -4358,9 +4318,9 @@ describe('LLMClient model budget gates and usage metering', () => {
             id: 'chatgptn-primary',
             rank: 10,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'ChatGPTN',
-              source: { type: 'litellm' },
+              source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'chat', primary: true }],
             capabilities: {
@@ -4392,7 +4352,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
@@ -4434,20 +4393,21 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
 
     expect(response.content).toBe('Recovered on nano.');
-    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(response.model).toBe('openai/gpt-5.4-nano');
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
       'ChatGPTN',
-      'openrouter/openai/gpt-5.4-nano',
+      'openai/gpt-5.4-nano',
     ]);
   });
 
   it('fails over from unreachable ChatGPTN without retrying the same stream candidate', async () => {
     const config = makeConfig({
       primaryModel: 'ChatGPTN',
-      primaryProvider: 'litellm',
+      primaryProvider: 'openrouter',
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
-        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        chat: { model: 'ChatGPTN', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       },
       modelRegistry: {
@@ -4457,9 +4417,9 @@ describe('LLMClient model budget gates and usage metering', () => {
             id: 'chatgptn-primary',
             rank: 10,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'ChatGPTN',
-              source: { type: 'litellm' },
+              source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'chat', primary: true }],
             capabilities: {
@@ -4491,7 +4451,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
@@ -4542,17 +4501,18 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(secondResponse.content).toBe('Recovered on nano.');
     expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
       'ChatGPTN',
-      'openrouter/openai/gpt-5.4-nano',
-      'openrouter/openai/gpt-5.4-nano',
+      'openai/gpt-5.4-nano',
+      'openai/gpt-5.4-nano',
     ]);
   });
 
   it('falls back without streaming leading provider template artifacts from the primary model', async () => {
     const config = makeConfig({
       primaryModel: 'ChatGPTN',
-      primaryProvider: 'litellm',
+      primaryProvider: 'openrouter',
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
-        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        chat: { model: 'ChatGPTN', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       },
       modelRegistry: {
@@ -4562,9 +4522,9 @@ describe('LLMClient model budget gates and usage metering', () => {
             id: 'chatgptn-primary',
             rank: 10,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'ChatGPTN',
-              source: { type: 'litellm' },
+              source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'chat', primary: true }],
             capabilities: {
@@ -4596,7 +4556,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
@@ -4635,22 +4594,23 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
 
     expect(response.content).toBe('Recovered on nano.');
-    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(response.model).toBe('openai/gpt-5.4-nano');
     expect(streamedText.join('')).toBe('Recovered on nano.');
     expect(streamedText.join('')).not.toContain('begin▁of▁sentence');
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
       'ChatGPTN',
-      'openrouter/openai/gpt-5.4-nano',
+      'openai/gpt-5.4-nano',
     ]);
   });
 
   it('falls back on leading generated response headers even without a BOS token', async () => {
     const config = makeConfig({
       primaryModel: 'ChatGPTN',
-      primaryProvider: 'litellm',
+      primaryProvider: 'openrouter',
+      openRouterApiBaseUrl: 'http://litellm.test/v1',
       modelRoster: {
-        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        chat: { model: 'ChatGPTN', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       },
       modelRegistry: {
@@ -4660,9 +4620,9 @@ describe('LLMClient model budget gates and usage metering', () => {
             id: 'chatgptn-primary',
             rank: 10,
             identity: {
-              provider: 'litellm',
+              provider: 'openrouter',
               model: 'ChatGPTN',
-              source: { type: 'litellm' },
+              source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'chat', primary: true }],
             capabilities: {
@@ -4694,7 +4654,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
@@ -4740,7 +4699,6 @@ describe('LLMClient model budget gates and usage metering', () => {
 
   it('allows normal Markdown headings once they are not response-header artifacts', async () => {
     const client = new LLMClient(makeConfig(), {
-      litellmBaseUrl: 'http://litellm.test/v1',
     });
     const content = '# Garden plan\nBring snacks.';
 
@@ -4775,7 +4733,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     const config = makeConfig();
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     mocks.completeSimple.mockResolvedValue({
@@ -4821,7 +4778,6 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     const estimateSpy = vi.spyOn(fromAny(client), 'estimateBudgetInputTokens');
@@ -5050,7 +5006,7 @@ describe('LLMClient model budget gates and usage metering', () => {
           toolCalls: [],
         }),
     };
-    const client = new LLMClient(makeConfig(), {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }), {
       transport: fromAny(transport),
       circuitBreaker,
     });
@@ -5115,7 +5071,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       stream: vi.fn().mockRejectedValue(new Error('fetch failed')),
       complete: vi.fn(),
     };
-    const client = new LLMClient(makeConfig(), {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }), {
       transport: fromAny(transport),
       circuitBreaker,
     });
@@ -5156,7 +5112,7 @@ describe('LLMClient model budget gates and usage metering', () => {
           toolCalls: [],
         }),
     };
-    const client = new LLMClient(makeConfig(), {
+    const client = new LLMClient(makeConfig({ openRouterApiBaseUrl: undefined }), {
       transport: fromAny(transport),
       circuitBreaker,
     });
@@ -5236,7 +5192,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       }),
     };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       transport: fromAny(transport),
     });
 
@@ -5339,7 +5294,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       return await providerRelease.promise;
     });
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 3 }), {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     const controller = new AbortController();
@@ -5441,7 +5395,6 @@ describe('LLMClient model budget gates and usage metering', () => {
       ],
     };
     const client = new LLMClient(config, {
-      litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     const controller = new AbortController();
@@ -5559,7 +5512,7 @@ describe('LLMClient model budget gates and usage metering', () => {
   });
 
   it('does not serialize direct registered-model calls when no shared route is in play', async () => {
-    const config = makeConfig();
+    const config = makeConfig({ openRouterApiBaseUrl: undefined });
     const secondStarted = createDeferred<void>();
     const firstRelease = createDeferred<{
       content: string;

@@ -11,10 +11,9 @@ function isSet(value: unknown): boolean {
 export function resolveGatewayCredentialPresence(input: {
   config: SubstrateConfig;
   channelsConfig: RuntimeChannelsConfig;
-  providerEnv: NodeJS.ProcessEnv;
   env: NodeJS.ProcessEnv;
 }): GatewayCredentialPresenceResult {
-  const { config, channelsConfig, providerEnv, env } = input;
+  const { config, channelsConfig, env } = input;
   return {
     discordToken: isSet(config.discordToken)
       || (channelsConfig.discord.accounts ?? []).some(account => isSet(account.token)),
@@ -25,8 +24,6 @@ export function resolveGatewayCredentialPresence(input: {
     openrouterApiKey: isSet(
       resolveOptionalEnvCredential(config.credentialVault, 'OPENROUTER_API_KEY', env),
     ),
-    litellmBaseUrl: isSet(config.litellmBaseUrl),
-    litellmApiKey: isSet(providerEnv.LITELLM_API_KEY),
     importProcessingLocalApiKey: isSet(
       resolveOptionalEnvCredential(config.credentialVault, 'IMPORT_PROCESSING_LOCAL_API_KEY', env),
     ),

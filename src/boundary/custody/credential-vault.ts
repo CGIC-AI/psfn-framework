@@ -1,5 +1,4 @@
 const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-const DEFAULT_LITELLM_API_KEY_ENV = 'LITELLM_API_KEY';
 const CREDENTIAL_VAULT_BACKEND_ENV = 'CREDENTIAL_VAULT_BACKEND';
 const OPENBAO_KV_VERSION_DEFAULT = 2;
 
@@ -7,8 +6,6 @@ const PROVIDER_API_KEY_ENV_NAMES: Readonly<Record<string, readonly string[]>> = 
   anthropic: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
   generic_openai: ['OPENAI_API_KEY'],
   google: ['GEMINI_API_KEY'],
-  litellm: [DEFAULT_LITELLM_API_KEY_ENV],
-  litellm_proxy: [DEFAULT_LITELLM_API_KEY_ENV],
   mistral: ['MISTRAL_API_KEY'],
   openai: ['OPENAI_API_KEY'],
   openrouter: ['OPENROUTER_API_KEY'],
@@ -53,7 +50,6 @@ export interface CredentialVaultPort {
 
 export interface CredentialVaultConfigLike {
   credentialVault?: CredentialVaultPort;
-  litellmApiKeyRef?: CredentialReference;
   providerRegistry?: {
     providers: ReadonlyArray<{
       type: string;
@@ -90,9 +86,6 @@ function resolveProviderCredentialReferences(
   )?.apiKeyRef;
   if (configuredRef) {
     return [configuredRef];
-  }
-  if (normalized === 'litellm' || normalized === 'litellm_proxy' || normalized === 'local_endpoint') {
-    return [config.litellmApiKeyRef ?? envCredential(DEFAULT_LITELLM_API_KEY_ENV)];
   }
   return (PROVIDER_API_KEY_ENV_NAMES[normalized] ?? []).map((envName) => envCredential(envName));
 }
@@ -363,7 +356,6 @@ export function buildProviderCredentialEnv(
   return {
     EMBEDDING_API_KEY: resolveOptionalEnvCredential(config.credentialVault, 'EMBEDDING_API_KEY', fallbackEnv),
     OPENAI_API_KEY: resolveOptionalEnvCredential(config.credentialVault, 'OPENAI_API_KEY', fallbackEnv),
-    LITELLM_API_KEY: resolveProviderApiKey('litellm_proxy', config, fallbackEnv),
     HF_TOKEN: resolveOptionalEnvCredential(config.credentialVault, 'HF_TOKEN', fallbackEnv),
     HF_ACCESS_TOKEN: resolveOptionalEnvCredential(config.credentialVault, 'HF_ACCESS_TOKEN', fallbackEnv),
     HUGGINGFACE_HUB_TOKEN: resolveOptionalEnvCredential(config.credentialVault, 'HUGGINGFACE_HUB_TOKEN', fallbackEnv),

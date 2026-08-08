@@ -68,8 +68,8 @@ function buildProbe(provider: ProviderSelection): { url: string; headers: Record
       headers: { 'x-api-key': provider.apiKeyValue, 'anthropic-version': '2023-06-01' },
     };
   }
-  // openrouter, openai, google (openai-compat), mistral, litellm_proxy,
-  // generic_openai all expose an OpenAI-style /models list.
+  // openrouter, openai, google (openai-compat), mistral, and generic_openai
+  // all expose an OpenAI-style /models list.
   const url = provider.modelsApiUrl ?? `${base}/models`;
   return { url, headers: { Authorization: `Bearer ${provider.apiKeyValue}` } };
 }

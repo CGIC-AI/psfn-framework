@@ -49,7 +49,6 @@ import {
   resolveModelUsageCostRates,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
-import { isConfiguredEndpointRouteKind } from '../../shared/telemetry/route-kind.js';
 import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
 import {
   FOREGROUND_CHAT_RUNTIME_CLASS,
@@ -144,7 +143,6 @@ export interface LLMCompletionOptions {
 }
 
 export interface LLMClientRuntimeOptions {
-  litellmBaseUrl?: string;
   transport?: LLMProviderPort;
   runtime?: ProviderRuntime;
   eligibilityGate?: EligibilityGate;
@@ -174,7 +172,6 @@ export class SensitiveImportRoutePolicyError extends Error {
 
 export class LLMClient {
   private config: SubstrateConfig;
-  private litellmBaseUrl: string | null;
   private requestCapability: LLMRequestCapability;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
@@ -191,36 +188,33 @@ export class LLMClient {
 
   constructor(
     config: SubstrateConfig,
-    litellmBaseUrlOrOptions?: string | LLMClientRuntimeOptions,
+    runtimeOptions?: string | LLMClientRuntimeOptions,
   ) {
-    const runtimeOptions = typeof litellmBaseUrlOrOptions === 'string'
-      ? { litellmBaseUrl: litellmBaseUrlOrOptions }
-      : (litellmBaseUrlOrOptions ?? {});
+    const options = typeof runtimeOptions === 'string'
+      ? ({} satisfies LLMClientRuntimeOptions)
+      : (runtimeOptions ?? {});
     this.config = config;
-    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? config.litellmBaseUrl ?? null;
-    this.transport = runtimeOptions.transport;
-    this.runtime = runtimeOptions.runtime ?? new PiProviderRuntime();
+    this.transport = options.transport;
+    this.runtime = options.runtime ?? new PiProviderRuntime();
     this.requestCapability = new LLMRequestCapability(
       config,
-      this.litellmBaseUrl,
-      config.litellmApiKeyRef,
       this.runtime,
     );
     this.fallbackRunner = new FallbackRunner();
-    this.budgetController = new ModelBudgetController(config, runtimeOptions.usageBudgetQuery);
-    this.eligibilityGate = runtimeOptions.eligibilityGate;
-    this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
-    this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
-    this.usageRecorder = runtimeOptions.usageRecorder;
+    this.budgetController = new ModelBudgetController(config, options.usageBudgetQuery);
+    this.eligibilityGate = options.eligibilityGate;
+    this.onEligibilityDecision = options.onEligibilityDecision;
+    this.onBudgetBlocked = options.onBudgetBlocked;
+    this.usageRecorder = options.usageRecorder;
     this.icpConversationCostBreaker = new IcpConversationCostBreaker(
       config,
-      runtimeOptions.icpConversationCostAccounting,
-      runtimeOptions.onIcpConversationCostDecision,
-      runtimeOptions.icpConversationChargePolicyResolver,
+      options.icpConversationCostAccounting,
+      options.onIcpConversationCostDecision,
+      options.icpConversationChargePolicyResolver,
     );
-    this.providerCostResolver = runtimeOptions.providerCostResolver;
+    this.providerCostResolver = options.providerCostResolver;
     this.modelCallGate = new ModelCallGate();
-    this.circuitBreaker = runtimeOptions.circuitBreaker ?? new SlidingWindowCircuitBreaker({
+    this.circuitBreaker = options.circuitBreaker ?? new SlidingWindowCircuitBreaker({
       failureThreshold: LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
       windowMs: LLM_CIRCUIT_BREAKER_WINDOW_MS,
       cooldownMs: LLM_CIRCUIT_BREAKER_COOLDOWN_MS,
@@ -387,12 +381,9 @@ export class LLMClient {
     if (routeKind === 'request_base_url') {
       return `request_base_url::${normalizeSharedRouteKey(candidate.requestBaseUrl)}`;
     }
-    if (isConfiguredEndpointRouteKind(routeKind)) {
-      return `configured_endpoint::${normalizeSharedRouteKey(this.litellmBaseUrl)}`;
-    }
 
     const provider = candidate.provider.trim().toLowerCase();
-    if (provider === 'litellm' || provider === 'local_endpoint') {
+    if (provider === 'local_endpoint') {
       return `registered_model::${provider}`;
     }
     return null;
@@ -495,10 +486,7 @@ export class LLMClient {
    * single-in-flight behavior for any unconfigured endpoint.
    */
   private resolveModelCallCapacity(candidate: RoutingCandidate): ModelCallGateCapacity {
-    const routeKind = this.requestCapability.resolveRouteKind(candidate);
-    const providerId = isConfiguredEndpointRouteKind(routeKind)
-      ? 'litellm'
-      : candidate.provider.trim().toLowerCase();
+    const providerId = candidate.provider.trim().toLowerCase();
     const entry = this.config.providerRegistry?.providers.find(
       provider => provider.id.trim().toLowerCase() === providerId,
     );

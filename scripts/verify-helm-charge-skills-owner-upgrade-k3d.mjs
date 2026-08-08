@@ -302,7 +302,6 @@ function finalValues(image, overrides = {}) {
       },
     },
     redis: { enabled: false },
-    liteLlm: { enabled: false },
     networkPolicy: { enabled: false },
     ingress: { enabled: false },
     modelPrefetch: { enabled: false },

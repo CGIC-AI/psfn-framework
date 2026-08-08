@@ -39,8 +39,8 @@ export interface DiscoveryBackfillTarget {
 }
 
 const PER_TOKEN_TO_PER_MILLION = 1_000_000;
-const LOOKUP_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
-const PROVIDER_INFRA_HINTS = new Set(['proxy', 'litellm', 'router']);
+const LOOKUP_WRAPPER_PREFIXES = new Set(['openrouter', 'proxy', 'router']);
+const PROVIDER_INFRA_HINTS = new Set(['proxy', 'router']);
 const LOOKUP_DISPLAY_SEPARATORS = [' — ', ' – ', ' - ', ' | ', ' · '] as const;
 const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 

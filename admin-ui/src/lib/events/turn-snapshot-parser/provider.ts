@@ -362,7 +362,7 @@ function parseProviderObservability(
     'capturedWirePayload',
   ]);
   const routeKind = requireString(source.routeKind, `${path}.routeKind`);
-  if (!['registered_model', 'configured_litellm_proxy', 'request_base_url'].includes(routeKind)) {
+  if (!['registered_model', 'configured_endpoint', 'configured_litellm_proxy', 'request_base_url'].includes(routeKind)) {
     reject(`${path}.routeKind`, 'contains an unsupported value');
   }
   const backendBaseUrl = optionalString(source, 'backendBaseUrl', path);

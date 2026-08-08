@@ -203,8 +203,6 @@ const EMPTY_CREDENTIAL_PRESENCE: GatewayCredentialPresenceResult = {
   apiKey: false,
   adminToken: false,
   openrouterApiKey: false,
-  litellmBaseUrl: false,
-  litellmApiKey: false,
   importProcessingLocalApiKey: false,
   falApiKey: false,
   telegramBotToken: false,

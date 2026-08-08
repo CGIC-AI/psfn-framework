@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createModel } from './models.js';
+import { createOpenAICompatibleEndpointModel } from './models.js';
 import { PiProviderRuntime } from './provider-runtime.js';
 
 // ── gu8m regression: streamed tool-call argument accumulation ──
@@ -42,7 +42,15 @@ async function streamToolCalls(chunks: WireChunk[]): Promise<Array<{ name: strin
   installSseFetch(body);
 
   const baseUrl = 'http://pi-ai-streaming-toolcall-accumulation.test/v1';
-  const model = createModel(baseUrl, 'z-ai/glm-5.2', 4096, 131072, 'openai-completions', { reasoning: true });
+  const model = createOpenAICompatibleEndpointModel({
+    baseUrl,
+    modelId: 'z-ai/glm-5.2',
+    provider: 'local_endpoint',
+    maxTokens: 4096,
+    contextWindow: 131072,
+    api: 'openai-completions',
+    reasoning: true,
+  });
   const runtime = new PiProviderRuntime();
   const stream = runtime.stream(model, {
     systemPrompt: 'system',

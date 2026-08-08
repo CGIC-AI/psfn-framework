@@ -23,14 +23,18 @@ describe('credential vault', () => {
 
   it('resolves provider credentials through configured env handles', () => {
     const vault = createEnvCredentialVault({
-      CUSTOM_LITELLM_TOKEN: 'litellm-secret',
+      CUSTOM_SHARED_ROUTER_TOKEN: 'shared-router-secret',
       ANTHROPIC_API_KEY: 'anthropic-secret',
     });
 
-    expect(resolveProviderApiKey('litellm_proxy', {
+    expect(resolveProviderApiKey('generic_openai', {
       credentialVault: vault,
-      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_TOKEN'),
-    })).toBe('litellm-secret');
+      providerRegistry: {
+        providers: [
+          { type: 'generic_openai', enabled: true, apiKeyRef: envCredential('CUSTOM_SHARED_ROUTER_TOKEN') },
+        ],
+      },
+    })).toBe('shared-router-secret');
     expect(resolveProviderApiKey('anthropic', {
       credentialVault: vault,
     })).toBe('anthropic-secret');
@@ -56,7 +60,6 @@ describe('credential vault', () => {
     expect(buildProviderCredentialEnv({ credentialVault: vault })).toEqual({
       EMBEDDING_API_KEY: 'embedding-secret',
       OPENAI_API_KEY: 'openai-secret',
-      LITELLM_API_KEY: undefined,
       HF_TOKEN: undefined,
       HF_ACCESS_TOKEN: 'hf-secret',
       HUGGINGFACE_HUB_TOKEN: undefined,

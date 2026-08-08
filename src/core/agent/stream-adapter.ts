@@ -27,7 +27,7 @@ import type {
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
+import { createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
   buildStreamTransportModelHint,
@@ -53,16 +53,13 @@ import {
   findRegistryEntryByProviderModel,
   normalizeModelIdForProvider,
 } from '../../primitives/llm/model-budget.js';
-import {
-  resolveConfiguredLiteLLMBaseUrl,
-} from '../../system/config/providers-config.js';
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderStreamOptions } from './contracts.js';
 import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 
 const log = createComponentLogger('StreamAdapter');
-const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
+const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
 
 export interface StreamTerminalFailureEvent {
   purpose: RoutingPurpose;
@@ -135,7 +132,6 @@ export function createSubstrateStreamFn(
       'Core stream adapter requires an injected transport; direct provider transport is not supported.',
     );
   }
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const fallbackRunner = new FallbackRunner();
 
   const wrappedStreamFn: StreamFn = async (model, context, options) => {
@@ -150,7 +146,6 @@ export function createSubstrateStreamFn(
       purpose,
       model,
       callerMaxTokens,
-      litellmBaseUrl,
     );
     const logicalCallId = `llm:${randomUUID()}:chat:${purpose}`;
     let physicalAttempt = 0;
@@ -169,7 +164,6 @@ export function createSubstrateStreamFn(
           attempt,
           config,
           transport: runtimeOptions.transport,
-          litellmBaseUrl,
           model,
           context,
           options: options ? { ...options } : undefined,
@@ -238,7 +232,6 @@ interface ExecuteStreamCandidateParams {
   attempt: number;
   config: CoreSubstrateConfig;
   transport: SubstrateStreamTransport;
-  litellmBaseUrl: string | null;
   model: Model<any>;
   context: unknown;
   options: SimpleStreamOptions | undefined;
@@ -263,7 +256,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     candidate,
     params.options,
     undefined,
-    params.litellmBaseUrl,
   );
   const retryConfig = llmRetryConfig(params.config);
   const maxRetries = Number.isFinite(retryConfig.maxRetries)
@@ -904,17 +896,15 @@ function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel
   return undefined;
 }
 
-function supportsFullKnobPassthrough(candidate: RoutingCandidate, litellmBaseUrl: string | null): boolean {
+function supportsFullKnobPassthrough(candidate: RoutingCandidate): boolean {
   return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
-    || !!candidate.requestBaseUrl
-    || litellmBaseUrl !== null;
+    || !!candidate.requestBaseUrl;
 }
 
 function buildStreamRequestOptions(
   candidate: RoutingCandidate,
   options: SimpleStreamOptions | undefined,
   apiKey: string | undefined,
-  litellmBaseUrl: string | null,
 ): Record<string, unknown> {
   const requestOptions: Record<string, unknown> = {
     ...(options ?? {}),
@@ -935,7 +925,7 @@ function buildStreamRequestOptions(
     requestOptions.reasoning = reasoning;
   }
 
-  if (supportsFullKnobPassthrough(candidate, litellmBaseUrl)) {
+  if (supportsFullKnobPassthrough(candidate)) {
     if (candidate.topP !== undefined && requestOptions.topP === undefined) {
       requestOptions.topP = candidate.topP;
     }
@@ -967,14 +957,12 @@ function resolveStreamCandidates(
   purpose: RoutingPurpose,
   model: Model<any>,
   callerMaxTokens: number | undefined,
-  litellmBaseUrl: string | null,
 ): RoutingCandidate[] {
   const currentCandidate = buildCurrentCandidate(
     config,
     purpose,
     model,
     callerMaxTokens,
-    litellmBaseUrl,
   );
   const {
     candidates: routingCandidates,
@@ -1032,16 +1020,11 @@ function buildCurrentCandidate(
   purpose: RoutingPurpose,
   model: Model<any>,
   callerMaxTokens: number | undefined,
-  litellmBaseUrl: string | null,
 ): RoutingCandidate {
   const modelProvider = resolveModelProvider(model);
-  const effectiveProvider = litellmBaseUrl
-    ? config.primaryProvider.trim().toLowerCase()
-    : (modelProvider ?? config.primaryProvider).trim().toLowerCase();
+  const effectiveProvider = (modelProvider ?? config.primaryProvider).trim().toLowerCase();
   const rawModelId = String(model.id);
-  const normalizedModelId = litellmBaseUrl
-    ? normalizeModelIdForProvider(effectiveProvider, rawModelId)
-    : normalizeModelIdForProvider(effectiveProvider, rawModelId);
+  const normalizedModelId = normalizeModelIdForProvider(effectiveProvider, rawModelId);
   const resolvedMaxTokens = callerMaxTokens ?? resolveStreamMaxTokens(model, undefined, config.primaryMaxTokens);
   const matchedRegistryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
     ?? findRegistryEntryByModelId(config, normalizedModelId);
@@ -1162,24 +1145,16 @@ function resolveModelProvider(model: Model<any>): string | undefined {
 /**
  * Resolve a pi-ai Model object from SubstrateConfig for a given purpose.
  *
- * Uses LiteLLM proxy if providers.json or env config resolves one, otherwise falls back
- * to pi-ai's built-in model registry via resolveRegisteredModel().
+ * Routes through a configured OpenAI-compatible provider endpoint when the
+ * selected candidate carries a request base URL, otherwise falls back to
+ * pi-ai's built-in model registry via resolveRegisteredModel().
  */
 export function resolveModel(
   config: CoreSubstrateConfig,
   runtime: ProviderRuntime,
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const selection = resolveModelSelection(config, runtime, purpose);
-
-  if (litellmBaseUrl) {
-    const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
-    return ensurePurposeInputCapabilities(model, purpose, {
-      supportsVision: selection.supportsVision,
-    });
-  }
 
   if (selection.requestBaseUrl) {
     const model = createOpenAICompatibleEndpointModel({
@@ -1203,7 +1178,7 @@ export function resolveModel(
   if (!model) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+      'Configure an OpenAI-compatible provider in providers.json or update the canonical model config in models.json.',
     );
   }
   return ensurePurposeInputCapabilities(model, purpose, {
@@ -1229,23 +1204,15 @@ export function resolveModelSelection(
 }
 
 export function resolveExplicitModel(
-  config: CoreSubstrateConfig,
+  _config: CoreSubstrateConfig,
   runtime: ProviderRuntime,
   selection: MessageModelOverride,
 ): Model<any> {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-
-  if (litellmBaseUrl) {
-    const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
-    return ensurePurposeInputCapabilities(model, selection.purpose);
-  }
-
   const registered = resolveRegisteredModel(runtime, selection.provider, selection.model);
   if (!registered) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Use a known canonical provider model or configure LiteLLM.',
+      'Use a known canonical provider model or configure an OpenAI-compatible provider.',
     );
   }
 
@@ -1301,16 +1268,3 @@ function toRoutingPurpose(purpose: ModelPurpose): RoutingPurpose {
   return purpose;
 }
 
-function normalizeLiteLLMModelId(provider: string, modelId: string): string {
-  const normalizedProvider = provider.trim().toLowerCase();
-  const normalizedModelId = modelId.trim();
-  if (!normalizedModelId) return normalizedModelId;
-  if (normalizedProvider !== 'openrouter') return normalizedModelId;
-  if (normalizedModelId.startsWith('openrouter/')) return normalizedModelId;
-
-  // OpenRouter model IDs are typically vendor-qualified (e.g. google/gemini-3-flash-preview).
-  // In LiteLLM mode we normalize these to the openrouter/* wildcard namespace.
-  return normalizedModelId.includes('/')
-    ? `openrouter/${normalizedModelId}`
-    : normalizedModelId;
-}

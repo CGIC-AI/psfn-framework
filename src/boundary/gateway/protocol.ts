@@ -714,8 +714,6 @@ export interface GatewayCredentialPresenceResult {
   apiKey: boolean;
   adminToken: boolean;
   openrouterApiKey: boolean;
-  litellmBaseUrl: boolean;
-  litellmApiKey: boolean;
   importProcessingLocalApiKey: boolean;
   falApiKey: boolean;
   telegramBotToken: boolean;

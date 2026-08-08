@@ -81,7 +81,7 @@ describe('provider registry helpers', () => {
 
   it('exposes provider-specific validation helpers', () => {
     expect(providerSupportsModelsApi('openrouter')).toBe(true);
-    expect(providerSupportsModelsApi('litellm_proxy')).toBe(true);
+    expect(providerSupportsModelsApi('generic_openai')).toBe(true);
     expect(providerSupportsModelsApi('openai')).toBe(false);
     expect(providerIdIsValid('openrouter-prod')).toBe(true);
     expect(providerIdIsValid('bad id')).toBe(false);

@@ -1,6 +1,6 @@
 // ── Routed Endpoint Model Factory ──
-// Creates pi-ai Model objects for OpenAI-compatible routed endpoints.
-// LiteLLM is one supported backend, not the generic abstraction itself.
+// Creates pi-ai Model objects for OpenAI-compatible routed endpoints, such as
+// a configured shared OpenAI-compatible router.
 
 import type { Api, Model } from '@earendil-works/pi-ai';
 import type {
@@ -77,44 +77,6 @@ export function createOpenAICompatibleEndpointModel(
       ...(config.reasoning && config.thinkingFormat ? { thinkingFormat: config.thinkingFormat } : {}),
     },
   };
-}
-
-/**
- * Create a pi-ai Model that routes through LiteLLM.
- * LiteLLM handles the upstream provider credentials behind a virtual key.
- */
-export function createLiteLLMModel(
-  config: Omit<OpenAICompatibleEndpointModelConfig, 'provider' | 'routeLabel'>,
-): Model<OpenAICompatibleApi> {
-  return createOpenAICompatibleEndpointModel({
-    ...config,
-    provider: 'litellm',
-    routeLabel: 'LiteLLM',
-  });
-}
-
-export function createModel(
-  baseUrl: string,
-  modelId: string,
-  maxTokens?: number,
-  contextWindow?: number,
-  api: OpenAICompatibleApi = 'openai-completions',
-  options: {
-    reasoning?: boolean;
-    supportsVision?: boolean;
-  } = {},
-): Model<OpenAICompatibleApi> {
-  return createOpenAICompatibleEndpointModel({
-    baseUrl,
-    modelId,
-    provider: 'litellm',
-    routeLabel: 'LiteLLM',
-    maxTokens,
-    contextWindow,
-    api,
-    reasoning: options.reasoning,
-    supportsVision: options.supportsVision,
-  });
 }
 
 function supportsOpenAIDeveloperRole(model: Model<any>): boolean {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventBus } from '../../shared/event-bus.js';
 import { AgentApiBackend } from './agent-backend.js';
 import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
@@ -26,7 +27,7 @@ function createSessionManagerStub() {
 describe('AgentApiBackend health RPC', () => {
   it('returns the health body directly instead of an HTTP response envelope', async () => {
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage: vi.fn(), abort: vi.fn() } as any,
+      agentLoop: fromAny({ handleMessage: vi.fn(), abort: vi.fn() }),
       eventBus: new EventBus(),
       sessionManager: createSessionManagerStub(),
       healthChecks: {
@@ -78,7 +79,7 @@ describe('AgentApiBackend chat body intake screening', () => {
       metadata: { inputTokens: 1, outputTokens: 1 },
     }));
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort: vi.fn() } as any,
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
       eventBus: new EventBus(),
       sessionManager: createSessionManagerStub(),
       documentIngest: {
@@ -145,7 +146,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       }],
     });
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort: vi.fn() } as any,
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
       eventBus: new EventBus(), sessionManager,
       companionId,
       requestCapabilityVerifier: assertionVerifier,
@@ -246,7 +247,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-endpoint-id': 'office-device',
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
-      hubDevicePrincipal: { ...hubDevicePrincipal, humanPrincipal: { id: 'forged' } } as any,
+      hubDevicePrincipal: fromAny({ ...hubDevicePrincipal, humanPrincipal: { id: 'forged' } }),
       hubDeviceAttachment,
     })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
 
@@ -643,15 +644,15 @@ describe('AgentApiBackend chat completion deadlines', () => {
       };
       const handleMessage = vi.fn((message) => {
         setTimeout(() => {
-          void eventBus.emit('agent.turn.end', { message, response } as any);
+          void eventBus.emit('agent.turn.end', fromAny({ message, response }));
         }, 10);
         return new Promise(() => undefined);
       });
       const backend = new AgentApiBackend({
-        agentLoop: {
+        agentLoop: fromAny({
           handleMessage,
           abort: vi.fn(),
-        } as any,
+        }),
         eventBus,
         sessionManager: createSessionManagerStub(),
       });
@@ -723,10 +724,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
         }
       });
       const backend = new AgentApiBackend({
-        agentLoop: {
+        agentLoop: fromAny({
           handleMessage: vi.fn(() => new Promise(() => undefined)),
           abort,
-        } as any,
+        }),
         eventBus,
         sessionManager: createSessionManagerStub(),
       });
@@ -781,7 +782,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
     const handleMessage = vi.fn(() => turnPromise);
     const abort = vi.fn(() => ({ status: 'signaled' as const }));
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort } as any,
+      agentLoop: fromAny({ handleMessage, abort }),
       eventBus,
       sessionManager: createSessionManagerStub(),
     });
@@ -832,7 +833,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
     const handleMessage = vi.fn(() => turnPromise);
     const abort = vi.fn(() => ({ status: 'not_active' as const }));
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort } as any,
+      agentLoop: fromAny({ handleMessage, abort }),
       eventBus,
       sessionManager: createSessionManagerStub(),
     });
@@ -888,7 +889,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
     const handleMessage = vi.fn(() => turnPromise);
     const abort = vi.fn(() => ({ status: 'owner_mismatch' as const }));
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort } as any,
+      agentLoop: fromAny({ handleMessage, abort }),
       eventBus,
       sessionManager: createSessionManagerStub(),
     });
@@ -935,12 +936,12 @@ describe('AgentApiBackend chat completion deadlines', () => {
     });
     const handleMessage = vi.fn(() => turnPromise);
     const backend = new AgentApiBackend({
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         abort: vi.fn(() => {
           throw new Error('agent abort failed');
         }),
-      } as any,
+      }),
       eventBus,
       sessionManager: createSessionManagerStub(),
     });
@@ -989,15 +990,15 @@ describe('AgentApiBackend direct model completions', () => {
     const handleMessage = overrides.handleMessage ?? vi.fn(() => new Promise(() => undefined));
     const eventBus = overrides.eventBus ?? new EventBus();
     const backend = new AgentApiBackend({
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         abort: vi.fn(() => ({ status: 'not_active' as const })),
-      } as any,
+      }),
       eventBus,
       sessionManager: createSessionManagerStub(),
       ...(overrides.llmProvider === false
         ? {}
-        : { llmProvider: { complete, stream: vi.fn() } as any }),
+        : { llmProvider: fromAny({ complete, stream: vi.fn() }) }),
     });
     return { backend, complete, handleMessage, eventBus };
   }

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1380,7 +1381,7 @@ describe('LLMClient provider observability', () => {
     await client.stream({
       systemPrompt: 'System prompt',
       messages: [
-        {
+        fromAny({
           role: 'assistant',
           content: [
             { type: 'thinking', thinking: 'trace' },
@@ -1399,16 +1400,16 @@ describe('LLMClient provider observability', () => {
           },
           stopReason: 'stop',
           timestamp: 1000,
-        } as any,
-        {
+        }),
+        fromAny({
           role: 'toolResult',
           toolCallId: 'call-1',
           toolName: 'lookup',
           content: [{ type: 'text', text: 'done' }],
           isError: false,
           timestamp: 1001,
-        } as any,
-        { role: 'user', content: 'continue' } as any,
+        }),
+        fromAny({ role: 'user', content: 'continue' }),
       ],
     });
 
@@ -2501,7 +2502,7 @@ describe('LLMClient completion model hints', () => {
     });
     const client = new LLMClient(config, 'http://litellm.test/v1');
 
-    const candidates = (client as any).resolveCandidates('chat', {
+    const candidates = (fromAny(client)).resolveCandidates('chat', {
       model: 'moonshotai/kimi-k2.5',
       provider: 'openrouter',
       pin: true,
@@ -3206,21 +3207,21 @@ describe('LLMClient correlation metadata', () => {
     });
 
     await client.complete(
-      {
+      fromAny({
         systemPrompt: 'System',
-        messages: [{
+        messages: fromAny([{
           role: 'user',
           content: [
             { type: 'text', text: 'What is in this image?' },
             { type: 'image', data: 'YmFzZTY0', mimeType: 'image/jpeg' },
           ],
-        }] as any,
+        }]),
         modelHint: {
           model: 'openrouter/google/gemini-3-flash-preview',
           provider: 'litellm',
           maxTokens: 4096,
         },
-      } as any,
+      }),
       'background',
       { disableRetry: true },
     );
@@ -4786,7 +4787,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
-    const estimateSpy = vi.spyOn(client as any, 'estimateBudgetInputTokens');
+    const estimateSpy = vi.spyOn(fromAny(client), 'estimateBudgetInputTokens');
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
       model: 'deepseek/deepseek-v3.2',
@@ -4823,7 +4824,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         toolCalls: [],
       })),
     };
-    const client = new LLMClient(config, { transport: transport as any });
+    const client = new LLMClient(config, { transport: fromAny(transport) });
 
     const response = await client.complete(
       {
@@ -4901,7 +4902,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         toolCalls: [],
       })),
     };
-    const client = new LLMClient(config, { transport: transport as any });
+    const client = new LLMClient(config, { transport: fromAny(transport) });
 
     await client.complete(
       {
@@ -4943,7 +4944,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       })),
       complete: vi.fn(),
     };
-    const client = new LLMClient(config, { transport: transport as any });
+    const client = new LLMClient(config, { transport: fromAny(transport) });
 
     const response = await client.stream(
       {
@@ -5013,10 +5014,10 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
     };
     const client = new LLMClient(makeConfig(), {
-      transport: transport as any,
+      transport: fromAny(transport),
       circuitBreaker,
     });
-    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const transitionSpy = vi.spyOn(fromAny(client), 'logCircuitBreakerTransition');
     const request = () => client.complete(
       {
         systemPrompt: 'System',
@@ -5078,7 +5079,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       complete: vi.fn(),
     };
     const client = new LLMClient(makeConfig(), {
-      transport: transport as any,
+      transport: fromAny(transport),
       circuitBreaker,
     });
     const request = () => client.stream(
@@ -5119,10 +5120,10 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
     };
     const client = new LLMClient(makeConfig(), {
-      transport: transport as any,
+      transport: fromAny(transport),
       circuitBreaker,
     });
-    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const transitionSpy = vi.spyOn(fromAny(client), 'logCircuitBreakerTransition');
     const request = () => client.complete(
       {
         systemPrompt: 'System',
@@ -5199,7 +5200,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     };
     const client = new LLMClient(config, {
       litellmBaseUrl: 'http://litellm.test/v1',
-      transport: transport as any,
+      transport: fromAny(transport),
     });
 
     const backgroundOnePromise = client.complete(
@@ -5472,7 +5473,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
         complete: vi.fn(),
       };
-      const client = new LLMClient(config, { transport: transport as any });
+      const client = new LLMClient(config, { transport: fromAny(transport) });
       // Replace the gate with a minimal stand-in that yields a preempt signal we
       // control, mirroring ModelCallGate.run granting a slot and calling
       // execute(slot.preemptController.signal).
@@ -5548,7 +5549,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         };
       }),
     };
-    const client = new LLMClient(config, { transport: transport as any });
+    const client = new LLMClient(config, { transport: fromAny(transport) });
 
     const firstPromise = client.complete(
       {

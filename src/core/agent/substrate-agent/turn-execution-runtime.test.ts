@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -610,8 +611,8 @@ function createRuntime(params: {
     TurnExecutionRuntime['getCurrentTurnDisclosureLineage']
   >;
   const agentState = {
-    messages: [] as any[],
-    tools: [] as any[],
+    messages: fromAny([]),
+    tools: fromAny([]),
     model: { id: 'test-model', provider: 'test', api: 'openai-completions' },
   };
   const emotionSelfModelRuntime = {
@@ -971,7 +972,7 @@ function createPersistenceBackedRuntime(
   runtime.recordToolObservations = turnSupportRuntime.recordToolObservations.bind(turnSupportRuntime);
   runtime.buildTurnRecord = turnSupportRuntime.buildTurnRecord.bind(turnSupportRuntime);
   runtime.extractResponseText = vi.fn(() => {
-    const latestAssistant = [...(runtime.agent.state.messages as any[])]
+    const latestAssistant = [...(fromAny(runtime.agent.state.messages))]
       .reverse()
       .find(message => message.role === 'assistant');
     return Array.isArray(latestAssistant?.content)
@@ -1359,8 +1360,8 @@ describe('handleMessageForTurn generated media delivery', () => {
     });
     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{
           type: 'toolCall',
@@ -1370,7 +1371,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         }],
         stopReason: 'toolUse',
       });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'toolResult',
         toolCallId: 'call-media-1',
         toolName: 'media',
@@ -1391,7 +1392,7 @@ describe('handleMessageForTurn generated media delivery', () => {
           },
         },
       });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'Here is the image.' });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: 'Here is the image.' });
     });
     runtime.extractResponseText = vi.fn(() => 'Here is the image.');
 
@@ -1585,8 +1586,8 @@ describe('handleMessageForTurn generated media delivery', () => {
           localPath,
         }],
       });
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: 'Your selfie is attached below.',
       });
@@ -1672,8 +1673,8 @@ describe('handleMessageForTurn generated media delivery', () => {
     });
     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'toolResult',
         toolCallId: 'call-media-1',
         toolName: 'media',
@@ -3293,8 +3294,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const modelAuthoredText = 'I can wrap this thought up from here.';
     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: modelAuthoredText });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: modelAuthoredText });
     });
     runtime.extractResponseText = vi.fn(() => modelAuthoredText);
 
@@ -4450,17 +4451,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const promptStarted = createDeferred<void>();
     const releasePrompt = createDeferred<void>();
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
       promptStarted.resolve();
       await releasePrompt.promise;
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'toolResult',
         toolCallId: 'call-turn-start-owner',
         toolName: 'contact',
         content: [{ type: 'text', text: 'Old-turn tool observation.' }],
         isError: false,
       });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'assistant reply' }],
       });
@@ -4502,8 +4503,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       sessionId: logicalSessionId,
     });
     futureRuntime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (futureRuntime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (futureRuntime.agent.state.messages as any[]).push({
+      (fromAny(futureRuntime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(futureRuntime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'future reply' }],
       });
@@ -4613,8 +4614,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       observedPromptHistory = (runtime.agent.state.messages as Array<{ content?: unknown }>)
         .map(entry => typeof entry.content === 'string' ? entry.content : '')
         .join('\n');
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'assistant reply' }],
       });
@@ -4660,8 +4661,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.sessionManager = sessionManager;
     runtime.buildTurnCorrelation = turnSupportRuntime.buildTurnCorrelation.bind(turnSupportRuntime);
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'assistant reply' }],
       });
@@ -4752,8 +4753,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       canonicalContactKey: correlation.peerContactId,
     }));
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'assistant reply' }],
       });
@@ -6001,9 +6002,9 @@ describe('handleMessageForTurn failure persistence', () => {
     runtime.getLatestAssistantMessage = vi.fn(() => failedAssistant as never);
     runtime.extractResponseText = vi.fn(() => 'Partial response before tool failure.');
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push(failedAssistant);
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push(failedAssistant);
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'toolResult',
         toolCallId: 'call-2',
         toolName: 'memory_write',
@@ -6076,7 +6077,7 @@ describe('handleMessageForTurn failure persistence', () => {
     }));
     runtime.buildTurnRecord = buildTurnRecord as unknown as TurnExecutionRuntime['buildTurnRecord'];
     runtime.agent.prompt = vi.fn(async () => {
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{
           type: 'toolCall',
@@ -7094,8 +7095,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       observedContext = getVisionToolRequestContext();
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: 'assistant reply' });
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-vision-context', {
@@ -7136,11 +7137,11 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
     runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
       callOrder.push('apply-tools');
-      runtime.agent.state.tools = [{
+      runtime.agent.state.tools = fromAny([{
         name: 'selfie_create',
         description: 'Generate a dedicated selfie or self-portrait of the companion.',
         inputSchema: { type: 'object' },
-      }] as any[];
+      }]);
     });
     runtime.buildDynamicPromptTemplateVariables = vi.fn(() => {
       callOrder.push('dynamic-prompt');
@@ -7184,17 +7185,17 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
     runtime.buildPromptTemplateVariables = vi.fn(() => ({ 'character.visual_description': 'Silver eyes and a weathered jacket.' }));
     runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
-      runtime.agent.state.tools = [{
+      runtime.agent.state.tools = fromAny([{
         name: 'selfie_create',
         description: 'Generate a dedicated selfie or self-portrait of the companion.',
         inputSchema: { type: 'object' },
-      }] as any[];
+      }]);
     });
     let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       observedContext = getVisionToolRequestContext();
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: 'assistant reply' });
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-selfie-appearance-context', {
@@ -7235,8 +7236,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       observedContext = getVisionToolRequestContext();
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: 'assistant reply' });
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-vision-review-context', {
@@ -7337,8 +7338,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const retriedContradictoryResponse = 'The time is wrong. Are you sure this is right?';
     let promptAttempt = 0;
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{
           type: 'text',
@@ -7460,8 +7461,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
     const validNonDatetimeReply = 'Are you sure you want me to delete all three branches? That seems drastic, but it must be a bug report waiting to happen if we keep them.';
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({
         role: 'assistant',
         content: [{ type: 'text', text: validNonDatetimeReply }],
         api: 'openai-completions',
@@ -7512,7 +7513,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordAssistantMessage: vi.fn(() => 2),
     });
     runtime.extractResponseText = vi.fn(() => {
-      const latestAssistant = [...(runtime.agent.state.messages as any[])]
+      const latestAssistant = [...(fromAny(runtime.agent.state.messages))]
         .reverse()
         .find(message => message.role === 'assistant');
       if (Array.isArray(latestAssistant?.content)) {
@@ -7524,8 +7525,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       return typeof latestAssistant?.content === 'string' ? latestAssistant.content : '';
     });
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: '' });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
+      (fromAny(runtime.agent.state.messages)).push({ role: 'assistant', content: '' });
     });
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-vision-empty', {
@@ -7577,7 +7578,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const abort = vi.fn();
       runtime.agent.abort = abort as typeof runtime.agent.abort;
       runtime.extractResponseText = vi.fn(() => {
-        const latestAssistant = [...(runtime.agent.state.messages as any[])]
+        const latestAssistant = [...(fromAny(runtime.agent.state.messages))]
           .reverse()
           .find(message => message.role === 'assistant');
         if (Array.isArray(latestAssistant?.content)) {
@@ -7589,7 +7590,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         return typeof latestAssistant?.content === 'string' ? latestAssistant.content : '';
       });
       runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-        (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+        (fromAny(runtime.agent.state.messages)).push({ role: 'user', content: promptMessage.content });
         return promptDeferred.promise;
       });
 

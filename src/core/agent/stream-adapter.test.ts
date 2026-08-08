@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
@@ -270,10 +271,10 @@ describe('createSubstrateStreamFn', () => {
     });
     const model = resolveModel(config, 'chat');
 
-    const stream = await streamFn(model, {
+    const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
-    } as any, {});
+    }), {});
     const events = await collectStreamEvents(stream);
 
     expect(transport.stream).toHaveBeenCalledWith(
@@ -346,8 +347,8 @@ describe('createSubstrateStreamFn', () => {
 
     const stream = await streamFn(
       model,
-      { systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] } as any,
-      { signal: controller.signal } as any,
+      fromAny({ systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] }),
+      fromAny({ signal: controller.signal }),
     );
     await collectStreamEvents(stream);
 
@@ -379,7 +380,7 @@ describe('createSubstrateStreamFn', () => {
 
     const stream = await streamFn(
       model,
-      { systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] } as any,
+      fromAny({ systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] }),
       {},
     );
     await collectStreamEvents(stream);
@@ -561,7 +562,7 @@ describe('createSubstrateStreamFn', () => {
       required: ['query'],
     };
 
-    const stream = await streamFn(resolveModel(config, 'chat'), {
+    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'try a selfie' }],
       tools: [
@@ -576,7 +577,7 @@ describe('createSubstrateStreamFn', () => {
           inputSchema: psfnSchema,
         },
       ],
-    } as any, {});
+    }), {});
     await collectStreamEvents(stream as AsyncIterable<unknown>);
 
     const forwardedContext = transport.stream.mock.calls[0]?.[0] as LLMContext;
@@ -644,11 +645,11 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const stream = await streamFn(resolveModel(config, 'chat'), {
+    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'activate image analysis' }],
       tools: [toolsetTool, imageAnalyzeTool],
-    } as any, {});
+    }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
     const doneEvent = events.at(-1) as { type: 'done'; message: { content: Array<{ type: string; name?: string; arguments?: Record<string, unknown> }> } };
     const toolCalls = doneEvent.message.content.filter((entry) => entry.type === 'toolCall');
@@ -662,11 +663,11 @@ describe('createSubstrateStreamFn', () => {
       input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
     });
-    expect(validateToolArguments(toolsetTool as any, toolCalls[0] as any)).toEqual({
+    expect(validateToolArguments(fromAny(toolsetTool), fromAny(toolCalls[0]))).toEqual({
       action: 'activate',
       tools: ['north_star'],
     });
-    expect(validateToolArguments(imageAnalyzeTool as any, toolCalls[1] as any)).toEqual({
+    expect(validateToolArguments(fromAny(imageAnalyzeTool), fromAny(toolCalls[1]))).toEqual({
       action: 'analyze',
       input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
@@ -703,11 +704,11 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const stream = await streamFn(resolveModel(config, 'chat'), {
+    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'activate a tool' }],
       tools: [toolsetTool],
-    } as any, {});
+    }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
     const doneEvent = events.at(-1) as { type: 'done'; message: { content: Array<{ type: string; arguments?: Record<string, unknown> }> } };
     const toolCall = doneEvent.message.content.find((entry) => entry.type === 'toolCall');
@@ -716,7 +717,7 @@ describe('createSubstrateStreamFn', () => {
       action: 'activate',
       tools: 'north_star',
     });
-    expect(() => validateToolArguments(toolsetTool as any, toolCall as any))
+    expect(() => validateToolArguments(fromAny(toolsetTool), fromAny(toolCall)))
       .toThrow('Validation failed for tool "toolset"');
   });
 
@@ -768,10 +769,10 @@ describe('createSubstrateStreamFn', () => {
 
     const streamFn = makeStreamFn(config);
     const model = resolveModel(config, 'chat');
-    const stream = await streamFn(model, {
+    const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
-    } as any, {});
+    }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
 
     expect(events).toHaveLength(4);
@@ -955,10 +956,10 @@ describe('createSubstrateStreamFn', () => {
         purpose: 'agent.turn.prompt',
       },
       async () => {
-        const stream = await streamFn(model, {
+        const stream = await streamFn(model, fromAny({
           systemPrompt: 'System',
           messages: [{ role: 'user', content: 'hello' }],
-        } as any, {});
+        }), {});
         return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     );
@@ -1001,10 +1002,10 @@ describe('createSubstrateStreamFn', () => {
         purpose: 'repl.sandbox.reasoning',
       },
       async () => {
-        const stream = await streamFn(mountedChatModel, {
+        const stream = await streamFn(mountedChatModel, fromAny({
           systemPrompt: 'System',
           messages: [{ role: 'user', content: 'think hard' }],
-        } as any, {});
+        }), {});
         return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     );
@@ -1049,10 +1050,10 @@ describe('createSubstrateStreamFn', () => {
         purpose: 'repl.sandbox.reasoning',
       },
       async () => {
-        const stream = await streamFn(mountedChatModel, {
+        const stream = await streamFn(mountedChatModel, fromAny({
           systemPrompt: 'System',
           messages: [{ role: 'user', content: 'think hard' }],
-        } as any, {});
+        }), {});
         return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     )).rejects.toThrow("No eligible model configured for purpose 'reasoning'");
@@ -1096,10 +1097,10 @@ describe('createSubstrateStreamFn', () => {
 
     const streamFn = makeStreamFn(config, { onTerminalFailure });
     const model = resolveModel(config, 'chat');
-    const stream = await streamFn(model, {
+    const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
-    } as any, {});
+    }), {});
 
     await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toThrow('fatal failure');
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
@@ -1132,10 +1133,10 @@ describe('createSubstrateStreamFn', () => {
 
     const streamFn = makeStreamFn(config);
     const model = resolveModel(config, 'chat');
-    const stream = await streamFn(model, {
+    const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
-    } as any, {});
+    }), {});
     const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
 
     expect(events).toHaveLength(4);
@@ -1187,10 +1188,10 @@ describe('createSubstrateStreamFn', () => {
 
     const streamFn = makeStreamFn(config);
     const model = resolveModel(config, 'chat');
-    const stream = await streamFn(model, {
+    const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
-    } as any, {});
+    }), {});
 
     const events: unknown[] = [];
     let terminalError: Error | null = null;

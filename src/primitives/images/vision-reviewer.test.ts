@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
@@ -41,9 +42,9 @@ describe('DefaultImageVisionReviewer', () => {
     });
 
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
-      } as any,
+      }),
       {
         binaryFetcher,
         completeImpl,
@@ -73,10 +74,10 @@ describe('DefaultImageVisionReviewer', () => {
     }));
 
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
         comfyUiBaseUrl: 'https://comfy.local.example.test',
-      } as any,
+      }),
       {
         binaryFetcher,
         completeImpl,
@@ -110,11 +111,11 @@ describe('DefaultImageVisionReviewer', () => {
     };
     const completeImpl = vi.fn();
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
-      } as any,
+      }),
       {
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         binaryFetcher: vi.fn(async () => ({
           dataBase64: 'AQID',
           mimeType: 'image/png',
@@ -161,11 +162,11 @@ describe('DefaultImageVisionReviewer', () => {
       })),
     };
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
-      } as any,
+      }),
       {
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         binaryFetcher: vi.fn(async () => ({
           dataBase64: 'AQID',
           mimeType: 'image/png',
@@ -237,11 +238,11 @@ describe('DefaultImageVisionReviewer', () => {
       })),
     };
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
-      } as any,
+      }),
       {
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         binaryFetcher: vi.fn(async () => ({
           dataBase64: 'AQID',
           mimeType: 'image/png',
@@ -267,11 +268,11 @@ describe('DefaultImageVisionReviewer', () => {
       }),
     };
     const reviewer = new DefaultImageVisionReviewer(
-      {
+      fromAny({
         primaryProvider: 'openrouter',
-      } as any,
+      }),
       {
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         binaryFetcher: vi.fn(async () => ({
           dataBase64: 'AQID',
           mimeType: 'image/png',
@@ -297,7 +298,7 @@ describe('DefaultImageVisionReviewer', () => {
       })),
     };
     const makeReviewer = (text: string) => new DefaultImageVisionReviewer(
-      { primaryProvider: 'openrouter' } as any,
+      fromAny({ primaryProvider: 'openrouter' }),
       {
         referenceResolver,
         binaryFetcher: vi.fn(async () => ({
@@ -345,7 +346,7 @@ describe('DefaultImageVisionReviewer', () => {
   it('skips embodiment when the review does not opt into reference comparison', async () => {
     const referenceResolver = { resolveForTool: vi.fn() };
     const reviewer = new DefaultImageVisionReviewer(
-      { primaryProvider: 'openrouter' } as any,
+      fromAny({ primaryProvider: 'openrouter' }),
       {
         referenceResolver,
         binaryFetcher: vi.fn(async () => ({
@@ -371,7 +372,7 @@ describe('DefaultImageVisionReviewer', () => {
   it('reviews without an embodiment descriptor when no active reference is set', async () => {
     const referenceResolver = { resolveForTool: vi.fn(async () => null) };
     const reviewer = new DefaultImageVisionReviewer(
-      { primaryProvider: 'openrouter' } as any,
+      fromAny({ primaryProvider: 'openrouter' }),
       {
         referenceResolver,
         binaryFetcher: vi.fn(async () => ({
@@ -423,9 +424,9 @@ describe('DefaultImageVisionReviewer', () => {
       });
 
       const reviewer = new DefaultImageVisionReviewer(
-        {
+        fromAny({
           primaryProvider: 'openrouter',
-        } as any,
+        }),
         {
           binaryFetcher,
           completeImpl,

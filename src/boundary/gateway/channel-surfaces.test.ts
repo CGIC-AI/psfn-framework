@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   resolveDiscordPrimaryUsers,
   resolveChannelIntakeScreening,
@@ -18,17 +19,17 @@ function createInput(): {
 
   return {
     input: {
-      discord: {
+      discord: fromAny({
         onMessage: (handler) => {
           discordHandler = handler as (message: any) => Promise<any>;
         },
-      } as any,
-      telegram: {
+      }),
+      telegram: fromAny({
         onMessage: (handler) => {
           telegramHandler = handler as (message: any) => Promise<any>;
         },
-      } as any,
-      gateway: {
+      }),
+      gateway: fromAny({
         notifyChannelMessage: vi.fn(() => 1),
         requestAgentVoiceStream: vi.fn(async () => ({
           content: 'voice reply',
@@ -37,7 +38,7 @@ function createInput(): {
           durationMs: 42,
           attachments: [{ kind: 'audio' }],
         })),
-      } as any,
+      }),
       serializeMessage: (message) => ({ ...message, serialized: true }),
     },
     get discordHandler() {
@@ -137,15 +138,15 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
     const sharedDiscordOnMessage = vi.fn();
     const notifyChannelMessage = vi.fn(() => 1);
     wireGatewayChannelMessages({
-      discord: { onMessage: sharedDiscordOnMessage } as any,
+      discord: fromAny({ onMessage: sharedDiscordOnMessage }),
       discordAccounts: [
-        { accountId: 'acct-a', adapter: makeAdapter('acct-a') as any },
-        { accountId: 'acct-b', adapter: makeAdapter('acct-b') as any },
+        { accountId: 'acct-a', adapter: fromAny(makeAdapter('acct-a')) },
+        { accountId: 'acct-b', adapter: fromAny(makeAdapter('acct-b')) },
       ],
-      gateway: {
+      gateway: fromAny({
         notifyChannelMessage,
         requestAgentVoiceStream: vi.fn(),
-      } as any,
+      }),
       serializeMessage: (message) => ({ ...message, serialized: true }),
     });
 
@@ -176,7 +177,7 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
 
     await setup.discordHandler?.({ channelId: 'ch-3', content: 'single mode' });
 
-    const call = (setup.input.gateway.notifyChannelMessage as any).mock.calls[0];
+    const call = (fromAny(setup.input.gateway.notifyChannelMessage)).mock.calls[0];
     expect(call).toHaveLength(3);
   });
 });

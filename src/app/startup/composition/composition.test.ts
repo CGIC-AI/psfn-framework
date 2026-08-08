@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -213,17 +214,17 @@ function wireSplitThinkTool(options: {
   const target = new FakeSubstrateAgent();
   wireShardAndThinkRuntime({
     snapshotParentCapabilityGrant,
-    agentLoop: target as any,
+    agentLoop: fromAny(target),
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
-    sessionStore: {} as any,
+    sessionStore: fromPartial<Record<string, unknown>>({}),
     embeddingService: null,
-    memoryStore: EMPTY_MEMORY_STORE as any,
-    sessionManager: {} as any,
-    config: {
+    memoryStore: fromAny(EMPTY_MEMORY_STORE),
+    sessionManager: fromPartial<Record<string, unknown>>({}),
+    config: fromAny({
       capabilityTier: options.tier,
       fsReadMaxBytes: options.fsReadMaxBytes ?? 20_000,
-    } as any,
+    }),
     parentSystemPrompt: 'test',
     shardParentIcpDelivery: null,
     scheduler: null,
@@ -316,14 +317,14 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 
       const shardPort = wireShardAndThinkRuntime({
         snapshotParentCapabilityGrant,
-        agentLoop: target as any,
+        agentLoop: fromAny(target),
         eventBus,
         llmProvider: llm,
-        sessionStore: {} as any,
+        sessionStore: fromPartial<Record<string, unknown>>({}),
         embeddingService: null,
-        memoryStore: EMPTY_MEMORY_STORE as any,
-        sessionManager: {} as any,
-        config: { capabilityTier: 'apprentice' } as any,
+        memoryStore: fromAny(EMPTY_MEMORY_STORE),
+        sessionManager: fromPartial<Record<string, unknown>>({}),
+        config: fromAny({ capabilityTier: 'apprentice' }),
         parentSystemPrompt: 'test',
         shardParentIcpDelivery: null,
         scheduler: null,
@@ -362,14 +363,14 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 
       wireShardAndThinkRuntime({
         snapshotParentCapabilityGrant,
-        agentLoop: target as any,
+        agentLoop: fromAny(target),
         eventBus,
         llmProvider: llm,
-        sessionStore: {} as any,
+        sessionStore: fromPartial<Record<string, unknown>>({}),
         embeddingService: null,
-        memoryStore: EMPTY_MEMORY_STORE as any,
-        sessionManager: {} as any,
-        config: { capabilityTier: 'autonomous' } as any,
+        memoryStore: fromAny(EMPTY_MEMORY_STORE),
+        sessionManager: fromPartial<Record<string, unknown>>({}),
+        config: fromAny({ capabilityTier: 'autonomous' }),
         parentSystemPrompt: 'test',
         shardParentIcpDelivery: null,
         scheduler: null,

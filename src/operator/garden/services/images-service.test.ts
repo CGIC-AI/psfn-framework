@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -46,7 +47,7 @@ describe('AdminImagesDataService', () => {
 
     const service = new AdminImagesDataService({
       companionDataDir,
-      config: { workspacePath } as any,
+      config: fromAny({ workspacePath }),
     });
 
     const list = await service.listGeneratedImages();
@@ -103,7 +104,7 @@ describe('AdminImagesDataService', () => {
 
     const service = new AdminImagesDataService({
       companionDataDir,
-      config: { workspacePath } as any,
+      config: fromAny({ workspacePath }),
     });
     const first = (await service.listGeneratedImages()).images.find((image) => image.fileName === 'first.png');
     expect(first).toBeDefined();
@@ -174,7 +175,7 @@ describe('AdminImagesDataService', () => {
 
     const reloaded = new AdminImagesDataService({
       companionDataDir,
-      config: { workspacePath } as any,
+      config: fromAny({ workspacePath }),
     });
     expect((await reloaded.listGeneratedImages({ favorite: true })).images.map((image) => image.fileName)).toEqual(['first.png']);
     expect((await reloaded.listGeneratedImages({ tags: ['portrait'] })).images.map((image) => image.fileName)).toEqual(['first.png']);
@@ -206,7 +207,7 @@ describe('AdminImagesDataService', () => {
       },
     }));
 
-    const service = new AdminImagesDataService({ companionDataDir, config: { workspacePath } as any });
+    const service = new AdminImagesDataService({ companionDataDir, config: fromAny({ workspacePath }) });
     const image = (await service.listGeneratedImages()).images.find((i) => i.fileName === 'self-portrait.png');
     expect(image).toBeDefined();
     expect(image!.autobiography?.author).toBe('companion');
@@ -266,7 +267,7 @@ describe('AdminImagesDataService', () => {
       },
     }));
 
-    const service = new AdminImagesDataService({ companionDataDir, config: { workspacePath } as any });
+    const service = new AdminImagesDataService({ companionDataDir, config: fromAny({ workspacePath }) });
     const image = (await service.listGeneratedImages()).images.find((i) => i.fileName === 'self-portrait.png');
     expect(image).toBeDefined();
 
@@ -309,7 +310,7 @@ describe('AdminImagesDataService', () => {
 
     const service = new AdminImagesDataService({
       companionDataDir,
-      config: { workspacePath } as any,
+      config: fromAny({ workspacePath }),
     });
     const baseline = await service.addReferencePhoto({
       filename: 'base.png',
@@ -350,7 +351,7 @@ describe('AdminImagesDataService', () => {
     tempDirs.push(companionDataDir);
     const service = new AdminImagesDataService({
       companionDataDir,
-      config: {} as any,
+      config: fromPartial<Record<string, unknown>>({}),
     });
 
     const first = await service.addReferencePhoto({

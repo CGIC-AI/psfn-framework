@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import {
   syncAllBeadsToGitHubProject,
   syncMutatedBeadToGitHubProject,
@@ -83,7 +84,7 @@ describe('beads GitHub Project sync helper', () => {
       'create',
       'new',
       { id: 'PSFN-1' },
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -192,7 +193,7 @@ describe('beads GitHub Project sync helper', () => {
       'create',
       'new',
       { id: 'PSFN-10' },
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -288,7 +289,7 @@ describe('beads GitHub Project sync helper', () => {
       'update',
       'PSFN-2',
       {},
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -364,7 +365,7 @@ describe('beads GitHub Project sync helper', () => {
       'update',
       'PSFN-11',
       {},
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -427,7 +428,7 @@ describe('beads GitHub Project sync helper', () => {
       'close',
       'PSFN-5',
       [{ id: 'PSFN-5' }],
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -471,7 +472,7 @@ describe('beads GitHub Project sync helper', () => {
       'update',
       'PSFN-12',
       {},
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -501,7 +502,7 @@ describe('beads GitHub Project sync helper', () => {
       'update',
       'PSFN-13',
       {},
-      runner as any,
+      fromAny(runner),
     );
 
     expect(result).toMatchObject({
@@ -564,7 +565,7 @@ describe('beads GitHub Project sync helper', () => {
       { error: new Error('missing project scope') },
     ]);
 
-    const result = await syncAllBeadsToGitHubProject('/workspace', runner as any);
+    const result = await syncAllBeadsToGitHubProject('/workspace', fromAny(runner));
 
     expect(result).toMatchObject({
       integration: 'github_project',

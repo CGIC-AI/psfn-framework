@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
@@ -56,13 +57,13 @@ function makeStreamFn(resultContract: ResultContract) {
   return vi.fn(async () => {
     const partial = makeAssistantMessage('partial');
     const final = makeAssistantMessage('final answer');
-    return {
+    return fromAny({
       async *[Symbol.asyncIterator]() {
         yield { type: 'start', partial };
         yield { type: 'done' };
       },
       result: resultContract === 'value' ? final : Promise.resolve(final),
-    } as any;
+    });
   });
 }
 
@@ -74,15 +75,15 @@ describe('scheduled-agent-loop stream result contract', () => {
       const events: any[] = [];
 
       const stream = agentLoopWithScheduler(
-        [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-        {
+        [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+        fromAny({
           systemPrompt: 'system prompt',
           messages: [],
           tools: [],
-        } as any,
-        makeLoopConfig() as any,
+        }),
+        fromAny(makeLoopConfig()),
         new AbortController().signal,
-        streamFn as any,
+        fromAny(streamFn),
         { maxParallelToolCalls: 1 },
       );
 
@@ -106,25 +107,25 @@ describe('scheduled-agent-loop stream result contract', () => {
     const final = makeAssistantMessage('done payload final');
     const streamFn = vi.fn(async () => {
       const partial = makeAssistantMessage('partial');
-      return {
+      return fromAny({
         async *[Symbol.asyncIterator]() {
           yield { type: 'start', partial };
           yield { type: 'done', message: final };
         },
-      } as any;
+      });
     });
     const events: any[] = [];
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      makeLoopConfig() as any,
+      }),
+      fromAny(makeLoopConfig()),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -142,30 +143,30 @@ describe('scheduled-agent-loop stream result contract', () => {
   });
 
   it('throws when no final assistant message is available anywhere', async () => {
-    await expect(resolveStreamResult({} as any, {
+    await expect(resolveStreamResult(fromPartial<Record<string, unknown>>({}), {
       terminalEvent: { type: 'done' },
       partialMessage: null,
     })).rejects.toThrow('Stream response missing result payload');
   });
 
   it('surfaces terminal stream failure without emitting a synthetic assistant message', async () => {
-    const streamFn = vi.fn(async () => ({
+    const streamFn = vi.fn(async () => fromAny(({
       async *[Symbol.asyncIterator]() {
         throw new Error('terminal model failure');
       },
-    }) as any);
+    })));
     const events: any[] = [];
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      makeLoopConfig() as any,
+      }),
+      fromAny(makeLoopConfig()),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -184,13 +185,13 @@ describe('scheduled-agent-loop stream result contract', () => {
     const events: any[] = [];
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      makeLoopConfig() as any,
+      }),
+      fromAny(makeLoopConfig()),
       new AbortController().signal,
       undefined,
       { maxParallelToolCalls: 1 },
@@ -234,15 +235,15 @@ describe('scheduled-agent-loop stream result contract', () => {
     };
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      config as any,
+      }),
+      fromAny(config),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -303,15 +304,15 @@ describe('scheduled-agent-loop stream result contract', () => {
     };
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hi' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hi' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      config as any,
+      }),
+      fromAny(config),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -352,13 +353,13 @@ describe('scheduled-agent-loop stream result contract', () => {
         ...makeAssistantMessage(''),
         stopReason: 'error',
       };
-      return {
+      return fromAny({
         async *[Symbol.asyncIterator]() {
           yield { type: 'start', partial };
           yield { type: 'done', message: errored };
         },
         result: errored,
-      } as any;
+      });
     });
 
     const heldFollowUp = {
@@ -380,15 +381,15 @@ describe('scheduled-agent-loop stream result contract', () => {
 
     const events: any[] = [];
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      config as any,
+      }),
+      fromAny(config),
       new AbortController().signal,
-      errorStreamFn as any,
+      fromAny(errorStreamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -423,15 +424,15 @@ describe('scheduled-agent-loop stream result contract', () => {
     };
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      config as any,
+      }),
+      fromAny(config),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -447,15 +448,15 @@ describe('scheduled-agent-loop stream result contract', () => {
     const events: any[] = [];
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      makeLoopConfig() as any,
+      }),
+      fromAny(makeLoopConfig()),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 
@@ -479,15 +480,15 @@ describe('scheduled-agent-loop stream result contract', () => {
     };
 
     const stream = agentLoopWithScheduler(
-      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
-      {
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
         systemPrompt: 'system prompt',
         messages: [],
         tools: [],
-      } as any,
-      config as any,
+      }),
+      fromAny(config),
       new AbortController().signal,
-      streamFn as any,
+      fromAny(streamFn),
       { maxParallelToolCalls: 1 },
     );
 

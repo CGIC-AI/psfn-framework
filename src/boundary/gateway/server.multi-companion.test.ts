@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
@@ -78,7 +79,7 @@ function createMockConnection(
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
-      onSend?.(data as any, (response) => emitter.emit('message', response));
+      onSend?.(fromAny(data), (response) => emitter.emit('message', response));
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -117,7 +118,7 @@ function createMockConnection(
 function createMinimalOptions(): GatewayServerOptions {
   return {
     socketPath: '/tmp/test.sock',
-    llmProvider: {
+    llmProvider: fromAny({
       stream: vi.fn().mockResolvedValue({
         content: 'test',
         toolCalls: [],
@@ -127,19 +128,19 @@ function createMinimalOptions(): GatewayServerOptions {
         stopReason: 'end',
       }),
       complete: vi.fn(),
-    } as any,
-    embeddingService: {
+    }),
+    embeddingService: fromAny({
       embed: vi.fn(),
       embedBatch: vi.fn(),
       dims: 1024,
-    } as any,
-    discordAdapter: {
+    }),
+    discordAdapter: fromAny({
       id: 'discord',
       outbound: {
         textChunkLimit: 2000,
         sendText: vi.fn(),
       },
-    } as any,
+    }),
     policyConfig: {
       workspacePath: '/workspace',
     },
@@ -159,7 +160,7 @@ function withSharedSatelliteEligibility(
   return {
     ...options,
     capabilityTierProvider: () => 'autonomous',
-    icpAutonomyStore: {
+    icpAutonomyStore: fromAny({
       getAvailability: vi.fn(async (companionId: string) => ({
         companionId,
         state: 'available',
@@ -168,12 +169,12 @@ function withSharedSatelliteEligibility(
         source: 'companion',
         revision: 1,
       })),
-    } as any,
-    icpInitiationPolicyAuthority: {
+    }),
+    icpInitiationPolicyAuthority: fromAny({
       resolve: vi.fn(),
       authorizeHandoff: vi.fn(),
       runAuthorizedHandoff: vi.fn(),
-    } as any,
+    }),
     sharedSatelliteQuietHoursAllows: () => true,
   };
 }
@@ -204,10 +205,10 @@ async function setupServer(
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return {
+    return fromAny({
       close: vi.fn((done?: () => void) => done?.()),
       listen: vi.fn(),
-    } as any;
+    });
   });
   server.start();
   return {
@@ -413,7 +414,7 @@ function fleetPosture(updatedAt: number, utilizationPercent: number) {
 }
 
 function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'terminal') {
-  return {
+  return fromAny({
     id: `msg-${channelType}-1`,
     channelId: `${channelType}:test-channel`,
     channelType,
@@ -421,7 +422,7 @@ function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'termi
     authorName: 'Test User',
     content: 'hello there',
     timestamp: new Date('2025-01-01T00:00:00.000Z'),
-  } as any;
+  });
 }
 
 function makeSatelliteVoiceMessage(satelliteId: string, primaryCompanionId?: string) {
@@ -566,7 +567,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         token: 'token-a',
         heartbeatChannelId: '',
         allowedBotUserIds: [],
-        groupMemory: { channelOverrides: {} } as any,
+        groupMemory: fromAny({ channelOverrides: {} }),
       },
       {
         accountId: 'acct-b',
@@ -575,7 +576,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         token: 'token-b',
         heartbeatChannelId: '',
         allowedBotUserIds: [],
-        groupMemory: { channelOverrides: {} } as any,
+        groupMemory: fromAny({ channelOverrides: {} }),
       },
     ];
     expect(resolveGatewayMultiCompanionConfig({
@@ -611,7 +612,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       token: 'token-a',
       heartbeatChannelId: '',
       allowedBotUserIds: [],
-      groupMemory: { channelOverrides: {} } as any,
+      groupMemory: fromAny({ channelOverrides: {} }),
     }];
     expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
       /discord\.accounts \[acct-a\] but this is a single-companion/,
@@ -781,7 +782,7 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 
   it('broadcasts llm.chunk stream deltas to every agent (characterizes existing behavior)', async () => {
     const options = createMinimalOptions();
-    options.llmProvider.stream = vi.fn(async (_context: any, callbacks: any) => {
+    options.llmProvider.stream = fromAny(vi.fn(async (_context: any, callbacks: any) => {
       callbacks?.onText?.('delta-text');
       return {
         content: 'done',
@@ -791,7 +792,7 @@ describe('GatewayServer single-companion parity (flag off)', () => {
         outputTokens: 1,
         stopReason: 'end',
       };
-    }) as any;
+    }));
     const { connect } = await setupServer(options);
     const connA = await connect();
     const connB = await connect();
@@ -1493,10 +1494,10 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      llmProvider: {
+      llmProvider: fromAny({
         stream: vi.fn(),
         complete,
-      } as any,
+      }),
       multiCompanion: multiCompanion({}),
     });
     const connA = await connect();
@@ -1585,7 +1586,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     };
     const { server, connectClient } = await setupServer({
       ...createMinimalOptions(),
-      llmProvider: {
+      llmProvider: fromAny({
         complete: vi.fn(async (
           _context: unknown,
           _purpose: unknown,
@@ -1596,7 +1597,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
           _callbacks: unknown,
           options?: { signal?: AbortSignal },
         ) => await waitForAbort('chat', options?.signal)),
-      } as any,
+      }),
       multiCompanion: multiCompanion({}),
     });
     const clientA = await connectClient('11111111-1111-4111-8111-111111111111');
@@ -1646,7 +1647,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const { connectClient } = await setupServer({
       ...createMinimalOptions(),
-      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+      embeddingService: fromAny({ embed: vi.fn(), embedBatch, dims: 3 }),
       multiCompanion: multiCompanion({}),
     });
     const clientA = await connectClient('11111111-1111-4111-8111-111111111111');
@@ -1720,10 +1721,10 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     const auditComplete = vi.fn(async () => undefined);
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      llmProvider: {
+      llmProvider: fromAny({
         stream: method === 'llm.chat' ? lateOperation : vi.fn(),
         complete: method === 'llm.complete' ? lateOperation : vi.fn(),
-      } as any,
+      }),
       auditStore: createMockAuditStore({
         append: auditAppend,
         complete: auditComplete,
@@ -2113,7 +2114,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   });
 
   it('routes voice/channel streams by message channelType to exactly the routed companion', async () => {
-    const routed = { messages: [] as any[] };
+    const routed = { messages: fromAny([]) };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion({ telegram: '22222222-2222-4222-8222-222222222222' }),
@@ -2486,7 +2487,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   });
 
   it('stamps the routed companionId on wyoming-tagged api voice streams', async () => {
-    const routed = { messages: [] as any[] };
+    const routed = { messages: fromAny([]) };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion({ api: '22222222-2222-4222-8222-222222222222' }),
@@ -2507,7 +2508,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       isDirectMessage: true,
       routing: { source: 'wyoming' as const },
     };
-    await server.requestAgentVoiceStream(message as any);
+    await server.requestAgentVoiceStream(fromAny(message));
 
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(routed.messages[0]?.routing?.gateway).toEqual({
@@ -2597,7 +2598,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
     const conn = await connect();
     await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
-    const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+    const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
     const status = statuses.get(conn.conn);
     status.state = 'degraded';
     status.health = 'stale';
@@ -2625,13 +2626,13 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const telegramSend = vi.fn(async () => undefined);
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      telegramDock: {
+      telegramDock: fromAny({
         id: 'telegram',
         outbound: {
           textChunkLimit: 4_096,
           sendText: telegramSend,
         },
-      } as any,
+      }),
       operatorTelegramChatId: '123456',
       multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
@@ -2837,7 +2838,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     });
     expect(methodFrames(conn, 'discord.message')).toHaveLength(0);
 
-    const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+    const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
     const status = statuses.get(conn.conn);
     status.state = 'degraded';
     status.health = 'stale';
@@ -3037,10 +3038,10 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
   it('keeps flag-off outbound discord sends on the shared adapter (parity)', async () => {
     const options = createMinimalOptions();
     const sendText = vi.fn(async () => undefined);
-    options.discordAdapter = {
+    options.discordAdapter = fromAny({
       id: 'discord',
       outbound: { textChunkLimit: 2000, sendText },
-    } as any;
+    });
     const { connect } = await setupServer(options);
     const conn = await connect();
 
@@ -3056,7 +3057,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
 describe('GatewayServer multi-companion crossover under concurrent load (flag on)', () => {
   it('returns every interleaved response and stream chunk to exactly the originating companion', async () => {
     const options = createMinimalOptions();
-    options.llmProvider.stream = vi.fn(async (context: any, callbacks: any) => {
+    options.llmProvider.stream = fromAny(vi.fn(async (context: any, callbacks: any) => {
       const marker = context.messages[0].content as string;
       callbacks?.onText?.(`chunk:${marker}`);
       // Interleave completions: pseudo-random latency per request.
@@ -3070,7 +3071,7 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
         outputTokens: 1,
         stopReason: 'end',
       };
-    }) as any;
+    }));
 
     const { connect } = await setupServer({
       ...options,
@@ -3128,8 +3129,8 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
       await new Promise(r => setTimeout(r, 5));
     }
 
-    const aResponses = responsesOf(connA) as any[];
-    const bResponses = responsesOf(connB) as any[];
+    const aResponses = fromAny(responsesOf(connA));
+    const bResponses = fromAny(responsesOf(connB));
     expect(aResponses).toHaveLength(perAgentRequests);
     expect(bResponses).toHaveLength(perAgentRequests);
     for (let i = 1; i <= perAgentRequests; i++) {
@@ -3320,7 +3321,7 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       };
       const complete = vi.fn().mockResolvedValue(llmResponse);
       const stream = vi.fn().mockResolvedValue(llmResponse);
-      options.llmProvider = { complete, stream } as any;
+      options.llmProvider = fromAny({ complete, stream });
       const { connect } = await setupServer(options);
       const connB = await connect();
       await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 1);

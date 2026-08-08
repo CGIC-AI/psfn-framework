@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -485,7 +486,7 @@ describe('settings', () => {
       };
 
       const normalized = normalizeEditableSettings({
-        observerEvalSidecar: settings as any,
+        observerEvalSidecar: fromAny(settings),
       });
 
       expect(normalized.observerEvalSidecar).toEqual({
@@ -535,26 +536,26 @@ describe('settings', () => {
       };
 
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: {
+        observerEvalSidecar: fromAny({
           ...base,
           levers: {
             ...createDefaultObserverEvalSidecarLeverSettings(),
             wouldCheckIn: { enabled: true, valenceThreshold: -3, sustainMs: 1_200_000 },
           },
-        } as any,
+        }),
       })).toThrow(/observerEvalSidecar\.levers\.wouldCheckIn\.valenceThreshold/);
 
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: {
+        observerEvalSidecar: fromAny({
           ...base,
           levers: 'watch-everything',
-        } as any,
+        }),
       })).toThrow(/observerEvalSidecar\.levers/);
 
       // Removed physiological-drive threshold: fail closed (no silently-ignored
       // config) — would_rest reads mood.arousal only after the oth4 ruling.
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: {
+        observerEvalSidecar: fromAny({
           ...base,
           levers: {
             ...createDefaultObserverEvalSidecarLeverSettings(),
@@ -563,28 +564,28 @@ describe('settings', () => {
               sleepPressureThreshold: 0.8,
             },
           },
-        } as any,
+        }),
       })).toThrow(/observerEvalSidecar\.levers\.wouldRest\.sleepPressureThreshold/);
     });
 
     it('rejects enabled levers without observer sidecar persistence', () => {
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: {
+        observerEvalSidecar: fromAny({
           ...createDefaultObserverEvalSidecarSettings(),
           levers: {
             ...createDefaultObserverEvalSidecarLeverSettings(),
             enabled: true,
           },
-        } as any,
+        }),
       })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
     });
 
     it('normalizes session tail cache settings as a JSON-owned structured object', () => {
       const normalized = normalizeEditableSettings({
-        sessionTailCache: {
+        sessionTailCache: fromAny({
           enabled: true,
           maxEntriesPerChannel: 256,
-        } as any,
+        }),
       });
       expect(normalized.sessionTailCache).toEqual({
         enabled: true,
@@ -594,32 +595,32 @@ describe('settings', () => {
 
     it('fails closed on malformed session tail cache settings', () => {
       expect(() => normalizeEditableSettings({
-        sessionTailCache: 'enabled' as any,
+        sessionTailCache: fromAny('enabled'),
       })).toThrow(/sessionTailCache/);
       expect(() => normalizeEditableSettings({
-        sessionTailCache: {
+        sessionTailCache: fromAny({
           enabled: 'sometimes',
           maxEntriesPerChannel: 512,
-        } as any,
+        }),
       })).toThrow(/sessionTailCache\.enabled/);
       expect(() => normalizeEditableSettings({
-        sessionTailCache: {
+        sessionTailCache: fromAny({
           enabled: true,
           maxEntriesPerChannel: 0,
-        } as any,
+        }),
       })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
       expect(() => normalizeEditableSettings({
-        sessionTailCache: {
+        sessionTailCache: fromAny({
           ...createDefaultSessionTailCacheSettings(),
           maxEntriesPerChannel: 1_000_000,
-        } as any,
+        }),
       })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
     });
 
     it('normalizes group memory settings as a JSON-owned structured object', () => {
       const defaults = createDefaultGroupMemorySettings();
       const normalized = normalizeEditableSettings({
-        groupMemory: {
+        groupMemory: fromAny({
           memoryMode: 'group',
           autoDetection: {
             recentParticipantWindowMessages: '60',
@@ -688,7 +689,7 @@ describe('settings', () => {
             maxLlmCallsPerRun: 2,
             cooldownMs: 900_000,
           },
-        } as any,
+        }),
       });
 
       expect(normalized.groupMemory).toEqual({
@@ -773,31 +774,31 @@ describe('settings', () => {
 
     it('fails closed for malformed group memory settings', () => {
       expect(() => normalizeEditableSettings({
-        groupMemory: {
+        groupMemory: fromAny({
           memoryMode: 'guild',
-        } as any,
+        }),
       })).toThrow('groupMemory.memoryMode');
 
       expect(() => normalizeEditableSettings({
-        groupMemory: {
+        groupMemory: fromAny({
           onlineExtraction: {
             maxMessagesPerChunk: 0,
           },
-        } as any,
+        }),
       })).toThrow('groupMemory.onlineExtraction.maxMessagesPerChunk');
 
       expect(() => normalizeEditableSettings({
-        groupMemory: {
+        groupMemory: fromAny({
           mysteryKnob: true,
-        } as any,
+        }),
       })).toThrow('unknown field mysteryKnob');
     });
 
     it('fails closed for partial observer eval sidecar settings', () => {
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: {
+        observerEvalSidecar: fromAny({
           enabled: true,
-        } as any,
+        }),
       })).toThrow('observerEvalSidecar.queue');
     });
 
@@ -847,7 +848,7 @@ describe('settings', () => {
       };
 
       expect(() => normalizeEditableSettings({
-        observerEvalSidecar: sidecar as any,
+        observerEvalSidecar: fromAny(sidecar),
       })).toThrow('observerEvalSidecar.adapter.emosimRoot');
     });
 
@@ -1194,12 +1195,12 @@ describe('settings', () => {
     it('applies compositional policy with fail-closed normalization', () => {
       const config = makeConfig();
       applySettings(config, {
-        compositionalPolicy: {
+        compositionalPolicy: fromAny({
           enabled: true,
           allowedTiers: ['autonomous', 'autonomous', 'bogus'],
           allowedChannelTypes: ['api', 'discord', 'bogus'],
           allowedPurposes: ['retrieval', 'retrieval', 'bogus'],
-        } as any,
+        }),
       });
 
       expect(config.compositionalPolicy).toEqual({
@@ -2003,7 +2004,7 @@ describe('settings', () => {
       config.analysisWorkbenchMaxSubQueries = 7;
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(Object.keys(snapshot).sort()).toEqual([...RUNTIME_SETTINGS_KEYS].sort());
-      expect((snapshot as any).discordToken).toBeUndefined();
+      expect((fromAny(snapshot)).discordToken).toBeUndefined();
     });
 
     it('normalizes optional values to null when unset', () => {

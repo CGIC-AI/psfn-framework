@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -55,8 +56,8 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: mockSubagentContent }],
-    api: '' as any,
-    provider: '' as any,
+    api: fromAny(''),
+    provider: fromAny(''),
     model: '',
     usage: {
       input: 0,
@@ -66,7 +67,7 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: 'stop' as any,
+    stopReason: fromAny('stop'),
     timestamp: Date.now(),
   });
 });
@@ -1113,8 +1114,8 @@ describe('SubagentFaculty', () => {
         this.state.messages.push({
           role: 'assistant',
           content: [{ type: 'text' as const, text: 'turn one output' }],
-          api: '' as any,
-          provider: '' as any,
+          api: fromAny(''),
+          provider: fromAny(''),
           model: 'turn-0-model',
           usage: {
             input: 10,
@@ -1124,7 +1125,7 @@ describe('SubagentFaculty', () => {
             totalTokens: 52,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
-          stopReason: 'stop' as any,
+          stopReason: fromAny('stop'),
           timestamp: Date.now(),
         });
       })
@@ -1624,7 +1625,7 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     };
     const wrapped = createSubagentWorkSpecProvider(inner, spec);
 
-    await wrapped.stream({ messages: [] } as any);
+    await wrapped.stream(fromAny({ messages: [] }));
     expect(inner.stream).toHaveBeenCalledWith(
       { messages: [] },
       undefined,
@@ -1633,7 +1634,7 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
 
     // An already-declared stream spec is never overridden.
     const otherSpec = buildSubagentWorkSpec({ correlation: { channelId: 'api:other' } });
-    await wrapped.stream({ messages: [] } as any, undefined, { workSpec: otherSpec });
+    await wrapped.stream(fromAny({ messages: [] }), undefined, { workSpec: otherSpec });
     expect(inner.stream).toHaveBeenLastCalledWith(
       { messages: [] },
       undefined,
@@ -1666,7 +1667,7 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     };
 
     // Purpose matches the spec (background) → attributed.
-    await wrapped.complete({ messages: [] } as any, 'background');
+    await wrapped.complete(fromAny({ messages: [] }), 'background');
     expect(inner.complete).toHaveBeenLastCalledWith(
       { messages: [] },
       'background',
@@ -1721,8 +1722,8 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     );
 
     // Purpose differs → never mis-attributed (fail closed): no workSpec injected.
-    await wrapped.complete({ messages: [] } as any, 'memory');
-    const memoryCallOptions = (inner.complete as any).mock.calls.at(-1)?.[2];
+    await wrapped.complete(fromAny({ messages: [] }), 'memory');
+    const memoryCallOptions = (fromAny(inner.complete)).mock.calls.at(-1)?.[2];
     expect(memoryCallOptions?.workSpec).toBeUndefined();
   });
 });

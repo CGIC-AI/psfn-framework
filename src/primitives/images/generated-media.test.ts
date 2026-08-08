@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
@@ -49,7 +50,7 @@ describe('collectGeneratedImageAttachments', () => {
         ],
       },
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'selfie_create',
           toolCallId: 'call-gallery-1',
@@ -69,7 +70,7 @@ describe('collectGeneratedImageAttachments', () => {
               ],
             }),
           }],
-        } as any,
+        }),
       ],
       fetchImpl: async () => (
         new Response(Buffer.from('png-bytes'), {
@@ -141,7 +142,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: companionDataDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'generate_image',
           content: [{ type: 'text', text: 'not-json' }],
@@ -160,7 +161,7 @@ describe('collectGeneratedImageAttachments', () => {
               ],
             },
           },
-        } as any,
+        }),
       ],
       fetchImpl: async () => (
         new Response(Buffer.from('png-two'), {
@@ -185,7 +186,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: companionDataDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'selfie_create',
           content: [{ type: 'text', text: 'not-json' }],
@@ -213,7 +214,7 @@ describe('collectGeneratedImageAttachments', () => {
               },
             },
           },
-        } as any,
+        }),
       ],
       fetchImpl: async () => (
         new Response(Buffer.from('png-embodiment'), {
@@ -243,7 +244,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: companionDataDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'media',
           content: [{ type: 'text', text: 'not-json' }],
@@ -262,7 +263,7 @@ describe('collectGeneratedImageAttachments', () => {
               ],
             },
           },
-        } as any,
+        }),
       ],
       fetchImpl: async () => (
         new Response(Buffer.from('png-three'), {
@@ -291,7 +292,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: personalDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'media',
           content: [{
@@ -309,7 +310,7 @@ describe('collectGeneratedImageAttachments', () => {
               ],
             }),
           }],
-        } as any,
+        }),
       ],
       fetchImpl: async () => {
         throw new Error('fetch should not be called for existing local image paths');
@@ -339,7 +340,7 @@ describe('collectGeneratedImageAttachments', () => {
 
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: personalDir,
-      turnMessages: [{
+      turnMessages: [fromAny({
         role: 'toolResult',
         toolName: 'media',
         content: [{
@@ -354,7 +355,7 @@ describe('collectGeneratedImageAttachments', () => {
             }],
           }),
         }],
-      } as any],
+      })],
       fetchImpl: async () => {
         throw new Error('fetch should not be called for existing local image paths');
       },
@@ -432,7 +433,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: companionDataDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'selfie_create',
           toolCallId: 'call-dedupe',
@@ -450,7 +451,7 @@ describe('collectGeneratedImageAttachments', () => {
             },
           },
           content: [],
-        } as any,
+        }),
       ],
       paidDeliverables: [{
         surface: 'paidImageGeneration',
@@ -491,7 +492,7 @@ describe('collectGeneratedImageAttachments', () => {
       return localPath;
     });
 
-    const turnMessages = localPaths.flatMap((localPath, index) => ([
+    const turnMessages = localPaths.flatMap((localPath, index) => (fromAny([
       {
         role: 'assistant',
         content: [{
@@ -521,15 +522,15 @@ describe('collectGeneratedImageAttachments', () => {
           },
         },
       },
-    ] as any[]));
-    turnMessages.push({
+    ])));
+    turnMessages.push(fromAny({
       role: 'assistant',
       content: [{ type: 'text', text: 'The fourth one finally feels right — selfie-4.png 💜' }],
-    } as any);
+    }));
 
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: personalDir,
-      turnMessages: turnMessages as any,
+      turnMessages: fromAny(turnMessages),
       fetchImpl: async () => {
         throw new Error('fetch should not be called for existing local image paths');
       },
@@ -551,7 +552,7 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: personalDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'selfie_create',
           toolCallId: 'call-newer',
@@ -569,11 +570,11 @@ describe('collectGeneratedImageAttachments', () => {
               }],
             },
           },
-        } as any,
-        {
+        }),
+        fromAny({
           role: 'assistant',
           content: [{ type: 'text', text: 'This one feels right.' }],
-        } as any,
+        }),
       ],
       paidDeliverables: [
         {
@@ -621,16 +622,16 @@ describe('collectGeneratedImageAttachments', () => {
     const attachments = await collectGeneratedImageAttachments({
       personalFilesDir: companionDataDir,
       turnMessages: [
-        {
+        fromAny({
           role: 'toolResult',
           toolName: 'shell_exec',
           content: [{ type: 'text', text: '{"ok":true}' }],
-        } as any,
-        {
+        }),
+        fromAny({
           role: 'toolResult',
           toolName: 'media',
           content: [{ type: 'text', text: 'not json' }],
-        } as any,
+        }),
       ],
     });
 
@@ -641,7 +642,7 @@ describe('collectGeneratedImageAttachments', () => {
 describe('summarizeChargedImageDeliverables', () => {
   it('summarizes paid fal image tool results', () => {
     const summaries = summarizeChargedImageDeliverables([
-      {
+      fromAny({
         role: 'toolResult',
         toolName: 'selfie_create',
         toolCallId: 'call-paid-1',
@@ -658,7 +659,7 @@ describe('summarizeChargedImageDeliverables', () => {
             ],
           },
         },
-      } as any,
+      }),
     ]);
 
     expect(summaries).toEqual([{
@@ -704,7 +705,7 @@ describe('summarizeChargedImageDeliverables', () => {
 
   it('excludes free comfyui, errored, and non-image results', () => {
     const summaries = summarizeChargedImageDeliverables([
-      {
+      fromAny({
         role: 'toolResult',
         toolName: 'media',
         toolCallId: 'call-free',
@@ -717,8 +718,8 @@ describe('summarizeChargedImageDeliverables', () => {
             images: [{ url: 'https://images.example.test/free.png', fileName: 'free.png' }],
           },
         },
-      } as any,
-      {
+      }),
+      fromAny({
         role: 'toolResult',
         toolName: 'selfie_create',
         toolCallId: 'call-errored',
@@ -731,14 +732,14 @@ describe('summarizeChargedImageDeliverables', () => {
             images: [{ url: 'https://images.example.test/errored.png', fileName: 'errored.png' }],
           },
         },
-      } as any,
-      {
+      }),
+      fromAny({
         role: 'toolResult',
         toolName: 'scratchpad',
         toolCallId: 'call-other',
         isError: false,
         content: [{ type: 'text', text: 'unrelated' }],
-      } as any,
+      }),
     ]);
 
     expect(summaries).toEqual([]);

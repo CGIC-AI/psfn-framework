@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -70,7 +71,7 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
 
     await composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
@@ -78,7 +79,7 @@ describe('session runtime composition transcript projection wiring', () => {
         postgresSchema: 'companion_alpha',
         postgresRole: 'companion_alpha_runtime',
         multiCompanion: true,
-      } as any,
+      }),
     });
 
     expect(createDefaultPostgresSessionAdapters).toHaveBeenCalledWith(
@@ -98,12 +99,12 @@ describe('session runtime composition transcript projection wiring', () => {
     const sessionsDir = resolveSessionsDir(companionDataDir);
 
     const composition = await composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
-      } as any,
+      }),
     });
 
     expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
@@ -116,10 +117,10 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
 
     await expect(composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
-      } as any,
+      }),
     })).rejects.toThrow('requires config.persistenceBackend=postgres');
   });
 
@@ -129,11 +130,11 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
 
     await expect(composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
-      } as any,
+      }),
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
   });
 
@@ -149,12 +150,12 @@ describe('session runtime composition transcript projection wiring', () => {
     } as unknown as Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>);
 
     await expect(composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
-      } as any,
+      }),
     })).rejects.toThrow('requires a TurnRecord eligibility fence');
   });
 
@@ -164,11 +165,11 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
 
     const composition = await composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
-      } as any,
+      }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
     });
 
@@ -180,11 +181,11 @@ describe('session runtime composition transcript projection wiring', () => {
     dirs.push(root);
     const companionDataDir = join(root, 'companion-data');
     const composition = await composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
-      } as any,
+      }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
       enableContinuity: true,
       continuityChannelIds: ['discord:configured-room'],
@@ -223,11 +224,11 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
 
     await expect(composeSessionRuntimeAsync({
-      config: {
+      config: fromAny({
         companionDataDir,
         dataDir: companionDataDir,
         persistenceBackend: 'postgres',
-      } as any,
+      }),
       postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
       enableContinuity: true,
     })).rejects.toThrow('requires configured channels.json channel ids');
@@ -239,7 +240,7 @@ describe('session runtime composition transcript projection wiring', () => {
     const companionDataDir = join(root, 'companion-data');
     const databaseUrl = 'postgres://postgres:secret@localhost:5432/psfn_test';
 
-    await composeMemoryStoreAsync({
+    await composeMemoryStoreAsync(fromAny({
       companionDataDir,
       dataDir: companionDataDir,
       persistenceBackend: 'postgres',
@@ -247,7 +248,7 @@ describe('session runtime composition transcript projection wiring', () => {
       postgresSchema: 'companion_alpha',
       postgresRole: 'companion_alpha_runtime',
       multiCompanion: true,
-    } as any, 1536);
+    }), 1536);
 
     expect(existsSync(join(companionDataDir, 'state', 'companion.db'))).toBe(false);
     expect(postgresStoreMocks.createPostgresMemoryStore).toHaveBeenCalledTimes(1);
@@ -267,10 +268,10 @@ describe('session runtime composition transcript projection wiring', () => {
     dirs.push(root);
     const companionDataDir = join(root, 'companion-data');
 
-    await expect(composeMemoryStoreAsync({
+    await expect(composeMemoryStoreAsync(fromAny({
       companionDataDir,
       dataDir: companionDataDir,
       persistenceBackend: 'postgres',
-    } as any, 1536)).rejects.toThrow('requires config.postgresDatabaseUrl');
+    }), 1536)).rejects.toThrow('requires config.postgresDatabaseUrl');
   });
 });

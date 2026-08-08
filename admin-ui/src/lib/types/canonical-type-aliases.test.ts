@@ -326,7 +326,8 @@ describe('admin canonical type aliases', () => {
         source: { type: 'openrouter' },
       },
       purposes: [{ purpose: 'chat', primary: true }],
-      // @ts-expect-error routing belongs to projected ModelCatalogEntry, not ModelRegistryEntry.
+      // routing is now a canonical ModelRegistryEntry field via
+      // ModelRegistryRoutingMetadata (provider-driven routing), so it is accepted.
       routing: { providerOrder: ['openrouter'] },
     };
 

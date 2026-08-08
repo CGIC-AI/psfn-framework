@@ -635,7 +635,11 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     };
 
     this.genericSources.forEach((source, index) => {
-      for (const entry of genericCatalogs[index]) {
+      const catalog = genericCatalogs[index];
+      if (catalog === undefined) {
+        return;
+      }
+      for (const entry of catalog) {
         addUnique(discoveredModelFromGenericEntry(entry, source, openRouterMetaMap, zdrMap));
       }
     });

@@ -28,6 +28,7 @@ import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
+import type { GatewayCredentialPresenceResult } from './protocol.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import {
   resolveCompanionNameFromConfig,
@@ -82,7 +83,10 @@ export interface GatewayPrivilegedCore {
     companionChannels?: GatewayCompanionChannelLane;
     /** Shared durable authority for the ICP autonomy broker. */
     icpAutonomyStore?: IcpSharedAutonomyStorePort;
-    icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
+    icpInitiationPolicyAuthority?: Pick<
+      GatewayIcpInitiationPolicyAuthority,
+      'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+    >;
     /**
      * fxt1: gateway-side welfare grant verifier. Injected by
      * gateway main so the LLM RPC handlers can re-verify caller-asserted
@@ -97,6 +101,7 @@ export interface GatewayPrivilegedCore {
      */
     shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
     sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
+    credentialPresence?: GatewayCredentialPresenceResult;
   }): GatewayServer;
 }
 
@@ -337,6 +342,7 @@ export async function buildGatewayPrivilegedCore(
       contactLifecycleAuthority,
       shardApprovalWorkloads,
       sharedSatelliteQuietHoursAllows,
+      credentialPresence,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
@@ -346,6 +352,7 @@ export async function buildGatewayPrivilegedCore(
       ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
       ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
       ...(sharedSatelliteQuietHoursAllows ? { sharedSatelliteQuietHoursAllows } : {}),
+      ...(credentialPresence ? { credentialPresence } : {}),
       systemDataWriter,
       ...(mcp.broker ? { mcpBroker: mcp.broker } : {}),
       socketPath: input.bootstrap.socketPath,

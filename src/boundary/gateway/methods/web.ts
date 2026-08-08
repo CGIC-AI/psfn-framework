@@ -552,7 +552,7 @@ function stripSensitiveRedirectHeaders(
 async function recordRedirectChainAudit(
   runtime: GatewayMethodRuntime,
   event: {
-    rpcMethod: WebFetchMethodName;
+    rpcMethod: WebCircuitMethodName;
     lane: UrlPolicyLane;
     originUrl: string;
     finalUrl: string;

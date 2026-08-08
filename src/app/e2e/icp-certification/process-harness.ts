@@ -33,6 +33,7 @@ import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
 import { CapabilityRuntime } from '../../../system/capabilities/runtime.js';
 import { loadPlacesRegistryConfig } from '../../../channels/backplane/places-registry.js';
+import { createCompanionId, type CompanionId } from '../../../shared/routing/companion-id.js';
 import { LLMClient } from '../../../primitives/llm/client.js';
 import {
   CERTIFICATION_COMPANION_A,
@@ -591,7 +592,7 @@ export async function startIcpCertificationProcessHarness(input: {
     companionFleet,
   });
   const fleet = input.fixture.companions.map(companion => ({
-    companionId: companion.companionId,
+    companionId: createCompanionId(companion.companionId, 'certification fleet companionId'),
     postgresSchema: companion.postgresSchema,
     companionDataDir: companion.companionDataDir,
   }));
@@ -636,7 +637,10 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     icpConversationChargePolicyResolver: resolveChargePolicy,
   });
-  const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
+  const companionIds: CompanionId[] = [
+    createCompanionId(CERTIFICATION_COMPANION_A, 'certification companion A'),
+    createCompanionId(CERTIFICATION_COMPANION_B, 'certification companion B'),
+  ];
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
   const autonomy = await PostgresIcpSharedAutonomyStore.connect(input.databaseUrl, {
     knownCompanionIds: companionIds,
@@ -651,7 +655,7 @@ export async function startIcpCertificationProcessHarness(input: {
       },
       {
         read: ({ senderCompanionId, nowMs }) => {
-          const companion = fleetById.get(senderCompanionId);
+          const companion = fleetById.get(createCompanionId(senderCompanionId, 'senderCompanionId'));
           if (!companion) throw new Error('Unknown certification companion charge owner');
           return readRunChargeRollingWindowFromLedger(
             resolveChargeLedgerPath(companion.companionDataDir),

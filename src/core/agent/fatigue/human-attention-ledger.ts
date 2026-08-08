@@ -89,7 +89,7 @@ function assertEvent(value: unknown, lineNumber: number): asserts value is Human
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid human attention ledger entry at line ${lineNumber}: missing event`);
   }
-  assertNoUnknownKeys(value, HUMAN_ATTENTION_EVENT_KEYS, 'event', {
+  assertNoUnknownKeys(value as Record<string, unknown>, HUMAN_ATTENTION_EVENT_KEYS, 'event', {
     errorPrefix: `Invalid human attention ledger entry at line ${lineNumber}`,
   });
   const event = value as Partial<HumanAttentionPressureEvent>;

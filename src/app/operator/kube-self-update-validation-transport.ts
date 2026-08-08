@@ -25,6 +25,14 @@ import {
   type CommandRunner,
 } from './kube-self-update-transport.js';
 
+function extractImageTag(imageReference: string): string {
+  const atSeparator = imageReference.indexOf('@');
+  const nameAndTag = atSeparator >= 0 ? imageReference.slice(0, atSeparator) : imageReference;
+  const lastSlash = nameAndTag.lastIndexOf('/');
+  const lastColon = nameAndTag.lastIndexOf(':');
+  return lastColon > lastSlash ? nameAndTag.slice(lastColon + 1) : imageReference;
+}
+
 export interface HttpJsonResponse {
   status: number;
   body: string;
@@ -312,8 +320,9 @@ export function createLivePostRolloutValidationRunner(
             return fail('agent container is not ready');
           }
           const image = typeof cs.image === 'string' ? cs.image : '';
-          if (!image.includes(context.imageTag)) {
-            return fail(`running agent image ${image} does not match target tag ${context.imageTag}`, { image });
+          const imageTag = extractImageTag(context.imageReference);
+          if (!image.includes(imageTag)) {
+            return fail(`running agent image ${image} does not match target tag ${imageTag}`, { image });
           }
         }
       }

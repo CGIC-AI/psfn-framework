@@ -371,6 +371,7 @@ export class AgentApiBackend {
   async handleCompanionUiShardAction(
     params: ApiCompanionUiShardActionRpcParams,
   ): Promise<ApiCompanionUiShardActionRpcResult> {
+    let compiled: CompiledCompanionUiAction | undefined;
     try {
       if (!this.shardDirectory || !this.companionId
         || !isHubDevicePrincipalSnapshot(params.hubDevicePrincipal)
@@ -385,7 +386,7 @@ export class AgentApiBackend {
         || params.hubDevicePrincipal.companionId !== this.companionId) {
         throw new Error('shard action attachment denied');
       }
-      const compiled = this.compileVerifiedCompanionUiCapability(params);
+      compiled = this.compileVerifiedCompanionUiCapability(params);
       const parentCompanionId = this.companionId as CompanionId;
       const body = compiled.frame.body as Record<string, unknown>;
       switch (compiled.frame.resource) {
@@ -426,7 +427,7 @@ export class AgentApiBackend {
       const failure = classifyCompanionUiShardActionFailure(error);
       log.warn(failure.logMessage, {
         requestId: params.requestId,
-        resource: params.companionUiCapability.frame.resource,
+        resource: compiled?.frame.resource ?? 'unknown',
         error: toErrorMessage(failure.logError),
       });
       return this.fail(failure.status, failure.type, failure.message);
@@ -1601,9 +1602,16 @@ export class AgentApiBackend {
     let hubDeviceCanonicalContactId: string | undefined;
 
     if (hubDevicePrincipal) {
-      const enrollment = satellite && this.satelliteRegistry?.satellites
-        .find(candidate => candidate.satelliteId === satellite.satelliteId)
-        ?.endpoints.find(candidate => candidate.endpointId === satellite.endpointId)
+      if (!satellite) {
+        return {
+          ok: false,
+          error: this.fail(403, 'hub_device_principal_mismatch', 'Hub device principal did not match the server registry binding'),
+        };
+      }
+      const currentSatellite = satellite;
+      const enrollment = this.satelliteRegistry?.satellites
+        .find(candidate => candidate.satelliteId === currentSatellite.satelliteId)
+        ?.endpoints.find(candidate => candidate.endpointId === currentSatellite.endpointId)
         ?.hubDeviceEnrollment;
       if (!enrollment
         || !this.companionId
@@ -1616,8 +1624,8 @@ export class AgentApiBackend {
         || hubDevicePrincipal.companionId !== this.companionId
         || hubDevicePrincipal.deviceId !== enrollment.deviceId
         || hubDevicePrincipal.enrollmentVersion !== enrollment.enrollmentVersion
-        || hubDevicePrincipal.sessionId !== satellite.sessionId
-        || hubDevicePrincipal.placeId !== satellite.placeId
+        || hubDevicePrincipal.sessionId !== currentSatellite.sessionId
+        || hubDevicePrincipal.placeId !== currentSatellite.placeId
         ) {
         return {
           ok: false,

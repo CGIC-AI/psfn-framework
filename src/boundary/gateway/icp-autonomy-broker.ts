@@ -679,6 +679,9 @@ export class GatewayIcpAutonomyBroker {
         episode,
       };
     }
+    if (!('result' in guarded)) {
+      throw new Error('ICP authorized handoff result is missing after eligible decision');
+    }
     const result = guarded.result;
     await this.options.eventBus.emit('icp.permit.lifecycle', {
       candidateId: result.permit?.candidateId ?? '[unknown]',

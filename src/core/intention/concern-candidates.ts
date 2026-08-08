@@ -814,7 +814,7 @@ export class ConcernCandidateWorker {
     }
     this.emitGateEvent('ran', pendingGate.reason, { pendingCount });
     this.inFlight = this.runReview()
-      .catch((error) => {
+      .catch((error): ConcernCandidateWorkerRunResult => {
         log.warn('Concern candidate review failed', { error: String(error) });
         return { status: 'completed', pendingCount, reviewedCount: 0, outcomes: [] };
       })

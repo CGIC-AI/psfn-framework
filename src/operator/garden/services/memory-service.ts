@@ -290,7 +290,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }
     return Object.freeze({
       ...fleetSafeService,
-      revealMemory: id => scoped.revealFleetMemory(context, id),
+      revealMemory: (id: string) => scoped.revealFleetMemory(context, id),
     });
   }
 

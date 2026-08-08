@@ -586,7 +586,7 @@ function requestOptions(
     servername: upstream.tls.serverName ?? upstream.origin.hostname,
     checkServerIdentity: createSpiffeCheckServerIdentity(upstream.tls.expectedPeerSpiffeUri),
     minVersion: 'TLSv1.3',
-  };
+  } as RequestOptions;
 }
 
 export class GatewayFleetSsoRouter {

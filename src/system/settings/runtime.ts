@@ -45,12 +45,12 @@ import {
   resolveActiveTimezone,
   setActiveTimezone,
 } from '../../shared/time/active-timezone.js';
+import { nonEmptyStringOrUndefined } from '../../shared/utils/strings.js';
 import {
   normalizeSttProvider,
   normalizeTtsProvider,
   resolveRuntimeSttProvider,
   resolveRuntimeTtsProvider,
-  toNonEmptyString,
 } from './coercion.js';
 import {
   hasLegacyModelSettingsPayload,
@@ -444,7 +444,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
       : null,
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     activeTimezone: config.activeTimezone ?? resolveActiveTimezone(),
-    uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
+    uiThemeId: nonEmptyStringOrUndefined(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
   } satisfies SnapshotSection<
     | 'compositionalPolicy'
     | 'webFetchAllowHttp'

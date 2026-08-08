@@ -140,8 +140,7 @@ export function pinRelativeDirectory(
   let ownsDescriptor = false;
   let traversed = root.logicalPath;
   try {
-    for (let index = 0; index < components.length; index += 1) {
-      const component = components[index];
+    for (const [index, component] of components.entries()) {
       validateComponent(component, label);
       traversed = resolve(traversed, component);
       const child = openChildDirectory(

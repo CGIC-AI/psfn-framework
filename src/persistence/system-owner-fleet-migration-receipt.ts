@@ -456,9 +456,11 @@ export function assertReceiptContents(
     if (file.destinations.length !== expectedDestinations.length) {
       throw new Error(`System-owner fleet migration receipt has incomplete destinations for ${file.ownerFile}`);
     }
-    for (let index = 0; index < expectedDestinations.length; index += 1) {
-      const destination = file.destinations[index];
+    for (const [index, destination] of file.destinations.entries()) {
       const expected = expectedDestinations[index];
+      if (expected === undefined) {
+        throw new Error(`System-owner fleet migration receipt has incomplete destinations for ${file.ownerFile}`);
+      }
       if (destination.companionId !== expected.companionId
         || resolve(destination.companionDataDir) !== expected.companionDataDir
         || resolve(destination.destinationPath) !== expected.destinationPath
@@ -521,7 +523,11 @@ export function requireExpectedDigests(
     throw new Error(`Expected source-digest approvals for exactly ${fileKeys.join(', ') || '(no files)'}`);
   }
   for (const file of files) {
-    const expected = expectedSourceDigests[file.ownerFile].trim();
+    const expectedDigest = expectedSourceDigests[file.ownerFile];
+    if (expectedDigest === undefined) {
+      throw new Error(`Missing expected source digest for ${file.ownerFile}`);
+    }
+    const expected = expectedDigest.trim();
     if (!expected || !SHA256_PATTERN.test(expected)) {
       throw new Error(`Approval for ${file.ownerFile} must be an exact lowercase SHA-256 digest`);
     }

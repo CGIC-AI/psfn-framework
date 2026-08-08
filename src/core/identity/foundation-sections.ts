@@ -230,10 +230,13 @@ export function decomposeFoundationSections(content: string): FoundationSectionS
   const contentById: Partial<Record<FoundationSectionId, string>> = {};
   let match: RegExpExecArray | null;
   while ((match = WRAPPED_PROMPT_SECTION_PATTERN.exec(normalized)) !== null) {
-    const id = normalizePromptSectionId(match[1]);
+    const rawId = match[1];
+    const rawContent = match[2];
+    if (rawId === undefined || rawContent === undefined) continue;
+    const id = normalizePromptSectionId(rawId);
     if (!isFoundationSectionId(id)) continue;
     parsedOrder.push(id);
-    contentById[id] = trimSurroundingBlankLines(match[2]);
+    contentById[id] = trimSurroundingBlankLines(rawContent);
   }
 
   if (parsedOrder.length > 0) {

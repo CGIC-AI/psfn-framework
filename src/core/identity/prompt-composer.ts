@@ -121,9 +121,13 @@ function splitCompactionSummaryParts(summary: string): CompactionSummaryParts {
   );
   const recordMatch = recordPattern.exec(normalized);
   if (recordMatch) {
+    const recordBody = recordMatch[1];
+    if (recordBody === undefined) {
+      return { summaryText: normalized, metadata: '' };
+    }
     const stripped = `${normalized.slice(0, recordMatch.index)}${normalized.slice(recordMatch.index + recordMatch[0].length)}`.trim();
     return {
-      summaryText: stripControlCharacters(recordMatch[1]),
+      summaryText: stripControlCharacters(recordBody),
       metadata: stripped,
     };
   }
@@ -193,7 +197,8 @@ export function enforceUntrustedCompactionGuard(systemPrompt: string): string {
   if (!normalized.includes(`<${UNTRUSTED_COMPACTION_PROMPT_TAG}`)) {
     return normalized;
   }
-  if (normalized.includes(UNTRUSTED_COMPACTION_PROMPT_GUARD_LINES[0])) {
+  const guardLine = UNTRUSTED_COMPACTION_PROMPT_GUARD_LINES[0];
+  if (guardLine !== undefined && normalized.includes(guardLine)) {
     return normalized;
   }
   return `${UNTRUSTED_COMPACTION_PROMPT_GUARD}\n\n${normalized}`;

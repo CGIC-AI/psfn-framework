@@ -312,9 +312,9 @@ export class LLMRequestCapability {
   }
 
   private resolveOpenAICompatibleApi(candidate: RoutingCandidate): OpenAICompatibleApi {
-    return candidate.promptCacheStrategy === 'openai_responses'
+    return candidate.apiKind ?? (candidate.promptCacheStrategy === 'openai_responses'
       ? 'openai-responses'
-      : 'openai-completions';
+      : 'openai-completions');
   }
 
   private toProviderWireMessages(

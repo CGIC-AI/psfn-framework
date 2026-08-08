@@ -4,6 +4,8 @@ import {
   type CanonicalModelPurpose,
   type ModelRegistryBudgetPolicy,
   type ModelRegistryEntry,
+  type ModelApiKind,
+  type ModelRegistryRoutingMetadata,
   type ModelRegistryPromptCachingPolicy,
   type PromptCacheRetention,
   type PromptCacheScope,
@@ -36,6 +38,7 @@ import {
 } from './contracts.js';
 
 const CANONICAL_MODEL_PURPOSE_SET = new Set<CanonicalModelPurpose>(CANONICAL_MODEL_PURPOSES);
+const MODEL_API_KINDS = new Set<ModelApiKind>(['openai-completions', 'openai-responses']);
 const MODEL_REGISTRY_THINKING_EFFORT_VALUES = new Set([
   'none',
   'off',
@@ -463,6 +466,16 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     throw new Error(`Invalid model registry at ${fieldPath}.enabled: expected boolean`);
   }
 
+  let apiKind: ModelApiKind | undefined;
+  if (value.apiKind !== undefined) {
+    if (typeof value.apiKind !== 'string' || !MODEL_API_KINDS.has(value.apiKind as ModelApiKind)) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.apiKind: expected one of ${[...MODEL_API_KINDS].join(', ')}`,
+      );
+    }
+    apiKind = value.apiKind as ModelApiKind;
+  }
+
   if (!isRecord(value.identity)) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity: expected object`);
   }
@@ -494,12 +507,43 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     return normalized;
   });
 
+  if (value.capabilities !== undefined && !isRecord(value.capabilities)) {
+    throw new Error(`Invalid model registry at ${fieldPath}.capabilities: expected object`);
+  }
   const capabilities = isRecord(value.capabilities) ? { ...value.capabilities } : undefined;
   const tuning = isRecord(value.tuning)
     ? normalizeModelRegistryTuning({ ...value.tuning }, `${fieldPath}.tuning`)
     : undefined;
   const cost = isRecord(value.cost) ? { ...value.cost } : undefined;
   const metadata = isRecord(value.metadata) ? { ...value.metadata } : undefined;
+  let routing: ModelRegistryRoutingMetadata | undefined;
+  if (value.routing !== undefined) {
+    if (!isRecord(value.routing)) {
+      throw new Error(`Invalid model registry at ${fieldPath}.routing: expected object`);
+    }
+    const providerOrder = value.routing.providerOrder === undefined
+      ? undefined
+      : toStringList(value.routing.providerOrder);
+    if (
+      value.routing.providerOrder !== undefined
+      && (
+        !providerOrder
+        || providerOrder.length === 0
+        || !Array.isArray(value.routing.providerOrder)
+        || providerOrder.length !== value.routing.providerOrder.length
+      )
+    ) {
+      throw new Error(`Invalid model registry at ${fieldPath}.routing.providerOrder: expected non-empty strings`);
+    }
+    const zdrOnly = value.routing.zdrOnly === undefined ? undefined : toBoolean(value.routing.zdrOnly);
+    if (value.routing.zdrOnly !== undefined && zdrOnly === undefined) {
+      throw new Error(`Invalid model registry at ${fieldPath}.routing.zdrOnly: expected boolean`);
+    }
+    routing = {
+      ...(providerOrder ? { providerOrder } : {}),
+      ...(zdrOnly !== undefined ? { zdrOnly } : {}),
+    };
+  }
 
   const capabilityMaxTokens = toPositiveInteger(capabilities?.maxOutputTokens);
   const tuningMaxTokens = toPositiveInteger(tuning?.maxOutputTokens);
@@ -508,10 +552,22 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     throw new Error(`Invalid model registry at ${fieldPath}: maxOutputTokens must be set in capabilities or tuning`);
   }
 
+  if (capabilities?.maxOutputTokens !== undefined && capabilityMaxTokens === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.capabilities.maxOutputTokens: expected positive integer`);
+  }
+
   const capabilityContextWindow = toPositiveInteger(capabilities?.contextWindow);
   const tuningContextWindow = toPositiveInteger(tuning?.contextWindow);
   if (capabilities && capabilityContextWindow !== undefined) {
     capabilities.contextWindow = capabilityContextWindow;
+  }
+  if (capabilities?.contextWindow !== undefined && capabilityContextWindow === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.capabilities.contextWindow: expected positive integer`);
+  }
+  for (const capability of ['supportsVision', 'supportsReasoning', 'supportsPromptCaching'] as const) {
+    if (capabilities?.[capability] !== undefined && typeof capabilities[capability] !== 'boolean') {
+      throw new Error(`Invalid model registry at ${fieldPath}.capabilities.${capability}: expected boolean`);
+    }
   }
   if (capabilities && capabilityMaxTokens !== undefined) {
     capabilities.maxOutputTokens = capabilityMaxTokens;
@@ -527,6 +583,7 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     id,
     ...(enabled === false ? { enabled: false } : {}),
     rank,
+    ...(apiKind ? { apiKind } : {}),
     identity: {
       provider,
       model,
@@ -549,6 +606,7 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     purposes,
     ...(capabilities ? { capabilities } : {}),
     ...(tuning ? { tuning } : {}),
+    ...(routing ? { routing } : {}),
     ...(cost ? { cost } : {}),
     ...(metadata ? { metadata } : {}),
   };

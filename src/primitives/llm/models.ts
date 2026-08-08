@@ -6,10 +6,12 @@ import type { Api, Model } from '@earendil-works/pi-ai';
 import type {
   LLMSystemPromptTransport,
   LLMSystemRoleCapabilityMetadata,
+  ModelApiKind,
+  ModelRegistryCostMetadata,
 } from '../../shared/contracts/runtime.js';
 import type { ProviderRuntime } from './provider-runtime.js';
 
-export type OpenAICompatibleApi = 'openai-completions' | 'openai-responses';
+export type OpenAICompatibleApi = ModelApiKind;
 
 export interface OpenAICompatibleEndpointModelConfig {
   /** OpenAI-compatible base URL, e.g. http://localhost:4000/v1 */
@@ -30,6 +32,8 @@ export interface OpenAICompatibleEndpointModelConfig {
   supportsVision?: boolean;
   /** OpenAI-compatible API shape to expose through pi-ai */
   api?: OpenAICompatibleApi;
+  /** Reviewed per-million-token catalog cost used for estimates. */
+  cost?: ModelRegistryCostMetadata;
   /** Format for reasoning parameter — required when reasoning: true */
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
@@ -59,7 +63,12 @@ export function createOpenAICompatibleEndpointModel(
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
     input: config.supportsVision ? ['text', 'image'] : ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: {
+      input: config.cost?.inputPer1MUsd ?? 0,
+      output: config.cost?.outputPer1MUsd ?? 0,
+      cacheRead: config.cost?.cacheReadPer1MUsd ?? 0,
+      cacheWrite: config.cost?.cacheWritePer1MUsd ?? 0,
+    },
     contextWindow: config.contextWindow ?? 128_000,
     maxTokens: config.maxTokens ?? 4096,
     compat: {

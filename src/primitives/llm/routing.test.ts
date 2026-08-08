@@ -9,10 +9,17 @@ interface RegistryModelInput {
   rank: number;
   provider: string;
   model: string;
+  apiKind?: ModelRegistryEntry['apiKind'];
   source?: ModelRegistryEntry['identity']['source'];
   maxOutputTokens: number;
   contextWindow: number;
   supportsVision?: boolean;
+  supportsReasoning?: boolean;
+  supportsPromptCaching?: boolean;
+  promptCacheStrategy?: 'openai_responses';
+  thinkingEnabled?: boolean;
+  providerOrder?: string[];
+  zdrOnly?: boolean;
   purposes: Array<{ purpose: CanonicalModelPurpose; primary: boolean }>;
   cost?: { inputPer1MUsd?: number; outputPer1MUsd?: number };
 }
@@ -24,6 +31,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
       id: model.id,
       ...(model.enabled === false ? { enabled: false } : {}),
       rank: model.rank,
+      ...(model.apiKind ? { apiKind: model.apiKind } : {}),
       identity: {
         provider: model.provider,
         model: model.model,
@@ -34,11 +42,23 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
         maxOutputTokens: model.maxOutputTokens,
         contextWindow: model.contextWindow,
         ...(model.supportsVision !== undefined ? { supportsVision: model.supportsVision } : {}),
+        ...(model.supportsReasoning !== undefined ? { supportsReasoning: model.supportsReasoning } : {}),
+        ...(model.supportsPromptCaching !== undefined
+          ? { supportsPromptCaching: model.supportsPromptCaching }
+          : {}),
+        ...(model.promptCacheStrategy ? { promptCacheStrategy: model.promptCacheStrategy } : {}),
       },
       tuning: {
         maxOutputTokens: model.maxOutputTokens,
         contextWindow: model.contextWindow,
+        ...(model.thinkingEnabled !== undefined ? { thinkingEnabled: model.thinkingEnabled } : {}),
       },
+      ...(model.providerOrder || model.zdrOnly !== undefined
+        ? { routing: {
+            ...(model.providerOrder ? { providerOrder: model.providerOrder } : {}),
+            ...(model.zdrOnly !== undefined ? { zdrOnly: model.zdrOnly } : {}),
+          } }
+        : {}),
       ...(model.cost ? { cost: model.cost } : {}),
     })),
   };
@@ -335,6 +355,74 @@ describe('resolveRoutingCandidates(background)', () => {
         model: 'moonshotai/kimi-k2.6',
         requestBaseUrl: 'https://openrouter.ai/api/v1',
         requestApiKeyEnv: 'OPENROUTER_API_KEY',
+      }),
+    ]);
+  });
+
+  it('routes reviewed exacto and Nitro wire ids through an ordinary configured endpoint', () => {
+    const config = makeConfig({
+      providerRegistry: {
+        schemaVersion: 1,
+        providers: [{
+          id: 'shared-router',
+          type: 'generic_openai',
+          enabled: true,
+          apiBaseUrl: 'https://router.example.test/v1',
+          apiKeyRef: { kind: 'env', envName: 'SHARED_ROUTER_API_KEY' },
+        }],
+      },
+      modelRegistry: makeRegistry([
+        {
+          id: 'tool-reliable-exacto',
+          rank: 10,
+          provider: 'shared-router',
+          model: 'exacto/test-model',
+          apiKind: 'openai-responses',
+          maxOutputTokens: 8192,
+          contextWindow: 128_000,
+          supportsReasoning: true,
+          supportsPromptCaching: true,
+          promptCacheStrategy: 'openai_responses',
+          providerOrder: ['provider-a', 'provider-b'],
+          cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 },
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+        {
+          id: 'fast-nitro',
+          rank: 20,
+          provider: 'shared-router',
+          model: 'nitro/test-model',
+          apiKind: 'openai-completions',
+          maxOutputTokens: 4096,
+          contextWindow: 64_000,
+          supportsReasoning: true,
+          thinkingEnabled: false,
+          cost: { inputPer1MUsd: 0.1, outputPer1MUsd: 0.2 },
+          purposes: [{ purpose: 'chat', primary: false }],
+        },
+      ]),
+    });
+
+    expect(resolveRoutingCandidates(config, 'chat')).toEqual([
+      expect.objectContaining({
+        slotKey: 'tool-reliable-exacto',
+        provider: 'shared-router',
+        model: 'exacto/test-model',
+        apiKind: 'openai-responses',
+        requestBaseUrl: 'https://router.example.test/v1',
+        requestApiKeyEnv: 'SHARED_ROUTER_API_KEY',
+        supportsReasoning: true,
+        promptCacheStrategy: 'openai_responses',
+        openRouterProviderOrder: ['provider-a', 'provider-b'],
+      }),
+      expect.objectContaining({
+        slotKey: 'fast-nitro',
+        provider: 'shared-router',
+        model: 'nitro/test-model',
+        apiKind: 'openai-completions',
+        requestBaseUrl: 'https://router.example.test/v1',
+        requestApiKeyEnv: 'SHARED_ROUTER_API_KEY',
+        thinkingEnabled: false,
       }),
     ]);
   });

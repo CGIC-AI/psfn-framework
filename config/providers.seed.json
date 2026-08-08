@@ -29,6 +29,17 @@
           "model": "openai/gpt-4o-mini"
         }
       }
+    },
+    {
+      "id": "shared-router-example",
+      "type": "generic_openai",
+      "enabled": false,
+      "label": "External shared LLM router example",
+      "apiBaseUrl": "https://router.example.test/v1",
+      "apiKeyRef": {
+        "kind": "env",
+        "envName": "SHARED_ROUTER_API_KEY"
+      }
     }
   ]
 }

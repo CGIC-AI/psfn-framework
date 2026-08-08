@@ -4,6 +4,7 @@ import type {
   ImportProcessingRouteMode,
   ModelRegistryCostMetadata,
   ModelRegistryEntry,
+  ModelApiKind,
   ModelRegistryPurposeTag,
   ModelThinkingEffort,
   PromptCacheRetention,
@@ -64,6 +65,7 @@ export type ImportPolicyRejectionReason = 'strict_requires_openrouter_zdr';
 export interface RoutingCandidate {
   model: string;
   provider: string;
+  apiKind?: ModelApiKind;
   maxTokens: number;
   contextWindow?: number;
   supportsVision?: boolean;
@@ -419,6 +421,23 @@ function resolveOpenRouterEndpointRoute(
   };
 }
 
+function resolveConfiguredGenericEndpointRoute(
+  config: SubstrateConfig,
+  provider: string,
+): Pick<RoutingCandidate, 'provider' | 'requestBaseUrl' | 'requestApiKeyEnv'> | null {
+  const configuredProvider = config.providerRegistry?.providers.find(
+    (entry) => entry.enabled && entry.id === provider && entry.type === 'generic_openai',
+  );
+  if (!configuredProvider?.apiBaseUrl) return null;
+  return {
+    provider: configuredProvider.id,
+    requestBaseUrl: configuredProvider.apiBaseUrl,
+    ...(configuredProvider.apiKeyRef
+      ? { requestApiKeyEnv: configuredProvider.apiKeyRef.envName }
+      : {}),
+  };
+}
+
 export function resolveRoutingCandidateForRegistryEntry(
   config: SubstrateConfig,
   entry: ModelRegistryEntry,
@@ -440,17 +459,21 @@ export function resolveRoutingCandidateForRegistryEntry(
     ? entry.capabilities.supportsReasoning
     : undefined;
   const tuning = resolveCandidateTuning(entry);
-  const endpointRoute = resolveOpenRouterEndpointRoute(config, entry, provider);
+  const endpointRoute = resolveConfiguredGenericEndpointRoute(config, provider)
+    ?? resolveOpenRouterEndpointRoute(config, entry, provider);
   return applyGlobalPromptCachePolicy(withOpenRouterPreferences({
     slotKey: entry.id,
     provider: endpointRoute.provider,
     model,
+    ...(entry.apiKind ? { apiKind: entry.apiKind } : {}),
     maxTokens,
     ...(contextWindow > 0 ? { contextWindow } : {}),
     ...(supportsVision !== undefined ? { supportsVision } : {}),
     ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
     ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
     ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
+    ...(entry.routing?.providerOrder ? { openRouterProviderOrder: [...entry.routing.providerOrder] } : {}),
+    ...(entry.routing?.zdrOnly !== undefined ? { openRouterZdrOnly: entry.routing.zdrOnly } : {}),
     ...tuning,
   }, config), resolveGlobalPromptCachePolicy(config));
 }

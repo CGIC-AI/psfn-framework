@@ -273,7 +273,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
-  const runtime = new PiProviderRuntime();
+  const runtime = new PiProviderRuntime(undefined, config);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
     postgresDatabaseUrl,

@@ -12,6 +12,7 @@ import {
   type MutableModels,
 } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type {
   Api,
@@ -22,6 +23,8 @@ import type {
   Model,
   SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { createOpenAICompatibleEndpointModel } from './models.js';
 
 export type ProviderRuntimeCompleteResult = AssistantMessage;
 
@@ -96,6 +99,54 @@ function registerLegacyEndpointProviders(models: MutableModels): void {
   registerOpenAICompatibleEndpointProvider(models, 'local_endpoint', 'Local endpoint', []);
 }
 
+type ProviderRuntimeConfig = Pick<SubstrateConfig, 'providerRegistry' | 'modelRegistry'>;
+
+function registerConfiguredProviders(models: MutableModels, config: ProviderRuntimeConfig): void {
+  for (const provider of config.providerRegistry?.providers ?? []) {
+    if (!provider.enabled || provider.type !== 'generic_openai') continue;
+    if (!provider.apiBaseUrl) {
+      throw new Error(`Configured provider "${provider.id}" is missing apiBaseUrl`);
+    }
+    const apiBaseUrl = provider.apiBaseUrl;
+    const configuredModels = (config.modelRegistry?.models ?? [])
+      .filter((entry) => entry.enabled !== false && entry.identity.provider === provider.id)
+      .map((entry) => {
+        if (!entry.apiKind) {
+          throw new Error(`Configured model "${entry.id}" is missing apiKind`);
+        }
+        return createOpenAICompatibleEndpointModel({
+          baseUrl: apiBaseUrl,
+          modelId: entry.identity.model,
+          provider: provider.id,
+          routeLabel: provider.label ?? provider.id,
+          contextWindow: entry.tuning?.contextWindow ?? entry.capabilities?.contextWindow,
+          maxTokens: entry.tuning?.maxOutputTokens ?? entry.capabilities?.maxOutputTokens,
+          reasoning: entry.capabilities?.supportsReasoning === true
+            && entry.tuning?.thinkingEnabled !== false,
+          supportsVision: entry.capabilities?.supportsVision === true,
+          api: entry.apiKind,
+          cost: entry.cost,
+        });
+      });
+    models.setProvider(createProvider({
+      id: provider.id,
+      name: provider.label ?? provider.id,
+      baseUrl: apiBaseUrl,
+      auth: {
+        apiKey: envApiKeyAuth(
+          `${provider.label ?? provider.id} API key`,
+          provider.apiKeyRef ? [provider.apiKeyRef.envName] : [],
+        ),
+      },
+      models: configuredModels,
+      api: {
+        'openai-completions': openAICompletionsApi(),
+        'openai-responses': openAIResponsesApi(),
+      },
+    }));
+  }
+}
+
 /**
  * Gateway-owned pi-ai runtime. Holds one Models collection and delegates
  * stream/completion/lookup calls to it. The default constructor registers
@@ -104,9 +155,10 @@ function registerLegacyEndpointProviders(models: MutableModels): void {
 export class PiProviderRuntime implements ProviderRuntime {
   private readonly models: MutableModels;
 
-  constructor(models?: Models) {
+  constructor(models?: Models, config?: ProviderRuntimeConfig) {
     this.models = models ? asMutableModels(models) : builtinModels();
     registerLegacyEndpointProviders(this.models);
+    if (config) registerConfiguredProviders(this.models, config);
   }
 
   complete(

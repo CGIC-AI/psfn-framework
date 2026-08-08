@@ -1,6 +1,7 @@
 # pi-ai sole LLM gateway migration guide
 
-Status: approved architecture; implementation not started
+Status: code migration implemented on `wave/shjzt-pi-ai-gateway-final`; awaiting
+the final pre-PR gate, publication, merge, and separately authorized live rollout
 
 Date: 2026-08-08
 
@@ -614,6 +615,23 @@ Rollback restores the prior application/chart version and owner-file snapshot.
 It must not restore the old internal proxy by editing ad hoc host or side-directory
 configuration.
 
+The owner-file handoff is a deterministic pair, kept in the private live-ops
+bundle rather than tracked source:
+
+- forward: the validated `providers.json` uses one enabled
+  `generic_openai` entry with the placeholder endpoint and credential reference
+  shown in section 6.1, while `models.json` maps each stable PSFN slot to its
+  exact upstream wire model and API kind;
+- rollback: the pre-cutover byte snapshots of `providers.json` and `models.json`,
+  their recorded SHA-256 hashes, and the previous chart/application revision;
+- validation: parse both owner files with the release's strict loaders, confirm
+  every enabled model references an enabled provider, confirm every credential
+  reference names an available gateway-held secret, and render the selected
+  chart before either direction is applied.
+
+Real endpoints, secret names, live hashes, and release identifiers belong only
+in the ignored private operations input and the Bead 9 execution evidence.
+
 ## 17. Risks and mitigations
 
 ### Private Agent coupling
@@ -766,3 +784,41 @@ The epic is complete only when:
 - final repository gates pass on the merged head;
 - live owner files and workloads have been migrated under explicit authority;
 - rollback evidence and final main/live SHAs are recorded in Beads.
+
+## 20. Implementation checkpoint
+
+The code train was assembled and rebased onto `origin/main` at
+`9009ed876a90f8634120fd02145dd7cd9a485d33`. The final candidate branch contains
+the guide plus Beads 1–8 as one nine-commit train. The reconciliation checkpoint
+is `2ca7c0cc7953b2dbc8f3317faa7ae500f0d60967`; the documentation and recovery
+digest cleanup immediately after that checkpoint will be represented by the
+exact gated PR head recorded in Bead 8.
+
+Implemented evidence:
+
+- maintained `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` packages
+  replace the deprecated package scope, without `/compat` imports;
+- a repository-owned `ProviderRuntime` is injected through gateway composition
+  and handles registered and configured pi-ai models;
+- traffic-class, provider-runtime, credential, routing, discovery, streaming
+  tool-call, embedding, vision, and usage/cost fixtures exercise the migrated
+  seams;
+- canonical provider configuration models an external router as
+  `generic_openai`; production code no longer emits a LiteLLM-specific route or
+  branches on a LiteLLM provider identity;
+- Helm renders no bundled LiteLLM Deployment, Service, ConfigMap, credential,
+  environment variable, or network rule; gateway external HTTPS egress remains
+  enabled and agent external provider egress remains denied;
+- the bundled proxy assets and retired standalone Kubernetes manifests are
+  absent, while historical telemetry decoding and cost-evidence header reading
+  remain reader-compatible.
+
+Rebase validation found and fixed one `noUncheckedIndexedAccess` discovery
+regression and one stale admin type assertion. Source typecheck reported zero
+new errors; conflict-area and migration conformance suites passed. A compact
+Kimi review returned PASS, with its two concrete questions independently checked
+against the chart egress rule and provider-id uniqueness validation.
+
+Still pending at this checkpoint: the single broad `gate:pre-pr` run on the
+exact final commit, PR publication, merge/main evidence, and Bead 9 live work.
+No live mutation is authorized by this document.

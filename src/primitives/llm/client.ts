@@ -49,10 +49,7 @@ import {
   resolveModelUsageCostRates,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
-import {
-  resolveConfiguredLiteLLMApiKeyReference,
-  resolveConfiguredLiteLLMBaseUrl,
-} from '../../system/config/providers-config.js';
+import { isConfiguredEndpointRouteKind } from '../../shared/telemetry/route-kind.js';
 import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
 import {
   FOREGROUND_CHAT_RUNTIME_CLASS,
@@ -200,13 +197,13 @@ export class LLMClient {
       ? { litellmBaseUrl: litellmBaseUrlOrOptions }
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
-    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
+    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? config.litellmBaseUrl ?? null;
     this.transport = runtimeOptions.transport;
     this.runtime = runtimeOptions.runtime ?? new PiProviderRuntime();
     this.requestCapability = new LLMRequestCapability(
       config,
       this.litellmBaseUrl,
-      resolveConfiguredLiteLLMApiKeyReference(config),
+      config.litellmApiKeyRef,
       this.runtime,
     );
     this.fallbackRunner = new FallbackRunner();
@@ -390,8 +387,8 @@ export class LLMClient {
     if (routeKind === 'request_base_url') {
       return `request_base_url::${normalizeSharedRouteKey(candidate.requestBaseUrl)}`;
     }
-    if (routeKind === 'configured_litellm_proxy') {
-      return `configured_litellm_proxy::${normalizeSharedRouteKey(this.litellmBaseUrl)}`;
+    if (isConfiguredEndpointRouteKind(routeKind)) {
+      return `configured_endpoint::${normalizeSharedRouteKey(this.litellmBaseUrl)}`;
     }
 
     const provider = candidate.provider.trim().toLowerCase();
@@ -499,7 +496,7 @@ export class LLMClient {
    */
   private resolveModelCallCapacity(candidate: RoutingCandidate): ModelCallGateCapacity {
     const routeKind = this.requestCapability.resolveRouteKind(candidate);
-    const providerId = routeKind === 'configured_litellm_proxy'
+    const providerId = isConfiguredEndpointRouteKind(routeKind)
       ? 'litellm'
       : candidate.provider.trim().toLowerCase();
     const entry = this.config.providerRegistry?.providers.find(

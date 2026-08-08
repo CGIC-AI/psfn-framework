@@ -15,11 +15,6 @@ import {
   normalizeCorrelationValue,
   resolveCorrelationMetadata,
 } from '../llm/correlation.js';
-import {
-  resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMBaseUrl,
-} from '../../system/config/providers-config.js';
-import { resolveProviderApiKey } from '../../boundary/custody/credential-vault.js';
 import { sanitizeCoreSubstrateConfig, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
 import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
@@ -133,19 +128,14 @@ function normalizeQuestion(input: ImageVisionReviewRequest): string {
 
 function resolveApiKey(
   model: Model<any>,
-  config: SubstrateConfig,
+  runtime: ProviderRuntime,
+  primaryProvider: string,
 ): string | undefined {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  if (litellmBaseUrl) {
-    return resolveConfiguredLiteLLMApiKey(config);
-  }
-
   const modelProvider = (model as { provider?: unknown }).provider;
   if (typeof modelProvider === 'string' && modelProvider.trim().length > 0) {
-    return resolveProviderApiKey(modelProvider, config, process.env);
+    return runtime.resolveProviderApiKey(modelProvider);
   }
-
-  return resolveProviderApiKey(config.primaryProvider, config, process.env);
+  return runtime.resolveProviderApiKey(primaryProvider);
 }
 
 function validateFetchedImage(payload: {
@@ -346,7 +336,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       model,
       context as unknown as PiContext,
       {
-        apiKey: resolveApiKey(model, this.config),
+        apiKey: resolveApiKey(model, this.runtime, this.config.primaryProvider),
         maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),
       },
     );

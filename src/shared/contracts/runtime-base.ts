@@ -1256,7 +1256,7 @@ export interface LLMCapturedProviderWirePayload {
 }
 
 export interface LLMProviderObservability {
-  routeKind: 'registered_model' | 'configured_litellm_proxy' | 'request_base_url';
+  routeKind: 'registered_model' | 'configured_endpoint' | 'request_base_url';
   requestedProvider: string;
   requestedModel: string;
   backendProvider: string;

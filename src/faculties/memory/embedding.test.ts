@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { createEnvCredentialVault } from '../../boundary/custody/credential-vault.js';
+import { createEnvCredentialVault, envCredential } from '../../boundary/custody/credential-vault.js';
 import {
   DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
   STARTUP_EMBEDDING_WARMUP_TEXT,
@@ -446,20 +446,16 @@ describe('embedding providers', () => {
     });
   });
 
-  it('derives api endpoint from LITELLM_BASE_URL when EMBEDDING_API_URL is unset', async () => {
+  it('no longer derives the api endpoint from LITELLM_BASE_URL when EMBEDDING_API_URL is unset', () => {
     process.env.EMBEDDING_PROVIDER = 'api';
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     process.env.EMBEDDING_MODEL = 'snowflake-arctic-embed2';
     process.env.EMBEDDING_DIMS = '2';
-    fetchMock.mockResolvedValue(okJson({ embeddings: [[9, 8]] }));
 
-    const provider = createEmbeddingProviderFromEnv();
-
-    expect(provider.kind).toBe('api');
-    await provider.embed('litellm');
-
-    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://localhost:4000/v1/embeddings');
+    expect(() => createEmbeddingProviderFromEnv()).toThrow(
+      'EMBEDDING_API_URL must be set when EMBEDDING_PROVIDER=api',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses the credential vault for api embeddings loaded from runtime config', async () => {
@@ -482,6 +478,42 @@ describe('embedding providers', () => {
     expect(headers.Authorization).toBe('Bearer vault-api-key');
   });
 
+  it('resolves an explicit generic endpoint apiKeyRef through the vault for api embeddings', async () => {
+    fetchMock.mockResolvedValue(okJson({ embeddings: [[9, 8]] }));
+
+    const provider = createEmbeddingProviderFromConfig({
+      embeddingProvider: 'api',
+      embeddingApiUrl: 'https://embeddings.example/v1/embeddings',
+      embeddingApiModel: 'text-embedding-3-small',
+      embeddingApiDims: 2,
+      embeddingApiKeyRef: envCredential('EMBEDDING_ENDPOINT_API_KEY'),
+      credentialVault: createEnvCredentialVault({
+        EMBEDDING_ENDPOINT_API_KEY: 'explicit-ref-secret',
+      }),
+    });
+
+    await provider.embed('explicit-ref');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer explicit-ref-secret');
+  });
+
+  it('requires an explicit embeddingApiUrl from runtime config without a LiteLLM fallback', () => {
+    expect(() => createEmbeddingProviderFromConfig({
+      embeddingProvider: 'api',
+      embeddingApiModel: 'text-embedding-3-small',
+      embeddingApiDims: 2,
+      embeddingApiKeyRef: envCredential('EMBEDDING_ENDPOINT_API_KEY'),
+      credentialVault: createEnvCredentialVault({
+        EMBEDDING_ENDPOINT_API_KEY: 'explicit-ref-secret',
+      }),
+    })).toThrow(
+      'API embeddings require embeddingApiUrl, embeddingApiModel (or embeddingModel), and embeddingApiDims in settings.json',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('throws for unsupported provider names', () => {
     process.env.EMBEDDING_PROVIDER = 'unknown-provider';
     expect(() => createEmbeddingProviderFromEnv()).toThrow(
@@ -497,6 +529,27 @@ describe('embedding providers', () => {
     expect(() => createEmbeddingProviderFromEnv()).toThrow(
       'EMBEDDING_API_URL must be set when EMBEDDING_PROVIDER=api',
     );
+  });
+
+  it('does not fall back to LITELLM_API_KEY for the api embedding credential', async () => {
+    process.env.EMBEDDING_PROVIDER = 'api';
+    process.env.EMBEDDING_API_URL = 'https://embeddings.example/v1/embeddings';
+    process.env.EMBEDDING_API_MODEL = 'text-embedding-3-small';
+    process.env.EMBEDDING_API_DIMS = '3';
+    delete process.env.EMBEDDING_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.LITELLM_API_KEY = 'leaked-litellm-key';
+    fetchMock.mockResolvedValue(okJson({ data: [{ index: 0, embedding: [1, 2, 3] }] }));
+
+    const provider = createEmbeddingProviderFromEnv();
+
+    expect(provider.kind).toBe('api');
+    await provider.embed('no-litellm-fallback');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    // No Authorization header: the leaked LITELLM_API_KEY is never used.
+    expect(headers.Authorization).toBeUndefined();
   });
 
   it('warms the embedding service with the startup probe text', async () => {

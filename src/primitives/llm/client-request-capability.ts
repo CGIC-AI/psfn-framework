@@ -33,10 +33,10 @@ import {
 import { captureProviderWirePayload } from './wire-payload-capture.js';
 import {
   type CredentialReference,
-  resolveOptionalEnvCredential,
-  resolveProviderApiKey,
+  envCredential,
+  resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
-import { resolveConfiguredLiteLLMApiKey } from '../../system/config/providers-config.js';
+import { CONFIGURED_ENDPOINT_ROUTE_KIND } from '../../shared/telemetry/route-kind.js';
 import { normalizeProxyModelId } from './client-response-helpers.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
@@ -63,7 +63,7 @@ export class LLMRequestCapability {
   constructor(
     private readonly config: SubstrateConfig,
     private readonly litellmBaseUrl: string | null,
-    private readonly litellmApiKeyRef: CredentialReference,
+    private readonly litellmApiKeyRef: CredentialReference | undefined,
     private readonly runtime: ProviderRuntime,
   ) {}
 
@@ -81,7 +81,10 @@ export class LLMRequestCapability {
 
     if (candidate.requestBaseUrl) {
       const apiKey = candidate.requestApiKeyEnv
-        ? resolveOptionalEnvCredential(this.config.credentialVault, candidate.requestApiKeyEnv)
+        ? resolveOptionalCredentialReference(
+          this.config.credentialVault,
+          envCredential(candidate.requestApiKeyEnv),
+        )
         : undefined;
       return {
         model: createOpenAICompatibleEndpointModel({
@@ -100,6 +103,13 @@ export class LLMRequestCapability {
     }
 
     if (this.litellmBaseUrl) {
+      // The configured shared endpoint credential resolves solely through the
+      // gateway credential vault from the configured reference. There is no
+      // LITELLM_API_KEY default: a missing configured reference leaves the
+      // endpoint unauthenticated and the provider call fails closed.
+      const apiKey = this.litellmApiKeyRef
+        ? resolveOptionalCredentialReference(this.config.credentialVault, this.litellmApiKeyRef)
+        : undefined;
       return {
         model: createModel(
           this.litellmBaseUrl,
@@ -109,10 +119,7 @@ export class LLMRequestCapability {
           this.resolveOpenAICompatibleApi(candidate),
           routedModelOptions,
         ),
-        apiKey: resolveConfiguredLiteLLMApiKey({
-          credentialVault: this.config.credentialVault,
-          litellmApiKeyRef: this.litellmApiKeyRef,
-        }),
+        apiKey,
       };
     }
 
@@ -120,12 +127,12 @@ export class LLMRequestCapability {
     if (!model) {
       throw new Error(
         `Unknown model "${modelId}" for provider "${candidate.provider}". `
-        + 'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+        + 'Configure the provider in providers.json or update the canonical model config in models.json.',
       );
     }
     return {
       model,
-      apiKey: resolveProviderApiKey(candidate.provider, this.config, process.env),
+      apiKey: this.runtime.resolveProviderApiKey(candidate.provider),
     };
   }
 
@@ -242,7 +249,7 @@ export class LLMRequestCapability {
 
   resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {
     if (candidate.requestBaseUrl) return 'request_base_url';
-    if (this.litellmBaseUrl) return 'configured_litellm_proxy';
+    if (this.litellmBaseUrl) return CONFIGURED_ENDPOINT_ROUTE_KIND;
     return 'registered_model';
   }
 

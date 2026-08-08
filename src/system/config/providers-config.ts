@@ -4,7 +4,6 @@ import type { CredentialReference } from '../../boundary/custody/credential-vaul
 import type { SubstrateConfig } from './runtime-config-contracts.js';
 import {
   envCredential,
-  resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
 import { loadRequiredJson } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -53,12 +52,6 @@ interface ProvidersConfigLoadOptions {
 
 export interface ProvidersLoadResult {
   config: ProvidersRuntimeConfig;
-}
-
-export interface ConfiguredModelRoutingProxy {
-  type: 'litellm_proxy';
-  baseUrl: string;
-  apiKeyEnv: string;
 }
 
 function toNonEmptyString(value: unknown): string | undefined {
@@ -339,43 +332,4 @@ export function resolveConfiguredLiteLLMBaseUrl(config: SubstrateConfig): string
   const configured = toNonEmptyString(config.litellmBaseUrl);
   if (configured) return configured;
   return toNonEmptyString(process.env.LITELLM_BASE_URL) ?? null;
-}
-
-export function resolveConfiguredLiteLLMApiKeyReference(
-  config: Pick<SubstrateConfig, 'litellmApiKeyRef'>,
-): CredentialReference {
-  return config.litellmApiKeyRef ?? envCredential('LITELLM_API_KEY');
-}
-
-export function resolveConfiguredLiteLLMApiKeyEnv(
-  config: Pick<SubstrateConfig, 'litellmApiKeyRef'>,
-): string {
-  return resolveConfiguredLiteLLMApiKeyReference(config).envName;
-}
-
-export function resolveConfiguredLiteLLMApiKey(
-  config: Pick<SubstrateConfig, 'credentialVault' | 'litellmApiKeyRef'>,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return resolveOptionalCredentialReference(
-    config.credentialVault,
-    resolveConfiguredLiteLLMApiKeyReference(config),
-    env,
-  );
-}
-
-/**
- * Resolve the configured provider-routing proxy without making upper layers
- * depend on LiteLLM as a conceptual default.
- */
-export function resolveConfiguredModelRoutingProxy(
-  config: SubstrateConfig,
-): ConfiguredModelRoutingProxy | null {
-  const baseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  if (!baseUrl) return null;
-  return {
-    type: 'litellm_proxy',
-    baseUrl,
-    apiKeyEnv: resolveConfiguredLiteLLMApiKeyEnv(config),
-  };
 }

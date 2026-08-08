@@ -25,6 +25,7 @@ import { resolvePromptCacheMechanism } from '../../../../primitives/llm/prompt-c
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import { resolveSystemRoleCapabilityMetadata } from '../../../../primitives/llm/models.js';
+import { CONFIGURED_ENDPOINT_ROUTE_KIND } from '../../../../shared/telemetry/route-kind.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import type {
   CorrelationMetadata,
@@ -841,7 +842,7 @@ export async function assembleTurnPrompt(input: {
         },
       ]),
     providerObservability: {
-      routeKind: providerModel.provider === 'litellm' ? 'configured_litellm_proxy' : 'registered_model',
+      routeKind: providerModel.provider === 'litellm' ? CONFIGURED_ENDPOINT_ROUTE_KIND : 'registered_model',
       requestedProvider: providerModel.provider,
       requestedModel: providerModel.id,
       backendProvider: providerModel.provider,

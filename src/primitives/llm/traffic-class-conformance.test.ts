@@ -123,6 +123,10 @@ class RecordingProviderRuntime implements ProviderRuntime {
   getAuth(): Promise<undefined> {
     return Promise.resolve(undefined);
   }
+
+  resolveProviderApiKey(): undefined {
+    return undefined;
+  }
 }
 
 function cannedAssistantMessage(model: Model<Api>, text = 'ok'): AssistantMessage {

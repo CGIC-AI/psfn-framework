@@ -10,7 +10,7 @@ import {
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,
 } from '../types.js';
-import { clamp } from './config.js';
+import { clampWithMidpointNaN } from '../../../shared/utils/numeric.js';
 
 export function parseFactsXml(xml: string): ExtractedFact[] {
   const responseMatch = xml.match(/<response>([\s\S]*?)<\/response>/);
@@ -36,9 +36,9 @@ function parseFactBlock(block: string): ExtractedFact | null {
   const typeStr = extractTag(block, 'type')?.trim().toLowerCase() as MemoryType | undefined;
   if (!typeStr || !VALID_MEMORY_TYPES.includes(typeStr)) return null;
 
-  const importance = clamp(parseFloat(extractTag(block, 'importance') ?? '0.5'), 0, 1);
-  const emotionalValence = clamp(parseFloat(extractTag(block, 'emotional_valence') ?? '0'), -1, 1);
-  const confidence = clamp(parseFloat(extractTag(block, 'confidence') ?? '0.7'), 0, 1);
+  const importance = clampWithMidpointNaN(parseFloat(extractTag(block, 'importance') ?? '0.5'), 0, 1);
+  const emotionalValence = clampWithMidpointNaN(parseFloat(extractTag(block, 'emotional_valence') ?? '0'), -1, 1);
+  const confidence = clampWithMidpointNaN(parseFloat(extractTag(block, 'confidence') ?? '0.7'), 0, 1);
 
   const tagsStr = extractTag(block, 'tags') ?? '';
   const tags = tagsStr

@@ -3,6 +3,17 @@ export function clamp(value: unknown, min: number, max: number): number {
   return Math.max(min, Math.min(max, candidate));
 }
 
+/**
+ * Clamp a number between `min` and `max`, mapping `NaN` to the midpoint
+ * `(min + max) / 2`. Preserves the historical memory-domain tool/extraction
+ * behavior where a missing or unparseable numeric tool argument should resolve
+ * to a neutral default rather than the shared `clamp` fallback of `0`.
+ */
+export function clampWithMidpointNaN(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return (min + max) / 2;
+  return Math.max(min, Math.min(max, value));
+}
+
 export function clampUnit(value: unknown): number;
 export function clampUnit(value: unknown, fallback: number): number;
 export function clampUnit(value: unknown, fallback: undefined): number | undefined;

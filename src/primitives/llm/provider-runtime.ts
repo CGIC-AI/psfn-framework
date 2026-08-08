@@ -1,25 +1,29 @@
 // ── Provider Runtime Boundary ──
 // Repository-owned seam over the upstream pi-ai provider dispatch API.
-// Current implementation delegates to @mariozechner/pi-ai 0.73.1 globals;
-// the later package upgrade replaces this adapter without touching call sites.
+// The implementation owns one gateway-scoped Models collection; all pi-ai
+// construction and provider registration lives here so call sites depend on
+// this boundary instead of upstream globals.
 
 import {
-  completeSimple,
-  streamSimple,
-  getModels,
-  getProviders,
-  getEnvApiKey,
-} from '@mariozechner/pi-ai';
+  createModels,
+  createProvider,
+  envApiKeyAuth,
+  type Models,
+  type MutableModels,
+} from '@earendil-works/pi-ai';
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type {
   Api,
+  AuthResult,
+  AssistantMessage,
   AssistantMessageEvent,
   Context as PiContext,
-  KnownProvider,
   Model,
   SimpleStreamOptions,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
-export type ProviderRuntimeCompleteResult = Awaited<ReturnType<typeof completeSimple>>;
+export type ProviderRuntimeCompleteResult = AssistantMessage;
 
 export interface ProviderRuntime {
   /**
@@ -41,33 +45,76 @@ export interface ProviderRuntime {
   ): AsyncIterable<AssistantMessageEvent>;
 
   /**
-   * Enumerate built-in provider identifiers known to the runtime.
+   * Enumerate provider identifiers registered in the runtime.
    */
-  getProviders(): readonly KnownProvider[];
+  getProviders(): readonly string[];
 
   /**
-   * Enumerate models registered for a built-in provider.
+   * Enumerate models registered for a provider by id.
    */
-  getModels(provider: KnownProvider): readonly Model<Api>[];
+  getModels(provider: string): readonly Model<Api>[];
 
-  /**
-   * Resolve a provider API key from the process environment.
-   * This is a fallback; canonical credential resolution belongs in the vault.
-   */
-  getEnvApiKey(provider: string): string | undefined;
+  /** Resolve provider-scoped auth through the runtime-owned Models collection. */
+  getAuth(provider: string | Model<Api>): Promise<AuthResult | undefined>;
+}
+
+function asMutableModels(models: Models): MutableModels {
+  if (!('setProvider' in models)) {
+    throw new Error('Provider runtime requires a MutableModels collection');
+  }
+  return models as MutableModels;
+}
+
+function registerOpenAICompatibleEndpointProvider(
+  models: MutableModels,
+  providerId: string,
+  displayName: string,
+  envApiKeyNames: readonly string[],
+): void {
+  models.setProvider(
+    createProvider({
+      id: providerId,
+      name: displayName,
+      auth: {
+        apiKey: envApiKeyAuth(`${displayName} API key`, envApiKeyNames),
+      },
+      models: [],
+      api: openAICompletionsApi(),
+    }),
+  );
 }
 
 /**
- * Current adapter: delegates directly to the pinned @mariozechner/pi-ai
- * globals. This is the only production module that imports those globals.
+ * Register the OpenAI-compatible endpoint providers that PSFN historically
+ * routed by model `provider` id. These have no static catalog; models are
+ * supplied per-request through {@link createModel} / {@link createOpenAICompatibleEndpointModel}.
+ * This preserves explicit configured endpoint behavior while the migration to
+ * typed generic providers proceeds in later beads.
+ */
+function registerLegacyEndpointProviders(models: MutableModels): void {
+  registerOpenAICompatibleEndpointProvider(models, 'litellm', 'LiteLLM', ['LITELLM_API_KEY']);
+  registerOpenAICompatibleEndpointProvider(models, 'local_endpoint', 'Local endpoint', []);
+}
+
+/**
+ * Gateway-owned pi-ai runtime. Holds one Models collection and delegates
+ * stream/completion/lookup calls to it. The default constructor registers
+ * all built-in providers; callers may also inject a pre-built Models instance.
  */
 export class PiProviderRuntime implements ProviderRuntime {
+  private readonly models: MutableModels;
+
+  constructor(models?: Models) {
+    this.models = models ? asMutableModels(models) : builtinModels();
+    registerLegacyEndpointProviders(this.models);
+  }
+
   complete(
     model: Model<any>,
     context: PiContext,
     options?: SimpleStreamOptions,
   ): Promise<ProviderRuntimeCompleteResult> {
-    return completeSimple(model, context, options);
+    return this.models.completeSimple(model, context, options);
   }
 
   stream(
@@ -75,18 +122,28 @@ export class PiProviderRuntime implements ProviderRuntime {
     context: PiContext,
     options?: SimpleStreamOptions,
   ): AsyncIterable<AssistantMessageEvent> {
-    return streamSimple(model, context, options);
+    return this.models.streamSimple(model, context, options);
   }
 
-  getProviders(): readonly KnownProvider[] {
-    return getProviders();
+  getProviders(): readonly string[] {
+    return this.models.getProviders().map((provider) => provider.id);
   }
 
-  getModels(provider: KnownProvider): readonly Model<Api>[] {
-    return getModels(provider);
+  getModels(provider: string): readonly Model<Api>[] {
+    return this.models.getModels(provider);
   }
 
-  getEnvApiKey(provider: string): string | undefined {
-    return getEnvApiKey(provider) ?? undefined;
+  getAuth(provider: string | Model<Api>): Promise<AuthResult | undefined> {
+    return typeof provider === 'string'
+      ? this.models.getAuth(provider)
+      : this.models.getAuth(provider);
   }
+}
+
+/**
+ * Factory for tests and composition that need an empty, mutable Models
+ * collection without built-in providers registered.
+ */
+export function createEmptyProviderRuntime(): PiProviderRuntime {
+  return new PiProviderRuntime(createModels());
 }

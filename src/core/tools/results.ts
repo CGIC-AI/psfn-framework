@@ -1,5 +1,5 @@
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
-import type { TextContent } from '@mariozechner/pi-ai';
+import type { TextContent } from '@earendil-works/pi-ai';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   renderSystemLanguageTemplate,

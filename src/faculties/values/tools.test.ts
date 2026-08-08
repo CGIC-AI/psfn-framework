@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
-import type { TextContent } from '@mariozechner/pi-ai';
+import type { TextContent } from '@earendil-works/pi-ai';
 import { ValuesJournalStore } from './store.js';
 import { createOrientTool } from '../core-memory/tools.js';
 

@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import { redactSecretsInValue } from '../../shared/diagnostics/redaction.js';
 import { isRecord } from '../../shared/utils/types.js';
 

@@ -10,7 +10,7 @@
 
 import { Agent } from '../../boundary/pi-agent/index.js';
 import type { AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
-import type { UserMessage } from '@mariozechner/pi-ai';
+import type { UserMessage } from '@earendil-works/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
 import {

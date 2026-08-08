@@ -86,7 +86,7 @@ export default [
         {
           patterns: [
             {
-              group: ['@mariozechner/pi-agent-core', '@mariozechner/pi-agent-core/*'],
+              group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
               message:
                 'Import pi-agent-core symbols from src/boundary/pi-agent (the version-coupling boundary), not from the package directly.',
             },

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fromPartial } from '@total-typescript/shoehorn';
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import { EventBus } from '../../shared/event-bus.js';
 import { executeToolCallsWithScheduler } from '../agent/tool-call-scheduler.js';
 import type {

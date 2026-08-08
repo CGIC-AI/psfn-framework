@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { UserMessage, AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { UserMessage, AssistantMessage, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import type { PromptLayer } from '../identity/prompt-types.js';
@@ -267,6 +267,32 @@ describe('convertToLlm', () => {
 
   it('handles empty message array', () => {
     expect(convertToLlm([])).toEqual([]);
+  });
+
+  it('rejects upstream harness custom messages without a PSFN type discriminator', () => {
+    const message = {
+      role: 'custom',
+      customType: 'harness-note',
+      content: 'must not cross the model boundary implicitly',
+      display: false,
+      timestamp: NOW,
+    } as AgentMessage;
+
+    expect(() => convertToLlm([message])).toThrow('Unsupported agent message role "custom"');
+  });
+
+  it('rejects upstream harness execution messages at the model boundary', () => {
+    const message = {
+      role: 'bashExecution',
+      command: 'true',
+      output: '',
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: NOW,
+    } as AgentMessage;
+
+    expect(() => convertToLlm([message])).toThrow('Unsupported agent message role "bashExecution"');
   });
 });
 

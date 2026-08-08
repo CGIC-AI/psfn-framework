@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import {
   createToolCallExecutionGuard,

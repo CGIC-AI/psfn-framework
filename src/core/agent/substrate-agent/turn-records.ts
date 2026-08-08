@@ -1,5 +1,5 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
-import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, TextContent, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';

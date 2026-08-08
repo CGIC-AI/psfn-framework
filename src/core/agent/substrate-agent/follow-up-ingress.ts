@@ -6,7 +6,7 @@
 
 import type { Agent } from '../../../boundary/pi-agent/index.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { UserMessage } from '@mariozechner/pi-ai';
+import type { UserMessage } from '@earendil-works/pi-ai';
 import type { TurnRunReservation } from './turn-run-reservation.js';
 import type { TurnQueueIngressCoordinator } from './turn-queue-ingress.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';

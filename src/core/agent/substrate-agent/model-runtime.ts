@@ -1,4 +1,4 @@
-import type { Model } from '@mariozechner/pi-ai';
+import type { Model } from '@earendil-works/pi-ai';
 import type { MessageModelOverride, ModelPurpose, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';

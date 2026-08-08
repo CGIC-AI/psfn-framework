@@ -8,7 +8,7 @@ import { Type } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult, AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
-import type { TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { TextContent, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { PROCESS_TERMINATION_GRACE_TIMEOUT_MS } from '../../shared/process-termination-policy.js';

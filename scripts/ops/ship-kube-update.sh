@@ -252,7 +252,7 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   NEW_HASH="$(docker run --rm --platform "$PLATFORM" --entrypoint cat "${IMAGE_NAME}:${TAG}" /app/contract-hash.txt | tr -d '[:space:]')"
   [[ -n "$NEW_HASH" ]] || { echo "FAIL: image carries no contract hash" >&2; exit 1; }
   docker run --rm --platform "$PLATFORM" --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
-    "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
+    "grep -q toolCallBlocksByIndex /app/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js \
      && test -f /app/config/intake-l1-rules.json \
      && find /app/skills -type f -name SKILL.md -print -quit | grep -q . \
      && test -f /app/deploy/helm/psfn/Chart.yaml \

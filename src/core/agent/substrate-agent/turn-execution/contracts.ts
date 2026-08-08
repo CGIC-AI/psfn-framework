@@ -1,5 +1,5 @@
 import type { Agent, AgentMessage, AgentTool } from '../../../../boundary/pi-agent/index.js';
-import type { AssistantMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EventBus, EventMap } from '../../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../../shared/telemetry/cost-telemetry-port.js';
 import type {

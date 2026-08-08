@@ -7,7 +7,7 @@ import type {
   ToolCall,
   ToolResultMessage,
   UserMessage,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { ContextMessage } from '../../shared/contracts/runtime-base.js';
 
 export type PiChatMessage = UserMessage | AssistantMessage | ToolResultMessage;

@@ -1,5 +1,5 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import type { UserMessage } from '@mariozechner/pi-ai';
+import type { UserMessage } from '@earendil-works/pi-ai';
 import { describe, expect, it } from 'vitest';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
 import type { SystemNoteMessage } from '../../messages.js';

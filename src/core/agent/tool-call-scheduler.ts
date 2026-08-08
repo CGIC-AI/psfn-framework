@@ -1,6 +1,6 @@
-import { validateToolArguments } from '@mariozechner/pi-ai';
+import { validateToolArguments } from '@earendil-works/pi-ai';
 import type { AgentMessage, AgentTool, AgentToolResult } from '../../boundary/pi-agent/index.js';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { ScheduledAgentEvent } from './agent-loop-events.js';
 import type { ToolCallOutcome } from '../../shared/contracts/runtime.js';
 import {

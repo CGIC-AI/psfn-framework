@@ -1,4 +1,4 @@
-import type { AssistantMessage, TextContent } from '@mariozechner/pi-ai';
+import type { AssistantMessage, TextContent } from '@earendil-works/pi-ai';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 interface AgentStateRuntimeLogger {

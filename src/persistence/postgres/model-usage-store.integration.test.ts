@@ -45,7 +45,7 @@ const piMocks = vi.hoisted(() => ({
   completeSimple: vi.fn(),
 }));
 
-vi.mock('@mariozechner/pi-ai', async (importOriginal) => ({
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...await importOriginal<Record<string, unknown>>(),
   completeSimple: piMocks.completeSimple,
 }));

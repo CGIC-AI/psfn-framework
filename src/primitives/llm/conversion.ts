@@ -4,7 +4,7 @@ import type {
   Context as PiContext,
   TextContent as TextBlock,
   ThinkingContent as ThinkingBlock,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { ContextMessage, LLMContext, ToolSchema } from '../../shared/contracts/runtime.js';
 import {
   contextMessagesToPiMessages,

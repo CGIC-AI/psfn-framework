@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
-import type { Context } from '@mariozechner/pi-ai';
+import type { Context } from '@earendil-works/pi-ai';
 import type { CanonicalModelRegistry, CompletionPurpose, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
 import {
   deriveChildIcpConversationCostCorrelation,
@@ -33,13 +33,50 @@ const mocks = vi.hoisted(() => ({
   getEnvApiKey: vi.fn(),
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', () => ({
   getModel: mocks.getModel,
   getModels: mocks.getModels,
   getProviders: mocks.getProviders,
   completeSimple: mocks.completeSimple,
   streamSimple: mocks.streamSimple,
   getEnvApiKey: mocks.getEnvApiKey,
+  createProvider: vi.fn(() => ({
+    id: 'litellm',
+    name: 'LiteLLM',
+    getModels: mocks.getModels,
+    streamSimple: mocks.streamSimple,
+    completeSimple: mocks.completeSimple,
+  })),
+  envApiKeyAuth: vi.fn(() => ({ apiKey: { name: 'Test API key', resolve: vi.fn() } })),
+}));
+
+function createMockModels(): {
+  getProviders: () => [];
+  getModels: typeof mocks.getModels;
+  getModel: typeof mocks.getModel;
+  streamSimple: typeof mocks.streamSimple;
+  completeSimple: typeof mocks.completeSimple;
+  setProvider: () => void;
+} {
+  return {
+    getProviders: () => [],
+    getModels: mocks.getModels,
+    getModel: mocks.getModel,
+    streamSimple: mocks.streamSimple,
+    completeSimple: mocks.completeSimple,
+    setProvider: () => {},
+  };
+}
+
+vi.mock('@earendil-works/pi-ai/providers/all', () => ({
+  builtinModels: () => createMockModels(),
+}));
+
+vi.mock('@earendil-works/pi-ai/api/openai-completions.lazy', () => ({
+  openAICompletionsApi: () => ({
+    streamSimple: mocks.streamSimple,
+    completeSimple: mocks.completeSimple,
+  }),
 }));
 
 import {

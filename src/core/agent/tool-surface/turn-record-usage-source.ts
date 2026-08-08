@@ -147,7 +147,7 @@ export function createTurnRecordToolUsageSource(
         // `page[0]` is the oldest record read.
         if (page.length >= limit && page.length > 0) {
           const oldestRead = page[0];
-          if (oldestRead.startedAt >= sinceMs) truncated = true;
+          if (oldestRead && oldestRead.startedAt >= sinceMs) truncated = true;
         }
 
         for (const record of page) {

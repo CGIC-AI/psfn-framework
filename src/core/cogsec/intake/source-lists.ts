@@ -170,8 +170,10 @@ export function adjustSourceRiskTierForSourceLists(
   }
   const index = INTAKE_SOURCE_RISK_TIERS.indexOf(baseTier);
   if (index <= 0) return { tier: baseTier };
+  const lowered = INTAKE_SOURCE_RISK_TIERS[index - 1];
+  if (!lowered) return { tier: baseTier };
   return {
-    tier: INTAKE_SOURCE_RISK_TIERS[index - 1],
+    tier: lowered,
     adjustment: { match, from: baseTier, kind: 'lowered_one_step' },
   };
 }

@@ -289,7 +289,7 @@ function writeNegotiatedJson(
     if (ifNoneMatchSatisfied(req.headers['if-none-match'], etag)) {
       const notModifiedHeaders: Record<string, string> = {
         ETag: etag,
-        Vary: responseHeaders.Vary,
+        Vary: responseHeaders.Vary ?? '',
       };
       if (responseHeaders['Cache-Control']) {
         notModifiedHeaders['Cache-Control'] = responseHeaders['Cache-Control'];
@@ -329,7 +329,8 @@ function selectJsonCompressionEncoding(req: IncomingMessage): JsonCompressionEnc
   const accepted = new Map<string, number>();
   for (const part of header.split(',')) {
     const [rawEncoding, ...rawParams] = part.trim().split(';');
-    const encoding = rawEncoding.trim().toLowerCase();
+    const encoding = rawEncoding?.trim().toLowerCase();
+    if (!encoding) continue;
     if (!encoding) continue;
     const qParam = rawParams
       .map(param => param.trim())

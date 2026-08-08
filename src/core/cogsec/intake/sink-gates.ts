@@ -315,7 +315,20 @@ export function evaluateEgressTrifecta(
   }
 
   let enforcement: IntakeTrifectaEnforcement = 'soft';
-  let strongestTier: IntakeSourceRiskTier = contentInPath[0].sourceRiskTier;
+  const firstEnvelope = contentInPath[0];
+  if (!firstEnvelope) {
+    return {
+      triggered: false,
+      enforcement: null,
+      verdict: 'allow',
+      allowed: true,
+      reviewRequired: false,
+      mode,
+      reason: `trifecta evaluation could not resolve content path for ${input.egressDescription}`,
+      envelopeIds,
+    };
+  }
+  let strongestTier: IntakeSourceRiskTier = firstEnvelope.sourceRiskTier;
   for (const envelope of contentInPath) {
     if (trifectaEnforcementForTier(policy, envelope.sourceRiskTier) === 'hard') {
       enforcement = 'hard';

@@ -315,7 +315,9 @@ const postgresContactLifecycleRecoveryOperations: PostgresContactOperationMap = 
         WHERE intent_id = $1
         RETURNING *
       `, [input.intentId, nextRetryCount, manualHold, reason]);
-      return outcomeForIntentRow(updated.rows[0]);
+      const updatedRow = updated.rows[0];
+      if (!updatedRow) throw new Error('Contact lifecycle recovery update returned no row');
+      return outcomeForIntentRow(updatedRow);
     });
   },
 

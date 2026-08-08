@@ -25,6 +25,6 @@ export function resolveSharedSatelliteFatigueEligibility(input: {
     channelId,
     limit: 1,
   }).events;
-  const latest = events.length > 0 ? events[0].event : undefined;
+  const latest = events.length > 0 ? events[0]?.event : undefined;
   return { fatigueAllows: latest?.hardState !== 'exhausted' };
 }

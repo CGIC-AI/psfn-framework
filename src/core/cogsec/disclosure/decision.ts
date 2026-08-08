@@ -48,7 +48,7 @@ import {
 
 // The most restrictive sensitivity — used as the fail-closed floor for an empty
 // source set and as the auto-shareable ceiling for the private sink.
-const MOST_RESTRICTIVE_SENSITIVITY: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1];
+const MOST_RESTRICTIVE_SENSITIVITY: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1] ?? 'confidential';
 
 /**
  * Per-destination ceiling: the highest effective sensitivity that can be
@@ -75,9 +75,11 @@ const DESTINATION_AUTO_SHAREABLE_CEILING: Record<DisclosureDestinationKind, Sens
  */
 export function maxSensitivity(levels: readonly SensitivityLevel[]): SensitivityLevel {
   if (levels.length === 0) return MOST_RESTRICTIVE_SENSITIVITY;
+  const initial = levels[0];
+  if (!initial) return MOST_RESTRICTIVE_SENSITIVITY;
   return levels.reduce<SensitivityLevel>(
     (highest, level) => (sensitivityOrd(level) > sensitivityOrd(highest) ? level : highest),
-    levels[0],
+    initial,
   );
 }
 

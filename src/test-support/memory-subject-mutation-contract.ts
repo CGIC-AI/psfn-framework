@@ -34,7 +34,7 @@ function memory(id: string, subjectContactId: string, overrides: Partial<PurrMem
     lastAccessed: 1_700_000_000_000,
     accessCount: 0,
     tags: [],
-    sensitivity: 'low',
+    sensitivity: 'public',
     consentFlags: {},
     provenance: { subjectContactId },
     ...overrides,

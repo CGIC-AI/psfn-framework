@@ -13,6 +13,7 @@ export function makeContextManifestFixture(): ContextManifest {
       finalMessageCount: 4,
       compactionSummaryCount: 0,
       continuityEntryCount: 0,
+      historySummaryEntryCount: 0,
     },
     memory: {
       includedCount: 1,

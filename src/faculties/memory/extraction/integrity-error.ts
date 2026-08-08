@@ -16,7 +16,7 @@ export interface ExtractionIntegrityErrorContext {
 
 export class ExtractionIntegrityError extends Error {
   readonly context: ExtractionIntegrityErrorContext;
-  readonly cause: unknown;
+  override readonly cause: unknown;
 
   constructor(message: string, context: ExtractionIntegrityErrorContext, cause: unknown) {
     super(message);

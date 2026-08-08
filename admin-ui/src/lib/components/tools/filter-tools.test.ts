@@ -1,6 +1,9 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import type {
+  AdminToolHealthView,
+  AdminToolInventoryGroup,
+} from '../../types/tools';
 import {
   ALL_TOOL_FILTERS,
   countInventoryTools,
@@ -10,7 +13,10 @@ import {
   hasActiveToolInventoryFilters,
 } from './filter-tools';
 
-function tool(name, overrides = {}) {
+function tool(
+  name: string,
+  overrides: Partial<Omit<AdminToolHealthView, 'name'>> = {},
+): AdminToolHealthView {
   return {
     name,
     description: `${name} description`,
@@ -33,7 +39,7 @@ function tool(name, overrides = {}) {
   };
 }
 
-const groups = [
+const groups: AdminToolInventoryGroup[] = [
   {
     key: 'control_surface',
     title: 'Control Surface',

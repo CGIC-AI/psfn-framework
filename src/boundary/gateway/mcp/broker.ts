@@ -41,7 +41,7 @@ export type McpBrokerErrorCode =
   | 'BROKER_CLOSED';
 
 export class McpBrokerError extends Error {
-  readonly name = 'McpBrokerError';
+  override readonly name = 'McpBrokerError';
 
   constructor(
     readonly code: McpBrokerErrorCode,

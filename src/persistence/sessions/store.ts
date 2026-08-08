@@ -16,10 +16,6 @@ import {
   IMPORT_MANIFEST_FILENAME,
   L0_SESSION_FILE_MAX_BYTES,
   createKeyringIntegrityProvider,
-  normalizeOptionalHmac,
-  normalizeOptionalNonNegativeNumber,
-  normalizeOptionalSessionEntryRole,
-  normalizeOptionalString,
   sanitizeChannelId,
   unsanitizeChannelId,
   type ChannelCache,
@@ -32,7 +28,6 @@ import {
   type SessionFileSeed,
   type SessionStoreOptions,
 } from './store-primitives.js';
-import { inferSessionChannelType } from '../../core/session/session-id.js';
 import {
   type SessionSearchHit,
   supportsKeywordSearch,
@@ -87,7 +82,6 @@ import {
   syncLastMessageMetadataFromEntries,
 } from './store/session-cache-metadata.js';
 import {
-  buildRecentEntriesFingerprint,
   fingerprintSessionJournalChain,
   fullyLoadedSessionChainIsCurrent,
   loadSessionJournalChain,
@@ -108,10 +102,13 @@ import {
   type CogSecL0TombstoneResult,
   type CogSecTombstoneDiagnostic,
 } from './store/cogsec-operations.js';
+import { SessionCursorOperations } from './store/cursor-operations.js';
+import type { LatestSessionSummary, SessionActivitySummary } from './store/cursor-operations.js';
 
 const log = createComponentLogger('SessionStore');
 
-const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
+export type { LatestSessionSummary, SessionActivitySummary } from './store/cursor-operations.js';
+
 export {
   L0_SESSION_FILE_MAX_BYTES,
   sanitizeChannelId,
@@ -137,57 +134,7 @@ export type {
   CogSecTombstoneDiagnostic,
 } from './store/cogsec-operations.js';
 
-export interface LatestSessionSummary {
-  sessionId: string;
-  timestamp: number;
-  channelType?: string;
-  lastRole: SessionEntry['role'];
-}
 
-export interface SessionActivitySummary {
-  sessionId: string;
-  channelId: string;
-  channelType?: string;
-  lastActivityAt: number;
-  messageCount: number;
-  lastRole: SessionEntry['role'];
-  lastAuthorName?: string;
-  lastMessagePreview: string;
-}
-
-type EntriesBeforeReadPlan =
-  | { kind: 'complete'; entries: SessionEntry[] }
-  | {
-      kind: 'archive';
-      channelId: string;
-      filePath: string;
-      beforeId: number;
-      limit: number;
-      tombstones: ReadonlySet<string>;
-      // Load-bearing only for the asynchronous request-time revalidation path
-      // (getEntriesBeforeAsync): a missing fingerprint means an L0 mutation
-      // mid-read cannot be detected, so that path fails closed. The synchronous
-      // getEntriesBefore does not revalidate and reads without it, so this stays
-      // optional here (psfn-framework-k4uei).
-      archiveFingerprint?: string;
-    };
-
-const ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS = Object.freeze({
-  retries: 2,
-});
-
-function entriesBeforeAuthorityMatches(
-  expected: Extract<EntriesBeforeReadPlan, { kind: 'archive' }>,
-  observed: Extract<EntriesBeforeReadPlan, { kind: 'archive' }>,
-): boolean {
-  return expected.channelId === observed.channelId
-    && expected.filePath === observed.filePath
-    && expected.beforeId === observed.beforeId
-    && expected.limit === observed.limit
-    && expected.archiveFingerprint === observed.archiveFingerprint
-    && expected.tombstones.size === observed.tombstones.size
-    && [...expected.tombstones].every(turnId => observed.tombstones.has(turnId));
-}
 
 export {
   TurnRecordEligibilitySnapshotChangedError,
@@ -222,6 +169,7 @@ export class SessionStore implements TranscriptSearchPort {
   private channelIndexFailureLogged = false;
   private readonly tailOperations: SessionTailOperations;
   private readonly cogSecOperations: SessionCogSecOperations;
+  private readonly cursorOperations: SessionCursorOperations;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.maxHotChannels = Math.max(
@@ -248,10 +196,26 @@ export class SessionStore implements TranscriptSearchPort {
     }
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
     this.turnRecordEligibilityFence = options.turnRecordEligibilityFence ?? null;
+    this.cursorOperations = new SessionCursorOperations({
+      sessionsDir: this.sessionsDir,
+      journalRuntime: this.journalRuntime,
+      refreshChannelIndexFromDisk: () => this.refreshChannelIndexFromDisk(),
+      resolveSessionId: (channelId) => this.resolveSessionId(channelId),
+      resolveExistingSession: (channelId) => this.resolveExistingSession(channelId),
+      getLoadedCache: (channelId) => this.getLoadedCache(channelId),
+      loadExistingChannelCache: (channelId) => this.loadExistingChannelCache(channelId),
+      ensureChannelFullyLoaded: (channelId) => this.ensureChannelFullyLoaded(channelId),
+      resolveJournalAuthoritativeTurnTombstones: (params) => this.resolveJournalAuthoritativeTurnTombstones(params),
+      ensureChannelIndexEntry: (sessionId, channelId, filePaths) => this.ensureChannelIndexEntry(sessionId, channelId, filePaths),
+      fullyLoadedCacheIsCurrent: (cache) => this.fullyLoadedCacheIsCurrent(cache),
+      fingerprintArchive: (cache) => this.fingerprintArchive(cache),
+      getChannelIndexEntries: () => [...this.channelIndex.entries()],
+      primeChannelIndexFromDisk: () => this.primeChannelIndexFromDisk(),
+    });
     this.tailOperations = new SessionTailOperations({
       tailCache: options.tailCache ?? null,
       resolveChannelKey: (channelId) => this.resolveSessionId(channelId) ?? channelId,
-      getRecent: this.getRecent.bind(this),
+      getRecent: this.cursorOperations.getRecent.bind(this.cursorOperations),
     });
     this.recoveryAuthoritySnapshotHook = options.recoveryAuthoritySnapshotHook;
     for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
@@ -291,9 +255,55 @@ export class SessionStore implements TranscriptSearchPort {
       resolveJournalAuthoritativeTurnTombstones: this.resolveJournalAuthoritativeTurnTombstones.bind(this),
       syncTranscriptProjectionForChannel: this.syncTranscriptProjectionForChannel.bind(this),
       upsertChannelIndex: this.upsertChannelIndex.bind(this),
-      getEntriesInRange: this.getEntriesInRange.bind(this),
+      getEntriesInRange: this.cursorOperations.getEntriesInRange.bind(this.cursorOperations),
       refreshChannelIndexFromDisk: this.refreshChannelIndexFromDisk.bind(this),
     });
+  }
+
+  // Cursor/query operations
+  getRecent(channelId: string, limit: number): SessionEntry[] {
+    return this.cursorOperations.getRecent(channelId, limit);
+  }
+  getLastEntry(channelId: string): SessionEntry | undefined {
+    return this.cursorOperations.getLastEntry(channelId);
+  }
+  findLatestEntries(
+    channelId: string,
+    predicate: (entry: SessionEntry) => boolean,
+    limit = 1,
+    options: { stopBeforeTimestamp?: number } = {},
+  ): SessionEntry[] {
+    return this.cursorOperations.findLatestEntries(channelId, predicate, limit, options);
+  }
+  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+    return this.cursorOperations.getEntriesBefore(channelId, beforeId, limit);
+  }
+  async getEntriesBeforeAsync(channelId: string, beforeId: number, limit: number): Promise<SessionEntry[]> {
+    return this.cursorOperations.getEntriesBeforeAsync(channelId, beforeId, limit);
+  }
+  getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
+    return this.cursorOperations.getEntriesInRange(channelId, startId, endId);
+  }
+  count(channelId: string): number {
+    return this.cursorOperations.count(channelId);
+  }
+  getCompactionSummaries(channelId: string): CompactionSummary[] {
+    return this.cursorOperations.getCompactionSummaries(channelId);
+  }
+  getSessionActivity(channelId: string): SessionActivitySummary | null {
+    return this.cursorOperations.getSessionActivity(channelId);
+  }
+  listSessionsByRecentActivity(limit = 20, offset = 0): SessionActivitySummary[] {
+    return this.cursorOperations.listSessionsByRecentActivity(limit, offset);
+  }
+  getLatestSessionByTimestamp(): LatestSessionSummary | null {
+    return this.cursorOperations.getLatestSessionByTimestamp();
+  }
+  listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
+    return this.cursorOperations.listChannels();
+  }
+  getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
+    return this.cursorOperations.getRecentDiscordMessageIds(channelId, limit);
   }
   private fingerprintChannelIndex(): string | null {
     try {
@@ -690,46 +700,6 @@ export class SessionStore implements TranscriptSearchPort {
       writer(this.reconcileWriteCache(cache), renewLease)
     ));
   }
-  private readRecentEntriesFromTail(
-    channelId: string,
-    filePaths: readonly string[],
-    limit: number,
-    tombstones: ReadonlySet<string> = new Set(),
-  ): SessionEntry[] {
-    return this.journalRuntime.readRecentEntriesFromTailChain(
-      filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath)),
-      limit,
-      tombstones,
-    );
-  }
-  private readEntriesBeforeFromArchive(
-    channelId: string,
-    filePath: string,
-    beforeId: number,
-    limit: number,
-    tombstones: ReadonlySet<string> = new Set(),
-  ): SessionEntry[] {
-    return this.journalRuntime.readEntriesBefore(
-      this.journalRuntime.openArchive(channelId, filePath),
-      beforeId,
-      limit,
-      tombstones,
-    );
-  }
-  private async readEntriesBeforeFromArchiveAsync(
-    channelId: string,
-    filePath: string,
-    beforeId: number,
-    limit: number,
-    tombstones: ReadonlySet<string> = new Set(),
-  ): Promise<SessionEntry[]> {
-    return await this.journalRuntime.readEntriesBeforeAsync(
-      this.journalRuntime.openArchive(channelId, filePath),
-      beforeId,
-      limit,
-      tombstones,
-    );
-  }
   private fingerprintArchive(cache: ChannelCache): string | null {
     return fingerprintSessionJournalChain(this.journalRuntime, cache);
   }
@@ -761,39 +731,6 @@ export class SessionStore implements TranscriptSearchPort {
   ): void {
     if (!this.transcriptProjection) return;
     this.transcriptProjection.replaceChannelEntries(channelId, entries, options);
-  }
-  private readCachedRecentEntries(
-    cache: ChannelCache,
-    limit: number,
-    archiveFingerprint: string | null,
-  ): SessionEntry[] | null {
-    const cached = cache.recentEntriesByLimit.get(limit);
-    if (!cached) return null;
-    if (cached.fingerprint !== buildRecentEntriesFingerprint(cache)) return null;
-    if (cached.archiveFingerprint !== archiveFingerprint) return null;
-    return [...cached.entries];
-  }
-  private writeCachedRecentEntries(
-    cache: ChannelCache,
-    limit: number,
-    entries: SessionEntry[],
-    archiveFingerprintBeforeRead: string | null,
-  ): void {
-    if (cache.fullyLoaded) return;
-    const archiveFingerprint = this.fingerprintArchive(cache);
-    if (!archiveFingerprint || archiveFingerprint !== archiveFingerprintBeforeRead) {
-      return;
-    }
-    cache.recentEntriesByLimit.set(limit, {
-      fingerprint: buildRecentEntriesFingerprint(cache),
-      archiveFingerprint,
-      entries: [...entries],
-    });
-    while (cache.recentEntriesByLimit.size > MAX_RECENT_ENTRY_CACHE_LIMITS) {
-      const oldestKey = cache.recentEntriesByLimit.keys().next().value;
-      if (oldestKey === undefined) break;
-      cache.recentEntriesByLimit.delete(oldestKey);
-    }
   }
   listLegacyImportManifests(filters: LegacyChatImportManifestFilter = {}): LegacyChatImportManifest[] {
     return listLegacyImportManifests(this.importManifestPath, filters);
@@ -1045,57 +982,6 @@ export class SessionStore implements TranscriptSearchPort {
   rebuildSearchIndex(): void {
     this.backfillTranscriptProjectionFromDisk();
   }
-  getRecent(channelId: string, limit: number): SessionEntry[] {
-    this.refreshChannelIndexFromDisk();
-    if (limit <= 0) return [];
-    this.refreshChannelIndexFromDisk();
-    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    if (cached?.fullyLoaded) {
-      if (this.fullyLoadedCacheIsCurrent(cached)) {
-        if (cached.entries.length <= limit) return [...cached.entries];
-        return cached.entries.slice(-limit);
-      }
-    }
-    const resolved = this.resolveExistingSession(channelId) ?? (cached
-      ? {
-        sessionId,
-        channelId: cached.channelId,
-        filePaths: cached.archivePaths,
-        filePath: cached.resolvedPath,
-      }
-      : null);
-    if (!resolved) return [];
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
-    if (cached) {
-      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
-    }
-    const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
-    if (messageCount === 0) return [];
-    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
-      sessionId: resolved.sessionId,
-      channelId: resolved.channelId,
-      filePaths: resolved.filePaths,
-      cache: cached ?? undefined,
-    });
-    const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
-    const recentCacheHit = cached
-      ? this.readCachedRecentEntries(cached, limit, archiveFingerprintBeforeRead)
-      : null;
-    if (recentCacheHit) {
-      return recentCacheHit;
-    }
-    const recentEntries = this.readRecentEntriesFromTail(
-      resolved.channelId,
-      resolved.filePaths,
-      limit,
-      tombstones,
-    );
-    if (cached) {
-      this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
-    }
-    return recentEntries;
-  }
   /**
    * Drop every in-memory view of the channel and reload it from the archive
    * on disk. Detect-and-heal hook for readers that observe a session window
@@ -1120,231 +1006,7 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessageEntryId: loaded.entries.at(-1)?.id ?? null,
     };
   }
-  getLastEntry(channelId: string): SessionEntry | undefined {
-    const entries = this.getRecent(channelId, 1);
-    return entries[entries.length - 1];
-  }
-  findLatestEntries(
-    channelId: string,
-    predicate: (entry: SessionEntry) => boolean,
-    limit = 1,
-    options: { stopBeforeTimestamp?: number } = {},
-  ): SessionEntry[] {
-    const normalizedLimit = Math.max(0, Math.floor(limit));
-    if (normalizedLimit <= 0) return [];
-    const stopBeforeTimestamp = options.stopBeforeTimestamp;
-    if (stopBeforeTimestamp !== undefined && !Number.isFinite(stopBeforeTimestamp)) {
-      throw new Error('stopBeforeTimestamp must be finite when provided');
-    }
-    const matchesWindow = stopBeforeTimestamp === undefined
-      ? predicate
-      : (entry: SessionEntry): boolean => (
-        entry.timestamp >= stopBeforeTimestamp && predicate(entry)
-      );
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
-    if (cached?.fullyLoaded || (cached?.activeTurnTombstoneCount ?? 0) > 0) {
-      const full = cached?.fullyLoaded ? cached : this.ensureChannelFullyLoaded(channelId);
-      return full ? full.entries.filter(matchesWindow).slice(-normalizedLimit).reverse() : [];
-    }
-    const resolved = cached
-      ? { channelId: cached.channelId, filePath: cached.resolvedPath }
-      : this.resolveExistingSession(channelId);
-    if (!resolved) return [];
-    const found = this.journalRuntime.findLatestEntries(
-      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
-      predicate,
-      normalizedLimit,
-      stopBeforeTimestamp,
-    );
-    if (found) return found;
-    const full = this.ensureChannelFullyLoaded(channelId);
-    return full ? full.entries.filter(matchesWindow).slice(-normalizedLimit).reverse() : [];
-  }
 
-  private prepareEntriesBeforeRead(
-    channelId: string,
-    beforeId: number,
-    limit: number,
-  ): EntriesBeforeReadPlan {
-    this.refreshChannelIndexFromDisk();
-    if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) {
-      return { kind: 'complete', entries: [] };
-    }
-    const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
-    const normalizedLimit = Math.max(0, Math.floor(limit));
-    if (normalizedBeforeId <= 0 || normalizedLimit <= 0) {
-      return { kind: 'complete', entries: [] };
-    }
-
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
-    if (cached?.fullyLoaded) {
-      const current = this.fullyLoadedCacheIsCurrent(cached)
-        ? cached
-        : this.ensureChannelFullyLoaded(channelId);
-      if (!current) return { kind: 'complete', entries: [] };
-      const eligible = current.entries.filter(entry => entry.id < normalizedBeforeId);
-      return {
-        kind: 'complete',
-        entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
-      };
-    }
-
-    const resolved = cached
-      ? {
-        sessionId,
-        channelId: cached.channelId,
-        filePaths: cached.archivePaths,
-        filePath: cached.resolvedPath,
-      }
-      : this.resolveExistingSession(channelId);
-    if (!resolved) return { kind: 'complete', entries: [] };
-    const indexEntry = this.ensureChannelIndexEntry(
-      resolved.sessionId,
-      resolved.channelId,
-      resolved.filePaths,
-    );
-    if (cached && !cached.fullyLoaded) {
-      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
-    }
-    if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) {
-      return { kind: 'complete', entries: [] };
-    }
-
-    const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
-    const indexedTurnTombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
-    // Legacy/incomplete tombstone metadata cannot safely drive a bounded
-    // privacy filter. Fall back to canonical replay only for that stale shape.
-    if (activeTurnTombstoneCount > 0 && indexedTurnTombstones.size !== activeTurnTombstoneCount) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return { kind: 'complete', entries: [] };
-      const eligible = full.entries.filter(entry => entry.id < normalizedBeforeId);
-      return {
-        kind: 'complete',
-        entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
-      };
-    }
-    // The archive fingerprint is only consumed by the asynchronous
-    // request-time revalidation in getEntriesBeforeAsync; a missing fingerprint
-    // is failed closed there, not here. Keeping the check off this shared helper
-    // means the synchronous getEntriesBefore (auto-compaction, ICP projection),
-    // which never revalidates, does not inherit that fail-closed behavior it was
-    // never meant to have (psfn-framework-k4uei).
-    const archiveFingerprint = normalizeOptionalString(indexEntry.archiveFingerprint);
-    return {
-      kind: 'archive',
-      channelId: resolved.channelId,
-      filePath: resolved.filePath,
-      beforeId: normalizedBeforeId,
-      limit: normalizedLimit,
-      tombstones: indexedTurnTombstones,
-      ...(archiveFingerprint ? { archiveFingerprint } : {}),
-    };
-  }
-  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
-    const plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
-    if (plan.kind === 'complete') return plan.entries;
-    return this.readEntriesBeforeFromArchive(
-      plan.channelId,
-      plan.filePath,
-      plan.beforeId,
-      plan.limit,
-      plan.tombstones,
-    );
-  }
-  async getEntriesBeforeAsync(
-    channelId: string,
-    beforeId: number,
-    limit: number,
-  ): Promise<SessionEntry[]> {
-    let plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
-    for (
-      let attempt = 0;
-      attempt <= ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS.retries;
-      attempt += 1
-    ) {
-      if (plan.kind === 'complete') return plan.entries;
-      if (!plan.archiveFingerprint) {
-        // Async request-time reads revalidate the returned page against the
-        // archive fingerprint after the cooperative read (see the retry below).
-        // Without a fingerprint that authority check cannot detect an L0
-        // mutation mid-read, so fail closed here — this is the throw's intended
-        // scope, narrowed off the shared prepareEntriesBeforeRead so the
-        // synchronous path is unaffected (psfn-framework-k4uei).
-        throw new Error(
-          `Cannot establish bounded-read journal authority for L0 session ${channelId}`,
-        );
-      }
-      const entries = await this.readEntriesBeforeFromArchiveAsync(
-        plan.channelId,
-        plan.filePath,
-        plan.beforeId,
-        plan.limit,
-        plan.tombstones,
-      );
-      const observed = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
-      if (observed.kind === 'complete') return observed.entries;
-      if (entriesBeforeAuthorityMatches(plan, observed)) return entries;
-      plan = observed;
-    }
-    throw new Error(
-      `L0 session ${channelId} changed repeatedly during an asynchronous bounded read; `
-      + 'refusing to return a page under stale turn-tombstone authority',
-    );
-  }
-  getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
-    this.refreshChannelIndexFromDisk();
-    if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
-    const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));
-    const normalizedEnd = Math.max(0, Math.floor(Math.max(startId, endId)));
-    if (normalizedEnd < normalizedStart) return [];
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
-    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
-      return cached.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
-    }
-    const resolved = this.resolveExistingSession(channelId) ?? (cached
-      ? {
-        sessionId,
-        channelId: cached.channelId,
-        filePaths: cached.archivePaths,
-      }
-      : null);
-    if (!resolved) return [];
-    const indexEntry = this.ensureChannelIndexEntry(
-      resolved.sessionId,
-      resolved.channelId,
-      resolved.filePaths,
-    );
-    if (cached && !cached.fullyLoaded) {
-      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
-    }
-    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
-      sessionId: resolved.sessionId,
-      channelId: resolved.channelId,
-      filePaths: resolved.filePaths,
-      cache: cached ?? undefined,
-    });
-    if (
-      resolved.filePaths.length === 1
-      && tombstones.size === 0
-      && normalizeOptionalHmac(indexEntry.lastHmac) === null
-    ) {
-      const found = this.journalRuntime.findEntriesInRange(
-        this.journalRuntime.openArchive(resolved.channelId, resolved.filePaths[0]!),
-        normalizedStart,
-        normalizedEnd,
-      );
-      if (found) return found;
-    }
-    return this.journalRuntime.readEntriesInRangeFromChain(
-      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
-      normalizedStart,
-      normalizedEnd,
-      tombstones,
-    );
-  }
   async applyCogSecTombstones(options: CogSecL0TombstoneOptions): Promise<CogSecL0TombstoneResult> {
     return this.cogSecOperations.applyCogSecTombstones(options);
   }
@@ -1370,54 +1032,6 @@ export class SessionStore implements TranscriptSearchPort {
   ): Promise<CogSecCompactionRegenerationResult> {
     return this.cogSecOperations.applyCogSecCompactionRegenerations(options);
   }
-  getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
-    const entries = this.getRecent(channelId, limit);
-    const ids = entries
-      .map((entry) => entry.discordMessageId)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    return new Set(ids);
-  }
-  count(channelId: string): number {
-    this.refreshChannelIndexFromDisk();
-    let cached = this.getLoadedCache(channelId);
-    // Frozen fullyLoaded caches must not serve counts across a sibling
-    // process's journal rewrite (same fingerprint gate as entry reads).
-    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
-      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
-    }
-    if (cached) return cached.messageCount;
-    const resolved = this.resolveExistingSession(channelId);
-    if (!resolved) return 0;
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
-    return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
-  }
-  getCompactionSummaries(channelId: string): CompactionSummary[] {
-    this.refreshChannelIndexFromDisk();
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
-    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
-      return [...cached.compactions];
-    }
-    const resolved = this.resolveExistingSession(channelId) ?? (cached
-      ? { sessionId, channelId: cached.channelId, filePaths: cached.archivePaths }
-      : null);
-    if (!resolved) return [];
-    const indexEntry = this.ensureChannelIndexEntry(
-      resolved.sessionId,
-      resolved.channelId,
-      resolved.filePaths,
-    );
-    if (cached && !cached.fullyLoaded) {
-      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
-    }
-    const compactionArchivePaths = new Set(
-      (indexEntry.compactionFilenames ?? []).map(filename => join(this.sessionsDir, filename)),
-    );
-    return this.journalRuntime.readCompactionSummariesFromChain(
-      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
-      compactionArchivePaths,
-    );
-  }
   /**
    * Longest prefix that a scalar compaction boundary may safely cover.
    * Read projections override this when they can temporarily hide a row that
@@ -1428,105 +1042,6 @@ export class SessionStore implements TranscriptSearchPort {
     proposedEntries: readonly SessionEntry[],
   ): SessionEntry[] {
     return [...proposedEntries];
-  }
-  getSessionActivity(channelId: string): SessionActivitySummary | null {
-    this.refreshChannelIndexFromDisk();
-    const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    let cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
-    // Same fingerprint gate as count(): a frozen fullyLoaded cache must not
-    // serve activity metadata across a sibling process's journal rewrite.
-    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
-      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
-    }
-    if (cached && cached.messageCount > 0 && cached.lastMessageTimestamp > 0 && cached.lastMessageRole) {
-      return {
-        sessionId,
-        channelId: cached.channelId,
-        channelType: inferSessionChannelType(cached.channelId),
-        lastActivityAt: cached.lastMessageTimestamp,
-        messageCount: cached.messageCount,
-        lastRole: cached.lastMessageRole,
-        lastAuthorName: cached.lastMessageAuthorName,
-        lastMessagePreview: cached.lastMessagePreview,
-      };
-    }
-
-    const resolved = this.resolveExistingSession(channelId);
-    if (!resolved) return null;
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
-    const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
-    const lastActivityAt = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
-    const lastRole = normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole);
-    if (messageCount <= 0 || lastActivityAt <= 0 || !lastRole) return null;
-    return {
-      sessionId,
-      channelId: resolved.channelId,
-      channelType: inferSessionChannelType(resolved.channelId),
-      lastActivityAt,
-      messageCount,
-      lastRole,
-      lastAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
-      lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
-    };
-  }
-  listSessionsByRecentActivity(limit = 20, offset = 0): SessionActivitySummary[] {
-    if (limit <= 0 || offset < 0) return [];
-    this.primeChannelIndexFromDisk();
-    const sessions: SessionActivitySummary[] = [];
-
-    // Ensuring a stale entry may atomically replace the backing Map. Iterate a
-    // stable snapshot so that replacement cannot revisit already-seen rows.
-    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
-      const logicalChannelId = indexedChannelId(sessionId, indexEntry);
-      const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
-      if (filePaths.some(filePath => !existsSync(filePath))) continue;
-
-      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePaths);
-      const messageCount = normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0;
-      if (messageCount <= 0) continue;
-
-      const summary = this.getSessionActivity(sessionId);
-      if (!summary) continue;
-      sessions.push(summary);
-    }
-
-    sessions.sort((left, right) => {
-      if (right.lastActivityAt !== left.lastActivityAt) {
-        return right.lastActivityAt - left.lastActivityAt;
-      }
-      return left.sessionId.localeCompare(right.sessionId);
-    });
-
-    return sessions.slice(offset, offset + limit);
-  }
-  getLatestSessionByTimestamp(): LatestSessionSummary | null {
-    const latest = this.listSessionsByRecentActivity(1)[0];
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- array index may be undefined at runtime
-    if (!latest) return null;
-    return {
-      sessionId: latest.sessionId,
-      timestamp: latest.lastActivityAt,
-      channelType: latest.channelType,
-      lastRole: latest.lastRole,
-    };
-  }
-  listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
-    this.primeChannelIndexFromDisk();
-    const channels: Array<{ sessionId: string; channelId: string; messageCount: number }> = [];
-    // `ensureChannelIndexEntry` can replace the local Map after an index
-    // repair; snapshot iteration prevents duplicate rows in this one listing.
-    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
-      const logicalChannelId = indexedChannelId(sessionId, indexEntry);
-      const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
-      if (filePaths.some(filePath => !existsSync(filePath))) continue;
-      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePaths);
-      channels.push({
-        sessionId,
-        channelId: logicalChannelId,
-        messageCount: normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0,
-      });
-    }
-    return channels;
   }
   insertCompaction(channelId: string, summary: string, coveredUpTo: number): void {
     const now = Date.now();

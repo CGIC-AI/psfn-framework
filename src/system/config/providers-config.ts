@@ -316,4 +316,3 @@ export function applyProvidersRuntimeConfig(
     config.openRouterModelsApiUrl = providers.openRouterModelsApiUrl;
   }
 }
-

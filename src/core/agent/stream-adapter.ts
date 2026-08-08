@@ -1267,4 +1267,3 @@ function toRoutingPurpose(purpose: ModelPurpose): RoutingPurpose {
   }
   return purpose;
 }
-

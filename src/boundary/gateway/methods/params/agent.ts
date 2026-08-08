@@ -2,12 +2,16 @@ import { Type } from '@sinclair/typebox';
 
 import type { SatelliteResponseEligibilityRpcParams } from '../../../../channels/api/types.js';
 import { CHANNEL_TYPES } from '../../../../shared/contracts/channel-types.js';
+import { parseTurnPerformanceEvent } from '../../../../shared/telemetry/turn-performance.js';
+import type { TurnPerformanceIngestParams } from '../../protocol.js';
 import {
   agentDecoder,
   attachment,
   checkedDecoder,
   emptyParams,
   enumSchema,
+  nonEmptyCanonicalString,
+  nonNegativeInteger,
   optionalBoolean,
   optionalNumber,
   optionalString,
@@ -17,9 +21,9 @@ import {
 } from './schema.js';
 
 const voiceFrame = {
-  correlationId: Type.String(),
-  streamId: Type.String(),
-  sequence: Type.Integer(),
+  correlationId: nonEmptyCanonicalString,
+  streamId: nonEmptyCanonicalString,
+  sequence: nonNegativeInteger,
   metadata: Type.Optional(unknownRecord),
 };
 const substrateMessage = strictObject({
@@ -42,13 +46,13 @@ const apiPrincipal = strictObject({
 });
 
 export const agentMethodParamDecoders = {
-  'memory.deletion.snapshot': agentDecoder('memory.deletion.snapshot', strictObject({ proposalId: Type.String() })),
-  'memory.deletion.partner_alerted': agentDecoder('memory.deletion.partner_alerted', strictObject({ proposalId: Type.String() })),
+  'memory.deletion.snapshot': agentDecoder('memory.deletion.snapshot', strictObject({ proposalId: nonEmptyCanonicalString })),
+  'memory.deletion.partner_alerted': agentDecoder('memory.deletion.partner_alerted', strictObject({ proposalId: nonEmptyCanonicalString })),
   'memory.deletion.resolve': agentDecoder('memory.deletion.resolve', strictObject({
-    proposalId: Type.String(), decision: enumSchema(['approve', 'deny']), operatorId: Type.String(),
+    proposalId: nonEmptyCanonicalString, decision: enumSchema(['approve', 'deny']), operatorId: nonEmptyCanonicalString,
   })),
   'contact.authority.snapshot': agentDecoder('contact.authority.snapshot', strictObject({
-    contactId: Type.String(), providerSubjectId: Type.String(),
+    contactId: nonEmptyCanonicalString, providerSubjectId: nonEmptyCanonicalString,
   })),
   'voice.handleMessage': agentDecoder('voice.handleMessage', strictObject({ message: substrateMessage })),
   'voice.stream.start': agentDecoder('voice.stream.start', strictObject({ ...voiceFrame, message: substrateMessage })),
@@ -56,28 +60,29 @@ export const agentMethodParamDecoders = {
   'voice.stream.end': agentDecoder('voice.stream.end', strictObject(voiceFrame)),
   'voice.stream.cancel': agentDecoder('voice.stream.cancel', strictObject({ ...voiceFrame, reason: optionalString })),
   'api.chat.completion': agentDecoder('api.chat.completion', strictObject({
-    requestId: Type.String(), request: unknownRecord, principal: apiPrincipal, headers: stringRecord,
+    requestId: nonEmptyCanonicalString, request: unknownRecord, principal: apiPrincipal, headers: stringRecord,
     clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: Type.Optional(unknownRecord),
     hubDeviceAttachment: Type.Optional(unknownRecord), companionUiCapability: Type.Optional(unknownRecord),
     timeoutMs: optionalNumber, performance: Type.Optional(strictObject({
       receivedMonotonicAtMs: Type.Number(), receivedTimestampMs: Type.Number(),
     })),
   })),
-  'api.chat.cancel': agentDecoder('api.chat.cancel', strictObject({ requestId: Type.String() })),
+  'api.chat.cancel': agentDecoder('api.chat.cancel', strictObject({ requestId: nonEmptyCanonicalString })),
   'api.companion-ui.shard.action': agentDecoder('api.companion-ui.shard.action', strictObject({
-    requestId: Type.String(), principal: apiPrincipal, headers: stringRecord,
+    requestId: nonEmptyCanonicalString, principal: apiPrincipal, headers: stringRecord,
     clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: unknownRecord,
     hubDeviceAttachment: unknownRecord, companionUiCapability: unknownRecord,
   })),
-  'shard.directory.owner': agentDecoder('shard.directory.owner', strictObject({ shardId: Type.String() })),
+  'shard.directory.owner': agentDecoder('shard.directory.owner', strictObject({ shardId: nonEmptyCanonicalString })),
   'api.telemetry.ingest': agentDecoder('api.telemetry.ingest', strictObject({ event: unknownRecord })),
   'api.health': agentDecoder('api.health', emptyParams),
   'satellite.response.eligibility': checkedDecoder<SatelliteResponseEligibilityRpcParams>(
     'satellite.response.eligibility', strictObject({
-    canonicalContactId: Type.String(), channelId: Type.String(),
+    canonicalContactId: nonEmptyCanonicalString, channelId: nonEmptyCanonicalString,
     }),
   ),
-  'telemetry.turn.performance': agentDecoder('telemetry.turn.performance', strictObject({
-    event: unknownRecord,
-  })),
+  'telemetry.turn.performance': (params: unknown): TurnPerformanceIngestParams => {
+    const wrapper = agentDecoder('telemetry.turn.performance', strictObject({ event: unknownRecord }))(params);
+    return { event: parseTurnPerformanceEvent(wrapper.event) };
+  },
 } as const;

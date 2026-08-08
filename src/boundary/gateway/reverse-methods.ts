@@ -16,6 +16,7 @@ import type {
 } from '../../channels/api/types.js';
 import type {
   VoiceHandleMessageResult,
+  VoiceStreamStartParams,
   VoiceStreamChunkParams,
   VoiceStreamEndParams,
   VoiceStreamCancelParams,
@@ -28,6 +29,8 @@ import type {
   MemoryDeletionProposalSnapshotResult,
   MemoryDeletionResolveParams,
   MemoryDeletionResolveResult,
+  TurnPerformanceIngestParams,
+  TurnPerformanceIngestResult,
 } from './protocol.js';
 import type {
   ContactAuthoritySnapshotRequest,
@@ -53,7 +56,7 @@ import type { RpcParamsDecoder } from './rpc-param-decoder.js';
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult>;
-  handleVoiceStreamStart(params: unknown): VoiceStreamAckResult;
+  handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult;
   handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult;
   handleVoiceStreamEnd(params: VoiceStreamEndParams): Promise<VoiceStreamEndResult>;
   handleVoiceStreamCancel(params: VoiceStreamCancelParams): Promise<VoiceStreamCancelResult>;
@@ -68,7 +71,7 @@ export interface ReverseGatewayMethodRuntime {
   handleSatelliteResponseEligibility(
     params: SatelliteResponseEligibilityRpcParams,
   ): Promise<SatelliteResponseEligibilityRpcResult>;
-  handleTurnPerformance(params: unknown): Promise<unknown>;
+  handleTurnPerformance(params: TurnPerformanceIngestParams): Promise<TurnPerformanceIngestResult>;
   handleContactAuthoritySnapshot(
     params: ContactAuthoritySnapshotRequest,
   ): Promise<VerifiedDiscordContactAuthoritySnapshot | null>;

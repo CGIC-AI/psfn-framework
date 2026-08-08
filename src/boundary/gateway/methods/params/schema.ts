@@ -18,6 +18,11 @@ export const optionalString = Type.Optional(Type.String());
 export const optionalNumber = Type.Optional(Type.Number());
 export const optionalInteger = Type.Optional(Type.Integer());
 export const optionalBoolean = Type.Optional(Type.Boolean());
+export const nonEmptyCanonicalString = Type.String({
+  minLength: 1,
+  pattern: '^\\S(?:.*\\S)?$',
+});
+export const nonNegativeInteger = Type.Integer({ minimum: 0 });
 
 export function strictObject(properties: TProperties): TSchema {
   return Type.Object(properties, { additionalProperties: false });

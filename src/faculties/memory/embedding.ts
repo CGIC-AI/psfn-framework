@@ -8,12 +8,9 @@ import type {
 } from '../../boundary/custody/credential-vault.js';
 import {
   resolveHuggingFaceToken,
+  resolveOptionalCredentialReference,
   resolveOptionalEnvCredential,
 } from '../../boundary/custody/credential-vault.js';
-import {
-  resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMBaseUrl,
-} from '../../system/config/providers-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
@@ -43,8 +40,13 @@ export interface EmbeddingProviderRuntimeConfig {
   embeddingApiModel?: string;
   embeddingApiDims?: number;
   credentialVault?: CredentialVaultPort;
-  litellmApiKeyRef?: CredentialReference;
-  litellmBaseUrl?: string;
+  /**
+   * Explicit credential reference for the generic API embedding endpoint.
+   * Resolved solely through the credential vault. Optional: when absent the
+   * endpoint credential falls back to the EMBEDDING_API_KEY / OPENAI_API_KEY
+   * env-name references, also resolved through the vault.
+   */
+  embeddingApiKeyRef?: CredentialReference;
 }
 
 /** Callable feature-extraction pipeline from @huggingface/transformers. */
@@ -630,14 +632,12 @@ function resolveTransformersProvider(env: NodeJS.ProcessEnv): TransformersEmbedd
 }
 
 function resolveApiProvider(env: NodeJS.ProcessEnv): ApiEmbeddingProvider {
-  const endpoint = env.EMBEDDING_API_URL
-    ?? (env.LITELLM_BASE_URL ? appendPath(env.LITELLM_BASE_URL, '/embeddings') : undefined);
+  const endpoint = env.EMBEDDING_API_URL;
   const dims = parsePositiveInt(env.EMBEDDING_API_DIMS)
     ?? parsePositiveInt(env.EMBEDDING_DIMS);
   const model = env.EMBEDDING_API_MODEL ?? env.EMBEDDING_MODEL;
   const apiKey = resolveOptionalEnvCredential(undefined, 'EMBEDDING_API_KEY', env)
-    ?? resolveOptionalEnvCredential(undefined, 'OPENAI_API_KEY', env)
-    ?? resolveOptionalEnvCredential(undefined, 'LITELLM_API_KEY', env);
+    ?? resolveOptionalEnvCredential(undefined, 'OPENAI_API_KEY', env);
 
   return new ApiEmbeddingProvider({
     ...(endpoint ? { endpoint } : {}),
@@ -691,14 +691,14 @@ function resolveApiProviderFromRuntimeConfig(
   config: EmbeddingProviderRuntimeConfig,
   env: NodeJS.ProcessEnv,
 ): ApiEmbeddingProvider {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config as SubstrateConfig);
-  const endpoint = config.embeddingApiUrl?.trim()
-    ?? (litellmBaseUrl ? appendPath(litellmBaseUrl, '/embeddings') : undefined);
+  const endpoint = config.embeddingApiUrl?.trim();
   const model = (config.embeddingApiModel ?? config.embeddingModel)?.trim();
   const dims = toPositiveInteger(config.embeddingApiDims ?? config.embeddingDims);
-  const apiKey = resolveOptionalEnvCredential(config.credentialVault, 'EMBEDDING_API_KEY', env)
-    ?? resolveOptionalEnvCredential(config.credentialVault, 'OPENAI_API_KEY', env)
-    ?? resolveConfiguredLiteLLMApiKey(config as SubstrateConfig, env);
+  const apiKey = (config.embeddingApiKeyRef
+    ? resolveOptionalCredentialReference(config.credentialVault, config.embeddingApiKeyRef, env)
+    : undefined)
+    ?? resolveOptionalEnvCredential(config.credentialVault, 'EMBEDDING_API_KEY', env)
+    ?? resolveOptionalEnvCredential(config.credentialVault, 'OPENAI_API_KEY', env);
   if (!endpoint || !model || !dims) {
     throw new Error('API embeddings require embeddingApiUrl, embeddingApiModel (or embeddingModel), and embeddingApiDims in settings.json');
   }

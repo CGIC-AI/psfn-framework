@@ -24,6 +24,11 @@ import type {
   SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  type CredentialReference,
+  type CredentialVaultPort,
+  resolveOptionalCredentialReference,
+} from '../../boundary/custody/credential-vault.js';
 import { createOpenAICompatibleEndpointModel } from './models.js';
 
 export type ProviderRuntimeCompleteResult = AssistantMessage;
@@ -59,6 +64,14 @@ export interface ProviderRuntime {
 
   /** Resolve provider-scoped auth through the runtime-owned Models collection. */
   getAuth(provider: string | Model<Api>): Promise<AuthResult | undefined>;
+
+  /**
+   * Resolve a configured provider credential solely through the gateway-owned
+   * credential vault. Returns the resolved secret, or `undefined` when the
+   * provider has no configured `apiKeyRef` / `openRouterApiKeyRef` (callers
+   * fail closed). Never falls back to process.env or a LiteLLM default.
+   */
+  resolveProviderApiKey(provider: string): string | undefined;
 }
 
 function asMutableModels(models: Models): MutableModels {
@@ -99,7 +112,40 @@ function registerLegacyEndpointProviders(models: MutableModels): void {
   registerOpenAICompatibleEndpointProvider(models, 'local_endpoint', 'Local endpoint', []);
 }
 
-type ProviderRuntimeConfig = Pick<SubstrateConfig, 'providerRegistry' | 'modelRegistry'>;
+type ProviderRuntimeConfig = Pick<
+  SubstrateConfig,
+  'providerRegistry' | 'modelRegistry' | 'credentialVault' | 'openRouterApiKeyRef'
+>;
+
+function resolveConfiguredProviderCredentialReference(
+  provider: string,
+  config: ProviderRuntimeConfig,
+): CredentialReference | undefined {
+  const normalized = provider.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'openrouter') {
+    return config.openRouterApiKeyRef;
+  }
+  const providers = config.providerRegistry?.providers ?? [];
+  const matchById = providers.find((entry) => entry.enabled && entry.id === normalized);
+  const matchByType = providers.find((entry) => entry.enabled && entry.type === normalized);
+  return (matchById ?? matchByType)?.apiKeyRef;
+}
+
+/**
+ * Resolve a configured provider credential through the vault only. No process.env
+ * fallback and no LiteLLM default: a provider without a resolvable configured
+ * reference yields `undefined` so callers can fail closed.
+ */
+export function resolveConfiguredProviderCredential(
+  provider: string,
+  config: ProviderRuntimeConfig,
+): string | undefined {
+  const reference = resolveConfiguredProviderCredentialReference(provider, config);
+  if (!reference) return undefined;
+  const vault: CredentialVaultPort | undefined = config.credentialVault;
+  return resolveOptionalCredentialReference(vault, reference);
+}
 
 function registerConfiguredProviders(models: MutableModels, config: ProviderRuntimeConfig): void {
   for (const provider of config.providerRegistry?.providers ?? []) {
@@ -154,11 +200,13 @@ function registerConfiguredProviders(models: MutableModels, config: ProviderRunt
  */
 export class PiProviderRuntime implements ProviderRuntime {
   private readonly models: MutableModels;
+  private readonly config: ProviderRuntimeConfig;
 
-  constructor(models?: Models, config?: ProviderRuntimeConfig) {
+  constructor(models?: Models, config: ProviderRuntimeConfig = {}) {
     this.models = models ? asMutableModels(models) : builtinModels();
+    this.config = config;
     registerLegacyEndpointProviders(this.models);
-    if (config) registerConfiguredProviders(this.models, config);
+    registerConfiguredProviders(this.models, config);
   }
 
   complete(
@@ -189,6 +237,10 @@ export class PiProviderRuntime implements ProviderRuntime {
     return typeof provider === 'string'
       ? this.models.getAuth(provider)
       : this.models.getAuth(provider);
+  }
+
+  resolveProviderApiKey(provider: string): string | undefined {
+    return resolveConfiguredProviderCredential(provider, this.config);
   }
 }
 

@@ -18,7 +18,7 @@ name: psfn-smoke
 # Split topology is real here: gateway and agent are separate containers that
 # share ONLY the gateway socket (an internal named volume). system-data and
 # companion-data are DISTINCT named volumes, so the two roots can never overlap
-# (production layout rejects overlap). k8s/Helm remains the reference deployment
+# (production layout rejects overlap). Helm remains the reference deployment
 # shape (network-mode mTLS RPC + cert-manager); this compose uses the simpler
 # single-node Unix-socket RPC and is explicitly not production-hardened.
 #

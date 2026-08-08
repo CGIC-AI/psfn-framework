@@ -364,7 +364,7 @@ Personal Workspace, and `shakedown_artie` tenant remain.
 
 ### Pre-flight (before any live case runs)
 
-`npm test`, `npm run e2e`, and the `verify:*` floor from the release epic: `verify:startup-owner-files`, `verify:settings-contract`, `verify:backup-restore`, plus `verify:helm-chart`/`verify:k8s-manifests`/`verify:kube-rollout` for the kube lane. A red pre-flight aborts the round — shakedown time is too expensive to spend on a broken build.
+`npm test`, `npm run e2e`, and the `verify:*` floor from the release epic: `verify:startup-owner-files`, `verify:settings-contract`, `verify:backup-restore`, plus `verify:helm-chart`/`verify:kube-rollout` for the kube lane. A red pre-flight aborts the round — shakedown time is too expensive to spend on a broken build.
 
 ### Harness rules (learned from Sprint 8/9)
 

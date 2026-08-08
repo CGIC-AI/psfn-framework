@@ -25,6 +25,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from '../../shared/context-budget.js';
 import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
+import { nonEmptyStringOrUndefined } from '../../shared/utils/strings.js';
 import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
@@ -44,7 +45,6 @@ import {
   toBoolean,
   toImportProcessingRouteMode,
   toIntegerInRange,
-  toNonEmptyString,
   toNumberInRange,
   toPositiveInteger,
   toSessionRestartBehavior,
@@ -215,7 +215,7 @@ function expectBoolean(value: unknown, fieldPath: string): boolean {
 }
 
 function expectNonEmptyString(value: unknown, fieldPath: string): string {
-  const normalized = toNonEmptyString(value);
+  const normalized = nonEmptyStringOrUndefined(value);
   if (!normalized) {
     throw new Error(`Invalid settings at ${fieldPath}: expected non-empty string`);
   }
@@ -671,7 +671,7 @@ function normalizeEndpointAndGardenSettings(
   }
   if ('uiThemeId' in settings) {
     normalized.uiThemeId =
-      toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
+      nonEmptyStringOrUndefined(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
   }
   if ('observerEvalSidecar' in settings) {
     normalized.observerEvalSidecar = normalizeObserverEvalSidecarSettings(
@@ -965,7 +965,7 @@ function normalizeEmbeddingSettings(
   normalizeTrimmedStringSetting(normalized, settings, 'transformersCacheDir');
 
   if ('textEmotionModel' in settings) {
-    const textEmotionModel = toNonEmptyString(settings.textEmotionModel);
+    const textEmotionModel = nonEmptyStringOrUndefined(settings.textEmotionModel);
     if (textEmotionModel === undefined) {
       throw new Error('textEmotionModel must be a non-empty string');
     }
@@ -1215,11 +1215,11 @@ function normalizeObsidianAndMoaSettings(
   settings: EditableSettings,
 ): void {
   if ('obsidianVaultName' in settings) {
-    normalized.obsidianVaultName = toNonEmptyString(settings.obsidianVaultName);
+    normalized.obsidianVaultName = nonEmptyStringOrUndefined(settings.obsidianVaultName);
   }
   if ('obsidianCliPath' in settings) {
     normalized.obsidianCliPath =
-      toNonEmptyString(settings.obsidianCliPath) ?? 'obsidian';
+      nonEmptyStringOrUndefined(settings.obsidianCliPath) ?? 'obsidian';
   }
   if ('obsidianAutoPublish' in settings) {
     normalized.obsidianAutoPublish =

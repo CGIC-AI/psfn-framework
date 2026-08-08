@@ -82,12 +82,6 @@ export function toNumberInRange(value: unknown, min: number, max: number): numbe
   return parsed >= min && parsed <= max ? parsed : undefined;
 }
 
-export function toNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 export function toStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const cleaned = [...new Set(value

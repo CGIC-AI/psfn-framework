@@ -16,11 +16,11 @@ import {
   type ModelSlotDefaults,
   type ModelSlotOverrides,
 } from '../../shared/contracts/runtime.js';
+import { nonEmptyStringOrUndefined } from '../../shared/utils/strings.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   toBoolean,
   toIntegerInRange,
-  toNonEmptyString,
   toPositiveInteger,
   toPositiveNumber,
   toStrictIntegerInRange,
@@ -316,7 +316,7 @@ function normalizeModelRegistryPurposeTag(
   if (!isRecord(value)) {
     throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
   }
-  const purposeRaw = toNonEmptyString(value.purpose);
+  const purposeRaw = nonEmptyStringOrUndefined(value.purpose);
   if (!purposeRaw || !CANONICAL_MODEL_PURPOSE_SET.has(purposeRaw as CanonicalModelPurpose)) {
     throw new Error(
       `Invalid model registry at ${fieldPath}.purpose: expected one of ${CANONICAL_MODEL_PURPOSES.join(', ')}`,
@@ -359,7 +359,7 @@ function normalizeModelRegistryBudgetPolicy(
     throw new Error(`Invalid model registry at ${fieldPath}: monthlyUsdLimit must be >= dailyUsdLimit`);
   }
 
-  const currencyRaw = toNonEmptyString(value.currency);
+  const currencyRaw = nonEmptyStringOrUndefined(value.currency);
   if (currencyRaw && currencyRaw.toUpperCase() !== 'USD') {
     throw new Error(`Invalid model registry at ${fieldPath}.currency: only "USD" is supported`);
   }
@@ -396,7 +396,7 @@ function normalizeModelRegistryPromptCachingPolicy(
 
   let retention: PromptCacheRetention | undefined;
   if (value.retention !== undefined) {
-    const retentionRaw = toNonEmptyString(value.retention)?.toLowerCase();
+    const retentionRaw = nonEmptyStringOrUndefined(value.retention)?.toLowerCase();
     if (!retentionRaw || !MODEL_REGISTRY_PROMPT_CACHE_RETENTIONS.has(retentionRaw as PromptCacheRetention)) {
       throw new Error(
         `Invalid model registry at ${fieldPath}.retention: expected one of ${[...MODEL_REGISTRY_PROMPT_CACHE_RETENTIONS].join(', ')}`,
@@ -407,7 +407,7 @@ function normalizeModelRegistryPromptCachingPolicy(
 
   let scope: PromptCacheScope | undefined;
   if (value.scope !== undefined) {
-    const scopeRaw = toNonEmptyString(value.scope)?.toLowerCase();
+    const scopeRaw = nonEmptyStringOrUndefined(value.scope)?.toLowerCase();
     if (!scopeRaw || !MODEL_REGISTRY_PROMPT_CACHE_SCOPES.has(scopeRaw as PromptCacheScope)) {
       throw new Error(
         `Invalid model registry at ${fieldPath}.scope: expected one of ${[...MODEL_REGISTRY_PROMPT_CACHE_SCOPES].join(', ')}`,
@@ -449,7 +449,7 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
   }
 
-  const id = toNonEmptyString(value.id);
+  const id = nonEmptyStringOrUndefined(value.id);
   if (!id || !MODEL_SLOT_KEY_PATTERN.test(id)) {
     throw new Error(`Invalid model registry at ${fieldPath}.id: expected non-empty key-safe string`);
   }
@@ -466,15 +466,15 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   if (!isRecord(value.identity)) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity: expected object`);
   }
-  const provider = toNonEmptyString(value.identity.provider);
-  const model = toNonEmptyString(value.identity.model);
+  const provider = nonEmptyStringOrUndefined(value.identity.provider);
+  const model = nonEmptyStringOrUndefined(value.identity.model);
   if (!provider || !model) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity: provider and model are required`);
   }
   if (!isRecord(value.identity.source)) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity.source: expected object`);
   }
-  const sourceType = toNonEmptyString(value.identity.source.type);
+  const sourceType = nonEmptyStringOrUndefined(value.identity.source.type);
   if (!sourceType) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity.source.type: expected non-empty string`);
   }
@@ -532,18 +532,18 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
       model,
       source: {
         type: sourceType,
-        ...(toNonEmptyString(value.identity.source.label)
-          ? { label: toNonEmptyString(value.identity.source.label) }
+        ...(nonEmptyStringOrUndefined(value.identity.source.label)
+          ? { label: nonEmptyStringOrUndefined(value.identity.source.label) }
           : {}),
-        ...(toNonEmptyString(value.identity.source.baseUrl)
-          ? { baseUrl: toNonEmptyString(value.identity.source.baseUrl) }
+        ...(nonEmptyStringOrUndefined(value.identity.source.baseUrl)
+          ? { baseUrl: nonEmptyStringOrUndefined(value.identity.source.baseUrl) }
           : {}),
         ...(isRecord(value.identity.source.metadata)
           ? { metadata: { ...value.identity.source.metadata } }
           : {}),
       },
-      ...(toNonEmptyString(value.identity.family)
-        ? { family: toNonEmptyString(value.identity.family) }
+      ...(nonEmptyStringOrUndefined(value.identity.family)
+        ? { family: nonEmptyStringOrUndefined(value.identity.family) }
         : {}),
     },
     purposes,
@@ -784,7 +784,7 @@ function sanitizeModelSlotDefaults(value: unknown): ModelSlotDefaults | undefine
   const maxTokens = toPositiveInteger(value.maxTokens);
   const contextWindow = toPositiveInteger(value.contextWindow);
   const contextBudget = sanitizeModelContextBudget(value.contextBudget);
-  const description = toNonEmptyString(value.description);
+  const description = nonEmptyStringOrUndefined(value.description);
   if (maxTokens === undefined && contextWindow === undefined && contextBudget === undefined && description === undefined) {
     return undefined;
   }
@@ -832,8 +832,8 @@ function _sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry
     const slotKey = rawSlotKey.trim();
     if (!slotKey || !MODEL_SLOT_KEY_PATTERN.test(slotKey) || !isRecord(rawEntry)) continue;
 
-    let model = toNonEmptyString(rawEntry.model);
-    let provider = toNonEmptyString(rawEntry.provider);
+    let model = nonEmptyStringOrUndefined(rawEntry.model);
+    let provider = nonEmptyStringOrUndefined(rawEntry.provider);
 
     // Accept "openrouter/<model-id>" shorthand and normalize to canonical
     // provider + model fields so settings PATCH round-trips do not drift.
@@ -872,7 +872,7 @@ function _sanitizeModelRoleAssignments(value: unknown): ModelRoleAssignments {
   const assignments: ModelRoleAssignments = {};
   for (const [rawPurpose, rawSlotKey] of Object.entries(value)) {
     const purpose = rawPurpose.trim();
-    const slotKey = toNonEmptyString(rawSlotKey);
+    const slotKey = nonEmptyStringOrUndefined(rawSlotKey);
     if (!purpose || !slotKey || !MODEL_SLOT_KEY_PATTERN.test(slotKey)) continue;
     assignments[purpose] = slotKey;
   }
@@ -887,8 +887,8 @@ function _sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Mode
     const candidate = value[purpose];
     if (!isRecord(candidate)) continue;
 
-    const model = toNonEmptyString(candidate.model);
-    const provider = toNonEmptyString(candidate.provider);
+    const model = nonEmptyStringOrUndefined(candidate.model);
+    const provider = nonEmptyStringOrUndefined(candidate.provider);
     const maxTokens = toPositiveInteger(candidate.maxTokens);
     const contextWindow = toPositiveInteger(candidate.contextWindow);
     const contextBudget = sanitizeModelContextBudget(candidate.contextBudget);
@@ -920,8 +920,8 @@ function _mergeCatalogSlot(
     routing?: ModelRouteConfig;
   },
 ): void {
-  const model = toNonEmptyString(slot.model);
-  const provider = toNonEmptyString(slot.provider);
+  const model = nonEmptyStringOrUndefined(slot.model);
+  const provider = nonEmptyStringOrUndefined(slot.provider);
   if (!model || !provider || !MODEL_SLOT_KEY_PATTERN.test(slotKey)) return;
 
   const existing = catalog[slotKey];

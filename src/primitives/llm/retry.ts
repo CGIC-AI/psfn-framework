@@ -87,7 +87,7 @@ function parseStatusCode(error: Error): number | null {
 
   const messageMatch = error.message.match(/\b([45]\d{2})\b/);
   if (messageMatch) {
-    return parseInt(messageMatch[1], 10);
+    return parseInt(messageMatch[1]!, 10);
   }
 
   return null;

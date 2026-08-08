@@ -164,7 +164,7 @@ function validateAppliedSeedManifest(path: string, sourceBundle: CompanionLibrar
   }
   for (let index = 0; index < sourceBundle.files.length; index += 1) {
     const appliedFile = parsed.files[index];
-    const sourceFile = sourceBundle.files[index];
+    const sourceFile = sourceBundle.files[index]!;
     if (!isRecord(appliedFile)
       || appliedFile.path !== sourceFile.path
       || appliedFile.sha256 !== sourceFile.sha256

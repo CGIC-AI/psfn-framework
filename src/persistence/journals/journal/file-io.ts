@@ -247,7 +247,7 @@ export function parseJournalText(raw: string): ReadJournalResult {
   const lines = raw.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.trim().length === 0) continue;
+    if (line === undefined || line.trim().length === 0) continue;
 
     try {
       const entry = parseJournalLine(line);
@@ -485,7 +485,7 @@ export function readJournalTailEntries(
 
   let truncated = false;
   for (let index = archivePaths.length - 1; index >= 0 && !truncated; index -= 1) {
-    truncated = scanJournalLinesBackward(archivePaths[index], (line) => {
+    truncated = scanJournalLinesBackward(archivePaths[index]!, (line) => {
       if (line.trim().length === 0) return false;
 
       try {
@@ -529,7 +529,7 @@ export function readJournalMatchingEntriesBackward(
 
   let stopped = false;
   for (let index = archivePaths.length - 1; index >= 0 && !stopped; index -= 1) {
-    stopped = scanJournalLinesBackward(archivePaths[index], (line) => {
+    stopped = scanJournalLinesBackward(archivePaths[index]!, (line) => {
       if (line.trim().length === 0) return false;
       let entry: JournalEntry;
       try {
@@ -724,9 +724,9 @@ function readJournalEntriesBeforeOnce(
   while (low <= high) {
     const midpoint = low + Math.floor((high - low) / 2);
     const sampled = readSeekEntry(
-      nonEmptyPaths[midpoint],
+      nonEmptyPaths[midpoint]!,
       0,
-      midpoint > 0 ? nonEmptyPaths[midpoint - 1] : undefined,
+      midpoint > 0 ? nonEmptyPaths[midpoint - 1]! : undefined,
     );
     if (!sampled) {
       segmentSeekTrusted = false;
@@ -742,19 +742,19 @@ function readJournalEntriesBeforeOnce(
 
   if (segmentSeekTrusted && candidateIndex >= 0) {
     for (let index = candidateIndex; index >= 0 && !truncated; index -= 1) {
-      const candidateSize = statSync(nonEmptyPaths[index]).size;
+      const candidateSize = statSync(nonEmptyPaths[index]!).size;
       const cursorOffset = index === candidateIndex && candidateSize > 256 * 1024
-        ? findCursorOffset(nonEmptyPaths[index], index > 0 ? nonEmptyPaths[index - 1] : undefined)
+        ? findCursorOffset(nonEmptyPaths[index]!, index > 0 ? nonEmptyPaths[index - 1]! : undefined)
         : candidateSize;
       truncated = scanCandidate(
-        nonEmptyPaths[index],
+        nonEmptyPaths[index]!,
         cursorOffset ?? candidateSize,
       );
     }
   } else if (!segmentSeekTrusted) {
     // An unauthenticated or malformed boundary is never skip authority.
     for (let index = nonEmptyPaths.length - 1; index >= 0 && !truncated; index -= 1) {
-      truncated = scanCandidate(nonEmptyPaths[index]);
+      truncated = scanCandidate(nonEmptyPaths[index]!);
     }
   }
 

@@ -189,7 +189,7 @@ export class FallbackRunner {
     let lastError: Error | null = null;
 
     for (let index = 0; index < orderedCandidates.length; index += 1) {
-      const candidate = orderedCandidates[index];
+      const candidate = orderedCandidates[index]!;
       const attempt = index + 1;
       const cooldownUntil = this.getCooldownUntil(candidate);
       const now = this.now();
@@ -254,7 +254,7 @@ export class FallbackRunner {
     const correlationFields = buildFallbackCorrelation(correlation, purpose);
 
     for (let index = 0; index < orderedCandidates.length; index += 1) {
-      const candidate = orderedCandidates[index];
+      const candidate = orderedCandidates[index]!;
       const attempt = index + 1;
       const cooldownUntil = this.getCooldownUntil(candidate);
       const now = this.now();

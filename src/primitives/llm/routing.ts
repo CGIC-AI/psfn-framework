@@ -526,7 +526,7 @@ function scoreCandidates(
     const capabilityScore = (normalizedContextWindow * capabilityWeights.contextWindow)
       + (normalizedMaxTokens * capabilityWeights.maxTokens);
 
-    const costValue = resolvedCosts[index];
+    const costValue = resolvedCosts[index]!;
     const costScore = maxCost > minCost
       ? (maxCost - costValue) / (maxCost - minCost)
       : 1;

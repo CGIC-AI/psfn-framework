@@ -89,7 +89,7 @@ const MODEL_ID_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
 
 function providerFromModelId(modelId: string): string | undefined {
   const [prefix] = modelId.split('/');
-  const trimmed = prefix.trim();
+  const trimmed = prefix?.trim() ?? '';
   return trimmed ? trimmed : undefined;
 }
 

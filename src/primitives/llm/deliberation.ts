@@ -224,10 +224,16 @@ function resolveVoiceConfigs(
     return purposes.map(purpose => ({ purpose }));
   }
 
-  return referenceModels.map((requestedModel, index) => ({
-    purpose: purposes[index % purposes.length],
-    requestedModel,
-  }));
+  return referenceModels.map((requestedModel, index) => {
+    const purpose = purposes[index % purposes.length];
+    if (!purpose) {
+      throw new Error('Deliberation voice config requires at least one purpose');
+    }
+    return {
+      purpose,
+      requestedModel,
+    };
+  });
 }
 
 function tokenizeForNovelty(text: string): Set<string> {
@@ -777,7 +783,7 @@ export async function runDeliberation(
       break;
     }
 
-    let synthesis = voices[voices.length - 1].content;
+    let synthesis = voices[voices.length - 1]!.content;
 
     if (!stopReason) {
       const roundRemainingTokens = config.caps.maxTokensPerRound !== undefined

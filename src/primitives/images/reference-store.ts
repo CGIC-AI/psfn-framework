@@ -514,7 +514,7 @@ export class ImageReferenceStore {
     }
     let target: string | undefined;
     for (let i = index.defaultHistory.length - 1; i >= 0; i -= 1) {
-      const entry = index.defaultHistory[i];
+      const entry = index.defaultHistory[i]!;
       if (entry.referenceId === currentDefaultId && entry.previousReferenceId) {
         target = entry.previousReferenceId;
         break;

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createServer, type AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -167,7 +168,7 @@ describe('TelegramAdapter', () => {
       return okResponse(message.channelId);
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 1,
       message: {
         message_id: 10,
@@ -178,7 +179,7 @@ describe('TelegramAdapter', () => {
       },
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 11,
@@ -244,7 +245,7 @@ describe('TelegramAdapter', () => {
       return okResponse(message.channelId);
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 3,
       message: {
         message_id: 12,
@@ -301,7 +302,7 @@ describe('TelegramAdapter', () => {
       };
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 20,
@@ -340,7 +341,7 @@ describe('TelegramAdapter', () => {
     });
     const eventBus = new EventBus();
     const diagnostics: any[] = [];
-    (eventBus as any).on('channel.message.error', (event: any) => {
+    (fromAny(eventBus)).on('channel.message.error', (event: any) => {
       diagnostics.push(event);
     });
     const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
@@ -360,7 +361,7 @@ describe('TelegramAdapter', () => {
       };
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 3,
       message: {
         message_id: 21,
@@ -418,7 +419,7 @@ describe('TelegramAdapter', () => {
         return okResponse(message.channelId);
       });
 
-      await (adapter as any).handleUpdate({
+      await (fromAny(adapter)).handleUpdate({
         update_id: 3,
         message: {
           message_id: 12,
@@ -458,7 +459,7 @@ describe('TelegramAdapter', () => {
     );
     adapter.onMessage(handler);
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 1,
       message: {
         message_id: 1,
@@ -470,7 +471,7 @@ describe('TelegramAdapter', () => {
     });
     expect(handler).toHaveBeenCalledTimes(0);
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 2,
@@ -519,7 +520,7 @@ describe('TelegramAdapter', () => {
     });
 
     try {
-      await (adapter as any).handleUpdate({
+      await (fromAny(adapter)).handleUpdate({
         update_id: 1,
         message: {
           message_id: 10,
@@ -606,7 +607,7 @@ describe('TelegramAdapter', () => {
       },
     }));
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 99,
@@ -634,7 +635,7 @@ describe('TelegramAdapter', () => {
     });
     const eventBus = new EventBus();
     const diagnostics: any[] = [];
-    (eventBus as any).on('channel.message.error', (event: any) => {
+    (fromAny(eventBus)).on('channel.message.error', (event: any) => {
       diagnostics.push(event);
     });
 
@@ -643,7 +644,7 @@ describe('TelegramAdapter', () => {
       throw new Error('telegram handler exploded');
     });
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 44,
@@ -689,7 +690,7 @@ describe('TelegramAdapter', () => {
       },
     }));
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 99,
@@ -729,7 +730,7 @@ describe('TelegramAdapter', () => {
       return okResponse(message.channelId);
     });
 
-    const firstTurn = (adapter as any).handleUpdate({
+    const firstTurn = (fromAny(adapter)).handleUpdate({
       update_id: 1,
       message: {
         message_id: 10,
@@ -741,7 +742,7 @@ describe('TelegramAdapter', () => {
     });
     await firstTurnStarted.promise;
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 2,
       message: {
         message_id: 11,
@@ -788,7 +789,7 @@ describe('TelegramAdapter', () => {
       return okResponse(message.channelId);
     });
 
-    const firstTurn = (adapter as any).handleUpdate({
+    const firstTurn = (fromAny(adapter)).handleUpdate({
       update_id: 10,
       message: {
         message_id: 30,
@@ -800,7 +801,7 @@ describe('TelegramAdapter', () => {
     });
     await firstTurnStarted.promise;
 
-    await (adapter as any).handleUpdate({
+    await (fromAny(adapter)).handleUpdate({
       update_id: 11,
       message: {
         message_id: 31,
@@ -1019,7 +1020,7 @@ describe('TelegramAdapter clarify delivery', () => {
 
   async function waitForPendingClarify(adapter: TelegramAdapter): Promise<void> {
     for (let i = 0; i < 200; i++) {
-      if ((adapter as any).pendingClarifyReplies.size > 0) return;
+      if ((fromAny(adapter)).pendingClarifyReplies.size > 0) return;
       await new Promise((r) => setTimeout(r, 1));
     }
     throw new Error('clarify waiter was never registered');
@@ -1041,7 +1042,7 @@ describe('TelegramAdapter clarify delivery', () => {
       clarification, 'telegram:-900', 1000, ORIGINATING_USER,
     );
     await waitForPendingClarify(adapter);
-    await (adapter as any).handleUpdate(replyUpdate('2'));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('2'));
     const result = await delivery;
 
     expect(result).toEqual({
@@ -1066,7 +1067,7 @@ describe('TelegramAdapter clarify delivery', () => {
       clarification, 'telegram:-900', 1000, ORIGINATING_USER,
     );
     await waitForPendingClarify(adapter);
-    await (adapter as any).handleUpdate(replyUpdate('water'));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('water'));
     const result = await delivery;
 
     expect(result.status).toBe('resolved');
@@ -1118,12 +1119,12 @@ describe('TelegramAdapter clarify delivery', () => {
 
     // A different member replies '1'. It must NOT resolve the clarification and
     // must fall through to a normal turn rather than being dropped.
-    await (adapter as any).handleUpdate(replyUpdate('1', 99));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('1', 99));
     expect(handled).toHaveLength(1);
-    expect((adapter as any).pendingClarifyReplies.size).toBe(1);
+    expect((fromAny(adapter)).pendingClarifyReplies.size).toBe(1);
 
     // The originating user then answers and the clarification resolves.
-    await (adapter as any).handleUpdate(replyUpdate('1', Number(ORIGINATING_USER)));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('1', Number(ORIGINATING_USER)));
     const result = await delivery;
     expect(result.status).toBe('resolved');
     expect(result.selection?.selectedIndex).toBe(0);
@@ -1151,13 +1152,13 @@ describe('TelegramAdapter clarify delivery', () => {
 
     // A parse-miss from the ORIGINATING user is NOT consumed: it becomes a turn
     // and the clarification stays pending (previously the message was dropped).
-    await (adapter as any).handleUpdate(replyUpdate('banana'));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('banana'));
     expect(handled).toHaveLength(1);
     expect(handled[0].content).toBe('banana');
-    expect((adapter as any).pendingClarifyReplies.size).toBe(1);
+    expect((fromAny(adapter)).pendingClarifyReplies.size).toBe(1);
 
     // A subsequent valid reply still resolves the still-pending clarification.
-    await (adapter as any).handleUpdate(replyUpdate('3'));
+    await (fromAny(adapter)).handleUpdate(replyUpdate('3'));
     const result = await delivery;
     expect(result.status).toBe('resolved');
     expect(result.selection).toEqual({ clarificationId: 'clar-1', selectedIndex: 2, selectedChoice: 'Water' });

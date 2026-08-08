@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
@@ -371,7 +372,7 @@ describe('MemoryWriter', () => {
       const result = await writer.write({
         text: 'Scoped memory',
         type: 'semantic',
-        scopeRef: { kind: 'PROJECT' as any, id: 'proj-1', label: ' Project One ' },
+        scopeRef: { kind: fromAny('PROJECT'), id: 'proj-1', label: ' Project One ' },
         scopeTags: ['Project:Proj-1', 'scope:alpha'],
       });
 
@@ -478,7 +479,7 @@ describe('MemoryWriter', () => {
 
     it('throws on invalid memory type', async () => {
       await expect(
-        writer.write({ text: 'test', type: 'invalid' as any }),
+        writer.write({ text: 'test', type: fromAny('invalid') }),
       ).rejects.toThrow('Invalid memory type: invalid');
     });
 
@@ -1139,7 +1140,7 @@ describe('MemoryWriter', () => {
 
     it('throws on invalid memory type', async () => {
       await expect(
-        writer.upsert({ text: 'test', type: 'bogus' as any }),
+        writer.upsert({ text: 'test', type: fromAny('bogus') }),
       ).rejects.toThrow('Invalid memory type: bogus');
     });
 

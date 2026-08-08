@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { describe, expect, it, vi } from 'vitest';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
@@ -273,7 +274,7 @@ describe('WikiRetrievalService', () => {
     const service = new WikiRetrievalService({
       projection: makeProjection([makeMatch()]),
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings({ enabled: false }),
     });
     const block = await readWikiBlock(service, {
@@ -291,7 +292,7 @@ describe('WikiRetrievalService', () => {
     const service = new WikiRetrievalService({
       projection: makeProjection([makeMatch({ chunkText: 'Gateways are separate from Garden.' })]),
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
     });
     const block = await readWikiBlock(service, {
@@ -308,13 +309,13 @@ describe('WikiRetrievalService', () => {
   it('fails closed to an empty block and emits degraded when search throws', async () => {
     const bus = recordingEventBus();
     const projection = makeProjection([]);
-    (projection.search as any) = vi.fn(async () => {
+    (fromAny(projection)).search = vi.fn(async () => {
       throw new Error('pgvector down');
     });
     const service = new WikiRetrievalService({
       projection,
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
     });
     const block = await readWikiBlock(service, {
@@ -332,7 +333,7 @@ describe('WikiRetrievalService', () => {
     const service = new WikiRetrievalService({
       projection: makeProjection([]),
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
     });
     const block = await readWikiBlock(service, {
@@ -363,7 +364,7 @@ describe('WikiRetrievalService', () => {
       currentSiteId: 'studio',
     });
     // 4th positional arg (scopes) must be undefined → unrestricted, as today.
-    expect((projection.search as any).mock.calls[0][3]).toBeUndefined();
+    expect((fromAny(projection.search)).mock.calls[0][3]).toBeUndefined();
   });
 
   it('under the flag forwards personal + the current site shared scope', async () => {
@@ -381,7 +382,7 @@ describe('WikiRetrievalService', () => {
       focusActive: false,
       currentSiteId: 'studio',
     });
-    expect((projection.search as any).mock.calls[0][3]).toEqual(['personal', 'shared_world:studio']);
+    expect((fromAny(projection.search)).mock.calls[0][3]).toEqual(['personal', 'shared_world:studio']);
   });
 
   it('under the flag with no current site forwards personal-only', async () => {
@@ -398,7 +399,7 @@ describe('WikiRetrievalService', () => {
       isDirectMessage: true,
       focusActive: false,
     });
-    expect((projection.search as any).mock.calls[0][3]).toEqual(['personal']);
+    expect((fromAny(projection.search)).mock.calls[0][3]).toEqual(['personal']);
   });
 
   // ── s10f9 retrieval union: shared-schema chunks join personal results ──
@@ -421,7 +422,7 @@ describe('WikiRetrievalService', () => {
       projection: makeProjection([personal]),
       sharedProjection,
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
@@ -433,7 +434,7 @@ describe('WikiRetrievalService', () => {
       currentSiteId: 'studio',
     });
     // Shared search receives ONLY the shared scopes, never personal.
-    expect((sharedProjection.search as any).mock.calls[0][3]).toEqual(['shared_world:studio']);
+    expect((fromAny(sharedProjection.search)).mock.calls[0][3]).toEqual(['shared_world:studio']);
     // Both slices contribute; the higher-scoring shared match ranks first.
     expect(block).toContain('site-overview');
     expect(block).toContain('p-doc');
@@ -453,7 +454,7 @@ describe('WikiRetrievalService', () => {
       projection: makeProjection([personalMatch]),
       sharedProjection,
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
       // getMultiCompanion omitted → off
     });
@@ -505,7 +506,7 @@ describe('WikiRetrievalService', () => {
       projection: makeProjection([makeMatch({ chunkText: 'Personal still serves.' })]),
       sharedProjection,
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
@@ -525,7 +526,7 @@ describe('WikiRetrievalService', () => {
     const service = new WikiRetrievalService({
       projection: makeProjection([makeMatch({ chunkText: 'Personal still serves.' })]),
       embedding: fakeEmbedding,
-      eventBus: bus as any,
+      eventBus: fromAny(bus),
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
@@ -613,7 +614,7 @@ describe('WikiRetrievalService cached snapshot (mmo9.7.4 — off the foreground 
     expect(service.getWikiContextBlock(request)).toBeNull();
     // Proof it never touched the foreground embed/search path.
     expect(embedding.embed).not.toHaveBeenCalled();
-    expect((projection.search as any)).not.toHaveBeenCalled();
+    expect((fromAny(projection.search))).not.toHaveBeenCalled();
   });
 
   it('a closed gate is a ready empty snapshot, not a cold miss or a degradation (disabled)', () => {
@@ -684,7 +685,7 @@ describe('WikiRetrievalService cached snapshot (mmo9.7.4 — off the foreground 
       service.refreshWikiContextBlock(request),
       service.refreshWikiContextBlock(request),
     ]);
-    expect((projection.search as any)).toHaveBeenCalledTimes(1);
+    expect((fromAny(projection.search))).toHaveBeenCalledTimes(1);
   });
 
   it('keys the cache on contextClass: a DM warm block is a cold miss for a group turn', async () => {

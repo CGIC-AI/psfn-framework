@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -470,11 +471,11 @@ describe('ImageService', () => {
     });
 
     const service = new ImageService(
-      {
+      fromAny({
         falApiKey: 'fal-key',
         companionDataDir,
         systemDataDir: join(companionDataDir, '..', 'system-data'),
-      } as any,
+      }),
       fetchMock as typeof fetch,
     );
 
@@ -521,11 +522,11 @@ describe('ImageService', () => {
     });
 
     const service = new ImageService(
-      {
+      fromAny({
         falApiKey: 'fal-key',
         companionDataDir,
         systemDataDir: join(companionDataDir, '..', 'system-data'),
-      } as any,
+      }),
       fetchMock as typeof fetch,
       { personalFilesDir },
     );

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import type { GatewayRpcConnection } from './transport.js';
@@ -136,7 +137,7 @@ function createMockConnection(
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
-      onSend?.(data as any);
+      onSend?.(fromAny(data));
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -177,12 +178,12 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
   };
   return {
     socketPath: '/tmp/test.sock',
-    llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
-    embeddingService: { embed: vi.fn(), embedBatch: vi.fn(), dims: 1024 } as any,
-    discordAdapter: {
+    llmProvider: fromAny({ stream: vi.fn(), complete: vi.fn() }),
+    embeddingService: fromAny({ embed: vi.fn(), embedBatch: vi.fn(), dims: 1024 }),
+    discordAdapter: fromAny({
       id: 'discord',
       outbound: { textChunkLimit: 2000, sendText: vi.fn() },
-    } as any,
+    }),
     policyConfig: { workspacePath: '/workspace' },
     intakeScreeningMode: 'off',
     intakeScreeningProvider: () => null,
@@ -368,7 +369,7 @@ async function setupLoopHarness(): Promise<{
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return { close: vi.fn(), listen: vi.fn() } as any;
+    return fromAny({ close: vi.fn(), listen: vi.fn() });
   });
   server.start();
 

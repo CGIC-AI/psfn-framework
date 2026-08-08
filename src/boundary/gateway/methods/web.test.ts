@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+import { fromAny } from '@total-typescript/shoehorn';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
@@ -20,14 +21,14 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     keys: { v1: 'test-web-secret' },
   };
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromAny({}),
+    embeddingService: fromAny({}),
+    discordAdapter: fromAny({}),
     policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
@@ -44,9 +45,9 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     nextStreamRequestId: () => 'stream-1',
     recordAuditEvent,
     audited: (_method, handler) => handler,
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: (_options) => async (params) => _options.handler(params),
-    } as any,
+    }),
   };
 
   registerWebMethods(runtime);

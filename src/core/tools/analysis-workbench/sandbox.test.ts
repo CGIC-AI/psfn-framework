@@ -431,7 +431,7 @@ describe('REPLSandbox', () => {
 
     expect(result.output).toContain('false');
     expect(result.output).toContain('path not allowed');
-    expect((llm as any).gitApplyPatch).not.toHaveBeenCalled();
+    expect((fromAny(llm)).gitApplyPatch).not.toHaveBeenCalled();
   });
 
   it('web browse/search use the gateway webFetch path', async () => {
@@ -456,8 +456,8 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('content for https://example.com/a');
     expect(result.output).toContain('2');
     expect(result.output).toContain('https://example.com/a');
-    expect((llm as any).webFetch).toHaveBeenCalledTimes(3);
-    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com/a', undefined, 'local_crawler');
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledTimes(3);
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com/a', undefined, 'local_crawler');
   });
 
   it('read_file/write_file/list_files/web helpers call gateway RPC capabilities', async () => {
@@ -510,9 +510,9 @@ describe('REPLSandbox', () => {
       maxBytes: 12_345,
       offsetBytes: 0,
     });
-    expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
-    expect((llm as any).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
-    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
+    expect((fromAny(llm)).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
+    expect((fromAny(llm)).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
   });
 
   it('omits repo and workspace mutation helpers under the default read-only parent policy', async () => {
@@ -767,9 +767,9 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('web');
     expect(result.output).toContain('max tool calls reached');
     expect(fileRead).toHaveBeenCalledTimes(1);
-    expect((llm as any).webFetch).toHaveBeenCalledTimes(1);
-    expect((llm as any).fsList).not.toHaveBeenCalled();
-    expect((llm as any).fsWrite).not.toHaveBeenCalled();
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledTimes(1);
+    expect((fromAny(llm)).fsList).not.toHaveBeenCalled();
+    expect((fromAny(llm)).fsWrite).not.toHaveBeenCalled();
     expect(budgetRef.toolCalls).toBe(2);
   });
 
@@ -828,7 +828,7 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('1');
     expect(result.output).toContain('planner true');
     expect(result.output).toContain('ready');
-    expect((llm as any).fsWrite).not.toHaveBeenCalled();
+    expect((fromAny(llm)).fsWrite).not.toHaveBeenCalled();
   });
 
   it('memory_search returns empty when no memory store', async () => {

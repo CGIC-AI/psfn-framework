@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -206,7 +207,7 @@ describe('PromptLayerStore', () => {
     it('returns a copy (not the internal array)', () => {
       store.create({ type: 'base', name: 'A', content: 'a', identifier: 'main' });
       const all = store.getAll();
-      all.push(null as any);
+      all.push(fromAny(null));
       expect(store.getAll()).toHaveLength(1);
     });
   });
@@ -364,7 +365,7 @@ describe('PromptLayerStore', () => {
 
     it('validates role enum values', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
-      expect(() => store.update(layer.id, 'v2', 'admin', { role: 'bad' as any })).toThrow('Invalid prompt role');
+      expect(() => store.update(layer.id, 'v2', 'admin', { role: fromAny('bad') })).toThrow('Invalid prompt role');
     });
 
     it('validates promptOrder as integer >= 0', () => {

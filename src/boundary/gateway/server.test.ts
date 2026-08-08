@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,7 +57,7 @@ function createMockConnection(
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
-      onSend?.(data as any, (response) => emitter.emit('message', response));
+      onSend?.(fromAny(data), (response) => emitter.emit('message', response));
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -104,7 +105,7 @@ async function setupServerConnection(
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return { close: vi.fn(), listen: vi.fn() } as any;
+    return fromAny({ close: vi.fn(), listen: vi.fn() });
   });
   server.start();
   const conn = createMockConnection(onSend);
@@ -117,7 +118,7 @@ function createMinimalOptions(): GatewayServerOptions {
   return {
     socketPath: '/tmp/test.sock',
     companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
-    llmProvider: {
+    llmProvider: fromAny({
       stream: vi.fn().mockResolvedValue({
         content: 'test',
         toolCalls: [],
@@ -127,19 +128,19 @@ function createMinimalOptions(): GatewayServerOptions {
         stopReason: 'end',
       }),
       complete: vi.fn(),
-    } as any,
-    embeddingService: {
+    }),
+    embeddingService: fromAny({
       embed: vi.fn(),
       embedBatch: vi.fn(),
       dims: 1024,
-    } as any,
-    discordAdapter: {
+    }),
+    discordAdapter: fromAny({
       id: 'discord',
       outbound: {
         textChunkLimit: 2000,
         sendText: vi.fn(),
       },
-    } as any,
+    }),
     policyConfig: {
       workspacePath: '/workspace',
     },
@@ -271,7 +272,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -289,9 +290,9 @@ describe('GatewayServer', () => {
       // The request should have been sent to the agent
       // Find the RPC request in sent messages
       await new Promise(r => setTimeout(r, 10)); // let async settle
-      const rpcRequest = mockConn.sent.find(
+      const rpcRequest = fromAny(mockConn.sent.find(
         (msg: any) => msg.method === 'discord.handleMessage',
-      ) as any;
+      ));
       expect(rpcRequest).toBeDefined();
       expect(rpcRequest.method).toBe('discord.handleMessage');
 
@@ -316,7 +317,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
       server.start();
       const mockConn = createMockConnection();
@@ -334,9 +335,9 @@ describe('GatewayServer', () => {
       await vi.waitFor(() => {
         expect(mockConn.sent.some((frame: any) => frame.method === 'telemetry.turn.performance')).toBe(true);
       });
-      const request = mockConn.sent.find(
+      const request = fromAny(mockConn.sent.find(
         (frame: any) => frame.method === 'telemetry.turn.performance',
-      ) as any;
+      ));
       expect(request.params.event).toMatchObject({
         traceId: 'voice-gateway-1',
         stage: 'speech_end',
@@ -352,7 +353,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -1772,7 +1773,7 @@ describe('GatewayServer', () => {
 
     it('reports zero channel-message deliveries when every connected agent is unhealthy', async () => {
       const { server, conn } = await setupServerConnection(createMinimalOptions());
-      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(conn.conn);
       status.state = 'degraded';
       status.health = 'failed';
@@ -1821,7 +1822,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -1847,7 +1848,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -1856,7 +1857,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
       status.state = 'degraded';
@@ -1872,7 +1873,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -1881,7 +1882,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
       status.lastHealthcheckAt = Date.now() - status.healthcheckStaleAfterMs - 5;
@@ -1898,7 +1899,7 @@ describe('GatewayServer', () => {
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -1935,12 +1936,12 @@ describe('GatewayServer', () => {
       const agentSigning = await invokeRpc(agentConn, 302, 'session.hmac.sign', {});
       expect(agentSigning.error).toMatchObject({ code: GatewayErrors.CONNECTION_ROLE_DENIED });
 
-      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
       const internalStatus = statuses.get(internalConn.conn);
       expect(internalStatus.role).toBe('internal_session_integrity');
       internalStatus.lastHealthcheckAt = Date.now() - internalStatus.healthcheckStaleAfterMs - 5;
 
-      (server as any).refreshConnectionHealth();
+      (fromAny(server)).refreshConnectionHealth();
       expect(internalStatus.state).toBe('ready');
       expect(internalStatus.health).toBe('healthy');
 
@@ -1960,7 +1961,7 @@ describe('GatewayServer', () => {
       expect(internalConn.sent).not.toContainEqual(expect.objectContaining({
         method: 'voice.handleMessage',
       }));
-      const agentRequest = agentConn.sent.find((message: any) => message.method === 'voice.handleMessage') as any;
+      const agentRequest = fromAny(agentConn.sent.find((message: any) => message.method === 'voice.handleMessage'));
       expect(agentRequest).toBeDefined();
       agentConn._emit({
         jsonrpc: '2.0',
@@ -1994,14 +1995,14 @@ describe('GatewayServer', () => {
       }>((resolve) => {
         resolveComplete = resolve;
       });
-      options.llmProvider.complete = vi.fn(() => completePromise) as any;
+      options.llmProvider.complete = fromAny(vi.fn(() => completePromise));
 
       const server = new GatewayServer(options);
 
       let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
-        return { close: vi.fn(), listen: vi.fn() } as any;
+        return fromAny({ close: vi.fn(), listen: vi.fn() });
       });
 
       server.start();
@@ -2010,7 +2011,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const statuses = (fromAny(server)).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
 
@@ -2034,7 +2035,7 @@ describe('GatewayServer', () => {
         expect(options.llmProvider.complete).toHaveBeenCalledTimes(1);
 
         await vi.advanceTimersByTimeAsync(status.healthcheckStaleAfterMs + 30_000);
-        (server as any).refreshConnectionHealth();
+        (fromAny(server)).refreshConnectionHealth();
 
         expect(status.state).toBe('ready');
         expect(status.health).toBe('healthy');
@@ -2566,14 +2567,14 @@ describe('GatewayServer', () => {
           vault: {
             enabled: true,
             allowActions: ['write', 'read'],
-            ops: vaultOps as any,
+            ops: fromAny(vaultOps),
           },
         },
-        mcpBroker: {
+        mcpBroker: fromAny({
           health: mcpHealth,
           releaseCompanion: vi.fn(async () => {}),
           close: vi.fn(async () => {}),
-        } as any,
+        }),
       });
 
       const initial = await invokeRpc(conn, 600, 'runtime.health', {});

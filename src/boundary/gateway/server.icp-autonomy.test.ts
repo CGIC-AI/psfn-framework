@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -531,9 +532,9 @@ async function setup(
   });
   const options: GatewayServerOptions = {
     socketPath: '/tmp/icp-autonomy-test.sock',
-    llmProvider: llmProvider as any,
-    embeddingService: { embed: vi.fn(), embedBatch: vi.fn(), dims: 16 } as any,
-    discordAdapter: { id: 'discord', outbound: { textChunkLimit: 2_000, sendText: vi.fn() } } as any,
+    llmProvider: fromAny(llmProvider),
+    embeddingService: fromAny({ embed: vi.fn(), embedBatch: vi.fn(), dims: 16 }),
+    discordAdapter: fromAny({ id: 'discord', outbound: { textChunkLimit: 2_000, sendText: vi.fn() } }),
     policyConfig: { workspacePath: '/workspace' },
     intakeScreeningMode: 'off',
     intakeScreeningProvider: () => null,
@@ -558,7 +559,7 @@ async function setup(
   let onConnection: ((conn: GatewayRpcConnection) => void) | undefined;
   mockedCreateSocketServer.mockImplementation((_path, callback) => {
     onConnection = callback;
-    return { close: vi.fn(), listen: vi.fn() } as any;
+    return fromAny({ close: vi.fn(), listen: vi.fn() });
   });
   const server = new GatewayServer(options);
   server.start();

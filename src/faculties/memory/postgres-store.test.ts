@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { QueryResult } from 'pg';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { MemoryRetriever } from './retrieval.js';
@@ -1396,13 +1397,13 @@ describe('postgres memory store unit coverage', () => {
     });
     const activeRow = makeMemoryRow(active);
     const deletedRow = makeMemoryRow(deleted);
-    (activeRow as any).extracted_at = String(active.extractedAt);
-    (activeRow as any).last_accessed = String(active.lastAccessed);
-    (activeRow as any).access_count = String(active.accessCount);
-    (deletedRow as any).extracted_at = String(deleted.extractedAt);
-    (deletedRow as any).last_accessed = String(deleted.lastAccessed);
-    (deletedRow as any).access_count = String(deleted.accessCount);
-    (deletedRow as any).deleted_at = String(deleted.deletedAt);
+    (fromAny(activeRow)).extracted_at = String(active.extractedAt);
+    (fromAny(activeRow)).last_accessed = String(active.lastAccessed);
+    (fromAny(activeRow)).access_count = String(active.accessCount);
+    (fromAny(deletedRow)).extracted_at = String(deleted.extractedAt);
+    (fromAny(deletedRow)).last_accessed = String(deleted.lastAccessed);
+    (fromAny(deletedRow)).access_count = String(deleted.accessCount);
+    (fromAny(deletedRow)).deleted_at = String(deleted.deletedAt);
     pool.memories.set(active.id, activeRow);
     pool.memories.set(deleted.id, deletedRow);
     postgresMocks.activePool = pool;

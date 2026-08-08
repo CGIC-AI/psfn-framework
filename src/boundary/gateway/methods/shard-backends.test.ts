@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './types.js';
 import type { PolicyConfig } from '../policy.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
@@ -88,14 +89,14 @@ function createHarness(options: HarnessOptions): {
   });
   const executor = vi.fn(options.executor ?? (async context => unavailableResult(context.backend)));
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromAny({}),
+    embeddingService: fromAny({}),
+    discordAdapter: fromAny({}),
     policyConfig: options.policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,

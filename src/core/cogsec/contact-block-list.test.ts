@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -139,7 +140,7 @@ describe('ContactBlockListStore', () => {
   it('rejects invalid block inputs (fail closed)', () => {
     const store = new ContactBlockListStore(path);
     expect(() => store.block({ channelType: '', contactId: '42', mode: 'soft', actor: companionActor })).toThrow();
-    expect(() => store.block({ channelType: 'discord', contactId: '42', mode: 'nope' as any, actor: companionActor })).toThrow();
-    expect(() => store.block({ channelType: 'discord', contactId: '42', mode: 'soft', scope: 'weird' as any, actor: companionActor })).toThrow();
+    expect(() => store.block({ channelType: 'discord', contactId: '42', mode: fromAny('nope'), actor: companionActor })).toThrow();
+    expect(() => store.block({ channelType: 'discord', contactId: '42', mode: 'soft', scope: fromAny('weird'), actor: companionActor })).toThrow();
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createMemoryTool } from './tools.js';
 import type { MemoryWriter } from './writer.js';
 import type { MemoryStorePort } from './memory-store-port.js';
@@ -105,7 +106,7 @@ describe('memory tool action=shared_background', () => {
       trust_level: 'primary',
       channel_visibility: 'private',
     });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('Shared background between Ada and Bosco:');
     expect(text).toContain('[edge-evidence]');
     expect(text).toContain('A and B met at the conference');
@@ -124,7 +125,7 @@ describe('memory tool action=shared_background', () => {
       trust_level: 'public',
       channel_visibility: 'public',
     });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('No shared-background memories are visible');
     expect(text).toContain('Withheld context: 2');
     expect(text).toContain('trust ceiling');
@@ -142,7 +143,7 @@ describe('memory tool action=shared_background', () => {
       trust_level: 'primary',
       channel_visibility: 'private',
     });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('contact_a and contact_b are both required');
   });
 
@@ -158,7 +159,7 @@ describe('memory tool action=shared_background', () => {
       trust_level: 'primary',
       channel_visibility: 'private',
     });
-    const text = resultText(result as any);
+    const text = resultText(fromAny(result));
     expect(text).toContain('shared-background retrieval is not configured');
   });
 });

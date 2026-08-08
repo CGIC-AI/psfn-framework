@@ -3,13 +3,8 @@
   "typescriptVersion": "5.9.3",
   "project": "tsconfig.json",
   "aggregation": "path-and-code-count",
-  "totalErrors": 7,
-  "filesWithErrors": 3,
+  "totalErrors": 0,
+  "filesWithErrors": 0,
   "errors": [
-    {"path":"src/app/e2e/icp-certification/agent-process.ts","code":"TS2322","count":1},
-    {"path":"src/app/e2e/icp-certification/agent-process.ts","code":"TS2339","count":1},
-    {"path":"src/app/e2e/icp-certification/agent-process.ts","code":"TS2345","count":3},
-    {"path":"src/test-support/context-manifest.ts","code":"TS2741","count":1},
-    {"path":"src/test-support/memory-subject-mutation-contract.ts","code":"TS2322","count":1}
   ]
 }

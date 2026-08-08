@@ -56,6 +56,7 @@ import {
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import { createPersonaPreambleService } from '../../../core/identity/persona-preamble.js';
 import { resolveCoreCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { createAgentFleetPostureProvider } from '../../agent/fleet-posture.js';
 import { startIcpRuntimeAvailability } from '../../agent/icp-runtime-availability.js';
 
@@ -144,10 +145,11 @@ function projectCandidate(candidate: {
 async function main(): Promise<void> {
   const startup = prepareAgentStartupContext({ env: process.env, log: logger });
   const databaseUrl = startup.config.postgresDatabaseUrl?.trim();
-  const companionId = startup.config.companionId?.trim();
-  if (!databaseUrl || !companionId) {
+  const companionIdRaw = startup.config.companionId?.trim();
+  if (!databaseUrl || !companionIdRaw) {
     throw new Error('ICP certification agent requires Postgres and a companion identity');
   }
+  const companionId = createCompanionId(companionIdRaw, 'ICP certification companionId');
   const gateway = await GatewayClient.connectEndpoint(
     startup.gatewayRpcEndpoint,
     CERTIFICATION_EMBEDDING_DIMS,
@@ -616,7 +618,7 @@ async function main(): Promise<void> {
           if (candidate.deliveryDisposition === 'delivered') {
             const channelId = composeCompanionDmChannelId(
               companionId,
-              candidate.peerCompanionId,
+              createCompanionId(candidate.peerCompanionId, 'candidate peerCompanionId'),
             );
             const sourceMessageId = `icp-initiation:${candidate.candidateId}`;
             const observation = await agent.findIcpDeliveryObservation(channelId, sourceMessageId);
@@ -665,7 +667,10 @@ async function main(): Promise<void> {
           if (candidate.preferredChannel !== 'dm') {
             throw new Error('Certification delivery recovery currently requires a companion DM');
           }
-          const channelId = composeCompanionDmChannelId(companionId, candidate.peerCompanionId);
+          const channelId = composeCompanionDmChannelId(
+            companionId,
+            createCompanionId(candidate.peerCompanionId, 'candidate peerCompanionId'),
+          );
           const sourceMessageId = `icp-initiation:${candidate.candidateId}`;
           const observation = await agent.findIcpDeliveryObservation(channelId, sourceMessageId);
           const response = observation?.recoveryResponse;
@@ -907,7 +912,7 @@ async function main(): Promise<void> {
             result: {
               compaction: {
                 compacted: compaction.compacted,
-                compactedCount: compaction.compactedCount ?? 0,
+                compactedCount: recent.length - compaction.recent.length,
               },
               compactionThresholdPct: startup.coreConfig.compactionThresholdPct,
               recentCount: recent.length,

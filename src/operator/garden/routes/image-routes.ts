@@ -230,6 +230,10 @@ export function buildAdminImageRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/images/generated/', 'id', '/blob'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         imagesService.getGeneratedImageBlob(id).then(
           (blob) => {
             if (!blob) {
@@ -246,6 +250,10 @@ export function buildAdminImageRoutes(options: {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/images/generated/', 'id'),
       handle: (req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -277,6 +285,10 @@ export function buildAdminImageRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/images/generated/', 'id', '/promote-reference'),
       handle: (req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -431,6 +443,10 @@ export function buildAdminImageRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/image-references/', 'id', '/lineage'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         imagesService.getReferenceLineage(id).then(
           lineage => sendJson(res, 200, lineage, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, statusFromReferenceError(error), {
@@ -443,6 +459,10 @@ export function buildAdminImageRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/image-references/', 'id', '/blob'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         imagesService.getReferencePhotoBlob(id).then(
           (blob) => {
             if (!blob) {
@@ -459,6 +479,10 @@ export function buildAdminImageRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/image-references/', 'id', '/default'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         imagesService.setDefaultReferencePhoto(id).then(
           reference => {
             appendIdentityMutationAudit(
@@ -484,6 +508,10 @@ export function buildAdminImageRoutes(options: {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/image-references/', 'id'),
       handle: (req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -527,6 +555,10 @@ export function buildAdminImageRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/image-references/', 'id'),
       handle: (_req, res, { id }) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Image id is required' });
+          return;
+        }
         imagesService.deleteReferencePhoto(id).then(
           () => {
             appendIdentityMutationAudit(

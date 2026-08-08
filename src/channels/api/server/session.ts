@@ -79,16 +79,22 @@ export function getMessageTextContent(message: ChatCompletionRequest['messages']
 
 export function getLastUserMessage(messages: ChatCompletionRequest['messages']): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return getMessageTextContent(messages[i]);
+    const message = messages[i];
+    if (message === undefined) continue;
+    if (message.role === 'user') return getMessageTextContent(message);
   }
-  return getMessageTextContent(messages[messages.length - 1]);
+  const fallback = messages[messages.length - 1];
+  return fallback !== undefined ? getMessageTextContent(fallback) : '';
 }
 
 export function getLastUserMessageAttachments(messages: ChatCompletionRequest['messages']): Attachment[] {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return getMessageImageAttachments(messages[i]);
+    const message = messages[i];
+    if (message === undefined) continue;
+    if (message.role === 'user') return getMessageImageAttachments(message);
   }
-  return getMessageImageAttachments(messages[messages.length - 1]);
+  const fallback = messages[messages.length - 1];
+  return fallback !== undefined ? getMessageImageAttachments(fallback) : [];
 }
 
 export function getMessageImageAttachments(
@@ -127,9 +133,12 @@ export function getLastUserMessageFileParts(
   messages: ChatCompletionRequest['messages'],
 ): ApiFilePartExtraction {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return getMessageFileParts(messages[i]);
+    const message = messages[i];
+    if (message === undefined) continue;
+    if (message.role === 'user') return getMessageFileParts(message);
   }
-  return getMessageFileParts(messages[messages.length - 1]);
+  const fallback = messages[messages.length - 1];
+  return fallback !== undefined ? getMessageFileParts(fallback) : { candidates: [], rejected: [] };
 }
 
 export function getMessageFileParts(
@@ -156,8 +165,8 @@ export function getMessageFileParts(
     }
     const rawData = typeof file.file_data === 'string' ? file.file_data.trim() : '';
     const dataUrl = FILE_DATA_URL_PATTERN.exec(rawData);
-    const declaredMime = dataUrl ? dataUrl[1].trim().toLowerCase() : '';
-    const base64 = (dataUrl ? dataUrl[2] : rawData).replace(/\s+/g, '');
+    const declaredMime = dataUrl ? (dataUrl[1] ?? '').trim().toLowerCase() : '';
+    const base64 = (dataUrl ? (dataUrl[2] ?? '') : rawData).replace(/\s+/g, '');
     // Request validation already enforced strict base64; this guard keeps the
     // helper safe for direct callers.
     if (!base64) {
@@ -464,14 +473,14 @@ function contentPartToImageAttachment(part: Record<string, unknown>, index: numb
 function parseImageDataUrl(url: string): { mimeType: string; dataBase64: string } | null {
   const match = DATA_IMAGE_URL_PATTERN.exec(url.trim());
   if (!match) return null;
-  const mimeType = normalizeImageContentType(match[1]);
-  const dataBase64 = normalizeBase64(match[2]);
+  const mimeType = normalizeImageContentType(match[1] ?? '');
+  const dataBase64 = normalizeBase64(match[2] ?? '');
   if (!mimeType || !dataBase64) return null;
   return { mimeType, dataBase64 };
 }
 
 function normalizeImageContentType(value: string): string {
-  const normalized = value.split(';')[0].trim().toLowerCase();
+  const normalized = (value.split(';')[0] ?? '').trim().toLowerCase();
   return normalized.startsWith('image/') ? normalized : '';
 }
 

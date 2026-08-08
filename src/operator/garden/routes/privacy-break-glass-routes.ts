@@ -73,6 +73,10 @@ function routePair(input: {
       method: 'POST',
       match: paramWithSuffix(prefix, 'id', '/confirm'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Resource id is required' }, NO_STORE);
+          return;
+        }
         if (!input.appendAudit) {
           unavailable(res);
           return;
@@ -174,6 +178,10 @@ function routePair(input: {
       method: 'POST',
       match: paramWithSuffix(prefix, 'id', '/decide'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Resource id is required' }, NO_STORE);
+          return;
+        }
         if (!input.appendAudit) {
           unavailable(res);
           return;

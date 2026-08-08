@@ -130,6 +130,10 @@ export function buildAdminWishlistRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/acknowledge'),
       handle: (_req, res, { wishId }) => {
+        if (!wishId) {
+          sendJson(res, 400, { error: 'wishId is required' });
+          return;
+        }
         if (!wishlistService) {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
@@ -147,6 +151,10 @@ export function buildAdminWishlistRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/respond'),
       handle: (req, res, { wishId }) => {
+        if (!wishId) {
+          sendJson(res, 400, { error: 'wishId is required' });
+          return;
+        }
         if (!wishlistService) {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
@@ -166,6 +174,10 @@ export function buildAdminWishlistRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/convert-to-bead'),
       handle: (req, res, { wishId }) => {
+        if (!wishId) {
+          sendJson(res, 400, { error: 'wishId is required' });
+          return;
+        }
         if (!wishlistService) {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;
@@ -185,6 +197,10 @@ export function buildAdminWishlistRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/wishlist/', 'wishId', '/done'),
       handle: (_req, res, { wishId }) => {
+        if (!wishId) {
+          sendJson(res, 400, { error: 'wishId is required' });
+          return;
+        }
         if (!wishlistService) {
           sendJson(res, 503, { error: WISHLIST_UNAVAILABLE_ERROR });
           return;

@@ -633,6 +633,7 @@ export class EmotionSelfModelRuntime {
       .filter(entry => !isIntentionAppraisalArtifact(entry));
     for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
       const entry = recentEntries[index];
+      if (entry === undefined) continue;
       if (!entry.metadata || !entry.metadata.includes('"emotionState"')) {
         continue;
       }

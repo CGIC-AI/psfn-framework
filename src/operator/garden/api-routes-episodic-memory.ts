@@ -83,6 +83,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/episodic-memory/episodes/', 'id', '/arcs'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Episode id is required' });
+          return;
+        }
         withEpisodicService(episodicMemoryService, res, (service) => {
           const url = parseRequestUrl(req, `/api/admin/episodic-memory/episodes/${encodeURIComponent(id)}/arcs`);
           service.listEpisodeArcs(id, url.searchParams, context).then(
@@ -104,6 +108,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/episodic-memory/episodes/', 'id', '/provenance'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Episode id is required' });
+          return;
+        }
         withEpisodicService(episodicMemoryService, res, (service) => {
           service.getEpisodeProvenance(id, context).then(
             (payload) => {
@@ -124,6 +132,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/episodic-memory/episodes/', 'id'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Episode id is required' });
+          return;
+        }
         withEpisodicService(episodicMemoryService, res, (service) => {
           service.getEpisodeDetail(id, context).then(
             (detail) => {
@@ -144,6 +156,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/episodic-memory/threads/', 'threadId'),
       handle: (_req, res, { threadId }, context) => {
+        if (!threadId) {
+          sendJson(res, 400, { error: 'threadId is required' });
+          return;
+        }
         withEpisodicService(episodicMemoryService, res, (service) => {
           service.getThreadDetail(threadId, context).then(
             (detail) => {

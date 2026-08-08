@@ -262,6 +262,7 @@ export function applyTemporalSessionHistoryWindow(
   let missing = TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES - conversationalCount;
   for (let index = entries.length - 1; index >= 0 && missing > 0; index--) {
     const entry = entries[index];
+    if (entry === undefined) continue;
     if (kept.has(entry)) continue;
     if (!Number.isFinite(entry.timestamp) || entry.timestamp < backfillCutoff) continue;
     backfilled.push(entry);
@@ -347,6 +348,7 @@ export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBud
 
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
+    if (entry === undefined) break;
     const entryTokens = Math.max(1, countTokens(entry.content) + stampOverheadTokens(entry));
     if (selected.length >= SESSION_HISTORY_MIN_MESSAGES && usedTokens + entryTokens > tokenBudget) {
       break;
@@ -378,6 +380,9 @@ export function repairLeadingMultimodalReviewBoundary(
   const repaired = [...selectedEntries];
   while (repaired.length > 0) {
     const first = repaired[0];
+    if (first === undefined) {
+      break;
+    }
     if (!isCurrentImageReviewEntry(first)) {
       return repaired;
     }
@@ -732,9 +737,9 @@ export function buildRecentSessionSummaryFallbackText(params: {
 
 function joinHistorySummaryClauses(clauses: readonly string[]): string {
   if (clauses.length === 0) return '';
-  if (clauses.length === 1) return clauses[0];
-  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
-  return `${clauses.slice(0, -1).join('; ')}; and ${clauses[clauses.length - 1]}`;
+  if (clauses.length === 1) return clauses[0] ?? '';
+  if (clauses.length === 2) return `${clauses[0] ?? ''} and ${clauses[1] ?? ''}`;
+  return `${clauses.slice(0, -1).join('; ')}; and ${clauses[clauses.length - 1] ?? ''}`;
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {

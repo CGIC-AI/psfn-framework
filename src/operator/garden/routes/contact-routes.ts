@@ -13,6 +13,10 @@ export function buildAdminContactRoutes(options: {
   const { contactsService, withBody } = options;
 
   const handleContactUpdate: AdminApiRoute['handle'] = (req, res, { id }, context) => {
+    if (!id) {
+      sendJson(res, 400, { error: 'Contact id is required' });
+      return;
+    }
     withBody(req, res, (body) => {
       const parsed = parseAdminJsonBody(body);
       if (!parsed.ok) {
@@ -99,6 +103,10 @@ export function buildAdminContactRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/merge'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -124,6 +132,10 @@ export function buildAdminContactRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/unlink'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -149,6 +161,10 @@ export function buildAdminContactRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/conversation-channel/delete'),
       handle: (req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -174,6 +190,10 @@ export function buildAdminContactRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
         contactsService.getContactDetail(id, context).then(
           (detail) => {
             if (!detail) {
@@ -192,6 +212,10 @@ export function buildAdminContactRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }, context) => {
+        if (!id) {
+          sendJson(res, 400, { error: 'Contact id is required' });
+          return;
+        }
         contactsService.archiveContact(id, context).then(
           (result) => {
             if (!result.ok) {

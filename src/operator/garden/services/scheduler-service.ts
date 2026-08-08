@@ -360,6 +360,9 @@ export class AdminSchedulerService {
       }
 
       const template = policy.templates[idx];
+      if (template === undefined) {
+        return { ok: false, message: `Reflection template "${templateId}" not found for task "${taskId}"` };
+      }
       const templateBefore = cloneReflectionTemplate(template);
       if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
       if (updates.enabled !== undefined) template.enabled = updates.enabled;
@@ -625,6 +628,9 @@ export class AdminSchedulerService {
     }
 
     const template = policy.templates[idx];
+    if (template === undefined) {
+      return { ok: false, message: `Reflection template "${templateId}" not found` };
+    }
     const templateBefore = cloneReflectionTemplate(template);
     if (updates.name !== undefined) template.name = updates.name;
     if (updates.prompt !== undefined) template.prompt = updates.prompt;

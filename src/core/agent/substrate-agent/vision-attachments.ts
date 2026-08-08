@@ -533,6 +533,9 @@ async function screenTurnImageAttachments(input: {
   const decisionByKey = new Map<string, Promise<VisionIntakeScreenDecision>>();
   const decisions = await Promise.all(candidates.map((candidate, position) => {
     const key = candidateKeys[position];
+    if (key === undefined) {
+      return screenOne(candidate);
+    }
     let pending = decisionByKey.get(key);
     if (!pending) {
       pending = screenOne(candidate);
@@ -550,6 +553,8 @@ async function screenTurnImageAttachments(input: {
   let screenModel: string | undefined;
   decisions.forEach((decision, position) => {
     const candidate = candidates[position];
+    const key = candidateKeys[position];
+    if (candidate === undefined || key === undefined) return;
     if (decision.withheld) {
       withheld.add(candidate.attachment);
       withheldUrls.push(candidate.attachment.url.trim());
@@ -567,7 +572,6 @@ async function screenTurnImageAttachments(input: {
     }
     // One prompt block / description per UNIQUE delivered image, so duplicates
     // do not inflate the model context or double-count extractions.
-    const key = candidateKeys[position];
     if (!collectedKeys.has(key)) {
       collectedKeys.add(key);
       if (decision.promptBlock) {
@@ -654,6 +658,7 @@ async function analyzeVisionUrlsInChunks(input: {
   let model: string | undefined;
   settled.forEach((result, index) => {
     const imageChunk = chunks[index];
+    if (imageChunk === undefined) return;
     const start = index * VISION_ATTACHMENT_MAX_COUNT + 1;
     const end = start + imageChunk.length - 1;
     const rangeLabel = chunks.length === 1
@@ -772,8 +777,8 @@ async function analyzeWithDedicatedVisionRetry(input: {
 }
 
 function resolveAttachmentImageContentType(attachment: Attachment): string | null {
-  const normalizedContentType = attachment.contentType
-    .split(';')[0]
+  const normalizedContentType = (attachment.contentType
+    .split(';')[0] ?? '')
     .trim()
     .toLowerCase();
   if (normalizedContentType.startsWith('image/')) {
@@ -932,8 +937,8 @@ async function resolveVisionAttachmentContent(input: {
         lane: 'default',
         maxBytes: VISION_IMAGE_MAX_BYTES,
       });
-      const responseMimeType = fetched.mimeType
-        .split(';')[0]
+      const responseMimeType = (fetched.mimeType
+        .split(';')[0] ?? '')
         .trim()
         .toLowerCase();
       if (!responseMimeType.startsWith('image/')) {

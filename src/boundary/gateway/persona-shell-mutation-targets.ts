@@ -87,6 +87,9 @@ function decodeAnsiCodePoint(digits: string, radix: number, fallback: string): s
 function consumeAnsiEscape(script: string, slashIndex: number): { value: string; endIndex: number } {
   if (slashIndex + 1 >= script.length) return { value: '\\', endIndex: slashIndex };
   const escaped = script[slashIndex + 1];
+  if (escaped === undefined) {
+    return { value: '\\', endIndex: slashIndex };
+  }
   const simpleEscapes: Readonly<Record<string, string>> = {
     a: '\x07',
     b: '\b',
@@ -101,34 +104,34 @@ function consumeAnsiEscape(script: string, slashIndex: number): { value: string;
     "'": "'",
   };
   if (Object.prototype.hasOwnProperty.call(simpleEscapes, escaped)) {
-    return { value: simpleEscapes[escaped], endIndex: slashIndex + 1 };
+    return { value: simpleEscapes[escaped] ?? escaped, endIndex: slashIndex + 1 };
   }
   const numeric = script.slice(slashIndex + 1);
   const hexadecimal = numeric.match(/^x([0-9a-f]{1,2})/iu);
   if (hexadecimal) {
     return {
-      value: decodeAnsiCodePoint(hexadecimal[1], 16, escaped),
+      value: decodeAnsiCodePoint(hexadecimal[1] ?? '', 16, escaped),
       endIndex: slashIndex + hexadecimal[0].length,
     };
   }
   const unicode = numeric.match(/^u([0-9a-f]{1,4})/iu);
   if (unicode) {
     return {
-      value: decodeAnsiCodePoint(unicode[1], 16, escaped),
+      value: decodeAnsiCodePoint(unicode[1] ?? '', 16, escaped),
       endIndex: slashIndex + unicode[0].length,
     };
   }
   const longUnicode = numeric.match(/^U([0-9a-f]{1,8})/u);
   if (longUnicode) {
     return {
-      value: decodeAnsiCodePoint(longUnicode[1], 16, escaped),
+      value: decodeAnsiCodePoint(longUnicode[1] ?? '', 16, escaped),
       endIndex: slashIndex + longUnicode[0].length,
     };
   }
   const octal = numeric.match(/^([0-7]{1,3})/u);
   if (octal) {
     return {
-      value: decodeAnsiCodePoint(octal[1], 8, escaped),
+      value: decodeAnsiCodePoint(octal[1] ?? '', 8, escaped),
       endIndex: slashIndex + octal[0].length,
     };
   }
@@ -148,6 +151,7 @@ function tokenizeShellScript(script: string): ShellToken[] {
 
   for (let index = 0; index < script.length; index += 1) {
     const char = script[index];
+    if (char === undefined) continue;
     if (comment) {
       if (char === '\n' || char === '\r') {
         comment = false;
@@ -205,7 +209,10 @@ function tokenizeShellScript(script: string): ShellToken[] {
       continue;
     }
     if (char === '\\' && index + 1 < script.length) {
-      word += script[++index];
+      index += 1;
+      const nextChar = script[index];
+      if (nextChar === undefined) continue;
+      word += nextChar;
       continue;
     }
     if (char === '#' && word.length === 0) {
@@ -270,6 +277,7 @@ function normalizeCommandWords(input: readonly string[]): string[] {
   for (;;) {
     if (words.length === 0) return words;
     const first = words[0];
+    if (first === undefined) return words;
     if (SHELL_CONTROL_WORDS.has(first) || /^[A-Za-z_][A-Za-z0-9_]*=/u.test(first)) {
       words.shift();
       continue;
@@ -296,9 +304,11 @@ function resolveNestedShellScript(commandValue: string, args: readonly string[])
   if (command === 'eval') return args.join(' ');
   if (command !== 'bash' && command !== 'sh' && command !== 'dash') return null;
   const commandIndex = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/u.test(arg));
-  return commandIndex >= 0 && typeof args[commandIndex + 1] === 'string'
-    ? args[commandIndex + 1]
-    : null;
+  if (commandIndex >= 0) {
+    const scriptArg = args[commandIndex + 1];
+    if (typeof scriptArg === 'string') return scriptArg;
+  }
+  return null;
 }
 
 function resolveTargetPath(rawPath: string, cwd: string): string | null {
@@ -381,22 +391,26 @@ function collectScriptMutationTargets(script: string, cwd: string): ShellMutatio
     }
   };
   for (let scriptIndex = 0; scriptIndex < pendingScripts.length; scriptIndex += 1) {
+    const script = pendingScripts[scriptIndex];
+    if (script === undefined) continue;
     let words: string[] = [];
     let awaitingRedirect: 'output' | 'input' | null = null;
     const flushCommand = (): void => {
       const normalizedWords = normalizeCommandWords(words);
       words = [];
       if (normalizedWords.length === 0) return;
+      const commandWord = normalizedWords[0];
+      if (commandWord === undefined) return;
       targets.push(...collectCommandMutationTargets(
-        normalizedWords[0],
+        commandWord,
         normalizedWords.slice(1),
         cwd,
       ));
-      const nestedScript = resolveNestedShellScript(normalizedWords[0], normalizedWords.slice(1));
+      const nestedScript = resolveNestedShellScript(commandWord, normalizedWords.slice(1));
       if (nestedScript !== null) queueScript(nestedScript);
     };
 
-    for (const token of tokenizeShellScript(pendingScripts[scriptIndex])) {
+    for (const token of tokenizeShellScript(script)) {
       if (token.kind === 'separator') {
         flushCommand();
         awaitingRedirect = null;
@@ -439,7 +453,9 @@ export function collectShellMutationTargets(
   const args = Array.isArray(params.args) ? params.args : [];
   const commandWords = normalizeCommandWords([params.command, ...args]);
   if (commandWords.length === 0) return [];
-  const nestedScript = resolveNestedShellScript(commandWords[0], commandWords.slice(1));
+  const commandWord = commandWords[0];
+  if (commandWord === undefined) return [];
+  const nestedScript = resolveNestedShellScript(commandWord, commandWords.slice(1));
   if (nestedScript !== null) return collectScriptMutationTargets(nestedScript, cwd);
-  return collectCommandMutationTargets(commandWords[0], commandWords.slice(1), cwd);
+  return collectCommandMutationTargets(commandWord, commandWords.slice(1), cwd);
 }

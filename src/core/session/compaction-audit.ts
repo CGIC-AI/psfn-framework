@@ -25,8 +25,11 @@ export function buildCompactionSourceHashMetadata(
   entries: SessionEntry[],
 ): CompactionSourceHashMetadata | null {
   if (entries.length === 0) return null;
-  const firstMessageId = entries[0].id;
-  const lastMessageId = entries[entries.length - 1].id;
+  const firstEntry = entries[0];
+  const lastEntry = entries[entries.length - 1];
+  if (firstEntry === undefined || lastEntry === undefined) return null;
+  const firstMessageId = firstEntry.id;
+  const lastMessageId = lastEntry.id;
   if (!Number.isInteger(firstMessageId) || !Number.isInteger(lastMessageId) || firstMessageId <= 0 || lastMessageId <= 0) {
     return null;
   }
@@ -56,10 +59,23 @@ export function parseCompactionSourceHashTag(summary: string): CompactionSourceH
   const match = SOURCE_BLOCK_SHA256_TAG_PATTERN.exec(summary);
   if (!match) return null;
 
-  const firstMessageId = Number.parseInt(match[1], 10);
-  const lastMessageId = Number.parseInt(match[2], 10);
-  const messageCount = Number.parseInt(match[3], 10);
-  const sha256 = match[4].toLowerCase();
+  const rawFirstMessageId = match[1];
+  const rawLastMessageId = match[2];
+  const rawMessageCount = match[3];
+  const rawSha256 = match[4];
+  if (
+    rawFirstMessageId === undefined
+    || rawLastMessageId === undefined
+    || rawMessageCount === undefined
+    || rawSha256 === undefined
+  ) {
+    return null;
+  }
+
+  const firstMessageId = Number.parseInt(rawFirstMessageId, 10);
+  const lastMessageId = Number.parseInt(rawLastMessageId, 10);
+  const messageCount = Number.parseInt(rawMessageCount, 10);
+  const sha256 = rawSha256.toLowerCase();
 
   if (!Number.isInteger(firstMessageId) || firstMessageId <= 0) return null;
   if (!Number.isInteger(lastMessageId) || lastMessageId <= 0) return null;

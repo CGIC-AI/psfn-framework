@@ -194,6 +194,10 @@ export function buildAdminSettingsRoutes(options: {
       method: 'GET',
       match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
       handle: (_req, res, params, context) => {
+        if (!params.key) {
+          sendJson(res, 400, { error: 'Settings key is required' });
+          return;
+        }
         const raw = getSubConfigJson(params.key, context);
         if (raw === null) {
           sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
@@ -207,6 +211,11 @@ export function buildAdminSettingsRoutes(options: {
       method: 'POST',
       match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
       handle: (req, res, params, context) => {
+        const key = params.key;
+        if (!key) {
+          sendJson(res, 400, { error: 'Settings key is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const formParams = new URLSearchParams(body);
           const configJson = formParams.get('configJson');
@@ -214,7 +223,7 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          void saveSubConfigJson(params.key, configJson, context).then((result) => {
+          void saveSubConfigJson(key, configJson, context).then((result) => {
             if (!result.ok) {
               appendSettingsMutationAudit(
                 'denied',
@@ -250,6 +259,10 @@ export function buildAdminSettingsRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/settings/', 'key'),
       handle: (_req, res, params, context) => {
+        if (!params.key) {
+          sendJson(res, 400, { error: 'Settings key is required' });
+          return;
+        }
         const raw = getSubConfigJson(params.key, context);
         if (raw === null) {
           sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
@@ -263,6 +276,11 @@ export function buildAdminSettingsRoutes(options: {
       method: 'POST',
       match: prefixedParamPath('/api/settings/', 'key'),
       handle: (req, res, params, context) => {
+        const key = params.key;
+        if (!key) {
+          sendJson(res, 400, { error: 'Settings key is required' });
+          return;
+        }
         withBody(req, res, (body) => {
           const formParams = new URLSearchParams(body);
           const configJson = formParams.get('configJson');
@@ -270,7 +288,7 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          void saveSubConfigJson(params.key, configJson, context).then((result) => {
+          void saveSubConfigJson(key, configJson, context).then((result) => {
             if (!result.ok) {
               appendSettingsMutationAudit(
                 'denied',

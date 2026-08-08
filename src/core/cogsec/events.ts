@@ -782,7 +782,7 @@ export class CogSecEventStore {
     const caseId = parseCaseId(input.caseId, 'caseId');
     return this.withWriteLock(() => {
       const existing = this.state.events[caseId];
-      if (Object.prototype.hasOwnProperty.call(this.state.events, caseId)) {
+      if (existing !== undefined) {
         return this.updateLoadedEvent(caseId, updateExisting(cloneEvent(existing)));
       }
       const event = normalizeCreateInput(input, this.now());
@@ -801,10 +801,11 @@ export class CogSecEventStore {
   getEvent(caseId: string): CogSecEvent | null {
     const normalized = parseCaseId(caseId, 'caseId');
     this.state = this.load();
-    if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
+    const existing = this.state.events[normalized];
+    if (existing === undefined) {
       return null;
     }
-    return cloneEvent(this.state.events[normalized]);
+    return cloneEvent(existing);
   }
 
   listEvents(): CogSecEvent[] {
@@ -822,10 +823,10 @@ export class CogSecEventStore {
   appendEpochCut(caseId: string, epochCut: CogSecEpochCutRef): CogSecEvent {
     const normalized = parseCaseId(caseId, 'caseId');
     return this.withWriteLock(() => {
-      if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
+      const existing = this.state.events[normalized];
+      if (existing === undefined) {
         throw new Error(`CogSec event not found: ${normalized}`);
       }
-      const existing = this.state.events[normalized];
       return this.updateLoadedEvent(normalized, {
         actions: uniqueStrings([...existing.actions, 'epoch_cut']) as CogSecAction[],
         epochCuts: [...existing.epochCuts, parseEpochCutRef(epochCut, 'epochCut')],
@@ -835,10 +836,10 @@ export class CogSecEventStore {
 
   private updateLoadedEvent(caseId: string, input: CogSecUpdateEventInput): CogSecEvent {
     const normalized = parseCaseId(caseId, 'caseId');
-    if (!Object.prototype.hasOwnProperty.call(this.state.events, normalized)) {
+    const existing = this.state.events[normalized];
+    if (existing === undefined) {
       throw new Error(`CogSec event not found: ${normalized}`);
     }
-    const existing = this.state.events[normalized];
 
     const updatedAt = this.now().toISOString();
     const next: CogSecEvent = {

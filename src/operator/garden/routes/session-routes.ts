@@ -354,6 +354,10 @@ export function buildAdminSessionRoutes(options: {
       method: 'GET',
       match: wrappedParamPath('/api/admin/sessions/', '/search', 'channelId'),
       handle: (req, res, { channelId }, context) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         const params = parseRequestUrl(req).searchParams;
         const query = params.get('q')?.trim() ?? '';
         if (!query) {
@@ -381,6 +385,10 @@ export function buildAdminSessionRoutes(options: {
       method: 'GET',
       match: wrappedParamPath('/api/admin/sessions/', '/detail', 'channelId'),
       handle: (req, res, { channelId }, context) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         (context
           ? sessionService.getSessionDetail(channelId, context)
           : sessionService.getSessionDetail(channelId)).then(
@@ -402,6 +410,10 @@ export function buildAdminSessionRoutes(options: {
       method: 'GET',
       match: nestedParamPath('/api/admin/sessions/', '/turns/', 'channelId', 'turnId'),
       handle: (req, res, { channelId, turnId }, context) => {
+        if (!channelId || !turnId) {
+          sendJson(res, 400, { error: 'channelId and turnId are required' });
+          return;
+        }
         (context
           ? sessionService.getSessionTurnDetail(channelId, turnId, context)
           : sessionService.getSessionTurnDetail(channelId, turnId)).then(
@@ -420,6 +432,10 @@ export function buildAdminSessionRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/sessions/', 'channelId'),
       handle: (req, res, { channelId }, context) => {
+        if (!channelId) {
+          sendJson(res, 400, { error: 'channelId is required' });
+          return;
+        }
         const parsed = parseSessionMessageQuery(req);
         if (!parsed.ok) {
           sendJson(res, 400, { error: parsed.error });

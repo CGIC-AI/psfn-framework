@@ -52,6 +52,7 @@ import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
 import { GatewayImageOps } from '../../primitives/images/gateway-ops.js';
 import { ImageReferenceStore } from '../../primitives/images/reference-store.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
+import { PiProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { registerWebTools } from '../../boundary/integrations/web/runtime-wiring.js';
 import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.js';
 import { createWebSearchQueryJson } from '../../boundary/integrations/web/search.js';
@@ -272,6 +273,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
+  const runtime = new PiProviderRuntime();
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
     postgresDatabaseUrl,
@@ -352,6 +354,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider,
+    runtime,
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
@@ -560,6 +563,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
+    runtime,
     referenceResolver: imageReferenceStore,
   });
   registerImageTools(agentLoop, new GatewayImageOps(gateway, () => ({

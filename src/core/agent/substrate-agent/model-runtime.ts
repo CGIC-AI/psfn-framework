@@ -8,6 +8,7 @@ import {
   resolveModelSelection,
 } from '../stream-adapter.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
+import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
 export interface ModelRuntimeState {
   modelResolved: boolean;
@@ -51,10 +52,11 @@ export function resolveTurnWorkerExecutionPolicy(
 
 export function getModelSignatureForPurpose(
   config: CoreSubstrateConfig,
+  runtime: ProviderRuntime,
   purpose: ModelPurpose,
 ): string {
   try {
-    const selection = resolveModelSelection(config, purpose);
+    const selection = resolveModelSelection(config, runtime, purpose);
     const contextWindow = selection.contextWindow ?? config.defaultContextWindow;
     return `${purpose}::${selection.provider}::${selection.model}::${selection.maxTokens}::${contextWindow}`;
   } catch (error) {
@@ -107,12 +109,13 @@ export function requiresFailClosedWorkerModelResolution(
 
 export function getTurnModelSignature(
   config: CoreSubstrateConfig,
+  runtime: ProviderRuntime,
   message?: SubstrateMessage,
 ): string {
   const override = normalizeTurnModelOverride(message);
   if (!override) {
     const purpose = resolveTurnModelPurpose(message);
-    return getModelSignatureForPurpose(config, purpose);
+    return getModelSignatureForPurpose(config, runtime, purpose);
   }
   return `override::${override.provider}::${override.model}::${override.maxTokens ?? ''}::${override.contextWindow ?? ''}`;
 }
@@ -120,6 +123,7 @@ export function getTurnModelSignature(
 interface RefreshModelFromConfigParams {
   reason: ModelRefreshReason;
   config: CoreSubstrateConfig;
+  runtime: ProviderRuntime;
   state: ModelRuntimeState;
   message?: SubstrateMessage;
   resolutionFailurePolicy?: 'retain-current' | 'propagate';
@@ -134,7 +138,7 @@ export function refreshModelFromConfig(
   const override = normalizeTurnModelOverride(params.message);
   const workerExecution = resolveTurnWorkerExecutionPolicy(params.message);
   const purpose = override ? null : resolveTurnModelPurpose(params.message);
-  const nextSignature = getTurnModelSignature(params.config, params.message);
+  const nextSignature = getTurnModelSignature(params.config, params.runtime, params.message);
 
   if (params.state.modelResolved && params.state.modelSignature === nextSignature) {
     return params.state;
@@ -142,8 +146,8 @@ export function refreshModelFromConfig(
 
   try {
     const resolved = override
-      ? resolveExplicitModel(params.config, override)
-      : resolveModel(params.config, purpose ?? 'chat');
+      ? resolveExplicitModel(params.config, params.runtime, override)
+      : resolveModel(params.config, params.runtime, purpose ?? 'chat');
     params.setAgentModel(resolved);
     if (purpose === 'vision' && !resolved.input.includes('image')) {
       params.logger.warn('Vision purpose resolved to model without image input capability', {

@@ -12,10 +12,17 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { PiProviderRuntime, type ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
   transportStream: vi.fn(),
 }));
+
+function makeRuntime(): ProviderRuntime {
+  // Delegate model registry lookup to the real pinned pi-ai catalog so the
+  // existing focused tests continue to resolve known provider/model pairs.
+  return new PiProviderRuntime();
+}
 
 function makeTransport() {
   return {
@@ -269,7 +276,7 @@ describe('createSubstrateStreamFn', () => {
     const streamFn = createSubstrateStreamFn(config, {
       transport,
     });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
 
     const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
@@ -343,7 +350,7 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
 
     const stream = await streamFn(
       model,
@@ -376,7 +383,7 @@ describe('createSubstrateStreamFn', () => {
       })),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
 
     const stream = await streamFn(
       model,
@@ -424,7 +431,7 @@ describe('createSubstrateStreamFn', () => {
         purpose: 'agent.turn.prompt',
       },
       async () => {
-        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {});
         await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     );
@@ -497,7 +504,7 @@ describe('createSubstrateStreamFn', () => {
         purpose: 'agent.turn.prompt',
       },
       async () => {
-        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {});
         await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     );
@@ -530,7 +537,7 @@ describe('createSubstrateStreamFn', () => {
     await runWithRequestContext(
       { requestId: 'r', channelId: 'discord:general', callType: 'chat', purpose: 'agent.turn.prompt' },
       async () => {
-        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {});
         await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     );
@@ -562,7 +569,7 @@ describe('createSubstrateStreamFn', () => {
       required: ['query'],
     };
 
-    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'try a selfie' }],
       tools: [
@@ -645,7 +652,7 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'activate image analysis' }],
       tools: [toolsetTool, imageAnalyzeTool],
@@ -704,7 +711,7 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const streamFn = createSubstrateStreamFn(config, { transport });
-    const stream = await streamFn(resolveModel(config, 'chat'), fromAny({
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'activate a tool' }],
       tools: [toolsetTool],
@@ -768,7 +775,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
@@ -796,7 +803,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const mountedFleetDefault = resolveModel(config, 'chat');
+    const mountedFleetDefault = resolveModel(config, makeRuntime(), 'chat');
     const stream = await streamFn(mountedFleetDefault, makePiContext(), {});
     await collectStreamEvents(stream);
 
@@ -827,7 +834,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {});
     await collectStreamEvents(stream);
 
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
@@ -857,7 +864,7 @@ describe('createSubstrateStreamFn', () => {
       });
 
     const streamFn = makeStreamFn(config);
-    const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), makePiContext(), {});
     await collectStreamEvents(stream);
 
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
@@ -944,7 +951,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     const events = await runWithRequestContext(
       {
         turnId: 'turn-empty-primary-1',
@@ -990,7 +997,7 @@ describe('createSubstrateStreamFn', () => {
     }));
 
     const streamFn = makeStreamFn(config);
-    const mountedChatModel = resolveModel(config, 'chat');
+    const mountedChatModel = resolveModel(config, makeRuntime(), 'chat');
     const events = await runWithRequestContext(
       {
         turnId: 'turn-reasoning-stream-1',
@@ -1038,7 +1045,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const mountedChatModel = resolveModel(config, 'chat');
+    const mountedChatModel = resolveModel(config, makeRuntime(), 'chat');
     await expect(runWithRequestContext(
       {
         turnId: 'turn-reasoning-stream-missing',
@@ -1096,7 +1103,7 @@ describe('createSubstrateStreamFn', () => {
     const onTerminalFailure = vi.fn();
 
     const streamFn = makeStreamFn(config, { onTerminalFailure });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
@@ -1132,7 +1139,7 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
@@ -1187,7 +1194,7 @@ describe('createSubstrateStreamFn', () => {
     );
 
     const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     const stream = await streamFn(model, fromAny({
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'hello' }],
@@ -1220,7 +1227,7 @@ describe('resolveModel', () => {
   it('resolves chat model from roster', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(model.api).toBe('openai-completions');
     expect(model.baseUrl).toBe('http://localhost:4000/v1');
@@ -1229,7 +1236,7 @@ describe('resolveModel', () => {
   it('resolves background model from roster', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
-    const model = resolveModel(config, 'background');
+    const model = resolveModel(config, makeRuntime(), 'background');
     expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
   });
 
@@ -1241,7 +1248,7 @@ describe('resolveModel', () => {
         vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
       },
     });
-    const model = resolveModel(config, 'vision');
+    const model = resolveModel(config, makeRuntime(), 'vision');
     expect(model.id).toBe('vision-model');
     expect(model.input).toContain('image');
   });
@@ -1254,7 +1261,7 @@ describe('resolveModel', () => {
         longContext: { model: 'long-context-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 256_000 },
       },
     });
-    const model = resolveModel(config, 'context');
+    const model = resolveModel(config, makeRuntime(), 'context');
     expect(model.id).toBe('long-context-model');
   });
 
@@ -1289,7 +1296,7 @@ describe('resolveModel', () => {
       },
     });
 
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     expect(model.id).toBe('z-ai/glm-5.2');
     expect(model.provider).toBe('openrouter');
     expect(model.baseUrl).toBe('https://openrouter.ai/api/v1');
@@ -1345,7 +1352,7 @@ describe('resolveModel', () => {
       },
     });
 
-    expect(() => resolveModel(config, 'vision'))
+    expect(() => resolveModel(config, makeRuntime(), 'vision'))
       .toThrow(/vision_purpose_resolved_non_vision_model.*z-ai\/glm-5/s);
   });
 
@@ -1371,7 +1378,7 @@ describe('resolveModel', () => {
       },
     });
 
-    expect(() => resolveModel(config, 'vision')).toThrow(/No eligible model configured for purpose 'vision'/);
+    expect(() => resolveModel(config, makeRuntime(), 'vision')).toThrow(/No eligible model configured for purpose 'vision'/);
   });
 
   it('resolves reasoning model from canonical registry purpose tags', () => {
@@ -1382,7 +1389,7 @@ describe('resolveModel', () => {
         reasoning: { model: 'reasoning-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
       },
     });
-    const model = resolveModel(config, 'reasoning');
+    const model = resolveModel(config, makeRuntime(), 'reasoning');
     expect(model.id).toBe('reasoning-model');
   });
 
@@ -1392,7 +1399,7 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'background-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
     } });
-    const model = resolveModel(config, 'background');
+    const model = resolveModel(config, makeRuntime(), 'background');
     expect(model.id).toBe('background-model');
   });
 
@@ -1402,7 +1409,7 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     } });
-    const model = resolveModel(config, 'vision');
+    const model = resolveModel(config, makeRuntime(), 'vision');
     expect(model.id).toBe('vision-model');
     expect(model.input).toContain('image');
   });
@@ -1419,7 +1426,7 @@ describe('resolveModel', () => {
         },
       },
     });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     expect(model.id).toBe('openrouter/google/gemini-3-flash-preview');
   });
 
@@ -1435,7 +1442,7 @@ describe('resolveModel', () => {
         },
       },
     });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
     expect(model.id).toBe('vision-model');
   });
 
@@ -1446,7 +1453,7 @@ describe('resolveModel', () => {
         models: [],
       },
     });
-    expect(() => resolveModel(config, 'chat')).toThrow(/No eligible model configured/);
+    expect(() => resolveModel(config, makeRuntime(), 'chat')).toThrow(/No eligible model configured/);
   });
 
   it('model can be set on Agent', () => {
@@ -1590,9 +1597,9 @@ describe('resolveModel — direct-provider path', () => {
         chat: { model: 'test-model', provider: 'openrouter', maxTokens: 4096 },
       },
     });
-    const model = resolveModel(config, 'chat');
+    const model = resolveModel(config, makeRuntime(), 'chat');
 
-    expect(spy).toHaveBeenCalledWith('openrouter', 'test-model');
+    expect(spy).toHaveBeenCalledWith(expect.any(Object), 'openrouter', 'test-model');
     expect(model.id).toBe('test-model');
 
     spy.mockRestore();
@@ -1607,7 +1614,7 @@ describe('resolveModel — direct-provider path', () => {
       },
     });
 
-    expect(() => resolveModel(config, 'chat')).toThrow(
+    expect(() => resolveModel(config, makeRuntime(), 'chat')).toThrow(
       'Unknown model "bogus-model" for provider "fake-provider"',
     );
 

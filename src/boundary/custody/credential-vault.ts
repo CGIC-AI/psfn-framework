@@ -1,4 +1,4 @@
-import { getEnvApiKey } from '@mariozechner/pi-ai';
+import type { ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 
 const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DEFAULT_LITELLM_API_KEY_ENV = 'LITELLM_API_KEY';
@@ -335,6 +335,7 @@ export function resolveProviderApiKey(
   provider: string,
   config: CredentialVaultConfigLike = {},
   fallbackEnv: NodeJS.ProcessEnv = process.env,
+  runtime?: ProviderRuntime,
 ): string | undefined {
   for (const reference of resolveProviderCredentialReferences(provider, config)) {
     const value = resolveOptionalCredentialReference(config.credentialVault, reference, fallbackEnv);
@@ -342,7 +343,7 @@ export function resolveProviderApiKey(
       return value;
     }
   }
-  return getEnvApiKey(provider) ?? undefined;
+  return runtime?.getEnvApiKey(provider) ?? undefined;
 }
 
 export function resolveHuggingFaceToken(

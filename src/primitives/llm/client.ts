@@ -1,8 +1,7 @@
-import {
-  completeSimple,
-  type Context as PiContext,
-} from '@mariozechner/pi-ai';
+import type { Context as PiContext } from '@mariozechner/pi-ai';
 import { randomUUID } from 'node:crypto';
+import type { ProviderRuntime } from './provider-runtime.js';
+import { PiProviderRuntime } from './provider-runtime.js';
 import type {
   CompletionPurpose,
   CorrelationMetadata,
@@ -150,6 +149,7 @@ export interface LLMCompletionOptions {
 export interface LLMClientRuntimeOptions {
   litellmBaseUrl?: string;
   transport?: LLMProviderPort;
+  runtime?: ProviderRuntime;
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -182,6 +182,7 @@ export class LLMClient {
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
   private transport?: LLMProviderPort;
+  private runtime: ProviderRuntime;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -200,14 +201,16 @@ export class LLMClient {
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
     this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
+    this.transport = runtimeOptions.transport;
+    this.runtime = runtimeOptions.runtime ?? new PiProviderRuntime();
     this.requestCapability = new LLMRequestCapability(
       config,
       this.litellmBaseUrl,
       resolveConfiguredLiteLLMApiKeyReference(config),
+      this.runtime,
     );
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config, runtimeOptions.usageBudgetQuery);
-    this.transport = runtimeOptions.transport;
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
@@ -939,6 +942,7 @@ export class LLMClient {
             physicalAttempt += 1;
             const usageAttempt = physicalAttempt;
             return runLLMStreamAttempt({
+              runtime: this.runtime,
               model,
               context: piContext,
               requestOptions,
@@ -1141,9 +1145,9 @@ export class LLMClient {
             attempt,
             promptCaching?.engaged === true,
           );
-          let response: Awaited<ReturnType<typeof completeSimple>>;
+          let response: Awaited<ReturnType<ProviderRuntime['complete']>>;
           try {
-            response = await completeSimple(
+            response = await this.runtime.complete(
               model,
               piContext,
               requestOptions,
@@ -1299,7 +1303,7 @@ export class LLMClient {
         }
 
         return retryCompletionOnCorruptEmptyToolArgs<{
-          response: Awaited<ReturnType<typeof completeSimple>>;
+          response: Awaited<ReturnType<ProviderRuntime['complete']>>;
           providerObservability: LLMProviderObservability;
         }>({
           tools: context.tools,

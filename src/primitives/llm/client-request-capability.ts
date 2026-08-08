@@ -21,6 +21,7 @@ import {
   resolveSystemRoleCapabilityMetadata,
   type OpenAICompatibleApi,
 } from './models.js';
+import type { ProviderRuntime } from './provider-runtime.js';
 import {
   contextMessagesToPiMessages,
   mergeSystemContextIntoSystemPrompt,
@@ -63,6 +64,7 @@ export class LLMRequestCapability {
     private readonly config: SubstrateConfig,
     private readonly litellmBaseUrl: string | null,
     private readonly litellmApiKeyRef: CredentialReference,
+    private readonly runtime: ProviderRuntime,
   ) {}
 
   getModelAndKey(candidate: RoutingCandidate): {
@@ -114,7 +116,7 @@ export class LLMRequestCapability {
       };
     }
 
-    const model = resolveRegisteredModel(candidate.provider, modelId);
+    const model = resolveRegisteredModel(this.runtime, candidate.provider, modelId);
     if (!model) {
       throw new Error(
         `Unknown model "${modelId}" for provider "${candidate.provider}". `
@@ -123,7 +125,7 @@ export class LLMRequestCapability {
     }
     return {
       model,
-      apiKey: resolveProviderApiKey(candidate.provider, this.config),
+      apiKey: resolveProviderApiKey(candidate.provider, this.config, process.env, this.runtime),
     };
   }
 

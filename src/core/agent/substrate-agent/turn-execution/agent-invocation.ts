@@ -944,7 +944,7 @@ export async function invokeAgentForTurn(input: {
     });
 
     try {
-      const recoveryModel = resolveModel(runtime.config, 'chat');
+      const recoveryModel = resolveModel(runtime.config, runtime.runtime, 'chat');
       runtime.agent.state.model = recoveryModel;
       responseModel = recoveryModel.id;
     } catch (error) {

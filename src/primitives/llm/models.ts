@@ -9,7 +9,10 @@ import type {
   ModelApiKind,
   ModelRegistryCostMetadata,
 } from '../../shared/contracts/runtime.js';
-import type { ProviderRuntime } from './provider-runtime.js';
+
+interface ModelLookupRuntime {
+  getModels(provider: string): readonly Model<Api>[];
+}
 
 export type OpenAICompatibleApi = ModelApiKind;
 
@@ -39,7 +42,7 @@ export interface OpenAICompatibleEndpointModelConfig {
 }
 
 export function resolveRegisteredModel(
-  runtime: ProviderRuntime,
+  runtime: ModelLookupRuntime,
   provider: string,
   modelId: string,
 ): Model<Api> | null {

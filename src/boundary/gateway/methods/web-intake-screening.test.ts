@@ -5,6 +5,7 @@
 // scanners from the checked-in rule file; no ONNX weights required).
 
 import { createServer, type Server } from 'node:http';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -51,14 +52,14 @@ function createHarness(policyConfig: PolicyConfig, intakeScreening?: IntakeScree
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
   const recordAuditEvent = vi.fn(async () => {});
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromPartial<Record<string, unknown>>({}),
+    embeddingService: fromPartial<Record<string, unknown>>({}),
+    discordAdapter: fromPartial<Record<string, unknown>>({}),
     ...(intakeScreening ? { intakeScreening } : {}),
     policyConfig,
     workspacePath: process.cwd(),
@@ -66,20 +67,20 @@ function createHarness(policyConfig: PolicyConfig, intakeScreening?: IntakeScree
     notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
-    resolveConfirmation: vi.fn(async () => ({
+    resolveConfirmation: fromAny(vi.fn(async () => ({
       id: 'noop',
       status: 'not_found',
       message: 'noop',
       executed: false,
-    })) as any,
-    sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })) as any,
-    getRuntimeHealth: (() => ({})) as any,
+    }))),
+    sendNtfy: fromAny(vi.fn(async () => ({ status: 'debounced', topic: 'noop' }))),
+    getRuntimeHealth: fromAny((() => ({}))),
     nextStreamRequestId: () => 'stream-1',
     recordAuditEvent,
     audited: (_method, handler) => handler,
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: (options: any) => async (params: any) => options.handler(params),
-    } as any,
+    }),
   };
 
   registerWebMethods(runtime);

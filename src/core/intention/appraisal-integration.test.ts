@@ -1,4 +1,5 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -161,19 +162,19 @@ function registerOutboundHandlerHarness(options: {
   void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
-    {
+    fromAny({
       handleMessage: vi.fn(),
       followUp: vi.fn(),
       waitForIdle: vi.fn(),
       registerPostTurnActionInferer: vi.fn().mockReturnValue(() => {}),
-    } as any,
+    }),
     { send: vi.fn() },
     tempDir,
     undefined,
     {
       eventBus,
-      postTurnActions: postTurnActions as any,
-      llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
+      postTurnActions: fromAny(postTurnActions),
+      llmProvider: fromAny({ stream: vi.fn(), complete: vi.fn() }),
       proactiveOutbound: { dispatch },
       outreachOutbox: {
         append: vi.fn((record: OutreachOutboxAppendInput) => {
@@ -185,13 +186,13 @@ function registerOutboundHandlerHarness(options: {
         getIcpDeliveredCompletion: vi.fn(() => undefined),
         listRecent: vi.fn(() => []),
       },
-      sessionManager: {
+      sessionManager: fromAny({
         resolveSessionChannelId: (channelId: string) => channelId,
         getRecentMessages: vi.fn().mockReturnValue([]),
         recordSystemMessage: sessionAudit,
         recordAssistantMessage: sessionAssistant,
-      } as any,
-      pendingFollowUpStore: pendingFollowUpStore as any,
+      }),
+      pendingFollowUpStore: fromAny(pendingFollowUpStore),
       onIntentionFollowUpActivated,
       getActiveConcerns,
       ...(options.verifyPersonalProjectLive
@@ -808,11 +809,11 @@ describe('intention appraisal runtime integration', () => {
         {
           eventBus,
           postTurnActions,
-          llmProvider: llmProvider as any,
-          sessionManager: {
+          llmProvider: fromAny(llmProvider),
+          sessionManager: fromAny({
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: vi.fn().mockReturnValue([]),
-          } as any,
+          }),
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
@@ -833,14 +834,14 @@ describe('intention appraisal runtime integration', () => {
       const inferer = inferers[0]!;
       const message = makeMessage();
       const response = makeResponse();
-      const inferred = await inferer({
+      const inferred = await inferer(fromAny({
         message,
         response,
         turnMessages: [],
-        turnId: 'turn-intention-1' as any,
+        turnId: fromAny('turn-intention-1'),
         completedAt: Date.now(),
         capturedSessionReads: makeCapturedSessionReads(),
-      } as any);
+      }));
       expect(inferred).toEqual([]);
 
       await Promise.resolve();
@@ -934,11 +935,11 @@ describe('intention appraisal runtime integration', () => {
         {
           eventBus,
           postTurnActions,
-          llmProvider: llmProvider as any,
-          sessionManager: {
+          llmProvider: fromAny(llmProvider),
+          sessionManager: fromAny({
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: vi.fn().mockReturnValue([]),
-          } as any,
+          }),
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
@@ -957,7 +958,7 @@ describe('intention appraisal runtime integration', () => {
 
       expect(inferers).toHaveLength(1);
       const inferer = inferers[0]!;
-      await inferer({
+      await inferer(fromAny({
         message: {
           ...makeMessage(),
           id: 'msg-intention-runtime-internal-1',
@@ -966,10 +967,10 @@ describe('intention appraisal runtime integration', () => {
         },
         response: makeResponse(),
         turnMessages: [],
-        turnId: 'turn-intention-internal-1' as any,
+        turnId: fromAny('turn-intention-internal-1'),
         completedAt: Date.now(),
         capturedSessionReads: makeCapturedSessionReads(),
-      } as any);
+      }));
 
       await Promise.resolve();
       await Promise.resolve();
@@ -1052,11 +1053,11 @@ describe('intention appraisal runtime integration', () => {
         {
           eventBus,
           postTurnActions,
-          llmProvider: llmProvider as any,
-          sessionManager: {
+          llmProvider: fromAny(llmProvider),
+          sessionManager: fromAny({
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: vi.fn().mockReturnValue([]),
-          } as any,
+          }),
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
@@ -1075,14 +1076,14 @@ describe('intention appraisal runtime integration', () => {
 
       expect(inferers).toHaveLength(1);
       const inferer = inferers[0]!;
-      await inferer({
+      await inferer(fromAny({
         message: makeMessage(),
         response: makeResponse(),
         turnMessages: [],
-        turnId: 'turn-intention-scheduled-1' as any,
+        turnId: fromAny('turn-intention-scheduled-1'),
         completedAt: Date.now(),
         capturedSessionReads: makeCapturedSessionReads(),
-      } as any);
+      }));
 
       await new Promise(resolve => setTimeout(resolve, 60));
       await Promise.resolve();
@@ -1188,11 +1189,11 @@ describe('intention appraisal runtime integration', () => {
         {
           eventBus,
           postTurnActions,
-          llmProvider: llmProvider as any,
-          sessionManager: {
+          llmProvider: fromAny(llmProvider),
+          sessionManager: fromAny({
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: vi.fn().mockReturnValue([]),
-          } as any,
+          }),
           emotionState,
           contactStore: {
             getById: () => ({ trustLevel: 'primary' }),
@@ -1222,15 +1223,15 @@ describe('intention appraisal runtime integration', () => {
         mood: { valence: -0.29, arousal: 0.04, dominance: -0.1 },
       }));
 
-      await inferer({
+      await inferer(fromAny({
         message: firstMessage,
         response: firstResponse,
         turnMessages: [],
         canonicalContactKey: 'contact-primary',
-        turnId: 'turn-intention-motivation-1' as any,
+        turnId: fromAny('turn-intention-motivation-1'),
         completedAt: Date.now(),
         capturedSessionReads: makeCapturedSessionReads(),
-      } as any);
+      }));
       await Promise.resolve();
       await Promise.resolve();
       await scheduler.tick();
@@ -1238,15 +1239,15 @@ describe('intention appraisal runtime integration', () => {
       expect(llmProvider.complete).toHaveBeenCalledTimes(0);
       expect(agentLoop.followUp).toHaveBeenCalledTimes(0);
 
-      await inferer({
+      await inferer(fromAny({
         message: secondMessage,
         response: secondResponse,
         turnMessages: [],
         canonicalContactKey: 'contact-primary',
-        turnId: 'turn-intention-motivation-2' as any,
+        turnId: fromAny('turn-intention-motivation-2'),
         completedAt: Date.now(),
         capturedSessionReads: makeCapturedSessionReads(),
-      } as any);
+      }));
       await new Promise(resolve => setTimeout(resolve, 60));
       for (let index = 0; index < 3; index += 1) {
         await Promise.resolve();

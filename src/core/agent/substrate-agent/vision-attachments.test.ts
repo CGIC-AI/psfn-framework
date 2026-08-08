@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
@@ -52,7 +53,7 @@ describe('buildTurnUserContent', () => {
     const { reviewer, analyze } = makeReviewer();
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -104,7 +105,7 @@ describe('buildTurnUserContent', () => {
 
     const result = await buildTurnUserContent({
       message: makeMessage({ attachments }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: { analyze },
@@ -132,7 +133,7 @@ describe('buildTurnUserContent', () => {
 
     const result = await buildTurnUserContent({
       message: makeMessage({ attachments }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: { analyze },
@@ -154,7 +155,7 @@ describe('buildTurnUserContent', () => {
 
     const result = await buildTurnUserContent({
       message: makeMessage({ attachments }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: reviewer,
@@ -173,7 +174,7 @@ describe('buildTurnUserContent', () => {
         content: imageUrl,
         attachments: [],
       }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -198,7 +199,7 @@ describe('buildTurnUserContent', () => {
       message: makeMessage({
         content: `ok love lets see if you can see ${imageUrl}`,
       }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -214,7 +215,7 @@ describe('buildTurnUserContent', () => {
   it('fails closed when the dedicated reviewer errors', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -252,7 +253,7 @@ describe('buildTurnUserContent', () => {
 
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger,
       visionReviewer: { analyze },
@@ -272,13 +273,13 @@ describe('buildTurnUserContent', () => {
   it('keeps the multimodal fallback path when no reviewer is wired', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {
+      llmClient: fromAny({
         webFetchBinary: vi.fn(async () => ({
           dataBase64: 'YWJjZA==',
           mimeType: 'image/jpeg',
           sizeBytes: 4,
         })),
-      } as any,
+      }),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -312,7 +313,7 @@ describe('buildTurnUserContent', () => {
 
     const result = await buildTurnUserContent({
       message,
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: {
         warn: vi.fn(),
@@ -387,7 +388,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const result = await buildTurnUserContent({
       message: inlinePngMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger,
       visionIntakeScreener: screener,
@@ -412,7 +413,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const { screener, calls } = makeScreener(BENIGN);
     const result = await buildTurnUserContent({
       message: inlinePngMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionIntakeScreener: screener,
@@ -442,7 +443,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
           { url: cleanUrl, contentType: 'image/jpeg', name: 'clean.jpg' },
         ],
       }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: reviewer,
@@ -463,7 +464,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const { reviewer, analyze } = makeReviewer();
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: reviewer,
@@ -485,7 +486,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const result = await buildTurnUserContent({
       message: inlinePngMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger,
       visionIntakeScreener: screener,
@@ -504,7 +505,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const { screener } = makeScreener({ kind: 'skipped', flagged: false, withheld: false, reason: 'not configured' });
     const result = await buildTurnUserContent({
       message: inlinePngMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionIntakeScreener: screener,
@@ -529,7 +530,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const { reviewer, analyze } = makeReviewer('SECOND VLM PASS SUMMARY');
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: reviewer,
@@ -563,7 +564,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const { reviewer, analyze } = makeReviewer();
     const result = await buildTurnUserContent({
       message: makeMessage(),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionReviewer: reviewer,
@@ -586,7 +587,7 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
           { url: sharedUrl, contentType: 'image/png', name: 'meme-copy.png' },
         ],
       }),
-      llmClient: {} as any,
+      llmClient: fromPartial<Record<string, unknown>>({}),
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionIntakeScreener: screener,

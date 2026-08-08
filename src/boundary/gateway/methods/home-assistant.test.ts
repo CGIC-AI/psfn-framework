@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import type { ApprovalBoundaryGateOptions } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 import { GatewayErrors } from '../protocol.js';
@@ -49,10 +50,10 @@ function harness(policyConfig = policy(), env: NodeJS.ProcessEnv = {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const gateCalls: Array<ApprovalBoundaryGateOptions<Record<string, unknown>, unknown>> = [];
   const runtime: GatewayMethodRuntime = {
-    target: { addMethod: (name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) => methods.set(name, handler) } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    target: fromAny({ addMethod: (name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) => methods.set(name, handler) }),
+    llmProvider: fromPartial<Record<string, unknown>>({}),
+    embeddingService: fromPartial<Record<string, unknown>>({}),
+    discordAdapter: fromPartial<Record<string, unknown>>({}),
     credentialVault: createEnvCredentialVault(env),
     policyConfig,
     workspacePath: process.cwd(),
@@ -60,17 +61,17 @@ function harness(policyConfig = policy(), env: NodeJS.ProcessEnv = {
     notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
-    resolveConfirmation: vi.fn() as any,
-    sendNtfy: vi.fn() as any,
-    getRuntimeHealth: vi.fn() as any,
+    resolveConfirmation: fromAny(vi.fn()),
+    sendNtfy: fromAny(vi.fn()),
+    getRuntimeHealth: fromAny(vi.fn()),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: (options: ApprovalBoundaryGateOptions<Record<string, unknown>, unknown>) => {
         gateCalls.push(options);
         return async (params: Record<string, unknown>) => options.handler(params);
       },
-    } as any,
+    }),
   };
   registerHomeAssistantMethods(runtime);
   return {
@@ -99,7 +100,7 @@ describe('Satellite Hub world transport', () => {
       count: 1,
     }));
     vi.stubGlobal('fetch', fetchMock);
-    const result = await harness().invoke('home_assistant.get_states', { entityId: 'light.kitchen' }) as any;
+    const result = fromAny(await harness().invoke('home_assistant.get_states', { entityId: 'light.kitchen' }));
 
     expect(result.count).toBe(1);
     expect(fetchMock).toHaveBeenCalledOnce();

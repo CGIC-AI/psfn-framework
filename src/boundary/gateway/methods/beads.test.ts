@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { PassThrough } from 'node:stream';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -59,7 +60,7 @@ function queueSpawnResult(options: { stdout?: string; stderr?: string; exitCode?
       child.stderr.end();
       child.emit('close', options.exitCode ?? 0);
     });
-    return child as any;
+    return fromAny(child);
   });
 }
 
@@ -75,14 +76,14 @@ function createHarness(policyConfig: PolicyConfig): {
   };
 
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<unknown>) {
         methods.set(name, handler);
       },
-    } as any,
-    llmProvider: {} as any,
-    embeddingService: {} as any,
-    discordAdapter: {} as any,
+    }),
+    llmProvider: fromPartial<Record<string, unknown>>({}),
+    embeddingService: fromPartial<Record<string, unknown>>({}),
+    discordAdapter: fromPartial<Record<string, unknown>>({}),
     policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
@@ -100,7 +101,7 @@ function createHarness(policyConfig: PolicyConfig): {
     recordAuditEvent,
     resolveShardWorkloadForChannel: (channelId) => channelId === 'shard:shard-1'
       ? {
-          workload: { workloadId: 'workload-1', workloadGeneration: 'generation-1' } as any,
+          workload: fromAny({ workloadId: 'workload-1', workloadGeneration: 'generation-1' }),
           identity: {
             parentCompanionId: 'companion-1',
             shardId: 'shard-1',
@@ -111,7 +112,7 @@ function createHarness(policyConfig: PolicyConfig): {
         }
       : undefined,
     audited: (_method, handler) => handler,
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: ({ method, handler }) => async (params) => {
         const shard = runtime.resolveShardWorkloadForChannel?.(
           (params as Record<string, unknown>).channelId as string | undefined,
@@ -129,7 +130,7 @@ function createHarness(policyConfig: PolicyConfig): {
         }
         return handler(params);
       },
-    } as any,
+    }),
   };
 
   registerBeadsMethods(runtime);

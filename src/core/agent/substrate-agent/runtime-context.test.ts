@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
 import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
@@ -61,12 +62,12 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
 }
 
 function makeUnrestrictedTestTool(name: string, description: string) {
-  return withCapabilityRequirement({
+  return withCapabilityRequirement(fromAny({
     name,
     description,
-    parameters: {} as any,
+    parameters: fromPartial<Record<string, unknown>>({}),
     execute: () => { throw new Error('not used'); },
-  } as any, NO_CAPABILITY_REQUIREMENT);
+  }), NO_CAPABILITY_REQUIREMENT);
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
@@ -1485,12 +1486,12 @@ describe('runtime subject identity', () => {
         extended: 1,
         total: 1,
       },
-      extendedTools: [{
+      extendedTools: [fromAny({
         name: 'selfie_create',
         description: 'Create a new selfie or self-portrait.',
-        parameters: {} as any,
+        parameters: fromPartial<Record<string, unknown>>({}),
         execute: () => { throw new Error('not used'); },
-      } as any],
+      })],
       coreToolNames: new Set<string>(),
       skillsContext: '',
       behavioralNotesBlock: '',
@@ -1802,7 +1803,7 @@ describe('runtime subject identity', () => {
         extended: 3,
         total: 5,
       },
-      extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
+      extendedTools: fromAny([{ name: 'generate_image', description: 'Generate an image.' }]),
       coreToolNames: new Set<string>(),
       skillsContext: '',
       behavioralNotesBlock: '',
@@ -2169,18 +2170,18 @@ describe('runtime subject identity', () => {
         total: 1,
       },
       extendedTools: [
-        {
+        fromAny({
           name: 'web',
           description: 'Fetch a web page.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
-        {
+        }),
+        fromAny({
           name: 'notify',
           description: 'Notify the operator.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
+        }),
         makeUnrestrictedTestTool('background_probe', 'Observe long-running background state.'),
       ],
       coreToolNames: new Set<string>(),
@@ -2383,8 +2384,8 @@ describe('runtime subject identity', () => {
         total: 5,
       },
       extendedTools: [
-        { name: 'generate_image', description: 'Generate an image.' } as any,
-        { name: 'web', description: 'Fetch a web page.' } as any,
+        fromAny({ name: 'generate_image', description: 'Generate an image.' }),
+        fromAny({ name: 'web', description: 'Fetch a web page.' }),
         makeUnrestrictedTestTool('background_probe', 'Observe long-running background state.'),
       ],
       coreToolNames: new Set(['selfie_create']),
@@ -2627,7 +2628,7 @@ describe('runtime subject identity', () => {
         authorName: 'Alex',
         content: 'hi',
       }),
-      contactStore: {
+      contactStore: fromAny({
         resolveChannelIdentity: () => ({
           id: 'contact-alex',
           displayName: 'Alex',
@@ -2646,7 +2647,7 @@ describe('runtime subject identity', () => {
           recordedCalls.push({ contactId, channel, channelId, privacyLevel });
         },
         getEmotionalTimeSeries: () => [],
-      } as any,
+      }),
       logger: {
         warn: () => undefined,
         debug: () => undefined,
@@ -2703,18 +2704,18 @@ describe('runtime subject identity', () => {
         total: 1,
       },
       extendedTools: [
-        {
+        fromAny({
           name: 'web',
           description: 'Fetch a web page.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
-        {
+        }),
+        fromAny({
           name: 'notify',
           description: 'Notify the operator.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
+        }),
       ],
       coreToolNames: new Set<string>(),
       loadedExtended: new Map(),
@@ -2759,18 +2760,18 @@ describe('runtime subject identity', () => {
         total: 1,
       },
       extendedTools: [
-        {
+        fromAny({
           name: 'web',
           description: 'Fetch a web page.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
-        {
+        }),
+        fromAny({
           name: 'notify',
           description: 'Notify the operator.',
-          parameters: {} as any,
+          parameters: fromPartial<Record<string, unknown>>({}),
           execute: () => { throw new Error('not used'); },
-        } as any,
+        }),
       ],
       coreToolNames: new Set<string>(),
       loadedExtended: new Map(),
@@ -2934,7 +2935,7 @@ describe('turn prompt variable namespace conformance', () => {
         extended: 3,
         total: 5,
       },
-      extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
+      extendedTools: fromAny([{ name: 'generate_image', description: 'Generate an image.' }]),
       coreToolNames: new Set<string>(),
       skillsContext: '<skills_index><skill id="memory.write">Persist.</skill></skills_index>',
       behavioralNotesBlock: '',

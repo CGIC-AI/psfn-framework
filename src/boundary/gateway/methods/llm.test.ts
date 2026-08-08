@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
@@ -94,20 +95,20 @@ function createHarness(options: {
 
   const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
   const runtime: GatewayMethodRuntime = {
-    target: {
+    target: fromAny({
       addMethod(name: string, handler: (params: any) => Promise<any>) {
         methods.set(name, handler);
       },
-    } as any,
+    }),
     llmProvider: options.llmProvider ?? ({
       stream,
       complete,
     }),
-    embeddingService: options.embeddingService ?? {
+    embeddingService: options.embeddingService ?? fromAny({
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),
       dims: 1,
-    } as any,
+    }),
     ...(options.usageEvents ? {
       modelUsageRecorder: {
         async recordUsageEvent(event: ModelUsageEventInput) {
@@ -116,7 +117,7 @@ function createHarness(options: {
       },
     } : {}),
     modelDiscovery,
-    discordAdapter: {} as any,
+    discordAdapter: fromPartial<Record<string, unknown>>({}),
     policyConfig: { workspacePath: process.cwd() },
     workspacePath: process.cwd(),
     sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test' } },
@@ -138,9 +139,9 @@ function createHarness(options: {
       ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
       : {}),
     audited: options.audited ?? ((_method, handler) => handler),
-    approvalBoundary: {
+    approvalBoundary: fromAny({
       gate: (_options) => async (params) => _options.handler(params),
-    } as any,
+    }),
   };
 
   registerLLMMethods(runtime);
@@ -376,7 +377,7 @@ describe('registerLLMMethods', () => {
       });
     });
     const harness = createHarness({
-      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+      embeddingService: fromAny({ embed: vi.fn(), embedBatch, dims: 3 }),
     });
     const gatewayClient = createLinkedGatewayClient(harness.invoke);
     const controller = new AbortController();
@@ -405,7 +406,7 @@ describe('registerLLMMethods', () => {
       return [new Float32Array([1, 2, 3])];
     });
     const harness = createHarness({
-      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+      embeddingService: fromAny({ embed: vi.fn(), embedBatch, dims: 3 }),
     });
 
     // A durable background caller omits the signal deliberately; the provider
@@ -1284,7 +1285,7 @@ describe('registerLLMMethods work-spec accountability seam (psfn-framework-d8vq.
       })),
     };
     // A real serving LLMClient with NO usageRecorder configured.
-    const servingClient = new LLMClient(makeServingConfig(), { transport: transport as any });
+    const servingClient = new LLMClient(makeServingConfig(), { transport: fromAny(transport) });
     const harness = createHarness({ llmProvider: servingClient });
     const workSpec = autonomousWireSpec();
     expect(workSpec.lane).toBe('maintenance_reflection');

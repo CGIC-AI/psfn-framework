@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { MemoryExtractor, parseFactsXml, __test as extractionTestUtils } from './extraction.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -375,10 +376,10 @@ describe('extraction acceptance gates', () => {
 describe('MemoryExtractor telemetry payloads', () => {
   it('rejects testing sessions before transcript reads, model calls, or durable writes', async () => {
     const channelId = 'api:testing:durable-memory-lane';
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       characterName: 'Purrsephone',
       resolveSessionChannelId: vi.fn().mockReturnValue(channelId),
       getRecentMessages: vi.fn().mockReturnValue([
@@ -390,28 +391,28 @@ describe('MemoryExtractor telemetry payloads', () => {
           timestamp: 1_000,
         },
       ]),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       insertMemory: vi.fn(),
       upsertContactProfile: vi.fn(),
-    } as any;
-    const contactStore = {
+    });
+    const contactStore = fromAny({
       updateEmotionalBaseline: vi.fn(),
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
       sessionManager,
       memoryStore,
-      {
+      fromAny({
         embed: vi.fn().mockResolvedValue(new Float32Array(8)),
         embedBatch: vi.fn(),
         dims: 8,
-      } as any,
+      }),
       eventBus,
       { extractionInterval: 5 },
       null,
@@ -432,11 +433,11 @@ describe('MemoryExtractor telemetry payloads', () => {
 
   it('includes trigger reason and extraction stats in emitted events', async () => {
     const turnId = createTurnId();
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(5),
       getRecentMessages: vi.fn().mockReturnValue([
         {
@@ -456,21 +457,21 @@ describe('MemoryExtractor telemetry payloads', () => {
           }),
         },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -517,11 +518,11 @@ describe('MemoryExtractor telemetry payloads', () => {
   });
 
   it('fails closed when session turn metadata is malformed', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(5),
       getRecentMessages: vi.fn().mockReturnValue([
         {
@@ -540,21 +541,21 @@ describe('MemoryExtractor telemetry payloads', () => {
           }),
         },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -578,35 +579,35 @@ describe('MemoryExtractor telemetry payloads', () => {
       encode: (text: string) => ({ length: text.length }),
     }));
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(1),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'a', authorName: 'user' },
         { role: 'assistant', content: 'b', authorName: 'assistant' },
         { role: 'user', content: 'c', authorName: 'user' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -614,7 +615,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       memoryStore,
       embeddingService,
       eventBus,
-      {
+      fromAny({
         primaryModel: 'test-model',
         primaryProvider: 'test-provider',
         extractionModel: 'test-model',
@@ -642,7 +643,7 @@ describe('MemoryExtractor telemetry payloads', () => {
             contextWindow: 60,
           },
         },
-      } as any,
+      }),
     );
 
     await extractor.maybeExtract('api:threshold-tokens-callsite');
@@ -659,35 +660,35 @@ describe('MemoryExtractor telemetry payloads', () => {
       encode: (text: string) => ({ length: text.length }),
     }));
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(1),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'system', content: '1234567890123456789012345678901234567890', authorName: 'system' },
         { role: 'tool', content: 'abcdefghijklmnopqrstuvwxyz', authorName: 'memory_write' },
         { role: 'user', content: 'tiny', authorName: 'user' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -695,7 +696,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       memoryStore,
       embeddingService,
       eventBus,
-      {
+      fromAny({
         primaryModel: 'test-model',
         primaryProvider: 'test-provider',
         extractionModel: 'test-model',
@@ -723,7 +724,7 @@ describe('MemoryExtractor telemetry payloads', () => {
             contextWindow: 60,
           },
         },
-      } as any,
+      }),
     );
 
     await extractor.maybeExtract('api:threshold-filtered');
@@ -737,11 +738,11 @@ describe('MemoryExtractor telemetry payloads', () => {
       encode: (text: string) => ({ length: text.length }),
     }));
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(1),
       getRecentMessages: vi.fn().mockReturnValue([
         {
@@ -761,24 +762,24 @@ describe('MemoryExtractor telemetry payloads', () => {
           authorName: 'user',
         },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -786,7 +787,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       memoryStore,
       embeddingService,
       eventBus,
-      {
+      fromAny({
         primaryModel: 'test-model',
         primaryProvider: 'test-provider',
         extractionModel: 'test-model',
@@ -814,7 +815,7 @@ describe('MemoryExtractor telemetry payloads', () => {
             contextWindow: 100,
           },
         },
-      } as any,
+      }),
     );
 
     await extractor.maybeExtract('api:threshold-filter-callsite');
@@ -825,35 +826,35 @@ describe('MemoryExtractor telemetry payloads', () => {
   });
 
   it('injects runtime datetime tokens in extraction prompts', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'User likes coffee', authorName: 'user' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
-    const promptRegistry = {
+    const promptRegistry = fromAny({
       getPrompt: vi.fn().mockReturnValue(
         'Extraction run at {{current_datetime}}.\nKnown:\n{existing_facts}\nRecent:\n{recent_messages}',
       ),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -874,7 +875,7 @@ describe('MemoryExtractor telemetry payloads', () => {
   });
 
   it('caps writes by ranked value and reports write_cap rejections', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -900,27 +901,27 @@ describe('MemoryExtractor telemetry payloads', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'Conversation content', authorName: 'user' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -928,7 +929,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       memoryStore,
       embeddingService,
       eventBus,
-      {
+      fromAny({
         primaryModel: 'test-model',
         primaryProvider: 'test-provider',
         extractionModel: 'test-model',
@@ -960,14 +961,14 @@ describe('MemoryExtractor telemetry payloads', () => {
             contextWindow: 16_000,
           },
         },
-      } as any,
+      }),
     );
 
     const processFact = vi.fn(async (fact: { text: string }) => ({
       action: 'created',
       memory: { id: `memory:${fact.text}` },
     }));
-    (extractor as any).processFact = processFact;
+    (fromAny(extractor)).processFact = processFact;
 
     await extractor.extract('api:cap-test');
 
@@ -995,7 +996,7 @@ describe('MemoryExtractor telemetry payloads', () => {
 });
 
 function makeCompositionalExtractionRuntimeConfig(overrides: Record<string, unknown> = {}) {
-  return {
+  return fromAny({
     primaryModel: 'test-model',
     primaryProvider: 'test-provider',
     extractionModel: 'test-model',
@@ -1035,12 +1036,12 @@ function makeCompositionalExtractionRuntimeConfig(overrides: Record<string, unkn
       },
     },
     ...overrides,
-  } as any;
+  });
 }
 
 describe('MemoryExtractor compositional extraction', () => {
   it('uses chunk extraction with merge/dedup and a global write cap when policy allows extraction', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({
@@ -1087,26 +1088,26 @@ describe('MemoryExtractor compositional extraction', () => {
 </fact>
 </response>`,
         }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([]),
       getMessageCount: vi.fn().mockReturnValue(0),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -1121,7 +1122,7 @@ describe('MemoryExtractor compositional extraction', () => {
       action: 'created',
       memory: { id: `memory:${fact.text}` },
     }));
-    (extractor as any).processFact = processFact;
+    (fromAny(extractor)).processFact = processFact;
 
     const compactedEntries = Array.from({ length: 25 }, (_, index) => ({
       id: index + 1,
@@ -1164,28 +1165,28 @@ describe('MemoryExtractor compositional extraction', () => {
   });
 
   it('fails closed to the single-pass extraction path when policy does not allow extraction', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([]),
       getMessageCount: vi.fn().mockReturnValue(0),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -1232,11 +1233,11 @@ describe('MemoryExtractor compositional extraction', () => {
 
 describe('MemoryExtractor refusal boundary extraction', () => {
   it('extracts a boundary memory when assistant refusal is present', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         {
           id: 101,
@@ -1253,21 +1254,21 @@ describe('MemoryExtractor refusal boundary extraction', () => {
           timestamp: 2_000,
         },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -1282,7 +1283,7 @@ describe('MemoryExtractor refusal boundary extraction', () => {
       action: 'created',
       memory: { id: `boundary:${fact.type}` },
     }));
-    (extractor as any).processFact = processFact;
+    (fromAny(extractor)).processFact = processFact;
 
     await extractor.extract('api:boundary-memory-test');
 
@@ -1642,7 +1643,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
       },
     });
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -1654,28 +1655,28 @@ describe('MemoryExtractor provenance and trust caps', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { id: 10, role: 'user', authorName: 'user', content: 'I might switch teams soon', timestamp: 1_000 },
         { id: 11, role: 'assistant', authorName: 'assistant', content: 'Noted', timestamp: 2_000 },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const getFormationVAD = vi.fn(() => ({
       valence: 1,
@@ -1697,7 +1698,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-public-1' } }));
-    (extractor as any).writer = { write };
+    (fromAny(extractor)).writer = { write };
 
     await extractor.extract('discord:public-room');
 
@@ -1712,7 +1713,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
   it('tags shard extractions with shard source and session line range', async () => {
     const turnId = createTurnId();
     expect(isTurnId(turnId)).toBe(true);
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -1724,9 +1725,9 @@ describe('MemoryExtractor provenance and trust caps', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         {
           id: 41,
@@ -1761,21 +1762,21 @@ describe('MemoryExtractor provenance and trust caps', () => {
           }),
         },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -1787,7 +1788,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-shard-1' } }));
-    (extractor as any).writer = { write };
+    (fromAny(extractor)).writer = { write };
 
     await extractor.extract('shard:shard-abc');
 
@@ -1800,7 +1801,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
   });
 
   it('propagates formationVAD into extracted memory writes when provider is configured', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -1812,27 +1813,27 @@ describe('MemoryExtractor provenance and trust caps', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const getFormationVAD = vi.fn(() => ({
       valence: 0.55,
@@ -1854,7 +1855,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-1' } }));
-    (extractor as any).writer = { write };
+    (fromAny(extractor)).writer = { write };
 
     await extractor.extract('api:emotion-formation');
 
@@ -1870,7 +1871,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
 
   describe('location tagging (S10)', () => {
     const buildLocationExtractor = (writeSpy: ReturnType<typeof vi.fn>) => {
-      const llmClient = {
+      const llmClient = fromAny({
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
@@ -1883,21 +1884,21 @@ describe('MemoryExtractor provenance and trust caps', () => {
 </fact>
 </response>`,
         }),
-      } as any;
-      const sessionManager = {
+      });
+      const sessionManager = fromAny({
         getRecentMessages: vi.fn().mockReturnValue([
           { id: 1, role: 'user', authorName: 'user', content: 'I work as a software engineer', timestamp: 1_000 },
         ]),
-      } as any;
-      const memoryStore = {
+      });
+      const memoryStore = fromAny({
         getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      } as any;
-      const embeddingService = {
+      });
+      const embeddingService = fromAny({
         embed: vi.fn().mockResolvedValue(new Float32Array(8)),
         embedBatch: vi.fn(),
         dims: 8,
-      } as any;
-      const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+      });
+      const eventBus = fromAny({ emit: vi.fn().mockResolvedValue(undefined) });
       const extractor = new MemoryExtractor(
         llmClient,
         sessionManager,
@@ -1906,7 +1907,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
         eventBus,
         { extractionInterval: 5 },
       );
-      (extractor as any).writer = { write: writeSpy };
+      (fromAny(extractor)).writer = { write: writeSpy };
       return extractor;
     };
 
@@ -1937,7 +1938,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
   });
 
   it('applies emotional intensity multiplier to extracted importance before writing', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -1949,27 +1950,27 @@ describe('MemoryExtractor provenance and trust caps', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const getFormationVAD = vi.fn(() => ({
       valence: 1,
@@ -1994,7 +1995,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-importance-1' } }));
-    (extractor as any).writer = { write };
+    (fromAny(extractor)).writer = { write };
 
     await extractor.extract('api:emotion-formation');
 
@@ -2020,7 +2021,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     sourceMemories: Record<string, unknown>[];
     profileResponse: string | ((context: { systemPrompt: string }) => string);
   }) {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
@@ -2029,39 +2030,39 @@ describe('MemoryExtractor canonical profile synthesis', () => {
             ? options.profileResponse(context)
             : options.profileResponse,
         })),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue(options.sourceMemories),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const contactStore = options.targetContact
-      ? {
+      ? fromAny({
         getById: vi.fn().mockResolvedValue(options.targetContact),
         getByChannelIdentity: vi.fn().mockResolvedValue(undefined),
         getByDiscordUserId: vi.fn().mockResolvedValue(undefined),
         listAll: vi.fn().mockResolvedValue([options.targetContact]),
-      } as any
+      })
       : null;
 
     const extractor = new MemoryExtractor(
@@ -2091,23 +2092,23 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   }
 
   it('refreshes canonical profile on interval when source memories are sufficient', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
           content: '<profile><summary>PrimaryUser is a direct communicator and primary partner.</summary></profile>',
         }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
@@ -2129,17 +2130,17 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         },
       ]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2171,23 +2172,23 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   });
 
   it('normalizes duplicate names in synthesized contact profile summaries', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
           content: '<profile><summary>Lyra Lyra keeps livestream guardrails explicit.</summary></profile>',
         }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
@@ -2209,17 +2210,17 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         },
       ]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2247,23 +2248,23 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   });
 
   it('skips profile refresh when synthesized summary contains unresolved macros', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
           content: '<profile><summary>{{char}} keeps livestream guardrails explicit.</summary></profile>',
         }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
@@ -2285,17 +2286,17 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         },
       ]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2421,23 +2422,23 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   });
 
   it('skips profile refresh when synthesized summary novelty is too low', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
           content: '<profile><summary>PrimaryUser prefers concise updates.</summary></profile>',
         }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue({
         summary: 'PrimaryUser prefers concise updates.',
@@ -2462,17 +2463,17 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         },
       ]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2496,21 +2497,21 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   });
 
   it('drains cleanly when fire-and-forget profile refresh rejects', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockRejectedValueOnce(new Error('profile synthesis timeout')),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
@@ -2532,17 +2533,17 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         },
       ]),
       upsertContactProfile: vi.fn(),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2569,7 +2570,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
 describe('MemoryExtractor emotional state persistence', () => {
   it('updates canonical contact emotional baseline from accepted emotional signals', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({
         content: `<response>
 <fact>
@@ -2582,34 +2583,34 @@ describe('MemoryExtractor emotional state persistence', () => {
 </fact>
 </response>`,
       }),
-    } as any;
+    });
 
-    const sessionManager = {
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { role: 'user', content: 'I am anxious and overwhelmed right now', authorName: 'user' },
       ]),
       getMessageCount: vi.fn().mockReturnValue(1),
-    } as any;
+    });
 
-    const memoryStore = {
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       searchByEmbedding: vi.fn().mockReturnValue([]),
       insertMemory: vi.fn(),
       persistMemoryWrite: vi.fn(),
       runInTransaction: vi.fn(async (operation: () => Promise<unknown>) => operation()),
-    } as any;
+    });
 
-    const embeddingService = {
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
+    });
 
-    const eventBus = {
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
-    const contactStore = {
+    const contactStore = fromAny({
       updateEmotionalBaseline: vi.fn().mockReturnValue({
         id: 'contact-canonical-1',
         emotionalBaseline: {
@@ -2619,7 +2620,7 @@ describe('MemoryExtractor emotional state persistence', () => {
           moodSamples: 3,
         },
       }),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2651,24 +2652,24 @@ describe('MemoryExtractor emotional state persistence', () => {
 
 describe('MemoryExtractor crash recovery markers', () => {
   it('queues pre-compaction extraction over provided compacted entries', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([]),
       getMessageCount: vi.fn().mockReturnValue(0),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2713,24 +2714,24 @@ describe('MemoryExtractor crash recovery markers', () => {
       timestamp: 2_000,
     });
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockImplementation((id: string, limit = 10) => sessionStore.getRecent(id, limit)),
       getMessageCount: vi.fn().mockImplementation((id: string) => sessionStore.count(id)),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2787,24 +2788,24 @@ describe('MemoryExtractor crash recovery markers', () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0].unextractedEntries.map(entry => entry.content)).toEqual(['Message 2', 'Message 3']);
 
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockImplementation((id: string, limit = 10) => sessionStore.getRecent(id, limit)),
       getMessageCount: vi.fn().mockImplementation((id: string) => sessionStore.count(id)),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2829,34 +2830,34 @@ describe('MemoryExtractor crash recovery markers', () => {
   });
 
   it('prefers contact nickname in extraction naming guidance', async () => {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getRecentMessages: vi.fn().mockReturnValue([
         { id: 1, channelId: 'api:nickname-test', role: 'user', content: 'I like cardamom tea', authorName: 'user', timestamp: 1_000 },
         { id: 2, channelId: 'api:nickname-test', role: 'assistant', content: 'Noted', authorName: 'assistant', timestamp: 2_000 },
       ]),
       getMessageCount: vi.fn().mockReturnValue(2),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
-    const contactStore = {
+    });
+    const contactStore = fromAny({
       getById: vi.fn().mockReturnValue({
         id: 'contact-1',
         displayName: 'Alex Example',
         nickname: 'A',
       }),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2903,24 +2904,24 @@ describe('MemoryExtractor interval watermark coverage', () => {
     extractionInterval?: number;
   } = {}) {
     const entries = buildWatermarkEntries(channelId, options.entryCount ?? 10);
-    const llmClient = options.llmClient ?? {
+    const llmClient = options.llmClient ?? fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(entries.length),
       getRecentMessages: vi.fn().mockReturnValue(entries),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
 
     const extractor = new MemoryExtractor(
       llmClient,
@@ -2977,12 +2978,12 @@ describe('MemoryExtractor interval watermark coverage', () => {
 
   it('does not advance the watermark when pre-compaction extraction fails', async () => {
     const channelId = 'api:watermark-failure';
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi
         .fn()
         .mockRejectedValueOnce(new Error('extraction provider unavailable'))
         .mockResolvedValue({ content: '<response></response>' }),
-    } as any;
+    });
     const { extractor, entries } = buildWatermarkHarness(channelId, { llmClient });
 
     await expect(
@@ -3128,27 +3129,27 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
   }
 
   function makeExtractor(gate: Promise<void>): MemoryExtractor {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockImplementation(async () => {
         await gate;
         return { content: '<response></response>' };
       }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(0),
       getRecentMessages: vi.fn().mockReturnValue([]),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = {
+    });
+    const eventBus = fromAny({
       emit: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    });
     return new MemoryExtractor(
       llmClient,
       sessionManager,
@@ -3169,7 +3170,7 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
     const firstPromise = extractor.extractObservedGroupRange({
       channelId,
       triggerReason: 'observed_count',
-      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      recoveredEntries: fromAny([groupEntry(channelId, 1), groupEntry(channelId, 2)]),
       groupWriteCaps: groupWriteCaps(),
     });
     await Promise.resolve();
@@ -3181,7 +3182,7 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
     const secondPromise = extractor.extractObservedGroupRange({
       channelId,
       triggerReason: 'observed_count',
-      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      recoveredEntries: fromAny([groupEntry(channelId, 3), groupEntry(channelId, 4)]),
       groupWriteCaps: groupWriteCaps(),
     });
 
@@ -3199,7 +3200,7 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
 
     const firstPromise = extractor.extractGroupBackfillRange({
       channelId,
-      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      recoveredEntries: fromAny([groupEntry(channelId, 1), groupEntry(channelId, 2)]),
       groupWriteCaps: groupWriteCaps(),
     });
     await Promise.resolve();
@@ -3207,7 +3208,7 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
 
     const secondPromise = extractor.extractGroupBackfillRange({
       channelId,
-      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      recoveredEntries: fromAny([groupEntry(channelId, 3), groupEntry(channelId, 4)]),
       groupWriteCaps: groupWriteCaps(),
     });
 
@@ -3221,11 +3222,11 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
 describe('MemoryExtractor bounded snapshot sizing (u5bv.10)', () => {
   function makeExtractor(extractionInterval: number): MemoryExtractor {
     return new MemoryExtractor(
-      { complete: vi.fn() } as any,
-      {} as any,
-      { getMemoriesByChannel: vi.fn().mockResolvedValue([]) } as any,
-      { embed: vi.fn(), embedBatch: vi.fn(), dims: 8 } as any,
-      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      fromAny({ complete: vi.fn() }),
+      fromPartial<Record<string, unknown>>({}),
+      fromAny({ getMemoriesByChannel: vi.fn().mockResolvedValue([]) }),
+      fromAny({ embed: vi.fn(), embedBatch: vi.fn(), dims: 8 }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
       { extractionInterval },
     );
   }
@@ -3266,25 +3267,25 @@ describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
   }
 
   function makeDrainHarness(gate: Promise<void>) {
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockImplementation(async () => {
         await gate;
         return { content: '<response></response>' };
       }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(0),
       getRecentMessages: vi.fn().mockReturnValue([]),
-    } as any;
-    const memoryStore = {
+    });
+    const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockResolvedValue([]),
-    } as any;
-    const embeddingService = {
+    });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+    });
+    const eventBus = fromAny({ emit: vi.fn().mockResolvedValue(undefined) });
     const extractor = new MemoryExtractor(
       llmClient,
       sessionManager,
@@ -3307,7 +3308,7 @@ describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
     const aPromise = extractor.extractObservedGroupRange({
       channelId,
       triggerReason: 'observed_count',
-      recoveredEntries: substantiveEntries(channelId, [101, 102]) as any,
+      recoveredEntries: fromAny(substantiveEntries(channelId, [101, 102])),
       groupWriteCaps: createDefaultGroupMemorySettings().writeCaps,
     });
     await Promise.resolve();
@@ -3324,7 +3325,7 @@ describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
       undefined,
       undefined,
       bCrossBoundary,
-      substantiveEntries(channelId, [1, 2, 3, 4]) as any,
+      fromAny(substantiveEntries(channelId, [1, 2, 3, 4])),
     );
 
     // Graceful shutdown flips acceptance before B's chained run starts.
@@ -3351,20 +3352,20 @@ describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
     // A fresh (accepting) extractor models the process that picks up the deferred
     // job on restart: B's exact snapshot runs once and advances coverage, and a
     // reprocess of the same covered range is a no-op.
-    const llmClient = {
+    const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    } as any;
-    const sessionManager = {
+    });
+    const sessionManager = fromAny({
       getMessageCount: vi.fn().mockReturnValue(0),
       getRecentMessages: vi.fn().mockReturnValue([]),
-    } as any;
-    const memoryStore = { getMemoriesByChannel: vi.fn().mockResolvedValue([]) } as any;
-    const embeddingService = {
+    });
+    const memoryStore = fromAny({ getMemoriesByChannel: vi.fn().mockResolvedValue([]) });
+    const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
       dims: 8,
-    } as any;
-    const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+    });
+    const eventBus = fromAny({ emit: vi.fn().mockResolvedValue(undefined) });
     const extractor = new MemoryExtractor(
       llmClient,
       sessionManager,
@@ -3375,7 +3376,7 @@ describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
     );
     const channelId = 'api:drain-requeue-retry';
     const cross = vi.fn().mockResolvedValue(undefined);
-    const snapshot = substantiveEntries(channelId, [1, 2, 3, 4]) as any;
+    const snapshot = fromAny(substantiveEntries(channelId, [1, 2, 3, 4]));
 
     await extractor.maybeExtract(
       channelId, undefined, undefined, undefined, undefined, cross, snapshot,

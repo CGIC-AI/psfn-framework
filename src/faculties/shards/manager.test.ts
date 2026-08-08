@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -81,11 +82,11 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: nextMockShardContent() }],
-    api: '' as any,
-    provider: '' as any,
+    api: fromAny(''),
+    provider: fromAny(''),
     model: '',
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: 'stop' as any,
+    stopReason: fromAny('stop'),
     timestamp: Date.now(),
   });
 });
@@ -117,11 +118,11 @@ function restoreDefaultPromptMock(): void {
     this.state.messages.push({
       role: 'assistant',
       content: [{ type: 'text' as const, text: nextMockShardContent() }],
-      api: '' as any,
-      provider: '' as any,
+      api: fromAny(''),
+      provider: fromAny(''),
       model: '',
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: 'stop' as any,
+      stopReason: fromAny('stop'),
       timestamp: Date.now(),
     });
   });
@@ -861,13 +862,13 @@ describe('ShardManager', () => {
     });
 
     const parentSnapshot = await runWithRequestContext(
-      {
+      fromAny({
         requestId: 'launch-request',
         turnId: 'turn-launch',
         channelId: 'api:launch',
         callType: 'tool',
         purpose: 'shard',
-      } as any,
+      }),
       async () => runWithChargeContext({
         chargePolicy: makeChargePolicy(),
         eventBus,
@@ -1052,8 +1053,8 @@ describe('ShardManager', () => {
 
   it('keeps spawned shard agents on gateway runtime mode when no override is provided', async () => {
     const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockImplementationOnce(async function (this: SubstrateAgent) {
-      expect((this as any).runtimeMode).toBe('gateway');
-      return {
+      expect((fromAny(this)).runtimeMode).toBe('gateway');
+      return fromAny({
         content: 'gateway runtime response',
         channelId: 'shard:gateway-runtime',
         attachments: [],
@@ -1063,7 +1064,7 @@ describe('ShardManager', () => {
           outputTokens: 1,
           durationMs: 1,
         },
-      } as any;
+      });
     });
 
     try {
@@ -1174,9 +1175,9 @@ describe('ShardManager', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'done' }],
-        api: '' as any, provider: '' as any, model: '',
+        api: fromAny(''), provider: fromAny(''), model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any, timestamp: Date.now(),
+        stopReason: fromAny('stop'), timestamp: Date.now(),
       });
     });
 
@@ -1208,9 +1209,9 @@ describe('ShardManager', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'done' }],
-        api: '' as any, provider: '' as any, model: '',
+        api: fromAny(''), provider: fromAny(''), model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any, timestamp: Date.now(),
+        stopReason: fromAny('stop'), timestamp: Date.now(),
       });
     });
 
@@ -1296,7 +1297,7 @@ describe('ShardManager', () => {
     const parentSessionManager = new SessionManager(sessionStore, TEST_CONFIG, eventBus);
     parentSessionManager.intakeScreening = {
       mode: 'enforce',
-      screenSync: vi.fn((text: string) => ({
+      screenSync: vi.fn((text: string) => (fromAny({
         action: text.includes('Bearer')
           ? 'sanitize'
           : 'pass',
@@ -1307,7 +1308,7 @@ describe('ShardManager', () => {
             ? ['secrets/credential_material']
             : [],
         },
-      } as any)),
+      }))),
     };
     const deliverOrdinaryIcp = vi.fn(async (
       request: import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope,
@@ -1360,7 +1361,7 @@ describe('ShardManager', () => {
     await expect(manager.shardParentIcp.sendShardParentIcp('foreign-shard', 'do not route'))
       .rejects.toThrow(/unavailable or foreign/u);
 
-    const attachment = {
+    const attachment = fromAny({
       attachmentId: '11111111-1111-4111-8111-111111111111',
       disposition: 'created' as const,
       deviceActor: {
@@ -1378,7 +1379,7 @@ describe('ShardManager', () => {
         session: { recordId: 'session-1', authorityGeneration: 1, globalAuthEpoch: 1 },
       },
       channel: { source: 'server' as const, id: 'hub-device:test', companionId: parentCompanionId },
-    } as any;
+    });
     const response = await manager.shardDirectory.sendShardChat({
       parentCompanionId,
       shardId,
@@ -1785,9 +1786,9 @@ describe('ShardManager', () => {
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
-      sessionManager: {
+      sessionManager: fromAny({
         getActiveFocusMemoryScopeQuery: vi.fn(() => scopeQuery),
-      } as any,
+      }),
       embeddingService: null,
       memoryProvider: memory,
       config: {
@@ -2222,11 +2223,11 @@ describe('ShardManager', () => {
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: mockShardContent }],
-        api: '' as any,
-        provider: '' as any,
+        api: fromAny(''),
+        provider: fromAny(''),
         model: '',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any,
+        stopReason: fromAny('stop'),
         timestamp: Date.now(),
       });
     });
@@ -2626,7 +2627,7 @@ describe('ShardManager', () => {
   });
 
   it('returns accepted shard artifacts with explicit merge policy and lineage provenance', async () => {
-    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce(fromAny({
       content: 'artifact response',
       channelId: 'shard:result',
       attachments: [{
@@ -2641,7 +2642,7 @@ describe('ShardManager', () => {
         outputTokens: 4,
         durationMs: 8,
       },
-    } as any);
+    }));
 
     try {
       const manager = createTestShardManager({
@@ -2680,7 +2681,7 @@ describe('ShardManager', () => {
     const foldReviewController = new ShardFoldReviewController(
       join(dir, 'state', 'shard-fold-reviews.json'),
     );
-    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce(fromAny({
       content: 'artifact response',
       channelId: 'shard:result',
       attachments: [{
@@ -2694,7 +2695,7 @@ describe('ShardManager', () => {
         outputTokens: 4,
         durationMs: 8,
       },
-    } as any);
+    }));
     const lifecycleEvents: Array<{
       handoff: CompletionHandoffRecord;
       targetChannelId?: string;
@@ -2776,7 +2777,7 @@ describe('ShardManager', () => {
   });
 
   it('rejects ambiguous shard artifact returns', async () => {
-    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce(fromAny({
       content: 'artifact response',
       channelId: 'shard:result',
       attachments: [{
@@ -2790,7 +2791,7 @@ describe('ShardManager', () => {
         outputTokens: 4,
         durationMs: 8,
       },
-    } as any);
+    }));
 
     try {
       const manager = createTestShardManager({
@@ -3094,7 +3095,7 @@ describe('ShardManager', () => {
       config: TEST_CONFIG,
       parentSystemPrompt: 'test',
     });
-    const executeShard = vi.spyOn(manager as any, 'executeShard').mockResolvedValue({
+    const executeShard = vi.spyOn(fromAny(manager), 'executeShard').mockResolvedValue({
       shardId: 'wyoming-shard-test',
       name: 'wyoming-launch',
       content: 'ok',

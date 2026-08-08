@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -269,7 +270,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage: vi.fn(async (message: { content: string }) => {
           capturedPrompts.push(message.content);
           return { content: 'Uncertain telemetry stayed bounded.' };
@@ -277,7 +278,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalState: () => internalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      }),
       dataDir: tempDir,
     });
 
@@ -370,7 +371,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         },
         dataDir: tempDir,
         runtimeOptions: {
-          llmProvider: llmProvider as any,
+          llmProvider: fromAny(llmProvider),
         },
       });
 
@@ -624,7 +625,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         memoryExtractor,
         memoryProvider: {
@@ -634,10 +635,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [{ flag: 'continuity', confidence: 0.51 }],
         getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
-      } as any,
+      }),
       dataDir: tempDir,
       runtimeOptions: {
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         characterPromptVariablesProvider: () => ({
           char: 'Purrsephone',
           personality: 'PERSONALITY_SENTINEL',
@@ -990,7 +991,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         },
         dataDir: tempDir,
         runtimeOptions: {
-          llmProvider: llmProvider as any,
+          llmProvider: fromAny(llmProvider),
           characterPromptVariablesProvider: () => ({
             'character.visual_description': 'Silver eyes and a weathered jacket.',
           }),
@@ -1114,7 +1115,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
       const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-        agentLoop: {
+        agentLoop: fromAny({
           handleMessage,
           memoryProvider: {
             retrieve: memoryRetrieve,
@@ -1122,7 +1123,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentInternalState: () => currentInternalState,
           getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
           getCurrentMetacognitiveFlags: () => [],
-        } as any,
+        }),
         dataDir: tempDir,
         runtimeOptions: {
           eventBus,
@@ -1168,7 +1169,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
               }]
               : []
           ),
-          pendingFollowUpStore: {
+          pendingFollowUpStore: fromAny({
             list: async (options?: { contactId?: string }) => (
               options?.contactId === 'contact-1'
                 ? [{
@@ -1182,7 +1183,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
                 }]
                 : []
             ),
-          } as any,
+          }),
         },
       });
 
@@ -1368,7 +1369,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         memoryProvider: {
           retrieve: memoryRetrieve,
@@ -1376,9 +1377,9 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalState: () => currentInternalState,
         getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      }),
       dataDir: tempDir,
-      runtimeOptions: {
+      runtimeOptions: fromAny({
         eventBus,
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
@@ -1393,7 +1394,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getEmotionalSnapshot: async () => undefined,
           getEmotionalTimeSeries: async () => [],
         },
-      } as any,
+      }),
     });
 
     await runtime.runTemplateNow('daily-review', {
@@ -1463,14 +1464,14 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage: vi.fn(async () => ({
           content: 'I feel a quiet tenderness in my inner world, and I know it means I need more connection today.',
         })),
         getCurrentInternalState: () => internalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      }),
       dataDir: tempDir,
     });
 
@@ -1514,7 +1515,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage: vi.fn(async () => ({
           content: 'I feel the blocked anticipation, but I can see the memory evidence underneath it.',
           metadata: {
@@ -1527,7 +1528,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalState: () => internalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      }),
       dataDir: tempDir,
     });
 
@@ -1989,7 +1990,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         memoryProvider: {
           retrieve: memoryRetrieve,
@@ -1997,7 +1998,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalState: () => currentInternalState,
         getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      }),
       dataDir: tempDir,
       runtimeOptions: {
         characterPromptVariablesProvider: () => ({
@@ -2207,7 +2208,7 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
 
       const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-        agentLoop: {
+        agentLoop: fromAny({
           handleMessage: vi.fn(async () => ({ content: 'unused' })),
           memoryExtractor,
           memoryProvider: {
@@ -2217,11 +2218,11 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentInternalStateSnapshotRef: () => snapshotRef,
           getCurrentMetacognitiveFlags: () => [],
           getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
-        } as any,
+        }),
         dataDir: tempDir,
         runtimeOptions: {
           eventBus,
-          llmProvider: llmProvider as any,
+          llmProvider: fromAny(llmProvider),
           sessionManager: {
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: (channelId: string, limit?: number) => (
@@ -2412,7 +2413,7 @@ describe('createReflectionTemplateRuntime reflection novelty gate', () => {
 
     const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
-      agentLoop: {
+      agentLoop: fromAny({
         handleMessage,
         getCurrentInternalState: () => currentInternalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
@@ -2422,13 +2423,13 @@ describe('createReflectionTemplateRuntime reflection novelty gate', () => {
           '<identity>test identity</identity>',
           '<runtime_emotional_affect>test affect</runtime_emotional_affect>',
         ].join('\n\n'),
-      } as any,
+      }),
       dataDir: tempDir,
       runtimeOptions: {
         eventBus,
-        llmProvider: llmProvider as any,
+        llmProvider: fromAny(llmProvider),
         reflectionNoveltyGate: { minNewEntries: 1 },
-        episodicWatermarkStore: watermarkStore as any,
+        episodicWatermarkStore: fromAny(watermarkStore),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (

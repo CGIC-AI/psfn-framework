@@ -352,7 +352,7 @@ export function buildGatePlan({
       command('supply-chain', 'npm', ['run', 'verify:supply-chain', '--', '--ref', base]),
     );
   }
-  if (matches(/^(?:deploy\/helm\/|docker\/|scripts\/(?:verify-(?:helm|k8s|kube)|ops\/ship-kube))/)) {
+  if (matches(/^(?:deploy\/helm\/|docker\/|scripts\/(?:verify-(?:helm|kube)|ops\/ship-kube))/)) {
     plan.push(
       command('deployment-contracts', 'npm', ['run', 'verify:deployment-contracts']),
     );

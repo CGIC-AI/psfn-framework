@@ -246,30 +246,7 @@
       "reason": "Owner-file registry verification must match the established project-scoped Helm helper identifier used by the checked-in chart.",
       "pattern": "identity-legacy-slug"
     },
-    {
-      "path": "scripts/verify-k8s-manifests.mjs",
-      "contains": "/var/run/secrets/psfn-postgres/database-url",
-      "reason": "Kubernetes verifier pins the project-scoped Postgres Secret mount path; this is infrastructure naming, not companion identity.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-k8s-manifests.mjs",
-      "contains": "postgresql://psfn:",
-      "reason": "Kubernetes verifier asserts the legacy placeholder credential is absent from rendered manifests.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-k8s-manifests.mjs",
-      "contains": "psfn-framework-mlwk.31",
-      "reason": "Kubernetes verifier comment cites the bead that owns the empty DSN placeholder contract.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "scripts/verify-k8s-manifests.mjs",
-      "contains": "psfn-framework-mlwk.32",
-      "reason": "Kubernetes verifier comment cites the bead that owns the empty externalName contract.",
-      "pattern": "identity-legacy-slug"
-    },
+
     {
       "path": "scripts/verify-kube-ship-chart-provenance.mjs",
       "contains": "PSFN",

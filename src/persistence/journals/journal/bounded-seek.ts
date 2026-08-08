@@ -67,11 +67,13 @@ function assertSeekSnapshotUnchanged(
 ): void {
   const observed = snapshotSeekSegments(activePath);
   const unchanged = observed.length === expected.length
-    && observed.every((segment, index) => (
-      segment.path === expected[index]?.path
-      && segment.size === expected[index]?.size
-      && segment.identity === expected[index]?.identity
-    ));
+    && observed.every((segment, index) => {
+      const expectedSegment = expected[index];
+      return expectedSegment !== undefined
+        && segment.path === expectedSegment.path
+        && segment.size === expectedSegment.size
+        && segment.identity === expectedSegment.identity;
+    });
   if (unchanged) return;
   const error = new Error(
     `Journal segment snapshot changed during bounded seek of ${activePath}`,

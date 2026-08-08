@@ -388,7 +388,8 @@ export async function invalidateRestoredMemorySubjectProjections(
         const tables = await client.query<{ memories: string | null; classifications: string | null }>(`
           SELECT to_regclass($1)::text AS memories, to_regclass($2)::text AS classifications
         `, [`${schema}.l2_memories`, `${schema}.l2_memory_subject_classifications`]);
-        if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
+        const tablesRow = tables.rows[0];
+        if (tablesRow === undefined || !tablesRow.memories || !tablesRow.classifications) continue;
         const qualified = quotePostgresIdentifier(schema);
         // The subject-evidence invalidation trigger intentionally addresses
         // companion-local projection tables without schema qualification.
@@ -408,7 +409,8 @@ export async function invalidateRestoredMemorySubjectProjections(
           'SELECT to_regclass($1)::text AS checkpoint',
           [`${schema}.l2_memory_subject_backfill_checkpoints`],
         );
-        if (checkpoint.rows[0]?.checkpoint) {
+        const checkpointRow = checkpoint.rows[0];
+        if (checkpointRow !== undefined && checkpointRow.checkpoint) {
           await client.query(`
             UPDATE ${qualified}.l2_memory_subject_backfill_checkpoints
             SET cursor_memory_id = NULL, completed = FALSE, processed_count = 0,
@@ -440,7 +442,8 @@ export async function backfillRestoredMemorySubjectProjections(
         SELECT to_regclass('l2_memories')::text AS memories,
                to_regclass('l2_memory_subject_classifications')::text AS classifications
       `);
-      if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
+      const tablesRow = tables.rows[0];
+      if (tablesRow === undefined || !tablesRow.memories || !tablesRow.classifications) continue;
       await runMemorySubjectBackfillToCompletion(pool);
     } finally {
       await pool.end().catch(() => undefined);

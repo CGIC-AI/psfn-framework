@@ -32,6 +32,7 @@ export default defineConfig({
   entry: entries,
   format: ['esm'],
   target: 'node22',
+  tsconfig: './tsconfig.tsup.json',
   dts: {
     entry: Object.fromEntries(
       Object.entries(entries).filter(([name]) => (

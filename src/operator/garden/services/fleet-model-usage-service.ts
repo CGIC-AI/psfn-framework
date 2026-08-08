@@ -398,10 +398,12 @@ function parseModelUsageResponse(
   });
   const expectedBoundaries = createModelUsageBucketBoundaries(expectedRange);
   if (timeSeries.length !== expectedBoundaries.length
-    || timeSeries.some((bucket, index) => (
-      bucket.startMs !== expectedBoundaries[index]?.startMs
-      || bucket.endMs !== expectedBoundaries[index]?.endMs
-    ))) {
+    || timeSeries.some((bucket, index) => {
+      const boundary = expectedBoundaries[index];
+      return boundary === undefined
+        || bucket.startMs !== boundary.startMs
+        || bucket.endMs !== boundary.endMs;
+    })) {
     throw new Error('Fleet model-usage response timeSeries does not match the fleet buckets');
   }
   let visibleTotals = emptyTotals();

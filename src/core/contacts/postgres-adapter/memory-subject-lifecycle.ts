@@ -14,7 +14,8 @@ export async function invalidateMemorySubjectsForContact(
       to_regclass('l2_memory_subject_classifications')::text AS classifications,
       to_regclass('l2_memory_subject_contacts')::text AS contacts
   `);
-  if (!tables.rows[0]?.classifications || !tables.rows[0]?.contacts) return;
+  const firstRow = tables.rows[0];
+  if (firstRow === undefined || !firstRow.classifications || !firstRow.contacts) return;
   await client.query(`
     WITH affected AS (
       SELECT memory_id

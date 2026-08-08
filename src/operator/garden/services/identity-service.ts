@@ -60,7 +60,7 @@ function normalizeTags(tags: unknown): string[] {
 
 function extractSettingsResultMessage(html: string): ImportResult {
   const successMatch = html.match(/<span class="form-success">([\s\S]*?)<\/span>/i);
-  if (successMatch) {
+  if (successMatch && successMatch[1] !== undefined) {
     return {
       ok: true,
       message: successMatch[1].trim(),
@@ -68,7 +68,7 @@ function extractSettingsResultMessage(html: string): ImportResult {
   }
 
   const errorMatch = html.match(/<span class="form-error">([\s\S]*?)<\/span>/i);
-  if (errorMatch) {
+  if (errorMatch && errorMatch[1] !== undefined) {
     return {
       ok: false,
       message: errorMatch[1].trim(),
@@ -83,8 +83,8 @@ function extractSettingsResultMessage(html: string): ImportResult {
 
 function resolveMissingRequiredIdentityField(card: CharacterCardV2): 'name' | 'personality' | null {
   const macroMap = buildCharacterMacroMap(card);
-  if (!macroMap.name.trim()) return 'name';
-  if (!macroMap.personality.trim()) return 'personality';
+  if (!macroMap.name?.trim()) return 'name';
+  if (!macroMap.personality?.trim()) return 'personality';
   return null;
 }
 

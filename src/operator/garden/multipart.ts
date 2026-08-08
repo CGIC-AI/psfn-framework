@@ -43,7 +43,9 @@ export function extractBoundary(contentType: string | undefined): string | null 
   if (!boundaryMatch) return null;
 
   // Strip surrounding quotes if present
-  let boundary = boundaryMatch[1];
+  const rawBoundary = boundaryMatch[1];
+  if (rawBoundary === undefined) return null;
+  let boundary = rawBoundary;
   if (boundary.startsWith('"') && boundary.endsWith('"')) {
     boundary = boundary.slice(1, -1);
   }

@@ -172,6 +172,7 @@ export class PromptsSnapshotService {
       );
       for (let index = 0; index < sectionPatches.length; index += 1) {
         const section = sectionPatches[index];
+        if (!section) continue;
         const definition = FOUNDATION_SECTION_DEFINITIONS.find(entry => entry.id === section.id)!;
         const content = composeFoundationSectionTemplate(section);
         const priority = index * 10;

@@ -97,6 +97,10 @@ export function buildAdminEnrollmentRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/enrollments/', 'hubIdentityId'),
       handle: (_req, res, { hubIdentityId }, context) => {
+        if (!hubIdentityId) {
+          sendJson(res, 400, { error: 'hubIdentityId is required' });
+          return;
+        }
         enrollmentService.revoke(context, hubIdentityId).then(
           (result) => {
             if (!result.revoked) {

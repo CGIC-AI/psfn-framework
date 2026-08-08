@@ -267,6 +267,10 @@ export function buildAdminPromptRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/prompts/', 'layerId'),
       handle: (_req, res, { layerId }) => {
+        if (!layerId) {
+          sendJson(res, 400, { error: 'layerId is required' });
+          return;
+        }
         const detail = promptsService.getPromptDetail(layerId);
         if (!detail) {
           sendJson(res, 404, { error: 'Prompt layer not found' });

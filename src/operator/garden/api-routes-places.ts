@@ -76,6 +76,10 @@ export function buildAdminPlacesRoutes(options: {
             sendJson(res, 400, { error: 'Re-bind payload must include placeId' });
             return;
           }
+          if (!satelliteId) {
+            sendJson(res, 400, { error: 'satelliteId is required' });
+            return;
+          }
           const rawPlaceId = parsed.value.placeId;
           if (rawPlaceId !== null && typeof rawPlaceId !== 'string') {
             sendJson(res, 400, { error: 'placeId must be a string (target place) or null (unbind)' });

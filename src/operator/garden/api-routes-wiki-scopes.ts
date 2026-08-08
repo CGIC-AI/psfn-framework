@@ -102,6 +102,7 @@ export function buildAdminWikiScopeRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(CARETAKER_PROPOSALS_PREFIX, 'proposalId', '/approve'),
       handle: (_req, res, { proposalId }) => {
+        if (!proposalId) { sendJson(res, 400, { error: 'proposalId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         wikiService.approveSharedWorldWikiProposal(proposalId, GARDEN_OPERATOR_ACTOR).then(
           result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
@@ -113,6 +114,7 @@ export function buildAdminWikiScopeRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(CARETAKER_PROPOSALS_PREFIX, 'proposalId', '/reject'),
       handle: (_req, res, { proposalId }) => {
+        if (!proposalId) { sendJson(res, 400, { error: 'proposalId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         wikiService.rejectSharedWorldWikiProposal(proposalId, GARDEN_OPERATOR_ACTOR).then(
           proposal => sendJson(res, 200, { proposal }, ADMIN_DYNAMIC_JSON_HEADERS),
@@ -126,6 +128,7 @@ export function buildAdminWikiScopeRoutes(options: {
         exclude: path => path.slice(CARETAKER_PROPOSALS_PREFIX.length).includes('/'),
       }),
       handle: (_req, res, { proposalId }) => {
+        if (!proposalId) { sendJson(res, 400, { error: 'proposalId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         wikiService.getSharedWorldWikiProposal(proposalId).then(
           (proposal) => {
@@ -140,6 +143,7 @@ export function buildAdminWikiScopeRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(SHARED_WORLD_PREFIX, 'siteId', '/publish'),
       handle: (_req, res, { siteId }) => {
+        if (!siteId) { sendJson(res, 400, { error: 'siteId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         wikiService.publishSharedWorldSite(siteId).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
@@ -151,6 +155,7 @@ export function buildAdminWikiScopeRoutes(options: {
       method: 'POST',
       match: paramWithSuffix(SHARED_WORLD_PREFIX, 'siteId', '/import'),
       handle: (req, res, { siteId }) => {
+        if (!siteId) { sendJson(res, 400, { error: 'siteId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
@@ -180,6 +185,7 @@ export function buildAdminWikiScopeRoutes(options: {
         exclude: path => path.slice(SHARED_WORLD_PREFIX.length).includes('/'),
       }),
       handle: (req, res, { siteId }) => {
+        if (!siteId) { sendJson(res, 400, { error: 'siteId is required' }); return; }
         if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
         const url = parseRequestUrl(req, `${SHARED_WORLD_PREFIX}${siteId}`);
         const docId = url.searchParams.get('id')?.trim();

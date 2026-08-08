@@ -26,7 +26,13 @@ export function requireAuditOpaqueIdKeyring(
       `A valid ${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for Garden audit opaque IDs.`,
     );
   }
-  const [, version, proofDigest] = match;
+  const version = match[1];
+  const proofDigest = match[2];
+  if (version === undefined || proofDigest === undefined) {
+    throw new Error(
+      `A valid ${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for Garden audit opaque IDs.`,
+    );
+  }
   const auditKey = createHmac('sha256', Buffer.from(proofDigest, 'hex'))
     .update(AUDIT_OPAQUE_ID_KEY_CONTEXT, 'utf8')
     .update('\0')

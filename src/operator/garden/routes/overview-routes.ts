@@ -465,7 +465,12 @@ export function buildAdminOverviewRoutes(options: {
           sendJson(res, 503, { error: AUDIT_HISTORY_UNAVAILABLE_ERROR });
           return;
         }
-        auditHistoryService.getAuditHistoryDetail(params.entryId).then(
+        const entryId = params.entryId;
+        if (!entryId) {
+          sendJson(res, 400, { error: 'entryId is required' });
+          return;
+        }
+        auditHistoryService.getAuditHistoryDetail(entryId).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => {
             if (error instanceof AdminAuditHistoryEntryNotFoundError) {
@@ -763,6 +768,10 @@ export function buildAdminOverviewRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/action-pipe/actions/', 'actionRef', '/cancel'),
       handle: (req, res, { actionRef }) => {
+        if (!actionRef) {
+          sendJson(res, 400, { ok: false, message: 'actionRef is required' });
+          return;
+        }
         if (!actionPipeService) {
           sendJson(res, 503, { ok: false, message: ACTION_PIPE_UNAVAILABLE_ERROR });
           return;
@@ -792,6 +801,10 @@ export function buildAdminOverviewRoutes(options: {
       method: 'POST',
       match: paramWithSuffix('/api/admin/action-pipe/actions/', 'actionRef', '/acknowledge'),
       handle: (req, res, { actionRef }) => {
+        if (!actionRef) {
+          sendJson(res, 400, { ok: false, message: 'actionRef is required' });
+          return;
+        }
         if (!actionPipeService) {
           sendJson(res, 503, { ok: false, message: ACTION_PIPE_UNAVAILABLE_ERROR });
           return;

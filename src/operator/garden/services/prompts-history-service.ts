@@ -104,6 +104,7 @@ export class PromptsHistoryService {
     const previousVersion = layer.version - 1;
     const previousEntry = layerHistory.find(entry => entry.version === previousVersion)
       ?? layerHistory[layerHistory.length - 1];
+    if (!previousEntry) return null;
 
     return {
       oldContent: previousEntry.previousContent,

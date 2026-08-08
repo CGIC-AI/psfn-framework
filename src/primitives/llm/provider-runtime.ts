@@ -101,7 +101,7 @@ function registerOpenAICompatibleEndpointProvider(
 }
 
 /**
- * Register the OpenAI-compatible endpoint providers that PSFN routes by model
+ * Register the OpenAI-compatible endpoint providers that the runtime routes by model
  * `provider` id when no static catalog applies. Models are supplied per-request
  * through {@link createOpenAICompatibleEndpointModel}.
  */

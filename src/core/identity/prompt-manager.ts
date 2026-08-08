@@ -93,8 +93,7 @@ export class PromptManager {
     const working: WorkingEntry[] = [];
     let hasExplicitIdentifier = false;
 
-    for (let index = 0; index < layers.length; index++) {
-      const layer = layers[index];
+    for (const [index, layer] of layers.entries()) {
       const content = layer.content.trim();
       if (!content) continue;
 

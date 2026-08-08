@@ -127,9 +127,10 @@ function resolveRestoreTrees(options: FleetRestoreTransactionOptions): StagedRes
       throw new Error(`Fleet restore destination overlaps its immutable backup root: ${spec.destination}`);
     }
   }
-  for (let index = 0; index < resolvedSpecs.length; index += 1) {
-    for (let peer = index + 1; peer < resolvedSpecs.length; peer += 1) {
-      if (pathsOverlap(resolvedSpecs[index].destination, resolvedSpecs[peer].destination)) {
+  for (const [index, left] of resolvedSpecs.entries()) {
+    for (const [peer, right] of resolvedSpecs.entries()) {
+      if (peer <= index) continue;
+      if (pathsOverlap(left.destination, right.destination)) {
         throw new Error('Fleet restore destinations must be distinct, non-overlapping roots');
       }
     }
@@ -205,7 +206,11 @@ function stageRestoreTrees(
 }
 
 function restoreJournalPath(operationId: string, trees: readonly StagedRestoreTree[]): string {
-  return join(dirname(trees[0].destination), `.restore-operation-${operationId}.json`);
+  const firstTree = trees[0];
+  if (!firstTree) {
+    throw new Error('Fleet restore journal requires at least one tree');
+  }
+  return join(dirname(firstTree.destination), `.restore-operation-${operationId}.json`);
 }
 
 function writeRestoreJournal(path: string, journal: FleetRestoreJournal, exclusive = false): void {
@@ -238,7 +243,8 @@ function parseRestoreJournal(path: string, expected: FleetRestoreJournal): Fleet
   }
   const trees: StagedRestoreTree[] = parsed.trees.map((tree, index) => {
     const expectedTree = expected.trees[index];
-    if (!isRecord(tree)
+    if (expectedTree === undefined
+      || !isRecord(tree)
       || Object.keys(tree).sort().join(',') !== 'destination,published,source,staging'
       || tree.source !== expectedTree.source
       || tree.destination !== expectedTree.destination
@@ -429,8 +435,7 @@ export async function executeFleetRestoreTransaction(
       throw new Error('Fleet restore committed journal does not match its database marker');
     }
 
-    for (let index = 0; index < journal.trees.length; index += 1) {
-      const tree = journal.trees[index];
+    for (const [index, tree] of journal.trees.entries()) {
       const destinationExists = existsSync(tree.destination);
       const stagingExists = existsSync(tree.staging);
       if (tree.published || (destinationExists && !stagingExists)) {

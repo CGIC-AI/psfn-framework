@@ -754,8 +754,7 @@ export class PromptLayerStore {
     const touched: PromptLayer[] = [];
     const orderChanged = this.layers.some((layer, index) => layer.id !== targetOrder[index]?.id);
 
-    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
-      const layer = targetOrder[nextPriority];
+    for (const [nextPriority, layer] of targetOrder.entries()) {
       const nextPromptOrder = nextPriority;
       if (layer.priority === nextPriority && layer.promptOrder === nextPromptOrder) continue;
 
@@ -812,6 +811,7 @@ export class PromptLayerStore {
     const idx = this.layers.findIndex(l => l.id === id);
     if (idx === -1) throw new Error(`Prompt layer not found: ${id}`);
     const layer = this.layers[idx];
+    if (!layer) throw new Error(`Prompt layer not found: ${id}`);
     // Don't allow deleting the only base layer
     if (layer.type === 'base') {
       const otherBases = this.layers.filter(l => l.type === 'base' && l.id !== id);
@@ -904,7 +904,7 @@ export class PromptLayerStore {
     const baseLayers = this.layers.filter(layer => layer.type === 'base');
     if (baseLayers.length !== 1) return false;
     const legacy = baseLayers[0];
-    if (!isCanonicalCharacterFoundationLayer(legacy)) return false;
+    if (!legacy || !isCanonicalCharacterFoundationLayer(legacy)) return false;
 
     const sections = decomposeFoundationSections(legacy.content || systemPrompt);
     const replacementLayers = this.buildFoundationLayers(sections, 'system:foundation-migration');
@@ -992,6 +992,7 @@ export class PromptLayerStore {
     if (baseLayers.length !== 1) return false;
 
     const base = baseLayers[0];
+    if (!base) return false;
     let touched = false;
 
     if (!base.identifier) {

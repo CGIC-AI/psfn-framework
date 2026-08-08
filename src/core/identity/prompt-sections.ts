@@ -78,9 +78,12 @@ export function unwrapSingleWrappedPromptSection(text: string): UnwrappedPromptS
   if (!normalized) return null;
   const match = normalized.match(SINGLE_WRAPPED_PROMPT_SECTION_PATTERN);
   if (!match) return null;
+  const rawId = match[1];
+  const rawContent = match[2];
+  if (rawId === undefined || rawContent === undefined) return null;
   return {
-    id: normalizePromptSectionId(match[1]),
-    content: match[2].trim(),
+    id: normalizePromptSectionId(rawId),
+    content: rawContent.trim(),
   };
 }
 
@@ -121,8 +124,9 @@ export function extractWrappedPromptSections(
   let match: RegExpExecArray | null;
   while ((match = WRAPPED_PROMPT_SECTION_PATTERN.exec(normalized)) !== null) {
     const wrapped = match[0].trim();
-    const id = normalizePromptSectionId(match[1]);
-    if (!wrapped) continue;
+    const rawId = match[1];
+    if (rawId === undefined || !wrapped) continue;
+    const id = normalizePromptSectionId(rawId);
     const scopeProvenance = resolveScopeProvenance?.(id);
     sections.push({
       id,

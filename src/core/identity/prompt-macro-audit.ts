@@ -46,6 +46,7 @@ function collectUnregisteredMacroNames(content: string): string[] {
   const unregistered = new Set<string>();
   for (const match of content.matchAll(TEMPLATE_TOKEN_PATTERN)) {
     const name = match[1];
+    if (name === undefined) continue;
     if (!resolvePromptMacroManifestEntry(name)) {
       unregistered.add(name.toLowerCase().replace(/\(\)$/, ''));
     }

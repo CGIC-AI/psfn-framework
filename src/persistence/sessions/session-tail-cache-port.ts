@@ -154,9 +154,12 @@ export function validateSessionTailWindow(rows: readonly SessionTailRow[]): {
   maxRowId: number | null;
 } {
   const sorted = [...rows].sort((left, right) => sessionTailRowId(left) - sessionTailRowId(right));
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previousId = sessionTailRowId(sorted[index - 1]);
-    const currentId = sessionTailRowId(sorted[index]);
+  for (const [index, currentRow] of sorted.entries()) {
+    if (index === 0) continue;
+    const previousRow = sorted[index - 1];
+    if (!previousRow) continue;
+    const previousId = sessionTailRowId(previousRow);
+    const currentId = sessionTailRowId(currentRow);
     if (currentId === previousId) {
       throw new Error(`Session tail contains duplicate entry id ${currentId}`);
     }
@@ -169,6 +172,7 @@ export function validateSessionTailWindow(rows: readonly SessionTailRow[]): {
   const messages = sorted
     .filter((row): row is Extract<SessionTailRow, { kind: 'message' }> => row.kind === 'message')
     .map(row => row.entry);
-  const maxRowId = sorted.length > 0 ? sessionTailRowId(sorted[sorted.length - 1]) : null;
+  const lastRow = sorted[sorted.length - 1];
+  const maxRowId = lastRow ? sessionTailRowId(lastRow) : null;
   return { rows: sorted, messages, maxRowId };
 }

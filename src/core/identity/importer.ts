@@ -123,7 +123,7 @@ function pickPrimaryAsset(assets: readonly ImportedAssetMetadata[]): ImportedAss
     ?? assets.find(asset => asset.type === 'icon')
     ?? assets.find(asset => asset.isMain)
     ?? assets[0];
-  return ranked;
+  return ranked ?? null;
 }
 
 export function mapCharacterBookEntriesToMemorySeeds(card: CCv3Data): CharacterMemorySeed[] {

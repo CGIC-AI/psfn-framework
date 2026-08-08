@@ -89,7 +89,7 @@ export async function revokeProviderAuthority(
       );
     }
     const subject = provider.rows[0];
-    if (subject.state !== 'pending' && subject.state !== 'active') {
+    if (!subject || (subject.state !== 'pending' && subject.state !== 'active')) {
       throw new fleetAuthPersistenceBoundaryValues.FleetAuthBrokerError(
         'provider_not_active',
         409,

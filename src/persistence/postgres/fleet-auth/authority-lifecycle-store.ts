@@ -437,6 +437,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new FleetAuthLifecycleDeniedError('authority_state_missing');
     }
     const row = result.rows[0];
+    if (!row) {
+      throw new FleetAuthLifecycleDeniedError('authority_state_missing');
+    }
     if (row.authority_generation !== String(decision.authorityGeneration)
       || row.global_auth_epoch !== String(decision.globalAuthEpoch)
       || (!this.accountAuthority.sessionAuthorityGenerationIsCurrent(
@@ -559,6 +562,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new FleetAuthLifecycleDeniedError('actor_session_stale_or_invalid');
     }
     const row = result.rows[0];
+    if (!row) {
+      throw new FleetAuthLifecycleDeniedError('actor_session_stale_or_invalid');
+    }
     const session = decision.actorSession;
     if (row.revoked_at !== null
       || row.replaced_by !== null
@@ -692,6 +698,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new Error('Fleet auth lifecycle result target is missing');
     }
     const row = result.rows[0];
+    if (!row) {
+      throw new Error('Fleet auth lifecycle result target is missing');
+    }
     return {
       principalId: row.principal_id,
       authnVersion: integer(row.authn_version, 'authn_version'),
@@ -716,6 +725,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new Error('fleet_auth authority_state singleton is missing during denial audit');
     }
     const authority = result.rows[0];
+    if (!authority) {
+      throw new Error('fleet_auth authority_state singleton is missing during denial audit');
+    }
     await insertLifecycleAudit(client, this.digest, decision, 'deny', reasonCode, {
       authorityGeneration: integer(authority.authority_generation, 'authority_generation'),
       globalAuthEpoch: integer(authority.global_auth_epoch, 'global_auth_epoch'),

@@ -296,10 +296,11 @@ function findDatabaseDump(artifactDir: string): string {
       .filter(entry => entry.isFile() && entry.name.endsWith('.dump'))
       .map(entry => join(databaseDir, entry.name))
     : [];
-  if (dumps.length !== 1 || statSync(dumps[0]).size <= 0) {
+  const dump = dumps[0];
+  if (dumps.length !== 1 || !dump || statSync(dump).size <= 0) {
     throw new Error(`Fleet restore requires exactly one non-empty Postgres dump in ${databaseDir}`);
   }
-  return dumps[0];
+  return dump;
 }
 
 async function restorePostgresDump(
@@ -359,9 +360,13 @@ async function rollbackFleetAuthOwnedSchemas(options: {
   ownerDatabaseUrls: Readonly<Record<string, string>>;
 }): Promise<void> {
   for (const contract of options.contracts) {
+    const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
+    if (!ownerDatabaseUrl) {
+      throw new Error(`Fleet restore missing owner database URL for schema ${contract.schema}`);
+    }
     await dropOwnedPostgresSchema(
       contract.schema,
-      options.ownerDatabaseUrls[contract.schema],
+      ownerDatabaseUrl,
       options.postgres.psqlBinary,
     );
   }
@@ -726,8 +731,12 @@ export async function restoreFleetAuthConsistentFamily(options: {
       await prepareFleetRestoreDatabaseMarker(postgres, operation);
       markerPrepared = true;
       for (const { artifact, dumpPath } of verifiedSchemaDumps) {
+        const schemaOwnerDatabaseUrl = options.schemaOwnerDatabaseUrls[artifact.postgresSchema];
+        if (!schemaOwnerDatabaseUrl) {
+          throw new Error(`Fleet restore missing owner database URL for schema ${artifact.postgresSchema}`);
+        }
         await restorePostgresDump(dumpPath, {
-          databaseUrl: options.schemaOwnerDatabaseUrls[artifact.postgresSchema],
+          databaseUrl: schemaOwnerDatabaseUrl,
           ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
         });
         restoredSchemas.push(artifact.postgresSchema);
@@ -744,8 +753,12 @@ export async function restoreFleetAuthConsistentFamily(options: {
       });
 
       for (const schema of restoredSchemas) {
+        const schemaOwnerDatabaseUrl = options.schemaOwnerDatabaseUrls[schema];
+        if (!schemaOwnerDatabaseUrl) {
+          throw new Error(`Fleet restore missing owner database URL for schema ${schema}`);
+        }
         const restoredPostgres = {
-          databaseUrl: options.schemaOwnerDatabaseUrls[schema],
+          databaseUrl: schemaOwnerDatabaseUrl,
           ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
         };
         await invalidateRestoredMemorySubjectProjections(restoredPostgres, [schema]);
@@ -856,6 +869,10 @@ async function verifyRecoveryFamilyExactlyMatchesCoordinator(options: {
     if (schemas.length !== 1) {
       throw new Error('Fleet auth recovery slice must name exactly one PostgreSQL schema');
     }
+    const schema = schemas[0];
+    if (!schema) {
+      throw new Error('Fleet auth recovery slice must name exactly one PostgreSQL schema');
+    }
     if (unit.kind === 'companion') {
       if (typeof unit.companionId !== 'string' || !unit.companionId
         || companionIds.has(unit.companionId)) {
@@ -863,7 +880,6 @@ async function verifyRecoveryFamilyExactlyMatchesCoordinator(options: {
       }
       companionIds.add(unit.companionId);
     }
-    const schema = schemas[0];
     const artifactDir = resolveArtifactDir(options.recoveryManifest, unit);
     if (unit.kind === 'companion') {
       verifyCompanionTreeSnapshot(artifactDir);
@@ -891,13 +907,17 @@ async function verifyRecoveryFamilyExactlyMatchesCoordinator(options: {
     || JSON.stringify(actual.map(entry => entry.key)) !== JSON.stringify(expected.map(entry => entry.key))) {
     throw new Error('Fleet auth coordinator and recovery schema families must match exactly');
   }
-  for (let index = 0; index < actual.length; index += 1) {
+  for (const [index, actualEntry] of actual.entries()) {
+    const expectedEntry = expected[index];
+    if (!expectedEntry) {
+      throw new Error('Fleet auth coordinator and recovery schema families must match exactly');
+    }
     const recoveryDigest = createHash('sha256')
-      .update(readFileSync(actual[index].dumpPath))
+      .update(readFileSync(actualEntry.dumpPath))
       .digest('hex');
-    if (recoveryDigest !== expected[index].artifact.sha256) {
+    if (recoveryDigest !== expectedEntry.artifact.sha256) {
       throw new Error(
-        `Fleet auth recovery dump for ${actual[index].schema} is not bound to the coordinator family`,
+        `Fleet auth recovery dump for ${actualEntry.schema} is not bound to the coordinator family`,
       );
     }
   }
@@ -1029,8 +1049,9 @@ async function assertTargetDatabaseIsSafe(
     return;
   }
   const collisions = targetSchemas.filter(entry => expectedSchemas.includes(entry.schema));
-  if (collisions.length > 0) {
-    throw new Error(`Fleet restore target Postgres schema already exists: ${collisions[0].schema}`);
+  const firstCollision = collisions[0];
+  if (firstCollision) {
+    throw new Error(`Fleet restore target Postgres schema already exists: ${firstCollision.schema}`);
   }
 }
 
@@ -1129,7 +1150,11 @@ function requireSingleUnit(
   if (matches.length !== 1) {
     throw new Error(`Fleet restore requires exactly one successful ${label} unit; found ${matches.length}`);
   }
-  return matches[0];
+  const match = matches[0];
+  if (!match) {
+    throw new Error(`Fleet restore requires exactly one successful ${label} unit; found ${matches.length}`);
+  }
+  return match;
 }
 
 export async function restoreFleetCompanionSlice(options: {
@@ -1166,7 +1191,11 @@ export async function restoreFleetCompanionSlice(options: {
     prepareStaging: (staged) => {
     const sessionsSource = join(artifactDir, 'sessions');
     if (existsSync(sessionsSource)) {
-      const sessionsDestination = join(staged[0].staging, 'state', 'sessions');
+      const firstStaged = staged[0];
+      if (!firstStaged) {
+        throw new Error('Fleet restore companion staging requires at least one tree');
+      }
+      const sessionsDestination = join(firstStaged.staging, 'state', 'sessions');
       if (existsSync(sessionsDestination)) {
         throw new Error('Companion restore session destination collides with the verified companion tree');
       }

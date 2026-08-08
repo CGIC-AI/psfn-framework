@@ -148,7 +148,9 @@ function isSafeHelmSecretExpression(rawValue: string): boolean {
     expression,
   );
   if (!directValue) return false;
-  const valuePath = directValue[1].slice(1);
+  const valuePathCapture = directValue[1];
+  if (valuePathCapture === undefined) return false;
+  const valuePath = valuePathCapture.slice(1);
   return /^secrets\.values\.[A-Za-z_][A-Za-z0-9_]*$/.test(valuePath)
     || valuePath === 'postgres.auth.password'
     || valuePath === 'redis.auth.password';
@@ -232,8 +234,11 @@ function assertKubernetesSecretDataIsSafe(path: string, text: string): void {
   for (const document of documents) {
     if (/^[ \t]*apiVersion[ \t]*:/m.test(document)) {
       const dynamicKind = /^[ \t]*(?:["']kind["']|kind)[ \t]*:[ \t]*({{[^\r\n]*}})[ \t]*$/m.exec(document);
-      if (dynamicKind && !SAFE_NON_SECRET_DYNAMIC_KINDS.has(dynamicKind[1])) {
-        throw new Error(`Kubernetes Helm chart contains an unscannable templated Kubernetes kind in ${path}`);
+      if (dynamicKind) {
+        const kind = dynamicKind[1];
+        if (kind !== undefined && !SAFE_NON_SECRET_DYNAMIC_KINDS.has(kind)) {
+          throw new Error(`Kubernetes Helm chart contains an unscannable templated Kubernetes kind in ${path}`);
+        }
       }
     }
     const isSecretDocument = /^[ \t]*(?:["']kind["']|kind)[ \t]*:[ \t]*(?:!!str[ \t]+)?["']?Secret["']?[ \t]*(?:#.*)?$/m.test(
@@ -248,10 +253,15 @@ function assertKubernetesSecretDataIsSafe(path: string, text: string): void {
     for (const line of lines) {
       const dataMarker = /^(\s*)["']?(?:data|stringData)["']?[ \t]*:[ \t]*(.*)$/.exec(line);
       if (dataMarker) {
-        if (dataMarker[2].trim() !== '') {
+        const dataValue = dataMarker[2];
+        if (dataValue !== undefined && dataValue.trim() !== '') {
           throw new Error(`Kubernetes Helm chart contains unsupported inline Kubernetes Secret data in ${path}`);
         }
-        secretDataIndent = dataMarker[1].length;
+        const indent = dataMarker[1];
+        if (indent === undefined) {
+          throw new Error(`Kubernetes Helm chart credential scanner failed to parse Secret data in ${path}`);
+        }
+        secretDataIndent = indent.length;
         continue;
       }
       if (secretDataIndent === undefined || /^\s*(?:#.*)?$/.test(line)) continue;
@@ -260,7 +270,12 @@ function assertKubernetesSecretDataIsSafe(path: string, text: string): void {
       if (/^{{-?\s*(?:else|end|if|range|with)\b[\s\S]*-?}}$/.test(trimmed)) continue;
       const dynamicAssignment = /^\s*({{-?[\s\S]+?-?}})\s*:\s*(.*?)\s*$/.exec(line);
       if (dynamicAssignment) {
-        assertSecretAssignmentValueIsSafe(path, dynamicAssignment[1], dynamicAssignment[2]);
+        const dynamicKey = dynamicAssignment[1];
+        const dynamicValue = dynamicAssignment[2];
+        if (dynamicKey === undefined || dynamicValue === undefined) {
+          throw new Error(`Kubernetes Helm chart credential scanner failed to parse Secret data in ${path}`);
+        }
+        assertSecretAssignmentValueIsSafe(path, dynamicKey, dynamicValue);
         continue;
       }
       if (/^{{-?[\s\S]*-?}}$/.test(trimmed)) {
@@ -276,12 +291,16 @@ function assertKubernetesSecretDataIsSafe(path: string, text: string): void {
       if (!staticAssignment) {
         throw new Error(`Kubernetes Helm chart contains unscannable Kubernetes Secret data in ${path}`);
       }
+      const staticValue = staticAssignment[4];
+      if (staticValue === undefined) {
+        throw new Error(`Kubernetes Helm chart credential scanner failed to parse Secret data in ${path}`);
+      }
       const key = (staticAssignment.slice(1, 4) as Array<string | undefined>)
         .find((candidate): candidate is string => candidate !== undefined);
       if (key === undefined) {
         throw new Error(`Kubernetes Helm chart credential scanner failed to parse Secret data in ${path}`);
       }
-      assertSecretAssignmentValueIsSafe(path, key.trim(), staticAssignment[4]);
+      assertSecretAssignmentValueIsSafe(path, key.trim(), staticValue);
     }
   }
 }
@@ -299,7 +318,9 @@ function assertCredentialAssignmentsAreSafe(
       throw new Error(`Kubernetes Helm chart credential scanner failed to parse an assignment in ${path}`);
     }
     if (!isSensitiveValueKey(key)) continue;
-    const rawValue = match[4].replace(/\s+#.*$/, '').trim();
+    const rawValueCapture = match[4];
+    if (rawValueCapture === undefined) continue;
+    const rawValue = rawValueCapture.replace(/\s+#.*$/, '').trim();
     // This Kubernetes API field is a boolean policy switch, not credential
     // material. Keep the exception schema-specific and reject every non-boolean
     // value, including arbitrary Helm expressions.
@@ -325,7 +346,9 @@ function assertEmbeddedTextIsSecretFree(path: string, text: string): void {
     const key = (match.slice(1, 4) as Array<string | undefined>)
       .find((candidate): candidate is string => candidate !== undefined);
     if (key === undefined || !isSensitiveValueKey(key)) continue;
-    const rawValue = match[4].replace(/\s+#.*$/, '').trim();
+    const rawValueCapture = match[4];
+    if (rawValueCapture === undefined) continue;
+    const rawValue = rawValueCapture.replace(/\s+#.*$/, '').trim();
     const scalar = parseAssignmentScalar(rawValue);
     if (isPlaceholderSecretValue(scalar) || isExternalSecretReference(scalar)) continue;
     throw new Error(
@@ -337,7 +360,9 @@ function assertEmbeddedTextIsSecretFree(path: string, text: string): void {
     const key = (match.slice(1, 4) as Array<string | undefined>)
       .find((candidate): candidate is string => candidate !== undefined);
     if (key === undefined || !isSensitiveValueKey(key)) continue;
-    const scalar = parseAssignmentScalar(match[4].trim());
+    const rawValueCapture = match[4];
+    if (rawValueCapture === undefined) continue;
+    const scalar = parseAssignmentScalar(rawValueCapture.trim());
     if (isPlaceholderSecretValue(scalar) || isExternalSecretReference(scalar)) continue;
     throw new Error(
       `Kubernetes Helm chart contains a literal credential assignment in ${path} at key ${key}`,
@@ -348,7 +373,9 @@ function assertEmbeddedTextIsSecretFree(path: string, text: string): void {
     const key = (match.slice(1, 4) as Array<string | undefined>)
       .find((candidate): candidate is string => candidate !== undefined);
     if (key === undefined || !isSensitiveValueKey(key)) continue;
-    const scalar = parseAssignmentScalar(match[4].trim());
+    const rawValueCapture = match[4];
+    if (rawValueCapture === undefined) continue;
+    const scalar = parseAssignmentScalar(rawValueCapture.trim());
     if (isPlaceholderSecretValue(scalar) || isExternalSecretReference(scalar)) continue;
     throw new Error(
       `Kubernetes Helm chart contains a literal credential assignment in ${path} at key ${key}`,
@@ -401,8 +428,9 @@ function parseYamlDocuments(text: string, path: string): unknown[] {
     uniqueKeys: true,
   } as Parameters<typeof parseAllDocuments>[1]);
   const errors = documents.flatMap(document => document.errors);
-  if (errors.length > 0) {
-    throw new Error(`Kubernetes Helm chart contains invalid YAML at ${path}: ${errors[0].message}`);
+  const firstError = errors[0];
+  if (firstError) {
+    throw new Error(`Kubernetes Helm chart contains invalid YAML at ${path}: ${firstError.message}`);
   }
   return documents.map(document => document.toJS({ maxAliasCount: 0 }) as unknown);
 }
@@ -668,8 +696,9 @@ export function readKubernetesHelmChartMetadata(
     prettyErrors: true,
     uniqueKeys: true,
   } as Parameters<typeof parseDocument>[1]);
-  if (document.errors.length > 0) {
-    throw new Error(`Kubernetes Helm chart metadata is invalid: ${document.errors[0].message}`);
+  const firstMetadataError = document.errors[0];
+  if (firstMetadataError) {
+    throw new Error(`Kubernetes Helm chart metadata is invalid: ${firstMetadataError.message}`);
   }
   const parsed = document.toJS({ maxAliasCount: 0 }) as unknown;
   if (!isRecord(parsed)) {

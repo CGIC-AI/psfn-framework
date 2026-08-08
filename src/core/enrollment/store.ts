@@ -138,6 +138,7 @@ export class PostgresHubIdentityEnrollmentStore implements HubIdentityEnrollment
         'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1',
         [hubIdentityId],
       )).rows[0];
+      if (!row) throw new Error('Enrollment upsert returned no row');
       return toEnrollment(row);
     });
   }

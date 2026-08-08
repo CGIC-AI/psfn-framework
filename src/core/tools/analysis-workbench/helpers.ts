@@ -35,7 +35,8 @@ export function search(text: string, pattern: string, contextLines = 0): string[
   const lines = text.split('\n');
   const matchIndices: number[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (re.test(lines[i])) matchIndices.push(i);
+    const line = lines[i];
+    if (line && re.test(line)) matchIndices.push(i);
   }
 
   if (matchIndices.length === 0) return [];

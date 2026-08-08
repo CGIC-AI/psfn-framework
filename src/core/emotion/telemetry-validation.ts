@@ -305,7 +305,9 @@ function inferSourceFromProvenance(
   provenance: readonly EmotionTelemetryProvenance[] | undefined,
 ): EmotionTelemetrySource | null {
   if (!provenance || provenance.length === 0) return null;
-  return normalizeSource(provenance[0].source);
+  const first = provenance[0];
+  if (!first) return null;
+  return normalizeSource(first.source);
 }
 
 /**

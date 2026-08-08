@@ -305,7 +305,7 @@ export function resolveBondedSessionTimeline(params: {
     // member's privacy is undeterminable and the whole bond stays down.
     let memberPrivacy: ChannelPrivacy | undefined;
     for (let index = conversational.length - 1; index >= 0; index -= 1) {
-      memberPrivacy = parseChannelVisibility(conversational[index].channelVisibility);
+      memberPrivacy = parseChannelVisibility(conversational[index]?.channelVisibility);
       if (memberPrivacy !== undefined) break;
     }
     if (memberPrivacy === undefined) return null;

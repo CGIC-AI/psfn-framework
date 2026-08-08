@@ -397,7 +397,8 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
       sourceHashTag,
       preservedTagBlock,
     ]);
-    const coveredUpTo = toCompact[toCompact.length - 1].id;
+    const lastCompacted = toCompact[toCompact.length - 1];
+    const coveredUpTo = lastCompacted?.id ?? -1;
     await params.assertEffectAllowed?.();
     params.store.insertCompaction(params.channelId, compactionSummary, coveredUpTo);
     const keepTokens = countMessageTokens(

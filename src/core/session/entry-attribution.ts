@@ -186,8 +186,8 @@ export function parseGroupUserMessageContent(rendered: string): ParsedGroupUserM
   // RegExpExecArray types every element as `string`.
   const parsedContent = match[3] as string | undefined;
   return {
-    displayName: match[1].trim(),
-    stableId: match[2].trim(),
+    displayName: (match[1] ?? '').trim(),
+    stableId: (match[2] ?? '').trim(),
     content: parsedContent ?? '',
   };
 }

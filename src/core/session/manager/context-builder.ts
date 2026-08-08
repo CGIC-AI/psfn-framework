@@ -956,6 +956,7 @@ export function applyObservationMasking(
   if (normalizedWindow > 0) {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
+      if (!entry) continue;
       if (entry.role === 'system') continue;
       const turnContext = resolveSessionEntryTurnContext(entry);
       unmaskedTurnIds.add(turnContext.turnId);

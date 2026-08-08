@@ -235,7 +235,11 @@ export function resolveSubagentRole(
         : 'No subagent roles are configured.'),
     );
   }
-  return { name: normalized, definition: roles[normalized] };
+  const definition = roles[normalized];
+  if (!definition) {
+    throw new Error(`Unknown subagent role "${normalized}".`);
+  }
+  return { name: normalized, definition };
 }
 
 /**

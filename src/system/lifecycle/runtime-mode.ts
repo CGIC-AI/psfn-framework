@@ -140,6 +140,7 @@ export function resolveRuntimeCommandInvocation(raw: string | undefined): Runtim
   }
 
   const [command, ...args] = tokens;
+  if (!command) return undefined;
   return {
     command,
     args,

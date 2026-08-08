@@ -202,7 +202,7 @@ function resolveSeedDir(seedDir?: string): string {
 
 function localTimeMinute(value: string): number {
   const [hour, minute] = value.split(':').map(Number);
-  return hour * 60 + minute;
+  return (hour ?? 0) * 60 + (minute ?? 0);
 }
 
 function assertBackgroundMaintenanceRestWindowCoverage(

@@ -177,7 +177,9 @@ export function withEmbeddingUsageAccounting(
     recordsModelUsageInternally: true,
     async embed(text: string, options?: EmbeddingUsageCancellation): Promise<Float32Array> {
       const result = await embedBatchWithUsage([text], options);
-      return result.embeddings[0];
+      const first = result.embeddings[0];
+      if (!first) throw new Error('Embedding returned no results');
+      return first;
     },
     async embedBatch(texts: string[], options?: EmbeddingUsageCancellation): Promise<Float32Array[]> {
       return (await embedBatchWithUsage(texts, options)).embeddings;

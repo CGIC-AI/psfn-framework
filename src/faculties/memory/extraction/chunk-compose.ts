@@ -142,7 +142,10 @@ export function mergeExtractedFactGroups(
         continue;
       }
 
-      mergedFacts[existingIndex] = mergeExtractedFact(mergedFacts[existingIndex], normalized);
+      const existing = mergedFacts[existingIndex];
+      mergedFacts[existingIndex] = existing
+        ? mergeExtractedFact(existing, normalized)
+        : normalized;
     }
   }
 

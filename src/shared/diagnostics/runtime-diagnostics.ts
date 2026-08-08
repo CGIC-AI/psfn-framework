@@ -445,7 +445,7 @@ function parseTextLogLine(
   const component = /\[([^\]]{1,64})\]/.exec(line)?.[1];
   return {
     observedAt: fallbackObservedAt,
-    level: match[1].toLowerCase().startsWith('warn') ? 'warn' : 'error',
+    level: match[1]?.toLowerCase().startsWith('warn') ? 'warn' : 'error',
     ...(component ? { component: sanitizeDiagnosticText(component) } : {}),
     message: sanitizeDiagnosticText(line),
     source: `file:${sanitizeDiagnosticText(fileName)}`,

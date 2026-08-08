@@ -315,7 +315,7 @@ export function validateMemoryPresentationWithheldWordingOverride(
   const allowed = new Set(WITHHELD_WORDING_ALLOWED_TOKENS[field]);
   for (const match of value.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/gu)) {
     const token = match[1];
-    if (!allowed.has(token)) {
+    if (!token || !allowed.has(token)) {
       throw new Error(
         `Invalid settings at ${fieldPath}: unsupported placeholder "{{${token}}}" for ${WITHHELD_WORDING_TEMPLATE_KEYS[field]}`,
       );

@@ -134,7 +134,9 @@ export async function mapWithConcurrency<T, U>(
       const index = nextIndex;
       nextIndex += 1;
       try {
-        results[index] = await mapper(items[index], index);
+        const item = items[index];
+        if (item === undefined) continue;
+        results[index] = await mapper(item, index);
       } catch (error) {
         firstError ??= error;
       }

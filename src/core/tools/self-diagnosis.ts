@@ -294,7 +294,7 @@ function resolveFixesShipped(
     const colonIndex = line.indexOf(':');
     const head = colonIndex === -1 ? line : line.slice(0, colonIndex);
     for (const match of head.matchAll(BEAD_ID_PATTERN)) {
-      beadIds.add(match[1].toLowerCase());
+      if (match[1]) beadIds.add(match[1].toLowerCase());
     }
   }
   return {

@@ -62,7 +62,9 @@ function resolveItemByPrefix(store: NorthStarStore, rawId: unknown): NorthStarIt
   if (matches.length > 1) {
     throw new Error(`North Star item id is ambiguous: ${requested}`);
   }
-  return matches[0];
+  const match = matches[0];
+  if (!match) throw new Error(`North Star item not found: ${requested}`);
+  return match;
 }
 
 function normalizeAction(value: unknown): NorthStarAction {

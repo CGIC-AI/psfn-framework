@@ -426,7 +426,7 @@ export class LifecycleRestartSafeguard {
 
   private pruneHistory(now: number): void {
     const windowStart = now - ONE_HOUR_MS;
-    while (this.restartHistory.length > 0 && this.restartHistory[0] < windowStart) {
+    while (this.restartHistory.length > 0 && (this.restartHistory[0] ?? Infinity) < windowStart) {
       this.restartHistory.shift();
     }
   }

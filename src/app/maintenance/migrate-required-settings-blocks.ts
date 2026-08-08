@@ -12,11 +12,15 @@ function main(): void {
   if (dataDirIndex < 0 || !args[dataDirIndex + 1]) {
     throw new Error('--data-dir is required; pass the exact system owner-file directory');
   }
-  const known = new Set(['--apply', '--dry-run', '--data-dir', args[dataDirIndex + 1]]);
+  const dataDir = args[dataDirIndex + 1];
+  if (!dataDir) {
+    throw new Error('--data-dir is required; pass the exact system owner-file directory');
+  }
+  const known = new Set(['--apply', '--dry-run', '--data-dir', dataDir]);
   const unknown = args.find(arg => !known.has(arg));
   if (unknown) throw new Error(`Unknown argument: ${unknown}`);
   console.log(JSON.stringify(migrateRequiredSettingsBlocks({
-    dataDir: resolve(args[dataDirIndex + 1]),
+    dataDir: resolve(dataDir),
     apply,
   }), null, 2));
 }

@@ -754,7 +754,11 @@ export function registerGatewayMessageHandlers(
     if (entries.length === 0) {
       throw new Error('bundleDiscordMessages called with empty entries');
     }
-    if (entries.length === 1) return entries[0].message;
+    const firstEntry = entries[0];
+    if (entries.length === 1) {
+      if (!firstEntry) throw new Error('bundleDiscordMessages could not resolve first entry');
+      return firstEntry.message;
+    }
     const messages = entries.map((entry) => entry.message);
     const newest = messages[messages.length - 1];
     if (!newest) {
@@ -809,7 +813,7 @@ export function registerGatewayMessageHandlers(
           });
         }
         let completed = false;
-        let checkpoint = entries[0].retryDelivery;
+        let checkpoint = entries[0]?.retryDelivery;
         let deliveryStartedAt: number | null = null;
         const dedupeKeys = checkpoint?.dedupeKeys
           ?? entries.flatMap((entry) => entry.dedupeKey ? [entry.dedupeKey] : []);

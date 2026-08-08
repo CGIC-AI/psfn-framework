@@ -127,7 +127,10 @@ export function assertSafeSearchRegex(pattern: string): void {
   }
   const groups: { hasUnbounded: boolean }[] = [];
   const markCurrentGroupUnbounded = (): void => {
-    if (groups.length > 0) groups[groups.length - 1].hasUnbounded = true;
+    if (groups.length > 0) {
+      const current = groups[groups.length - 1];
+      if (current) current.hasUnbounded = true;
+    }
   };
   let inClass = false;
   let index = 0;

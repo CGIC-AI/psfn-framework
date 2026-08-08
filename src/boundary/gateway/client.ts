@@ -897,7 +897,9 @@ export class GatewayClient implements
 
   async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
     const results = await this.embedBatch([text], options);
-    return results[0];
+    const first = results[0];
+    if (!first) throw new Error('Embedding returned no results');
+    return first;
   }
 
   async embedBatch(

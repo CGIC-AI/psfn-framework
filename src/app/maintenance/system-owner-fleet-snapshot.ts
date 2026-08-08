@@ -19,6 +19,7 @@ function optionValue(argv: string[], name: string): string {
 function assertExactOptions(argv: string[], expected: ReadonlySet<string>): void {
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
+    if (!value) continue;
     if (!value.startsWith('--')) continue;
     if (!expected.has(value)) throw new Error(`Unknown option: ${value}`);
     index += 1;

@@ -486,7 +486,10 @@ async function main(): Promise<void> {
 
         const databaseUrl = config.postgresDatabaseUrl?.trim();
         if (databaseUrl) {
-          const schema = fleet.companions[0].postgresSchema;
+          const firstCompanion = fleet.companions[0];
+          assert(!!firstCompanion, 'Multi-entry fleet should have at least one companion');
+          if (!firstCompanion) throw new Error('unreachable');
+          const schema = firstCompanion.postgresSchema;
           const pool = createPostgresPool(databaseUrl, {
             applicationName: 'psfn-e2e-mc-schema',
             allowExitOnIdle: true,

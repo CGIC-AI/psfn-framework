@@ -924,8 +924,8 @@ const webDescriptors = [
           );
         }
 
-        const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
-          .split(';')[0]
+        const mimeType = ((response.headers.get('content-type') ?? 'application/octet-stream')
+          .split(';')[0] ?? '')
           .trim()
           .toLowerCase();
 
@@ -999,8 +999,8 @@ const webDescriptors = [
           );
         }
 
-        const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
-          .split(';')[0]
+        const mimeType = ((response.headers.get('content-type') ?? 'application/octet-stream')
+          .split(';')[0] ?? '')
           .trim()
           .toLowerCase();
 

@@ -499,11 +499,19 @@ function resolveProjectConfig(config: Record<string, unknown>): GitHubProjectSyn
         error: `Invalid ${GH_PROJECT_SYNC_PROJECT_URL_KEY}: expected https://github.com/users/<owner>/projects/<number> or https://github.com/orgs/<owner>/projects/<number>`,
       };
     }
+    const ownerMatch = match[1];
+    const projectNumberMatch = match[2];
+    if (!ownerMatch || !projectNumberMatch) {
+      return {
+        disabled: false,
+        error: `Invalid ${GH_PROJECT_SYNC_PROJECT_URL_KEY}: expected https://github.com/users/<owner>/projects/<number> or https://github.com/orgs/<owner>/projects/<number>`,
+      };
+    }
     const nativeFields = parseNativeFieldsConfig(config);
     if ('disabled' in nativeFields) return nativeFields;
     return {
-      owner: match[1],
-      projectNumber: Number.parseInt(match[2], 10),
+      owner: ownerMatch,
+      projectNumber: Number.parseInt(projectNumberMatch, 10),
       ...nativeFields,
     };
   }

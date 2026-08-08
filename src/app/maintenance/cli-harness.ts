@@ -40,6 +40,7 @@ export function parseCommonMaintenanceArgs<T extends CommonMaintenanceArgs>(
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (!arg) continue;
     if (arg === '--help' || arg === '-h') {
       options.showHelp = true;
       continue;

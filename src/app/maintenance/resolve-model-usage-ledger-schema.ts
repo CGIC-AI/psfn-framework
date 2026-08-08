@@ -15,6 +15,9 @@ export function resolveModelUsageLedgerSchema(
     seedDir ? { seedDir } : undefined,
   );
   const primary = fleet.companions[0];
+  if (!primary) {
+    throw new Error('Model usage ledger schema requires at least one companion entry');
+  }
   return primary.postgresSchema;
 }
 

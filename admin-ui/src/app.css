@@ -610,7 +610,7 @@
     grid-template-columns: minmax(20rem, 0.72fr) minmax(0, 1.28fr);
   }
 
-  .garden-split-view > :last-child {
+  .garden-split-view--sticky-detail > :last-child {
     position: sticky;
     top: 8rem;
   }

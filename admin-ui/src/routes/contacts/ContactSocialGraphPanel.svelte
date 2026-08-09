@@ -5,7 +5,7 @@
   } from '$lib/types';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
-  type BadgeStyle = { bg: string; text: string; label: string };
+  type BadgeStyle = { cls: string; label: string };
 
   interface Props {
     graph: AdminContactSocialGraphView | undefined;
@@ -97,8 +97,7 @@
                   </span>
                   {#if connection.neighbor.trustLevel}
                     {@const neighborBadge = trustBadge(connection.neighbor.trustLevel)}
-                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold"
-                      style="{neighborBadge.bg}; {neighborBadge.text}">
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold {neighborBadge.cls}">
                       {neighborBadge.label}
                     </span>
                   {/if}

@@ -7,6 +7,7 @@
     resolveGeneratedImageLinks,
     resolveGeneratedImageReferenceHref,
   } from './generated-image-links';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   let data = $state<GeneratedImagesResponse | null>(null);
   let loading = $state(true);
@@ -257,13 +258,13 @@
   });
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-wrap items-start justify-between gap-4">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">The Gallery</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Generated Images</h1>
-      <p class="mt-1 text-sm text-shadow-600">{images.length} image{images.length === 1 ? '' : 's'}</p>
-    </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="The Gallery"
+    title="Generated Images"
+    description={`${images.length} image${images.length === 1 ? '' : 's'} · curate favorites, moments, tags, and narrative context.`}
+  >
+    {#snippet actions()}
     <button
       onclick={refreshImages}
       disabled={refreshing}
@@ -271,9 +272,10 @@
     >
       {refreshing ? 'Refreshing...' : 'Refresh'}
     </button>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
-  <div class="grid gap-3 border-y border-bark-300 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+  <div class="garden-toolbar grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
     <label class="block text-sm font-medium text-shadow-700">
       Search
       <input
@@ -313,15 +315,15 @@
   </div>
 
   {#if error}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{error}</p>
     </div>
   {/if}
 
   {#if loading}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div class="garden-loading grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {#each Array(6) as _}
-        <div class="card-garden overflow-hidden animate-pulse">
+        <div class="garden-section card-garden overflow-hidden animate-pulse">
           <div class="aspect-[4/3] bg-bark-200"></div>
           <div class="space-y-2 p-4">
             <div class="h-4 w-2/3 rounded bg-bark-200"></div>
@@ -331,14 +333,14 @@
       {/each}
     </div>
   {:else if images.length === 0}
-    <div class="card-garden p-8 text-center">
+    <div class="garden-empty card-garden p-8 text-center">
       <p class="text-sm text-shadow-600">No generated images found.</p>
     </div>
   {:else}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {#each images as image (image.id)}
         {@const imageLinks = resolveGeneratedImageLinks(image)}
-        <article class="card-garden overflow-hidden">
+        <article class="garden-section card-garden overflow-hidden">
           {#if imageLinks.blobHref}
             <a href={imageLinks.blobHref} target="_blank" rel="noreferrer" class="block bg-bark-100">
               <img

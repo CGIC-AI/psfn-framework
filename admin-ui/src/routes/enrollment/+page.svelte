@@ -6,6 +6,7 @@
     revokeEnrollment,
     type AdminEnrollmentBindingView,
   } from '$lib/api/endpoints/enrollment';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
   let enrollments = $state<AdminEnrollmentBindingView[]>([]);
@@ -97,39 +98,36 @@
   });
 </script>
 
-<div class="space-y-8">
-  <div class="flex items-start justify-between gap-4 flex-wrap">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Recognition Seam</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Enrollment</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Bind an opaque hub-identity handle to an <em>existing</em> contact. Biometric templates live
-        entirely at the Satellite Hub and never enter core — only the handle, the contact link, and
-        audit metadata are stored here. Enroll fails closed if the contact does not exist.
-      </p>
-    </div>
-    <button
-      onclick={refreshData}
-      disabled={refreshing}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Recognition Seam"
+    title="Enrollment"
+    description="Bind an opaque hub-identity handle to an existing contact. Biometric templates remain entirely at the Satellite Hub."
+  >
+    {#snippet actions()}
+      <button
+        onclick={refreshData}
+        disabled={refreshing}
+        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {refreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
 
-  <section class="card-garden p-5 space-y-4" aria-label="Bind a hub identity">
+  <section class="garden-section card-garden space-y-4 p-4 sm:p-5" aria-label="Bind a hub identity">
     <div>
       <h2 class="text-lg font-serif font-semibold text-shadow-900">Bind a hub identity</h2>
       <p class="mt-1 text-sm text-shadow-600">The contact must already exist — this never creates one.</p>
     </div>
-    <form class="grid gap-4 sm:grid-cols-2" onsubmit={submitBind}>
-      <label class="space-y-1">
+    <form class="garden-field-grid sm:grid-cols-2" onsubmit={submitBind}>
+      <label class="garden-field space-y-1">
         <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Hub Identity ID <span class="text-wilt-500">*</span></span>
         <input
           bind:value={hubIdentityId}
@@ -139,7 +137,7 @@
           class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800 placeholder:text-shadow-400"
         />
       </label>
-      <label class="space-y-1">
+      <label class="garden-field space-y-1">
         <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Contact ID <span class="text-wilt-500">*</span></span>
         <input
           bind:value={canonicalContactId}
@@ -149,7 +147,7 @@
           class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800 placeholder:text-shadow-400"
         />
       </label>
-      <label class="space-y-1">
+      <label class="garden-field space-y-1">
         <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Satellite ID <span class="text-shadow-400">(optional)</span></span>
         <input
           bind:value={satelliteId}
@@ -158,7 +156,7 @@
           class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800 placeholder:text-shadow-400"
         />
       </label>
-      <label class="space-y-1">
+      <label class="garden-field space-y-1">
         <span class="text-xs uppercase tracking-[0.14em] text-shadow-500">Endpoint ID <span class="text-shadow-400">(optional)</span></span>
         <input
           bind:value={endpointId}
@@ -171,7 +169,7 @@
         <button
           type="submit"
           disabled={submitting}
-          class="rounded-xl bg-gold-600 px-4 py-2 text-sm font-semibold text-bark-50 transition-colors hover:bg-gold-700 disabled:cursor-not-allowed disabled:opacity-50"
+          class="garden-action garden-action--primary rounded-xl bg-gold-600 px-4 py-2 text-sm font-semibold text-bark-50 transition-colors hover:bg-gold-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Enrolling...' : 'Enroll'}
         </button>
@@ -186,24 +184,24 @@
     </div>
 
     {#if loading}
-      <div class="card-garden animate-pulse p-5">
+      <div class="garden-loading card-garden animate-pulse p-5">
         <div class="h-4 w-40 rounded bg-bark-200"></div>
         <div class="mt-3 h-3 w-full rounded bg-bark-100"></div>
       </div>
     {:else if enrollments.length === 0}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-500">No hub identities are enrolled yet.</p>
       </div>
     {:else}
       <div class="space-y-3">
         {#each enrollments as binding (binding.hubIdentityId)}
-          <article class="card-garden p-5">
+          <article class="garden-section card-garden p-5">
             <div class="flex items-start justify-between gap-3 flex-wrap">
               <div class="space-y-1">
                 <div class="flex items-center gap-2 flex-wrap">
                   <p class="font-mono text-sm text-shadow-900">{binding.hubIdentityId}</p>
                   <span
-                    class="rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-[0.12em]"
+                    class="garden-status rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-[0.12em]"
                     class:bg-moss-50={binding.status === 'enrolled'}
                     class:text-moss-700={binding.status === 'enrolled'}
                     class:bg-bark-200={binding.status === 'revoked'}

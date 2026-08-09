@@ -8,6 +8,7 @@
     type ContactApprovalEntry,
   } from '$lib/api/endpoints/contact-approvals';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
   import {
     createSilentBackgroundRevalidation,
@@ -16,6 +17,10 @@
 
   // ── State ──
   let entries = $state<ContactApprovalEntry[]>([]);
+  let selectedApprovalId = $state('');
+  const selectedApproval = $derived(
+    entries.find((entry) => entry.id === selectedApprovalId) ?? entries[0],
+  );
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
@@ -105,14 +110,14 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Contact Approvals</h1>
-      <p class="text-sm text-shadow-600 mt-1">New speakers from approval-gated channels -- approve to start tracking, deny to keep untracked</p>
-    </div>
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="Contact Approvals"
+    description="Review new speakers from approval-gated channels before contact tracking begins."
+  >
+    {#snippet actions()}
+      <div class="flex items-center gap-3">
       <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
       <button
         onclick={loadData}
@@ -123,17 +128,18 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if backgroundError}
-    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+    <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
       Background refresh failed: {backgroundError}. Showing the last available queue.
     </p>
   {/if}
 
   {#if loading && entries.length === 0}
-    <div class="space-y-3">
+    <div class="garden-loading space-y-3">
       {#each Array(3) as _}
         <div class="card-garden p-5 animate-pulse space-y-3">
           <div class="h-4 rounded bg-bark-200 w-2/5"></div>
@@ -147,7 +153,7 @@
       <p class="text-sm text-shadow-600 px-1">Loading contact approvals...</p>
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if endpointMissing}
@@ -160,7 +166,7 @@
       </p>
     </div>
   {:else if entries.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <p class="font-serif text-lg text-shadow-700 mb-1">No pending contact approvals</p>
       <p class="text-sm text-shadow-600">
         New speakers from approval-gated channels will appear here. Until approved, they stay
@@ -168,9 +174,39 @@
       </p>
     </div>
   {:else}
-    <div class="space-y-4">
-      {#each entries as entry (entry.id)}
-        <div class="card-garden overflow-hidden">
+    <div class="garden-split-view">
+      <aside class="garden-section flex min-h-0 flex-col gap-3 p-3 sm:p-4">
+        <div class="garden-section-header">
+          <div>
+            <h2 class="garden-section-title">Approval queue</h2>
+            <p class="garden-section-description">Select a speaker to review channel evidence.</p>
+          </div>
+          <span class="garden-status garden-status--warning">{entries.length}</span>
+        </div>
+        <div class="max-h-[66vh] space-y-1 overflow-y-auto pr-1" aria-label="Contact approval queue">
+          {#each entries as entry (entry.id)}
+            <button
+              type="button"
+              onclick={() => selectedApprovalId = entry.id}
+              class="w-full rounded-xl border px-3 py-3 text-left transition-colors {selectedApproval?.id === entry.id ? 'border-gold-300 bg-gold-50' : 'border-transparent hover:border-bark-200 hover:bg-bark-50'}"
+            >
+              <span class="flex items-start justify-between gap-3">
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-semibold text-shadow-900">{entry.displayName}</span>
+                  <span class="mt-0.5 block truncate text-xs text-shadow-600">{entry.channel}:{entry.channelUserId}</span>
+                </span>
+                <span class="garden-status {entry.status === 'denied' ? 'garden-status--danger' : 'garden-status--warning'}">
+                  {entry.status}
+                </span>
+              </span>
+            </button>
+          {/each}
+        </div>
+      </aside>
+
+      <section class="min-w-0">
+      {#each selectedApproval ? [selectedApproval] : [] as entry (entry.id)}
+        <div class="garden-section card-garden overflow-hidden">
           <div class="px-5 py-4 border-b border-bark-100 bg-bark-50">
             <div class="flex items-center justify-between">
               <h3 class="text-base font-semibold text-shadow-900">
@@ -178,7 +214,7 @@
                 <span class="text-shadow-600 font-normal">({entry.channel}:{entry.channelUserId})</span>
               </h3>
               <span
-                class="inline-block px-2.5 py-1 rounded-full text-sm font-medium {entry.status === 'denied' ? 'bg-wilt-100 text-wilt-600' : 'bg-gold-100 text-gold-700'}"
+                class="garden-status inline-block px-2.5 py-1 rounded-full text-sm font-medium {entry.status === 'denied' ? 'garden-status--danger bg-wilt-100 text-wilt-600' : 'garden-status--warning bg-gold-100 text-gold-700'}"
               >
                 {entry.status === 'denied' ? 'Denied' : 'Pending'}
               </span>
@@ -224,7 +260,7 @@
               {#if entry.status === 'pending'}
                 <button
                   onclick={() => handleAction(entry.id, 'approve')}
-                  class="px-4 py-2 rounded-lg text-sm font-medium
+                  class="garden-action garden-action--primary px-4 py-2 rounded-lg text-sm font-medium
                          bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors
                          border border-moss-300"
                 >
@@ -232,7 +268,7 @@
                 </button>
                 <button
                   onclick={() => handleAction(entry.id, 'deny')}
-                  class="px-4 py-2 rounded-lg text-sm font-medium
+                  class="garden-action garden-action--danger px-4 py-2 rounded-lg text-sm font-medium
                          bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors
                          border border-wilt-200"
                 >
@@ -241,7 +277,7 @@
               {:else}
                 <button
                   onclick={() => handleAction(entry.id, 'reset')}
-                  class="px-4 py-2 rounded-lg text-sm font-medium
+                  class="garden-action px-4 py-2 rounded-lg text-sm font-medium
                          bg-gold-100 text-gold-700 hover:bg-gold-200 transition-colors
                          border border-gold-300"
                 >
@@ -252,6 +288,7 @@
           </div>
         </div>
       {/each}
+      </section>
     </div>
   {/if}
 </div>

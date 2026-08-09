@@ -27,6 +27,7 @@
   } from '$lib/types';
   import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS, TRUST_LEVELS } from '$lib/types';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   let data = $state<AdminContactListData | null>(null);
   let loading = $state(true);
@@ -44,6 +45,20 @@
     (data?.contacts ?? []).filter((c) => showArchived || !c.archivedAt),
   );
   const archivedCount = $derived((data?.contacts ?? []).filter((c) => c.archivedAt).length);
+  let contactQuery = $state('');
+  let selectedContactId = $state('');
+  const filteredContacts = $derived.by(() => {
+    const query = contactQuery.trim().toLocaleLowerCase();
+    if (!query) return visibleContacts;
+    return visibleContacts.filter((contact) =>
+      [contact.displayName, contact.nickname, contact.id, contact.trustLevel, contact.relationshipType]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase().includes(query)),
+    );
+  });
+  const selectedContact = $derived(
+    filteredContacts.find((contact) => contact.id === selectedContactId) ?? filteredContacts[0],
+  );
 
   // Expanded edit panel
   let editingContactId = $state<string | null>(null);
@@ -92,17 +107,17 @@
     'sillytavern',
   ];
 
-  const TRUST_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-    primary:  { bg: 'background-color: #e8b931', text: 'color: #3a2e0a', label: '👑 Primary' },
-    trusted:  { bg: 'background-color: #c0c0c0', text: 'color: #2b2b2b', label: '🗝 Trusted' },
-    regular:  { bg: 'background-color: #4caf50', text: 'color: white', label: '🍃 Regular' },
-    public:   { bg: 'background-color: #9e9e9e', text: 'color: white', label: '🪨 Public' },
+  const TRUST_BADGE_STYLES: Record<string, { cls: string; label: string }> = {
+    primary:  { cls: 'border border-gold-300 bg-gold-50 text-gold-800', label: 'Primary' },
+    trusted:  { cls: 'border border-petal-300 bg-petal-50 text-petal-700', label: 'Trusted' },
+    regular:  { cls: 'border border-moss-300 bg-moss-50 text-moss-800', label: 'Regular' },
+    public:   { cls: 'border border-bark-300 bg-bark-100 text-shadow-700', label: 'Public' },
   };
 
-  const PRIVACY_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-    private:      { bg: 'background-color: #4A7C59', text: 'color: white', label: 'Private' },
-    invite_only: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Invite-Only' },
-    public:       { bg: 'background-color: #4A5C8B', text: 'color: white', label: 'Public' },
+  const PRIVACY_BADGE_STYLES: Record<string, { cls: string; label: string }> = {
+    private:      { cls: 'border border-moss-300 bg-moss-50 text-moss-800', label: 'Private' },
+    invite_only: { cls: 'border border-gold-300 bg-gold-50 text-gold-800', label: 'Invite-Only' },
+    public:       { cls: 'border border-petal-300 bg-petal-50 text-petal-700', label: 'Public' },
   };
 
   const VERIFICATION_STATUS: Record<string, { cls: string; label: string }> = {
@@ -629,12 +644,22 @@
   });
 </script>
 
-<div class="space-y-5">
-  <!-- Header -->
-  <div>
-    <h1 class="text-2xl font-serif font-bold text-shadow-900">The Visitors</h1>
-    <p class="text-sm text-shadow-600 mt-1">Contacts and trust management</p>
-  </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="The Visitors"
+    description={`${visibleContacts.length} contact${visibleContacts.length === 1 ? '' : 's'} in view · manage trust, channels, profiles, and social context.`}
+  >
+    {#snippet actions()}
+      <button
+        type="button"
+        onclick={() => showCreateForm = true}
+        class="garden-action garden-action--primary rounded-xl border border-gold-500 bg-gold-600 px-3 py-2 text-sm font-semibold text-bark-50 transition-colors hover:bg-gold-700"
+      >
+        New contact
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Flash message -->
   {#if saveMessage}
@@ -648,12 +673,12 @@
 
   <!-- Error -->
   {#if error}
-    <div class="card-garden p-5 text-center text-wilt-600 text-sm">{error}</div>
+    <div class="garden-error card-garden p-5 text-center text-wilt-600 text-sm">{error}</div>
   {/if}
 
   <!-- Loading -->
   {#if loading}
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div class="garden-loading grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
       {#each Array(6) as _}
         <div class="card-garden p-5 animate-pulse space-y-3">
           <div class="h-5 bg-bark-200 rounded w-32"></div>
@@ -683,8 +708,9 @@
           </span>
         </button>
         {#if showVerifications}
-          <div class="border-t border-bark-300 overflow-x-auto">
-            <table class="w-full text-sm">
+          <div class="garden-table-shell border-t border-bark-300">
+            <div class="garden-table-scroll">
+            <table class="garden-table w-full text-sm">
               <thead>
                 <tr class="bg-bark-100">
                   <th class="text-left px-4 py-2.5 text-sm font-medium text-shadow-700 uppercase tracking-wider">Status</th>
@@ -713,6 +739,7 @@
                 {/each}
               </tbody>
             </table>
+            </div>
           </div>
         {/if}
       </div>
@@ -737,8 +764,9 @@
           </span>
         </button>
         {#if showAuditTrail}
-          <div class="border-t border-bark-300 overflow-x-auto">
-            <table class="w-full text-sm">
+          <div class="garden-table-shell border-t border-bark-300">
+            <div class="garden-table-scroll">
+            <table class="garden-table w-full text-sm">
               <thead>
                 <tr class="bg-bark-100">
                   <th class="text-left px-4 py-2.5 text-sm font-medium text-shadow-700 uppercase tracking-wider">Contact</th>
@@ -774,6 +802,7 @@
                 {/each}
               </tbody>
             </table>
+            </div>
           </div>
         {/if}
       </div>
@@ -843,30 +872,70 @@
       {/if}
     </div>
 
-    <!-- Archived filter: default live-only, opt in to read-only history -->
-    <div class="flex items-center justify-end mb-3">
-      <label class="inline-flex items-center gap-2 text-sm text-shadow-600 cursor-pointer select-none">
-        <input type="checkbox" bind:checked={showArchived}
-          class="rounded border-bark-300 text-gold-600 focus:ring-gold-300" />
-        Show archived
-        {#if archivedCount > 0}
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-bark-200 text-shadow-600">
-            {archivedCount}
-          </span>
-        {/if}
-      </label>
-    </div>
+    <div class="garden-split-view">
+      <aside class="garden-section flex min-h-0 flex-col gap-3 p-3 sm:p-4">
+        <div class="garden-section-header">
+          <div>
+            <h2 class="garden-section-title">Contact directory</h2>
+            <p class="garden-section-description">Choose a visitor to inspect and edit.</p>
+          </div>
+          <span class="garden-status">{filteredContacts.length}</span>
+        </div>
+        <div class="garden-toolbar flex-col items-stretch">
+          <label class="garden-field">
+            <span>Search contacts</span>
+            <input
+              type="search"
+              bind:value={contactQuery}
+              placeholder="Name, trust, relationship…"
+              class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900"
+            />
+          </label>
+          <label class="inline-flex min-h-10 items-center gap-2 text-sm text-shadow-700">
+            <input type="checkbox" bind:checked={showArchived}
+              class="rounded border-bark-300 text-gold-600 focus:ring-gold-300" />
+            Show archived
+            {#if archivedCount > 0}
+              <span class="garden-status">{archivedCount}</span>
+            {/if}
+          </label>
+        </div>
+        <div class="max-h-[68vh] space-y-1 overflow-y-auto pr-1" aria-label="Contacts">
+          {#each filteredContacts as contact (contact.id)}
+            {@const listBadge = trustBadge(contact.trustLevel)}
+            <button
+              type="button"
+              onclick={() => {
+                selectedContactId = contact.id;
+                cancelEdit();
+                cancelQuickTrust();
+                showAddChannel = false;
+              }}
+              class="w-full rounded-xl border px-3 py-3 text-left transition-colors {selectedContact?.id === contact.id ? 'border-gold-300 bg-gold-50' : 'border-transparent hover:border-bark-200 hover:bg-bark-50'} {contact.archivedAt ? 'opacity-60' : ''}"
+            >
+              <span class="flex items-start justify-between gap-3">
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-semibold text-shadow-900">{contactDisplayName(contact)}</span>
+                  <span class="mt-0.5 block truncate text-xs text-shadow-600">{formatRelType(contact.relationshipType)}</span>
+                </span>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold {listBadge.cls}">{listBadge.label}</span>
+              </span>
+            </button>
+          {:else}
+            <div class="garden-empty p-5 text-center text-sm text-shadow-600">No contacts match the current filters.</div>
+          {/each}
+        </div>
+      </aside>
 
-    <!-- Contact Cards Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {#each visibleContacts as contact (contact.id)}
+      <section class="min-w-0">
+      {#each selectedContact ? [selectedContact] : [] as contact (contact.id)}
         {@const channels = getChannels(contact.id)}
         {@const profile = getProfile(contact.id)}
         {@const graph = getSocialGraph(contact.id)}
         {@const relationshipScore = getRelationshipScore(contact.id)}
         {@const badge = trustBadge(contact.trustLevel)}
 
-        <div class="card-garden p-5 flex flex-col gap-3 {editingContactId === contact.id ? 'ring-2 ring-gold-400' : ''} {contact.archivedAt ? 'opacity-60 grayscale' : ''}">
+        <div class="garden-section card-garden p-4 sm:p-5 flex flex-col gap-3 {editingContactId === contact.id ? 'ring-2 ring-gold-400' : ''} {contact.archivedAt ? 'opacity-60 grayscale' : ''}">
           <!-- Header: Name + Trust Badge -->
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
@@ -910,8 +979,7 @@
             {:else}
               <button onclick={() => startQuickTrust(contact)} class="group shrink-0" title="Click to change trust level">
                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-semibold
-                  group-hover:ring-2 group-hover:ring-gold-300 transition-all"
-                  style="{badge.bg}; {badge.text}">
+                  group-hover:ring-2 group-hover:ring-gold-300 transition-all {badge.cls}">
                   {badge.label}
                 </span>
               </button>
@@ -970,8 +1038,9 @@
           <div class="border-t border-bark-200 pt-2">
             <p class="text-sm font-medium text-shadow-700 mb-1.5 uppercase tracking-wider">Channel Identities</p>
             {#if contact.channels && contact.channels.length > 0}
-              <div class="overflow-x-auto">
-                <table class="w-full text-sm">
+              <div class="garden-table-shell">
+                <div class="garden-table-scroll">
+                <table class="garden-table w-full text-sm">
                   <thead>
                     <tr class="border-b border-bark-300">
                       <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Channel</th>
@@ -988,8 +1057,7 @@
                         <td class="py-1.5 pr-2 text-shadow-800 font-medium">{ch.channel}</td>
                         <td class="py-1.5 pr-2 font-mono text-shadow-800 text-sm break-all">{ch.userId}</td>
                         <td class="py-1.5 pr-2">
-                          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
-                            style="{pb.bg}; {pb.text}">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                             {pb.label}
                           </span>
                         </td>
@@ -1021,6 +1089,7 @@
                     {/each}
                   </tbody>
                 </table>
+                </div>
               </div>
             {:else if contact.channelIdentities && contact.channelIdentities.length > 0}
               <!-- Fallback: show channelIdentities without privacy/dates -->
@@ -1041,8 +1110,7 @@
                     <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
                     {#if ch.privacyLevel}
                       {@const pb = privacyBadge(ch.privacyLevel)}
-                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
-                        style="{pb.bg}; {pb.text}">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                         {pb.label}
                       </span>
                     {/if}
@@ -1065,8 +1133,7 @@
                     <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
                     {#if ch.privacyLevel}
                       {@const pb = privacyBadge(ch.privacyLevel)}
-                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
-                        style="{pb.bg}; {pb.text}">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                         {pb.label}
                       </span>
                     {/if}
@@ -1498,10 +1565,11 @@
           {/if}
         </div>
       {:else}
-        <div class="col-span-full card-garden p-10 text-center">
+        <div class="garden-empty card-garden p-10 text-center">
           <p class="text-shadow-600 italic text-sm">No visitors have been seen in the garden yet</p>
         </div>
       {/each}
+      </section>
     </div>
   {/if}
 </div>

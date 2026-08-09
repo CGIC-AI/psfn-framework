@@ -98,6 +98,54 @@ test('supports companion-name template substitution', () => {
   );
 });
 
+test('garden pins the approved warm palette and typography contract', () => {
+  const css = resolveThemePack('garden').cssVariables;
+
+  assert.deepEqual(
+    {
+      canvas: css['--color-bark-100'],
+      surface: css['--color-bark-50'],
+      sunken: css['--color-bark-200'],
+      line: css['--color-bark-300'],
+      ink: css['--color-shadow-900'],
+      muted: css['--color-shadow-600'],
+    },
+    {
+      canvas: '#faf8f3',
+      surface: '#ffffff',
+      sunken: '#f4f1e8',
+      line: '#e6e0d2',
+      ink: '#26231e',
+      muted: '#7c7364',
+    },
+  );
+
+  assert.deepEqual(
+    {
+      gold: css['--color-gold-500'],
+      moss: css['--color-moss-500'],
+      clay: css['--color-wilt-500'],
+      plum: css['--color-petal-500'],
+    },
+    {
+      gold: '#c29a2b',
+      moss: '#4f7a52',
+      clay: '#b4523a',
+      plum: '#8a4f72',
+    },
+  );
+
+  assert.match(css['--font-serif'] ?? '', /^'Fraunces'/);
+  assert.match(css['--font-sans'] ?? '', /^'Inter'/);
+  assert.match(css['--font-mono'] ?? '', /^'IBM Plex Mono'/);
+
+  assertContrastAtLeast(css['--color-shadow-900'], css['--color-bark-100'], 12, 'Garden ink on canvas');
+  assertContrastAtLeast(css['--color-shadow-600'], css['--color-bark-100'], 4.35, 'Garden muted text on canvas');
+  assertContrastAtLeast(css['--color-gold-700'], css['--color-gold-50'], 4.5, 'Garden gold badge text');
+  assertContrastAtLeast(css['--color-moss-700'], css['--color-moss-50'], 4.5, 'Garden success chip text');
+  assertContrastAtLeast(css['--color-wilt-600'], css['--color-bark-50'], 4.5, 'Garden error text');
+});
+
 test('generic-dark keeps page-level class pairings readable', () => {
   const dark = resolveThemePack('generic-dark');
   const css = dark.cssVariables;

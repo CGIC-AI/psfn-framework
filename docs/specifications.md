@@ -172,6 +172,30 @@ Supported until beta:
   the remaining move/warn paths before beta after every supported companion
   root no longer contains the legacy filenames or placement that the migrator
   recognizes.
+- Biographical profile typed-claim projection cutover for the legacy
+  `contact_profiles` summary (psfn-framework-o61vb). The new
+  `biographical_claims` and `biographical_grants` tables store versioned
+  companion/contact subjects, the closed `name`/`nickname`/`relationship`
+  kind registry, canonical claim and source-set digests, source snapshots,
+  effective sensitivity computed as the maximum of the kind floor, the
+  proposal, and every live source, exact digest-bound lowering grants,
+  lifecycle states, `validFrom`/`validTo` intervals, append-only supersession,
+  and audit-only recognition/developing/full collection-depth decisions. They
+  are added behind a separate persistence port with Postgres and in-memory
+  parity and do not change prompt behavior: no prompt path reads them yet, and
+  the legacy flat `contact_profiles` summary remains the prompt-resident recent
+  shape until a later tracer. Runtime must never fall back from a missing claim
+  to legacy summary prose; legacy summary text is not authority for structured
+  claims and must be rebuilt from live authorized sources. The schema enforces
+  the closed vocabularies and 64-hex digests with `CHECK` constraints, and
+  claims are append-only (no `DELETE`). Validate this boundary with the
+  biographical migration SQL assertions, the fail-closed contract tests, and
+  the Postgres roundtrip and adapter-parity tests. Remove the legacy
+  `contact_profiles` ambiguous refresh/rendering path before beta after the
+  biographical claim projection is the durable and portable authority, the
+  short summary is split into an explicitly freshness-bound Recent Contact
+  Shape, and a covered privacy-conformance run proves no fallback from missing
+  claims to summary prose remains (design: `working_docs/cross-channel-biographical-continuity-design.md`, delivery tickets o61vb.3 through o61vb.10).
 - Forward-schema rollback bridges for the live-alpha Postgres memory and model
   usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
   default so an image from before the anchor column can insert a new live

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { getDriftReviews, resolveDriftReviewCard } from '$lib/api/endpoints/drift';
   import type { DriftReviewCard, DriftReviewCardResolution } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
@@ -139,20 +140,13 @@
   <title>Cognitive Security: Drift Review</title>
 </svelte:head>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <p class="text-xs font-semibold uppercase text-moss-700">Cognitive Security</p>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Drift Review</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Slow-poisoning watch: the nightly scans compare each contact's recent emotional
-        trajectory, memory-write rate, intake labels, and retrieval share against their own
-        history -- and watch for second-arrow rumination stacks (near-duplicate memories
-        circling one topic). Acknowledging or dismissing never changes memories, trust, or
-        emotion; the only mutation is an explicitly approved second-arrow consolidation.
-      </p>
-    </div>
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Cognitive Security · Slow-poisoning watch"
+    title="Drift Review"
+    description="Compare emotional trajectory, memory-write rate, intake labels, and retrieval share against each contact's own history. Reviews are non-mutating unless consolidation is explicitly approved."
+  >
+    {#snippet actions()}
       <span class="text-xs text-shadow-600">Auto-refreshes every 30s</span>
       <button
         onclick={loadData}
@@ -162,11 +156,11 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if loading && cards.length === 0}
-    <div class="space-y-3">
+    <div class="garden-loading space-y-3">
       {#each Array(2) as _}
         <div class="card-garden p-5 animate-pulse space-y-3">
           <div class="h-4 rounded bg-bark-200 w-2/5"></div>
@@ -175,7 +169,7 @@
       {/each}
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if endpointMissing}
@@ -189,7 +183,7 @@
       </p>
     </div>
   {:else if cards.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <p class="font-serif text-lg text-shadow-700 mb-1">No drift detected</p>
       <p class="text-sm text-shadow-600">
         When a contact's emotional trajectory shifts abnormally fast -- or their memory writes,
@@ -270,8 +264,8 @@
                   <p class="text-sm font-medium text-shadow-800">
                     Cluster members ({card.members.length})
                   </p>
-                  <div class="overflow-x-auto">
-                    <table class="w-full text-xs text-left">
+                  <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+                    <table class="garden-table w-full text-xs text-left">
                       <thead>
                         <tr class="text-shadow-600">
                           <th class="pr-3 py-1 font-medium">written</th>
@@ -422,22 +416,40 @@
       </div>
     {/snippet}
 
-    {#if openCards.length > 0}
-      <div class="space-y-3">
-        <h2 class="text-sm font-semibold uppercase text-shadow-600">Open ({openCards.length})</h2>
-        {#each openCards as card (card.id)}
-          {@render cardView(card)}
-        {/each}
-      </div>
-    {/if}
+    <div class="garden-split-view grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.75fr)]">
+      <section class="space-y-3">
+        <div class="garden-section-header flex items-end justify-between gap-3">
+          <div>
+            <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Open reviews</h2>
+            <p class="garden-section-description text-xs text-shadow-600">Evidence requiring an operator interpretation; acknowledgement does not mutate cognition.</p>
+          </div>
+          <span class="garden-status garden-status--warning rounded-full bg-gold-100 px-2.5 py-1 text-xs font-semibold text-gold-700">{openCards.length} open</span>
+        </div>
+        {#if openCards.length === 0}
+          <div class="garden-empty card-garden p-8 text-center text-sm text-shadow-600">No open drift reviews.</div>
+        {:else}
+          {#each openCards as card (card.id)}
+            {@render cardView(card)}
+          {/each}
+        {/if}
+      </section>
 
-    {#if resolvedCards.length > 0}
-      <div class="space-y-3">
-        <h2 class="text-sm font-semibold uppercase text-shadow-600">Resolved ({resolvedCards.length})</h2>
-        {#each resolvedCards as card (card.id)}
-          {@render cardView(card)}
-        {/each}
-      </div>
-    {/if}
+      <section class="space-y-3 xl:sticky xl:top-28">
+        <div class="garden-section-header flex items-end justify-between gap-3">
+          <div>
+            <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Resolved trail</h2>
+            <p class="garden-section-description text-xs text-shadow-600">Recent review outcomes retained for audit context.</p>
+          </div>
+          <span class="garden-status garden-status--success rounded-full bg-moss-100 px-2.5 py-1 text-xs font-semibold text-moss-700">{resolvedCards.length} resolved</span>
+        </div>
+        {#if resolvedCards.length === 0}
+          <div class="garden-empty card-garden p-8 text-center text-sm text-shadow-600">No resolved reviews in this window.</div>
+        {:else}
+          {#each resolvedCards as card (card.id)}
+            {@render cardView(card)}
+          {/each}
+        {/if}
+      </section>
+    </div>
   {/if}
 </div>

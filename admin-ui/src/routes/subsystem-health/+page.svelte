@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { getSubsystemHealth } from '$lib/api/endpoints/subsystem-health';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import type {
@@ -110,38 +111,36 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Subsystem Health</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Live health from the event bus, durable episodic watermarks, and scheduler. Event-lane
-        history spans only since the current process started -- it is not durable.
-      </p>
-    </div>
-    <button
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Operations · Runtime posture"
+    title="Subsystem Health"
+    description="Live health from event-bus lanes, durable episodic watermarks, and scheduled work. Process-local history is labelled separately from durable state."
+  >
+    {#snippet actions()}
+      <button
       onclick={loadData}
       disabled={loading}
       class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
              text-shadow-600 hover:bg-bark-100
              transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-    >
-      {loading ? 'Loading...' : 'Refresh'}
-    </button>
-  </div>
+      >
+        {loading ? 'Loading...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if loading && !snapshot}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-loading card-garden p-12 text-center">
       <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
       <p class="text-sm text-shadow-600">Loading subsystem health...</p>
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if unavailable}
-    <div class="card-garden p-6 border-l-4 border-l-bark-300">
+    <div class="garden-empty card-garden p-6 border-l-4 border-l-bark-300">
       <p class="text-sm text-shadow-800">Subsystem health backend unavailable</p>
       <p class="text-sm text-shadow-600 mt-2">
         The health service is wired when the agent runs with an active gateway. No fabricated
@@ -164,7 +163,7 @@
     {/if}
 
     <!-- Process-start context -->
-    <div class="card-garden p-4 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+    <div class="garden-toolbar card-garden p-4 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
       <span class="text-shadow-600">
         <span class="font-medium text-shadow-800">Process started:</span>
         {formatClock(snapshot.processStartedAt)} ({formatRelative(snapshot.processStartedAt)})
@@ -245,8 +244,8 @@
           No durable episodic watermark state available.
         </div>
       {:else}
-        <div class="card-garden overflow-hidden">
-          <table class="w-full text-sm">
+        <div class="garden-table-shell card-garden overflow-hidden">
+          <table class="garden-table w-full text-sm">
             <thead>
               <tr class="bg-bark-50 border-b border-bark-100 text-left text-xs text-shadow-500 uppercase tracking-wide">
                 <th class="px-4 py-2 font-medium">Processor</th>
@@ -311,8 +310,8 @@
           No scheduler state available.
         </div>
       {:else}
-        <div class="card-garden overflow-hidden">
-          <table class="w-full text-sm">
+        <div class="garden-table-shell card-garden overflow-hidden">
+          <table class="garden-table w-full text-sm">
             <thead>
               <tr class="bg-bark-50 border-b border-bark-100 text-left text-xs text-shadow-500 uppercase tracking-wide">
                 <th class="px-4 py-2 font-medium">Lane</th>

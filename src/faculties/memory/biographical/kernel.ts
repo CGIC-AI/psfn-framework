@@ -4,7 +4,7 @@ import {
   classifyArtifactSensitivity,
   type ArtifactSensitivitySource,
 } from '../../../shared/contracts/artifact-sensitivity.js';
-import { isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
+import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import {
   sensitivityOrd,
   type SensitivityLevel,
@@ -16,7 +16,7 @@ import {
   BIOGRAPHICAL_CLAIM_STATUSES,
   BIOGRAPHICAL_CLAIM_STATUSES as CLAIM_STATUSES,
   BIOGRAPHICAL_COLLECTION_DEPTHS,
-  BIOGRAPHICAL_GRANT_POLICY_VERSION,
+  BIOGRAPHICAL_GRANT_DECISION_REVISION,
   BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
   BIOGRAPHICAL_TERMINAL_STATUSES,
 } from './types.js';
@@ -40,8 +40,8 @@ import {
 const BIOGRAPHICAL_SOURCE_REF_PATTERN = /^[a-z][a-z0-9_-]*:[^\s]+$/u;
 const BIOGRAPHICAL_SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 
-/** Maximum number of sources a single claim may carry (bounded audit surface). */
-export const BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM = 16;
+/** Fixed source slots in the v1 claim envelope; not a mutable extraction budget. */
+export const BIOGRAPHICAL_SOURCE_SLOTS = 16;
 
 // ── Canonical hashing ──
 
@@ -160,10 +160,13 @@ function fail(message: string): never {
 export function assertSubjectRef(value: unknown, field: string): BiographicalSubjectRef {
   if (!isRecord(value)) fail(`${field} must be an object`);
   if (value.kind === 'companion') {
+    if (!hasExactKeys(value, ['kind', 'companionId', 'subjectVersion'])) {
+      fail(`${field} has an invalid companion subject shape`);
+    }
     if (typeof value.companionId !== 'string' || value.companionId.trim().length === 0) {
       fail(`${field}.companionId must be a non-empty string`);
     }
-    const companionId = value.companionId;
+    const companionId = value.companionId.trim();
     const subjectVersion = assertPositiveInteger(value.subjectVersion, `${field}.subjectVersion`);
     return {
       kind: 'companion',
@@ -172,10 +175,13 @@ export function assertSubjectRef(value: unknown, field: string): BiographicalSub
     };
   }
   if (value.kind === 'contact') {
+    if (!hasExactKeys(value, ['kind', 'contactId', 'subjectVersion'])) {
+      fail(`${field} has an invalid contact subject shape`);
+    }
     if (typeof value.contactId !== 'string' || value.contactId.trim().length === 0) {
       fail(`${field}.contactId must be a non-empty string`);
     }
-    const contactId = value.contactId;
+    const contactId = value.contactId.trim();
     const subjectVersion = assertPositiveInteger(value.subjectVersion, `${field}.subjectVersion`);
     return { kind: 'contact', contactId, subjectVersion };
   }
@@ -232,6 +238,20 @@ export function assertConfidence(value: unknown): number {
 
 function assertSource(value: unknown, index: number): BiographicalClaimSource {
   if (!isRecord(value)) fail(`sources[${index}] must be an object`);
+  if (!hasExactKeys(
+    value,
+    [
+      'ref',
+      'revision',
+      'evidenceDigest',
+      'sensitivityAtProjection',
+      'subjectEvidenceDigest',
+      'consentFingerprint',
+    ],
+    ['sourceChannelId', 'sourceChannelEpoch'],
+  )) {
+    fail(`sources[${index}] has unknown or missing fields`);
+  }
   if (typeof value.ref !== 'string' || !BIOGRAPHICAL_SOURCE_REF_PATTERN.test(value.ref)) {
     fail(`sources[${index}].ref must be a content-free provenance reference like "memory:<id>"`);
   }
@@ -264,7 +284,7 @@ function assertSource(value: unknown, index: number): BiographicalClaimSource {
     if (typeof value.sourceChannelId !== 'string' || value.sourceChannelId.trim().length === 0) {
       fail(`sources[${index}].sourceChannelId must be a non-empty string`);
     }
-    sourceChannelId = value.sourceChannelId;
+    sourceChannelId = value.sourceChannelId.trim();
   }
   let sourceChannelEpoch: number | undefined;
   if (value.sourceChannelEpoch !== undefined) {
@@ -274,8 +294,8 @@ function assertSource(value: unknown, index: number): BiographicalClaimSource {
     );
   }
   return {
-    ref: value.ref,
-    revision: value.revision,
+    ref: value.ref.trim(),
+    revision: value.revision.trim(),
     evidenceDigest: value.evidenceDigest,
     sensitivityAtProjection: value.sensitivityAtProjection,
     subjectEvidenceDigest: value.subjectEvidenceDigest,
@@ -298,8 +318,8 @@ export function assertSources(
   if (!Array.isArray(value) || value.length === 0) {
     fail('sources must be a non-empty array');
   }
-  if (value.length > BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM) {
-    fail(`sources must contain at most ${BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM} entries`);
+  if (value.length > BIOGRAPHICAL_SOURCE_SLOTS) {
+    fail(`sources must contain at most ${BIOGRAPHICAL_SOURCE_SLOTS} entries`);
   }
   const parsed = value.map((entry, index) => assertSource(entry, index));
   const seen = new Set<string>();
@@ -482,6 +502,20 @@ export function assertGrantInput(value: unknown): {
   expiresAt?: string;
 } {
   if (!isRecord(value)) grantFail('grant input must be an object');
+  if (!hasExactKeys(
+    value,
+    [
+      'claimDigest',
+      'sourceSetDigest',
+      'grantedSensitivity',
+      'authorizingActor',
+      'authorityBasis',
+      'reason',
+    ],
+    ['expiresAt', 'now'],
+  )) {
+    grantFail('grant input has unknown or missing fields');
+  }
   if (
     typeof value.claimDigest !== 'string'
     || !BIOGRAPHICAL_SHA256_PATTERN.test(value.claimDigest)
@@ -516,26 +550,61 @@ export function assertGrantInput(value: unknown): {
     sourceSetDigest: value.sourceSetDigest,
     grantedSensitivity: value.grantedSensitivity,
     authorizingActor: value.authorizingActor,
-    authorityBasis: value.authorityBasis,
-    reason: value.reason,
+    authorityBasis: value.authorityBasis.trim(),
+    reason: value.reason.trim(),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
   };
 }
 
 export function assertGrantRecord(value: unknown): BiographicalSensitivityGrant {
   if (!isRecord(value)) throw new BiographicalGrantValidationError('stored grant must be an object');
+  if (!hasExactKeys(
+    value,
+    [
+      'id',
+      'schemaVersion',
+      'policyVersion',
+      'claimDigest',
+      'sourceSetDigest',
+      'grantedSensitivity',
+      'authorizingActor',
+      'authorityBasis',
+      'reason',
+      'grantedAt',
+    ],
+    ['expiresAt', 'revokedAt', 'revokedReason'],
+  )) {
+    throw new BiographicalGrantValidationError('stored grant has unknown or missing fields');
+  }
   if (value.schemaVersion !== BIOGRAPHICAL_GRANT_SCHEMA_VERSION) {
     throw new BiographicalGrantValidationError('grant schemaVersion is not supported');
   }
-  if (value.policyVersion !== BIOGRAPHICAL_GRANT_POLICY_VERSION) {
+  if (value.policyVersion !== BIOGRAPHICAL_GRANT_DECISION_REVISION) {
     throw new BiographicalGrantValidationError('grant policyVersion is not supported');
   }
   if (typeof value.id !== 'string' || value.id.trim().length === 0) {
     throw new BiographicalGrantValidationError('grant id must be a non-empty string');
   }
-  const input = assertGrantInput(value);
+  const input = assertGrantInput({
+    claimDigest: value.claimDigest,
+    sourceSetDigest: value.sourceSetDigest,
+    grantedSensitivity: value.grantedSensitivity,
+    authorizingActor: value.authorizingActor,
+    authorityBasis: value.authorityBasis,
+    reason: value.reason,
+    ...(value.expiresAt !== undefined ? { expiresAt: value.expiresAt } : {}),
+  });
   if (typeof value.grantedAt !== 'string' || !isCanonicalIsoTimestamp(value.grantedAt)) {
     throw new BiographicalGrantValidationError('grantedAt must be a canonical ISO instant');
+  }
+  if (
+    input.expiresAt !== undefined
+    && Date.parse(input.expiresAt) <= Date.parse(value.grantedAt)
+  ) {
+    throw new BiographicalGrantValidationError('expiresAt must be strictly after grantedAt');
+  }
+  if (value.revokedReason !== undefined && value.revokedAt === undefined) {
+    throw new BiographicalGrantValidationError('revokedReason requires revokedAt');
   }
   if (value.revokedAt !== undefined) {
     if (typeof value.revokedAt !== 'string' || !isCanonicalIsoTimestamp(value.revokedAt)) {
@@ -544,6 +613,9 @@ export function assertGrantRecord(value: unknown): BiographicalSensitivityGrant 
     if (typeof value.revokedReason !== 'string' || value.revokedReason.trim().length === 0) {
       throw new BiographicalGrantValidationError('revokedReason must be a non-empty string');
     }
+    if (Date.parse(value.revokedAt) < Date.parse(value.grantedAt)) {
+      throw new BiographicalGrantValidationError('revokedAt must not precede grantedAt');
+    }
   }
   const grantedAt = value.grantedAt;
   const revokedAt = typeof value.revokedAt === 'string' ? value.revokedAt : undefined;
@@ -551,7 +623,7 @@ export function assertGrantRecord(value: unknown): BiographicalSensitivityGrant 
   return {
     id: value.id,
     schemaVersion: BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
-    policyVersion: BIOGRAPHICAL_GRANT_POLICY_VERSION,
+    policyVersion: BIOGRAPHICAL_GRANT_DECISION_REVISION,
     ...input,
     grantedAt,
     ...(revokedAt !== undefined ? { revokedAt } : {}),

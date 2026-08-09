@@ -2,7 +2,7 @@ import {
   SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
-import { isRecord } from '../../../shared/utils/types.js';
+import { hasExactKeys, isRecord } from '../../../shared/utils/types.js';
 import type {
   BiographicalClaimKind,
   BiographicalClaimValue,
@@ -30,9 +30,11 @@ export class BiographicalClaimValidationError extends Error {
  * key. Unknown kinds reject (see {@link assertKnownClaimKind}).
  */
 
-const MAX_NAME_LENGTH = 256;
-const MAX_NICKNAME_LENGTH = 256;
-const MAX_RELATIONSHIP_TYPE_LENGTH = 128;
+// Schema capacities, not mutable collection budgets. Changing one requires a
+// normalizer revision because it changes which structured values are valid.
+const NAME_FIELD_CODE_UNITS = 256;
+const NICKNAME_FIELD_CODE_UNITS = 256;
+const RELATIONSHIP_TYPE_FIELD_CODE_UNITS = 128;
 
 interface ClaimKindDefinition {
   readonly kind: BiographicalClaimKind;
@@ -97,10 +99,10 @@ function assertNonEmptyBoundedString(
 }
 
 function assertNameValue(value: unknown): NameClaimValue {
-  if (!isRecord(value) || value.kind !== 'name') {
+  if (!isRecord(value) || !hasExactKeys(value, ['kind', 'name', 'role']) || value.kind !== 'name') {
     throw new BiographicalClaimValidationError('name claim value must be an object with kind "name"');
   }
-  const name = assertNonEmptyBoundedString(value.name, 'name', MAX_NAME_LENGTH);
+  const name = assertNonEmptyBoundedString(value.name, 'name', NAME_FIELD_CODE_UNITS);
   const role = value.role;
   if (role !== 'primary' && role !== 'alias') {
     throw new BiographicalClaimValidationError('name role must be one of: primary, alias');
@@ -109,10 +111,10 @@ function assertNameValue(value: unknown): NameClaimValue {
 }
 
 function assertNicknameValue(value: unknown): NicknameClaimValue {
-  if (!isRecord(value) || value.kind !== 'nickname') {
+  if (!isRecord(value) || !hasExactKeys(value, ['kind', 'nickname', 'scope']) || value.kind !== 'nickname') {
     throw new BiographicalClaimValidationError('nickname claim value must be an object with kind "nickname"');
   }
-  const nickname = assertNonEmptyBoundedString(value.nickname, 'nickname', MAX_NICKNAME_LENGTH);
+  const nickname = assertNonEmptyBoundedString(value.nickname, 'nickname', NICKNAME_FIELD_CODE_UNITS);
   const scope = value.scope;
   if (scope !== 'self' && scope !== 'relational') {
     throw new BiographicalClaimValidationError('nickname scope must be one of: self, relational');
@@ -121,13 +123,17 @@ function assertNicknameValue(value: unknown): NicknameClaimValue {
 }
 
 function assertRelationshipValue(value: unknown): RelationshipClaimValue {
-  if (!isRecord(value) || value.kind !== 'relationship') {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, ['kind', 'relationshipType'])
+    || value.kind !== 'relationship'
+  ) {
     throw new BiographicalClaimValidationError('relationship claim value must be an object with kind "relationship"');
   }
   const relationshipType = assertNonEmptyBoundedString(
     value.relationshipType,
     'relationshipType',
-    MAX_RELATIONSHIP_TYPE_LENGTH,
+    RELATIONSHIP_TYPE_FIELD_CODE_UNITS,
   );
   return { kind: 'relationship', relationshipType };
 }

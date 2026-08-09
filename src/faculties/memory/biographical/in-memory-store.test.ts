@@ -93,6 +93,40 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('rejects duplicate claim ids instead of rewriting append-only history', async () => {
+    const s = store();
+    const input = {
+      id: 'claim-fixed',
+      subject: contact('v'),
+      kind: 'name' as const,
+      value: { kind: 'name' as const, name: 'V', role: 'primary' as const },
+      basis: 'explicit' as const,
+      confidence: 1,
+      sources: [source()],
+      now: NOW,
+    };
+    await s.writeClaim(input);
+    await expect(s.writeClaim({
+      ...input,
+      value: { kind: 'name', name: 'Someone else', role: 'primary' },
+    })).rejects.toThrow('already exists');
+  });
+
+  it('matches an exact canonical subject version and validates list limits', async () => {
+    const s = store();
+    await s.writeClaim({
+      subject: contact('v', 1),
+      kind: 'name',
+      value: { kind: 'name', name: 'V', role: 'primary' },
+      basis: 'explicit',
+      confidence: 1,
+      sources: [source()],
+      now: NOW,
+    });
+    expect(await s.listClaims({ subject: contact('v', 2) })).toEqual([]);
+    await expect(s.listClaims({ limit: 0 })).rejects.toThrow('positive integer');
+  });
 });
 
 describe('InMemoryBiographicalProfileStore — supersession (append-only)', () => {
@@ -158,6 +192,31 @@ describe('InMemoryBiographicalProfileStore — supersession (append-only)', () =
         now: NOW,
       }),
     ).rejects.toThrow(BiographicalLifecycleError);
+  });
+
+  it('refuses to supersede a different canonical subject', async () => {
+    const s = store();
+    const original = await s.writeClaim({
+      subject: contact('v'),
+      kind: 'name',
+      value: { kind: 'name', name: 'V', role: 'primary' },
+      basis: 'explicit',
+      confidence: 1,
+      sources: [source()],
+      status: 'active',
+      now: NOW,
+    });
+    await expect(s.supersedeClaim({
+      supersededClaimId: original.id,
+      subject: contact('someone-else'),
+      kind: 'name',
+      value: { kind: 'name', name: 'Someone', role: 'primary' },
+      basis: 'explicit',
+      confidence: 1,
+      sources: [source({ ref: 'memory:m-2' })],
+      now: NOW,
+    })).rejects.toThrow('same canonical subject');
+    expect((await s.getClaim(original.id))?.status).toBe('active');
   });
 });
 
@@ -309,6 +368,30 @@ describe('InMemoryBiographicalProfileStore — exact digest-bound grants', () =>
       now: NOW,
     });
     expect(grant.grantedSensitivity).toBe('public');
+    expect((await s.getClaim(claim.id))?.effectiveSensitivity).toBe('public');
+  });
+
+  it('evaluates grant expiry against the supplied decision time', async () => {
+    const s = store();
+    const claim = await s.writeClaim({
+      subject: companion('purrs'),
+      kind: 'nickname',
+      value: { kind: 'nickname', nickname: 'Loaf', scope: 'self' },
+      basis: 'explicit',
+      confidence: 0.9,
+      sources: [source({ sensitivityAtProjection: 'intimate' })],
+      now: NOW,
+    });
+    await s.recordGrant({
+      claimDigest: claim.claimDigest,
+      sourceSetDigest: claim.sourceSetDigest,
+      grantedSensitivity: 'public',
+      authorizingActor: 'operator',
+      authorityBasis: 'hitl-approval',
+      reason: 'bounded approval',
+      expiresAt: '2026-08-09T12:30:00.000Z',
+      now: NOW,
+    });
     expect((await s.getClaim(claim.id))?.effectiveSensitivity).toBe('public');
   });
 });

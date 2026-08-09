@@ -6949,43 +6949,6 @@
       "note": "Existing mutable policy candidate IntrospectionValuesConsistencyRuntime.runOnce.claimedValues.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/memory/biographical/claim-kinds.ts",
-      "name": "MAX_NAME_LENGTH",
-      "value": "256",
-      "note": "Code-owned DoS input bound on biographical name structured-value length (psfn-framework-o61vb.2); not a mutable setting."
-    },
-    {
-      "file": "src/faculties/memory/biographical/claim-kinds.ts",
-      "name": "MAX_NICKNAME_LENGTH",
-      "value": "256",
-      "note": "Code-owned DoS input bound on biographical nickname structured-value length (psfn-framework-o61vb.2); not a mutable setting."
-    },
-    {
-      "file": "src/faculties/memory/biographical/claim-kinds.ts",
-      "name": "MAX_RELATIONSHIP_TYPE_LENGTH",
-      "value": "128",
-      "note": "Code-owned DoS input bound on biographical relationship-type length (psfn-framework-o61vb.2); not a mutable setting."
-    },
-    {
-      "file": "src/faculties/memory/biographical/kernel.ts",
-      "name": "BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM",
-      "value": "16",
-      "note": "Code-owned DoS guard bounding the per-claim source-snapshot audit surface (psfn-framework-o61vb.2); not a mutable setting."
-    },
-    {
-      "file": "src/faculties/memory/biographical/store-port.ts",
-      "name": "prepareBiographicalGrant.grant.policyVersion",
-      "value": "1",
-      "form": "object-member",
-      "note": "Protocol constant pinning the exact lowering-grant policy version; changing it intentionally invalidates bound grants (psfn-framework-o61vb.2)."
-    },
-    {
-      "file": "src/faculties/memory/biographical/types.ts",
-      "name": "BIOGRAPHICAL_GRANT_POLICY_VERSION",
-      "value": "1 as const",
-      "note": "Protocol constant pinning the exact lowering-grant policy version; changing it intentionally invalidates bound grants (psfn-framework-o61vb.2)."
-    },
-    {
       "file": "src/faculties/memory/boundary-log.ts",
       "name": "MAX_DYNAMIC_TAGS",
       "value": "6"

@@ -59,53 +59,96 @@
   }
 </script>
 
-<div class="min-h-screen flex items-center justify-center bg-bark-100 p-4">
-  <div class="card max-w-md w-full p-8">
-    <div class="text-center mb-8">
-      <h1 class="font-serif text-3xl text-gold-600 font-semibold">
-        {companionName}'s Garden
-      </h1>
-      <p class="text-shadow-700 mt-2 text-sm">
-        Enter your admin token to continue
-      </p>
-    </div>
+<svelte:head>
+  <title>Sign in · {companionName}'s Garden</title>
+</svelte:head>
 
-    <form onsubmit={handleSubmit} class="space-y-4">
-      <div>
-        <label for="token" class="block text-sm font-medium text-shadow-600 mb-1.5">
-          Admin Token
-        </label>
-        <input
-          id="token"
-          type="password"
-          bind:value={tokenInput}
-          placeholder="Enter admin token..."
-          class="w-full px-4 py-2.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                 placeholder:text-shadow-500 focus:outline-none focus:border-gold-400 focus:ring-2
-                 focus:ring-gold-200 transition-colors"
-          disabled={loading}
-        />
-      </div>
+<main class="grid min-h-dvh place-items-center bg-canvas px-4 py-8 sm:px-6 lg:px-8">
+  <div class="grid w-full max-w-5xl overflow-hidden rounded-2xl border border-line bg-surface shadow-[0_24px_70px_rgb(38_35_30/0.10)] lg:grid-cols-[1.08fr_0.92fr]">
+    <section class="relative overflow-hidden border-b border-line bg-sunken px-6 py-8 sm:px-10 sm:py-12 lg:border-b-0 lg:border-r lg:px-12 lg:py-16">
+      <div class="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full border border-gold-300/45" aria-hidden="true"></div>
+      <div class="pointer-events-none absolute -right-8 top-9 h-36 w-36 rounded-full border border-gold-300/65" aria-hidden="true"></div>
 
-      {#if error}
-        <div class="px-4 py-2.5 rounded-lg bg-wilt-50 border border-wilt-200 text-wilt-600 text-sm">
-          {error}
+      <div class="relative flex h-full max-w-xl flex-col">
+        <div class="inline-flex w-fit items-center gap-2 rounded-full border border-gold-300 bg-gold-50 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-gold-700">
+          <span class="h-1.5 w-1.5 rounded-full bg-moss-500" aria-hidden="true"></span>
+          Private operator surface
         </div>
-      {/if}
+        <p class="page-kicker mt-8">Garden · Companion administration</p>
+        <h1 class="mt-2 max-w-lg font-serif text-4xl font-semibold leading-[1.08] text-ink sm:text-5xl">
+          Tend {companionName}'s living system.
+        </h1>
+        <p class="mt-4 max-w-lg text-sm leading-6 text-muted sm:text-base">
+          One focused place for memory, runtime health, relationships, policy, and the decisions that need a human hand.
+        </p>
 
-      <button
-        type="submit"
-        disabled={loading}
-        class="w-full py-2.5 rounded-lg bg-gold-400 text-bark-50 font-medium
-               hover:bg-gold-500 focus:outline-none focus:ring-2 focus:ring-gold-300
-               disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-      >
-        {#if loading}
-          Signing in...
-        {:else}
-          Sign in
-        {/if}
-      </button>
-    </form>
+        <dl class="mt-10 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3 lg:mt-auto lg:grid-cols-1 xl:grid-cols-3">
+          <div class="bg-surface/80 px-4 py-3 backdrop-blur-sm">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-muted">Scope</dt>
+            <dd class="mt-1 font-serif text-sm font-semibold text-ink">One companion</dd>
+          </div>
+          <div class="bg-surface/80 px-4 py-3 backdrop-blur-sm">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-muted">Session</dt>
+            <dd class="mt-1 font-serif text-sm font-semibold text-ink">Operator only</dd>
+          </div>
+          <div class="bg-surface/80 px-4 py-3 backdrop-blur-sm">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-muted">Access</dt>
+            <dd class="mt-1 font-serif text-sm font-semibold text-ink">Token protected</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="flex items-center px-6 py-9 sm:px-10 sm:py-12 lg:px-12">
+      <div class="w-full">
+        <p class="page-kicker">Secure access</p>
+        <h2 class="page-title mt-1">Welcome back</h2>
+        <p class="page-description mt-2">Use the admin token issued for this Garden.</p>
+
+        <form onsubmit={handleSubmit} class="mt-8 space-y-5" aria-busy={loading}>
+          <div class="garden-field">
+            <label for="token">Admin token</label>
+            <input
+              id="token"
+              type="password"
+              bind:value={tokenInput}
+              placeholder="Paste your admin token"
+              autocomplete="current-password"
+              spellcheck="false"
+              aria-describedby={error ? 'token-hint token-error' : 'token-hint'}
+              aria-invalid={error ? 'true' : undefined}
+              class="min-h-11 w-full"
+              disabled={loading}
+            />
+            <p id="token-hint" class="garden-field-hint">The token stays in this authenticated operator session.</p>
+          </div>
+
+          {#if error}
+            <div id="token-error" class="garden-error min-h-0 px-3 py-2.5 text-sm" role="alert">
+              <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-wilt-100 text-xs font-bold text-wilt-700" aria-hidden="true">!</span>
+              <span>{error}</span>
+            </div>
+          {/if}
+
+          <button
+            type="submit"
+            disabled={loading}
+            class="garden-action garden-action--primary w-full disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {#if loading}
+              <span class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" aria-hidden="true"></span>
+              Signing in…
+            {:else}
+              Enter the Garden
+              <span aria-hidden="true">→</span>
+            {/if}
+          </button>
+        </form>
+
+        <p class="mt-6 border-t border-line pt-5 text-xs leading-5 text-muted">
+          Access is limited to authorized operators. Failed requests remain on this page without exposing system details.
+        </p>
+      </div>
+    </section>
   </div>
-</div>
+</main>

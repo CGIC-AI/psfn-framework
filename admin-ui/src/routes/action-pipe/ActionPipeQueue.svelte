@@ -17,7 +17,7 @@
   } = $props();
 </script>
 
-<section class="space-y-4" aria-labelledby="action-pipe-queued-heading">
+<section class="garden-section space-y-4" aria-labelledby="action-pipe-queued-heading">
   <div>
     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Queue</p>
     <h2 id="action-pipe-queued-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -29,7 +29,7 @@
   </div>
 
   {#if actions.length === 0}
-    <div class="card-garden p-5 text-sm text-shadow-600">No queued post-turn actions.</div>
+    <div class="garden-empty card-garden p-5 text-sm text-shadow-600">No queued post-turn actions.</div>
   {:else}
     <div class="space-y-3">
       {#each actions as action (action.dedupeKey)}
@@ -54,7 +54,7 @@
                 type="button"
                 onclick={() => onCancel(action)}
                 disabled={!action.cancellable || mutatingActionRef === action.actionId}
-                class="rounded-lg border border-wilt-300 px-3 py-1.5 text-sm font-medium text-wilt-700 transition-colors hover:bg-wilt-50 disabled:cursor-not-allowed disabled:opacity-40"
+                class="garden-action garden-action--danger min-h-11 rounded-lg border border-wilt-300 px-3 py-2 text-sm font-medium text-wilt-700 transition-colors hover:bg-wilt-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wilt-300 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Cancel
               </button>
@@ -62,7 +62,7 @@
                 type="button"
                 onclick={() => onAcknowledge(action)}
                 disabled={!action.cancellable || mutatingActionRef === action.actionId}
-                class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-40"
+                class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Acknowledge
               </button>

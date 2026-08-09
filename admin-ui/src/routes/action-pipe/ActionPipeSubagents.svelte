@@ -7,7 +7,7 @@
   let { outcomes }: { outcomes: CompletionRecord[] } = $props();
 </script>
 
-<section class="space-y-4" aria-labelledby="action-pipe-subagents-heading">
+<section class="garden-section space-y-4" aria-labelledby="action-pipe-subagents-heading">
   <div>
     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Subagents</p>
     <h2 id="action-pipe-subagents-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -15,7 +15,7 @@
     </h2>
   </div>
   {#if outcomes.length === 0}
-    <div class="card-garden p-5 text-sm text-shadow-600">No completed subagent spawn actions in recent history.</div>
+    <div class="garden-empty card-garden p-5 text-sm text-shadow-600">No completed subagent spawn actions in recent history.</div>
   {:else}
     <div class="grid gap-4 xl:grid-cols-2">
       {#each outcomes as outcome (outcome.dedupeKey)}

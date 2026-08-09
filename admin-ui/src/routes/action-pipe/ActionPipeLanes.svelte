@@ -7,7 +7,7 @@
   let { lanes }: { lanes: LaneStatus[] } = $props();
 </script>
 
-<section class="space-y-4" aria-labelledby="action-pipe-lanes-heading">
+<section class="garden-section space-y-4" aria-labelledby="action-pipe-lanes-heading">
   <div>
     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Runtime Lanes</p>
     <h2 id="action-pipe-lanes-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">

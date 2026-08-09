@@ -13,6 +13,7 @@
   import ActionPipeOutreach from './ActionPipeOutreach.svelte';
   import ActionPipeHistory from './ActionPipeHistory.svelte';
   import ActionPipeSubagents from './ActionPipeSubagents.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   type QueuedAction = ActionPipeStatus['queued'][number];
   type FailureRecord = ActionPipeStatus['failures']['recentFailures'][number];
@@ -102,38 +103,37 @@
   });
 </script>
 
-<div class="space-y-8">
-  <div class="flex items-start justify-between gap-4 flex-wrap">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Action Pipe</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Action Pipe - Backstage Queue</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Live operator surface for post-turn work, autonomous actions, retries, quarantine, and bounded subagent outcomes.
-      </p>
-    </div>
-    <button
-      onclick={refreshStatus}
-      disabled={refreshing}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-6">
+  <GardenPageHeader
+    eyebrow="Live Operations"
+    title="Action Pipe"
+    description="Post-turn work, autonomous actions, retries, quarantine, and bounded subagent outcomes."
+  >
+    {#snippet actions()}
+      <button
+        onclick={refreshStatus}
+        disabled={refreshing}
+        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {refreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
 
   {#if mutationMessage}
-    <div class="card-garden border-l-4 {mutationOk ? 'border-l-leaf-400' : 'border-l-wilt-400'} p-4">
+    <div class="garden-status {mutationOk ? 'garden-status--success' : 'garden-status--danger'} card-garden border-l-4 {mutationOk ? 'border-l-leaf-400' : 'border-l-wilt-400'} p-4" role="status" aria-live="polite">
       <p class="text-sm font-medium {mutationOk ? 'text-leaf-700' : 'text-wilt-700'}">{mutationMessage}</p>
     </div>
   {/if}
 
   {#if loading}
-    <div class="card-garden p-6 text-sm text-shadow-600">Loading action pipe status...</div>
+    <div class="garden-loading card-garden animate-pulse p-6 text-sm text-shadow-600" aria-busy="true">Loading action pipe status...</div>
   {:else if status}
     <ActionPipeOverview {status} />
     <ActionPipeLanes {lanes} />

@@ -17,7 +17,7 @@
   let { panels }: { panels: HistoryPanel[] } = $props();
 </script>
 
-<section class="space-y-4" aria-labelledby="action-pipe-history-heading">
+<section class="garden-section space-y-4" aria-labelledby="action-pipe-history-heading">
   <div>
     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Recent History</p>
     <h2 id="action-pipe-history-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -26,10 +26,10 @@
   </div>
   <div class="grid gap-4 xl:grid-cols-2">
     {#each panels as panel (panel.title)}
-      <article class="card-garden p-5">
+      <article class="garden-section card-garden p-5">
         <h3 class="font-serif font-semibold text-shadow-900">{panel.title}</h3>
         {#if panel.records.length === 0}
-          <p class="mt-3 text-sm text-shadow-600">{panel.empty}</p>
+          <p class="garden-empty mt-3 text-sm text-shadow-600">{panel.empty}</p>
         {:else}
           <div class="mt-4 space-y-3">
             {#each panel.records.slice(0, 8) as record}

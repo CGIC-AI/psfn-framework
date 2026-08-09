@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     cancelIcpCandidate,
     emergencyDisableIcpAutonomy,
@@ -143,46 +144,43 @@
   });
 </script>
 
-<div class="space-y-6">
-  <header class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-    <div>
+<div class="garden-page space-y-6">
+  <GardenPageHeader
+    eyebrow="Live Operations"
+    title="Autonomy Control Plane"
+    description="Bounded, content-free observability and emergency controls for autonomous companion initiation."
+  >
+    {#snippet actions()}
       <div class="flex flex-wrap items-center gap-2">
-        <h1 class="text-2xl font-serif font-bold text-shadow-900">Autonomy Control Plane</h1>
         {#if data}
-          <span class={`rounded-full px-2.5 py-1 text-xs font-medium ${data.runtimeEnabled ? 'bg-moss-100 text-moss-700' : 'bg-bark-200 text-shadow-700'}`}>
+          <span class={`garden-status ${data.runtimeEnabled ? 'garden-status--success' : 'garden-status--warning'} rounded-full px-2.5 py-1 text-xs font-medium ${data.runtimeEnabled ? 'bg-moss-100 text-moss-700' : 'bg-bark-200 text-shadow-700'}`}>
             {data.runtimeEnabled ? 'Runtime enabled' : 'Runtime disabled'}
           </span>
         {/if}
-      </div>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Bounded, content-free observability for autonomous companion initiation. Private motivation,
-        contact identifiers, bearer permits, transcripts, and model reasoning are never exposed here.
-      </p>
-    </div>
-    <div class="flex flex-wrap gap-2">
-      <button class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50" onclick={() => loadData()} disabled={loading}>
+      <button class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-50" onclick={() => loadData()} disabled={loading}>
         {loading ? 'Loading…' : 'Refresh'}
       </button>
-      <button class="rounded-lg border border-gold-400 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800 hover:bg-gold-100 disabled:opacity-50" onclick={() => (pendingAction = { kind: 'dnd' })} disabled={!data?.available || mutating}>
+      <button class="garden-action min-h-11 rounded-lg border border-gold-400 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800 hover:bg-gold-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-50" onclick={() => (pendingAction = { kind: 'dnd' })} disabled={!data?.available || mutating}>
         Set DND
       </button>
-      <button class="rounded-lg bg-wilt-600 px-3 py-2 text-sm font-medium text-white hover:bg-wilt-700 disabled:opacity-50" onclick={() => (pendingAction = { kind: 'disable' })} disabled={!data?.available || mutating || data?.runtimeEnabled === false}>
+      <button class="garden-action garden-action--danger min-h-11 rounded-lg bg-wilt-600 px-3 py-2 text-sm font-medium text-white hover:bg-wilt-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wilt-400 disabled:opacity-50" onclick={() => (pendingAction = { kind: 'disable' })} disabled={!data?.available || mutating || data?.runtimeEnabled === false}>
         Emergency disable
       </button>
-    </div>
-  </header>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if mutationMessage}
-    <div class="card-garden border-l-4 border-l-gold-400 p-4 text-sm text-shadow-800">{mutationMessage}</div>
+    <div class="garden-status garden-status--warning card-garden border-l-4 border-l-gold-400 p-4 text-sm text-shadow-800" role="status" aria-live="polite">{mutationMessage}</div>
   {/if}
 
   {#if loading && !data}
-    <div class="card-garden p-12 text-center text-sm text-shadow-600">Loading autonomy control-plane state…</div>
+    <div class="garden-loading card-garden animate-pulse p-8 text-center text-sm text-shadow-600" aria-busy="true">Loading autonomy control-plane state…</div>
   {:else if error && !data}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-6 text-sm text-shadow-800">{error}</div>
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6 text-sm text-shadow-800" role="alert">{error}</div>
   {:else if data}
     {#if !data.available}
-      <div class="card-garden border-l-4 border-l-gold-400 p-5">
+      <div class="garden-empty card-garden border-l-4 border-l-gold-400 p-5">
         <p class="font-medium text-shadow-900">Control plane wired but empty</p>
         <p class="mt-1 text-sm text-shadow-600">
           This deployment has no multi-companion ICP control plane (single-companion topology, or the
@@ -194,7 +192,7 @@
       </div>
     {/if}
     {#if data.companionPeerContactCount === 0}
-      <div class="card-garden border-l-4 border-l-wilt-400 p-5">
+      <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-5">
         <p class="font-medium text-shadow-900">No ICP-eligible sibling contacts</p>
         <p class="mt-1 text-sm text-shadow-600">
           No contact carries a <code>channel='companion'</code> identity, so peer selection can never
@@ -205,23 +203,23 @@
       </div>
     {/if}
 
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <div class="card-garden p-4">
+    <section class="garden-metric-grid grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div class="garden-metric card-garden p-4">
         <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Activity state</p>
         <p class="mt-2 text-lg font-semibold text-shadow-900">{data.quietState.replaceAll('_', ' ')}</p>
         <p class="mt-1 text-xs text-shadow-600">{data.quietExplanation}</p>
       </div>
-      <div class="card-garden p-4">
+      <div class="garden-metric card-garden p-4">
         <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Candidates / episodes</p>
         <p class="mt-2 text-lg font-semibold text-shadow-900">{data.candidates.length} / {data.episodes.length}</p>
         <p class="mt-1 text-xs text-shadow-600">Bounded to the most recent 50 records per lifecycle.</p>
       </div>
-      <div class="card-garden p-4">
+      <div class="garden-metric card-garden p-4">
         <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Failures observed</p>
         <p class="mt-2 text-lg font-semibold text-shadow-900">{data.failureCount}</p>
         <p class="mt-1 text-xs text-shadow-600">Rejected, suppressed, failed, or breaker-denied records.</p>
       </div>
-      <div class="card-garden p-4">
+      <div class="garden-metric card-garden p-4">
         <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Last refreshed</p>
         <p class="mt-2 text-lg font-semibold text-shadow-900">{relative(lastLoadedAt)}</p>
         <p class="mt-1 text-xs text-shadow-600">
@@ -236,7 +234,7 @@
       </div>
     </section>
 
-    <section class="card-garden p-5 space-y-4">
+    <section class="garden-section card-garden p-5 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 class="font-serif text-lg font-semibold text-shadow-900">Canonical owner policy</h2>
@@ -277,25 +275,25 @@
       </div>
     </section>
 
-    <section class="card-garden overflow-hidden">
+    <section class="garden-section garden-table-shell card-garden overflow-hidden">
       <div class="border-b border-bark-200 p-5">
         <h2 class="font-serif text-lg font-semibold text-shadow-900">Availability</h2>
         <p class="text-sm text-shadow-600">Current and expired coarse leases only; no presence transcript or private activity is included.</p>
       </div>
       {#if data.availability.length === 0}
-        <p class="p-5 text-sm text-shadow-600">No availability leases recorded.</p>
+        <p class="garden-empty p-5 text-sm text-shadow-600">No availability leases recorded.</p>
       {:else}
-        <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Companion</th><th class="p-3">State</th><th class="p-3">Source</th><th class="p-3">Expires</th></tr></thead><tbody class="divide-y divide-bark-200">
+        <div class="garden-table-scroll overflow-x-auto"><table class="garden-table w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Companion</th><th class="p-3">State</th><th class="p-3">Source</th><th class="p-3">Expires</th></tr></thead><tbody class="divide-y divide-bark-200">
           {#each data.availability as lease (lease.companionId)}<tr><td class="p-3 text-xs"><p>{lease.local ? 'Local · ' : ''}{companionDisplayLabel(displayCompanions, lease.companionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(lease.companionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(lease.state)}`}>{lease.state.replaceAll('_', ' ')}</span>{#if !lease.current}<span class="ml-2 text-xs text-shadow-500">expired</span>{/if}</td><td class="p-3">{lease.source}</td><td class="p-3">{dateTime(lease.expiresAtMs)}</td></tr>{/each}
         </tbody></table></div>
       {/if}
     </section>
 
-    <section class="card-garden overflow-hidden">
+    <section class="garden-section garden-table-shell card-garden overflow-hidden">
       <div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Local candidates</h2><p class="text-sm text-shadow-600">Private motivation and contact bindings are withheld. Cancellation uses the current revision and never accepts a target companion.</p></div>
-      {#if data.candidates.length === 0}<p class="p-5 text-sm text-shadow-600">No local autonomous candidates recorded.</p>{:else}
-        <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Source</th><th class="p-3">Peer</th><th class="p-3">Status / reason</th><th class="p-3">Created</th><th class="p-3"></th></tr></thead><tbody class="divide-y divide-bark-200">
-          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 text-xs"><p>{companionDisplayLabel(displayCompanions, candidate.peerCompanionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(candidate.peerCompanionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span><p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
+      {#if data.candidates.length === 0}<p class="garden-empty p-5 text-sm text-shadow-600">No local autonomous candidates recorded.</p>{:else}
+        <div class="garden-table-scroll overflow-x-auto"><table class="garden-table w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Source</th><th class="p-3">Peer</th><th class="p-3">Status / reason</th><th class="p-3">Created</th><th class="p-3"></th></tr></thead><tbody class="divide-y divide-bark-200">
+          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 text-xs"><p>{companionDisplayLabel(displayCompanions, candidate.peerCompanionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(candidate.peerCompanionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span><p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="garden-action garden-action--danger min-h-11 rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
         </tbody></table></div>
       {/if}
     </section>
@@ -310,7 +308,7 @@
       <div class="card-garden overflow-hidden"><div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Conversation cost breaker</h2><p class="text-sm text-shadow-600">Latest durable decision per conversation. Empty is expected when the breaker has no decisions.</p></div>{#if !data.costProjection.available}<div class="border-l-4 border-l-gold-400 p-5"><p class="font-medium text-shadow-900">Cost projection unavailable</p><p class="mt-1 text-sm text-shadow-600">{costProjectionUnavailableMessage(data.costProjection.unavailableReason)}</p></div>{:else if data.costs.length === 0}<p class="p-5 text-sm text-shadow-600">No cost-breaker decisions recorded.</p>{:else}<div class="divide-y divide-bark-200">{#each data.costs as cost (cost.conversationId)}<div class="p-4 text-sm"><div class="flex items-center justify-between gap-2"><span class={`rounded-full px-2 py-1 text-xs ${badge(costState(cost))}`}>{costState(cost).replaceAll('_', ' ')}</span><span class="text-xs text-shadow-500">{cost.reason.replaceAll('_', ' ')}</span></div><p class="mt-2 font-mono text-xs text-shadow-700">{cost.conversationId}</p><div class="mt-2 grid grid-cols-3 gap-2 text-xs text-shadow-600"><span>Actual {formatUsd(cost.actualCostUsd)}</span><span>Projected {formatUsd(cost.projectedTotalCostUsd)}</span><span>Hard {formatUsd(cost.hardLimitUsd)}</span></div></div>{/each}</div>{/if}</div>
     </section>
 
-    <section class="card-garden p-5">
+    <section class="garden-section card-garden p-5">
       <h2 class="font-serif text-lg font-semibold text-shadow-900">Reasons and redaction contract</h2>
       <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div>{#if data.reasonCounts.length === 0}<p class="text-sm text-shadow-600">No machine-readable reasons recorded.</p>{:else}<div class="flex flex-wrap gap-2">{#each data.reasonCounts as reason (reason.reasonCode)}<span class="rounded-full border border-bark-200 bg-bark-50 px-2.5 py-1 text-xs text-shadow-700">{reason.reasonCode}: {reason.count}</span>{/each}</div>{/if}</div>

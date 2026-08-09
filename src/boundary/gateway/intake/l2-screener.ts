@@ -2,15 +2,15 @@
 //
 // Mid-weight classification tier for items whose cheaper L1/L1.5 scores cross
 // the per-tier escalation threshold (intake-policy.json `l2Screener`). The
-// screener is a TOOL-LESS OpenRouter chat call: dual-LLM discipline (CaMeL,
+// screener is a TOOL-LESS pi-ai provider call: dual-LLM discipline (CaMeL,
 // arXiv 2503.18813) — it SEES untrusted content but holds NO tools and NO
 // capabilities, so a successful injection inside the content cannot make it act.
 // The request body carries no `tools` field; that invariant lives in the shared
 // transport (screener-transport.ts) and is pinned by the tests.
 //
 // Placement: gateway process. The gateway is the secret holder, so it resolves
-// the OpenRouter base URL + API key (never logged) and passes them in as the
-// backend. Model choice follows the canonical background purpose, resolved at
+// provider credential (never logged) and pi-ai runtime. Model choice follows
+// the canonical background purpose, resolved at
 // gateway startup from models.json + modelPurposeSelection.
 //
 // Contract with the rest of the firewall:
@@ -54,9 +54,12 @@ import {
 import {
   callValidatedToolLessJsonScreener,
   neutralizeUntrustedDelimiters,
+  screenerModelId,
+  screenerModelLabel,
   stripJsonFences,
   type ScreenerBackend,
-  type ScreenerFetch,
+  type ScreenerModel,
+  type ScreenerTestCompletion,
 } from './screener-transport.js';
 import { shouldEscalateToL3 } from './l3-screener.js';
 
@@ -78,7 +81,7 @@ const DEFAULT_MAX_CONTENT_CHARS = 24000;
 
 // ── Public types ──
 
-/** Gateway-resolved OpenRouter connection for the L2 screener (secret-bearing). */
+/** Gateway-owned pi-ai runtime and credential resolver for the L2 screener. */
 export type L2ScreenerBackend = ScreenerBackend;
 
 /** Provenance metadata handed to the screener alongside the untrusted content. */
@@ -102,18 +105,16 @@ export interface L2Classification {
 }
 
 /** Minimal fetch surface so tests inject a stub — no live network in tests. */
-export type L2ScreenerFetch = ScreenerFetch;
-
 export interface L2ScreenerDeps {
   backend: L2ScreenerBackend;
-  /** OpenRouter model slug resolved from the canonical background purpose. */
-  model: string;
+  /** Provider-aware model route resolved from the canonical background purpose. */
+  model: ScreenerModel;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
   /** Max characters of untrusted content sent to the screener. */
   maxContentChars?: number;
   /** Test seam; production uses the global fetch. */
-  fetch?: L2ScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
 }
 
 // ── Errors (fail closed, never swallowed) ──
@@ -247,7 +248,7 @@ function parseClassification(
 
 /**
  * Tool-less L2 API screener. Sends the untrusted `text` to the configured
- * OpenRouter model with zero tools and returns a schema-validated
+ * selected provider model with zero tools and returns a schema-validated
  * classification. Throws (`L2ScreenerError` / `L2ScreenerSchemaError`) on
  * transport failure, timeout, or malformed response — never returns a
  * default/pass classification.
@@ -277,12 +278,12 @@ export async function screenL2(
     timeoutMs: deps.timeoutMs,
     systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
     userMessage: buildUserMessage(neutralized, context),
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
     screenerName: 'L2 screener',
     makeError: (message) => new L2ScreenerError(message),
     validateContent: content => parseClassification(
       content,
-      deps.model,
+      screenerModelId(deps.model),
       performance.now() - startedAt,
     ),
     isValidationError: error => error instanceof L2ScreenerSchemaError,
@@ -294,7 +295,7 @@ export async function screenL2(
   // untrusted content and summary are NOT logged — only structural metadata.
   log.info(
     `L2 screen ${context.sourceClass}/${context.sourceRiskTier} `
-    + `model=${deps.model} confidence=${classification.injectionConfidence.toFixed(3)} `
+    + `model=${screenerModelLabel(deps.model)} confidence=${classification.injectionConfidence.toFixed(3)} `
     + `labels=${String(classification.labels.length)} latencyMs=${latencyMs.toFixed(1)}`,
   );
   return classification;
@@ -309,10 +310,10 @@ export interface EvaluateL2Input {
   priorScore: number;
   config: IntakePolicyConfig;
   /** Model resolved at startup from the canonical background purpose. */
-  model: string;
+  model: ScreenerModel;
   backend: L2ScreenerBackend;
   /** Test seam; production uses the global fetch. */
-  fetch?: L2ScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
 }
 
 export type L2ScreeningOutcome =
@@ -355,7 +356,7 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       model: input.model,
       timeoutMs: config.l2Screener.timeoutMs,
       maxContentChars: config.l2Screener.maxContentChars,
-      ...(input.fetch ? { fetch: input.fetch } : {}),
+      ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
     });
     // ── htm9.7 L3 escalation ──
     // A flagged L2 verdict — or a tier whose policy mandates deep screening —

@@ -37,8 +37,6 @@ const BENIGN = 'Here are my field notes from the hike: the trail was muddy after
 // envelope is screened. Providing it here removes the unrelated mandatory
 // L2/L3-backend startup guard from the L1.5 provisioning witness.
 const INERT_SCREENER_BACKEND = {
-  apiBaseUrl: 'https://unused.invalid/api/v1',
-  apiKey: 'unused-test-key',
 };
 
 function scanLabels(text: string): readonly string[] {

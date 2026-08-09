@@ -4,7 +4,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composeGatewayIntakeScreening } from './compose-screening.js';
+import { fromAny } from '@total-typescript/shoehorn';
+import {
+  composeGatewayIntakeScreening,
+  resolveIntakeScreenerBackend,
+} from './compose-screening.js';
 import { composeGatewayIntakeScreeningRuntime } from './fleet-screening.js';
 import type { InjectionClassifierBackend } from './injection-classifier.js';
 import { getRecentDiagnosticLogRecords } from '../../../shared/logger.js';
@@ -13,6 +17,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { createIntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
+import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
@@ -35,6 +40,10 @@ function fakeInjectionBackend(): InjectionClassifierBackend {
   };
 }
 const fakeInjectionBackendFactory = () => Promise.resolve(fakeInjectionBackend());
+const TEST_SCREENER_BACKEND = {};
+const unusedScreenerCompletion = vi.fn(async () => {
+  throw new Error('unexpected screener call');
+});
 
 const tempDirs: string[] = [];
 
@@ -75,10 +84,20 @@ afterEach(() => {
 });
 
 describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
+  it('reuses the gateway provider runtime instead of constructing a second LLM gateway', () => {
+    const input = makeDataDirs('enforce', true);
+    const runtime = fromAny<ProviderRuntime>({});
+
+    const backend = resolveIntakeScreenerBackend(input.config, runtime);
+
+    expect(backend?.runtime).toBe(runtime);
+  });
+
   it('wires the vision intake screener when enabled with a backend', async () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', true),
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.screening).not.toBeNull();
@@ -91,7 +110,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
       ...makeDataDirs('enforce', true),
       screenerBackend: null,
       injectionBackendFactory: fakeInjectionBackendFactory,
-    })).rejects.toThrow(/no OpenRouter backend is resolvable/);
+    })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
   });
 
   it('FAILS STARTUP when the selected vision model lacks explicit image capability', async () => {
@@ -108,7 +127,8 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
     await expect(composeGatewayIntakeScreening({
       ...input,
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
     })).rejects.toThrow(/vision.*supportsVision=true/is);
   });
@@ -126,7 +146,8 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
   it('does not wire the vision screener when the policy knob is disabled', async () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', false),
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.visionIntake).toBeNull();
@@ -178,8 +199,8 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     const durableCounts: number[] = [];
     const composition = await composeGatewayIntakeScreening({
       ...input,
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
-      screenerFetch: vi.fn().mockRejectedValue(new Error('vision transport unavailable')),
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: vi.fn().mockRejectedValue(new Error('vision transport unavailable')),
       injectionBackendFactory: fakeInjectionBackendFactory,
       onQuarantineHeld: () => {
         const stored = JSON.parse(
@@ -208,7 +229,8 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
     const runtime = await composeGatewayIntakeScreeningRuntime({
       ...input,
       multiCompanion: false,
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: backendFactory,
     });
 
@@ -247,7 +269,8 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
         { companionId: companionA, companionDataDir: input.companionDataDir },
         { companionId: companionB, companionDataDir: companionBDataDir },
       ],
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
       env: input.env,
       onQuarantineHeld: companionId => queueChanges.push(companionId ?? 'missing'),
@@ -345,10 +368,8 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
           { companionId: companionA, companionDataDir: input.companionDataDir },
           { companionId: companionA, companionDataDir: input.companionDataDir },
         ],
-        screenerBackend: {
-          apiBaseUrl: 'https://openrouter.test/api/v1',
-          apiKey: 'sk-test',
-        },
+        screenerBackend: TEST_SCREENER_BACKEND,
+        screenerTestCompletion: unusedScreenerCompletion,
         injectionBackendFactory: () => Promise.resolve(backend),
       });
     } catch (error) {
@@ -409,7 +430,8 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', false),
       // Enforce mode with mandatory L2/L3 tiers requires an escalation backend.
-      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.injectionClassifier.enabled).toBe(true);

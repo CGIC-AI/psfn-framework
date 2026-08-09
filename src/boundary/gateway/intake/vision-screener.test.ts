@@ -28,7 +28,8 @@ import {
   INTAKE_FIREWALL_NOTICE_TEMPLATES,
   isIntakeFirewallNoticeText,
 } from '../../../core/cogsec/intake-firewall-notice-templates.js';
-import type { ScreenerFetch } from './screener-transport.js';
+import type { ScreenerTestCompletion } from './screener-transport.js';
+import { adaptScreenerFetch } from './screener-transport.test-support.js';
 import {
   evaluateVisionIntake,
   renderVisionTranscriptBlock,
@@ -121,9 +122,12 @@ interface CapturedRequest {
   body: Record<string, unknown>;
 }
 
-/** OpenRouter-shaped stub: captures the request, answers with `content`. */
-function makeVlmFetch(content: string, captured: CapturedRequest[] = []): ScreenerFetch {
-  return async (url, init) => {
+/** Provider-wire fixture adapter: captures the request and answers with `content`. */
+function makeVlmFetch(
+  content: string,
+  captured: CapturedRequest[] = [],
+): ScreenerTestCompletion {
+  return adaptScreenerFetch(async (url, init) => {
     captured.push({ url, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> });
     return {
       ok: true,
@@ -133,15 +137,15 @@ function makeVlmFetch(content: string, captured: CapturedRequest[] = []): Screen
         choices: [{ message: { content } }],
       }),
     };
-  };
+  });
 }
 
 function makeVlmFetchSequence(
   contents: readonly string[],
   captured: CapturedRequest[],
-): ScreenerFetch {
+): ScreenerTestCompletion {
   let index = 0;
-  return async (url, init) => {
+  return adaptScreenerFetch(async (url, init) => {
     captured.push({ url, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> });
     const content = contents[index];
     index += 1;
@@ -151,7 +155,7 @@ function makeVlmFetchSequence(
       statusText: 'OK',
       text: async () => JSON.stringify({ choices: [{ message: { content } }] }),
     };
-  };
+  });
 }
 
 function verdictJson(input: {
@@ -170,12 +174,12 @@ function verdictJson(input: {
   });
 }
 
-const BACKEND = { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' };
+const BACKEND = {};
 
 function makeEvaluateInput(
   policy: IntakePolicyConfig,
   image: VisionIntakeImageInput,
-  fetchImpl: ScreenerFetch,
+  testCompletion: ScreenerTestCompletion,
   quarantine?: IntakeQuarantineHoldPort,
 ): EvaluateVisionIntakeInput {
   return {
@@ -187,7 +191,7 @@ function makeEvaluateInput(
     screening: makeScreening(policy, quarantine),
     backend: BACKEND,
     ...(quarantine ? { quarantine } : {}),
-    fetch: fetchImpl,
+    testCompletion,
   };
 }
 
@@ -202,7 +206,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         model: 'test/vision-model',
         timeoutMs: 5000,
         maxOutputTokens: 1600,
-        fetch: makeVlmFetch(verdictJson({
+        testCompletion: makeVlmFetch(verdictJson({
           ocrText: FIXTURE_INJECTION_TEXT,
           description: 'White image with rendered instruction text.',
           flags: ['embedded_instruction_text'],
@@ -239,7 +243,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         model: 'test/vision-model',
         timeoutMs: 5000,
         maxOutputTokens: 1600,
-        fetch: makeVlmFetch(verdictJson({ flags: ['made_up_flag'] })),
+        testCompletion: makeVlmFetch(verdictJson({ flags: ['made_up_flag'] })),
       },
     )).rejects.toThrow(VisionScreenerSchemaError);
   });
@@ -253,7 +257,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         model: 'test/vision-model',
         timeoutMs: 5000,
         maxOutputTokens: 1600,
-        fetch: makeVlmFetchSequence([
+        testCompletion: makeVlmFetchSequence([
           '{"ocrText":""',
           verdictJson({
             ocrText: '',
@@ -280,7 +284,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         model: 'test/vision-model',
         timeoutMs: 5000,
         maxOutputTokens: 1600,
-        fetch: makeVlmFetch('sorry, I cannot help with that'),
+        testCompletion: makeVlmFetch('sorry, I cannot help with that'),
       },
     )).rejects.toThrow(VisionScreenerSchemaError);
   });
@@ -293,7 +297,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
         model: 'test/vision-model',
         timeoutMs: 5000,
         maxOutputTokens: 1600,
-        fetch: makeVlmFetch(verdictJson({
+        testCompletion: makeVlmFetch(verdictJson({
           ocrText: '',
           description: 'A solid red square.',
           flags: [],
@@ -308,7 +312,7 @@ describe('screenImageWithVisionModel (htm9.8 VLM call)', () => {
       model: 'test/vision-model',
       timeoutMs: 5000,
       maxOutputTokens: 1600,
-      fetch: makeVlmFetch(verdictJson({})),
+      testCompletion: makeVlmFetch(verdictJson({})),
     };
     await expect(screenImageWithVisionModel({ dataBase64: 'aGk=' }, deps))
       .rejects.toThrow(/image\/\* mimeType/);
@@ -485,7 +489,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   });
 
   it('fails closed when the vision model is unreachable: enforce withholds, shadow passes through', async () => {
-    const failingFetch: ScreenerFetch = async () => {
+    const failingFetch: ScreenerTestCompletion = async () => {
       throw new Error('connect ECONNREFUSED');
     };
 
@@ -517,6 +521,27 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
     expect(shadow.envelope.state).toBe('quarantined');
   });
 
+  it('fails closed when a remote image cannot be securely materialized', async () => {
+    const quarantine = makeQuarantineStub();
+    const input = makeEvaluateInput(
+      makePolicy('enforce'),
+      { url: 'https://images.example.test/untrusted.png' },
+      makeVlmFetch(verdictJson({ noLegibleText: true })),
+      quarantine.port,
+    );
+    input.materializeImage = async () => {
+      throw new Error('remote image rejected by SSRF policy');
+    };
+
+    const outcome = await evaluateVisionIntake(input);
+
+    expect(outcome.kind).toBe('failed_closed');
+    if (outcome.kind !== 'failed_closed') throw new Error('unreachable');
+    expect(outcome.withheld).toBe(true);
+    expect(outcome.error).toContain('remote image rejected by SSRF policy');
+    expect(quarantine.holds).toHaveLength(1);
+  });
+
   it('fails closed on unparseable VLM output in enforce mode', async () => {
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       makePolicy('enforce'),
@@ -530,7 +555,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
 
   it('skips when the visionScreener policy knob is disabled (no VLM call)', async () => {
     let called = 0;
-    const countingFetch: ScreenerFetch = async () => {
+    const countingFetch: ScreenerTestCompletion = async () => {
       called += 1;
       throw new Error('must not be called');
     };

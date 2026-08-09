@@ -5,7 +5,7 @@
 // instruction text, including near-white-on-white that a machine reads but a
 // human cannot) rides straight into the model context. This module closes
 // that gap with ONE small multimodal model call that OCRs AND describes the
-// image (OpenRouter, fraction of a cent) — deliberately NOT a heavy OCR
+// image through pi-ai — deliberately NOT a heavy OCR
 // pipeline (no Tesseract, no CLIP+OCR at L1).
 //
 // TAINT RULE (CaMeL, arXiv 2503.18813): the VLM transcript/description is
@@ -57,9 +57,12 @@ import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quara
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 import {
   callValidatedToolLessJsonScreener,
+  screenerModelId,
+  screenerModelLabel,
   stripJsonFences,
   type ScreenerBackend,
-  type ScreenerFetch,
+  type ScreenerModel,
+  type ScreenerTestCompletion,
   type ScreenerUserContentPart,
 } from './screener-transport.js';
 
@@ -149,12 +152,10 @@ export class VisionScreenerSchemaError extends VisionScreenerError {
 
 // ── Public types ──
 
-/** Gateway-resolved OpenRouter connection (same secret-bearing shape as L2/L3). */
+/** Gateway-owned pi-ai runtime and credential resolver (shared with L2/L3). */
 export type VisionScreenerBackend = ScreenerBackend;
 
 /** Test seam fetch surface (shared with L2/L3; no live network in tests). */
-export type VisionScreenerFetch = ScreenerFetch;
-
 /** One inbound image handed to the screener. */
 export interface VisionIntakeImageInput {
   /** http(s) URL the screener model can fetch (URL-addressed attachments). */
@@ -183,14 +184,14 @@ export interface VisionScreenerVerdict {
 
 export interface VisionScreenerDeps {
   backend: VisionScreenerBackend;
-  /** OpenRouter model slug resolved from the canonical vision purpose. */
-  model: string;
+  /** Provider-aware model route resolved from the canonical vision purpose. */
+  model: ScreenerModel;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
   /** Max completion tokens for the verdict. */
   maxOutputTokens: number;
   /** Test seam; production uses the global fetch. */
-  fetch?: VisionScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
 }
 
 // ── Prompt construction (image pixels are DATA, never instructions) ──
@@ -374,12 +375,12 @@ export async function screenImageWithVisionModel(
       },
       imagePart,
     ],
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
     screenerName: 'vision screener',
     makeError: (message) => new VisionScreenerError(message),
     validateContent: content => parseVerdict(
       content,
-      deps.model,
+      screenerModelId(deps.model),
       performance.now() - startedAt,
     ),
     isValidationError: error => error instanceof VisionScreenerSchemaError,
@@ -390,7 +391,7 @@ export async function screenImageWithVisionModel(
   // Latency measured and logged per call (bead acceptance criterion). The
   // transcript and description are NOT logged — only structural metadata.
   log.info(
-    `Vision screen model=${deps.model} flags=${verdict.flags.join('+') || '(none)'} `
+    `Vision screen model=${screenerModelLabel(deps.model)} flags=${verdict.flags.join('+') || '(none)'} `
     + `ocrChars=${String(verdict.ocrText.length)} latencyMs=${latencyMs.toFixed(1)}`,
   );
   return verdict;
@@ -436,6 +437,8 @@ export function renderVisionTranscriptBlock(effectiveTranscript: string): string
 
 export interface EvaluateVisionIntakeInput {
   image: VisionIntakeImageInput;
+  /** Production seam that materializes remote URLs before pi-ai sees image bytes. */
+  materializeImage?: (image: VisionIntakeImageInput) => Promise<VisionIntakeImageInput>;
   /** Origin locator: `discord:<channel>:<message>:attachment:<n>`, url, ... */
   origin: { ref: string; detail?: string };
   /** What the envelope covers on the carrying message. */
@@ -444,15 +447,15 @@ export interface EvaluateVisionIntakeInput {
   canonicalContactId?: string;
   policy: IntakePolicyConfig;
   /** Model resolved at startup from the canonical vision purpose. */
-  model: string;
+  model: ScreenerModel;
   /** The gateway's existing L1(+L1.5) screening service — the envelope owner. */
   screening: IntakeScreeningService;
-  /** Null when no OpenRouter backend is resolvable (fail closed per mode). */
+  /** Null when no pi-ai provider backend is resolvable (fail closed per mode). */
   backend: VisionScreenerBackend | null;
   /** Durable quarantine store for the fail-closed (no-transcript) path. */
   quarantine?: IntakeQuarantineHoldPort;
   /** Test seam; production uses the global fetch. */
-  fetch?: VisionScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
   /** Acting principal for fail-closed envelope transitions. */
   actor?: string;
   atMs?: number;
@@ -626,12 +629,15 @@ export async function evaluateVisionIntake(
 
   let verdict: VisionScreenerVerdict;
   try {
-    verdict = await screenImageWithVisionModel(input.image, {
+    const image = input.materializeImage
+      ? await input.materializeImage(input.image)
+      : input.image;
+    verdict = await screenImageWithVisionModel(image, {
       backend: input.backend,
       model: input.model,
       timeoutMs: policy.visionScreener.timeoutMs,
       maxOutputTokens: policy.visionScreener.maxOutputTokens,
-      ...(input.fetch ? { fetch: input.fetch } : {}),
+        ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
     });
   } catch (error) {
     return failClosed(input, mode, error instanceof Error ? error.message : String(error));

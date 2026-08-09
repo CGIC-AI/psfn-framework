@@ -3,7 +3,7 @@
 // The deep second/third classification pass for items the L2 fast screener
 // FLAGS — or for source-risk tiers whose policy mandates deep screening
 // (intake-policy.json `l3Screener.mandatoryTiers`). Like L2 it is a TOOL-LESS
-// OpenRouter chat call (dual-LLM discipline, CaMeL arXiv 2503.18813) through
+// pi-ai provider call (dual-LLM discipline, CaMeL arXiv 2503.18813) through
 // the shared transport: the screener SEES hostile content but holds no
 // capabilities, its output is strictly schema-validated (fail closed on
 // anything unparseable), and its raw output is NEVER echoed verbatim into
@@ -74,9 +74,12 @@ import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quara
 import {
   callValidatedToolLessJsonScreener,
   neutralizeUntrustedDelimiters,
+  screenerModelId,
+  screenerModelLabel,
   stripJsonFences,
   type ScreenerBackend,
-  type ScreenerFetch,
+  type ScreenerModel,
+  type ScreenerTestCompletion,
 } from './screener-transport.js';
 
 // Re-exported from the shared transport so both screeners frame untrusted
@@ -123,12 +126,10 @@ export const L3_MIN_VERBATIM_QUOTE_CHARS = 24;
 
 // ── Public types ──
 
-/** Gateway-resolved OpenRouter connection (same secret-bearing shape as L2). */
+/** Gateway-owned pi-ai runtime and credential resolver (shared with L2). */
 export type L3ScreenerBackend = ScreenerBackend;
 
 /** Test seam fetch surface (shared with L2; no live network in tests). */
-export type L3ScreenerFetch = ScreenerFetch;
-
 /** Provenance metadata handed to the screener alongside the untrusted content. */
 export interface L3ScreenerContext {
   sourceClass: IntakeSourceClass;
@@ -185,8 +186,8 @@ export interface L3AggregateVerdict {
 
 export interface L3ScreenerDeps {
   backend: L3ScreenerBackend;
-  /** OpenRouter model slug resolved from a canonical model purpose. */
-  model: string;
+  /** Provider-aware model route resolved from a canonical model purpose. */
+  model: ScreenerModel;
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
   /** Max characters of untrusted content sent to the screener. */
@@ -194,7 +195,7 @@ export interface L3ScreenerDeps {
   /** Max completion tokens for the verdict. */
   maxOutputTokens: number;
   /** Test seam; production uses the global fetch. */
-  fetch?: L3ScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
 }
 
 // ── Errors (fail closed, never swallowed) ──
@@ -470,12 +471,12 @@ export async function screenL3(
     maxOutputTokens: deps.maxOutputTokens,
     systemPrompt: L3_CLASSIFIER_SYSTEM_PROMPT,
     userMessage: buildUserMessage(neutralized, context),
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
     screenerName: 'L3 screener',
     makeError: (message) => new L3ScreenerError(message),
     validateContent: content => parseVerdict(
       content,
-      deps.model,
+      screenerModelId(deps.model),
       performance.now() - startedAt,
       neutralized,
     ),
@@ -488,7 +489,7 @@ export async function screenL3(
   // representation are never logged from here.
   log.info(
     `L3 screen ${context.sourceClass}/${context.sourceRiskTier} `
-    + `model=${deps.model} flagged=${String(verdict.flagged)} `
+    + `model=${screenerModelLabel(deps.model)} flagged=${String(verdict.flagged)} `
     + `confidence=${verdict.injectionConfidence.toFixed(3)} `
     + `labels=${String(verdict.labels.length)} latencyMs=${latencyMs.toFixed(1)}`,
   );
@@ -554,10 +555,10 @@ export interface EvaluateL3Input {
    * Startup-resolved models. Single mode treats these as an ordered failover
    * chain; dual mode requires exactly two independent models.
    */
-  models: readonly string[];
+  models: readonly ScreenerModel[];
   backend: L3ScreenerBackend;
   /** Test seam; production uses the global fetch. */
-  fetch?: L3ScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
 }
 
 export type L3ScreeningOutcome =
@@ -635,7 +636,7 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
   const verdicts: L3Verdict[] = [];
   const errors: string[] = [];
 
-  const callModel = (model: string): Promise<L3Verdict> => screenL3(
+  const callModel = (model: ScreenerModel): Promise<L3Verdict> => screenL3(
     input.text,
     context,
     {
@@ -644,7 +645,7 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
       timeoutMs: l3.timeoutMs,
       maxContentChars: l3.maxContentChars,
       maxOutputTokens: l3.maxOutputTokens,
-      ...(input.fetch ? { fetch: input.fetch } : {}),
+        ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
     },
   );
 
@@ -657,7 +658,7 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
         const message = result.reason instanceof Error
           ? result.reason.message
           : String(result.reason);
-        errors.push(`${models[index]}: ${message}`);
+        errors.push(`${screenerModelLabel(models[index]!)}: ${message}`);
       }
     }
   } else {
@@ -672,7 +673,7 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        errors.push(`${model}: ${message}`);
+        errors.push(`${screenerModelLabel(model)}: ${message}`);
       }
     }
   }

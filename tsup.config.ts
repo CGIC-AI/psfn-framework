@@ -33,14 +33,16 @@ export default defineConfig({
   format: ['esm'],
   target: 'node22',
   tsconfig: './tsconfig.tsup.json',
-  dts: {
-    entry: Object.fromEntries(
-      Object.entries(entries).filter(([name]) => (
-        name !== 'turn-record-recovery-worker'
-        && name !== 'turn-tombstone-authority-worker'
-      )),
-    ),
-  },
+  dts: process.env.PSFN_RUNTIME_BUILD === '1'
+    ? false
+    : {
+        entry: Object.fromEntries(
+          Object.entries(entries).filter(([name]) => (
+            name !== 'turn-record-recovery-worker'
+            && name !== 'turn-tombstone-authority-worker'
+          )),
+        ),
+      },
   sourcemap: true,
   clean: true,
   outDir: 'dist',

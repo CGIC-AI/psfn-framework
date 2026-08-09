@@ -18,18 +18,16 @@ import {
   createIntakeScreeningService,
   type IntakeScreeningResult,
 } from '../../../core/cogsec/intake/screening.js';
-import { evaluateL2, type L2ScreenerBackend, type L2ScreenerFetch } from './l2-screener.js';
+import { evaluateL2, type L2ScreenerBackend } from './l2-screener.js';
 import { evaluateL3 } from './l3-screener.js';
+import { adaptScreenerFetch } from './screener-transport.test-support.js';
 
 const RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
 const CLEAN_ARTICLE = 'A calm survey of tram schedules and ticket prices in Lisbon.';
 
-const BACKEND: L2ScreenerBackend = {
-  apiBaseUrl: 'https://openrouter.ai/api/v1',
-  apiKey: 'sk-test-key-never-logged',
-};
+const BACKEND: L2ScreenerBackend = {};
 
 /**
  * Escalation-heavy policy: BOTH untrusted and hostile mandate L2, so a clean
@@ -53,7 +51,10 @@ function escalationPolicy(): IntakePolicyConfig {
 }
 
 /** Counting fetch returning a clean classification (L2 or L3 response shape). */
-function countingCleanFetch(shape: 'l2' | 'l3'): { fetch: L2ScreenerFetch; calls: () => number } {
+function countingCleanFetch(shape: 'l2' | 'l3'): {
+  testCompletion: ReturnType<typeof adaptScreenerFetch>;
+  calls: () => number;
+} {
   let count = 0;
   const verdict = shape === 'l2'
     ? {
@@ -74,7 +75,7 @@ function countingCleanFetch(shape: 'l2' | 'l3'): { fetch: L2ScreenerFetch; calls
     choices: [{ message: { content: JSON.stringify(verdict) } }],
   });
   return {
-    fetch: () => {
+    testCompletion: adaptScreenerFetch(() => {
       count += 1;
       return Promise.resolve({
         ok: true,
@@ -82,7 +83,7 @@ function countingCleanFetch(shape: 'l2' | 'l3'): { fetch: L2ScreenerFetch; calls
         statusText: 'OK',
         text: () => Promise.resolve(payload),
       });
-    },
+    }),
     calls: () => count,
   };
 }
@@ -122,7 +123,7 @@ async function screenAndEvaluate(originRef: string): Promise<{
     config: policy,
     model: 'test/background',
     backend: BACKEND,
-    fetch: l2Counter.fetch,
+    testCompletion: l2Counter.testCompletion,
   });
 
   const l3Counter = countingCleanFetch('l3');
@@ -143,7 +144,7 @@ async function screenAndEvaluate(originRef: string): Promise<{
     config: policy,
     models: ['test/reasoning'],
     backend: BACKEND,
-    fetch: l3Counter.fetch,
+    testCompletion: l3Counter.testCompletion,
   });
 
   return {

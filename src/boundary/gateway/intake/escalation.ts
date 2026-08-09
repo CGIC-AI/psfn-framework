@@ -10,7 +10,7 @@
 // knobs are honored in exactly one place.
 //
 // Placement: gateway process ONLY. The escalation screeners are tool-less
-// OpenRouter calls and the gateway is the secret holder; the agent process
+// pi-ai provider calls and the gateway is the secret holder; the agent process
 // composes its screening service through `maybeCreateIntakeScreeningService`,
 // which deliberately has no escalation option (L1-only by construction).
 //
@@ -41,7 +41,11 @@ import { COGSEC_EVIDENCE_FIELD_MAX_CHARS } from '../../../core/cogsec/intake/scr
 import type { IntakeRiskLabel } from '../../../shared/contracts/intake-envelope.js';
 import type { CogSecEventStore } from '../../../core/cogsec/events.js';
 import type { IntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
-import type { ScreenerBackend, ScreenerFetch } from './screener-transport.js';
+import type {
+  ScreenerBackend,
+  ScreenerModel,
+  ScreenerTestCompletion,
+} from './screener-transport.js';
 import { evaluateL2, l2ScreeningContribution } from './l2-screener.js';
 import { applyL3ScreeningOutcome, evaluateL3 } from './l3-screener.js';
 
@@ -51,10 +55,10 @@ export const L2_SCREENER_ERROR_FIELD = 'l2_error';
 export interface GatewayIntakeEscalationDeps {
   policy: IntakePolicyConfig;
   /** Startup-resolved canonical background-purpose model for L2. */
-  l2Model: string;
+  l2Model: ScreenerModel;
   /** Startup-resolved reasoning (+ optional background) purpose models for L3. */
-  l3Models: readonly string[];
-  /** Gateway-resolved OpenRouter connection (secret-bearing, never logged). */
+  l3Models: readonly ScreenerModel[];
+  /** Gateway-owned pi-ai runtime and credential resolver (never logged). */
   backend: ScreenerBackend;
   /** Durable quarantine store (htm9.11) for the L3 hard-rule hold. */
   quarantine?: IntakeQuarantineHoldPort;
@@ -63,7 +67,7 @@ export interface GatewayIntakeEscalationDeps {
   /** Acting principal for L3 envelope transitions. Default 'gateway:intake-l3'. */
   actor?: string;
   /** Test seam; production uses the global fetch. */
-  fetch?: ScreenerFetch;
+  testCompletion?: ScreenerTestCompletion;
   /** Structural operator-alert telemetry; never carries screened content. */
   onFailClosed?: IntakeScreeningServiceOptions['onFailClosed'];
 }
@@ -107,7 +111,7 @@ export function createGatewayIntakeEscalationPort(
         config: deps.policy,
         model: deps.l2Model,
         backend: deps.backend,
-        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
       });
     } catch (error) {
       request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));
@@ -171,7 +175,7 @@ export function createGatewayIntakeEscalationPort(
         config: deps.policy,
         models: deps.l3Models,
         backend: deps.backend,
-        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
       });
     } catch (error) {
       request.emitTiming?.('l3', 'observed', Math.max(0, performance.now() - l3StartedAt));

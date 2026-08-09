@@ -4,8 +4,8 @@
 // through the REAL composed gateway screening service
 // (composeGatewayIntakeScreening → createIntakeScreeningService →
 // createGatewayIntakeEscalationPort → evaluateL2/evaluateL3/
-// applyL3ScreeningOutcome) and mock ONLY the HTTP transport (the screener
-// fetch seam). The end-to-end guarantees pinned here:
+// applyL3ScreeningOutcome) and mock ONLY the test completion seam. The
+// end-to-end guarantees pinned here:
 //   - a hostile web_fetch payload whose L1 score crosses the tier's L2
 //     escalation threshold actually reaches L2;
 //   - an L2-flagged item actually reaches L3;
@@ -31,7 +31,11 @@ import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
 import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
 import { composeGatewayIntakeScreening } from './compose-screening.js';
 import type { InjectionClassifierBackend } from './injection-classifier.js';
-import type { ScreenerFetch } from './screener-transport.js';
+import type { ScreenerTestCompletion } from './screener-transport.js';
+import {
+  adaptScreenerFetch,
+  type ScreenerFetch,
+} from './screener-transport.test-support.js';
 import { L2_SCREENER_SCANNER_ID, L2_SCREENER_SUMMARY_FIELD } from './l2-screener.js';
 import { L3_FIELD_ERROR, L3_SCREENER_SCANNER_ID } from './l3-screener.js';
 import { L2_SCREENER_ERROR_FIELD } from './escalation.js';
@@ -61,7 +65,7 @@ function fakeInjectionBackendFactory(): Promise<InjectionClassifierBackend> {
 const L2_MODEL = 'deepseek/deepseek-v3.2';
 const L3_MODEL = 'z-ai/glm-5';
 
-const BACKEND = { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test-never-logged' };
+const BACKEND = {};
 
 /**
  * Crosses the untrusted tier's L2 escalation threshold (0.6) via the L1
@@ -151,7 +155,7 @@ type ModelBehavior = { verdict: unknown } | { rejectWith: string };
  * and pins the tool-less invariant on every request.
  */
 function routingFetch(behaviors: Partial<Record<string, ModelBehavior>>): {
-  fetch: ScreenerFetch;
+  fetch: ScreenerTestCompletion;
   calls: (model: string) => number;
   total: () => number;
 } {
@@ -178,7 +182,7 @@ function routingFetch(behaviors: Partial<Record<string, ModelBehavior>>): {
     });
   };
   return {
-    fetch,
+    fetch: adaptScreenerFetch(fetch),
     calls: (model) => counts.get(model) ?? 0,
     total: () => [...counts.values()].reduce((sum, count) => sum + count, 0),
   };
@@ -186,7 +190,7 @@ function routingFetch(behaviors: Partial<Record<string, ModelBehavior>>): {
 
 async function composeWith(
   policy: Record<string, unknown>,
-  fetch: ScreenerFetch,
+  fetch: ScreenerTestCompletion,
   onFailClosedScreening?: Parameters<typeof composeGatewayIntakeScreening>[0]['onFailClosedScreening'],
   onScreeningTiming?: Parameters<typeof composeGatewayIntakeScreening>[0]['onScreeningTiming'],
 ): Promise<{
@@ -197,7 +201,7 @@ async function composeWith(
   const composition = await composeGatewayIntakeScreening({
     ...dirs,
     screenerBackend: BACKEND,
-    screenerFetch: fetch,
+    screenerTestCompletion: fetch,
     injectionBackendFactory: fakeInjectionBackendFactory,
     ...(onFailClosedScreening ? { onFailClosedScreening } : {}),
     ...(onScreeningTiming ? { onScreeningTiming } : {}),
@@ -609,7 +613,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     expect(result.envelope.scores).not.toHaveProperty(L3_SCREENER_SCANNER_ID);
   });
 
-  it('FAILS STARTUP: enforce mode with mandatory escalation tiers and no OpenRouter backend', async () => {
+  it('FAILS STARTUP: enforce mode with mandatory escalation tiers and no pi-ai provider backend', async () => {
     const dirs = makeDataDirs(seedPolicy({ mode: 'enforce' }));
     await expect(composeGatewayIntakeScreening({
       ...dirs,
@@ -617,7 +621,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       // L1.5 provisioned (fake) so this test reaches the escalation-backend
       // fail-closed check rather than the L1.5 fail-closed gate (cyy7l).
       injectionBackendFactory: fakeInjectionBackendFactory,
-    })).rejects.toThrow(/no OpenRouter backend is resolvable/);
+    })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
   });
 
   it('composes without escalation (loud skip) in shadow mode with no backend', async () => {

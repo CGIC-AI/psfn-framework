@@ -3,7 +3,7 @@
 // Builds the gateway process's IntakeScreeningService from intake-policy.json
 // (system-data owner file): the deterministic L1 scanner pipeline, plus —
 // when the ONNX model has been provisioned out-of-band — the L1.5 injection
-// classifier as an async scorer, plus — when an OpenRouter backend is
+// classifier as an async scorer, plus — when a pi-ai provider backend is
 // resolvable — the L2/L3 escalation port (htm9.6/htm9.7, escalation.ts) so
 // the layered firewall actually escalates at runtime.
 //
@@ -39,8 +39,10 @@ import {
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
-import { resolveOptionalCredentialReference } from '../../custody/credential-vault.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
+import { LLMRequestCapability } from '../../../primitives/llm/client-request-capability.js';
+import { fetchRemoteImageBinary } from '../../../primitives/images/remote-fetch.js';
 import {
   assertInjectionModelProvisioned,
   createInjectionClassifier,
@@ -49,7 +51,11 @@ import {
   type InjectionClassifier,
   type InjectionClassifierBackendFactory,
 } from './injection-classifier.js';
-import type { ScreenerBackend, ScreenerFetch } from './screener-transport.js';
+import {
+  assertScreenerBackendReady,
+  type ScreenerBackend,
+  type ScreenerTestCompletion,
+} from './screener-transport.js';
 import { createGatewayIntakeEscalationPort } from './escalation.js';
 import {
   evaluateVisionIntake,
@@ -88,25 +94,20 @@ export interface GatewayVisionIntakeScreener {
 }
 
 /**
- * Resolves the OpenRouter backend for the gateway-side intake screeners from
- * the openrouter provider config (providers.json apiBaseUrl + apiKeyRef).
- * Returns null when either half is missing — the vision-screener composition
- * below decides whether that is a loud skip (shadow) or a startup failure
- * (enforce; never screen-less delivery).
+ * Builds the gateway-owned pi-ai backend for intake screeners. Model purpose
+ * selection remains canonical; this index retains the provider identity needed
+ * to resolve each selected wire model through pi-ai without a direct provider
+ * fetch or OpenRouter-only special case.
  */
 export function resolveIntakeScreenerBackend(
   config: SubstrateConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  runtime: ProviderRuntime,
 ): ScreenerBackend | null {
-  const apiBaseUrl = config.openRouterApiBaseUrl?.trim();
-  if (!apiBaseUrl || !config.openRouterApiKeyRef) return null;
-  const apiKey = resolveOptionalCredentialReference(
-    config.credentialVault,
-    config.openRouterApiKeyRef,
-    env,
-  );
-  if (!apiKey) return null;
-  return { apiBaseUrl, apiKey };
+  if ((config.modelRegistry?.models ?? []).every(entry => entry.enabled === false)) return null;
+  return {
+    runtime,
+    requestCapability: new LLMRequestCapability(config, runtime),
+  };
 }
 
 export interface GatewayIntakeScreeningComposition {
@@ -115,7 +116,7 @@ export interface GatewayIntakeScreeningComposition {
   quarantine: IntakeQuarantineStore | null;
   /**
    * Vision intake screener (htm9.8); null when the firewall is off, the
-   * visionScreener policy is disabled, or (shadow mode only) no OpenRouter
+   * visionScreener policy is disabled, or (shadow mode only) no pi-ai provider
    * backend is resolvable. Enforce mode with visionScreener enabled and no
    * backend FAILS STARTUP — images must never be delivered unscreened.
    */
@@ -143,14 +144,14 @@ export async function composeGatewayIntakeScreening(input: {
   /** Companion data root; hosts the durable quarantine store (htm9.11). */
   companionDataDir: string;
   /**
-   * OpenRouter backend for the L2/L3 escalation screeners (htm9.6/htm9.7)
+   * Pi-ai provider backend for the L2/L3 escalation screeners (htm9.6/htm9.7)
    * and the vision intake screener (htm9.8), resolved by the caller via
    * `resolveIntakeScreenerBackend`. Null/absent means no backend is
    * available.
    */
   screenerBackend?: ScreenerBackend | null;
   /** Test seam for the L2/L3/vision screener transports; production uses global fetch. */
-  screenerFetch?: ScreenerFetch;
+  screenerTestCompletion?: ScreenerTestCompletion;
   /** Called after a quarantine hold has been atomically persisted. */
   onQuarantineHeld?: () => void;
   /** Called for lazy held-item TTL expiry; content is never included. */
@@ -276,7 +277,23 @@ export async function composeGatewayIntakeScreening(input: {
   //                    (same posture as the vision screener below). Otherwise
   //                    the escalation layers are skipped LOUDLY (same posture
   //                    as unprovisioned L1.5 weights).
-  const backend = input.screenerBackend ?? null;
+  let backend = input.screenerBackend ?? null;
+  if (backend && !input.screenerTestCompletion) {
+    try {
+      assertScreenerBackendReady(backend, [
+        screenerModels.l2,
+        ...screenerModels.l3,
+        ...(screenerModels.vision ? [screenerModels.vision] : []),
+      ]);
+    } catch (error) {
+      if (policy.mode === 'enforce') throw error;
+      log.warn(
+        'Intake pi-ai screener backend failed credential/model preflight; '
+        + `screeners remain disabled in shadow mode: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      backend = null;
+    }
+  }
   let escalation: IntakeEscalationPort | null = null;
   if (backend) {
     // Multi-writer JSON store (same file the gateway core, contact-block
@@ -292,7 +309,9 @@ export async function composeGatewayIntakeScreening(input: {
       backend,
       quarantine,
       cogSecEvents,
-      ...(input.screenerFetch ? { fetch: input.screenerFetch } : {}),
+      ...(input.screenerTestCompletion
+        ? { testCompletion: input.screenerTestCompletion }
+        : {}),
       ...(input.onFailClosedScreening
         ? { onFailClosed: input.onFailClosedScreening }
         : {}),
@@ -305,16 +324,15 @@ export async function composeGatewayIntakeScreening(input: {
     if (policy.mode === 'enforce' && mandatoryTiers.length > 0) {
       throw new Error(
         `Intake policy mandates L2/L3 deep screening for tiers [${mandatoryTiers.join(', ')}] `
-        + 'with mode=enforce but no OpenRouter backend is resolvable '
-        + '(providers.json openrouter apiBaseUrl/apiKeyRef). Configure the '
-        + 'openrouter provider or remove the l2Screener/l3Screener '
+        + 'with mode=enforce but no pi-ai provider backend is resolvable. '
+        + 'Configure the selected models and provider credentials or remove the l2Screener/l3Screener '
         + 'mandatoryTiers from intake-policy.json.',
       );
     }
     log.warn(
-      'Intake L2/L3 escalation screeners have no OpenRouter backend; gateway '
-      + 'intake screening runs without escalation. Configure the openrouter '
-      + 'provider (providers.json apiBaseUrl/apiKeyRef) to enable L2/L3.',
+      'Intake L2/L3 escalation screeners have no pi-ai provider backend; gateway '
+      + 'intake screening runs without escalation. Configure the selected models '
+      + 'and provider credentials to enable L2/L3.',
     );
   }
 
@@ -367,22 +385,37 @@ export async function composeGatewayIntakeScreening(input: {
             screening,
             backend,
             quarantine,
-            ...(input.screenerFetch ? { fetch: input.screenerFetch } : {}),
+            ...(input.screenerTestCompletion
+              ? { testCompletion: input.screenerTestCompletion }
+              : {
+                  materializeImage: async (image: VisionIntakeImageInput) => {
+                    if (!image.url) return image;
+                    const remote = await fetchRemoteImageBinary(
+                      image.url,
+                      input.config,
+                      globalThis.fetch,
+                    );
+                    return {
+                      dataBase64: Buffer.from(remote.bytes).toString('base64'),
+                      mimeType: remote.contentType,
+                    };
+                  },
+                }),
           }),
         ),
       };
     } else if (policy.mode === 'enforce') {
       throw new Error(
-        'Intake vision screener is enabled with mode=enforce but no OpenRouter '
-        + 'backend is resolvable (providers.json openrouter apiBaseUrl/apiKeyRef). '
-        + 'Configure the openrouter provider or set intake-policy.json '
+        'Intake vision screener is enabled with mode=enforce but no pi-ai '
+        + 'provider backend is resolvable from providers.json/models.json. '
+        + 'Configure the selected providers or set intake-policy.json '
         + 'visionScreener.enabled=false.',
       );
     } else {
       log.warn(
-        'Intake vision screener is enabled but no OpenRouter backend is resolvable; '
-        + 'images pass UNSCREENED in shadow mode. Configure the openrouter provider '
-        + '(providers.json apiBaseUrl/apiKeyRef) to enable image screening.',
+        'Intake vision screener is enabled but no pi-ai provider backend is resolvable; '
+        + 'images pass UNSCREENED in shadow mode. Configure the selected vision model '
+        + 'and provider credentials to enable image screening.',
       );
     }
   }

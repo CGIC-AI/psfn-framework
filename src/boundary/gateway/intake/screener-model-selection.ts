@@ -5,15 +5,15 @@ import type { RoutingCandidate } from '../../../primitives/llm/routing.js';
 
 export interface IntakeScreenerModelSelection {
   /** L2 fast classifier: canonical background lane. */
-  l2: string;
+  l2: RoutingCandidate;
   /**
    * L3 models. In single-verdict mode this is an ordered failover chain
    * (reasoning first, then background). In dual-verdict mode it contains the
    * two distinct models that must both return a conforming verdict.
    */
-  l3: string[];
+  l3: RoutingCandidate[];
   /** Vision lane; absent only when vision screening is explicitly disabled. */
-  vision?: string;
+  vision?: RoutingCandidate;
 }
 
 function resolvePurposeCandidates(
@@ -31,22 +31,21 @@ function resolvePurposeCandidates(
       + `modelPurposeSelection.${purpose} to an enabled models.json slot.`,
     );
   }
-  const selectedCandidate = candidates[0]!;
-  if (selectedCandidate.provider !== 'openrouter') {
-    throw new Error(
-      `Intake screener purpose "${purpose}" resolved to `
-      + `${selectedCandidate.provider}/${selectedCandidate.model}, `
-      + 'but the isolated tool-less screener transport requires an OpenRouter-routed model. '
-      + `Select an OpenRouter models.json slot for ${purpose}.`,
-    );
-  }
-  // A later non-OpenRouter candidate cannot be used by this transport, but it
-  // must not erase usable OpenRouter fallbacks declared for the same purpose.
-  return candidates.filter((candidate) => candidate.provider === 'openrouter');
+  return candidates;
 }
 
-function distinctModels(candidates: readonly RoutingCandidate[]): string[] {
-  return [...new Set(candidates.map((candidate) => candidate.model))];
+function candidateKey(candidate: RoutingCandidate): string {
+  return `${candidate.provider}:${candidate.model}`;
+}
+
+function distinctModels(candidates: readonly RoutingCandidate[]): RoutingCandidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = candidateKey(candidate);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
@@ -67,14 +66,14 @@ export function resolveIntakeScreenerModels(
   const reasoning = resolvePurposeCandidates(config, 'reasoning');
   const reasoningModels = distinctModels(reasoning);
   const backgroundModels = distinctModels(background);
-  let l3: string[];
+  let l3: RoutingCandidate[];
   if (options.l3DualModel) {
     const primary = reasoningModels[0]!;
-    const secondary = backgroundModels.find((model) => model !== primary);
+    const secondary = backgroundModels.find((model) => candidateKey(model) !== candidateKey(primary));
     if (!secondary) {
       throw new Error(
         'Intake L3 dual-model mode requires the reasoning and background purposes '
-        + `to resolve to different models; both resolved only to "${primary}". `
+        + `to resolve to different models; both resolved only to "${candidateKey(primary)}". `
         + 'Choose different models.json slots or disable l3Screener.dualModel.',
       );
     }
@@ -84,27 +83,27 @@ export function resolveIntakeScreenerModels(
     // accept the slug or that the model will satisfy the strict L3 contract.
     // Preserve the canonical routing chains so one provider/model failure does
     // not quarantine every mandatory-L3 item. evaluateL3 tries these in order.
-    l3 = [...new Set([...reasoningModels, ...backgroundModels])];
+    l3 = distinctModels([...reasoningModels, ...backgroundModels]);
     if (l3.length < 2) {
       throw new Error(
         'Intake L3 single-verdict mode requires at least two distinct '
-        + 'OpenRouter models across the reasoning and background purpose chains; '
-        + `resolved only to "${l3[0] ?? '(none)'}". A single screener model is a `
+        + 'models across the reasoning and background purpose chains; '
+        + `resolved only to "${l3[0] ? candidateKey(l3[0]) : '(none)'}". A single screener model is a `
         + 'fail-closed availability single point of failure.',
       );
     }
   }
 
   if (!options.visionEnabled) {
-    return { l2: background[0]!.model, l3 };
+    return { l2: background[0]!, l3 };
   }
   const vision = resolvePurposeCandidates(config, 'vision')[0]!;
   if (vision.supportsVision !== true) {
     throw new Error(
-      `Intake vision purpose resolved to "${vision.model}" without explicit `
+      `Intake vision purpose resolved to "${candidateKey(vision)}" without explicit `
       + 'supportsVision=true capability metadata. Configure a vision-capable '
       + 'models.json slot for the vision purpose.',
     );
   }
-  return { l2: background[0]!.model, l3, vision: vision.model };
+  return { l2: background[0]!, l3, vision };
 }

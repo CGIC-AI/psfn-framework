@@ -225,10 +225,9 @@ export async function buildGatewayPrivilegedCore(
           })),
         }
       : {}),
-    // htm9.8: the vision intake screener shares the gateway's OpenRouter
-    // credentials (providers.json openrouter apiBaseUrl + apiKeyRef, key
-    // resolved through the credential vault with process-env fallback).
-    screenerBackend: resolveIntakeScreenerBackend(input.config),
+    // htm9.8: intake screeners share the gateway's sole pi-ai runtime and
+    // resolve provider credentials through the existing request capability.
+    screenerBackend: resolveIntakeScreenerBackend(input.config, privilegedServices.runtime),
     onQuarantineHeld: companionId => emitGardenQueueChanged(
       eventBus,
       'intake-quarantine',

@@ -135,13 +135,21 @@ describe('config generation passes the real settings-contract guard', () => {
     const registry = normalizeCanonicalModelRegistry(buildModelsRegistry(makePlan()));
     const runtime = projectCanonicalModelRegistry(registry) as SubstrateConfig;
 
-    expect(resolveIntakeScreenerModels(runtime, {
+    const models = resolveIntakeScreenerModels(runtime, {
       l3DualModel: false,
       visionEnabled: true,
-    })).toEqual({
-      l2: 'deepseek/deepseek-v3.2',
-      l3: ['z-ai/glm-5', 'deepseek/deepseek-v3.2'],
-      vision: 'google/gemini-3.1-flash',
+    });
+
+    expect({
+      l2: `${models.l2.provider}:${models.l2.model}`,
+      l3: models.l3.map((model) => `${model.provider}:${model.model}`),
+      vision: models.vision
+        ? `${models.vision.provider}:${models.vision.model}`
+        : undefined,
+    }).toEqual({
+      l2: 'openrouter:deepseek/deepseek-v3.2',
+      l3: ['openrouter:z-ai/glm-5', 'openrouter:deepseek/deepseek-v3.2'],
+      vision: 'openrouter:google/gemini-3.1-flash',
     });
   });
 

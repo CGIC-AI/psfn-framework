@@ -11,15 +11,16 @@ function entry(input: {
   id: string;
   model: string;
   purpose: CanonicalModelPurpose;
+  provider?: string;
   primary?: boolean;
   supportsVision?: boolean;
 }): ModelRegistryEntry {
   return {
     id: input.id,
     identity: {
-      provider: 'openrouter',
+      provider: input.provider ?? 'openrouter',
       model: input.model,
-      source: { type: 'openrouter' },
+      source: { type: input.provider ? 'configured' : 'openrouter' },
     },
     purposes: [{ purpose: input.purpose, primary: input.primary ?? true }],
     capabilities: {
@@ -30,6 +31,10 @@ function entry(input: {
         : {}),
     },
   };
+}
+
+function route(candidate: { provider: string; model: string }): string {
+  return `${candidate.provider}:${candidate.model}`;
 }
 
 function config(
@@ -68,13 +73,21 @@ describe('resolveIntakeScreenerModels', () => {
       vision: 'vision-selected',
     });
 
-    expect(resolveIntakeScreenerModels(runtime, {
+    const resolved = resolveIntakeScreenerModels(runtime, {
       l3DualModel: true,
       visionEnabled: true,
-    })).toEqual({
-      l2: 'vendor/background-selected',
-      l3: ['vendor/reasoning-selected', 'vendor/background-selected'],
-      vision: 'vendor/vision-selected',
+    });
+    expect({
+      l2: route(resolved.l2),
+      l3: resolved.l3.map(route),
+      vision: route(resolved.vision!),
+    }).toEqual({
+      l2: 'openrouter:vendor/background-selected',
+      l3: [
+        'openrouter:vendor/reasoning-selected',
+        'openrouter:vendor/background-selected',
+      ],
+      vision: 'openrouter:vendor/vision-selected',
     });
   });
 
@@ -110,16 +123,17 @@ describe('resolveIntakeScreenerModels', () => {
       multiCompanion: true,
     };
 
-    expect(resolveIntakeScreenerModels(runtime, {
+    const resolved = resolveIntakeScreenerModels(runtime, {
       l3DualModel: false,
       visionEnabled: false,
-    })).toEqual({
-      l2: 'vendor/background-primary',
+    });
+    expect({ l2: route(resolved.l2), l3: resolved.l3.map(route) }).toEqual({
+      l2: 'openrouter:vendor/background-primary',
       l3: [
-        'vendor/reasoning-primary',
-        'vendor/reasoning-selected',
-        'vendor/background-primary',
-        'vendor/background-selected',
+        'openrouter:vendor/reasoning-primary',
+        'openrouter:vendor/reasoning-selected',
+        'openrouter:vendor/background-primary',
+        'openrouter:vendor/background-selected',
       ],
     });
   });
@@ -132,16 +146,17 @@ describe('resolveIntakeScreenerModels', () => {
       entry({ id: 'reasoning-fallback', model: 'vendor/reasoning-fallback', purpose: 'reasoning', primary: false }),
     ]);
 
-    expect(resolveIntakeScreenerModels(runtime, {
+    const resolved = resolveIntakeScreenerModels(runtime, {
       l3DualModel: false,
       visionEnabled: false,
-    })).toEqual({
-      l2: 'vendor/background-primary',
+    });
+    expect({ l2: route(resolved.l2), l3: resolved.l3.map(route) }).toEqual({
+      l2: 'openrouter:vendor/background-primary',
       l3: [
-        'vendor/reasoning-primary',
-        'vendor/reasoning-fallback',
-        'vendor/background-primary',
-        'vendor/background-fallback',
+        'openrouter:vendor/reasoning-primary',
+        'openrouter:vendor/reasoning-fallback',
+        'openrouter:vendor/background-primary',
+        'openrouter:vendor/background-fallback',
       ],
     });
   });
@@ -191,6 +206,32 @@ describe('resolveIntakeScreenerModels', () => {
       l3DualModel: true,
       visionEnabled: false,
     })).toThrow(/dual.*reasoning.*background.*different/is);
+  });
+
+  it('keeps provider identity when two providers expose the same wire model', () => {
+    const runtime = config([
+      entry({
+        id: 'background',
+        provider: 'router-a',
+        model: 'vendor/shared',
+        purpose: 'background',
+      }),
+      entry({
+        id: 'reasoning',
+        provider: 'router-b',
+        model: 'vendor/shared',
+        purpose: 'reasoning',
+      }),
+    ]);
+
+    const resolved = resolveIntakeScreenerModels(runtime, {
+      l3DualModel: true,
+      visionEnabled: false,
+    });
+    expect(resolved.l3.map(route)).toEqual([
+      'router-b:vendor/shared',
+      'router-a:vendor/shared',
+    ]);
   });
 
   it('fails closed when single L3 mode has no distinct fallback model', () => {

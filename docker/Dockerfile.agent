@@ -49,7 +49,7 @@ RUN find src/shared/contracts src/boundary -type f -name '*.ts' ! -name '*.test.
       | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16 > /app/contract-hash.txt \
     && cat /app/contract-hash.txt
 
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
 RUN npm run garden:build
 
 FROM native-toolchain AS production-deps

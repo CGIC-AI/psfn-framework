@@ -16,7 +16,6 @@
     SettingsContractField,
   } from '$lib/types';
   import { resolveSettingAuthority } from '$lib/settings/authority';
-  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import SettingsAdvancedOwnerPanels from './SettingsAdvancedOwnerPanels.svelte';
   import SettingsDelegatedPanels from './SettingsDelegatedPanels.svelte';
   import SettingsEnvironmentSummary from '$lib/components/settings/SettingsEnvironmentSummary.svelte';
@@ -440,11 +439,21 @@
     return curatedDirty ? 1 : undefined;
   }
 
-  let settingsTabs = $derived<GardenTabItem[]>(SETTINGS_TAB_DEFINITIONS.map((tab) => ({
+  let settingsTabs = $derived(SETTINGS_TAB_DEFINITIONS.map((tab) => ({
     id: tab.id,
     label: tab.label,
     count: settingsTabDirtyCount(tab.id),
   })));
+
+  const SETTINGS_TAB_DESCRIPTIONS: Record<SettingsTabId, string> = {
+    providers: 'Provider registry and model handoffs',
+    memory: 'Retrieval, extraction, and synthesis',
+    runtime: 'Retries, import routes, and web fetch',
+    integrations: 'Voice, Obsidian, and channel adapters',
+    trust: 'Capabilities, fleet auth, secrets, and backups',
+    advanced: 'Every contract-backed runtime field',
+    raw: 'Direct canonical owner-file editors',
+  };
 
   // The unified save action is offered on every tab whose fields it commits
   // (curated panels, providers registry, and the advanced canonical editor).
@@ -1349,12 +1358,12 @@
   });
 
   // ── Style constants ──
-  const INPUT_CLS = 'w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 transition-colors';
+  const INPUT_CLS = 'w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-gold-200 focus:border-gold-400 transition-colors';
   const LABEL_CLS = 'block text-sm font-medium text-shadow-700 mb-1.5';
   const SLIDER_CLS = 'flex-1 h-2 rounded-full appearance-none bg-bark-300 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer';
   const COMPACT_INPUT_CLS = 'w-20 px-2 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300';
   const TOGGLE_CLS = 'w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300';
-  const PROVIDER_CARD_CLS = 'rounded-2xl border border-bark-300 bg-bark-50/90 p-4 space-y-4';
+  const PROVIDER_CARD_CLS = 'rounded-xl border border-bark-300 bg-bark-50 p-4 space-y-4 shadow-sm';
 </script>
 
 <datalist id="tts-provider-list">
@@ -1369,7 +1378,7 @@
   {/each}
 </datalist>
 
-<div class="space-y-5">
+<div class="garden-page space-y-5 pb-10">
   <FloatingSettingsSave
     {dirty}
     saveable={settingsSaveDirty}
@@ -1386,7 +1395,7 @@
 
   <!-- Loading -->
   {#if loading}
-    <div class="card-garden p-8">
+    <div class="garden-loading card-garden p-8">
       <div class="animate-pulse space-y-4">
         {#each Array(5) as _}
           <div class="h-10 bg-bark-300 rounded-lg"></div>
@@ -1395,22 +1404,45 @@
     </div>
 
   {:else if error}
-    <div class="card-garden p-8 text-center">
+    <div class="garden-error card-garden p-8 text-center" role="alert">
       <p class="text-wilt-600 text-sm">{error}</p>
     </div>
 
   {:else}
-    <div class="space-y-5">
-      <SettingsSearch onJump={handleSearchJump} />
+    <div class="grid gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
+      <aside class="min-w-0 lg:sticky lg:top-28 lg:h-fit">
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 bg-bark-50 p-3">
+            <SettingsSearch onJump={handleSearchJump} />
+          </div>
+          <nav aria-label="Settings domains" class="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible">
+            {#each settingsTabs as tab (tab.id)}
+              <button
+                type="button"
+                aria-current={activeTabId === tab.id ? 'page' : undefined}
+                onclick={() => selectTab(tab.id)}
+                class="group relative min-w-40 rounded-lg px-3 py-2 text-left transition-colors lg:min-w-0 {activeTabId === tab.id ? 'bg-gold-50 text-gold-700' : 'text-shadow-600 hover:bg-bark-100 hover:text-shadow-900'}"
+              >
+                {#if activeTabId === tab.id}
+                  <span class="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-gold-500" aria-hidden="true"></span>
+                {/if}
+                <span class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate text-sm font-medium">{tab.label}</span>
+                  {#if tab.count}
+                    <span class="rounded-full border border-gold-300 bg-gold-100 px-1.5 py-0.5 text-[0.65rem] font-semibold tabular-nums text-gold-700" aria-label={`${tab.count} unsaved changes`}>{tab.count}</span>
+                  {/if}
+                </span>
+                <span class="mt-0.5 hidden text-[0.68rem] leading-snug text-shadow-500 lg:block">{SETTINGS_TAB_DESCRIPTIONS[tab.id]}</span>
+              </button>
+            {/each}
+          </nav>
+        </div>
+        <div class="mt-3 hidden rounded-xl border border-bark-300 bg-bark-100 p-3 text-xs leading-relaxed text-shadow-500 lg:block">
+          Structured fields save through their canonical owner files. Raw JSON edits remain separately staged and never get overwritten by the unified save.
+        </div>
+      </aside>
 
-      <GardenTabBar
-        tabs={settingsTabs}
-        activeId={activeTabId}
-        onSelect={selectTab}
-        label="Settings domains"
-      />
-
-      <div class="space-y-5 min-w-0">
+      <div class="min-w-0 space-y-5">
         {#if activeTabId === 'providers'}
           <SettingsDelegatedPanels
             {providerRegistry} {providerValidationErrors} {providerRegistryDirty} {saving}
@@ -1479,9 +1511,9 @@
         {/if}
 
         {#if activeTabHasPrimarySave}
-          <div class="flex items-center gap-3 pt-2">
+          <div class="garden-toolbar card-garden flex flex-wrap items-center gap-3 p-4">
             <button onclick={saveSettings} disabled={saving || !settingsSaveDirty}
-              class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm
+              class="garden-action garden-action--primary min-h-10 rounded-lg px-5 py-2.5 text-sm font-medium transition-colors shadow-sm
                 {settingsSaveDirty
                   ? 'bg-gold-600 text-white hover:bg-gold-700'
                   : 'bg-bark-300 text-shadow-500 cursor-not-allowed'}"

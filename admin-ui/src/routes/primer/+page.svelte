@@ -1,5 +1,6 @@
 <script lang="ts">
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   interface GuideLink {
     label: string;
@@ -158,30 +159,47 @@
   <title>Operator Guide · Garden</title>
 </svelte:head>
 
-<div class="space-y-8">
-  <header>
-    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-gold-700">Garden map</p>
-    <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Operator Guide</h1>
-    <p class="mt-2 max-w-3xl text-sm leading-relaxed text-shadow-600">
-      A concise map for day-to-day operation. Use the linked repository docs for procedures and architecture detail.
-    </p>
-  </header>
+<div class="garden-page space-y-8 pb-10">
+  <GardenPageHeader
+    eyebrow="Garden map · Operator orientation"
+    title="Operator Guide"
+    description="A task-first map of the console, common operating flows, health language, and maintained repository references."
+  />
 
-  <section class="space-y-4" aria-labelledby="locations-title">
-    <div>
-      <h2 id="locations-title" class="font-serif text-xl font-semibold text-shadow-900">Where things live</h2>
-      <p class="mt-1 text-sm text-shadow-600">Links stay inside the active companion Garden unless marked cluster-level.</p>
+  <section class="garden-metric-grid grid gap-3 sm:grid-cols-3" aria-label="Guide summary">
+    <article class="garden-metric card-garden p-4">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Workspaces mapped</p>
+      <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-shadow-900">{locations.length}</p>
+      <p class="mt-1 text-xs text-shadow-500">from conversation through cluster operations</p>
+    </article>
+    <article class="garden-metric card-garden p-4">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Common flows</p>
+      <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-gold-700">{flows.length}</p>
+      <p class="mt-1 text-xs text-shadow-500">short operator paths with scoped links</p>
+    </article>
+    <article class="garden-metric card-garden p-4">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Maintained references</p>
+      <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-moss-700">{repositoryDocs.length}</p>
+      <p class="mt-1 text-xs text-shadow-500">source-of-truth documents for deeper work</p>
+    </article>
+  </section>
+
+  <section class="garden-section space-y-4" aria-labelledby="locations-title">
+    <div class="garden-section-header">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Console map</p>
+      <h2 id="locations-title" class="garden-section-title font-serif text-xl font-semibold text-shadow-900">Where things live</h2>
+      <p class="garden-section-description mt-1 text-sm text-shadow-600">Links stay inside the active companion Garden unless marked cluster-level.</p>
     </div>
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {#each locations as location (location.title)}
-        <article class="card-garden p-5">
+        <article class="card-garden flex flex-col p-5">
           <h3 class="font-serif text-lg font-semibold text-shadow-900">{location.title}</h3>
           <p class="mt-2 text-sm leading-relaxed text-shadow-700">{location.description}</p>
-          <div class="mt-4 flex flex-wrap gap-2">
+          <div class="garden-toolbar mt-auto flex flex-wrap gap-2 pt-4">
             {#each location.links as link (link.label)}
               <a
                 href={guideHref(link)}
-                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:border-gold-400 hover:bg-gold-50"
+                class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:border-gold-400 hover:bg-gold-50"
               >
                 {link.label}
               </a>
@@ -192,10 +210,11 @@
     </div>
   </section>
 
-  <section class="space-y-4" aria-labelledby="flows-title">
-    <div>
-      <h2 id="flows-title" class="font-serif text-xl font-semibold text-shadow-900">Common flows</h2>
-      <p class="mt-1 text-sm text-shadow-600">Short paths through the operator tasks that recur most often.</p>
+  <section class="garden-section space-y-4" aria-labelledby="flows-title">
+    <div class="garden-section-header">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Task paths</p>
+      <h2 id="flows-title" class="garden-section-title font-serif text-xl font-semibold text-shadow-900">Common flows</h2>
+      <p class="garden-section-description mt-1 text-sm text-shadow-600">Short paths through the operator tasks that recur most often.</p>
     </div>
     <div class="grid gap-4 lg:grid-cols-2">
       {#each flows as flow (flow.title)}
@@ -206,9 +225,9 @@
               <li class="pl-1">{step}</li>
             {/each}
           </ol>
-          <div class="mt-4 flex flex-wrap gap-3">
+          <div class="garden-toolbar mt-4 flex flex-wrap gap-3">
             {#each flow.links as link (link.label)}
-              <a href={guideHref(link)} class="text-sm font-medium text-gold-700 underline-offset-2 hover:underline">
+              <a href={guideHref(link)} class="garden-action text-sm font-medium text-gold-700 underline-offset-2 hover:underline">
                 {link.label} &rarr;
               </a>
             {/each}
@@ -218,24 +237,25 @@
     </div>
   </section>
 
-  <section class="space-y-4" aria-labelledby="health-title">
-    <div>
-      <h2 id="health-title" class="font-serif text-xl font-semibold text-shadow-900">What health messages mean</h2>
-      <p class="mt-1 text-sm text-shadow-600">Health is dimension-specific. An unknown or degraded dimension is not evidence that every companion surface is down.</p>
+  <section class="garden-section space-y-4" aria-labelledby="health-title">
+    <div class="garden-section-header">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Status language</p>
+      <h2 id="health-title" class="garden-section-title font-serif text-xl font-semibold text-shadow-900">What health messages mean</h2>
+      <p class="garden-section-description mt-1 text-sm text-shadow-600">Health is dimension-specific. An unknown or degraded dimension is not evidence that every companion surface is down.</p>
     </div>
     <div class="grid gap-4 lg:grid-cols-3">
       <article class="card-garden p-5 lg:col-span-2">
         <h3 class="font-serif text-lg font-semibold text-shadow-900">Cluster companion status</h3>
         <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+          <div class="surface-sunken p-3">
             <dt class="font-semibold text-shadow-800">Agent</dt>
             <dd class="mt-1 leading-relaxed text-shadow-600">Gateway-to-agent RPC registration: up when connected, down when absent, unknown while registering.</dd>
           </div>
-          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+          <div class="surface-sunken p-3">
             <dt class="font-semibold text-shadow-800">Admin</dt>
             <dd class="mt-1 leading-relaxed text-shadow-600">Reachability of that companion's Garden admin transport. Only an up Admin dimension enables Open Garden.</dd>
           </div>
-          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+          <div class="surface-sunken p-3">
             <dt class="font-semibold text-shadow-800">Channels</dt>
             <dd class="mt-1 leading-relaxed text-shadow-600">Routed channel connectivity: one confirmed connection is up; all confirmed disconnected is down; incomplete evidence is unknown.</dd>
           </div>
@@ -267,12 +287,13 @@
     </div>
   </section>
 
-  <section class="card-garden p-5" aria-labelledby="docs-title">
-    <h2 id="docs-title" class="font-serif text-xl font-semibold text-shadow-900">Repository references</h2>
+  <section class="garden-section card-garden p-5" aria-labelledby="docs-title">
+    <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Source of truth</p>
+    <h2 id="docs-title" class="garden-section-title mt-1 font-serif text-xl font-semibold text-shadow-900">Repository references</h2>
     <p class="mt-1 text-sm text-shadow-600">These are the maintained references; this page intentionally does not duplicate them.</p>
     <ul class="mt-4 grid gap-3 md:grid-cols-2">
       {#each repositoryDocs as doc (doc.label)}
-        <li class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+        <li class="surface-sunken p-3">
           <a
             href={doc.href}
             target="_blank"

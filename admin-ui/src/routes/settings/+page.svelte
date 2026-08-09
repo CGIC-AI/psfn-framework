@@ -4,6 +4,10 @@
   const loadPage = () => import('./LazyPageContent.svelte');
 </script>
 
+<svelte:head>
+  <title>Settings · Garden</title>
+</svelte:head>
+
 <LazyGardenPage
   loader={loadPage}
   loadingLabel="Loading settings..."

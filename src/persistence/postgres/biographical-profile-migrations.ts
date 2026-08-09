@@ -11,6 +11,11 @@
  * `contact_profiles` cutover criteria are recorded in `docs/specifications.md`
  * (Live Alpha Migration Boundary).
  */
+export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATION_ADVISORY_LOCK = [
+  1_297_431_347,
+  1_111_210_311,
+] as const;
+
 export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS biographical_claims (

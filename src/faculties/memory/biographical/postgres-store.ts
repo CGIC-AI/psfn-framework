@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
 import {
-  ensurePostgresSchema,
+  ensurePostgresSchemaWithAdvisoryLock,
   executeQuery,
   queryOne,
   queryRows,
   withPostgresClient,
 } from '../../../persistence/postgres.js';
-import { POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS } from '../../../persistence/postgres/biographical-profile-migrations.js';
+import {
+  POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATION_ADVISORY_LOCK,
+  POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS,
+} from '../../../persistence/postgres/biographical-profile-migrations.js';
 import {
   deserializeClaim,
   finalizeBiographicalClaim,
@@ -72,7 +75,10 @@ function subjectColumns(subject: BiographicalSubjectRef): {
  * The factory runs the idempotent {@link POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS}.
  */
 export class PostgresBiographicalProfileStore implements BiographicalProfileStorePort {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   private async readClaim(id: string): Promise<BiographicalClaim> {
     const row = await queryOne<ClaimRow>(
@@ -95,6 +101,11 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       [claimDigest, sourceSetDigest],
     );
     return rows.map(row => assertGrantRecord(row.grant_json));
+  }
+
+  private async projectClaimAtReadTime(claim: BiographicalClaim, now: Date): Promise<BiographicalClaim> {
+    const grants = await this.findGrantsByDigests(claim.claimDigest, claim.sourceSetDigest);
+    return reevaluateClaimEffective(claim, grants, now);
   }
 
   private async insertClaimRow(claim: BiographicalClaim, now: Date): Promise<void> {
@@ -174,7 +185,9 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       'SELECT claim_json FROM biographical_claims WHERE id = $1',
       [id],
     );
-    return row ? deserializeClaim(row.claim_json) : undefined;
+    return row
+      ? await this.projectClaimAtReadTime(deserializeClaim(row.claim_json), this.now())
+      : undefined;
   }
 
   async listClaims(options: BiographicalClaimListOptions = {}): Promise<BiographicalClaim[]> {
@@ -224,7 +237,10 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
        ORDER BY created_at ASC, id ASC ${paginationClause}`,
       params,
     );
-    return rows.map(row => deserializeClaim(row.claim_json));
+    const readAt = this.now();
+    return await Promise.all(
+      rows.map(async row => await this.projectClaimAtReadTime(deserializeClaim(row.claim_json), readAt)),
+    );
   }
 
   async supersedeClaim(
@@ -431,6 +447,10 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
 export async function createPostgresBiographicalProfileStore(
   pool: Pool,
 ): Promise<PostgresBiographicalProfileStore> {
-  await ensurePostgresSchema(pool, POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS);
+  await ensurePostgresSchemaWithAdvisoryLock(
+    pool,
+    POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS,
+    POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATION_ADVISORY_LOCK,
+  );
   return new PostgresBiographicalProfileStore(pool);
 }

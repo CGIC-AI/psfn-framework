@@ -66,6 +66,16 @@ async function withStore<T>(
 }
 
 describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
+  it('serializes concurrent eager migrations with the advisory lock', async () => {
+    await withStore(async (_store, pool) => {
+      const stores = await Promise.all([
+        createPostgresBiographicalProfileStore(pool),
+        createPostgresBiographicalProfileStore(pool),
+      ]);
+      expect(stores).toHaveLength(2);
+    });
+  });
+
   it('runs the migration and persists a self nickname with computed digest + sensitivity', async () => {
     await withStore(async (store) => {
       const claim = await store.writeClaim({
@@ -209,6 +219,38 @@ describe('PostgresBiographicalProfileStore — supersession and lifecycle', () =
 });
 
 describe('PostgresBiographicalProfileStore — exact digest-bound grants', () => {
+  it('re-tightens an expired grant when a claim is read', async () => {
+    await withStore(async (_store, pool) => {
+      let readAt = NOW;
+      const store = new PostgresBiographicalProfileStore(pool, () => readAt);
+      const claim = await store.writeClaim({
+        subject: companion('purrs'),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Loaf', scope: 'self' },
+        basis: 'explicit',
+        confidence: 0.9,
+        sources: [source({ sensitivityAtProjection: 'intimate' })],
+        now: NOW,
+      });
+      await store.recordGrant({
+        claimDigest: claim.claimDigest,
+        sourceSetDigest: claim.sourceSetDigest,
+        grantedSensitivity: 'public',
+        authorizingActor: 'operator',
+        authorityBasis: 'hitl-approval',
+        reason: 'bounded approval',
+        expiresAt: '2026-08-09T12:30:00.000Z',
+        now: NOW,
+      });
+      expect((await store.getClaim(claim.id))?.effectiveSensitivity).toBe('public');
+
+      readAt = new Date('2026-08-09T13:00:00.000Z');
+      const expired = await store.getClaim(claim.id);
+      expect(expired?.effectiveSensitivity).toBe('intimate');
+      expect(expired?.appliedGrantId).toBeUndefined();
+    });
+  });
+
   it('lowers via an exact grant and reverts on revoke', async () => {
     await withStore(async (store) => {
       const claim = await store.writeClaim({

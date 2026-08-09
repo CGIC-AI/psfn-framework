@@ -20,9 +20,11 @@ import {
   BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
 } from './types.js';
 import {
+  BiographicalClaimValidationError,
   assertKnownClaimKind,
   assertRelatedSubjectShape,
   canonicalizeClaimValue,
+  isValidSensitivityLevel,
 } from './claim-kinds.js';
 import {
   applyLoweringGrant,
@@ -158,17 +160,6 @@ function canonicalNow(now: Date): string {
   return now.toISOString();
 }
 
-function assertLastEvidenceAt(
-  sources: readonly BiographicalClaimSource[],
-  fallback: string,
-): string {
-  const timestamps = sources
-    .map(source => Date.parse(source.revision))
-    .filter(value => Number.isFinite(value));
-  if (timestamps.length === 0) return fallback;
-  return new Date(Math.max(...timestamps)).toISOString();
-}
-
 /**
  * Validate and canonicalize a write input into a prepared claim with computed
  * digests and automatic sensitivity. Throws {@link BiographicalClaimValidationError}
@@ -195,10 +186,18 @@ export function prepareBiographicalClaim(
   const confidence = assertConfidence(input.confidence);
   const interval = assertValidInterval({ validFrom: input.validFrom, validTo: input.validTo });
   const depthDecision = assertCollectionDepth(input.depthDecision);
-  const proposedSensitivity = input.proposedSensitivity;
+  if (
+    input.proposedSensitivity !== undefined
+    && !isValidSensitivityLevel(input.proposedSensitivity)
+  ) {
+    throw new BiographicalClaimValidationError(
+      'proposedSensitivity must be a supported sensitivity level',
+    );
+  }
+  const proposedSensitivity = input.proposedSensitivity ?? 'personal';
   const { sensitivity: automaticSensitivity } = computeAutomaticSensitivity({
     kind: input.kind,
-    ...(proposedSensitivity !== undefined ? { proposedSensitivity } : {}),
+    proposedSensitivity,
     sources,
     now,
   });
@@ -221,13 +220,16 @@ export function prepareBiographicalClaim(
     status,
     sources,
     confidence,
-    proposedSensitivity: proposedSensitivity ?? 'personal',
+    proposedSensitivity,
     claimDigest,
     sourceSetDigest,
     automaticSensitivity,
     synthesizedAt: nowIso,
     lastSourceValidatedAt: nowIso,
-    lastEvidenceAt: assertLastEvidenceAt(sources, nowIso),
+    // Source revisions are opaque identifiers, not evidence timestamps. Until
+    // the source contract carries an explicit observed-at field, admission time
+    // is the only truthful recency statement the kernel can make.
+    lastEvidenceAt: nowIso,
     ...(interval.validFrom !== undefined ? { validFrom: interval.validFrom } : {}),
     ...(interval.validTo !== undefined ? { validTo: interval.validTo } : {}),
     ...(input.supersedesClaimId !== undefined

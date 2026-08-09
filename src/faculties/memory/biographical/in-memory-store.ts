@@ -18,7 +18,7 @@ import {
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
 } from './store-port.js';
-import { BiographicalLifecycleError } from './kernel.js';
+import { assertGrantRecord, BiographicalLifecycleError } from './kernel.js';
 import { assertKnownClaimKind } from './claim-kinds.js';
 import type { BiographicalSubjectRef } from './types.js';
 
@@ -28,7 +28,11 @@ interface StoredClaimRow {
 }
 
 interface StoredGrantRow {
-  readonly grant: BiographicalSensitivityGrant;
+  readonly grantJson: string;
+}
+
+function deserializeGrant(grantJson: string): BiographicalSensitivityGrant {
+  return assertGrantRecord(JSON.parse(grantJson) as unknown);
 }
 
 function matchesSubject(
@@ -54,8 +58,8 @@ function matchesSubject(
 export class InMemoryBiographicalProfileStore implements BiographicalProfileStorePort {
   private readonly claims = new Map<string, StoredClaimRow>();
   private readonly grants = new Map<string, StoredGrantRow>();
-  private claimInsertionOrder = 0;
-  private readonly orderById = new Map<string, number>();
+
+  constructor(private readonly now: () => Date = () => new Date()) {}
 
   private readClaim(id: string): BiographicalClaim {
     const row = this.claims.get(id);
@@ -65,9 +69,6 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
 
   private storeClaim(claim: BiographicalClaim): void {
     this.claims.set(claim.id, { id: claim.id, claimJson: serializeClaim(claim) });
-    if (!this.orderById.has(claim.id)) {
-      this.orderById.set(claim.id, this.claimInsertionOrder++);
-    }
   }
 
   private grantsByDigests(
@@ -75,10 +76,18 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     sourceSetDigest: string,
   ): BiographicalSensitivityGrant[] {
     return [...this.grants.values()]
-      .map(row => row.grant)
+      .map(row => deserializeGrant(row.grantJson))
       .filter(
         grant => grant.claimDigest === claimDigest && grant.sourceSetDigest === sourceSetDigest,
       );
+  }
+
+  private projectClaimAtReadTime(claim: BiographicalClaim, now: Date): BiographicalClaim {
+    return reevaluateClaimEffective(
+      claim,
+      this.grantsByDigests(claim.claimDigest, claim.sourceSetDigest),
+      now,
+    );
   }
 
   private reevaluateClaimsForDigests(
@@ -109,7 +118,9 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
 
   async getClaim(id: string): Promise<BiographicalClaim | undefined> {
     const row = this.claims.get(id);
-    return row ? deserializeClaim(row.claimJson) : undefined;
+    return row
+      ? this.projectClaimAtReadTime(deserializeClaim(row.claimJson), this.now())
+      : undefined;
   }
 
   async listClaims(options: BiographicalClaimListOptions = {}): Promise<BiographicalClaim[]> {
@@ -121,11 +132,15 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     }
     const limit = options.limit ?? Number.POSITIVE_INFINITY;
     const results: BiographicalClaim[] = [];
-    const ordered = [...this.claims.values()].sort(
-      (left, right) => (this.orderById.get(left.id) ?? 0) - (this.orderById.get(right.id) ?? 0),
-    );
-    for (const row of ordered) {
-      const claim = deserializeClaim(row.claimJson);
+    const readAt = this.now();
+    const ordered = [...this.claims.values()]
+      .map(row => deserializeClaim(row.claimJson))
+      .sort((left, right) => {
+        const timestampOrder = left.synthesizedAt.localeCompare(right.synthesizedAt);
+        return timestampOrder !== 0 ? timestampOrder : left.id.localeCompare(right.id);
+      });
+    for (const storedClaim of ordered) {
+      const claim = this.projectClaimAtReadTime(storedClaim, readAt);
       if (options.subject !== undefined && !matchesSubject(options.subject, claim)) continue;
       if (options.kind !== undefined && claim.kind !== options.kind) continue;
       if (options.status !== undefined && claim.status !== options.status) continue;
@@ -202,7 +217,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   async recordGrant(input: BiographicalGrantWriteInput): Promise<BiographicalSensitivityGrant> {
     const { id, grant } = prepareBiographicalGrant(input);
     const fullGrant: BiographicalSensitivityGrant = { id, ...grant };
-    this.grants.set(id, { grant: fullGrant });
+    this.grants.set(id, { grantJson: JSON.stringify(fullGrant) });
     this.reevaluateClaimsForDigests(
       grant.claimDigest,
       grant.sourceSetDigest,
@@ -225,20 +240,22 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     const now = input.now ?? new Date();
     const row = this.grants.get(grantId);
     if (!row) throw new Error(`biographical grant not found: ${grantId}`);
-    if (row.grant.revokedAt !== undefined) {
+    const grant = deserializeGrant(row.grantJson);
+    if (grant.revokedAt !== undefined) {
       throw new Error(`biographical grant ${grantId} is already revoked`);
     }
     const revoked: BiographicalSensitivityGrant = {
-      ...row.grant,
+      ...grant,
       revokedAt: now.toISOString(),
       revokedReason: reason,
     };
-    this.grants.set(grantId, { grant: revoked });
+    this.grants.set(grantId, { grantJson: JSON.stringify(revoked) });
     this.reevaluateClaimsForDigests(revoked.claimDigest, revoked.sourceSetDigest, now);
     return revoked;
   }
 
   async getGrant(grantId: string): Promise<BiographicalSensitivityGrant | undefined> {
-    return this.grants.get(grantId)?.grant;
+    const row = this.grants.get(grantId);
+    return row ? deserializeGrant(row.grantJson) : undefined;
   }
 }

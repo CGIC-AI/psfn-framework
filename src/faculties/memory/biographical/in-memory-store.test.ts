@@ -28,8 +28,8 @@ function source(overrides: Partial<BiographicalClaimSource> = {}): BiographicalC
   };
 }
 
-function store() {
-  return new InMemoryBiographicalProfileStore();
+function store(now: () => Date = () => NOW) {
+  return new InMemoryBiographicalProfileStore(now);
 }
 
 describe('InMemoryBiographicalProfileStore — writeClaim', () => {
@@ -94,6 +94,37 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects an invalid proposed sensitivity before persistence', async () => {
+    const s = store();
+    await expect(
+      s.writeClaim({
+        subject: companion('purrs'),
+        kind: 'name',
+        value: { kind: 'name', name: 'Purrsephone', role: 'primary' },
+        basis: 'explicit',
+        // @ts-expect-error runtime callers must fail closed too
+        proposedSensitivity: 'friends-only',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      }),
+    ).rejects.toThrow('proposedSensitivity');
+  });
+
+  it('uses admission time for evidence recency instead of parsing opaque revisions', async () => {
+    const s = store();
+    const claim = await s.writeClaim({
+      subject: contact('v'),
+      kind: 'name',
+      value: { kind: 'name', name: 'V', role: 'primary' },
+      basis: 'explicit',
+      confidence: 1,
+      sources: [source({ revision: '1' })],
+      now: NOW,
+    });
+    expect(claim.lastEvidenceAt).toBe(NOW.toISOString());
+  });
+
   it('rejects duplicate claim ids instead of rewriting append-only history', async () => {
     const s = store();
     const input = {
@@ -126,6 +157,23 @@ describe('InMemoryBiographicalProfileStore — writeClaim', () => {
     });
     expect(await s.listClaims({ subject: contact('v', 2) })).toEqual([]);
     await expect(s.listClaims({ limit: 0 })).rejects.toThrow('positive integer');
+  });
+
+  it('orders same-time claims by id like the Postgres adapter', async () => {
+    const s = store();
+    for (const id of ['claim-b', 'claim-a']) {
+      await s.writeClaim({
+        id,
+        subject: contact(id),
+        kind: 'name',
+        value: { kind: 'name', name: id, role: 'primary' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source({ ref: `memory:${id}` })],
+        now: NOW,
+      });
+    }
+    expect((await s.listClaims()).map(claim => claim.id)).toEqual(['claim-a', 'claim-b']);
   });
 });
 
@@ -372,7 +420,8 @@ describe('InMemoryBiographicalProfileStore — exact digest-bound grants', () =>
   });
 
   it('evaluates grant expiry against the supplied decision time', async () => {
-    const s = store();
+    let readAt = NOW;
+    const s = store(() => readAt);
     const claim = await s.writeClaim({
       subject: companion('purrs'),
       kind: 'nickname',
@@ -393,6 +442,11 @@ describe('InMemoryBiographicalProfileStore — exact digest-bound grants', () =>
       now: NOW,
     });
     expect((await s.getClaim(claim.id))?.effectiveSensitivity).toBe('public');
+
+    readAt = new Date('2026-08-09T13:00:00.000Z');
+    const expired = await s.getClaim(claim.id);
+    expect(expired?.effectiveSensitivity).toBe('intimate');
+    expect(expired?.appliedGrantId).toBeUndefined();
   });
 });
 

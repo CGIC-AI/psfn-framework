@@ -54,19 +54,23 @@
 {#if LoadedComponent}
   <LoadedComponent />
 {:else if loadError}
-  <div class="card-garden border-l-4 border-l-wilt-400 p-4">
-    <p class="text-sm font-medium text-wilt-700">{errorLabel}</p>
-    <p class="mt-1 text-xs text-wilt-600">{loadError}</p>
-    <button
-      type="button"
-      onclick={() => void loadComponent()}
-      class="mt-3 rounded-lg border border-bark-300 px-3 py-1.5 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"
-    >
-      Retry
-    </button>
+  <div class="garden-error" role="alert">
+    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-wilt-100 font-semibold text-wilt-700" aria-hidden="true">!</div>
+    <div class="min-w-0 flex-1">
+      <p class="text-sm font-semibold text-wilt-800">{errorLabel}</p>
+      <p class="mt-1 text-xs text-wilt-700">{loadError}</p>
+      <button
+        type="button"
+        onclick={() => void loadComponent()}
+        class="garden-action mt-3 text-xs"
+      >
+        Retry
+      </button>
+    </div>
   </div>
 {:else}
-  <div class="card-garden p-4 text-sm text-shadow-600" aria-busy="true">
-    {loadingLabel}
+  <div class="garden-loading" aria-busy="true">
+    <span class="h-2 w-2 animate-pulse rounded-full bg-gold-500" aria-hidden="true"></span>
+    <span>{loadingLabel}</span>
   </div>
 {/if}

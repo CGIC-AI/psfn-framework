@@ -21,18 +21,18 @@
   const bodyId = `${uid}-body`;
 </script>
 
-<section class={`card-garden ${className}`.trim()}>
+<section class={`garden-section overflow-hidden p-0 ${className}`.trim()}>
   <button
     type="button"
     aria-expanded={!collapsed}
     aria-controls={bodyId}
     onclick={() => (collapsed = !collapsed)}
-    class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-bark-50
+    class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-bark-100
       {collapsed ? 'rounded-xl' : 'rounded-t-xl'}"
   >
     <span class="min-w-0">
       <span class="flex flex-wrap items-center gap-2">
-        <span class="font-serif text-base font-semibold text-shadow-900">{title}</span>
+          <span class="font-serif text-base font-semibold text-shadow-900">{title}</span>
         {#if count != null}
           <span class="rounded-full border border-bark-300 bg-bark-100 px-2 py-0.5 text-xs font-medium text-shadow-600">
             {count}
@@ -60,7 +60,7 @@
   </button>
 
   {#if !collapsed}
-    <div id={bodyId} class="border-t border-bark-200 px-4 py-4">
+    <div id={bodyId} class="border-t border-bark-300 px-4 py-4 sm:px-5">
       {@render children()}
     </div>
   {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { FleetPortalProjection } from '$lib/fleet/portal';
   import {
     filterConsoleNavigation,
@@ -7,6 +7,7 @@
     type ConsoleNavigationGroup,
   } from '$lib/nav/presentation';
   import RailGroupIcon from './RailGroupIcon.svelte';
+  import { OPEN_COMMAND_PALETTE_EVENT } from '$lib/page-design/command-palette';
 
   interface Props {
     groups: ConsoleNavigationGroup[];
@@ -91,6 +92,12 @@
     if (health.agentRpc === 'up' && health.adminTransport === 'up') return 'online';
     return 'partially available';
   }
+
+  onMount(() => {
+    const handlePaletteRequest = () => void openCommandPalette();
+    window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, handlePaletteRequest);
+    return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, handlePaletteRequest);
+  });
 </script>
 
 <svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />

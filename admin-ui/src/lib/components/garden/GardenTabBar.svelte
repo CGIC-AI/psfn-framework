@@ -78,7 +78,7 @@
 </script>
 
 <div class={`overflow-x-auto ${className}`.trim()}>
-  <div class="flex min-w-max gap-2" role="tablist" aria-label={label}>
+  <div class="flex min-w-max gap-1 border-b border-bark-300" role="tablist" aria-label={label}>
     {#each tabs as tab, index (tab.id)}
       <button
         bind:this={tabRefs[tab.id]}
@@ -89,14 +89,14 @@
         disabled={tab.disabled}
         onclick={() => onSelect(tab.id)}
         onkeydown={(event) => onTabKeydown(event, index)}
-        class="rounded-t-xl border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60
+        class="relative min-h-11 border-0 bg-transparent px-3 pb-2.5 pt-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60
           {activeId === tab.id
-            ? 'border-gold-300 bg-bark-50 text-shadow-900 shadow-sm'
-            : 'border-bark-300 bg-bark-100 text-shadow-600 hover:bg-bark-50 hover:text-shadow-900'}"
+            ? 'font-semibold text-shadow-900 after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-gold-500'
+            : 'font-medium text-shadow-600 hover:text-shadow-900'}"
       >
         {tab.label}
         {#if tab.count != null}
-          <span class="ml-1 text-xs opacity-75">({tab.count})</span>
+          <span class="ml-1 rounded-full px-1.5 py-0.5 text-[0.65rem] tabular-nums {activeId === tab.id ? 'bg-gold-100 text-gold-700' : 'bg-bark-200 text-shadow-600'}">{tab.count}</span>
         {/if}
       </button>
     {/each}

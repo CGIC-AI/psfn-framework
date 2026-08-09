@@ -11,6 +11,7 @@
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import ConcernActionEscalationModal from '$lib/components/ConcernActionEscalationModal.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   const TRANSITION_STATUSES = ['candidate', 'active', 'watching', 'deferred', 'blocked'] as const;
 
@@ -144,18 +145,14 @@
   });
 </script>
 
-<div class="space-y-4">
-  <div class="flex flex-wrap items-center gap-3">
-    <div class="min-w-0">
-      <p class="text-[0.65rem] uppercase tracking-[0.2em] text-shadow-500">Intention</p>
-      <h1 class="flex items-baseline gap-2 text-xl font-serif font-bold text-shadow-900">
-        Concerns
-        <span class="text-sm font-sans font-normal text-shadow-600">
-          {concerns.length} shown
-        </span>
-      </h1>
-    </div>
-    <div class="flex min-w-0 flex-1 items-center justify-end gap-2">
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Intention"
+    title="Concerns"
+    description={`${concerns.length} concern${concerns.length === 1 ? '' : 's'} shown · review, transition, or resolve active intentions.`}
+  >
+    {#snippet actions()}
+      <div class="garden-toolbar flex flex-wrap items-center gap-2">
       <label class="flex items-center gap-2 text-sm text-shadow-700">
         <input
           type="checkbox"
@@ -187,10 +184,11 @@
       >
         {refreshing ? 'Refreshing…' : 'Refresh'}
       </button>
-    </div>
-  </div>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
-  <section class="card-garden border-l-4 border-l-gold-400 p-4" aria-labelledby="concern-escalation-title">
+  <section class="garden-section card-garden border-l-4 border-l-gold-400 p-4" aria-labelledby="concern-escalation-title">
     <h2 id="concern-escalation-title" class="font-serif font-semibold text-shadow-900">
       Protected concern actions
     </h2>
@@ -201,19 +199,19 @@
   </section>
 
   {#if error}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{error}</p>
     </div>
   {/if}
 
   {#if loading}
-    <div class="card-garden animate-pulse p-5">
+    <div class="garden-loading card-garden animate-pulse p-5">
       <div class="h-4 w-2/3 rounded bg-bark-200"></div>
       <div class="mt-3 h-3 w-full rounded bg-bark-100"></div>
       <div class="mt-2 h-3 w-5/6 rounded bg-bark-100"></div>
     </div>
   {:else if concerns.length === 0}
-    <div class="card-garden p-6">
+    <div class="garden-empty card-garden p-6">
       <p class="text-sm text-shadow-600">No concerns match the current filter.</p>
     </div>
   {:else}
@@ -221,7 +219,7 @@
       <ul class="space-y-3 pr-1">
         {#each concerns as concern (concern.id)}
           {@const terminal = ['resolved', 'dismissed', 'suppressed'].includes(concern.status)}
-          <li class="rounded-xl border border-bark-200 bg-bark-50 p-4">
+          <li class="garden-section rounded-xl border border-bark-200 bg-bark-50 p-4">
             <div class="flex flex-wrap items-start justify-between gap-2">
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-medium text-shadow-900">{concern.text}</p>
@@ -236,10 +234,10 @@
                 </p>
               </div>
               <div class="flex shrink-0 items-center gap-1.5">
-                <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium {priorityBadge(concern.priority)}">
+                <span class="garden-status inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium {priorityBadge(concern.priority)}">
                   {concern.priority}
                 </span>
-                <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium {statusBadge(concern.status)}">
+                <span class="garden-status inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium {statusBadge(concern.status)}">
                   {concern.status}
                 </span>
               </div>

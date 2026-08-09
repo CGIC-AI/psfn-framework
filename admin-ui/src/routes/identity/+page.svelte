@@ -29,6 +29,7 @@
   import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import VersionHistoryPanel from './VersionHistoryPanel.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
 
   let data = $state<AdminIdentityData | null>(null);
@@ -593,13 +594,13 @@
   }
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Seeds</h1>
-      <p class="text-sm text-shadow-600 mt-1">Character identity and card data</p>
-    </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="The Seeds"
+    description="Shape character identity, card metadata, reference images, and version history."
+  >
+    {#snippet actions()}
     {#if data}
       <div class="flex items-center gap-2">
         <button
@@ -627,11 +628,12 @@
         </button>
       </div>
     {/if}
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Error -->
   {#if error}
-    <div class="card-garden p-4 flex items-center gap-3">
+    <div class="garden-error card-garden p-4 flex items-center gap-3">
       <svg class="w-5 h-5 text-wilt-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
       </svg>
@@ -642,7 +644,7 @@
 
   <!-- Loading -->
   {#if loading}
-    <div class="space-y-4">
+    <div class="garden-loading space-y-4">
       <div class="card-garden p-8 animate-pulse">
         <div class="flex items-center gap-4">
           <div class="w-16 h-16 rounded-full bg-bark-200"></div>
@@ -664,7 +666,7 @@
   {:else if data && card && cardData}
     <!-- Raw JSON view -->
     {#if showJson}
-      <div class="card-garden p-5">
+      <div class="garden-section card-garden p-5">
         <div class="flex items-center justify-between mb-3">
           <span class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Raw Character Card</span>
           <span class="text-sm font-mono text-shadow-600">
@@ -678,7 +680,7 @@
       <!-- Formatted card view -->
       <div class="space-y-4">
         <!-- Name + version hero card -->
-        <div class="card-garden p-6">
+        <div class="garden-section card-garden p-6">
           <div class="flex items-center gap-5">
             <div class="w-16 h-16 rounded-full bg-gold-50 border-2 border-gold-300 flex items-center justify-center shrink-0">
               <span class="text-2xl font-serif font-bold text-gold-700">{(cardData.name ?? '?')[0]}</span>
@@ -709,7 +711,7 @@
         </div>
 
         <!-- Metadata section (collapsible) -->
-        <div class="card-garden overflow-hidden">
+        <div class="garden-section card-garden overflow-hidden">
           <button
             class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
             onclick={() => showMetadata = !showMetadata}
@@ -773,7 +775,7 @@
         </div>
 
         <!-- Import card -->
-        <div class="card-garden p-5">
+        <div class="garden-section card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
           <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path, or upload a JSON/PNG/CharX card file.</p>
           <form onsubmit={(e) => { e.preventDefault(); openImportConfirmation(); }} class="flex gap-2">
@@ -838,7 +840,7 @@
         </div>
 
         <!-- Appearance (extensions.visual_description) -->
-        <div class="card-garden p-5">
+        <div class="garden-section card-garden p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Appearance</h3>
             {#if editingAppearance}
@@ -881,7 +883,7 @@
         </div>
 
         <!-- Reference photos -->
-        <div class="card-garden p-5">
+        <div class="garden-section card-garden p-5">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Reference Photos</h3>
@@ -1071,7 +1073,7 @@
         {#each CARD_FIELDS as field}
           {@const rawValue = cardData[field.key]}
           {@const value = displayValue(rawValue)}
-          <div class="card-garden p-5">
+          <div class="garden-section card-garden p-5">
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">{field.label}</h3>
               {#if editingField === field.key}
@@ -1117,7 +1119,7 @@
         {/each}
 
         <!-- Alternate Greetings -->
-        <div class="card-garden overflow-hidden">
+        <div class="garden-section card-garden overflow-hidden">
           <div class="w-full flex items-center justify-between p-5 hover:bg-bark-50 transition-colors">
             <button
               class="flex-1 flex items-center justify-between text-left"
@@ -1225,7 +1227,7 @@
 
         <!-- Extensions (collapsible) -->
         {#if cardData.extensions && Object.keys(cardData.extensions).length > 0}
-          <div class="card-garden overflow-hidden">
+          <div class="garden-section card-garden overflow-hidden">
             <button
               class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
               onclick={() => showExtensions = !showExtensions}
@@ -1245,7 +1247,7 @@
 
         <!-- Runtime Configuration -->
         {#if data.config}
-          <div class="card-garden overflow-hidden">
+          <div class="garden-section card-garden overflow-hidden">
             <button
               class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
               onclick={() => showRuntimeConfig = !showRuntimeConfig}
@@ -1257,8 +1259,9 @@
             </button>
             {#if showRuntimeConfig}
               <div class="border-t border-bark-300 p-5">
-                <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
+                <div class="garden-table-shell">
+                  <div class="garden-table-scroll">
+                  <table class="garden-table w-full text-sm">
                     <thead>
                       <tr class="border-b border-bark-300">
                         <th class="text-left px-3 py-2 text-shadow-700 font-medium">Setting</th>
@@ -1274,6 +1277,7 @@
                       {/each}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </div>
             {/if}

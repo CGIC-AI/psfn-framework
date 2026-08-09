@@ -8,6 +8,7 @@
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenTabBar from '$lib/components/garden/GardenTabBar.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     ensureCompanionNameLoaded,
     getCompanionName,
@@ -206,20 +207,19 @@
 {/snippet}
 
 {#snippet noMatches()}
-  <div class="card-garden p-8 text-center">
+  <div class="garden-empty card-garden p-8 text-center">
     <p class="text-sm text-shadow-600">No entries match "{searchQuery.trim()}".</p>
   </div>
 {/snippet}
 
-<div class="space-y-6">
-  <div>
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Journal</h1>
-      <p class="text-sm text-shadow-600 mt-1">{companionName}'s values and reflection timelines</p>
-    </div>
-  </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="The Journal"
+    description={`${companionName}'s values, metacognition, daily notes, and reflection timelines.`}
+  />
 
-  <div class="space-y-3">
+  <div class="garden-toolbar space-y-3">
     <GardenTabBar
       {tabs}
       activeId={activeTab}
@@ -255,11 +255,11 @@
 
   {#if activeTab === 'values'}
     {#if !values.disclosed}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">Values journal entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if values.entries.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No values reflections recorded yet</p>
         <p class="text-sm text-shadow-600">Values reflections will appear after scheduled reflection introspection writes them.</p>
       </div>
@@ -269,7 +269,7 @@
       <BoundedList maxHeight={LIST_MAX_HEIGHT} label="Values journal entries">
         <div class="space-y-3 pr-1">
           {#each filteredValues as entry (entry.id)}
-            <article class="card-garden overflow-hidden border-l-4 border-l-gold-300">
+            <article class="garden-section card-garden overflow-hidden border-l-4 border-l-gold-300">
               <div class="px-4 py-2 bg-bark-50 border-b border-bark-100">
                 <div class="flex items-center flex-wrap gap-2">
                   <span class="text-sm text-shadow-700">{formatDate(entry.createdAt)} {formatTime(entry.createdAt)}</span>
@@ -292,11 +292,11 @@
       so their counts always match — these are the same reflections viewed as run and mutation records.
     </p>
     {#if !metacognition.disclosed}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">Metacognition entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if metacognition.entries.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No metacognition entries yet</p>
         <p class="text-sm text-shadow-600">Reflection run and mutation entries will appear here when recorded.</p>
       </div>
@@ -306,7 +306,7 @@
       <BoundedList maxHeight={LIST_MAX_HEIGHT} label="Metacognition journal entries">
         <div class="space-y-3 pr-1">
           {#each filteredMetacognition as entry (entry.id)}
-            <article class="card-garden overflow-hidden border-l-4 border-l-petal-300">
+            <article class="garden-section card-garden overflow-hidden border-l-4 border-l-petal-300">
               <div class="px-4 py-2 bg-bark-50 border-b border-bark-100">
                 <div class="flex items-center flex-wrap gap-2">
                   <span class="text-sm text-shadow-700">{formatDateTime(entry.occurredAt)}</span>
@@ -339,11 +339,11 @@
     {/if}
   {:else if activeTab === 'daily'}
     {#if !daily.disclosed}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">Daily reflection entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if daily.entries.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No daily reflection entries yet</p>
         <p class="text-sm text-shadow-600">Daily reflection entries will appear after daily journal writes complete. Weekly reflections land here too, tagged with their weekly template.</p>
       </div>
@@ -353,7 +353,7 @@
       <BoundedList maxHeight={LIST_MAX_HEIGHT} label="Daily reflection journal entries">
         <div class="space-y-3 pr-1">
           {#each filteredDaily as entry (entry.id)}
-            <article class="card-garden overflow-hidden border-l-4 border-l-leaf-300">
+            <article class="garden-section card-garden overflow-hidden border-l-4 border-l-leaf-300">
               <div class="px-4 py-2 bg-bark-50 border-b border-bark-100">
                 <div class="flex items-center flex-wrap gap-2">
                   <span class="text-sm text-shadow-700">{entry.date} {formatTime(entry.createdAt)}</span>
@@ -383,11 +383,11 @@
       "{CONCERN_ROUTE_TEMPLATE_ID}" template. They are separated here so reflection reading stays uncluttered.
     </p>
     {#if !reflection.disclosed}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">Concern-routing entries remain sealed with the reflection journal until the audited confirmation is completed.</p>
       </div>
     {:else if concernEntries.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No concern-route entries yet</p>
         <p class="text-sm text-shadow-600">Entries appear when concern routing records a durable follow-up in the reflection journal.</p>
       </div>
@@ -397,7 +397,7 @@
       <BoundedList maxHeight={LIST_MAX_HEIGHT} label="Concern routing entries">
         <div class="space-y-3 pr-1">
           {#each filteredConcerns as entry (entry.id)}
-            <article class="card-garden overflow-hidden border-l-4 border-l-wilt-400">
+            <article class="garden-section card-garden overflow-hidden border-l-4 border-l-wilt-400">
               <div class="px-4 py-2 bg-bark-50 border-b border-bark-100">
                 <div class="flex items-center flex-wrap gap-2">
                   <span class="text-sm text-shadow-700">{formatDateTime(entry.createdAt)}</span>
@@ -416,11 +416,11 @@
     {/if}
   {:else}
     {#if !reflection.disclosed}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">Reflection entries remain sealed until the audited confirmation is completed.</p>
       </div>
     {:else if reflectionEntries.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No reflection journal entries yet</p>
         <p class="text-sm text-shadow-600">Free-form reflection entries will appear when reflection templates persist them.</p>
       </div>
@@ -430,7 +430,7 @@
       <BoundedList maxHeight={LIST_MAX_HEIGHT} label="Reflection journal entries">
         <div class="space-y-3 pr-1">
           {#each filteredReflection as entry (entry.id)}
-            <article class="card-garden overflow-hidden border-l-4 border-l-bark-300">
+            <article class="garden-section card-garden overflow-hidden border-l-4 border-l-bark-300">
               <div class="px-4 py-2 bg-bark-50 border-b border-bark-100">
                 <div class="flex items-center flex-wrap gap-2">
                   <span class="text-sm text-shadow-700">{formatDateTime(entry.createdAt)}</span>

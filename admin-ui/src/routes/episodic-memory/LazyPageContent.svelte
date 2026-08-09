@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     getEpisodicEpisodeDetail,
     getEpisodicThreadDetail,
@@ -198,31 +199,30 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="garden-page space-y-5 pb-8">
   <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-    <div>
-      <h1 class="font-serif text-2xl text-shadow-900 font-semibold">l01_episodes <span class="text-shadow-600">(L0.1 episodic memory)</span></h1>
-      <p class="text-shadow-600 text-sm mt-1">
-        Inspect canonical episodes, L0 provenance, and woven <code>l01_episode_arcs</code> graph threads.
-      </p>
-    </div>
-    <div class="grid grid-cols-3 gap-2 text-center sm:min-w-[24rem]">
-      <div class="card-garden p-3">
+    <GardenPageHeader
+      eyebrow="Memory & Identity"
+      title="L0.1 Episodes"
+      description="Inspect canonical episodes, L0 provenance, and woven episode-arc graph threads."
+    />
+    <div class="garden-metric-grid grid-cols-3 text-center sm:min-w-[24rem]">
+      <div class="garden-metric card-garden p-3">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">episodes</p>
         <p class="font-serif text-xl text-shadow-900">{episodeData?.pagination.total ?? 0}</p>
       </div>
-      <div class="card-garden p-3">
+      <div class="garden-metric card-garden p-3">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">threads</p>
         <p class="font-serif text-xl text-shadow-900">{threadData.length}</p>
       </div>
-      <div class="card-garden p-3">
+      <div class="garden-metric card-garden p-3">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">selected</p>
         <p class="font-serif text-xl text-shadow-900">{selectedEpisode?.relatedArcs.length ?? 0}</p>
       </div>
     </div>
   </div>
 
-  <div class="card-garden p-4 space-y-3">
+  <div class="garden-toolbar card-garden space-y-3 p-4 sm:p-5">
     <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_11rem_11rem_auto_auto]">
       <input
         data-search-shortcut
@@ -270,7 +270,7 @@
   </div>
 
   {#if error}
-    <div class="card-garden p-4 border-wilt-200">
+    <div class="garden-error card-garden p-4 border-wilt-200">
       <p class="text-sm text-wilt-600">{error}</p>
     </div>
   {/if}
@@ -285,9 +285,9 @@
     </div>
   {/if}
 
-  <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,28rem)_minmax(0,1fr)]">
+  <div class="garden-split-view">
     <section class="space-y-4">
-      <div class="card-garden p-4 space-y-3">
+      <div class="garden-section card-garden p-4 space-y-3">
         <div class="flex items-center justify-between gap-3">
           <div>
             <h2 class="font-serif text-lg font-semibold text-shadow-900">threadId <span class="text-shadow-600">(woven threads)</span></h2>
@@ -307,7 +307,7 @@
             <div class="h-16 rounded-lg bg-bark-200 animate-pulse"></div>
           {/each}
         {:else if threadData.length === 0}
-          <p class="rounded-lg border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-600">No threaded episodes found.</p>
+          <p class="garden-empty rounded-lg border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-600">No threaded episodes found.</p>
         {:else}
           <BoundedList maxHeight="16rem" label="Woven threads">
             <div class="space-y-2 pr-1">
@@ -339,14 +339,14 @@
       <div class="space-y-3">
         {#if loadingEpisodes}
           {#each Array(3) as _}
-            <div class="card-garden p-4 animate-pulse">
+            <div class="garden-loading card-garden p-4 animate-pulse">
               <div class="h-4 bg-bark-200 rounded w-2/3 mb-2"></div>
               <div class="h-3 bg-bark-200 rounded w-full mb-1"></div>
               <div class="h-3 bg-bark-200 rounded w-4/5"></div>
             </div>
           {/each}
         {:else if episodes.length === 0}
-          <div class="card-garden p-6 text-center">
+          <div class="garden-empty card-garden p-6 text-center">
             <p class="text-shadow-600 text-sm">No L0.1 episodes match the current filters.</p>
           </div>
         {:else}

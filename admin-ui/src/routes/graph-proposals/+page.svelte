@@ -10,6 +10,7 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
   import {
     createSilentBackgroundRevalidation,
@@ -108,13 +109,14 @@
   });
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Graph Proposals</h1>
-      <p class="text-sm text-shadow-600 mt-1">Social-graph edges proposed from accumulated room evidence -- approve to write the edge, reject to keep it out</p>
-    </div>
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Social Graph"
+    title="Graph Proposals"
+    description="Review relationship edges inferred from room evidence before they enter the live graph."
+  >
+    {#snippet actions()}
+      <div class="flex items-center gap-3">
       <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
       <button
         onclick={loadData}
@@ -123,19 +125,20 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if backgroundError}
-    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+    <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
       Background refresh failed: {backgroundError}. Showing the last available queue.
     </p>
   {/if}
 
   {#if loading && proposals.length === 0}
-    <p class="text-sm text-shadow-600 px-1">Loading graph proposals...</p>
+    <p class="garden-loading text-sm text-shadow-600 px-1">Loading graph proposals...</p>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if endpointMissing}
@@ -146,7 +149,7 @@
       </p>
     </div>
   {:else if proposals.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <p class="font-serif text-lg text-shadow-700 mb-1">No graph proposals</p>
       <p class="text-sm text-shadow-600">The graph-builder worker will surface proposed edges here as room evidence accumulates.</p>
     </div>
@@ -160,13 +163,13 @@
       <BoundedList maxHeight="36rem" label="Graph proposals">
         <div class="space-y-4 pr-1">
           {#each proposals as p (p.id)}
-            <div class="card-garden overflow-hidden">
+            <div class="garden-section card-garden overflow-hidden">
               <div class="px-5 py-4 border-b border-bark-100 bg-bark-50 flex items-center justify-between">
                 <h3 class="text-base font-semibold text-shadow-900">
                   {p.sourceDisplayName} &harr; {p.targetDisplayName}
                   <span class="text-shadow-600 font-normal">({p.relationshipType}{p.directional ? ', directed' : ''})</span>
                 </h3>
-                <span class="inline-block px-2.5 py-1 rounded-full text-sm font-medium {p.status === 'conflict' ? 'bg-wilt-100 text-wilt-600' : p.status === 'accepted' ? 'bg-moss-100 text-moss-700' : p.status === 'rejected' ? 'bg-bark-200 text-shadow-600' : 'bg-gold-100 text-gold-700'}">
+                <span class="garden-status inline-block px-2.5 py-1 rounded-full text-sm font-medium {p.status === 'conflict' ? 'garden-status--danger bg-wilt-100 text-wilt-600' : p.status === 'accepted' ? 'garden-status--success bg-moss-100 text-moss-700' : p.status === 'rejected' ? 'bg-bark-200 text-shadow-600' : 'garden-status--warning bg-gold-100 text-gold-700'}">
                   {p.status}
                 </span>
               </div>
@@ -194,8 +197,8 @@
                         {/each}
                       </select>
                     </label>
-                    <button onclick={() => handleApprove(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300">Approve</button>
-                    <button onclick={() => handleReject(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200">Reject</button>
+                    <button onclick={() => handleApprove(p)} class="garden-action garden-action--primary px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300">Approve</button>
+                    <button onclick={() => handleReject(p)} class="garden-action garden-action--danger px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200">Reject</button>
                   </div>
                 {:else}
                   <p class="text-shadow-600">Decided{p.decidedAt ? ` ${formatTimestamp(p.decidedAt)}` : ''}{p.decidedBy ? ` by ${p.decidedBy}` : ''}{p.acceptedRelationshipType ? ` as ${p.acceptedRelationshipType}` : ''}.</p>

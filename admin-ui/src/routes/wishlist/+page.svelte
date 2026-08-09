@@ -11,6 +11,7 @@
     type CompanionWishState,
   } from '$lib/api/endpoints/wishlist';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import { pushToast } from '$lib/stores/toast.svelte';
   import {
@@ -101,16 +102,13 @@
   onDestroy(() => poller.stop());
 </script>
 
-<div class="space-y-5">
-  <header class="flex flex-wrap items-start justify-between gap-3">
-    <div>
-      <p class="text-[0.65rem] uppercase tracking-[0.2em] text-shadow-500">Her low-pressure queue</p>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Wishlist</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Things the companion wants, saved without a push notification or interruption. Review when it suits you.
-      </p>
-    </div>
-    <div class="flex items-center gap-2">
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="Wishlist"
+    description="A low-pressure queue for things the companion wants, saved without interruption."
+  >
+    {#snippet actions()}
       <label class="flex items-center gap-2 text-sm text-shadow-600">
         <input type="checkbox" bind:checked={showCompleted} class="accent-moss-600" />
         Show done
@@ -123,16 +121,16 @@
       >
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if boundary}
     <p class="rounded-xl border border-bark-200 bg-bark-50 px-4 py-3 text-sm text-shadow-600">{boundary}</p>
   {/if}
 
-  <section class="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Wishlist state summary">
+  <section class="garden-metric-grid grid-cols-2 lg:grid-cols-4" aria-label="Wishlist state summary">
     {#each WISHLIST_STATE_ORDER as state}
-      <div class="card-garden px-4 py-3">
+      <div class="garden-metric card-garden px-4 py-3">
         <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">{wishlistStateLabel(state)}</p>
         <p class="mt-1 text-xl font-semibold text-shadow-900">{counts[state]}</p>
       </div>
@@ -140,13 +138,13 @@
   </section>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4 text-sm text-wilt-700">{errorMessage}</div>
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4 text-sm text-wilt-700">{errorMessage}</div>
   {/if}
 
   {#if loading}
-    <p class="px-1 text-sm text-shadow-600">Loading wishes...</p>
+    <p class="garden-loading px-1 text-sm text-shadow-600">Loading wishes...</p>
   {:else if visibleWishes.length === 0}
-    <div class="card-garden p-10 text-center">
+    <div class="garden-empty card-garden p-10 text-center">
       <p class="font-serif text-lg text-shadow-800">{showCompleted ? 'No wishes yet' : 'No active wishes'}</p>
       <p class="mt-1 text-sm text-shadow-600">New wishes will appear here after she saves them through her canonical wiki tool.</p>
     </div>
@@ -154,7 +152,7 @@
     <BoundedList maxHeight="46rem" label="Companion wishlist">
       <div class="space-y-4 pr-1">
         {#each visibleWishes as wish (wish.id)}
-          <article class="card-garden overflow-hidden">
+          <article class="garden-section card-garden overflow-hidden">
             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-bark-100 bg-bark-50 px-5 py-4">
               <div class="min-w-0 flex-1">
                 <p class="text-base font-semibold text-shadow-900">{wish.text}</p>

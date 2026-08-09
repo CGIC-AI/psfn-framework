@@ -30,6 +30,7 @@
     AdminMemoryScopeSummary,
     AdminUiPurrMemory,
   } from '$lib/types';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import MemoryDetailModal from './MemoryDetailModal.svelte';
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
@@ -756,13 +757,14 @@
   });
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Roots</h1>
-    <p class="text-shadow-600 text-sm mt-1">Memory Browser</p>
-  </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="The Roots"
+    description="Search canonical memory, inspect privacy boundaries, and manage scoped retrieval metadata."
+  />
 
-  <div class="card-garden p-4 space-y-4">
+  <section class="garden-section card-garden p-4 space-y-4">
     <div>
       <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Privacy Boundaries</p>
       <h2 class="mt-1 font-serif text-lg text-shadow-900 font-semibold">Withheld memory visibility</h2>
@@ -808,38 +810,38 @@
       {/if}
     </div>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-8">
-      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+    <div class="garden-metric-grid grid-cols-2 lg:grid-cols-8">
+      <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Active</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.activeMemoryCount ?? 0}</p>
       </div>
-      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+      <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Matching</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.matchingMemoryCount ?? 0}</p>
       </div>
       {#if !searchActive && data?.withheldBySubjectAuthorizationCount !== undefined}
-        <div class="rounded-xl border border-gold-200 bg-gold-50 p-3">
+        <div class="garden-metric rounded-xl border border-gold-200 bg-gold-50 p-3">
           <p class="text-xs uppercase tracking-[0.16em] text-gold-800">Subject-Withheld</p>
           <p class="mt-2 font-serif text-2xl text-gold-800">{data.withheldBySubjectAuthorizationCount}</p>
         </div>
       {/if}
-      <div class="rounded-xl border border-wilt-200 bg-wilt-50 p-3">
+      <div class="garden-metric rounded-xl border border-wilt-200 bg-wilt-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-wilt-700">High Sensitivity</p>
         <p class="mt-2 font-serif text-2xl text-wilt-700">{privacySummary?.highSensitivityCount ?? 0}</p>
       </div>
-      <div class="rounded-xl border border-gold-200 bg-gold-50 p-3">
+      <div class="garden-metric rounded-xl border border-gold-200 bg-gold-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-gold-800">Consent-Gated</p>
         <p class="mt-2 font-serif text-2xl text-gold-800">{privacySummary?.consentGatedCount ?? 0}</p>
       </div>
-      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+      <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Scoped</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.scopedCount ?? 0}</p>
       </div>
-      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+      <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Preferences</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.preferenceCount ?? 0}</p>
       </div>
-      <div class="rounded-xl border border-moss-200 bg-moss-50 p-3">
+      <div class="garden-metric rounded-xl border border-moss-200 bg-moss-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-moss-700">Durable Prefs</p>
         <p class="mt-2 font-serif text-2xl text-moss-700">{privacySummary?.durablePreferenceCount ?? 0}</p>
       </div>
@@ -859,7 +861,7 @@
       {/if}
       Retrieval-time exclusions are shown per turn in Prompt Monitor under Memory -> withheld summary. Use those counts to explain why context was narrowed, then use this page to inspect safe operator-level metadata and adjust contact trust or consent policy deliberately.
     </p>
-  </div>
+  </section>
 
   <!-- Flash message -->
   {#if actionMessage}
@@ -902,7 +904,7 @@
       <p class="text-sm text-wilt-600">{managedScopeError}</p>
     {/if}
 
-    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
+    <div class="garden-split-view">
       <div class="space-y-2">
         {#if managedScopeLoading}
           {#each Array(4) as _}
@@ -1030,7 +1032,7 @@
   </div>
 
   <!-- Filter bar -->
-  <div class="card-garden p-4 space-y-3">
+  <div class="garden-toolbar card-garden p-4 space-y-3">
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
       <select
         bind:value={typeFilter}
@@ -1224,7 +1226,7 @@
 
   <!-- Error -->
   {#if error}
-    <div class="card-garden p-4 border-wilt-200">
+    <div class="garden-error card-garden p-4 border-wilt-200">
       <p class="text-wilt-600 text-sm">{error}</p>
       <button onclick={() => error = ''} class="text-sm text-shadow-600 hover:text-shadow-800 mt-1">Dismiss</button>
     </div>
@@ -1234,7 +1236,7 @@
   {#if loading}
     <div class="space-y-3">
       {#each Array(5) as _}
-        <div class="card-garden p-4 animate-pulse">
+        <div class="garden-loading card-garden p-4 animate-pulse">
           <div class="h-4 bg-bark-200 rounded w-32 mb-2"></div>
           <div class="h-3 bg-bark-200 rounded w-full mb-1"></div>
           <div class="h-3 bg-bark-200 rounded w-3/4"></div>
@@ -1331,7 +1333,7 @@
       {/each}
 
       {#if memories.length === 0 && !loading}
-        <div class="card-garden p-6 text-center">
+        <div class="garden-empty card-garden p-6 text-center">
           <p class="text-shadow-600 text-sm">No memories found.</p>
         </div>
       {/if}

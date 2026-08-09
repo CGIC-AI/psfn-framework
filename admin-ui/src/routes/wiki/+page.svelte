@@ -13,6 +13,7 @@
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type { WikiDocument, WikiDocumentListEntry, WikiSearchMatch } from '../../../../src/faculties/wiki/types';
   import {
     parseNamedWardrobeLookDocument,
@@ -157,18 +158,14 @@
   });
 </script>
 
-<div class="space-y-4">
-  <div class="flex flex-wrap items-center gap-3">
-    <div class="min-w-0">
-      <p class="text-[0.65rem] uppercase tracking-[0.2em] text-shadow-500">The Library</p>
-      <h1 class="flex items-baseline gap-2 text-xl font-serif font-bold text-shadow-900">
-        Wiki
-        <span class="text-sm font-sans font-normal text-shadow-600">
-          {documents.length} document{documents.length === 1 ? '' : 's'}
-        </span>
-      </h1>
-    </div>
-    <div class="flex min-w-0 flex-1 items-center justify-end gap-2">
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="The Library"
+    description={`${documents.length} document${documents.length === 1 ? '' : 's'} across personal and shared-world knowledge.`}
+  >
+    {#snippet actions()}
+      <div class="flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
       <input
         type="search"
         bind:value={searchQuery}
@@ -193,11 +190,12 @@
       >
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
@@ -230,20 +228,20 @@
 
   {#if data}
     <CollapsibleSection title="Workspace" subtitle={data.boundary} count={documents.length}>
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div>
+      <div class="garden-metric-grid md:grid-cols-2 xl:grid-cols-4">
+        <div class="garden-metric">
           <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Boundary</p>
           <p class="mt-2 text-sm text-shadow-700">{data.boundary}</p>
         </div>
-        <div>
+        <div class="garden-metric">
           <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Workspace</p>
           <p class="mt-2 truncate font-mono text-xs text-shadow-700">{data.roots.workspaceRoot}</p>
         </div>
-        <div>
+        <div class="garden-metric">
           <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Wiki Root</p>
           <p class="mt-2 truncate font-mono text-xs text-shadow-700">{data.roots.wikiRoot}</p>
         </div>
-        <div>
+        <div class="garden-metric">
           <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Documents</p>
           <p class="mt-2 text-sm font-semibold text-shadow-900">{documents.length}</p>
         </div>
@@ -332,14 +330,15 @@
     </section>
   {/if}
 
-  <section class="space-y-3">
+  <div class="garden-split-view">
+  <section class="garden-section space-y-3 p-4 sm:p-5">
     <h2 class="text-base font-serif font-semibold text-shadow-900">
       Documents
       <span class="ml-1 text-sm font-sans font-normal text-shadow-600">{documents.length}</span>
     </h2>
 
     {#if loading}
-      <div class="card-garden animate-pulse p-5">
+      <div class="garden-loading card-garden animate-pulse p-5">
         <div class="h-4 w-2/3 rounded bg-bark-200"></div>
         <div class="mt-3 h-3 w-full rounded bg-bark-100"></div>
         <div class="mt-2 h-3 w-5/6 rounded bg-bark-100"></div>
@@ -373,13 +372,13 @@
         </CardGrid>
       </BoundedList>
     {:else}
-      <div class="card-garden p-6">
+      <div class="garden-empty card-garden p-6">
         <p class="text-sm text-shadow-600">No wiki documents found.</p>
       </div>
     {/if}
   </section>
 
-  <section class="card-garden min-w-0 p-5">
+  <section class="garden-section card-garden min-w-0 p-5">
     {#if selected}
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="min-w-0">
@@ -424,7 +423,8 @@
 
       <pre class="mt-4 max-h-[36rem] overflow-auto whitespace-pre-wrap rounded-xl border border-bark-200 bg-bark-50 p-4 text-sm leading-relaxed text-shadow-800">{selected.body}</pre>
     {:else}
-      <p class="text-sm text-shadow-600">Select a wiki document.</p>
+      <div class="garden-empty p-5"><p class="text-sm text-shadow-600">Select a wiki document.</p></div>
     {/if}
   </section>
+  </div>
 </div>

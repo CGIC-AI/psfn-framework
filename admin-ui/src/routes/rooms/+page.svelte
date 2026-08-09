@@ -11,6 +11,7 @@
     type AdminPlacesData,
     type AdminPlaceView,
   } from '$lib/api/endpoints/places';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createRosterLoader } from './roster-loader';
 
@@ -120,28 +121,24 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Rooms</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Known conversation channels and their rosters -- who has been seen where. Derived from
-        channel activity; DATA only, never loaded into prompts.
-      </p>
-    </div>
-    <button
-      onclick={refreshAll}
-      disabled={roomsLoading || placesLoading}
-      class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-             text-shadow-600 hover:bg-bark-100
-             transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-    >
-      {roomsLoading || placesLoading ? 'Loading...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-5 pb-8">
+  <GardenPageHeader
+    eyebrow="Memory & Identity"
+    title="Rooms"
+    description="Known conversation channels, virtual spaces, and their observed rosters. This operational data is never loaded into prompts."
+  >
+    {#snippet actions()}
+      <button
+        onclick={refreshAll}
+        disabled={roomsLoading || placesLoading}
+        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {roomsLoading || placesLoading ? 'Loading...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
-  <section class="space-y-4" aria-labelledby="virtual-spaces-heading">
+  <section class="garden-section space-y-4 p-4 sm:p-5" aria-labelledby="virtual-spaces-heading">
     <div>
       <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Presence Overlay</p>
       <h2 id="virtual-spaces-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -154,18 +151,18 @@
     </div>
 
     {#if placesLoading && !placesData}
-      <div class="card-garden p-6"><p class="text-sm text-shadow-600">Loading virtual spaces...</p></div>
+      <div class="garden-loading card-garden p-6"><p class="text-sm text-shadow-600">Loading virtual spaces...</p></div>
     {:else if placesError}
-      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+      <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
         <p class="text-sm text-shadow-800">{placesError}</p>
       </div>
     {:else if virtualPlaces.length === 0}
-      <div class="card-garden p-6"><p class="text-sm text-shadow-500">No virtual spaces configured.</p></div>
+      <div class="garden-empty card-garden p-6"><p class="text-sm text-shadow-500">No virtual spaces configured.</p></div>
     {:else}
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {#each virtualPlaces as place (place.placeId)}
           {@const twin = resolveTwin(place)}
-          <article class="card-garden p-5">
+          <article class="garden-section card-garden p-5">
             <div class="flex items-start justify-between gap-3">
               <div>
                 <h3 class="text-lg font-serif font-semibold text-shadow-900">{place.displayName}</h3>
@@ -196,7 +193,7 @@
     {/if}
   </section>
 
-  <section class="space-y-4" aria-labelledby="conversation-channels-heading">
+  <section class="garden-section space-y-4 p-4 sm:p-5" aria-labelledby="conversation-channels-heading">
     <div>
       <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Observed Activity</p>
       <h2 id="conversation-channels-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -205,15 +202,15 @@
     </div>
 
   {#if roomsLoading && rooms.length === 0}
-    <div class="card-garden p-6">
+    <div class="garden-loading card-garden p-6">
       <p class="text-sm text-shadow-600">Loading rooms...</p>
     </div>
   {:else if roomsError}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{roomsError}</p>
     </div>
   {:else if rooms.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <p class="font-serif text-lg text-shadow-700 mb-1">No known rooms yet</p>
       <p class="text-sm text-shadow-600">
         Rooms appear here once tracked contacts have channel activity. Untracked speakers have no
@@ -221,7 +218,7 @@
       </p>
     </div>
   {:else}
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="garden-split-view">
       <!-- Room list -->
       <div class="lg:col-span-1 space-y-2">
         {#each rooms as room (room.channel + ':' + room.channelId)}
@@ -250,12 +247,12 @@
       <!-- Roster detail -->
       <div class="lg:col-span-2">
         {#if !selected}
-          <div class="card-garden p-12 text-center">
+          <div class="garden-empty card-garden p-12 text-center">
             <p class="font-serif text-lg text-shadow-700 mb-1">Select a room</p>
             <p class="text-sm text-shadow-600">Choose a room to view its known-member roster.</p>
           </div>
         {:else}
-          <div class="card-garden overflow-hidden">
+          <div class="garden-section card-garden overflow-hidden">
             <div class="px-5 py-4 border-b border-bark-100 bg-bark-50 flex items-center justify-between">
               <div>
                 <h3 class="text-base font-semibold text-shadow-900">Roster</h3>
@@ -271,8 +268,9 @@
             {:else if members.length === 0}
               <div class="p-8 text-center"><p class="text-sm text-shadow-600">No known members in this room.</p></div>
             {:else}
-              <div class="overflow-x-auto">
-                <table class="w-full text-sm">
+              <div class="garden-table-shell">
+                <div class="garden-table-scroll">
+                <table class="garden-table w-full text-sm">
                   <thead>
                     <tr class="text-left text-shadow-600 border-b border-bark-100">
                       <th class="px-4 py-2 font-medium">Name</th>
@@ -294,6 +292,7 @@
                     {/each}
                   </tbody>
                 </table>
+                </div>
               </div>
 
               {#if rosterTotal > ROSTER_PAGE_SIZE}

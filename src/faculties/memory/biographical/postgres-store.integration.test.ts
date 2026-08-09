@@ -102,6 +102,28 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       ).rejects.toThrow();
     });
   });
+
+  it('rejects duplicate ids and scopes lists to the exact subject version', async () => {
+    await withStore(async (store) => {
+      const input = {
+        id: 'claim-fixed',
+        subject: contact('v', 1),
+        kind: 'name' as const,
+        value: { kind: 'name' as const, name: 'V', role: 'primary' as const },
+        basis: 'explicit' as const,
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      };
+      await store.writeClaim(input);
+      await expect(store.writeClaim({
+        ...input,
+        value: { kind: 'name', name: 'Someone else', role: 'primary' },
+      })).rejects.toThrow();
+      expect(await store.listClaims({ subject: contact('v', 2) })).toEqual([]);
+      await expect(store.listClaims({ limit: 0 })).rejects.toThrow('positive integer');
+    });
+  });
 });
 
 describe('PostgresBiographicalProfileStore — supersession and lifecycle', () => {
@@ -156,6 +178,32 @@ describe('PostgresBiographicalProfileStore — supersession and lifecycle', () =
       await expect(
         store.transitionClaim({ claimId: claim.id, to: 'candidate', now: NOW }),
       ).rejects.toThrow();
+    });
+  });
+
+  it('refuses cross-subject supersession without mutating the prior claim', async () => {
+    await withStore(async (store) => {
+      const original = await store.writeClaim({
+        subject: contact('v'),
+        kind: 'name',
+        value: { kind: 'name', name: 'V', role: 'primary' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        status: 'active',
+        now: NOW,
+      });
+      await expect(store.supersedeClaim({
+        supersededClaimId: original.id,
+        subject: contact('someone-else'),
+        kind: 'name',
+        value: { kind: 'name', name: 'Someone', role: 'primary' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source({ ref: 'memory:m-2' })],
+        now: NOW,
+      })).rejects.toThrow('same canonical subject');
+      expect((await store.getClaim(original.id))?.status).toBe('active');
     });
   });
 });

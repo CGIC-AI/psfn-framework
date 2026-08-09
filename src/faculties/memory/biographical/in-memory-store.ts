@@ -1,6 +1,7 @@
 import type { BiographicalClaim, BiographicalSensitivityGrant } from './types.js';
 import {
   assertClaimTransition,
+  assertCompatibleSupersession,
   deserializeClaim,
   finalizeBiographicalClaim,
   prepareBiographicalClaim,
@@ -37,8 +38,12 @@ function matchesSubject(
   if (subject === undefined) return true;
   if (subject.kind !== candidate.subject.kind) return false;
   return subject.kind === 'companion'
-    ? candidate.subject.kind === 'companion' && subject.companionId === candidate.subject.companionId
-    : candidate.subject.kind === 'contact' && subject.contactId === candidate.subject.contactId;
+    ? candidate.subject.kind === 'companion'
+      && subject.companionId === candidate.subject.companionId
+      && subject.subjectVersion === candidate.subject.subjectVersion
+    : candidate.subject.kind === 'contact'
+      && subject.contactId === candidate.subject.contactId
+      && subject.subjectVersion === candidate.subject.subjectVersion;
 }
 
 /**
@@ -95,6 +100,9 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     const prepared: PreparedBiographicalClaim = prepareBiographicalClaim(input);
     const grants = this.grantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
     const claim = finalizeBiographicalClaim(prepared, grants, now);
+    if (this.claims.has(claim.id)) {
+      throw new Error(`biographical claim already exists: ${claim.id}`);
+    }
     this.storeClaim(claim);
     return claim;
   }
@@ -105,6 +113,12 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   }
 
   async listClaims(options: BiographicalClaimListOptions = {}): Promise<BiographicalClaim[]> {
+    if (
+      options.limit !== undefined
+      && (!Number.isSafeInteger(options.limit) || options.limit < 1)
+    ) {
+      throw new Error('biographical claim list limit must be a positive integer');
+    }
     const limit = options.limit ?? Number.POSITIVE_INFINITY;
     const results: BiographicalClaim[] = [];
     const ordered = [...this.claims.values()].sort(
@@ -158,6 +172,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
         now,
       },
     );
+    assertCompatibleSupersession(prior, prepared);
     const grants = this.grantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
     const superseding = finalizeBiographicalClaim(prepared, grants, now);
     assertKnownClaimKind(prior.kind);
@@ -188,7 +203,11 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     const { id, grant } = prepareBiographicalGrant(input);
     const fullGrant: BiographicalSensitivityGrant = { id, ...grant };
     this.grants.set(id, { grant: fullGrant });
-    this.reevaluateClaimsForDigests(grant.claimDigest, grant.sourceSetDigest, new Date());
+    this.reevaluateClaimsForDigests(
+      grant.claimDigest,
+      grant.sourceSetDigest,
+      input.now ?? new Date(),
+    );
     return fullGrant;
   }
 

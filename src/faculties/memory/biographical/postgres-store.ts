@@ -12,6 +12,7 @@ import { POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS } from '../../../persistence/p
 import {
   deserializeClaim,
   finalizeBiographicalClaim,
+  assertCompatibleSupersession,
   prepareBiographicalClaim,
   prepareBiographicalGrant,
   reevaluateClaimEffective,
@@ -96,7 +97,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     return rows.map(row => assertGrantRecord(row.grant_json));
   }
 
-  private async upsertClaimRow(claim: BiographicalClaim, now: Date): Promise<void> {
+  private async insertClaimRow(claim: BiographicalClaim, now: Date): Promise<void> {
     const { subjectKind, subjectId, subjectVersion } = subjectColumns(claim.subject);
     const nowIso = now.toISOString();
     await executeQuery(
@@ -105,12 +106,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         (id, claim_digest, source_set_digest, schema_version, subject_kind,
          subject_id, subject_version, kind, status, effective_sensitivity,
          supersedes_claim_id, claim_json, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
-       ON CONFLICT (id) DO UPDATE SET
-         status = EXCLUDED.status,
-         effective_sensitivity = EXCLUDED.effective_sensitivity,
-         claim_json = EXCLUDED.claim_json,
-         updated_at = EXCLUDED.updated_at`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)`,
       [
         claim.id,
         claim.claimDigest,
@@ -168,7 +164,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     const prepared: PreparedBiographicalClaim = prepareBiographicalClaim(input);
     const grants = await this.findGrantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
     const claim = finalizeBiographicalClaim(prepared, grants, now);
-    await this.upsertClaimRow(claim, now);
+    await this.insertClaimRow(claim, now);
     return claim;
   }
 
@@ -191,9 +187,13 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (options.subject !== undefined) {
-      const { subjectKind, subjectId } = subjectColumns(options.subject);
-      params.push(subjectKind, subjectId);
-      conditions.push(`subject_kind = $${params.length - 1} AND subject_id = $${params.length}`);
+      const { subjectKind, subjectId, subjectVersion } = subjectColumns(options.subject);
+      params.push(subjectKind, subjectId, subjectVersion);
+      conditions.push(
+        `subject_kind = $${params.length - 2}
+         AND subject_id = $${params.length - 1}
+         AND subject_version = $${params.length}`,
+      );
     }
     if (options.kind !== undefined) {
       params.push(options.kind);
@@ -206,13 +206,22 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     if (options.includeTerminal !== true) {
       conditions.push(`status NOT IN ('superseded', 'revoked')`);
     }
-    params.push(options.limit ?? 1000);
-    const limitClause = `LIMIT $${params.length}`;
+    if (
+      options.limit !== undefined
+      && (!Number.isSafeInteger(options.limit) || options.limit < 1)
+    ) {
+      throw new Error('biographical claim list limit must be a positive integer');
+    }
+    let paginationClause = '';
+    if (options.limit !== undefined) {
+      params.push(options.limit);
+      paginationClause = `LIMIT $${params.length}`;
+    }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await queryRows<ClaimRow>(
       this.pool,
       `SELECT claim_json FROM biographical_claims ${where}
-       ORDER BY created_at ASC, id ASC ${limitClause}`,
+       ORDER BY created_at ASC, id ASC ${paginationClause}`,
       params,
     );
     return rows.map(row => deserializeClaim(row.claim_json));
@@ -254,6 +263,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         supersedesClaimId: input.supersededClaimId,
         now,
       });
+      assertCompatibleSupersession(priorClaim, prepared);
       const grants = await this.findGrantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
       const superseding = finalizeBiographicalClaim(prepared, grants, now);
       const superseded: BiographicalClaim = {
@@ -356,7 +366,11 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         JSON.stringify(fullGrant),
       ],
     );
-    await this.reevaluateClaimsForDigests(grant.claimDigest, grant.sourceSetDigest, new Date());
+    await this.reevaluateClaimsForDigests(
+      grant.claimDigest,
+      grant.sourceSetDigest,
+      input.now ?? new Date(),
+    );
     return fullGrant;
   }
 

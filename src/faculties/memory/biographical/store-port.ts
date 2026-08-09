@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SensitivityLevel } from '../../../system/trust/types.js';
-import { isCanonicalIsoTimestamp } from '../../../shared/utils/types.js';
+import { hasExactKeys, isCanonicalIsoTimestamp } from '../../../shared/utils/types.js';
 import type {
   BiographicalClaim,
   BiographicalClaimBasis,
@@ -12,6 +12,12 @@ import type {
   BiographicalCollectionDepth,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
+} from './types.js';
+import {
+  BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
+  BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
+  BIOGRAPHICAL_GRANT_DECISION_REVISION,
+  BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
 } from './types.js';
 import {
   assertKnownClaimKind,
@@ -197,8 +203,8 @@ export function prepareBiographicalClaim(
     now,
   });
   const claimDigest = computeClaimDigest({
-    schemaVersion: 1,
-    normalizerVersion: 1,
+    schemaVersion: BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
+    normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     subject,
     ...(relatedSubject !== undefined ? { relatedSubject } : {}),
     kind: input.kind,
@@ -323,8 +329,8 @@ export function prepareBiographicalGrant(
   return {
     id: randomUUID(),
     grant: {
-      schemaVersion: 1,
-      policyVersion: 1,
+      schemaVersion: BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
+      policyVersion: BIOGRAPHICAL_GRANT_DECISION_REVISION,
       claimDigest: validated.claimDigest,
       sourceSetDigest: validated.sourceSetDigest,
       grantedSensitivity: validated.grantedSensitivity,
@@ -373,8 +379,43 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     throw new Error('stored claim must be a JSON object');
   }
   const record = parsed as Record<string, unknown>;
-  if (record.schemaVersion !== 1) {
+  if (!hasExactKeys(
+    record,
+    [
+      'id',
+      'subject',
+      'kind',
+      'value',
+      'basis',
+      'status',
+      'schemaVersion',
+      'normalizerVersion',
+      'claimDigest',
+      'sourceSetDigest',
+      'sources',
+      'proposedSensitivity',
+      'effectiveSensitivity',
+      'confidence',
+      'synthesizedAt',
+      'lastSourceValidatedAt',
+      'lastEvidenceAt',
+    ],
+    [
+      'relatedSubject',
+      'validFrom',
+      'validTo',
+      'supersedesClaimId',
+      'depthDecision',
+      'appliedGrantId',
+    ],
+  )) {
+    throw new Error('stored claim has unknown or missing fields');
+  }
+  if (record.schemaVersion !== BIOGRAPHICAL_CLAIM_SCHEMA_VERSION) {
     throw new Error('stored claim schemaVersion is not supported');
+  }
+  if (record.normalizerVersion !== BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION) {
+    throw new Error('stored claim normalizerVersion is not supported');
   }
   // Re-validate the canonical fields so a corrupted row fails closed on read.
   const subject = assertSubjectRef(record.subject, 'subject');
@@ -385,6 +426,7 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
   const kind = record.kind;
   assertKnownClaimKind(kind);
   const claimValue = canonicalizeClaimValue(kind, record.value);
+  assertRelatedSubjectShape(kind, claimValue, relatedSubject);
   const basis = assertClaimBasis(record.basis);
   const status = assertClaimStatus(record.status);
   const sources = assertSources(record.sources);
@@ -405,6 +447,29 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
   if (typeof record.sourceSetDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(record.sourceSetDigest)) {
     throw new Error('stored claim sourceSetDigest must be a 64-hex digest');
   }
+  const recomputedClaimDigest = computeClaimDigest({
+    schemaVersion: BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
+    normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
+    subject,
+    ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+    kind,
+    value: claimValue,
+  });
+  if (record.claimDigest !== recomputedClaimDigest) {
+    throw new Error('stored claim claimDigest does not match canonical content');
+  }
+  const recomputedSourceSetDigest = computeSourceSetDigest(sources);
+  if (record.sourceSetDigest !== recomputedSourceSetDigest) {
+    throw new Error('stored claim sourceSetDigest does not match source snapshots');
+  }
+  for (const field of ['appliedGrantId', 'supersedesClaimId'] as const) {
+    if (
+      record[field] !== undefined
+      && (typeof record[field] !== 'string' || record[field].trim().length === 0)
+    ) {
+      throw new Error(`stored claim ${field} must be a non-empty string when present`);
+    }
+  }
   const proposed = record.proposedSensitivity;
   const effective = record.effectiveSensitivity;
   if (typeof proposed !== 'string' || !['public', 'personal', 'intimate', 'confidential'].includes(proposed)) {
@@ -421,8 +486,8 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     value: claimValue,
     basis,
     status,
-    schemaVersion: 1,
-    normalizerVersion: 1,
+    schemaVersion: BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
+    normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     claimDigest: record.claimDigest,
     sourceSetDigest: record.sourceSetDigest,
     sources,
@@ -444,6 +509,30 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
       ? { depthDecision: assertCollectionDepth(record.depthDecision) }
       : {}),
   };
+}
+
+function sameSubject(left: BiographicalSubjectRef, right: BiographicalSubjectRef): boolean {
+  if (left.kind !== right.kind || left.subjectVersion !== right.subjectVersion) return false;
+  return left.kind === 'companion'
+    ? right.kind === 'companion' && left.companionId === right.companionId
+    : right.kind === 'contact' && left.contactId === right.contactId;
+}
+
+/** Supersession may revise only the same canonical subject/kind relationship. */
+export function assertCompatibleSupersession(
+  prior: BiographicalClaim,
+  next: PreparedBiographicalClaim,
+): void {
+  const relatedMatches = prior.relatedSubject === undefined
+    ? next.relatedSubject === undefined
+    : next.relatedSubject !== undefined && sameSubject(prior.relatedSubject, next.relatedSubject);
+  if (
+    prior.kind !== next.kind
+    || !sameSubject(prior.subject, next.subject)
+    || !relatedMatches
+  ) {
+    throw new Error('superseding claim must target the same canonical subject and claim kind');
+  }
 }
 
 export interface BiographicalProfileStorePort {

@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyLoweringGrant,
+  assembleCanonicalClaim,
   assertGrantInput,
   assertGrantRecord,
   assertLifecycleTransition,
   assertSources,
+  assertSubjectRef,
   assertValidInterval,
   BiographicalClaimValidationError,
   BiographicalGrantValidationError,
   BiographicalLifecycleError,
-  BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM,
+  BIOGRAPHICAL_SOURCE_SLOTS,
   computeAutomaticSensitivity,
   computeClaimDigest,
   computeSourceSetDigest,
@@ -21,7 +23,7 @@ import {
   claimConflictKey,
   claimKindFloor,
 } from './claim-kinds.js';
-import { assertClaimTransition } from './store-port.js';
+import { assertClaimTransition, deserializeClaim } from './store-port.js';
 import type {
   BiographicalClaimKind,
   BiographicalClaimSource,
@@ -219,11 +221,25 @@ describe('biographical exact digest-bound lowering grants', () => {
     expect(() => assertGrantInput({ claimDigest: 'short', sourceSetDigest, grantedSensitivity: 'public', authorizingActor: 'operator', authorityBasis: 'x', reason: 'y' })).toThrow(BiographicalGrantValidationError);
     expect(() => assertGrantInput({ claimDigest, sourceSetDigest, grantedSensitivity: 'nope', authorizingActor: 'operator', authorityBasis: 'x', reason: 'y' })).toThrow(BiographicalGrantValidationError);
     expect(() => assertGrantInput({ claimDigest, sourceSetDigest, grantedSensitivity: 'public', authorizingActor: 'martian', authorityBasis: 'x', reason: 'y' })).toThrow(BiographicalGrantValidationError);
+    expect(() => assertGrantInput({ claimDigest, sourceSetDigest, grantedSensitivity: 'public', authorizingActor: 'operator', authorityBasis: 'x', reason: 'y', surprise: true })).toThrow(BiographicalGrantValidationError);
   });
 
   it('rejects stored grants with unsupported schema/policy versions', () => {
     expect(() => assertGrantRecord({ ...grant(), schemaVersion: 2 })).toThrow(BiographicalGrantValidationError);
     expect(() => assertGrantRecord({ ...grant(), policyVersion: 99 })).toThrow(BiographicalGrantValidationError);
+  });
+
+  it('rejects inconsistent grant chronology and revocation fields', () => {
+    expect(() => assertGrantRecord(grant({
+      expiresAt: '2026-08-09T10:00:00.000Z',
+    }))).toThrow(BiographicalGrantValidationError);
+    expect(() => assertGrantRecord(grant({
+      revokedReason: 'missing timestamp',
+    }))).toThrow(BiographicalGrantValidationError);
+    expect(() => assertGrantRecord(grant({
+      revokedAt: '2026-08-09T10:00:00.000Z',
+      revokedReason: 'before grant',
+    }))).toThrow(BiographicalGrantValidationError);
   });
 });
 
@@ -247,6 +263,19 @@ describe('biographical validation (fail closed)', () => {
     expectInvalid('nickname', { kind: 'nickname', nickname: '', scope: 'self' });
     expectInvalid('nickname', { kind: 'nickname', nickname: 'V', scope: 'both' });
     expectInvalid('relationship', { kind: 'relationship', relationshipType: '' });
+    expectInvalid('name', { kind: 'name', name: 'V', role: 'primary', hidden: 'payload' });
+  });
+
+  it('rejects unknown subject and source fields', () => {
+    expect(() => assertSubjectRef({
+      kind: 'contact',
+      contactId: 'v',
+      subjectVersion: 1,
+      channelOwnedIdentity: true,
+    }, 'subject')).toThrow(BiographicalClaimValidationError);
+    expect(() => assertSources([{ ...source(), hidden: 'payload' }])).toThrow(
+      BiographicalClaimValidationError,
+    );
   });
 
   it('rejects name values with a related subject (cardinality gate)', () => {
@@ -288,7 +317,7 @@ describe('biographical validation (fail closed)', () => {
   });
 
   it('rejects sources that exceed the bounded audit surface', () => {
-    const tooMany = Array.from({ length: BIOGRAPHICAL_MAX_SOURCES_PER_CLAIM + 1 }, (_, i) =>
+    const tooMany = Array.from({ length: BIOGRAPHICAL_SOURCE_SLOTS + 1 }, (_, i) =>
       source({ ref: `memory:m-${i}` }),
     );
     expect(() => assertSources(tooMany)).toThrow(BiographicalClaimValidationError);
@@ -296,6 +325,37 @@ describe('biographical validation (fail closed)', () => {
 
   it('validates only public for the unused value shim', () => {
     void validValue;
+  });
+
+  it('rejects corrupted or forward-version stored claim envelopes', () => {
+    const claim = assembleCanonicalClaim({
+      id: 'claim-1',
+      subject: contact('v'),
+      kind: 'name',
+      value: { kind: 'name', name: 'V', role: 'primary' },
+      basis: 'explicit',
+      status: 'active',
+      sources: [source()],
+      proposedSensitivity: 'personal',
+      effectiveSensitivity: 'personal',
+      confidence: 1,
+      synthesizedAt: NOW.toISOString(),
+      lastSourceValidatedAt: NOW.toISOString(),
+      lastEvidenceAt: NOW.toISOString(),
+    });
+    expect(() => deserializeClaim({ ...claim, normalizerVersion: 99 })).toThrow(
+      'normalizerVersion',
+    );
+    expect(() => deserializeClaim({ ...claim, claimDigest: 'f'.repeat(64) })).toThrow(
+      'does not match canonical content',
+    );
+    expect(() => deserializeClaim({
+      ...claim,
+      sources: [{ ...claim.sources[0], revision: 'changed' }],
+    })).toThrow('does not match source snapshots');
+    expect(() => deserializeClaim({ ...claim, hidden: 'payload' })).toThrow(
+      'unknown or missing fields',
+    );
   });
 });
 

@@ -23,8 +23,8 @@ export const BIOGRAPHICAL_CLAIM_SCHEMA_VERSION = 1 as const;
 export const BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION = 1 as const;
 /** Authorization-grant envelope version. */
 export const BIOGRAPHICAL_GRANT_SCHEMA_VERSION = 1 as const;
-/** Policy version an exact lowering grant was decided under (audit only). */
-export const BIOGRAPHICAL_GRANT_POLICY_VERSION = 1 as const;
+/** Decision-contract revision an exact lowering grant was decided under. */
+export const BIOGRAPHICAL_GRANT_DECISION_REVISION = 1 as const;
 
 // ── Subjects ──
 
@@ -166,7 +166,7 @@ type BiographicalGrantActor = 'companion' | 'operator' | 'subject';
 export interface BiographicalSensitivityGrant {
   readonly id: string;
   readonly schemaVersion: typeof BIOGRAPHICAL_GRANT_SCHEMA_VERSION;
-  readonly policyVersion: typeof BIOGRAPHICAL_GRANT_POLICY_VERSION;
+  readonly policyVersion: typeof BIOGRAPHICAL_GRANT_DECISION_REVISION;
   /** Exact claim content digest the grant is bound to. */
   readonly claimDigest: string;
   /** Exact source-set digest the grant is bound to. */

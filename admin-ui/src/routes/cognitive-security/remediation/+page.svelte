@@ -4,6 +4,7 @@
   // them with tombstones, revokes derived cognition, and optionally cuts a
   // fresh lane. Fresh-lane-only recovery stays on /session-recovery.
   import { onMount } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     applyCogSecRemediation,
     getSessionMessages,
@@ -362,25 +363,25 @@
   <title>Cognitive Security: Remediation</title>
 </svelte:head>
 
-<div class="flex w-full flex-col gap-5">
-    <header class="flex flex-col gap-2 border-b border-bark-200 pb-4">
-      <p class="text-xs font-semibold uppercase tracking-wide text-shadow-500">Cognitive Security</p>
-      <h1 class="font-serif text-2xl font-semibold text-bark-900">CogSec Remediation</h1>
-      <p class="max-w-3xl text-sm text-shadow-700">
-        Post-incident cleanup: seal selected companion L0 rows, replace them with tombstones,
-        revoke derived cognition, and optionally cut a fresh lane. For a simple fresh lane without
-        redaction, use <a class="underline underline-offset-2" href={scopeGardenPath('/session-recovery')}>Session Recovery</a>.
-        Pre-incident holds live on the <a class="underline underline-offset-2" href={scopeGardenPath('/cognitive-security/approvals')}>Approvals</a> queue.
-      </p>
-    </header>
+<div class="garden-page flex w-full flex-col gap-5">
+    <GardenPageHeader
+      eyebrow="Cognitive Security · Post-incident response"
+      title="CogSec Remediation"
+      description="Seal selected L0 rows, replace them with tombstones, revoke derived cognition, and optionally cut a fresh lane. Preview is required before the destructive confirmation."
+    >
+      {#snippet actions()}
+        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/session-recovery')}>Session recovery</a>
+        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/cognitive-security/approvals')}>Held content</a>
+      {/snippet}
+    </GardenPageHeader>
 
     {#if error}
-      <div class="rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
+      <div class="garden-error rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
         {error}
       </div>
     {/if}
 
-    <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+    <section class="garden-split-view grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
       <div class="flex min-w-0 flex-col gap-4">
         <div class="card-garden p-4">
           <div class="mb-4 flex items-center justify-between gap-3">
@@ -403,8 +404,8 @@
           {:else if routes.length === 0}
             <p class="text-sm text-shadow-600">No source-channel routes have been created yet.</p>
           {:else}
-            <div class="overflow-x-auto">
-              <table class="w-full min-w-[760px] text-left text-sm">
+            <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+              <table class="garden-table w-full min-w-[760px] text-left text-sm">
                 <thead class="border-b border-bark-200 text-xs uppercase text-shadow-600">
                   <tr>
                     <th class="px-2 py-2 font-semibold">Source Channel</th>
@@ -660,14 +661,14 @@
 
           <div class="mt-5 grid gap-2 sm:grid-cols-2">
             <button
-              class="rounded border border-bark-300 px-4 py-2 text-sm font-semibold text-shadow-700 hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+              class="garden-action rounded border border-bark-300 px-4 py-2 text-sm font-semibold text-shadow-700 hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
               type="submit"
               disabled={loading || cogSecSubmitting}
             >
               {cogSecSubmitting ? 'Working...' : 'Preview Impact'}
             </button>
             <button
-              class="rounded bg-wilt-600 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
+              class="garden-action garden-action--danger rounded bg-wilt-600 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
               disabled={loading || cogSecSubmitting}
               onclick={requestApplyCogSec}

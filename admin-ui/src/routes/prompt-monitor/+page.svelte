@@ -7,6 +7,7 @@
     listSessions,
   } from '$lib/api/endpoints/sessions';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import PromptMonitorSelectedTurnTabs from '$lib/components/prompt-monitor/PromptMonitorSelectedTurnTabs.svelte';
   import {
     connectGardenEventBus,
@@ -279,15 +280,13 @@
   });
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-start justify-between gap-3 flex-wrap">
-    <div>
-      <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Loom</h1>
-      <p class="text-shadow-600 text-sm mt-1">
-        Prompt-generation monitor built from live turn snapshots and stage telemetry.
-      </p>
-    </div>
-    <div class="flex items-center gap-2 flex-wrap">
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Prompts · Live monitor"
+    title="The Loom"
+    description="Prompt-generation timing, assembled context, and model handoff built from live turn snapshots and stage telemetry."
+  >
+    {#snippet actions()}
       <span class="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium
         {isGardenEventBusConnected() ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-wilt-200 bg-wilt-50 text-wilt-600'}">
         <span class="inline-block h-2.5 w-2.5 rounded-full {isGardenEventBusConnected() ? 'bg-moss-500' : 'bg-wilt-400'}"></span>
@@ -318,8 +317,8 @@
       >
         {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if error}
     <div class="card-garden border-wilt-200 p-4">
@@ -328,29 +327,28 @@
     </div>
   {/if}
 
-  <div class="card-garden flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
-    <div class="flex items-baseline gap-2" title="Mean `agent.turn.stage.prompt` duration across loaded turns">
+  <section class="garden-metric-grid grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-bark-300 bg-bark-300 shadow-sm md:grid-cols-4" aria-label="Prompt monitor summary">
+    <div class="garden-metric flex items-baseline gap-2 bg-surface px-4 py-3" title="Mean `agent.turn.stage.prompt` duration across loaded turns">
       <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Avg Prompt</span>
       <span class="font-serif text-2xl leading-none {metricTone(summary.averagePromptDurationMs, 1_500)}">
         {formatDuration(summary.averagePromptDurationMs)}
       </span>
     </div>
-    <div class="flex items-baseline gap-2" title="Mean time-to-first-token across loaded turns">
+    <div class="garden-metric flex items-baseline gap-2 bg-surface px-4 py-3" title="Mean time-to-first-token across loaded turns">
       <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Avg TTFT</span>
       <span class="font-serif text-2xl leading-none {metricTone(summary.averageTtftMs, 500)}">
         {formatDuration(summary.averageTtftMs)}
       </span>
     </div>
-    <div class="h-6 w-px bg-bark-300" aria-hidden="true"></div>
-    <div class="flex items-baseline gap-2">
+    <div class="garden-metric flex items-baseline gap-2 bg-surface px-4 py-3">
       <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Turns</span>
       <span class="text-base text-shadow-900">{summary.turnCount}</span>
     </div>
-    <div class="flex items-baseline gap-2" title="Incomplete prompt traces still accumulating">
+    <div class="garden-metric flex items-baseline gap-2 bg-surface px-4 py-3" title="Incomplete prompt traces still accumulating">
       <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Live</span>
       <span class="text-base text-shadow-900">{summary.liveTurnCount}</span>
     </div>
-    <div class="ml-auto flex min-w-0 items-baseline gap-3 text-xs text-shadow-600">
+    <div class="col-span-2 flex min-w-0 items-baseline gap-3 bg-bark-50 px-4 py-2.5 text-xs text-shadow-600 md:col-span-4">
       <span class="truncate" title={selectedLogicalChannelId ?? undefined}>
         {selectedLogicalChannelId ? truncateValue(selectedLogicalChannelId, 28) : 'No channel selected'}
       </span>
@@ -358,10 +356,10 @@
         stack {truncateValue(summary.latestPromptVersionPointer, 16)}
       </span>
     </div>
-  </div>
+  </section>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <aside class="card-garden overflow-hidden">
+  <div class="garden-split-view grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <aside class="garden-section card-garden overflow-hidden">
       <div class="flex items-baseline justify-between gap-3 border-b border-bark-300 bg-bark-100 px-4 py-2">
         <p class="text-sm font-medium text-shadow-800">Sessions</p>
         <p class="text-xs text-shadow-600">

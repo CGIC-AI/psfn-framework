@@ -3,6 +3,7 @@
   // used to live here as a second mode moved to Cognitive Security ->
   // Remediation (/cognitive-security/remediation) in htm9.11.
   import { onMount } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     listCogSecEvents,
     listSessionRoutes,
@@ -124,26 +125,25 @@
   <title>Session Recovery</title>
 </svelte:head>
 
-<div class="flex w-full flex-col gap-5">
-    <header class="flex flex-col gap-2 border-b border-bark-200 pb-4">
-      <p class="text-xs font-semibold uppercase tracking-wide text-shadow-500">Review & Safety</p>
-      <h1 class="font-serif text-2xl font-semibold text-bark-900">Session Recovery</h1>
-      <p class="max-w-3xl text-sm text-shadow-700">
-        Start a fresh logical session for an existing source channel without deleting old L0 history.
-        Future live context uses the new route; retained sessions stay available for explicit audit/search.
-        For row-level redaction and lineage remediation, use
-        <a class="underline underline-offset-2" href={scopeGardenPath('/cognitive-security/remediation')}>Cognitive Security &rarr; Remediation</a>.
-      </p>
-    </header>
+<div class="garden-page flex w-full flex-col gap-5">
+    <GardenPageHeader
+      eyebrow="Review & Safety · Session routing"
+      title="Session Recovery"
+      description="Cut a fresh logical lane without deleting prior L0 history. Retired sessions remain available for explicit audit and search."
+    >
+      {#snippet actions()}
+        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300 hover:text-shadow-900" href={scopeGardenPath('/cognitive-security/remediation')}>Open remediation</a>
+      {/snippet}
+    </GardenPageHeader>
 
     {#if error}
-      <div class="rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
+      <div class="garden-error rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
         {error}
       </div>
     {/if}
 
     {#if result}
-      <div class="rounded border border-moss-300 bg-moss-100 px-4 py-3 text-sm text-moss-900">
+      <div class="garden-section rounded border border-moss-300 bg-moss-100 px-4 py-3 text-sm text-moss-900">
         <p class="font-medium">{result.message}</p>
         <p class="mt-1 font-mono text-xs">
           {result.oldLogicalSessionId} -> {result.newLogicalSessionId}
@@ -151,8 +151,8 @@
       </div>
     {/if}
 
-    <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-      <div class="card-garden p-4">
+    <section class="garden-split-view grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+      <div class="garden-section card-garden p-4">
         <div class="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 class="font-serif text-lg font-semibold text-shadow-900">Active Routes</h2>
@@ -173,8 +173,8 @@
         {:else if routes.length === 0}
           <p class="text-sm text-shadow-600">No source-channel routes have been created yet.</p>
         {:else}
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[760px] text-left text-sm">
+          <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+            <table class="garden-table w-full min-w-[760px] text-left text-sm">
               <thead class="border-b border-bark-200 text-xs uppercase text-shadow-600">
                 <tr>
                   <th class="px-2 py-2 font-semibold">Source Channel</th>
@@ -208,7 +208,7 @@
         {/if}
       </div>
 
-      <form class="card-garden p-4" onsubmit={(event) => { event.preventDefault(); void resetSession(); }}>
+      <form class="garden-section card-garden p-4" onsubmit={(event) => { event.preventDefault(); void resetSession(); }}>
         <h2 class="font-serif text-lg font-semibold text-shadow-900">Start Fresh Lane</h2>
         <p class="mt-1 text-sm text-shadow-600">
           This retires the current active logical session for one physical source channel and creates a new live route.

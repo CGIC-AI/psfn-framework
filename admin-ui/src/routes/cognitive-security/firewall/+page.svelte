@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     getIntakePolicy,
     getIntakeSourceLists,
@@ -106,26 +107,23 @@
   <title>Cognitive Security: Firewall</title>
 </svelte:head>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <p class="text-xs font-semibold uppercase text-moss-700">Cognitive Security</p>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Intake Firewall</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        The intake-policy configuration (mode, source risk tiers, escalation thresholds, source lists)
-        plus recent CogSec events. Edit thresholds via Settings &rarr; intake-policy; source lists are
-        editable here and fed by Approvals-page decisions (the flywheel).
-      </p>
-    </div>
-    <button
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Cognitive Security · Intake policy"
+    title="Intake Firewall"
+    description="Inspect enforcement posture, source risk tiers, escalation thresholds, and the allow/deny flywheel that gates inbound context."
+  >
+    {#snippet actions()}
+      <button
       onclick={loadData}
       disabled={loading}
       class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100
              transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-    >
-      {loading ? 'Loading...' : 'Refresh'}
-    </button>
-  </div>
+      >
+        {loading ? 'Loading...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if loading && !policy}
     <div class="card-garden p-5 animate-pulse space-y-3">
@@ -146,8 +144,8 @@
     </div>
   {:else if policy && lists}
     <!-- Mode + quarantine limits -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="card-garden p-5">
+    <div class="garden-metric-grid grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase font-semibold text-shadow-600">Mode</p>
         <p class="mt-2">
           <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold {MODE_STYLES[policy.mode] ?? 'bg-bark-200 text-shadow-700'}">{policy.mode}</span>
@@ -160,12 +158,12 @@
               : 'Firewall off: no intake screening is wired anywhere.'}
         </p>
       </div>
-      <div class="card-garden p-5">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase font-semibold text-shadow-600">Quarantine TTL</p>
         <p class="mt-2 text-2xl font-serif text-shadow-900">{policy.quarantine.itemTtlHours}h</p>
         <p class="mt-1 text-xs text-shadow-600">Held items expire after this window.</p>
       </div>
-      <div class="card-garden p-5">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase font-semibold text-shadow-600">Max held items</p>
         <p class="mt-2 text-2xl font-serif text-shadow-900">{policy.quarantine.maxHeldItems}</p>
         <p class="mt-1 text-xs text-shadow-600">Oldest held items expire early beyond this.</p>
@@ -176,8 +174,8 @@
     <div class="card-garden p-5">
       <h2 class="font-serif text-lg text-shadow-900 mb-1">Source risk tiers</h2>
       <p class="text-sm text-shadow-600 mb-3">Every inbound surface maps to a tier; scrutiny scales with the tier (source lists adjust it per origin).</p>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm min-w-[480px]">
+      <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+        <table class="garden-table w-full text-left text-sm min-w-[480px]">
           <thead class="text-xs uppercase text-shadow-600 border-b border-bark-200">
             <tr><th class="px-2 py-1.5 font-semibold">Source class</th><th class="px-2 py-1.5 font-semibold">Tier</th></tr>
           </thead>
@@ -206,8 +204,8 @@
         L2 lane: <span class="font-mono text-xs">background purpose</span> ·
         L3 lane: <span class="font-mono text-xs">reasoning purpose{policy.l3Screener.dualModel ? ' + background purpose' : ''}</span>
       </p>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm min-w-[640px]">
+      <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+        <table class="garden-table w-full text-left text-sm min-w-[640px]">
           <thead class="text-xs uppercase text-shadow-600 border-b border-bark-200">
             <tr>
               <th class="px-2 py-1.5 font-semibold">Tier</th>
@@ -243,8 +241,8 @@
     <div class="card-garden p-5">
       <h2 class="font-serif text-lg text-shadow-900 mb-1">Sink gates</h2>
       <p class="text-sm text-shadow-600 mb-3">Per-sink caps: content above the tier cap (or carrying a denied label) may never drive that sink.</p>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm min-w-[640px]">
+      <div class="garden-table-shell garden-table-scroll overflow-x-auto rounded-xl border border-bark-200">
+        <table class="garden-table w-full text-left text-sm min-w-[640px]">
           <thead class="text-xs uppercase text-shadow-600 border-b border-bark-200">
             <tr>
               <th class="px-2 py-1.5 font-semibold">Sink</th>

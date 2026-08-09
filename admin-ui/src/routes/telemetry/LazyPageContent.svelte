@@ -484,7 +484,7 @@
   });
 </script>
 
-<div class="space-y-5 h-full flex flex-col">
+<div class="garden-page space-y-5 h-full flex flex-col">
   {#if getTelemetryCacheError()}
     <div class="card-garden p-4 border-l-4 border-l-wilt-400 text-sm text-wilt-600">
       Local telemetry cache unavailable: {getTelemetryCacheError()}
@@ -514,8 +514,9 @@
   {/snippet}
 
   <GardenPageHeader
+    eyebrow="Operations · Observability"
     title="Events & Audit"
-    description="Live telemetry, derived audit trail, and observability map. Garden context: The Sap."
+    description="Live telemetry, persisted audit evidence, and an honest map of which operator surfaces are durable, derived, or process-local."
     actions={telemetryHeaderActions}
   />
 
@@ -538,7 +539,7 @@
     <ContextCoherenceCard events={getEvents()} />
 
     <!-- Controls bar -->
-    <div class="card-garden p-4">
+    <div class="garden-toolbar card-garden p-4">
       <div class="flex flex-wrap items-center gap-3">
         {#if isConnected()}
           <button
@@ -630,7 +631,7 @@
     </div>
 
     <!-- Stats bar -->
-    <div class="flex items-center gap-6 text-sm text-shadow-600">
+    <div class="garden-metric-grid flex flex-wrap items-center gap-6 rounded-xl border border-bark-200 bg-surface px-4 py-3 text-sm text-shadow-600 shadow-sm">
       <span class="flex items-center gap-1.5">
         <strong class="text-shadow-800">{totalCount}</strong> events
       </span>
@@ -694,7 +695,7 @@
   <!-- AUDIT TRAIL TAB                               -->
   <!-- ══════════════════════════════════════════════ -->
   {#if activeTab === 'audit'}
-    <div class="card-garden p-4">
+    <div class="garden-toolbar card-garden p-4">
       <p class="text-sm text-shadow-600 mb-4">
         Unified persisted timeline for tool invocations and activation failures, settings changes,
         confirmations, gateway policy decisions, memory mutations, charge decisions, and external actions.

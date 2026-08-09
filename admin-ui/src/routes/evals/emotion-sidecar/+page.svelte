@@ -349,33 +349,29 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="garden-page space-y-5">
   <GardenPageHeader
-    eyebrow="Evals"
+    eyebrow="Evals · Observer lane"
     title="Emotion Sidecar"
-    description="Read-only current-system and EmoSim observer comparison."
-  />
-
-  <div class="flex flex-wrap items-center gap-2">
-    <button
-      type="button"
-      onclick={refresh}
-      disabled={refreshing || loading}
-      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-50 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing' : 'Refresh'}
-    </button>
-    <a
-      href={currentExportPath}
-      download="observer-eval-sidecar-export.json"
-      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-50"
-    >
-      Export
-    </a>
-    <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {statusBadgeClass(pageState)}">
-      {labelizeObserverEval(pageState)}
-    </span>
-  </div>
+    description="Read-only comparison between PSFN's current EmotionState and the isolated EmoSim observer, with privacy-safe evidence and lever timelines."
+  >
+    {#snippet actions()}
+      <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {statusBadgeClass(pageState)}">
+        Status: {labelizeObserverEval(pageState)}
+      </span>
+      <a
+        href={currentExportPath}
+        download="observer-eval-sidecar-export.json"
+        class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300"
+      >Export JSON</a>
+      <button
+        type="button"
+        onclick={refresh}
+        disabled={refreshing || loading}
+        class="rounded-xl border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800 transition-colors hover:bg-gold-100 disabled:cursor-not-allowed disabled:opacity-50"
+      >{refreshing ? 'Refreshing' : 'Refresh'}</button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
     <div class="card-garden border-l-4 border-l-wilt-400 p-4">

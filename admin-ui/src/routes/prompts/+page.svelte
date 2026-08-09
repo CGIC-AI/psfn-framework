@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import ConstitutionBuilderPanel from './ConstitutionBuilderPanel.svelte';
   import NorthStarEditorPanel from './NorthStarEditorPanel.svelte';
@@ -767,19 +768,19 @@
   }
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Prompt Soil</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Layered prompt composition stack -- {layers.length} layer{layers.length === 1 ? '' : 's'}, {runtimeBlocks.length} runtime-derived, {staticPrompts.length} static
-      </p>
-    </div>
-    <div class="flex items-center gap-3 text-sm text-shadow-600">
-      <span>Total: {formatResolvedTokenCount(totalLayerTokenCount)}</span>
-    </div>
-  </div>
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Prompts · Composition"
+    title="Prompt Soil"
+    description={`Layered prompt composition across ${layers.length} authored layer${layers.length === 1 ? '' : 's'}, ${runtimeBlocks.length} runtime participants, and ${staticPrompts.length} static prompts.`}
+  >
+    {#snippet actions()}
+      <div class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-right shadow-sm">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Resolved budget</p>
+        <p class="font-mono text-sm font-semibold text-shadow-900">{formatResolvedTokenCount(totalLayerTokenCount)}</p>
+      </div>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Error -->
   {#if error}
@@ -883,7 +884,7 @@
 
       <!-- New Layer Form -->
       {#if showNewLayerForm}
-        <div class="card-garden p-5 mb-3 filigree-border-strong">
+        <div class="garden-section card-garden p-5 mb-3 filigree-border-strong">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Create New Prompt Layer</h3>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
             <label class="block">

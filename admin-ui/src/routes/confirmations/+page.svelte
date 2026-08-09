@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { onMount, onDestroy } from 'svelte';
   import {
     loadConfirmationsLocalFirst,
@@ -193,14 +194,13 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Gate</h1>
-      <p class="text-sm text-shadow-600 mt-1">Pending approval queue -- review, approve, deny, or modify actions</p>
-    </div>
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-5">
+  <GardenPageHeader
+    eyebrow="Review & Safety · Action queue"
+    title="The Gate"
+    description="Review the exact scope, provenance, and parameters of actions awaiting an operator decision."
+  >
+    {#snippet actions()}
       <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
       <button
         onclick={loadData}
@@ -211,14 +211,29 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if backgroundError}
-    <p class="rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+    <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
       Background refresh failed: {backgroundError}. Showing the last available queue.
     </p>
   {/if}
+
+  <section class="garden-metric-grid grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-bark-300 bg-bark-300 shadow-sm sm:grid-cols-3" aria-label="Confirmation queue summary">
+    <div class="garden-metric bg-surface px-4 py-3">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Pending decisions</p>
+      <p class="mt-1 font-serif text-2xl font-semibold text-shadow-900">{entries.length}</p>
+    </div>
+    <div class="garden-metric bg-surface px-4 py-3">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Gateway posture</p>
+      <p class="mt-1 text-sm font-semibold {available ? 'text-moss-700' : 'text-wilt-600'}">{available ? 'Connected · decisions enabled' : 'Unavailable · fail closed'}</p>
+    </div>
+    <div class="garden-metric bg-surface px-4 py-3">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Queue cadence</p>
+      <p class="mt-1 font-serif text-2xl font-semibold text-shadow-900">15s</p>
+    </div>
+  </section>
 
   <!-- Action message -->
   {#if actionMessage}
@@ -236,7 +251,7 @@
   {/if}
 
   {#if loading && entries.length === 0}
-    <div class="space-y-3">
+    <div class="garden-loading space-y-3">
       {#each Array(3) as _}
         <div class="card-garden p-5 animate-pulse space-y-3">
           <div class="h-4 rounded bg-bark-200 w-2/5"></div>
@@ -296,7 +311,7 @@
       </div>
     </div>
   {:else if !available}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
         <path d="M7 11V7a5 5 0 0110 0v4" />
@@ -305,7 +320,7 @@
       <p class="text-sm text-shadow-600">Confirmations require an active gateway connection. The approval queue will appear here when the agent is running with the gateway.</p>
     </div>
   {:else if entries.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
@@ -321,9 +336,9 @@
     </div>
 
     <!-- Confirmation entries -->
-    <div class="space-y-4">
+    <div class="garden-split-view grid gap-4 xl:grid-cols-2">
       {#each entries as entry (entry.id)}
-        <div class="card-garden overflow-hidden">
+        <article class="garden-section card-garden overflow-hidden">
           <!-- Entry header -->
           <div class="px-5 py-4 border-b border-bark-100 bg-bark-50">
             <div class="flex items-center justify-between">
@@ -527,7 +542,7 @@
             <div class="flex flex-wrap gap-3 pt-2">
               <button
                 onclick={() => handleResolve(entry.id, 'approve')}
-                class="px-4 py-2 rounded-lg text-sm font-medium
+                class="garden-action garden-action--primary px-4 py-2 rounded-lg text-sm font-medium
                        bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors
                        border border-moss-300"
               >
@@ -535,7 +550,7 @@
               </button>
               <button
                 onclick={() => handleResolve(entry.id, 'deny')}
-                class="px-4 py-2 rounded-lg text-sm font-medium
+                class="garden-action garden-action--danger px-4 py-2 rounded-lg text-sm font-medium
                        bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors
                        border border-wilt-200"
               >
@@ -543,7 +558,7 @@
               </button>
               <button
                 onclick={() => handleResolve(entry.id, 'modify')}
-                class="px-4 py-2 rounded-lg text-sm font-medium
+                class="garden-action px-4 py-2 rounded-lg text-sm font-medium
                        bg-gold-100 text-gold-700 hover:bg-gold-200 transition-colors
                        border border-gold-300"
               >
@@ -551,7 +566,7 @@
               </button>
             </div>
           </div>
-        </div>
+        </article>
       {/each}
     </div>
   {/if}

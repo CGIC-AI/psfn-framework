@@ -65,20 +65,18 @@
   <title>Theme · Garden</title>
 </svelte:head>
 
-<div class="space-y-6 pb-10">
-  <div>
-    {#snippet themeActions()}
-      <span class="rounded-lg border border-moss-300 bg-moss-50 px-3 py-2 text-xs font-medium text-moss-700">
-        Active · {activeTheme.name}
-      </span>
-    {/snippet}
-    <GardenPageHeader
-      eyebrow="Configure Garden · Appearance"
-      title="Theme"
-      description="Choose the palette and navigation language for this browser. Theme preference changes presentation only; runtime settings remain untouched."
-      actions={themeActions}
-    />
-  </div>
+<div class="garden-page space-y-6 pb-10">
+  {#snippet themeActions()}
+    <span class="rounded-lg border border-moss-300 bg-moss-50 px-3 py-2 text-xs font-medium text-moss-700">
+      Active · {activeTheme.name}
+    </span>
+  {/snippet}
+  <GardenPageHeader
+    eyebrow="Configure Garden · Appearance"
+    title="Theme"
+    description="Choose the palette and navigation language for this browser. Theme preference changes presentation only; runtime settings remain untouched."
+    actions={themeActions}
+  />
 
   {#if successMessage}
     <div class="rounded-xl border border-moss-300 bg-moss-50 p-4" role="status">

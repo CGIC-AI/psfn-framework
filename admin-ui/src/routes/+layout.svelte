@@ -5,6 +5,8 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { navGroups } from '$lib/nav';
+  import OperatorNavigation from '$lib/components/navigation/OperatorNavigation.svelte';
+  import type { ConsoleNavigationGroup } from '$lib/nav/presentation';
   import {
     ATTENTION_SOURCES,
     mergeAttentionPollResults,
@@ -34,7 +36,6 @@
   import { clearToasts } from '$lib/stores/toast.svelte';
   import {
     activateCompanionScopeFromPath,
-    getCompanionCacheScope,
     isFleetOverviewPath,
     parseCompanionGardenScope,
     scopeGardenPath,
@@ -50,7 +51,6 @@
 
   let { children } = $props();
 
-  let sidebarOpen = $state(true);
   let isDesktop = $state(true);
   let mobileNavOpen = $state(false);
   let fleetProjection = $state<FleetPortalProjection | null>(null);
@@ -60,42 +60,8 @@
   const activeCompanionId = $derived(companionScope?.companionId ?? null);
   const companionName = $derived(getCompanionName());
   const activeTheme = $derived(getActiveThemePack());
-  const sidebarTitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarTitleTemplate, { companionName }));
   const sidebarSubtitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarSubtitleTemplate, { companionName }));
   const appTitle = $derived(resolveThemeTemplate(activeTheme.ui.appTitleTemplate, { companionName }));
-
-  // ── Collapsible nav groups (persisted per browser profile) ──
-  let collapsedGroups = $state<Record<string, boolean>>(loadCollapsedGroups());
-
-  function navGroupsStorageKey(): string {
-    return `garden.nav.collapsedGroups:${getCompanionCacheScope()}`;
-  }
-
-  function loadCollapsedGroups(): Record<string, boolean> {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(navGroupsStorageKey());
-      if (!raw) return {};
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-      const out: Record<string, boolean> = {};
-      for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value === 'boolean') out[key] = value;
-      }
-      return out;
-    } catch {
-      return {};
-    }
-  }
-
-  function toggleNavGroup(groupId: string): void {
-    collapsedGroups = { ...collapsedGroups, [groupId]: !collapsedGroups[groupId] };
-    try {
-      window.localStorage.setItem(navGroupsStorageKey(), JSON.stringify(collapsedGroups));
-    } catch {
-      // Storage unavailable (private mode, quota) — collapse still works for the session.
-    }
-  }
 
   // ── Human-in-the-loop attention badges (polled, fail-quiet) ──
   let attentionCounts = $state<AttentionCounts>({});
@@ -171,18 +137,26 @@
     }
   }
 
-  const themedNavGroups = $derived(navGroups.map((group) => ({
-    ...group,
+  const consoleNavigationGroups = $derived(navGroups.map((group) => ({
+    id: group.id,
+    label: group.defaultLabel,
     attention: group.items.reduce((sum, item) => sum + (attentionCounts[item.path] ?? 0), 0),
     items: group.items.map((item) => {
       const labels = resolveThemeMenuLabel(activeTheme, item.id, item.defaultLabel, { companionName });
       return {
-        ...item,
-        ...labels,
+        id: item.id,
+        path: item.path,
+        href: item.id === 'fleet-costs'
+          ? fleetCostNavigationPath($page.url.pathname)
+          : scopeGardenPath(item.path, $page.url.pathname),
+        icon: item.icon,
+        primaryLabel: labels.primaryLabel,
+        secondaryLabel: labels.secondaryLabel,
         attention: attentionCounts[item.path] ?? 0,
+        active: isActive(item.path),
       };
     }),
-  })));
+  })) as ConsoleNavigationGroup[]);
 
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
@@ -197,7 +171,6 @@
     void activateSessionScopeFromPath(pathname).catch((error: unknown) => {
       console.warn('Garden session scope activation failed.', error);
     });
-    collapsedGroups = loadCollapsedGroups();
     attentionCounts = {};
     clearToasts();
     if (isLoginPage || isFleetPage) return;
@@ -309,8 +282,6 @@
       isDesktop = mediaQuery.matches;
       if (isDesktop) {
         mobileNavOpen = false;
-      } else {
-        sidebarOpen = false;
       }
     };
 
@@ -370,203 +341,35 @@
     {@render children()}
   </div>
 {:else}
-  <div class="flex h-screen bg-bark-100 relative">
-    {#if !isDesktop && mobileNavOpen}
-      <button
-        aria-label="Close navigation"
-        onclick={() => mobileNavOpen = false}
-        class="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px] lg:hidden"
-      ></button>
-    {/if}
+  <div class="relative flex h-screen bg-bark-100">
+    <OperatorNavigation
+      groups={consoleNavigationGroups}
+      {appTitle}
+      {sidebarSubtitle}
+      {companionName}
+      {activeCompanionId}
+      {fleetProjection}
+      {fleetProjectionError}
+      onSwitchCompanion={(event) => void switchCompanion(event)}
+      onLogout={handleLogout}
+      bind:mobileOpen={mobileNavOpen}
+    />
 
-    <!-- Sidebar -->
-    <aside
-      class="flex flex-col bg-bark-50 border-r border-bark-300 transition-all duration-200 z-40
-             fixed inset-y-0 left-0 lg:static lg:translate-x-0 shadow-lg lg:shadow-none"
-      class:w-64={!isDesktop || sidebarOpen}
-      class:w-16={isDesktop && !sidebarOpen}
-      class:translate-x-0={isDesktop || mobileNavOpen}
-      class:-translate-x-full={!isDesktop && !mobileNavOpen}
-    >
-      <!-- Header -->
-      <div class="p-4 border-b border-bark-300">
-        {#if sidebarOpen || !isDesktop}
-          <h1 class="font-serif text-xl text-gold-300 font-semibold leading-tight">
-            {sidebarTitle}
-          </h1>
-          <p class="text-sm text-bark-700 mt-1">{sidebarSubtitle}</p>
-        {:else}
-          <span class="text-gold-300 text-xl block text-center" title={appTitle}>
-            &#x2727;
-          </span>
-        {/if}
-        {#if (sidebarOpen || !isDesktop) && companionScope}
-          <label
-            for="companion-switcher"
-            class="mt-3 block text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-400"
-          >
-            Companion
-          </label>
-          <select
-            id="companion-switcher"
-            value={activeCompanionId ?? ''}
-            onchange={(event) => void switchCompanion(event)}
-            disabled={!fleetProjection}
-            class="mt-1 w-full rounded-md border border-bark-300 bg-bark-100 px-2 py-1.5 text-xs text-shadow-800"
-          >
-            {#if fleetProjection}
-              {#each fleetProjection.companions.filter(companion => companion.gardenPath) as companion (companion.companionId)}
-                <option value={companion.companionId}>{companion.displayName}</option>
-              {/each}
-            {:else}
-              <option value={activeCompanionId ?? ''}>{companionName}</option>
-            {/if}
-          </select>
-          <a
-            href="/fleet"
-            class="mt-3 inline-flex w-full items-center justify-center rounded-lg border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-semibold text-gold-800 transition-colors hover:border-gold-400 hover:bg-gold-100"
-          >
-            Cluster Overview
-          </a>
-          {#if fleetProjectionError}
-            <p class="mt-1 text-[0.68rem] text-wilt-600">{fleetProjectionError}</p>
-          {/if}
-        {/if}
-      </div>
-
-      <!-- Navigation -->
-      <nav class="flex-1 overflow-y-auto py-2">
-        {#each themedNavGroups as group, groupIndex}
-          {#if isDesktop && !sidebarOpen && groupIndex > 0}
-            <div class="mx-4 my-2 border-t border-bark-200"></div>
-          {/if}
-
-          <div class="px-2 py-1.5">
-            {#if sidebarOpen || !isDesktop}
-              <button
-                type="button"
-                aria-expanded={!collapsedGroups[group.id]}
-                aria-controls="nav-group-{group.id}"
-                onclick={() => toggleNavGroup(group.id)}
-                class="flex w-full items-center justify-between gap-2 rounded px-2 pb-1.5 text-left"
-              >
-                <span class="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-shadow-400">
-                  {group.defaultLabel}
-                </span>
-                <span class="flex items-center gap-1.5">
-                  {#if group.attention > 0}
-                    <span
-                      class="rounded-full bg-wilt-500 px-1.5 py-0.5 text-[0.65rem] font-bold leading-none text-white"
-                      title="{group.attention} item{group.attention === 1 ? '' : 's'} need attention in {group.defaultLabel}"
-                    >{group.attention}</span>
-                  {/if}
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="h-3 w-3 text-shadow-400 transition-transform {collapsedGroups[group.id] ? '' : 'rotate-180'}"
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
-              </button>
-            {/if}
-
-            <div
-              id="nav-group-{group.id}"
-              class="space-y-0.5"
-              hidden={Boolean(collapsedGroups[group.id]) && (!isDesktop || sidebarOpen)}
-            >
-              {#each group.items as item}
-                <a
-                  href={item.id === 'fleet-costs'
-                    ? fleetCostNavigationPath($page.url.pathname)
-                    : scopeGardenPath(item.path, $page.url.pathname)}
-                  onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
-                  class="relative flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors group"
-                  class:bg-gold-50={isActive(item.path)}
-                  class:border-l-3={isActive(item.path)}
-                  class:border-gold-400={isActive(item.path)}
-                  class:hover:bg-bark-200={!isActive(item.path)}
-                >
-                  <span class="text-lg shrink-0 mt-0.5">{item.icon}</span>
-                  {#if sidebarOpen || !isDesktop}
-                    <div class="min-w-0 flex-1">
-                      <span
-                        class="flex items-center justify-between gap-2 text-sm font-semibold"
-                        class:text-gold-700={isActive(item.path)}
-                        class:text-bark-700={!isActive(item.path)}
-                      >
-                        <span class="truncate">{item.primaryLabel}</span>
-                        {#if item.attention > 0}
-                          <span
-                            class="shrink-0 rounded-full bg-wilt-500 px-1.5 py-0.5 text-[0.65rem] font-bold leading-none text-white"
-                            title="{item.attention} pending — needs a human"
-                          >{item.attention}</span>
-                        {/if}
-                      </span>
-                      {#if item.secondaryLabel}
-                        <span class="font-serif text-sm text-bark-600 block">
-                          {item.secondaryLabel}
-                        </span>
-                      {/if}
-                    </div>
-                  {:else if item.attention > 0}
-                    <span
-                      class="absolute ml-5 -mt-1 rounded-full bg-wilt-500 px-1.5 py-0.5 text-[0.65rem] font-bold leading-none text-white"
-                      title="{item.attention} pending — needs a human"
-                    >{item.attention}</span>
-                  {/if}
-                </a>
-              {/each}
-            </div>
-          </div>
-        {/each}
-      </nav>
-
-      <!-- Footer -->
-      <div class="p-3 border-t border-bark-300">
-        <div class="flex items-center gap-2">
-          {#if isDesktop}
-            <button
-              onclick={() => (sidebarOpen = !sidebarOpen)}
-              class="p-1.5 rounded hover:bg-bark-200 text-bark-700 transition-colors"
-              title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                {#if sidebarOpen}
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                {:else}
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                {/if}
-              </svg>
-            </button>
-          {/if}
-          {#if sidebarOpen || !isDesktop}
-            <button
-              onclick={handleLogout}
-              class="ml-auto text-sm text-bark-600 hover:text-wilt-600 transition-colors"
-            >
-              Logout
-            </button>
-          {/if}
-        </div>
-      </div>
-    </aside>
-
-    <!-- Main content -->
-    <main class="flex-1 overflow-y-auto">
-      <div class="px-3 py-4 sm:px-5 sm:py-5 lg:p-6 max-w-7xl mx-auto">
-        {#if !isDesktop}
-          <button
-            onclick={() => mobileNavOpen = !mobileNavOpen}
-            class="mb-4 inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-bark-700 hover:bg-bark-100 transition-colors"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-            Menu
-          </button>
-        {/if}
+    <main class="min-w-0 flex-1 overflow-y-auto">
+      {#if !isDesktop}
+        <button
+          type="button"
+          onclick={() => mobileNavOpen = true}
+          class="fixed bottom-4 left-4 z-20 inline-flex items-center gap-2 rounded-full border border-bark-300 bg-bark-50/95 px-4 py-2 text-sm font-semibold text-bark-700 shadow-lg backdrop-blur transition-colors hover:bg-bark-100 lg:hidden"
+          aria-label="Open operator navigation"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          Menu
+        </button>
+      {/if}
+      <div class="console-page-frame mx-auto w-full max-w-[100rem] px-3 py-4 sm:px-5 sm:py-5 lg:px-7 lg:py-6">
         {@render children()}
       </div>
     </main>

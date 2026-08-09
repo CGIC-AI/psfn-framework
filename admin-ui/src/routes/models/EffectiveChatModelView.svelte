@@ -9,21 +9,26 @@
   }>();
 </script>
 
-<section class="card-garden p-4 space-y-3" aria-labelledby="effective-chat-model-heading">
-  <div>
+<section class="garden-section card-garden p-5 space-y-3" aria-labelledby="effective-chat-model-heading">
+  <div class="garden-section-header flex flex-wrap items-start justify-between gap-3">
+    <div>
     <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Runtime truth</p>
-    <h2 id="effective-chat-model-heading" class="text-sm font-serif font-semibold text-shadow-800">
+    <h2 id="effective-chat-model-heading" class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">
       Effective chat model
     </h2>
+    </div>
+    {#if effectiveChat}
+      <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">resolved</span>
+    {/if}
   </div>
 
   {#if loading}
-    <p class="text-sm text-shadow-600">Loading effective model selection...</p>
+    <p class="garden-loading text-sm text-shadow-600">Loading effective model selection...</p>
   {:else if loadError}
-    <p class="text-sm text-wilt-700">{loadError}</p>
+    <p class="garden-error rounded-lg border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700">{loadError}</p>
   {:else if effectiveChat}
-    <div class="rounded-lg border border-moss-300 bg-moss-50 px-3 py-2">
-      <p class="font-mono text-sm text-moss-800 break-all">{effectiveChat.model}</p>
+    <div class="garden-metric rounded-lg border border-moss-300 bg-moss-50 px-4 py-3">
+      <p class="font-mono text-base font-medium text-moss-800 break-all">{effectiveChat.model}</p>
       <p class="mt-1 text-xs text-moss-700">
         {effectiveChat.provider}
         {#if effectiveChat.slotKey} · slot {effectiveChat.slotKey}{/if}
@@ -31,7 +36,7 @@
       </p>
     </div>
   {:else}
-    <p class="text-sm text-wilt-700">No effective chat model is currently resolvable.</p>
+    <p class="garden-error rounded-lg border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700">No effective chat model is currently resolvable.</p>
   {/if}
 
   {#if fleetDefault}

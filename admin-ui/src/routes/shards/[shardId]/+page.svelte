@@ -17,6 +17,7 @@
     fetchFleetPortalProjection,
     type FleetPortalCompanion,
   } from '$lib/fleet/portal';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type { ShardFoldReviewRecord } from '../../../../../src/faculties/shards/fold-review.js';
   import type { ShardConfigurationSnapshot } from '../../../../../src/faculties/shards/types.js';
 
@@ -158,36 +159,33 @@
   });
 </script>
 
-<div class="space-y-6">
-  <nav class="text-sm text-shadow-600" aria-label="Shard breadcrumb">
-    <a href={`${base}/shards`} class="hover:text-gold-700">Shards</a>
-    <span class="px-2">/</span>
-    <span class="font-mono text-shadow-800">{shardId}</span>
-  </nav>
-
-  <header>
-    <p class="text-sm uppercase tracking-wide text-shadow-500">Parent-owned shard subview</p>
-    <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">{shardId}</h1>
-    <p class="mt-1 text-sm text-shadow-600">
-      Runtime-only overrides. Canonical owner files and shard authority remain unchanged.
-    </p>
-  </header>
+<div class="garden-page space-y-6 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Shards · Parent-owned subview"
+    title={shardId || 'Shard detail'}
+    description="Runtime-only overrides. Canonical owner files and shard authority remain unchanged."
+    class="border-b border-bark-300 pb-4 [&_h1]:break-all [&_h1]:font-mono [&_h1]:text-xl"
+  >
+    {#snippet actions()}
+      <a href={`${base}/shards`} class="garden-action inline-flex rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50">← All shards</a>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if error}
-    <div class="rounded-xl border border-wilt-200 bg-wilt-50 p-4 text-sm text-wilt-700">{error}</div>
+    <div class="garden-error rounded-xl border border-wilt-200 bg-wilt-50 p-4 text-sm text-wilt-700">{error}</div>
   {/if}
   {#if notice}
-    <div class="rounded-xl border border-moss-200 bg-moss-50 p-4 text-sm text-moss-700">{notice}</div>
+    <div class="garden-status garden-status--success rounded-xl border border-moss-200 bg-moss-50 p-4 text-sm text-moss-700">{notice}</div>
   {/if}
 
   {#if loading}
-    <div class="card-garden p-8 text-center text-shadow-600">Loading parent-scoped shard state...</div>
+    <div class="garden-loading card-garden p-8 text-center text-shadow-600">Loading parent-scoped shard state...</div>
   {:else}
     {#if snapshot}
-      <section class="card-garden p-5" aria-labelledby="configuration-heading">
-        <div class="flex flex-wrap items-start justify-between gap-3">
+      <section class="garden-section card-garden overflow-hidden" aria-labelledby="configuration-heading">
+        <div class="garden-section-header flex flex-wrap items-start justify-between gap-3 border-b border-bark-300 px-5 py-4">
           <div>
-            <h2 id="configuration-heading" class="text-lg font-serif font-semibold text-shadow-900">
+            <h2 id="configuration-heading" class="garden-section-title text-lg font-serif font-semibold text-shadow-900">
               Configuration snapshot
             </h2>
             <p class="mt-1 text-sm text-shadow-600">
@@ -204,8 +202,8 @@
           </div>
         </div>
 
-        <div class="mt-5 grid gap-4 lg:grid-cols-3">
-          <div class="rounded-xl border border-bark-200 p-4">
+        <div class="garden-metric-grid grid gap-4 p-5 lg:grid-cols-3">
+          <div class="garden-metric rounded-xl border border-bark-200 bg-bark-50 p-4">
             <h3 class="text-sm font-medium uppercase tracking-wide text-shadow-500">Inherited</h3>
             <dl class="mt-3 space-y-2 text-sm">
               <div><dt class="text-shadow-500">Model</dt><dd class="font-mono text-shadow-800">{snapshot.inherited.model.provider}/{snapshot.inherited.model.model}</dd></div>
@@ -214,7 +212,7 @@
               <div><dt class="text-shadow-500">Charge units</dt><dd>{snapshot.inherited.workerBudget.maxChargeUnits}</dd></div>
             </dl>
           </div>
-          <div class="rounded-xl border border-gold-200 bg-gold-50 p-4">
+          <div class="garden-metric rounded-xl border border-gold-200 bg-gold-50 p-4">
             <h3 class="text-sm font-medium uppercase tracking-wide text-gold-700">Override</h3>
             <dl class="mt-3 space-y-2 text-sm">
               <div><dt class="text-shadow-500">Model</dt><dd class="font-mono text-shadow-800">{snapshot.override.model ? `${snapshot.override.model.provider}/${snapshot.override.model.model}` : 'none'}</dd></div>
@@ -223,7 +221,7 @@
               <div><dt class="text-shadow-500">Charge units</dt><dd>{snapshot.override.workerBudget.maxChargeUnits ?? 'none'}</dd></div>
             </dl>
           </div>
-          <div class="rounded-xl border border-moss-200 bg-moss-50 p-4">
+          <div class="garden-metric rounded-xl border border-moss-200 bg-moss-50 p-4">
             <h3 class="text-sm font-medium uppercase tracking-wide text-moss-700">Effective</h3>
             <dl class="mt-3 space-y-2 text-sm">
               <div><dt class="text-shadow-500">Model</dt><dd class="font-mono text-shadow-800">{snapshot.effective.model.provider}/{snapshot.effective.model.model}</dd></div>
@@ -234,10 +232,10 @@
           </div>
         </div>
 
-        <form class="mt-6 space-y-4 border-t border-bark-200 pt-5" onsubmit={(event) => { event.preventDefault(); void saveOverride(); }}>
+        <form class="garden-toolbar space-y-4 border-t border-bark-300 bg-bark-50 p-5" onsubmit={(event) => { event.preventDefault(); void saveOverride(); }}>
           <h3 class="font-medium text-shadow-900">Limited overrides</h3>
-          <div class="grid gap-4 md:grid-cols-2">
-            <label class="text-sm text-shadow-700">
+          <div class="garden-field-grid grid gap-4 md:grid-cols-2">
+            <label class="garden-field text-sm text-shadow-700">
               Parent-eligible model
               <select bind:value={selectedModel} class="mt-1 w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
                 {#each snapshot.allowed.models as model}
@@ -247,32 +245,32 @@
                 {/each}
               </select>
             </label>
-            <label class="text-sm text-shadow-700">
+            <label class="garden-field text-sm text-shadow-700">
               Maximum turns
               <input bind:value={maxTurns} type="number" min="1" max={snapshot.allowed.workerBudget.maxTurns} class="mt-1 w-full rounded-lg border border-bark-300 px-3 py-2" />
             </label>
-            <label class="text-sm text-shadow-700">
+            <label class="garden-field text-sm text-shadow-700">
               Maximum output tokens
               <input bind:value={maxOutputTokens} type="number" min="1" max={snapshot.allowed.workerBudget.maxOutputTokens} class="mt-1 w-full rounded-lg border border-bark-300 px-3 py-2" />
             </label>
-            <label class="text-sm text-shadow-700">
+            <label class="garden-field text-sm text-shadow-700">
               Maximum charge units
               <input bind:value={maxChargeUnits} type="number" min="0" max={snapshot.allowed.workerBudget.maxChargeUnits} step="0.25" class="mt-1 w-full rounded-lg border border-bark-300 px-3 py-2" />
             </label>
           </div>
           <div class="flex flex-wrap gap-3">
-            <button disabled={saving} class="rounded-lg bg-gold-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+            <button disabled={saving} class="garden-action garden-action--primary rounded-lg bg-gold-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               {saving ? 'Applying...' : 'Apply bounded override'}
             </button>
-            <button type="button" disabled={saving} onclick={() => void resetOverride()} class="rounded-lg border border-bark-300 px-4 py-2 text-sm text-shadow-700 disabled:opacity-50">
+            <button type="button" disabled={saving} onclick={() => void resetOverride()} class="garden-action rounded-lg border border-bark-300 px-4 py-2 text-sm text-shadow-700 disabled:opacity-50">
               Reset to inherited
             </button>
           </div>
         </form>
       </section>
 
-      <section class="card-garden p-5" aria-labelledby="readonly-heading">
-        <h2 id="readonly-heading" class="text-lg font-serif font-semibold text-shadow-900">Inherited authority (read-only)</h2>
+      <section class="garden-section card-garden p-5" aria-labelledby="readonly-heading">
+        <h2 id="readonly-heading" class="garden-section-title text-lg font-serif font-semibold text-shadow-900">Inherited authority (read-only)</h2>
         <p class="mt-1 text-sm text-shadow-600">These fields have no override parser or mutation control.</p>
         <dl class="mt-4 grid gap-4 text-sm md:grid-cols-2">
           <div><dt class="text-shadow-500">Capability tier</dt><dd>{snapshot.effective.readOnly.capabilityTier.parent} → {snapshot.effective.readOnly.capabilityTier.effective}</dd></div>
@@ -285,8 +283,8 @@
         </dl>
       </section>
 
-      <section class="card-garden p-5" aria-labelledby="lineage-heading">
-        <h2 id="lineage-heading" class="text-lg font-serif font-semibold text-shadow-900">Lineage</h2>
+      <section class="garden-section card-garden p-5" aria-labelledby="lineage-heading">
+        <h2 id="lineage-heading" class="garden-section-title text-lg font-serif font-semibold text-shadow-900">Lineage</h2>
         <dl class="mt-4 grid gap-4 text-sm md:grid-cols-2">
           <div>
             <dt class="text-shadow-500">Parent companion</dt>
@@ -302,7 +300,7 @@
         </dl>
       </section>
     {:else if snapshotUnavailable}
-      <div class="card-garden border-l-4 border-l-bark-300 p-5">
+      <div class="garden-empty card-garden border-l-4 border-l-bark-300 p-5">
         <h2 class="font-serif text-lg font-semibold text-shadow-900">Runtime configuration unavailable</h2>
         <p class="mt-1 text-sm text-shadow-600">
           This shard is completed, failed, cleaned up, unknown, or outside the selected parent.
@@ -312,9 +310,9 @@
     {/if}
 
     {#if review}
-      <section class="card-garden p-5" aria-labelledby="fold-review-heading">
+      <section class="garden-section card-garden p-5" aria-labelledby="fold-review-heading">
         <div class="flex items-center justify-between gap-3">
-          <h2 id="fold-review-heading" class="text-lg font-serif font-semibold text-shadow-900">Fold review</h2>
+          <h2 id="fold-review-heading" class="garden-section-title text-lg font-serif font-semibold text-shadow-900">Fold review</h2>
           <span class="rounded-full bg-bark-100 px-3 py-1 text-sm text-shadow-700">{review.reviewState}</span>
         </div>
         <p class="mt-2 text-sm text-shadow-700">{review.task}</p>
@@ -327,8 +325,8 @@
             <textarea bind:value={reviewNote} rows="3" class="mt-1 w-full rounded-lg border border-bark-300 px-3 py-2"></textarea>
           </label>
           <div class="mt-3 flex gap-3">
-            <button disabled={resolvingReview} onclick={() => void decideReview('approve')} class="rounded-lg bg-moss-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Approve fold</button>
-            <button disabled={resolvingReview} onclick={() => void decideReview('deny')} class="rounded-lg bg-wilt-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Deny fold</button>
+            <button disabled={resolvingReview} onclick={() => void decideReview('approve')} class="garden-action garden-action--primary rounded-lg bg-moss-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Approve fold</button>
+            <button disabled={resolvingReview} onclick={() => void decideReview('deny')} class="garden-action garden-action--danger rounded-lg bg-wilt-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Deny fold</button>
           </div>
         {/if}
       </section>

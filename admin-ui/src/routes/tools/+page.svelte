@@ -189,17 +189,18 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="garden-page space-y-6 pb-10">
   <GardenPageHeader
     eyebrow="The Shed"
     title="Tools"
     description="Direct runtime tool availability for registered tools, service health, turn policy, and audit signals."
+    class="border-b border-bark-300 pb-4"
   >
     {#snippet actions()}
       <button
         onclick={refreshData}
         disabled={refreshing}
-        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+        class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
@@ -207,28 +208,28 @@
   </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
 
-  <section class="grid gap-4 md:grid-cols-4" aria-label="Runtime tool summary">
-    <div class="card-garden overflow-hidden p-5">
+  <section class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Runtime tool summary">
+    <div class="garden-metric card-garden overflow-hidden p-4">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Registered</p>
       <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{summary.registeredTools}</p>
       <p class="mt-2 text-sm text-shadow-600">Direct tools currently in the runtime catalog.</p>
     </div>
-    <div class="card-garden overflow-hidden p-5">
+    <div class="garden-metric card-garden overflow-hidden p-4">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active Now</p>
       <p class="mt-3 text-4xl font-serif font-bold text-petal-500">{summary.activeTools}</p>
       <p class="mt-2 text-sm text-shadow-600">Tools active in the current adaptive runtime snapshot.</p>
     </div>
-    <div class="card-garden overflow-hidden p-5">
+    <div class="garden-metric card-garden overflow-hidden p-4">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Pinned Order</p>
       <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.pinnedOrderApplied}</p>
       <p class="mt-2 text-sm text-shadow-600">Extended-tool ordering preferences applied to the catalog.</p>
     </div>
-    <div class="card-garden overflow-hidden p-5">
+    <div class="garden-metric card-garden overflow-hidden p-4">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Runs</p>
       <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentInvocations}</p>
       <p class="mt-2 text-sm text-shadow-600">Successful and failed tool invocations retained by admin telemetry.</p>
@@ -238,11 +239,11 @@
   <GardenTabBar tabs={tabs} activeId={activeTab} onSelect={selectTab} label="Tool views" />
 
   {#if activeTab === 'health'}
-    <section class="space-y-4" aria-labelledby="tools-health-heading">
-      <div class="flex items-baseline gap-3">
+    <section class="garden-section space-y-4" aria-labelledby="tools-health-heading">
+      <div class="garden-section-header flex items-baseline gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Health</p>
-          <h2 id="tools-health-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+          <h2 id="tools-health-heading" class="garden-section-title mt-1 text-lg font-serif font-semibold text-shadow-900">
             Runtime dependencies
           </h2>
         </div>
@@ -252,7 +253,7 @@
       {#if loading}
         <CardGrid>
           {#each Array(3) as _}
-            <div class="card-garden animate-pulse p-5">
+            <div class="garden-loading card-garden animate-pulse p-5">
               <div class="h-4 w-24 rounded bg-bark-200"></div>
               <div class="mt-3 h-8 w-20 rounded bg-bark-100"></div>
               <div class="mt-4 h-3 w-full rounded bg-bark-100"></div>
@@ -267,16 +268,16 @@
           {/each}
         </CardGrid>
       {:else}
-        <div class="card-garden p-5">
+        <div class="garden-empty card-garden p-5">
           <p class="text-sm text-shadow-500">No runtime service health data is available.</p>
         </div>
       {/if}
     </section>
 
-    <section class="space-y-4" aria-labelledby="tools-workflows-heading">
-      <div>
+    <section class="garden-section space-y-4" aria-labelledby="tools-workflows-heading">
+      <div class="garden-section-header">
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Workflows</p>
-        <h2 id="tools-workflows-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        <h2 id="tools-workflows-heading" class="garden-section-title mt-1 text-lg font-serif font-semibold text-shadow-900">
           Memory and social operations
         </h2>
         <p class="mt-1 text-sm text-shadow-600">
@@ -284,7 +285,7 @@
         </p>
       </div>
 
-      <div class="card-garden p-5">
+      <div class="garden-section card-garden p-5">
         <div class="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-base font-serif font-semibold text-shadow-900">Knowledge / Memory Workflow</h3>
@@ -346,11 +347,11 @@
       </CollapsibleSection>
     </section>
   {:else if activeTab === 'tools'}
-    <section class="space-y-5" aria-labelledby="tools-inventory-heading">
-      <div class="flex items-baseline gap-3">
+    <section class="garden-section space-y-5" aria-labelledby="tools-inventory-heading">
+      <div class="garden-section-header flex items-baseline gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Inventory</p>
-          <h2 id="tools-inventory-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+          <h2 id="tools-inventory-heading" class="garden-section-title mt-1 text-lg font-serif font-semibold text-shadow-900">
             Tool catalog by runtime role
           </h2>
         </div>
@@ -360,7 +361,7 @@
       </div>
 
       {#if !loading && inventoryGroups.length}
-        <div class="card-garden p-5 space-y-4">
+        <div class="garden-toolbar card-garden p-5 space-y-4">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 class="text-base font-serif font-semibold text-shadow-900">Inventory Filters</h3>
@@ -377,14 +378,14 @@
               type="button"
               onclick={clearInventoryFilters}
               disabled={!hasInventoryFilters}
-              class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+              class="garden-action rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Clear filters
             </button>
           </div>
 
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <label class="block md:col-span-2 xl:col-span-1">
+          <div class="garden-field-grid grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <label class="garden-field block md:col-span-2 xl:col-span-1">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Search</span>
               <input
                 data-search-shortcut
@@ -395,7 +396,7 @@
               />
             </label>
 
-            <label class="block">
+            <label class="garden-field block">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Inventory Group</span>
               <select
                 bind:value={inventoryFilters.groupKey}
@@ -410,7 +411,7 @@
               </select>
             </label>
 
-            <label class="block">
+            <label class="garden-field block">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Scope</span>
               <select
                 bind:value={inventoryFilters.scope}
@@ -425,7 +426,7 @@
               </select>
             </label>
 
-            <label class="block">
+            <label class="garden-field block">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Health</span>
               <select
                 bind:value={inventoryFilters.healthStatus}
@@ -440,7 +441,7 @@
               </select>
             </label>
 
-            <label class="block">
+            <label class="garden-field block">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat Availability</span>
               <select
                 bind:value={inventoryFilters.chatStatus}
@@ -455,7 +456,7 @@
               </select>
             </label>
 
-            <label class="block">
+            <label class="garden-field block">
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Reflection Availability</span>
               <select
                 bind:value={inventoryFilters.reflectionStatus}
@@ -474,7 +475,7 @@
       {/if}
 
       {#if loading}
-        <div class="grid gap-4 lg:grid-cols-2">
+        <div class="garden-loading grid gap-4 lg:grid-cols-2">
           {#each Array(4) as _}
             <div class="card-garden animate-pulse p-5">
               <div class="h-4 w-40 rounded bg-bark-200"></div>
@@ -513,7 +514,7 @@
           </section>
         {/each}
       {:else if inventoryGroups.length}
-        <div class="card-garden border-l-4 border-l-gold-400 p-5">
+        <div class="garden-empty card-garden border-l-4 border-l-gold-400 p-5">
           <h3 class="text-base font-serif font-semibold text-shadow-900">No tools match these filters</h3>
           <p class="mt-2 text-sm text-shadow-600">
             Adjust the search or selectors to widen the inventory view.
@@ -521,22 +522,22 @@
           <button
             type="button"
             onclick={clearInventoryFilters}
-            class="mt-4 rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100"
+            class="garden-action mt-4 rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100"
           >
             Clear filters
           </button>
         </div>
       {:else}
-        <div class="card-garden p-5">
+        <div class="garden-empty card-garden p-5">
           <p class="text-sm text-shadow-500">No tool health rows are available for this runtime.</p>
         </div>
       {/if}
     </section>
   {:else if activeTab === 'runs'}
-    <section class="space-y-4" aria-labelledby="tools-adaptive-runtime-heading">
-      <div>
+    <section class="garden-section space-y-4" aria-labelledby="tools-adaptive-runtime-heading">
+      <div class="garden-section-header">
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Adaptive Runtime</p>
-        <h2 id="tools-adaptive-runtime-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        <h2 id="tools-adaptive-runtime-heading" class="garden-section-title mt-1 text-lg font-serif font-semibold text-shadow-900">
           Catalog snapshot
         </h2>
         <p class="mt-1 text-sm text-shadow-600">
@@ -544,7 +545,7 @@
         </p>
       </div>
 
-      <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+      <div class="garden-split-view grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
         <div class="card-garden p-5">
           <div class="flex items-baseline justify-between gap-4">
             <div>
@@ -609,10 +610,10 @@
       </div>
     </section>
 
-    <section class="space-y-4" aria-labelledby="tools-failures-audit-heading">
-      <div>
+    <section class="garden-section space-y-4" aria-labelledby="tools-failures-audit-heading">
+      <div class="garden-section-header">
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Runs / Audit</p>
-        <h2 id="tools-failures-audit-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        <h2 id="tools-failures-audit-heading" class="garden-section-title mt-1 text-lg font-serif font-semibold text-shadow-900">
           Recent tool use, failures, and telemetry trail
         </h2>
         <p class="mt-1 text-sm text-shadow-600">

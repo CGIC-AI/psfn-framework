@@ -37,18 +37,18 @@
   }
 </script>
 
-<section class="card-garden overflow-hidden" aria-labelledby="human-attention-heading">
-  <div class="border-b border-bark-300 px-5 py-4">
+<section class="garden-section card-garden overflow-hidden" aria-labelledby="human-attention-heading">
+  <div class="garden-section-header border-b border-bark-300 px-5 py-4">
     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Companion boundaries</p>
-    <h2 id="human-attention-heading" class="mt-1 font-serif text-lg font-semibold text-shadow-900">
+    <h2 id="human-attention-heading" class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">
       Human attention pressure
     </h2>
-    <p class="mt-1 text-sm text-shadow-600">
+    <p class="garden-section-description mt-1 text-sm text-shadow-600">
       Separate from MI fatigue. Threshold events add private context to the companion's normal turn; they never silence a human or send canned boundary text.
     </p>
   </div>
-  <div class="grid gap-4 p-5 md:grid-cols-3">
-    <div class="rounded-xl border border-bark-300 bg-bark-50 p-4">
+  <div class="garden-metric-grid grid gap-4 p-5 md:grid-cols-3">
+    <div class="garden-metric rounded-xl border border-bark-300 bg-bark-50 p-4">
       <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">Policy</p>
       <p class="mt-2 font-serif text-xl font-semibold text-shadow-900">
         {policy?.enabled ? 'Enabled' : 'Disabled'}
@@ -57,7 +57,7 @@
         Window {formatInteger((policy?.windowMs ?? 0) / 60_000)} min · cooldown {formatInteger((policy?.boundaryCooldownMs ?? 0) / 60_000)} min
       </p>
     </div>
-    <div class="rounded-xl border border-bark-300 bg-bark-50 p-4">
+    <div class="garden-metric rounded-xl border border-bark-300 bg-bark-50 p-4">
       <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">Recorded pressure</p>
       <p class="mt-2 font-serif text-xl font-semibold text-shadow-900">
         {formatInteger(data?.aggregates.eventCount)}
@@ -66,7 +66,7 @@
         {formatInteger(data?.aggregates.boundaryAlertCount)} boundary alerts
       </p>
     </div>
-    <div class="rounded-xl border border-bark-300 bg-bark-50 p-4">
+    <div class="garden-metric rounded-xl border border-bark-300 bg-bark-50 p-4">
       <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">Trust thresholds</p>
       <p class="mt-2 font-mono text-sm text-shadow-800">
         public {policy?.trustThresholds.public ?? '-'} · regular {policy?.trustThresholds.regular ?? '-'}

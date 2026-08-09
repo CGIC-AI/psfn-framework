@@ -15,6 +15,7 @@
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     buildSkillRootViews,
     findManagedSkillRecord,
@@ -311,18 +312,18 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Crafts</h1>
-      <p class="text-sm text-shadow-600 mt-1">Skills discovered, loaded, and injected into runtime context</p>
-    </div>
-    <div class="flex gap-2">
+<div class="garden-page space-y-6 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Skills"
+    title="The Crafts"
+    description="Skills discovered, loaded, budgeted, and injected into the companion's runtime context."
+    class="border-b border-bark-300 pb-4"
+  >
+    {#snippet actions()}
       {#if snapshot}
         <button
           onclick={() => { showCreateForm = !showCreateForm; actionError = ''; }}
-          class="text-sm px-3 py-1.5 rounded-lg border border-gold-400
+          class="garden-action text-sm px-3 py-2 rounded-lg border border-gold-400
                  text-gold-700 hover:bg-gold-50
                  transition-colors font-medium"
         >
@@ -332,25 +333,25 @@
       <button
         onclick={loadData}
         disabled={loading}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
+        class="garden-action text-sm px-3 py-2 rounded-lg border border-bark-300 bg-bark-50
                text-shadow-600 hover:bg-bark-100
                transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Action Error Banner -->
   {#if actionError}
-    <div class="card-garden p-4 border-l-4 border-l-wilt-400 flex items-start justify-between">
+    <div class="garden-error card-garden p-4 border-l-4 border-l-wilt-400 flex items-start justify-between">
       <p class="text-sm text-wilt-700">{actionError}</p>
       <button data-esc-close onclick={() => actionError = ''} class="text-shadow-400 hover:text-shadow-600 ml-4 shrink-0">&times;</button>
     </div>
   {/if}
 
   {#if loading}
-    <div class="space-y-3">
+    <div class="garden-loading space-y-3">
       <div class="card-garden p-5 animate-pulse space-y-3">
         <div class="h-5 rounded bg-bark-200 w-1/3"></div>
         <div class="h-4 rounded bg-bark-200 w-1/2"></div>
@@ -370,11 +371,11 @@
       <p class="text-sm text-shadow-600 px-1">Loading skills snapshot...</p>
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden p-6 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if endpointMissing || !snapshot}
-    <div class="card-garden p-6">
+    <div class="garden-empty card-garden p-6">
       <div class="flex items-start gap-3">
         <svg class="w-5 h-5 text-bark-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -392,8 +393,8 @@
     </div>
 
     <!-- What the skills system does -->
-    <div class="card-garden p-5">
-      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">About Skills</h2>
+    <section class="garden-section card-garden p-5">
+      <h2 class="garden-section-title text-base font-serif font-semibold text-shadow-900 mb-3">About Skills</h2>
       <div class="space-y-3 text-sm text-shadow-700">
         <p>The skills system discovers, evaluates, and injects skill definitions into the agent's runtime context as XML prompt content.</p>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
@@ -411,33 +412,38 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
   {:else}
     <!-- Runtime Snapshot Summary -->
-    <div class="card-garden p-5">
-      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-4">Runtime Snapshot</h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div>
+    <section class="garden-section card-garden p-5">
+      <div class="garden-section-header mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 class="garden-section-title text-base font-serif font-semibold text-shadow-900">Runtime snapshot</h2>
+        <span class="garden-status {snapshot.configEnabled ? 'garden-status--success' : 'garden-status--danger'} rounded-full border px-2.5 py-1 text-xs font-semibold {snapshot.configEnabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-wilt-300 bg-wilt-50 text-wilt-700'}">
+          runtime {snapshot.configEnabled ? 'enabled' : 'disabled'}
+        </span>
+      </div>
+      <div class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div class="garden-metric rounded-lg border border-bark-200 bg-bark-50 p-3">
           <p class="text-xs text-shadow-600 uppercase tracking-wide mb-1">Generated At</p>
           <p class="text-sm font-mono text-shadow-800">{snapshot.generatedAt}</p>
         </div>
-        <div>
+        <div class="garden-metric rounded-lg border border-bark-200 bg-bark-50 p-3">
           <p class="text-xs text-shadow-600 uppercase tracking-wide mb-1">Runtime Enabled</p>
           <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {snapshot.configEnabled ? 'bg-moss-100 text-moss-700' : 'bg-wilt-100 text-wilt-600'}">
             {snapshot.configEnabled ? 'yes' : 'no'}
           </span>
         </div>
-        <div>
+        <div class="garden-metric rounded-lg border border-bark-200 bg-bark-50 p-3">
           <p class="text-xs text-shadow-600 uppercase tracking-wide mb-1">Prompt XML</p>
           <p class="text-sm font-mono text-shadow-800">{snapshot.promptXml.length.toLocaleString()} chars</p>
         </div>
-        <div>
+        <div class="garden-metric rounded-lg border border-bark-200 bg-bark-50 p-3">
           <p class="text-xs text-shadow-600 uppercase tracking-wide mb-1">Budget</p>
           <p class="text-sm font-mono text-shadow-800">{snapshot.budget.maxSkills} skills / {snapshot.budget.maxChars.toLocaleString()} chars</p>
         </div>
       </div>
 
-      <div class="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-bark-100">
+      <div class="garden-metric-grid grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-bark-100">
         <div class="text-center">
           <p class="text-2xl font-serif font-bold text-shadow-900">{snapshot.scannedFiles}</p>
           <p class="text-xs text-shadow-600 uppercase tracking-wide mt-1">Discovered</p>
@@ -451,11 +457,11 @@
           <p class="text-xs text-shadow-600 uppercase tracking-wide mt-1">Injected</p>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- Missing Scan Roots Warning -->
     {#if missingScanRoots.length > 0}
-      <div class="card-garden p-4 border-l-4 border-l-wilt-400">
+      <div class="garden-error card-garden p-4 border-l-4 border-l-wilt-400">
         <ul class="space-y-1">
           {#each missingScanRoots as view (view.root.absolutePath)}
             <li class="text-sm text-wilt-700">
@@ -468,11 +474,11 @@
 
     <!-- Create Skill Form -->
     {#if showCreateForm}
-      <div class="card-garden p-5 border-l-4 border-l-gold-400">
-        <h2 class="text-base font-serif font-semibold text-shadow-900 mb-4">Create New Skill</h2>
+      <section class="garden-section card-garden p-5 border-l-4 border-l-gold-400">
+        <h2 class="garden-section-title text-base font-serif font-semibold text-shadow-900 mb-4">Create new skill</h2>
         <div class="space-y-4">
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
+          <div class="garden-field-grid grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="garden-field">
               <label for="new-skill-name" class="block text-sm font-medium text-shadow-700 mb-1">Name</label>
               <input
                 id="new-skill-name"
@@ -484,7 +490,7 @@
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               />
             </div>
-            <div>
+            <div class="garden-field">
               <label for="new-skill-category" class="block text-sm font-medium text-shadow-700 mb-1">Category</label>
               <input
                 id="new-skill-category"
@@ -496,7 +502,7 @@
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               />
             </div>
-            <div>
+            <div class="garden-field">
               <label for="new-skill-description" class="block text-sm font-medium text-shadow-700 mb-1">Description</label>
               <input
                 id="new-skill-description"
@@ -525,7 +531,7 @@
             <button
               onclick={() => { showCreateForm = false; actionError = ''; }}
               data-esc-close
-              class="px-4 py-2 text-sm rounded-lg border border-bark-300
+            class="garden-action px-4 py-2 text-sm rounded-lg border border-bark-300
                      text-shadow-600 hover:bg-bark-100 transition-colors"
             >
               Cancel
@@ -533,7 +539,7 @@
             <button
               onclick={handleCreate}
               disabled={creating || !newName.trim() || !newContent.trim()}
-              class="px-4 py-2 text-sm rounded-lg font-medium
+              class="garden-action garden-action--primary px-4 py-2 text-sm rounded-lg font-medium
                      bg-gold-500 text-white hover:bg-gold-600
                      disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
@@ -541,12 +547,12 @@
             </button>
           </div>
         </div>
-      </div>
+      </section>
     {/if}
 
     <!-- Filters -->
-    <div class="flex flex-wrap gap-3 items-center">
-      <label for="filter-source" class="text-sm text-shadow-600">Source:</label>
+    <div class="garden-toolbar card-garden flex flex-wrap items-center gap-3 p-3">
+      <label for="filter-source" class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">Source</label>
       <select
         id="filter-source"
         bind:value={filterSource}
@@ -559,7 +565,7 @@
         {/each}
       </select>
 
-      <label for="filter-status" class="text-sm text-shadow-600 ml-2">Status:</label>
+      <label for="filter-status" class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500 sm:ml-2">Status</label>
       <select
         id="filter-status"
         bind:value={filterStatus}
@@ -578,11 +584,11 @@
 
     <!-- Skill Cards -->
     {#if filteredSkills.length === 0}
-      <div class="card-garden p-8 text-center">
+      <div class="garden-empty card-garden p-8 text-center">
         <p class="text-sm text-shadow-600">No skills match the current filters.</p>
       </div>
     {:else}
-      <div class="space-y-3">
+      <section class="garden-section space-y-3" aria-label="Skill registry">
         {#each filteredSkills as skill (skill.id)}
           {@const expanded = expandedSkills.has(skill.id)}
           {@const isEditing = editingSkill === skill.id}
@@ -591,7 +597,7 @@
           {@const isDeleting = deletingSkill === skill.name}
           <div class="card-garden overflow-hidden {skill.disabled ? 'opacity-60' : ''}">
             <!-- Card Header -->
-            <div class="px-5 py-4 flex items-start gap-3">
+            <div class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 px-4 py-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:px-5">
               <!-- Expand/Collapse Toggle -->
               <button
                 onclick={() => toggleExpand(skill.id)}
@@ -662,12 +668,12 @@
               </div>
 
               <!-- Action Buttons -->
-              <div class="flex items-center gap-2 shrink-0">
+              <div class="col-span-2 ml-7 flex shrink-0 flex-wrap items-center gap-2 sm:col-span-1 sm:ml-0 sm:justify-end">
                 <!-- Toggle Enable/Disable -->
                 <button
                   onclick={() => handleToggle(skill.name)}
                   disabled={isToggling}
-                  class="text-sm px-3 py-1 rounded-lg border transition-colors
+                  class="garden-action text-sm px-3 py-1.5 rounded-lg border transition-colors
                          {skill.disabled
                            ? 'border-moss-300 text-moss-600 hover:bg-moss-50'
                            : 'border-bark-300 text-shadow-600 hover:bg-bark-100'}
@@ -684,7 +690,7 @@
                       startEdit(skill);
                       if (!expanded) toggleExpand(skill.id);
                     }}
-                    class="text-sm px-3 py-1 rounded-lg border border-bark-300
+                    class="garden-action text-sm px-3 py-1.5 rounded-lg border border-bark-300
                            text-shadow-600 hover:bg-bark-100 transition-colors"
                   >
                     Edit
@@ -694,7 +700,7 @@
                   <button
                     onclick={() => handleDelete(skill.name)}
                     disabled={isDeleting}
-                    class="text-sm px-3 py-1 rounded-lg border border-wilt-300
+                    class="garden-action garden-action--danger text-sm px-3 py-1.5 rounded-lg border border-wilt-300
                            text-wilt-600 hover:bg-wilt-50 transition-colors
                            disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Delete this managed skill"
@@ -767,7 +773,7 @@
             {/if}
           </div>
         {/each}
-      </div>
+      </section>
     {/if}
 
     <!-- Discovery Directories (scan provenance) -->

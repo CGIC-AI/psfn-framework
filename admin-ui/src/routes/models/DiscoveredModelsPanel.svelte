@@ -22,15 +22,16 @@
   }>();
 </script>
 
-<section class="card-garden p-4 space-y-3" aria-labelledby="discovered-models-heading">
-  <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+<section class="garden-section card-garden space-y-4 p-5" aria-labelledby="discovered-models-heading">
+  <div class="garden-section-header flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
     <div>
-      <h2 id="discovered-models-heading" class="text-sm font-serif font-semibold text-shadow-800">Discovered Models</h2>
-      <p class="text-sm text-shadow-600 mt-1">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-500">Provider metadata</p>
+      <h2 id="discovered-models-heading" class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Discovered models</h2>
+      <p class="garden-section-description text-sm text-shadow-600 mt-1">
         Discovery uses OpenRouter model metadata. ZDR tags come from OpenRouter endpoint metadata.
       </p>
     </div>
-    <div class="w-full lg:w-80">
+    <div class="garden-field w-full lg:w-80">
       <label class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1" for="discovered-model-search">
         Search
       </label>
@@ -47,17 +48,17 @@
     </div>
   </div>
   {#if discoveryError}
-    <p class="text-sm text-wilt-600">{discoveryError}</p>
+    <p class="garden-error rounded-lg border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700">{discoveryError}</p>
   {/if}
   {#if !hasDiscoveredModels}
-    <p class="text-sm text-shadow-500">No models discovered yet.</p>
+    <p class="garden-empty rounded-lg border border-dashed border-bark-300 bg-bark-50 p-6 text-center text-sm text-shadow-500">No models discovered yet.</p>
   {:else if filteredDiscoveredModels.length === 0}
-    <p class="text-sm text-shadow-500">No discovered models match the current search.</p>
+    <p class="garden-empty rounded-lg border border-dashed border-bark-300 bg-bark-50 p-6 text-center text-sm text-shadow-500">No discovered models match the current search.</p>
   {:else}
-    <div class="overflow-x-auto pb-1">
-      <div class="flex min-w-full gap-3">
+    <div>
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {#each filteredDiscoveredModels as discovered}
-          <article class="min-w-[18rem] max-w-[22rem] rounded-lg border border-bark-200 bg-bark-50 px-3 py-2">
+          <article class="flex min-w-0 flex-col rounded-xl border border-bark-200 bg-bark-50 px-3 py-3 transition-colors hover:border-gold-300">
             <div class="flex items-start justify-between gap-2">
               <p class="font-mono text-xs text-shadow-800 break-all">{discovered.id}</p>
               {#if discovered.zdrAvailable}
@@ -89,7 +90,7 @@
             <p class="mt-2 text-xs text-shadow-500">{discoveryLimitSummary(discovered)}</p>
             <button
               onclick={() => addDiscoveredModel(discovered)}
-              class="mt-3 px-2.5 py-1 text-xs font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-100 transition-colors"
+              class="garden-action mt-auto self-start rounded border border-gold-400 px-2.5 py-1.5 text-xs font-medium text-gold-700 transition-colors hover:bg-gold-100"
             >
               + Add + Autofill
             </button>

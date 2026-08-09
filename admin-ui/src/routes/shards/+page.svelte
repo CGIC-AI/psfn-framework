@@ -10,6 +10,7 @@
   } from '$lib/stores/telemetry.svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import { listParentShards } from '$lib/api/endpoints/shards';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type {
     AdminShardFoldReviewListData,
   } from '../../../../src/operator/garden/services/types/shards.js';
@@ -144,32 +145,31 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between flex-wrap gap-3">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Blooms</h1>
-      <p class="text-sm text-shadow-600 mt-1">Active shards -- ephemeral sub-agents spawned for parallel work</p>
-    </div>
-
-    <!-- Connection indicator + controls -->
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-6 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Shards"
+    title="The Blooms"
+    description="Parent-owned shard activity, runtime-only overrides, fold reviews, and the live telemetry trail."
+    class="border-b border-bark-300 pb-4"
+  >
+    {#snippet actions()}
+    <div class="garden-toolbar flex flex-wrap items-center gap-2">
       {#if isConnected()}
         <span class="relative flex h-2.5 w-2.5">
           <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
           <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
         </span>
-        <span class="text-sm text-moss-700 font-medium">Telemetry active</span>
+        <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">Telemetry active</span>
         <button
           onclick={() => disconnectTelemetry()}
-          class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600
+          class="garden-action text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600
                  hover:bg-bark-100 font-medium transition-colors"
         >
           Disconnect
         </button>
       {:else}
         <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
-        <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
+        <span class="garden-status garden-status--danger rounded-full border border-wilt-300 bg-wilt-50 px-2.5 py-1 text-xs font-semibold text-wilt-700">Disconnected</span>
         {#if getTelemetryConnectionError()}
           <span class="text-xs text-wilt-600" role="status">
             {#if getTelemetryConnectionError()?.code !== null}
@@ -180,19 +180,20 @@
         {/if}
         <button
           onclick={() => connectTelemetry()}
-          class="text-sm px-3 py-1.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
+          class="garden-action text-sm px-3 py-1.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
                  hover:bg-moss-100 font-medium transition-colors"
         >
           Connect
         </button>
       {/if}
     </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Active Shards Counter + Overview -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+  <div class="garden-metric-grid grid grid-cols-1 gap-4 md:grid-cols-3">
     <!-- Main counter -->
-    <div class="card-garden p-6 text-center md:col-span-1">
+    <div class="garden-metric card-garden p-5 text-center md:col-span-1">
       <p class="text-sm font-medium text-shadow-600 uppercase tracking-wide mb-2">Active Blooms</p>
       {#if dashboardLoading}
         <div class="h-16 flex items-center justify-center">
@@ -216,9 +217,9 @@
     </div>
 
     <!-- Stats summary -->
-    <div class="card-garden p-6 md:col-span-2">
+    <div class="garden-metric card-garden p-5 md:col-span-2">
       <p class="text-sm font-medium text-shadow-600 uppercase tracking-wide mb-3">Shard Overview</p>
-      <div class="grid grid-cols-3 gap-4">
+      <div class="grid grid-cols-3 gap-2 sm:gap-4">
         <div>
           <div class="flex items-center gap-2 mb-1">
             <span class="w-2.5 h-2.5 rounded-full bg-petal-400 animate-pulse"></span>
@@ -246,7 +247,7 @@
   </div>
 
   {#if dashboardError}
-    <div class="card-garden p-4 border-l-4 border-l-wilt-300 flex items-start justify-between gap-3">
+    <div class="garden-error card-garden p-4 border-l-4 border-l-wilt-300 flex items-start justify-between gap-3">
       <p class="text-sm text-shadow-700">{dashboardError}</p>
       <button
         data-esc-close
@@ -259,11 +260,11 @@
     </div>
   {/if}
 
-  <section class="card-garden p-5" aria-labelledby="parent-shard-tree-heading">
-    <div class="flex items-start justify-between gap-3 mb-4">
+  <section class="garden-section card-garden p-5" aria-labelledby="parent-shard-tree-heading">
+    <div class="garden-section-header flex items-start justify-between gap-3 mb-4">
       <div>
         <p class="text-sm uppercase tracking-wide text-shadow-500">Parent companion</p>
-        <h2 id="parent-shard-tree-heading" class="text-lg font-serif font-semibold text-shadow-900">
+        <h2 id="parent-shard-tree-heading" class="garden-section-title text-lg font-serif font-semibold text-shadow-900">
           Shards
         </h2>
         <p class="text-sm text-shadow-600 mt-1">
@@ -283,7 +284,7 @@
     {:else if parentShardData === null}
       <p class="text-sm text-shadow-600">Loading parent-owned shards...</p>
     {:else if parentShardData.shards.length === 0}
-      <p class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm text-shadow-600">
+      <p class="garden-empty rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm text-shadow-600">
         No mutable shard subviews are active. Completed shard fold reviews remain listed below.
       </p>
     {:else}
@@ -327,7 +328,7 @@
 
   <!-- No connection notice -->
   {#if !isConnected() && shards.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-10 text-center">
       <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3" />
         <path d="M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-7.07l-2.83 2.83M9.76 14.24l-2.83 2.83m0-10.14l2.83 2.83m4.48 4.48l2.83 2.83" />
@@ -340,14 +341,14 @@
       </p>
       <button
         onclick={() => connectTelemetry()}
-        class="text-sm px-5 py-2.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
+        class="garden-action text-sm px-5 py-2.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
                hover:bg-moss-100 font-medium transition-colors"
       >
         Connect telemetry
       </button>
     </div>
   {:else if shards.length === 0 && isConnected()}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-10 text-center">
       <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3" />
         <path d="M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-7.07l-2.83 2.83M9.76 14.24l-2.83 2.83m0-10.14l2.83 2.83m4.48 4.48l2.83 2.83" />
@@ -362,14 +363,14 @@
 
   <!-- Active Shards Section -->
   {#if activeShards.length > 0}
-    <div>
+    <section class="garden-section">
       <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">
         Active Blooms
         <span class="text-sm font-sans font-normal text-shadow-600 ml-2">({activeShards.length})</span>
       </h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {#each activeShards as shard (shard.id)}
-          <div class="card-garden p-4 border-l-4 border-l-petal-400" style="background: linear-gradient(90deg, var(--color-petal-50) 0%, white 20%);">
+          <div class="card-garden border-l-4 border-l-petal-400 p-4" style="background: linear-gradient(90deg, var(--color-petal-50) 0%, var(--color-surface) 20%);">
             <!-- Header row -->
             <div class="flex items-center justify-between mb-2">
               <strong class="text-sm text-shadow-900 truncate">{shard.name}</strong>
@@ -390,12 +391,12 @@
           </div>
         {/each}
       </div>
-    </div>
+    </section>
   {/if}
 
   <!-- Completed Shards Section -->
   {#if completedShards.length > 0}
-    <div>
+    <section class="garden-section">
       <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">
         Recent Blooms
         <span class="text-sm font-sans font-normal text-shadow-600 ml-2">({completedShards.length})</span>
@@ -425,16 +426,16 @@
           </div>
         {/each}
       </div>
-    </div>
+    </section>
   {/if}
 
   <!-- Shard Event Log -->
   {#if shardEvents.length > 0}
-    <div class="card-garden p-5">
-      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Shard Event Log</h2>
+    <section class="garden-section garden-table-shell card-garden overflow-hidden p-5">
+      <h2 class="garden-section-title text-base font-serif font-semibold text-shadow-900 mb-3">Shard Event Log</h2>
       <div class="space-y-0.5 max-h-80 overflow-y-auto">
         <div class="sticky top-0 bg-bark-50 z-10 pb-2 mb-1 border-b border-bark-200">
-          <div class="flex items-center gap-4 text-sm font-medium text-shadow-600 uppercase tracking-wide px-1">
+          <div class="hidden items-center gap-4 px-1 text-sm font-medium uppercase tracking-wide text-shadow-600 sm:flex">
             <span class="w-20">Time</span>
             <span class="w-36">Event</span>
             <span class="flex-1">Details</span>
@@ -443,11 +444,11 @@
         {#each [...shardEvents].reverse().slice(0, 50) as event}
           {@const data = event.data as Record<string, unknown> | null}
           {@const shardId = data && typeof data === 'object' ? ((data.shardId as string) || (data.id as string) || '') : ''}
-          <div class="flex items-start gap-4 py-1.5 px-1 text-sm font-mono border-b border-bark-50 hover:bg-bark-50 transition-colors">
-            <span class="text-shadow-600 shrink-0 w-20">
+          <div class="grid gap-1 border-b border-bark-100 px-1 py-2 text-sm font-mono transition-colors hover:bg-bark-50 sm:flex sm:items-start sm:gap-4">
+            <span class="text-shadow-600 shrink-0 sm:w-20">
               {formatTime(event.timestamp)}
             </span>
-            <span class="shrink-0 w-36">
+            <span class="shrink-0 sm:w-36">
               <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium bg-petal-100 text-petal-500">
                 {event.type}
               </span>
@@ -465,6 +466,6 @@
           </div>
         {/each}
       </div>
-    </div>
+    </section>
   {/if}
 </div>

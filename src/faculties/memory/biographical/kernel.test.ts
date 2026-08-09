@@ -208,6 +208,18 @@ describe('biographical exact digest-bound lowering grants', () => {
     expect(expired.effectiveSensitivity).toBe('intimate');
   });
 
+  it('does not apply a future-dated grant before its authorization time', () => {
+    const result = applyLoweringGrant({
+      claimDigest,
+      sourceSetDigest,
+      automaticSensitivity: 'intimate',
+      grants: [grant({ grantedAt: '2026-08-09T13:00:00.000Z' })],
+      now: NOW,
+    });
+    expect(result.effectiveSensitivity).toBe('intimate');
+    expect(result.appliedGrant).toBeUndefined();
+  });
+
   it('never raises sensitivity above the automatic floor', () => {
     const result = applyLoweringGrant({
       claimDigest, sourceSetDigest, automaticSensitivity: 'public',

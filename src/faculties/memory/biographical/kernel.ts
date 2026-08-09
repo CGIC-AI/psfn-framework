@@ -425,6 +425,7 @@ export function applyLoweringGrant(
   const nowMs = input.now.getTime();
   for (const grant of input.grants) {
     if (grant.revokedAt !== undefined) continue;
+    if (Date.parse(grant.grantedAt) > nowMs) continue;
     if (grant.expiresAt !== undefined && Date.parse(grant.expiresAt) <= nowMs) continue;
     if (grant.claimDigest !== input.claimDigest) continue;
     if (grant.sourceSetDigest !== input.sourceSetDigest) continue;

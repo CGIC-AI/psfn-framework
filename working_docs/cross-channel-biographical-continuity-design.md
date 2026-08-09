@@ -1,7 +1,7 @@
 # Cross-Channel Biographical Continuity
 
 **Status:** implementation design  
-**Date:** 2026-08-05  
+**Date:** 2026-08-05; operator refinement 2026-08-09
 **Epic:** `psfn-framework-o61vb`  
 **Related authority work:** `psfn-framework-ta3q7` (Core Partner Model)
 
@@ -11,10 +11,12 @@ PSFN should preserve one continuous companion and one continuous relationship
 across rooms without moving raw private memories between rooms.
 
 The system will keep the existing room-visibility gate on raw memories and add a
-separate, rebuildable **Biographical Profile** projection. The projection is a
-bounded set of typed claims about the companion or a canonical contact. Each
-claim is independently selected, source-revalidated, sensitivity-gated, and
-recorded in CogSec disclosure lineage before it can enter generation context.
+separate, rebuildable **Biographical Profile** projection. The projection is an
+economically bounded set of typed claims for low-exposure contacts and a richer,
+continuously revisable history for close relationships and the companion. Each
+claim belongs to one canonical subject rather than a channel-local copy. It is
+independently selected, source-revalidated, sensitivity-gated, and recorded in
+CogSec disclosure lineage before it can enter generation context.
 
 This changes the product from:
 
@@ -28,7 +30,9 @@ to:
 
 The motivating result is simple: if V says “hey, sunbeam loaf” in a group room,
 Purrsephone can recognize her nickname and V as her husband without receiving
-the private conversation in which the nickname was created.
+the private conversation in which the nickname was created. She remains the
+same person across rooms because the profile is contact- and companion-centric;
+the room controls what may be revealed, not which identity exists.
 
 ## Why this work exists
 
@@ -47,8 +51,8 @@ This is not merely failed fact retrieval. It fragments the companion:
 - fixing the symptom by loading private memories would create a much worse
   disclosure problem.
 
-The desired experience is **one self with graded access**, not a separate copy
-of the companion behind every channel wall.
+The desired experience is **one self and one relationship with graded access**,
+not a separate copy of the companion or contact behind every channel wall.
 
 ### Why room walls stay
 
@@ -70,6 +74,23 @@ not carry the full narrative texture of a life. A later, separately approved
 **Public Story** projection may carry tellable narratives such as “how we met.”
 That future layer is described at the end of this document so the present seam
 does not block it, but it is not part of this epic.
+
+### Contact identity, not channel identity
+
+Every verified channel identity resolves to one canonical contact before it can
+affect the profile. A DM identity and a group identity for the same person feed
+one biographical history. Origin channel, room, participants, privacy envelope,
+and consent remain immutable provenance and disclosure inputs; they never create
+a second person or a second biography.
+
+This distinction avoids both failure extremes:
+
+- channel-owned memory would give the companion selective amnesia and a
+  different personality in every room;
+- globally loading everything about a contact would erase the privacy boundary.
+
+The canonical profile supplies consistent identity. The destination projection
+selects the outward-facing subset allowed in the present audience.
 
 ## Current architecture and confirmed gap
 
@@ -150,7 +171,8 @@ sources instead of creating a parallel fact store.
 5. Make every possible profile influence visible to CogSec egress.
 6. Make deletion, correction, contact merge, source drift, and sensitivity
    changes revoke or rebuild projections deterministically.
-7. Keep prompt use bounded and extraction economical.
+7. Keep prompt use bounded and make collection/extraction depth proportional to
+   relationship depth and evidence breadth.
 8. Leave a clean seam for future HITL-approved narrative projections.
 
 ## Non-goals
@@ -164,6 +186,8 @@ sources instead of creating a parallel fact store.
 - Letting the LLM invent claim kinds, schemas, subject cardinality, conflict
   rules, sensitivity exceptions, or authorization.
 - Inferring permission to disclose from affection, relationship type, or usage.
+- Treating collection depth, trust level, sensitivity, and disclosure permission
+  as the same policy decision.
 - Implementing Public Stories or general public narrative memory in this epic.
 
 ## Domain model
@@ -177,7 +201,10 @@ sources instead of creating a parallel fact store.
 | Orientation | What matters and how should I engage here? | Room-local active frame (`orient` / legacy `core_memory`) |
 | Biographical Profile | Who am I, and who is this person? | Slow, rebuildable, stable claims |
 
-“V was laid off two days ago” is Current Context, not durable identity. An
+“V was laid off two days ago” is an event and may produce Current Context, not a
+permanent identity claim. The durable biographical consequence is temporal: an
+old `role: employed at X` claim becomes superseded or receives `validTo`, while
+the active employment state becomes unknown or a new explicit claim. An
 orientation block may derive “be gentle about work in this room,” but it is not
 the canonical status store. A companion's present mood remains in affect and
 orientation, not in a globally portable self-profile.
@@ -185,6 +212,21 @@ orientation, not in a globally portable self-profile.
 The first implementation does not make Current Context cross-room portable. If
 that is later wanted, it requires its own TTL, destination policy, and lineage
 design; it must never travel merely because the Biographical Profile does.
+
+### The existing short profile remains recent shape
+
+The current one- or two-paragraph `ContactProfileArtifact`, synthesized from a
+small recent-memory window, captures useful *in-time shape*: how the person has
+recently presented, what themes are active, and what may help the next turn. It
+must not remain the durable fact authority or the cross-channel portability
+mechanism, but its product function should survive as a bounded **Recent Contact
+Shape** projection.
+
+Recent Contact Shape is freshness-bound, source-gated, and clearly labeled as a
+summary. It may be room-local or destination-filtered and can be regenerated.
+It cannot silently overwrite atomic biographical claims, grant portability, or
+stand in for missing long-term facts. The cutover in this epic separates these
+roles instead of deleting the useful recent-summary behavior.
 
 ### Subjects
 
@@ -264,6 +306,8 @@ interface BiographicalClaim {
   synthesizedAt: string;
   lastSourceValidatedAt: string;
   lastEvidenceAt: string;
+  validFrom?: string;
+  validTo?: string;
   supersedesClaimId?: string;
 }
 ```
@@ -271,6 +315,13 @@ interface BiographicalClaim {
 The stored `effectiveSensitivity` is a cache and audit statement, not read-time
 authority. Admission recomputes or validates it from live sources and any exact
 authorization grant.
+
+`validFrom` and `validTo` express the interval in which a role or other temporal
+biographical fact is believed current. The record remains append-only after the
+interval closes. A superseding claim never erases the prior fact; active-profile
+selection prefers the current valid claim and withholds contested keys. This is
+how “works at X” can become “no longer works at X” without either forgetting the
+history or continuing to speak as if the old job were current.
 
 ### Source snapshots
 
@@ -292,6 +343,52 @@ interface BiographicalClaimSource {
 The source set is sorted canonically before hashing. The snapshot answers not
 only “which memory?” but “which revision, classification, subject evidence, and
 consent state made this claim admissible?”
+
+## Adaptive profile depth and collection economy
+
+### Depth is a collection policy, not a privacy shortcut
+
+PSFN should know enough about a stranger to recognize and update that person,
+without spending full-profile compute on every incidental participant. Profile
+depth is derived from canonical relationship type, trust, and breadth of
+verified interaction. It controls extraction frequency, candidate count,
+retention/compaction pressure, and backfill effort. It never lowers sensitivity
+or authorizes disclosure.
+
+The initial policy has three modes:
+
+| Mode | Eligibility | Collection behavior |
+|---|---|---|
+| `recognition` | Stranger/acquaintance or low-trust contact observed in only one governed context | Keep a small, owner-configured budget of identity and relationship-shape claims; prioritize name/alias, explicit pronouns, relationship type, and a few high-confidence stable preferences; refresh only on material change |
+| `developing` | The canonical contact is verified across at least two independent contexts (for example group plus DM), or is the primary contact in a verified DM | Permit a larger long-term claim budget, more stable kinds, and bounded backfill from authorized sources |
+| `full` | Companion self, or a contact at friend/family/partner relationship depth or otherwise explicitly promoted to the high-depth policy | No product-level fact-count ceiling: keep a continuously growing, correctable biography, while using compaction, relevance indexes, source retention policy, and per-turn prompt budgets to keep operations finite |
+
+“Two contexts” means two independently governed interaction contexts for the same
+canonical contact, not two messages or two room IDs inferred to be the same
+person. One ordinary DM does not automatically deepen a stranger. The primary
+contact exception reflects an already authoritative relationship binding.
+
+The thresholds and per-mode budgets are mutable policy and belong in the
+canonical memory/settings owner-file contract, with Garden exposure and
+`verify:settings-contract` coverage. They must not be hidden numeric constants.
+The policy must also set per-refresh candidate limits, minimum evidence, and a
+bounded backfill batch so promotion cannot cause an unbounded LLM job.
+
+### Promotion, demotion, and revision
+
+Promotion changes future collection depth and may schedule bounded backfill from
+live authorized sources. It does not make existing private claims more visible.
+Demotion immediately tightens disclosure through the ordinary trust gates and
+stops high-depth enrichment. Retention, compaction, or deletion then follows the
+owner policy and consent rules rather than destructively truncating history as a
+side effect of a relationship label change.
+
+All modes remain updateable. New evidence may supersede a current claim, close
+its validity interval, contest it, or revoke it. Low-budget profiles evict or
+compact by deterministic value (identity safety, explicitness, confidence,
+recency where relevant), never by letting an LLM silently choose which truth to
+forget. A promoted profile starts from the same canonical history; there is no
+second “friend profile” to merge later.
 
 ## Digest and revalidation invariants
 
@@ -411,7 +508,9 @@ budgeting still apply.
    required.
 7. Kind-specific conflict rules activate, coalesce, quarantine, contest, or
    supersede the candidate.
-8. Accepted claims enter the rebuildable profile projection.
+8. The depth policy admits, defers, or deterministically compacts the candidate
+   under the canonical subject's current collection mode.
+9. Accepted claims enter the rebuildable profile projection.
 
 No candidate may quote or smuggle unstructured source text into the portable
 renderer.
@@ -445,6 +544,11 @@ Resolution precedence is:
 The live message remains in the current turn, so the companion can respond to a
 correction immediately while durable reconciliation proceeds. Contradictory
 evidence remains inspectable through append-only history.
+
+For temporal facts, correction and time progression are distinct. “I left X”
+normally closes or supersedes the active employment claim; “I never worked at X”
+contests or corrects its historical validity. The active renderer must not emit
+an expired role as current merely because the old claim remains in history.
 
 ## Turn-time participant selection
 
@@ -534,6 +638,7 @@ interface. Persistence must preserve:
 - source snapshots and both digests;
 - sensitivity classification and exact grants;
 - candidate, conflict, correction, supersession, and revocation history;
+- validity intervals, active/current selection, and depth-policy decisions;
 - rebuild timestamps and reasons.
 
 Contact merge must re-key claims transactionally or rebuild them under the
@@ -545,7 +650,8 @@ memory revocation invalidate dependent claims.
 
 The existing flat `contact_profiles` projection cannot be safely parsed into
 public claims. Migration must rebuild structured claims from live authorized
-sources; legacy summary prose is not an authority.
+sources; legacy summary prose is not an authority. Its useful recent-summary
+role is retained only after it is explicitly separated as Recent Contact Shape.
 
 The migration sequence is:
 
@@ -555,10 +661,14 @@ The migration sequence is:
    new interface, with no fallback from a missing claim to summary text;
 3. provide operator inspection and approval for candidates requiring grants;
 4. rebuild eligible profiles and measure withheld/rebuild reasons;
-5. cut prompt assembly atomically to the new projection;
-6. stop legacy profile refresh and rendering in the same cutover;
-7. retain old rows only for the explicitly documented rollback window, then
-   remove the unused code and table under reviewed migration criteria.
+5. cut portable prompt assembly atomically to the new claim projection;
+6. rename/split the recent summary path, make its freshness and destination
+   limits explicit, and prevent it from serving as durable or portable fact
+   authority;
+7. stop legacy ambiguous profile refresh/rendering in the same cutover;
+8. retain old rows only for the explicitly documented rollback window, then
+   migrate the Recent Contact Shape representation and remove the ambiguous
+   legacy code/table under reviewed migration criteria.
 
 There is no permanent dual-read or silent compatibility fallback. The exact
 alpha migration and removal criteria must be recorded in `docs/specifications.md`
@@ -663,6 +773,11 @@ has a bug.
 - Garden shows structured provenance and withheld reasons without leaking source
   bodies.
 - Prompt claim count and token use remain bounded in DM and group fixtures.
+- Recognition/developing profiles obey configured collection budgets; full
+  profiles remain operationally bounded without a product-level fact cap.
+- Promotion schedules bounded backfill without widening disclosure, and
+  demotion stops enrichment while tightening access immediately.
+- Superseded employment/role facts remain historical but never render as current.
 
 ## Delivery plan
 
@@ -679,9 +794,10 @@ it to the Partner Model authority epic, and create the dependency graph below.
 
 Add the versioned subject, claim-kind registry, structured values, source
 snapshots, canonical digests, sensitivity/grant envelope, conflict states, and
-Postgres/in-memory store interface. Extend the shared artifact-sensitivity and
-provenance primitives rather than creating a second max-sensitivity system.
-Record the bounded legacy migration in the specifications.
+temporal validity/supersession, depth-mode decisions, and Postgres/in-memory
+store interface. Extend the shared artifact-sensitivity and provenance
+primitives rather than creating a second max-sensitivity system. Record the
+bounded legacy migration in the specifications.
 
 This ticket does not change prompt behavior. It makes the subsequent vertical
 tracers small enough to review.
@@ -706,12 +822,13 @@ Public claims may be relevant; personal claims require authoritative
 participation proof and an allowed destination. Recent speakers and historical
 roster data alone do not widen access.
 
-### 6. Stable kinds and contradiction lifecycle
+### 6. Stable kinds, adaptive depth, and contradiction lifecycle
 
 Add role, stable preference, and shared-language schemas with their conflict
 keys, cardinality, deterministic renderers, correction precedence, contested
-state, and append-only supersession. Reject ephemeral status and unsupported
-third-party shapes.
+state, validity intervals, and append-only supersession. Add owner-configured
+recognition/developing/full collection modes, promotion backfill, and demotion
+behavior. Reject ephemeral status and unsupported third-party shapes.
 
 ### 7. Source, contact, and grant lifecycle hardening
 
@@ -726,12 +843,13 @@ old/new digest diffs through Garden. Reuse the existing HITL approval seam for
 claim-scoped approval, revocation, and re-grant without placing private source
 bodies in notifications.
 
-### 9. Legacy profile cutover and rebuild
+### 9. Legacy profile separation, cutover, and rebuild
 
 Rebuild eligible structured claims from live sources, atomically switch prompt
-assembly to the claim projection, stop flat-summary refresh/rendering, and leave
-no runtime fallback from missing claims to legacy prose. Apply the documented
-rollback/removal criteria.
+assembly to the claim projection, retain the useful short summary as an
+explicitly freshness-bound Recent Contact Shape, and leave no runtime fallback
+from missing claims to summary prose. Apply the documented rollback/removal
+criteria.
 
 ### 10. Cross-channel privacy conformance
 
@@ -766,17 +884,27 @@ not solve “which stories from my life can I naturally tell?”
 
 A future `PortableNarrativeProjection` can use the same subject selection,
 source snapshots, canonical digest, exact authorization, destination policy,
-and CogSec lineage interfaces while storing a bounded approved telling rather
-than a typed identity value. Examples include how the companion and partner met,
-a favorite shared joke, or a public milestone.
+and CogSec lineage interfaces while referencing canonical memories or episodic
+records rather than copying them into a second database. Examples include how
+the companion and partner met, a favorite shared joke, or a public milestone.
 
 That future module must add narrative-specific rules:
 
 - participant consent for dyadic or multi-person stories;
-- an approved telling or semantic envelope;
+- an approved telling or semantic envelope, with separate operator and companion
+  decisions and a companion veto even when the operator approves;
 - revocation and versioned retelling;
+- candidate-publication suggestions that remain inert until both required
+  reviewers approve the exact digest-bound projection;
 - relevance-based loading rather than ambient autobiography;
 - no access to the private source text during public generation.
+
+Audience grants should form outward-facing bands such as public, invite-only,
+and narrower relationship scopes. A story can be approved for one band without
+changing the sensitivity, room ownership, or consent state of its canonical
+source. Grants are references plus policy; they are never duplicated memories.
+This allows a consistent public self and shared relationship history without
+turning the companion's inward-facing life into public context.
 
 It should not reuse `BiographicalClaimKind` or turn the profile into a bag of
 prose. The shared seam is governed projection and lineage, not storage shape.

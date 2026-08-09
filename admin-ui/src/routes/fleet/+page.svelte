@@ -119,32 +119,30 @@
   <title>Cluster · Garden</title>
 </svelte:head>
 
-<div class="console-page-frame min-h-screen pb-12">
-  <div class="mx-auto max-w-[100rem] px-4 pt-4 sm:px-6 lg:px-8">
-      {#snippet clusterActions()}
-        {#if projection}
-          <span class="garden-status garden-status--success rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-xs text-shadow-600">
-            Updated {new Date(projection.generatedAt).toLocaleString()}
-          </span>
-        {/if}
-        <button
-          type="button"
-          class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:text-shadow-900 disabled:opacity-50"
-          disabled={loading}
-          onclick={() => void loadFleet()}
-        >
-          {loading ? 'Refreshing…' : 'Refresh cluster'}
-        </button>
-      {/snippet}
-      <GardenPageHeader
-        eyebrow="Garden Cluster · All companions"
-        title="The Grove"
-        description="Aggregate health, posture, usage, and cost across every companion this fleet session is authorized to reach."
-        actions={clusterActions}
-      />
-  </div>
+<div class="console-page-frame mx-auto min-h-screen w-full max-w-[100rem] px-3 pb-20 pt-4 sm:px-5 sm:pt-5 lg:px-7 lg:pt-6">
+  {#snippet clusterActions()}
+    {#if projection}
+      <span class="garden-status garden-status--success rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-xs text-shadow-600">
+        Updated {new Date(projection.generatedAt).toLocaleString()}
+      </span>
+    {/if}
+    <button
+      type="button"
+      class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:text-shadow-900 disabled:opacity-50"
+      disabled={loading}
+      onclick={() => void loadFleet()}
+    >
+      {loading ? 'Refreshing…' : 'Refresh cluster'}
+    </button>
+  {/snippet}
+  <GardenPageHeader
+    eyebrow="Garden Cluster · All companions"
+    title="The Grove"
+    description="Aggregate health, posture, usage, and cost across every companion this fleet session is authorized to reach."
+    actions={clusterActions}
+  />
 
-  <main class="mx-auto max-w-[100rem] space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+  <main class="space-y-6 pt-6">
     {#if projection}
       <section class="garden-metric-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Cluster health summary">
         <article class="garden-metric card-garden p-4">

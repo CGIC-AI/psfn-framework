@@ -215,6 +215,28 @@
     color: var(--color-ink);
   }
 
+  .garden-page {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .garden-page-header {
+    margin-inline: -0.75rem;
+    margin-top: -1rem;
+    border-bottom: 1px solid var(--color-line);
+    background: color-mix(in srgb, var(--color-canvas) 92%, transparent);
+    box-shadow: 0 1px 0 rgb(38 35 30 / 0.02);
+    backdrop-filter: blur(14px);
+  }
+
+  .garden-page-header--sticky {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
   .page-header {
     display: flex;
     flex-wrap: wrap;
@@ -248,6 +270,50 @@
     line-height: 1.6;
   }
 
+  .garden-action {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    background: var(--color-surface);
+    padding: 0.5rem 0.75rem;
+    color: var(--color-ink);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+    box-shadow: 0 1px 2px rgb(38 35 30 / 0.025);
+    transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+  }
+
+  .garden-action:hover:not(:disabled) {
+    border-color: var(--color-gold-300);
+    box-shadow: 0 3px 10px rgb(38 35 30 / 0.06);
+  }
+
+  .garden-action:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .garden-action--primary {
+    border-color: var(--color-gold-600);
+    background: var(--color-gold-600);
+    color: white;
+  }
+
+  .garden-action--primary:hover:not(:disabled) {
+    border-color: var(--color-gold-500);
+    background: var(--color-gold-500);
+  }
+
+  .garden-action--danger {
+    border-color: var(--color-wilt-300);
+    background: var(--color-wilt-50);
+    color: var(--color-wilt-700);
+  }
+
   .card,
   .card-garden {
     border: 1px solid var(--color-line);
@@ -256,6 +322,230 @@
     box-shadow: var(--shadow-card);
     color: var(--color-ink);
     transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  }
+
+  .garden-section {
+    min-width: 0;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
+    padding: 1rem;
+    box-shadow: var(--shadow-card);
+    color: var(--color-ink);
+  }
+
+  .garden-section-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--color-line);
+    padding-bottom: 0.875rem;
+  }
+
+  .garden-section-title {
+    color: var(--color-ink);
+    font-family: var(--font-serif);
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .garden-section-description {
+    margin-top: 0.125rem;
+    max-width: 72ch;
+    color: var(--color-muted);
+    font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  .garden-toolbar {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
+    padding: 0.625rem;
+    box-shadow: var(--shadow-card);
+  }
+
+  .garden-split-view {
+    display: grid;
+    min-width: 0;
+    align-items: start;
+    gap: 1rem;
+  }
+
+  .garden-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background: var(--color-line);
+    box-shadow: var(--shadow-card);
+  }
+
+  .garden-metric {
+    min-width: 0;
+    background: var(--color-surface);
+    padding: 0.875rem;
+  }
+
+  .garden-metric-label {
+    color: var(--color-muted);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .garden-metric-value {
+    margin-top: 0.375rem;
+    color: var(--color-ink);
+    font-family: var(--font-serif);
+    font-size: 1.5rem;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .garden-table-shell {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-card);
+  }
+
+  .garden-table-scroll {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .garden-table {
+    width: 100%;
+    border-collapse: collapse;
+    color: var(--color-ink);
+    font-size: 0.875rem;
+  }
+
+  .garden-table thead {
+    background: var(--color-sunken);
+    color: var(--color-muted);
+    font-size: 0.625rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .garden-table :where(th, td) {
+    padding: 0.7rem 0.875rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .garden-table tbody tr {
+    border-top: 1px solid var(--color-line);
+    transition: background-color 140ms ease;
+  }
+
+  .garden-table tbody tr:hover {
+    background: var(--color-canvas);
+  }
+
+  .garden-field-grid {
+    display: grid;
+    min-width: 0;
+    gap: 1rem;
+  }
+
+  .garden-field {
+    display: grid;
+    min-width: 0;
+    gap: 0.375rem;
+  }
+
+  .garden-field > :where(label, .garden-field-label) {
+    color: var(--color-ink);
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+
+  .garden-field-hint {
+    color: var(--color-muted);
+    font-size: 0.6875rem;
+    line-height: 1.45;
+  }
+
+  .garden-status {
+    display: inline-flex;
+    min-height: 1.5rem;
+    align-items: center;
+    gap: 0.375rem;
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    background: var(--color-sunken);
+    padding: 0.125rem 0.5rem;
+    color: var(--color-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1rem;
+  }
+
+  .garden-status::before {
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 999px;
+    background: currentColor;
+    content: '';
+  }
+
+  .garden-status--success {
+    border-color: var(--color-moss-300);
+    background: var(--color-moss-50);
+    color: var(--color-moss-700);
+  }
+
+  .garden-status--warning {
+    border-color: var(--color-gold-300);
+    background: var(--color-gold-50);
+    color: var(--color-gold-700);
+  }
+
+  .garden-status--danger {
+    border-color: var(--color-wilt-300);
+    background: var(--color-wilt-50);
+    color: var(--color-wilt-700);
+  }
+
+  .garden-empty,
+  .garden-loading,
+  .garden-error {
+    display: flex;
+    min-height: 7rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    border: 1px dashed var(--color-line);
+    border-radius: var(--radius-card);
+    background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+    padding: 1.5rem;
+    color: var(--color-muted);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+
+  .garden-error {
+    justify-content: flex-start;
+    border-style: solid;
+    border-color: var(--color-wilt-300);
+    background: var(--color-wilt-50);
+    text-align: left;
   }
 
   :where(.card, .card-garden):focus-within {
@@ -288,6 +578,51 @@
 
   .filigree-border-strong {
     border-color: var(--color-gold-400);
+  }
+}
+
+@media (min-width: 640px) {
+  .garden-page-header {
+    margin-inline: -1.25rem;
+    margin-top: -1.25rem;
+  }
+
+  .garden-section {
+    padding: 1.25rem;
+  }
+
+  .garden-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .garden-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .garden-page-header {
+    margin-inline: -1.75rem;
+    margin-top: -1.5rem;
+  }
+
+  .garden-split-view {
+    grid-template-columns: minmax(20rem, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .garden-split-view > :last-child {
+    position: sticky;
+    top: 8rem;
+  }
+}
+
+@media (max-width: 639px) {
+  .garden-toolbar > :where(button, a, label, input, select) {
+    min-height: 2.75rem;
+  }
+
+  .garden-table :where(th, td) {
+    padding-inline: 0.75rem;
   }
 }
 

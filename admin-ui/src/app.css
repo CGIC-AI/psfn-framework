@@ -1,127 +1,331 @@
 @import 'tailwindcss';
 
-/* Base palette defaults. Active theme packs can override these CSS variables at runtime. */
+/*
+ * Garden is the default palette. Theme packs override the primitive variables at
+ * runtime; the semantic aliases keep every route on the same design vocabulary.
+ */
 
 @theme {
-  /* Bark — BACKGROUNDS: pure white -> warm light greys */
+  /* Surfaces */
   --color-bark-50: #ffffff;
-  --color-bark-100: #fafafa;
-  --color-bark-200: #f0f0ee;
-  --color-bark-300: #e0dfdc;
-  --color-bark-400: #c5c3bf;
-  --color-bark-500: #a19e99;
-  --color-bark-600: #807d78;
-  --color-bark-700: #646260;
-  --color-bark-800: #4a4846;
-  --color-bark-900: #343230;
+  --color-bark-100: #faf8f3;
+  --color-bark-200: #f4f1e8;
+  --color-bark-300: #e6e0d2;
+  --color-bark-400: #cec6b6;
+  --color-bark-500: #aea493;
+  --color-bark-600: #8f8575;
+  --color-bark-700: #6f675a;
+  --color-bark-800: #474238;
+  --color-bark-900: #26231e;
 
-  /* Gold — gilded accents, Rococo ornament */
-  --color-gold-50: #fdf8eb;
-  --color-gold-100: #f9ecc6;
-  --color-gold-200: #f0d685;
-  --color-gold-300: #e4bc44;
-  --color-gold-400: #d4a520;
-  --color-gold-500: #b8901a;
-  --color-gold-600: #977414;
-  --color-gold-700: #7a5d10;
-  --color-gold-800: #5e470d;
-  --color-gold-900: #43340a;
+  /* Gold — primary actions and attention */
+  --color-gold-50: #fbf5e4;
+  --color-gold-100: #f5e9c8;
+  --color-gold-200: #ead799;
+  --color-gold-300: #dfc372;
+  --color-gold-400: #cfaa47;
+  --color-gold-500: #c29a2b;
+  --color-gold-600: #9e7b1d;
+  --color-gold-700: #7f6117;
+  --color-gold-800: #604812;
+  --color-gold-900: #44320c;
 
-  /* Moss — greens for healthy/active states */
-  --color-moss-50: #f0f7ec;
-  --color-moss-100: #dcefd2;
-  --color-moss-200: #b8dea5;
-  --color-moss-300: #88c56c;
-  --color-moss-400: #5fa843;
-  --color-moss-500: #478c30;
-  --color-moss-600: #367024;
-  --color-moss-700: #2b591d;
-  --color-moss-800: #224718;
-  --color-moss-900: #1a3712;
+  /* Moss — healthy and active states */
+  --color-moss-50: #eef5ee;
+  --color-moss-100: #dceadc;
+  --color-moss-200: #bad5bc;
+  --color-moss-300: #8eb590;
+  --color-moss-400: #669267;
+  --color-moss-500: #4f7a52;
+  --color-moss-600: #416845;
+  --color-moss-700: #3a5c3c;
+  --color-moss-800: #304b32;
+  --color-moss-900: #273c29;
 
-  /* Petal — rose/blush for emotional warmth */
-  --color-petal-50: #fdf3f5;
-  --color-petal-100: #fbe5eb;
-  --color-petal-200: #f5c7d4;
-  --color-petal-300: #eca3b6;
-  --color-petal-400: #df7491;
-  --color-petal-500: #cc4d6e;
-  --color-petal-600: #b13a5a;
-  --color-petal-700: #942e49;
-  --color-petal-800: #77243a;
+  /* Petal / plum — emotional and relational states */
+  --color-petal-50: #f6edf3;
+  --color-petal-100: #eedce8;
+  --color-petal-200: #ddbbd0;
+  --color-petal-300: #c58eae;
+  --color-petal-400: #a9678d;
+  --color-petal-500: #8a4f72;
+  --color-petal-600: #76415f;
+  --color-petal-700: #63364f;
+  --color-petal-800: #502b40;
 
-  /* Shadow — TEXT COLORS: neutral greys, high contrast on white */
-  --color-shadow-50: #f7f7f7;
-  --color-shadow-100: #ececec;
-  --color-shadow-200: #d9d9d8;
-  --color-shadow-300: #6b6b69;
-  --color-shadow-400: #555553;
-  --color-shadow-500: #3f3f3d;
-  --color-shadow-600: #333331;
-  --color-shadow-700: #272725;
-  --color-shadow-800: #1c1c1b;
-  --color-shadow-900: #111111;
-  --color-shadow-950: #0a0a0a;
+  /* Ink hierarchy */
+  --color-shadow-50: #f8f6f0;
+  --color-shadow-100: #efebe2;
+  --color-shadow-200: #ded8cc;
+  --color-shadow-300: #ada597;
+  --color-shadow-400: #978e80;
+  --color-shadow-500: #897f70;
+  --color-shadow-600: #7c7364;
+  --color-shadow-700: #5d564b;
+  --color-shadow-800: #3d3931;
+  --color-shadow-900: #26231e;
+  --color-shadow-950: #181612;
 
-  /* Wilt — amber/terracotta for errors */
-  --color-wilt-50: #fef5ec;
-  --color-wilt-100: #fce8d0;
-  --color-wilt-200: #f8cda0;
-  --color-wilt-300: #f2ab69;
-  --color-wilt-400: #e88832;
-  --color-wilt-500: #cf6d1e;
-  --color-wilt-600: #b05210;
-  --color-wilt-700: #8f420d;
-  --color-wilt-800: #6f330a;
-  --color-wilt-900: #522507;
+  /* Wilt / clay — destructive and error states */
+  --color-wilt-50: #fbede9;
+  --color-wilt-100: #f6dcd4;
+  --color-wilt-200: #edbaab;
+  --color-wilt-300: #da8974;
+  --color-wilt-400: #c66850;
+  --color-wilt-500: #b4523a;
+  --color-wilt-600: #98412d;
+  --color-wilt-700: #7e3526;
+  --color-wilt-800: #662b20;
+  --color-wilt-900: #4e2119;
 
-  /* Typography */
-  --font-serif: 'Playfair Display', 'Georgia', serif;
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  /* Approved semantic vocabulary. These aliases follow every active pack. */
+  --color-canvas: var(--color-bark-100);
+  --color-surface: var(--color-bark-50);
+  --color-sunken: var(--color-bark-200);
+  --color-line: var(--color-bark-300);
+  --color-ink: var(--color-shadow-900);
+  --color-muted: var(--color-shadow-600);
+  --color-plum-50: var(--color-petal-50);
+  --color-plum-100: var(--color-petal-100);
+  --color-plum-200: var(--color-petal-200);
+  --color-plum-300: var(--color-petal-300);
+  --color-plum-400: var(--color-petal-400);
+  --color-plum-500: var(--color-petal-500);
+  --color-plum-600: var(--color-petal-600);
+  --color-plum-700: var(--color-petal-700);
+  --color-plum-800: var(--color-petal-800);
+  --color-clay-50: var(--color-wilt-50);
+  --color-clay-100: var(--color-wilt-100);
+  --color-clay-200: var(--color-wilt-200);
+  --color-clay-300: var(--color-wilt-300);
+  --color-clay-400: var(--color-wilt-400);
+  --color-clay-500: var(--color-wilt-500);
+  --color-clay-600: var(--color-wilt-600);
+  --color-clay-700: var(--color-wilt-700);
+  --color-clay-800: var(--color-wilt-800);
+  --color-clay-900: var(--color-wilt-900);
+
+  /* No remote font fetches: unavailable faces fall through to local system fonts. */
+  --font-serif: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+
+  --radius-card: 0.75rem;
+  --radius-control: 0.625rem;
+  --shadow-card: 0 1px 2px rgb(38 35 30 / 0.04), 0 1px 12px rgb(38 35 30 / 0.03);
+  --shadow-card-raised: 0 8px 24px rgb(38 35 30 / 0.08), 0 2px 6px rgb(38 35 30 / 0.05);
 }
 
-body {
-  font-family: var(--font-sans);
-  font-size: 16px;
-  background-color: var(--color-bark-100);
-  color: var(--color-shadow-800);
+@layer base {
+  html {
+    min-width: 20rem;
+    min-height: 100%;
+    background: var(--color-canvas);
+    color-scheme: light;
+    scrollbar-color: var(--color-bark-400) transparent;
+    scrollbar-width: thin;
+  }
+
+  html[data-theme-id='generic-dark'] {
+    color-scheme: dark;
+  }
+
+  body {
+    min-height: 100dvh;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :where(h1, h2, h3, h4) {
+    color: var(--color-ink);
+    font-family: var(--font-serif);
+    letter-spacing: -0.012em;
+    text-wrap: balance;
+  }
+
+  :where(p, li, dd) {
+    text-wrap: pretty;
+  }
+
+  :where(code, kbd, samp, pre) {
+    font-family: var(--font-mono);
+  }
+
+  :where(hr) {
+    border-color: var(--color-line);
+  }
+
+  :where(
+    input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='image']):not([type='button']):not([type='submit']):not([type='reset']),
+    select,
+    textarea
+  ) {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    padding: 0.5rem 0.75rem;
+    box-shadow: 0 1px 2px rgb(38 35 30 / 0.025);
+    transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  }
+
+  :where(input, select, textarea, button) {
+    font: inherit;
+  }
+
+  :where(input, textarea)::placeholder {
+    color: var(--color-muted);
+    opacity: 0.78;
+  }
+
+  :where(input[type='checkbox'], input[type='radio'], input[type='range']) {
+    accent-color: var(--color-gold-600);
+  }
+
+  :where(button:not(:disabled), [role='button']:not([aria-disabled='true']), summary) {
+    cursor: pointer;
+  }
+
+  :where(button, input, select, textarea):disabled {
+    cursor: not-allowed;
+  }
+
+  :where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex='-1'])):focus-visible {
+    outline: 2px solid var(--color-gold-600);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-gold-100);
+    color: var(--color-ink);
+  }
 }
 
-/* Muted text utility for secondary content */
-.text-muted {
-  color: var(--color-shadow-600);
+@layer components {
+  .console-page-frame,
+  .page-shell {
+    min-height: 100%;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  .page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px solid var(--color-line);
+    padding-bottom: 1.25rem;
+  }
+
+  .page-kicker {
+    color: var(--color-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .page-title {
+    color: var(--color-ink);
+    font-family: var(--font-serif);
+    font-size: clamp(1.5rem, 1.25rem + 0.75vw, 2rem);
+    font-weight: 600;
+    line-height: 1.15;
+  }
+
+  .page-description {
+    max-width: 70ch;
+    color: var(--color-muted);
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+
+  .card,
+  .card-garden {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-card);
+    color: var(--color-ink);
+    transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  }
+
+  :where(.card, .card-garden):focus-within {
+    border-color: var(--color-gold-300);
+    box-shadow: var(--shadow-card-raised);
+  }
+
+  .surface-sunken {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    background: var(--color-sunken);
+  }
+
+  .control-garden {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    background: var(--color-surface);
+    color: var(--color-ink);
+    padding: 0.5rem 0.75rem;
+  }
+
+  .text-muted {
+    color: var(--color-muted);
+  }
+
+  .divider-filigree {
+    border: 0;
+    border-top: 1px solid var(--color-line);
+  }
+
+  .filigree-border-strong {
+    border-color: var(--color-gold-400);
+  }
 }
 
-h1, h2, h3, h4 { font-family: var(--font-serif); }
-
-/* Card with subtle gold-tinted shadow */
-.card,
-.card-garden {
-  background: var(--color-bark-50, #ffffff);
-  border: 1px solid var(--color-bark-300);
-  border-radius: 0.75rem;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-  color: var(--color-shadow-800);
-}
-.card:hover,
-.card-garden:hover {
-  border-color: var(--color-gold-300);
-  box-shadow: 0 2px 8px rgba(184,144,26,0.08);
+@media (hover: hover) {
+  :where(a, button, [role='button']):where(.card, .card-garden):hover {
+    border-color: var(--color-gold-300);
+    box-shadow: var(--shadow-card-raised);
+    transform: translateY(-1px);
+  }
 }
 
-/* Filigree divider */
-.divider-filigree {
-  border: 0;
-  border-top: 1px solid var(--color-bark-300);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
-/* Filigree border highlight */
-.filigree-border-strong {
-  border-color: var(--color-gold-400);
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-/* Gilded scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--color-bark-100); }
-::-webkit-scrollbar-thumb { background: var(--color-bark-400); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-gold-500); }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--color-bark-400);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-gold-500);
+}

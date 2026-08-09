@@ -105,9 +105,9 @@
             class="space-y-4"
             data-settings-section="advanced-fields"
           >
-            <div class="card-garden p-5 space-y-2">
+            <div class="garden-section card-garden space-y-2 border-l-4 border-l-gold-400 p-5">
               <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Runtime</p>
-              <h2 class="text-sm font-serif font-semibold text-shadow-800">All Canonical Fields</h2>
+              <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">All Canonical Fields</h2>
               <p class="text-sm text-shadow-600">
                 Full contract-backed runtime fields stay in this workspace for operator access.
                 Validation errors open the owning canonical group instead of switching modes.
@@ -148,9 +148,9 @@
             class="space-y-4"
             data-settings-section="owner-files"
           >
-            <div class="card-garden p-5 space-y-2">
+            <div class="garden-section card-garden space-y-2 border-l-4 border-l-petal-400 p-5">
               <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Owner Files</p>
-              <h2 class="text-sm font-serif font-semibold text-shadow-800">Raw Owner-File Editors</h2>
+              <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Raw Owner-File Editors</h2>
               <p class="text-sm text-shadow-600">
                 JSON owner files remain editable in place. Raw edits save directly to their
                 owner files here. Staged (unsaved) raw edits are preserved across the unified

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     getChannelEnvelopeData,
     saveChannelEnvelopeLabel,
@@ -56,6 +57,12 @@
     operator_override: 'override',
     derived_default: 'derived',
   };
+  const channelSummary = $derived.by(() => ({
+    total: data?.channels.length ?? 0,
+    owned: data?.channels.filter((channel) => channel.hasLabel).length ?? 0,
+    needsReview: data?.channels.filter((channel) => channel.needsReview).length ?? 0,
+    epochs: data?.epochs.length ?? 0,
+  }));
 
   function startCreate(): void {
     editingChannelId = null;
@@ -248,57 +255,91 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Channels</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Context Envelope labels -- channel-owned privacy, broadcast flag, and contact tracking
-        (channel label &gt; operator override &gt; derived default)
-      </p>
-    </div>
-    <div class="flex gap-2">
+<svelte:head>
+  <title>Channels · Garden</title>
+</svelte:head>
+
+<div class="garden-page space-y-6 pb-10">
+  {#snippet channelActions()}
+    <div class="garden-toolbar flex flex-wrap gap-2">
       <button
         onclick={startCreate}
         disabled={loading}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-               bg-gold-100 text-shadow-800 hover:bg-gold-200
-               transition-colors disabled:opacity-50 font-medium"
+        class="garden-action garden-action--primary min-h-10 rounded-lg bg-gold-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gold-700 disabled:opacity-50"
       >
         Add channel label
       </button>
       <button
         onclick={loadData}
         disabled={loading}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-               text-shadow-600 hover:bg-bark-100
-               transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+        class="garden-action min-h-10 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-600 transition-colors hover:border-gold-300 hover:text-shadow-900 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
     </div>
-  </div>
+  {/snippet}
+  <GardenPageHeader
+    eyebrow="Configure Garden · channels.json"
+    title="Channels"
+    description="Own privacy, broadcast, and contact-tracking labels for every inbound surface. Precedence remains channel label, operator override, then derived default."
+    actions={channelActions}
+  />
+
+  {#if data}
+    <section class="garden-metric-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Channel configuration summary">
+      <article class="garden-metric card-garden p-4">
+        <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Known surfaces</p>
+        <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-shadow-900">{channelSummary.total}</p>
+        <p class="mt-1 text-xs text-shadow-500">effective channel envelopes</p>
+      </article>
+      <article class="garden-metric card-garden p-4">
+        <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Owned labels</p>
+        <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-moss-700">{channelSummary.owned}</p>
+        <p class="mt-1 text-xs text-shadow-500">explicitly stored in channels.json</p>
+      </article>
+      <article class="garden-metric card-garden p-4">
+        <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Needs review</p>
+        <p class="mt-2 font-serif text-3xl font-semibold tabular-nums {channelSummary.needsReview > 0 ? 'text-wilt-600' : 'text-shadow-900'}">{channelSummary.needsReview}</p>
+        <p class="mt-1 text-xs text-shadow-500">fail-closed migration decisions</p>
+      </article>
+      <article class="garden-metric card-garden p-4">
+        <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Disclosure epochs</p>
+        <p class="mt-2 font-serif text-3xl font-semibold tabular-nums text-gold-700">{channelSummary.epochs}</p>
+        <p class="mt-1 text-xs text-shadow-500">audited privacy demotions</p>
+      </article>
+    </section>
+  {/if}
 
   <!-- Companion Cluster: Bearer API pinned companion (vknn) -->
-  <div class="card-garden p-5 space-y-3">
-    <div>
-      <h2 class="text-base font-serif font-semibold text-shadow-900">
+  <section class="garden-section card-garden overflow-hidden">
+    <div class="garden-section-header border-b border-bark-300 bg-bark-50 px-5 py-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Owner field · api.companionId</p>
+      <h2 class="garden-section-title mt-1 text-base font-serif font-semibold text-shadow-900">
         Companion Cluster &mdash; Bearer API pinned companion
       </h2>
-      <p class="text-sm text-shadow-600 mt-1">
+      <p class="garden-section-description mt-1 max-w-4xl text-sm text-shadow-600">
         The inbound OpenAI-compatible Bearer API is pinned to exactly one Companion Cluster member
         (channels.json <code class="font-mono">api.companionId</code>). Callers never select a
         companion per request. A change takes effect after a gateway restart.
       </p>
+        </div>
+        {#if bearerPin?.pinnedCompanionId}
+          <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-medium text-moss-700">Pinned</span>
+        {:else}
+          <span class="garden-status garden-status--warning rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-xs font-medium text-gold-700">Default routing</span>
+        {/if}
+      </div>
     </div>
+    <div class="space-y-3 p-5">
     {#if bearerPinError}
-      <div class="p-3 border-l-4 border-l-wilt-400 bg-wilt-50 rounded">
+      <div class="garden-error rounded-lg border border-wilt-300 bg-wilt-50 p-3" role="alert">
         <p class="text-sm text-shadow-800">{bearerPinError}</p>
       </div>
     {/if}
     {#if bearerPinMessage}
-      <div class="p-3 border-l-4 border-l-gold-400 bg-gold-50 rounded">
+      <div class="garden-status garden-status--success rounded-lg border border-moss-300 bg-moss-50 p-3" role="status">
         <p class="text-sm text-shadow-800">{bearerPinMessage}</p>
       </div>
     {/if}
@@ -307,8 +348,9 @@
         <p class="text-sm text-shadow-600">No registered companions are available to pin.</p>
       {:else}
         {@const gardenCompanionId = requestBoundCompanionId()}
-        <div class="flex flex-wrap items-end gap-3">
-          <div class="text-sm text-shadow-700">
+        <div class="garden-field-grid grid gap-4 rounded-xl border border-bark-200 bg-bark-100 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <div class="garden-field text-sm text-shadow-700">
+            <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Active Garden scope</p>
             <p>This Garden: {companionDisplayLabel(bearerPin.companions, gardenCompanionId)}</p>
             {#if gardenCompanionId}
               <details class="mt-1 text-xs text-shadow-500">
@@ -320,8 +362,7 @@
           <button
             onclick={submitBearerPin}
             disabled={bearerPinSaving || !gardenCompanionId || gardenCompanionId === bearerPin.pinnedCompanionId}
-            class="text-sm px-4 py-2 rounded-lg bg-gold-200 text-shadow-900 hover:bg-gold-300
-                   transition-colors disabled:opacity-50 font-medium"
+            class="garden-action garden-action--primary min-h-10 rounded-lg bg-gold-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gold-700 disabled:opacity-50"
           >
             {bearerPinSaving ? 'Pinning...' : 'Pin this companion'}
           </button>
@@ -342,22 +383,23 @@
         {/if}
       {/if}
     {/if}
-  </div>
+    </div>
+  </section>
 
   {#if saveMessage}
-    <div class="card-garden p-3 border-l-4 border-l-gold-400">
+    <div class="garden-status garden-status--success rounded-xl border border-moss-300 bg-moss-50 p-3" role="status">
       <p class="text-sm text-shadow-800">{saveMessage}</p>
     </div>
   {/if}
   {#if saveError}
-    <div class="card-garden p-3 border-l-4 border-l-wilt-400">
+    <div class="garden-error rounded-xl border border-wilt-300 bg-wilt-50 p-3" role="alert">
       <p class="text-sm text-shadow-800">{saveError}</p>
     </div>
   {/if}
 
   <!-- Demotion (invite-only -> public) click-to-accept notice (jp36.6.2) -->
   {#if demotionNotice}
-    <div class="card-garden p-5 space-y-4 border-l-4 border-l-petal-400">
+    <section class="garden-section card-garden space-y-4 border-l-4 border-l-petal-400 p-5">
       <h2 class="text-base font-serif font-semibold text-shadow-900">
         Demote <code class="font-mono">{demotionNotice.channelId}</code>: invite-only &rarr; public
       </h2>
@@ -372,7 +414,7 @@
           <button
             onclick={acceptDemotion}
             disabled={saving || !demotionAcknowledged}
-            class="text-sm px-4 py-1.5 rounded-lg bg-petal-200 text-shadow-900 hover:bg-petal-300
+            class="garden-action garden-action--danger text-sm px-4 py-1.5 rounded-lg bg-petal-200 text-shadow-900 hover:bg-petal-300
                    transition-colors disabled:opacity-50 font-medium"
           >
             {saving ? 'Applying...' : 'Accept and demote'}
@@ -380,7 +422,7 @@
           <button
             onclick={cancelDemotion}
             disabled={saving}
-            class="text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600
+            class="garden-action text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600
                    hover:bg-bark-100 transition-colors disabled:opacity-50 font-medium"
           >
             Cancel
@@ -390,21 +432,25 @@
         <p class="text-sm text-shadow-800">{demotionNotice.reason ?? 'This channel cannot be demoted.'}</p>
         <button
           onclick={cancelDemotion}
-          class="text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium"
+          class="garden-action text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium"
         >
           Close
         </button>
       {/if}
-    </div>
+    </section>
   {/if}
 
   {#if showForm}
-    <div class="card-garden p-5 space-y-4">
-      <h2 class="text-base font-serif font-semibold text-shadow-900">
+    <section class="garden-section card-garden overflow-hidden">
+      <div class="garden-section-header border-b border-bark-300 bg-bark-50 px-5 py-4">
+      <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Channel owner record</p>
+      <h2 class="garden-section-title mt-1 text-base font-serif font-semibold text-shadow-900">
         {editingChannelId ? `Edit label: ${editingChannelId}` : 'New channel label'}
       </h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <label class="block">
+      </div>
+      <div class="space-y-4 p-5">
+      <div class="garden-field-grid grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label class="garden-field block">
           <span class="text-xs font-medium text-shadow-600 uppercase tracking-wide">Channel id</span>
           <input
             type="text"
@@ -414,7 +460,7 @@
             class="mt-1 w-full text-sm rounded-lg border border-bark-300 px-3 py-2 disabled:opacity-60"
           />
         </label>
-        <label class="block">
+        <label class="garden-field block">
           <span class="text-xs font-medium text-shadow-600 uppercase tracking-wide">Privacy</span>
           <select
             bind:value={formPrivacy}
@@ -425,7 +471,7 @@
             <option value="public">public</option>
           </select>
         </label>
-        <label class="block">
+        <label class="garden-field block">
           <span class="text-xs font-medium text-shadow-600 uppercase tracking-wide">Contact tracking</span>
           <select
             bind:value={formContactTracking}
@@ -436,7 +482,7 @@
             <option value="role_gated">role_gated (reserved)</option>
           </select>
         </label>
-        <div class="flex items-end gap-6 pb-2">
+        <div class="garden-field flex flex-col justify-end gap-3 rounded-xl border border-bark-200 bg-bark-100 p-3 sm:flex-row sm:items-center">
           <label class="flex items-center gap-2 text-sm text-shadow-700">
             <input type="checkbox" bind:checked={formBroadcast} />
             Broadcast surface (requires public)
@@ -447,11 +493,11 @@
           </label>
         </div>
       </div>
-      <div class="flex gap-2">
+      <div class="garden-toolbar flex flex-wrap gap-2">
         <button
           onclick={submitLabel}
           disabled={saving}
-          class="text-sm px-4 py-1.5 rounded-lg bg-gold-200 text-shadow-900 hover:bg-gold-300
+          class="garden-action garden-action--primary text-sm px-4 py-1.5 rounded-lg bg-gold-600 text-white hover:bg-gold-700
                  transition-colors disabled:opacity-50 font-medium"
         >
           {saving ? 'Saving...' : 'Save label'}
@@ -459,27 +505,28 @@
         <button
           onclick={cancelEdit}
           disabled={saving}
-          class="text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600
+          class="garden-action text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600
                  hover:bg-bark-100 transition-colors disabled:opacity-50 font-medium"
         >
           Cancel
         </button>
       </div>
-    </div>
+      </div>
+    </section>
   {/if}
 
   {#if loading}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-loading card-garden p-12 text-center">
       <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
       <p class="text-sm text-shadow-600">Loading channel envelope data...</p>
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6" role="alert">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if data}
     {#if data.channels.length === 0}
-      <div class="card-garden p-12 text-center">
+      <div class="garden-empty card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No channel labels or overrides yet</p>
         <p class="text-sm text-shadow-600">
           Seed labels with <code class="font-mono">npm run migrate:channel-envelope</code> or add one above.
@@ -487,8 +534,17 @@
         </p>
       </div>
     {:else}
-      <div class="card-garden overflow-x-auto">
-        <table class="w-full text-sm">
+      <section class="garden-section space-y-3" aria-labelledby="channel-labels-heading">
+        <div class="garden-section-header flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Effective precedence</p>
+            <h2 id="channel-labels-heading" class="garden-section-title font-serif text-xl font-semibold text-shadow-900">Channel labels</h2>
+          </div>
+          <p class="text-xs text-shadow-500">{channelSummary.owned} explicit of {channelSummary.total} known surfaces</p>
+        </div>
+      <div class="garden-table-shell card-garden hidden overflow-hidden md:block">
+        <div class="garden-table-scroll overflow-x-auto">
+        <table class="garden-table w-full text-sm">
           <thead>
             <tr class="text-left border-b border-bark-200 text-xs text-shadow-600 uppercase tracking-wide">
               <th class="px-4 py-3">Channel</th>
@@ -530,7 +586,7 @@
                     <button
                       onclick={() => startEdit(row)}
                       disabled={saving}
-                      class="text-xs px-2 py-1 rounded border border-bark-300 text-shadow-600 hover:bg-bark-100 disabled:opacity-50"
+                      class="garden-action text-xs px-2 py-1 rounded border border-bark-300 text-shadow-600 hover:bg-bark-100 disabled:opacity-50"
                     >
                       {row.hasLabel ? 'Edit' : 'Add label'}
                     </button>
@@ -538,7 +594,7 @@
                       <button
                         onclick={() => confirmReviewed(row)}
                         disabled={saving}
-                        class="text-xs px-2 py-1 rounded border border-gold-300 text-shadow-700 bg-gold-100 hover:bg-gold-200 disabled:opacity-50"
+                        class="garden-action text-xs px-2 py-1 rounded border border-gold-300 text-shadow-700 bg-gold-100 hover:bg-gold-200 disabled:opacity-50"
                       >
                         Confirm reviewed
                       </button>
@@ -548,7 +604,7 @@
                         onclick={() => startDemotion(row)}
                         disabled={saving || demotionLoading}
                         title="Demote invite-only -> public (click-to-accept: starts a fresh disclosure epoch)"
-                        class="text-xs px-2 py-1 rounded border border-petal-300 text-petal-500 hover:bg-petal-100 disabled:opacity-50"
+                        class="garden-action garden-action--danger text-xs px-2 py-1 rounded border border-petal-300 text-petal-500 hover:bg-petal-100 disabled:opacity-50"
                       >
                         Demote to public
                       </button>
@@ -557,7 +613,7 @@
                       <button
                         onclick={() => removeLabel(row)}
                         disabled={saving}
-                        class="text-xs px-2 py-1 rounded border border-wilt-300 text-wilt-600 hover:bg-wilt-100 disabled:opacity-50"
+                        class="garden-action garden-action--danger text-xs px-2 py-1 rounded border border-wilt-300 text-wilt-600 hover:bg-wilt-100 disabled:opacity-50"
                       >
                         Remove label
                       </button>
@@ -568,12 +624,45 @@
             {/each}
           </tbody>
         </table>
+        </div>
       </div>
+      <div class="grid gap-3 md:hidden">
+        {#each data.channels as row (row.channelId)}
+          <article class="card-garden p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="break-all font-mono text-sm font-medium text-shadow-900">{row.channelId}</p>
+                <p class="mt-1 text-xs text-shadow-500">{SOURCE_LABELS[row.source]} · {row.contactTracking} contact tracking</p>
+              </div>
+              <span class="rounded-full border border-petal-200 bg-petal-50 px-2 py-1 text-xs font-medium text-petal-600">{row.privacy}</span>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2 text-xs">
+              <span class="garden-status rounded-full border border-bark-300 bg-bark-100 px-2 py-1 text-shadow-600">Broadcast {row.broadcast ? 'on' : 'off'}</span>
+              {#if row.needsReview}
+                <span class="garden-status garden-status--danger rounded-full border border-wilt-300 bg-wilt-50 px-2 py-1 text-wilt-600">Needs review</span>
+              {/if}
+            </div>
+            <div class="garden-toolbar mt-4 flex flex-wrap gap-2 border-t border-bark-200 pt-3">
+              <button onclick={() => startEdit(row)} disabled={saving} class="garden-action rounded border border-bark-300 px-2 py-1 text-xs text-shadow-700 disabled:opacity-50">{row.hasLabel ? 'Edit' : 'Add label'}</button>
+              {#if row.needsReview && row.hasLabel}
+                <button onclick={() => confirmReviewed(row)} disabled={saving} class="garden-action rounded border border-gold-300 bg-gold-50 px-2 py-1 text-xs text-gold-700 disabled:opacity-50">Confirm reviewed</button>
+              {/if}
+              {#if row.privacy === 'invite_only' && !row.broadcast}
+                <button onclick={() => startDemotion(row)} disabled={saving || demotionLoading} class="garden-action garden-action--danger rounded border border-petal-300 px-2 py-1 text-xs text-petal-600 disabled:opacity-50">Demote to public</button>
+              {/if}
+              {#if row.hasLabel}
+                <button onclick={() => removeLabel(row)} disabled={saving} class="garden-action garden-action--danger rounded border border-wilt-300 px-2 py-1 text-xs text-wilt-600 disabled:opacity-50">Remove label</button>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      </div>
+      </section>
     {/if}
 
     <!-- Informational: lower precedence tiers -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="card-garden p-5">
+      <section class="garden-section card-garden p-5">
         <h2 class="text-base font-serif font-semibold text-shadow-900 mb-2">Operator prefix overrides (tier 2)</h2>
         {#if Object.keys(data.prefixOverrides).length === 0}
           <p class="text-sm text-shadow-600">None configured in trust-policy.json.</p>
@@ -584,8 +673,8 @@
             {/each}
           </ul>
         {/if}
-      </div>
-      <div class="card-garden p-5">
+      </section>
+      <section class="garden-section card-garden p-5">
         <h2 class="text-base font-serif font-semibold text-shadow-900 mb-2">Derived-default prefix heuristics (tier 3, demoted)</h2>
         <p class="text-xs text-shadow-600 mb-2">
           Seed data for channel records; they apply only to channels without an owned label or override.
@@ -598,11 +687,11 @@
             <li><code class="font-mono">{prefix}*</code> &rarr; public + broadcast</li>
           {/each}
         </ul>
-      </div>
+      </section>
     </div>
 
     <!-- Classification epoch boundaries (jp36.6.2 demotion audit) -->
-    <div class="card-garden p-5">
+    <section class="garden-section card-garden p-5">
       <h2 class="text-base font-serif font-semibold text-shadow-900 mb-2">
         Classification epochs (invite-only &rarr; public demotions)
       </h2>
@@ -625,6 +714,6 @@
           {/each}
         </ul>
       {/if}
-    </div>
+    </section>
   {/if}
 </div>

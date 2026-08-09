@@ -48,17 +48,17 @@
 
 <section
   id={settingsSimpleSectionAnchorId('models')}
-  class="card-garden p-5 space-y-3"
+  class="garden-section card-garden space-y-3 p-5"
   data-settings-section="models"
 >
   <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Models</p>
-  <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry and Purpose Routing</h2>
+  <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Model Registry and Purpose Routing</h2>
   <p class="text-sm text-shadow-600">
     Purpose-tagged primary/fallback models, model rosters, and context windows are managed in the dedicated Models workspace.
   </p>
   <a
     href={`${base}/models`}
-    class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+    class="garden-action inline-flex min-h-10 items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:bg-gold-100"
   >
     Open Models
   </a>
@@ -66,24 +66,24 @@
 
 <section
   id={settingsSimpleSectionAnchorId('prompting')}
-  class="card-garden p-5 space-y-3"
+  class="garden-section card-garden space-y-3 p-5"
   data-settings-section="prompting"
 >
   <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Prompting</p>
-  <h2 class="text-sm font-serif font-semibold text-shadow-800">Prompt Stack and Authoring</h2>
+  <h2 class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Prompt Stack and Authoring</h2>
   <p class="text-sm text-shadow-600">
     Prompt layers and authoring controls live in Prompts. Prompt assembly debugging lives in Prompt Monitor.
   </p>
   <div class="flex flex-wrap gap-2">
     <a
       href={`${base}/prompts`}
-      class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+      class="garden-action inline-flex min-h-10 items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:bg-gold-100"
     >
       Open Prompts
     </a>
     <a
       href={`${base}/prompt-monitor`}
-      class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+      class="garden-action inline-flex min-h-10 items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100"
     >
       Open Prompt Monitor
     </a>
@@ -92,7 +92,7 @@
 
 <section
   id={settingsSimpleSectionAnchorId('providers')}
-  class="card-garden p-5 space-y-4"
+  class="garden-section card-garden space-y-4 overflow-hidden p-5"
   data-settings-section="providers"
 >
   <ProviderRegistrySection

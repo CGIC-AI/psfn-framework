@@ -34,6 +34,7 @@
   import ProviderWiringPanel from './ProviderWiringPanel.svelte';
   import EffectiveChatModelCard from './EffectiveChatModelCard.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     parseProviderRegistryJson,
     PROVIDER_TYPE_LABELS,
@@ -85,6 +86,7 @@
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
   let providerValidationErrors = $state<string[]>([]);
   let expandedModelIds = $state<Set<string>>(new Set());
+  let selectedModelId = $state('');
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
   let dirty = $state(false);
@@ -119,6 +121,11 @@
     models
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry }) => !isOtherCompanionSlot(entry))
+  ));
+  let resolvedSelectedModelId = $derived.by(() => (
+    ownModelEntries.some(({ entry }) => entry.id === selectedModelId)
+      ? selectedModelId
+      : (ownModelEntries[0]?.entry.id ?? '')
   ));
   let otherCompanionSlots = $derived.by(() => models.filter(isOtherCompanionSlot));
   let enabledModelCount = $derived.by(() => (
@@ -930,59 +937,83 @@
   {/each}
 </datalist>
 
-<div class="space-y-5">
-  <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Conservatory</h1>
-      <p class="text-sm text-shadow-600 mt-1">Canonical model management for routing, capabilities, and tuning</p>
-    </div>
-    <div class="flex items-center gap-3">
+<div class="garden-page space-y-5 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Model registry"
+    title="The Conservatory"
+    description="Canonical model routing, provider wiring, capability limits, tuning, and spend policy."
+    class="border-b border-bark-300 pb-4"
+  >
+    {#snippet actions()}
       {#if dirty}
-        <span class="px-2.5 py-1 rounded-full text-sm font-medium bg-gold-100 text-gold-700 border border-gold-300">
+        <span class="rounded-full border border-gold-300 bg-gold-100 px-2.5 py-1 text-xs font-semibold text-gold-800">
           Unsaved changes
         </span>
       {/if}
       <button
         onclick={refreshDiscovery}
         disabled={refreshingDiscovery || loading}
-        class="px-3 py-1.5 text-sm font-medium rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+        class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50 disabled:opacity-50"
       >
         {refreshingDiscovery ? 'Refreshing...' : 'Refresh Discovery'}
       </button>
       <button
         onclick={saveModels}
         disabled={saving || loading || budgetFormInvalid}
-        class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+        class="garden-action garden-action--primary rounded-lg bg-gold-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-gold-700 disabled:opacity-50"
       >
         {saving ? 'Saving...' : 'Save models.json'}
       </button>
-    </div>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
-  <div class="card-garden p-4 text-sm text-shadow-700">
-    Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
-    (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">SHARED_ROUTER_API_KEY</span>).
+  <nav aria-label="Conservatory sections" class="garden-toolbar -mx-1 flex gap-1 overflow-x-auto border-b border-bark-300 px-1">
+    {#each [
+      { href: '#models-registry', label: 'Registry', count: ownModelEntries.length },
+      { href: '#models-providers', label: 'Providers', count: providerRegistry.providers.length },
+      { href: '#models-discovery', label: 'Discovery', count: discoveredModels.length },
+      { href: '#models-budget', label: 'Budget', count: budgetPolicy.enabled ? 1 : 0 },
+    ] as item}
+      <a href={item.href} class="group flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 pb-2.5 pt-1 text-sm font-medium text-shadow-600 transition-colors hover:border-gold-400 hover:text-shadow-900">
+        {item.label}
+        <span class="rounded-full bg-bark-200 px-1.5 py-0.5 text-[0.65rem] tabular-nums text-shadow-600 group-hover:bg-gold-100 group-hover:text-gold-800">{item.count}</span>
+      </a>
+    {/each}
+  </nav>
+
+  <div class="card-garden border-l-4 border-l-gold-400 px-4 py-3 text-sm text-shadow-700">
+    <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-gold-700">Owner-file boundary</p>
+    <p class="mt-1">
+      Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
+      (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">SHARED_ROUTER_API_KEY</span>).
+    </p>
   </div>
 
   <EffectiveChatModelCard />
 
-  <ProviderWiringPanel
-    settingsHref={`${base}/settings#settings-providers`}
-    {providerRegistry}
-    {enabledProviderCount}
-    {providerValidationErrors}
-    {saving}
-    providerDirty={providerRegistryHasChanges}
-    {addProviderEntry}
-    {removeProviderEntry}
-    {updateProviderEntry}
-    {setProviderType}
-    {setProviderField}
-    {saveProviderRegistry}
-    {discardProviderRegistryChanges}
-  />
+  <section id="models-providers" class="garden-section scroll-mt-24">
+    <ProviderWiringPanel
+      settingsHref={`${base}/settings#settings-providers`}
+      {providerRegistry}
+      {enabledProviderCount}
+      {providerValidationErrors}
+      {saving}
+      providerDirty={providerRegistryHasChanges}
+      {addProviderEntry}
+      {removeProviderEntry}
+      {updateProviderEntry}
+      {setProviderType}
+      {setProviderField}
+      {saveProviderRegistry}
+      {discardProviderRegistryChanges}
+    />
+  </section>
 
-  <div class="card-garden p-4 space-y-3">
+  <section class="garden-section card-garden space-y-3 p-4">
+    <div>
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-500">Routing coverage</p>
+        <h2 class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Purpose primaries</h2>
+    </div>
     <div class="flex flex-wrap gap-2">
       {#each CANONICAL_PURPOSES as purpose}
         {@const count = purposePrimaryCounts[purpose] ?? 0}
@@ -992,10 +1023,18 @@
       {/each}
     </div>
     <p class="text-sm text-shadow-600">Each purpose must have exactly one primary model before save. The memory recall purpose is the dedicated model route for memory retrieval, synthesis, and improvement work. Purpose chips cycle off → standard → primary.</p>
-  </div>
+  </section>
 
-  <div class="card-garden p-4 space-y-3">
-    <h2 class="text-sm font-serif font-semibold text-shadow-800">Budget Policy (USD)</h2>
+  <section id="models-budget" class="garden-section card-garden scroll-mt-24 space-y-4 overflow-hidden p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-500">Spend policy</p>
+        <h2 class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Budget policy (USD)</h2>
+      </div>
+      <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {budgetPolicy.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+        {budgetPolicy.enabled ? 'gating enabled' : 'tracking only'}
+      </span>
+    </div>
     <div class="flex flex-col gap-3">
       <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
         <input
@@ -1059,16 +1098,16 @@
     {#if budgetInlineError}
       <p class="text-sm text-wilt-700">{budgetInlineError}</p>
     {/if}
-  </div>
+  </section>
 
   {#if flashMessage}
-    <div class="px-4 py-2.5 rounded-lg text-sm font-medium {flashOk ? 'bg-moss-50 text-moss-700 border border-moss-300' : 'bg-wilt-50 text-wilt-600 border border-wilt-300'}">
+    <div class="garden-status {flashOk ? 'garden-status--success' : 'garden-status--danger'} px-4 py-2.5 rounded-lg text-sm font-medium {flashOk ? 'bg-moss-50 text-moss-700 border border-moss-300' : 'bg-wilt-50 text-wilt-600 border border-wilt-300'}">
       {flashMessage}
     </div>
   {/if}
 
   {#if validationErrors.length > 0}
-    <div class="card-garden p-4 border border-wilt-300 bg-wilt-50/40">
+    <div class="garden-error card-garden p-4 border border-wilt-300 bg-wilt-50/40">
       <h2 class="text-sm font-semibold text-wilt-700 mb-2">Validation errors</h2>
       <ul class="space-y-1 text-sm text-wilt-700">
         {#each validationErrors as issue}
@@ -1079,7 +1118,7 @@
   {/if}
 
   {#if loading}
-    <div class="card-garden p-8">
+    <div class="garden-loading card-garden p-8">
       <div class="animate-pulse space-y-3">
         {#each Array(4) as _}
           <div class="h-16 rounded-lg bg-bark-200"></div>
@@ -1087,51 +1126,99 @@
       </div>
     </div>
   {:else if error}
-    <div class="card-garden p-6 text-sm text-wilt-600">{error}</div>
+    <div class="garden-error card-garden p-6 text-sm text-wilt-600">{error}</div>
   {:else}
-    <div class="space-y-4">
-      <DiscoveredModelsPanel
-        {discoveryError}
-        {discoverySearch}
-        {filteredDiscoveredModels}
-        {hasDiscoveredModels}
-        {setDiscoverySearch}
-        {addDiscoveredModel}
-      />
+    <div class="space-y-5">
+      <section id="models-discovery" class="garden-section scroll-mt-24">
+        <DiscoveredModelsPanel
+          {discoveryError}
+          {discoverySearch}
+          {filteredDiscoveredModels}
+          {hasDiscoveredModels}
+          {setDiscoverySearch}
+          {addDiscoveredModel}
+        />
+      </section>
 
-      <div class="space-y-3">
+      <section id="models-registry" class="garden-section scroll-mt-24 space-y-3">
         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry</h2>
+          <div>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-500">Canonical roster</p>
+            <h2 class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">Model registry</h2>
+            <p class="mt-1 text-sm text-shadow-600">Select a model to inspect routing, wiring, capabilities, tuning, and cost.</p>
+          </div>
           <div class="flex flex-wrap items-center gap-2">
             <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
               {enabledModelCount} enabled / {ownModelEntries.length} total
             </span>
             <button
               onclick={addModel}
-              class="px-3 py-1.5 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors"
+              class="garden-action rounded border border-gold-400 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:bg-gold-50"
             >
               + Add Model
             </button>
           </div>
         </div>
 
-        {#each ownModelEntries as { entry, index } (entry.id)}
-          {@const isExpanded = expandedModelIds.has(entry.id)}
-          {@const currentDragOver = dragOverIndex === index}
-          {@const modelEnabled = modelIsEnabled(entry)}
+        <div class="garden-split-view grid items-start gap-4 xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+          <div class="card-garden overflow-hidden xl:sticky xl:top-24">
+            <div class="flex items-center justify-between border-b border-bark-300 bg-bark-50 px-3 py-2.5">
+              <span class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">Routing order</span>
+              <span class="text-xs text-shadow-500">drag to rank</span>
+            </div>
+            <ul class="max-h-80 divide-y divide-bark-200 overflow-y-auto xl:max-h-[38rem]">
+              {#each ownModelEntries as { entry, index } (entry.id)}
+                {@const currentDragOver = dragOverIndex === index}
+                {@const modelEnabled = modelIsEnabled(entry)}
+                {@const isSelected = resolvedSelectedModelId === entry.id}
+                <li
+                  draggable="true"
+                  ondragstart={() => handleDragStart(index)}
+                  ondragover={(event) => handleDragOver(event, index)}
+                  ondrop={(event) => handleDrop(event, index)}
+                  ondragend={handleDragEnd}
+                  class="relative {currentDragOver ? 'bg-gold-100' : ''}"
+                >
+                  <button
+                    type="button"
+                    onclick={() => selectedModelId = entry.id}
+                    aria-current={isSelected ? 'true' : undefined}
+                    class="w-full border-l-2 px-3 py-3 text-left transition-colors {isSelected ? 'border-l-gold-500 bg-gold-50' : 'border-l-transparent bg-bark-50 hover:bg-bark-100'} {modelEnabled ? '' : 'opacity-65'}"
+                  >
+                    <span class="flex items-center gap-2">
+                      <span class="cursor-grab text-shadow-400" title="Drag to reorder">⋮⋮</span>
+                      <span class="h-1.5 w-1.5 shrink-0 rounded-full {modelEnabled ? 'bg-moss-500' : 'bg-bark-400'}"></span>
+                      <span class="min-w-0 flex-1 truncate font-mono text-xs font-medium text-shadow-900">{entry.id}</span>
+                      <span class="text-[0.65rem] tabular-nums text-shadow-500">#{entry.rank}</span>
+                    </span>
+                    <span class="mt-1 block truncate pl-8 font-mono text-[0.7rem] text-shadow-600">{entry.identity.provider || 'unset'} / {entry.identity.model || 'unset'}</span>
+                    <span class="mt-1.5 flex flex-wrap gap-1 pl-8">
+                      {#each entry.purposes as tag}
+                        <span class="rounded border px-1.5 py-0.5 text-[0.6rem] {tag.primary ? 'border-gold-300 bg-gold-100 text-gold-800' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                          {PURPOSE_LABELS[tag.purpose]}
+                        </span>
+                      {/each}
+                    </span>
+                  </button>
+                </li>
+              {:else}
+                <li class="px-4 py-8 text-center text-sm text-shadow-600">No model slots are configured.</li>
+              {/each}
+            </ul>
+          </div>
+
+          <div id="selected-model-detail" class="min-w-0 scroll-mt-24">
+          {#each ownModelEntries as { entry, index } (entry.id)}
+            {#if resolvedSelectedModelId === entry.id}
+              {@const isExpanded = expandedModelIds.has(entry.id)}
+              {@const modelEnabled = modelIsEnabled(entry)}
           <article
-            draggable="true"
-            ondragstart={() => handleDragStart(index)}
-            ondragover={(event) => handleDragOver(event, index)}
-            ondrop={(event) => handleDrop(event, index)}
-            ondragend={handleDragEnd}
-            class="card-garden overflow-hidden border {currentDragOver ? 'border-gold-400' : 'border-bark-300'} {modelEnabled ? '' : 'bg-bark-50/80 opacity-80'}"
+            class="card-garden overflow-hidden {modelEnabled ? '' : 'bg-bark-50/80 opacity-80'}"
           >
             <div class="px-4 py-3 space-y-3">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="space-y-2 min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="text-shadow-400 cursor-grab" title="Drag to reorder">⋮⋮</span>
                     <input
                       type="text"
                       value={entry.id}
@@ -1139,7 +1226,7 @@
                         nextEntry.id = (event.target as HTMLInputElement).value;
                         return nextEntry;
                       })}
-                      class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-bark-50"
+                      class="min-w-0 max-w-full flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 font-mono text-sm text-shadow-800"
                     />
                     <span class="px-2 py-0.5 rounded-full text-xs bg-bark-100 text-shadow-600 border border-bark-300">rank {entry.rank}</span>
                     <span class="px-2 py-0.5 rounded-full text-xs border {modelEnabled ? 'bg-moss-50 border-moss-300 text-moss-700' : 'bg-wilt-50 border-wilt-300 text-wilt-700'}">
@@ -1182,19 +1269,19 @@
                 <div class="flex flex-wrap items-center gap-2">
                   <button
                     onclick={() => setModelEnabled(index, !modelEnabled)}
-                    class="px-3 py-1.5 text-sm rounded border font-medium transition-colors {modelEnabled ? 'border-wilt-300 text-wilt-700 hover:bg-wilt-50' : 'border-moss-300 text-moss-700 hover:bg-moss-50'}"
+                    class="garden-action px-3 py-1.5 text-sm rounded border font-medium transition-colors {modelEnabled ? 'border-wilt-300 text-wilt-700 hover:bg-wilt-50' : 'border-moss-300 text-moss-700 hover:bg-moss-50'}"
                   >
                     {modelEnabled ? 'Disable Model' : 'Enable Model'}
                   </button>
                   <button
                     onclick={() => toggleExpanded(entry.id)}
-                    class="px-3 py-1.5 text-sm rounded border border-bark-300 text-shadow-700 hover:bg-bark-100 transition-colors"
+                    class="garden-action px-3 py-1.5 text-sm rounded border border-bark-300 text-shadow-700 hover:bg-bark-100 transition-colors"
                   >
                     {isExpanded ? 'Hide Advanced' : 'Advanced'}
                   </button>
                   <button
                     onclick={() => removeModel(index)}
-                    class="px-3 py-1.5 text-sm rounded border border-wilt-300 text-wilt-600 hover:bg-wilt-50 transition-colors"
+                    class="garden-action garden-action--danger px-3 py-1.5 text-sm rounded border border-wilt-300 text-wilt-600 hover:bg-wilt-50 transition-colors"
                   >
                     Remove
                   </button>
@@ -1222,7 +1309,7 @@
 
             {#if isExpanded}
               <div class="px-4 pb-4 border-t border-bark-300 pt-4 space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div class="garden-field-grid grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Provider</p>
                     <input
@@ -1318,7 +1405,7 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div class="garden-field-grid grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {#each CAPABILITY_BOOLEAN_FIELDS as field}
                     <label class="inline-flex items-center gap-2 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-700">
                       <input
@@ -1332,7 +1419,7 @@
                   {/each}
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div class="garden-field-grid grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {#each TUNING_NUMBER_FIELDS as field}
                     <div>
                       <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">{field.label}</p>
@@ -1373,8 +1460,11 @@
               </div>
             {/if}
           </article>
-        {/each}
-      </div>
+            {/if}
+          {/each}
+          </div>
+        </div>
+      </section>
 
       {#if otherCompanionSlots.length > 0}
         <CollapsibleSection

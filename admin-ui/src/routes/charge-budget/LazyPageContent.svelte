@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import AccountingCockpit from '$lib/components/accounting/AccountingCockpit.svelte';
   import HumanAttentionPressurePanel from './HumanAttentionPressurePanel.svelte';
   import { accountingSearchParamsForTab } from '$lib/accounting/query-state';
@@ -395,58 +396,58 @@
   });
 </script>
 
-<div class="space-y-8">
-  <div class="flex items-start justify-between gap-4 flex-wrap">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Runtime & Tools</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Charge / Budget</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Canonical charge-policy controls, a merged run/event ledger, rolling quotas, and persisted model-cost analysis.
-      </p>
-    </div>
+<div class="garden-page space-y-6 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Accounting"
+    title="Charge / Budget"
+    description="Canonical charge-policy controls, a merged run/event ledger, rolling quotas, and persisted model-cost analysis."
+    class="border-b border-bark-300 pb-4"
+  >
+    {#snippet actions()}
     {#if activeTab === 'charges'}
       <button
         onclick={refreshData}
         disabled={refreshing || saving}
-        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+        class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
     {/if}
-  </div>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage && activeTab === 'charges'}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-600">{errorMessage}</p>
     </div>
   {/if}
 
   {#if loading}
-    <div class="grid gap-4 md:grid-cols-4">
+    <div class="garden-loading garden-metric-grid grid gap-4 md:grid-cols-4">
       {#each Array(4) as _}
         <div class="card-garden h-32 animate-pulse bg-bark-50 p-5"></div>
       {/each}
     </div>
   {:else}
-    <div class="flex flex-wrap gap-2 border-b border-bark-300 pb-3">
+    <div class="garden-toolbar flex gap-1 overflow-x-auto border-b border-bark-300 pb-0">
       <button
         type="button"
         onclick={() => selectTab('charges')}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'charges' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
       >
         Charge Policy
       </button>
       <button
         type="button"
         onclick={() => selectTab('token-usage')}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
       >
         Token Usage
       </button>
     </div>
 
     {#if activeTab === 'charges'}
-    <section class="flex flex-wrap items-center gap-2" aria-label="Quick charge stats">
+    <section class="garden-metric-grid flex flex-wrap items-center gap-2" aria-label="Quick charge stats">
       <span class="inline-flex items-center gap-2 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
         <span class="h-2 w-2 rounded-full {activeRun ? 'bg-moss-500' : 'bg-bark-300'}" aria-hidden="true"></span>
         {#if activeRun}
@@ -469,12 +470,12 @@
       {/each}
     </section>
 
-    <section class="card-garden overflow-hidden" aria-labelledby="policy-heading">
-      <div class="flex flex-wrap items-start justify-between gap-3 border-b border-bark-300 px-5 py-4">
+    <section class="garden-section card-garden overflow-hidden" aria-labelledby="policy-heading">
+      <div class="garden-section-header flex flex-wrap items-start justify-between gap-3 border-b border-bark-300 px-5 py-4">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Canonical owner file</p>
-          <h2 id="policy-heading" class="mt-1 font-serif text-lg font-semibold text-shadow-900">charge-policy.json</h2>
-          <p class="mt-1 text-sm text-shadow-600">
+          <h2 id="policy-heading" class="garden-section-title mt-1 font-serif text-lg font-semibold text-shadow-900">charge-policy.json</h2>
+          <p class="garden-section-description mt-1 text-sm text-shadow-600">
             Curated controls save through the same raw owner-file path used by Garden settings.
           </p>
         </div>
@@ -485,14 +486,14 @@
           <button
             onclick={toggleRawEditor}
             disabled={!policy || saving}
-            class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+            class="garden-action rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
           >
             {rawEditorOpen ? 'Hide raw JSON' : 'Raw JSON'}
           </button>
           <button
             onclick={savePolicy}
             disabled={!policy || saving || (!rawEditorOpen && policyValidationErrors.length > 0) || !policyDirty}
-            class="rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gold-700 disabled:cursor-not-allowed disabled:opacity-50"
+            class="garden-action garden-action--primary rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gold-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save policy'}
           </button>
@@ -545,8 +546,9 @@
             <div>
               <h3 class="font-serif text-base font-semibold text-shadow-900">Surface costs and rationales</h3>
               <p class="mt-1 text-sm text-shadow-600">Every nonzero surface cost requires a non-empty rationale before save.</p>
-              <div class="mt-3 overflow-x-auto rounded-xl border border-bark-300">
-                <table class="min-w-full divide-y divide-bark-200 text-left text-sm">
+              <div class="garden-table-shell mt-3 overflow-hidden rounded-xl border border-bark-300">
+                <div class="garden-table-scroll overflow-x-auto">
+                <table class="garden-table min-w-full divide-y divide-bark-200 text-left text-sm">
                   <thead class="bg-bark-50 text-xs uppercase tracking-[0.14em] text-shadow-500">
                     <tr>
                       <th class="px-4 py-3 font-semibold">Surface</th>
@@ -587,6 +589,7 @@
                     {/each}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
 
@@ -660,9 +663,9 @@
 
     <HumanAttentionPressurePanel data={humanAttention} policy={humanAttentionPolicy} />
 
-    <section class="card-garden overflow-hidden" aria-labelledby="recent-runs-heading">
-      <div class="border-b border-bark-300 px-5 py-4">
-        <h2 id="recent-runs-heading" class="font-serif text-lg font-semibold text-shadow-900">Recent runs & charge events</h2>
+    <section class="garden-section card-garden overflow-hidden" aria-labelledby="recent-runs-heading">
+      <div class="garden-section-header border-b border-bark-300 px-5 py-4">
+        <h2 id="recent-runs-heading" class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Recent runs & charge events</h2>
         <p class="mt-1 text-sm text-shadow-600">
           {formatInteger(mergedRuns.length)} runs · {formatInteger(mergedEventCount)} charge events · {formatInteger(lineageRootCount)} lineage roots.
           Expand a run to see its individual charge events.
@@ -734,8 +737,8 @@
       </BoundedList>
     </section>
 
-    <section class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" aria-label="Charge quota and history">
-      <div class="card-garden overflow-hidden">
+    <section class="garden-split-view grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" aria-label="Charge quota and history">
+      <div class="garden-section card-garden overflow-hidden">
         <div class="border-b border-bark-300 px-5 py-4">
           <h2 class="font-serif text-lg font-semibold text-shadow-900">Rolling 24h quota by lane</h2>
           <p class="mt-1 text-sm text-shadow-600">Uses Last 24h ledger spend against charge-policy lane quotas; each run also uses the same quota as a runaway guard.</p>

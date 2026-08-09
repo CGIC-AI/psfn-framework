@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api/client';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   interface TraceStep {
     iteration: number;
@@ -30,6 +31,11 @@
   let loading = $state(true);
   let error = $state('');
   let expandedTask = $state<number | null>(null);
+  let totalTokens = $derived(traces.reduce((sum, trace) => sum + trace.totalTokens, 0));
+  let averageDuration = $derived(traces.length > 0
+    ? traces.reduce((sum, trace) => sum + trace.durationMs, 0) / traces.length
+    : 0);
+  let constrainedTraceCount = $derived(traces.filter((trace) => trace.truncated || trace.budgetStop).length);
 
   function formatTokens(value: number): string {
     if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
@@ -63,40 +69,64 @@
   });
 </script>
 
-<div class="space-y-4">
-  <div>
-    <p class="text-[0.65rem] uppercase tracking-[0.2em] text-shadow-500">Runtime & Tools</p>
-    <h1 class="flex items-baseline gap-2 text-xl font-serif font-bold text-shadow-900">
-      Analysis Workbench
-      <span class="text-sm font-sans font-normal text-shadow-600">
-        {traces.length} recent trace{traces.length === 1 ? '' : 's'}
+<div class="garden-page space-y-5 pb-10">
+  <GardenPageHeader
+    eyebrow="Runtime & Tools · Analysis"
+    title="Analysis Workbench"
+    description="Recent REPL traces for this process lifetime. Traces are in-memory and reset on restart."
+    class="border-b border-bark-300 pb-4"
+  >
+    {#snippet actions()}
+      <span class="garden-status {loading ? 'garden-status--warning' : error ? 'garden-status--danger' : 'garden-status--success'} rounded-full border border-bark-300 bg-bark-50 px-2.5 py-1 text-xs font-semibold text-shadow-700">
+        {loading ? 'loading traces' : `${traces.length} recent`}
       </span>
-    </h1>
-    <p class="mt-1 text-sm text-shadow-600">
-      Recent REPL traces for this process lifetime. Traces are in-memory and reset on restart.
-    </p>
-  </div>
+    {/snippet}
+  </GardenPageHeader>
+
+  <section class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Analysis trace summary">
+    <div class="garden-metric card-garden p-4">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Traces</p>
+      <p class="mt-2 font-serif text-2xl font-semibold text-shadow-900 tabular-nums">{traces.length}</p>
+    </div>
+    <div class="garden-metric card-garden p-4">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Tokens</p>
+      <p class="mt-2 font-serif text-2xl font-semibold text-gold-700 tabular-nums">{formatTokens(totalTokens)}</p>
+    </div>
+    <div class="garden-metric card-garden p-4">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Average duration</p>
+      <p class="mt-2 font-serif text-2xl font-semibold text-petal-600 tabular-nums">{formatDuration(averageDuration)}</p>
+    </div>
+    <div class="garden-metric card-garden p-4">
+      <p class="text-[0.65rem] font-semibold uppercase tracking-[0.15em] text-shadow-500">Constrained</p>
+      <p class="mt-2 font-serif text-2xl font-semibold {constrainedTraceCount > 0 ? 'text-wilt-600' : 'text-moss-600'} tabular-nums">{constrainedTraceCount}</p>
+    </div>
+  </section>
 
   {#if error}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-700">{error}</p>
     </div>
   {/if}
 
   {#if loading}
-    <div class="card-garden animate-pulse p-5">
+    <div class="garden-loading card-garden animate-pulse p-5">
       <div class="h-4 w-2/3 rounded bg-bark-200"></div>
       <div class="mt-3 h-3 w-full rounded bg-bark-100"></div>
     </div>
   {:else if traces.length === 0}
-    <div class="card-garden p-6">
+    <div class="garden-empty card-garden p-8 text-center">
       <p class="text-sm text-shadow-600">No analysis workbench traces recorded since this process started.</p>
     </div>
   {:else}
-    <BoundedList maxHeight="40rem" label="Analysis workbench traces">
+    <section class="garden-section card-garden overflow-hidden" aria-labelledby="analysis-trace-list-heading">
+      <div class="garden-section-header border-b border-bark-300 bg-bark-50 px-4 py-3">
+        <h2 id="analysis-trace-list-heading" class="garden-section-title font-serif text-lg font-semibold text-shadow-900">Trace ledger</h2>
+        <p class="garden-section-description mt-1 text-sm text-shadow-600">Expand a task to inspect iteration code, outputs, token movement, and budget stops.</p>
+      </div>
+    <BoundedList maxHeight="40rem" label="Analysis workbench traces" class="p-4">
       <ul class="space-y-3 pr-1">
         {#each traces as trace, index}
-          <li class="rounded-xl border border-bark-200 bg-bark-50">
+          <li class="rounded-xl border border-bark-200 bg-bark-50 transition-colors hover:border-gold-300">
             <button
               type="button"
               aria-expanded={expandedTask === index}
@@ -133,7 +163,7 @@
                   <p class="text-xs text-gold-700">Budget stop: {trace.budgetStop}</p>
                 {/if}
                 {#each trace.steps as step}
-                  <div class="rounded-lg border border-bark-200 bg-white p-3">
+                  <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                       <p class="text-xs font-semibold uppercase tracking-wide text-shadow-600">
                         Iteration {step.iteration}
@@ -165,5 +195,6 @@
         {/each}
       </ul>
     </BoundedList>
+    </section>
   {/if}
 </div>

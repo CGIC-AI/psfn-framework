@@ -112,6 +112,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/faculties/memory/biographical/postgres-store.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": 1800,
+      "baselineSource": "measured",
+      "note": "o61vb.2 biographical kernel persistence suite against the real containerized Postgres harness. Baseline 1.80s file wall (12 tests, warm tmpfs harness, this host, 2026-08-09); the 90s harness-start cap preserves 50x headroom for cold-start and shared-heavy-phase variance."
+    },
+    {
       "file": "src/faculties/memory/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

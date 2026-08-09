@@ -47,7 +47,7 @@ describe('companion display-name surface inventory', () => {
         'src/operator/garden/services/session-service.ts',
         'admin-ui/src/routes/+layout.svelte',
       ],
-      markers: ['assertGardenRequestCompanionScope', 'companion.displayName'],
+      markers: ['assertGardenRequestCompanionScope', 'getCompanionName()'],
     },
     {
       surface: 'ICP and room events',

@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { getRoomArbiterData, type RoomArbiterData } from '$lib/api/endpoints/room-arbiter';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import {
     companionDisplayLabel,
     companionTechnicalLabel,
@@ -79,54 +80,60 @@
   <title>Cluster Command · Garden</title>
 </svelte:head>
 
-<div class="min-h-screen bg-bark-100 px-4 py-8 sm:px-6 lg:px-8">
-  <main class="mx-auto max-w-6xl space-y-6">
-    <header class="space-y-1">
-      <h1 class="text-2xl font-semibold text-shadow-800">Cluster Command</h1>
-      <p class="text-sm text-shadow-600">
-        Room-state and arbitration telemetry. Content-free by contract: ids, enums, counts,
-        and timestamps only &mdash; no room or message text is collected.
-      </p>
-    </header>
+<div class="garden-page space-y-6">
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Cluster Command"
+      description="Room-state and arbitration telemetry. Content-free by contract: identifiers, enums, counts, and timestamps only."
+    >
+      {#snippet actions()}
+        <span class="garden-status garden-status--success inline-flex min-h-9 items-center rounded-full border border-bark-300 bg-bark-50 px-3 text-xs font-medium text-shadow-600">
+          Auto-refresh · 15s
+        </span>
+      {/snippet}
+    </GardenPageHeader>
 
     {#if loading && data === null}
-      <p class="text-sm text-shadow-500">Loading room arbiter telemetry&hellip;</p>
+      <div class="garden-loading card-garden animate-pulse p-8 text-center text-sm text-shadow-500" aria-busy="true">Loading room arbiter telemetry&hellip;</div>
     {:else if error}
-      <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-4 text-sm text-wilt-700">
+      <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4 text-sm text-wilt-700" role="alert">
         {error}
       </div>
     {:else if !available}
-      <div class="rounded-lg border border-bark-300 bg-bark-50 p-4 text-sm text-shadow-600">
-        The speaking arbiter is not active for this deployment. Room arbitration telemetry is
-        only available in multi-companion mode.
+      <div class="garden-empty card-garden p-6 text-center">
+        <p class="font-serif text-lg text-shadow-900">Speaking arbiter inactive</p>
+        <p class="mt-1 text-sm text-shadow-600">Room arbitration telemetry is available only in multi-companion mode.</p>
       </div>
     {:else if data}
-      <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div class="rounded-lg border border-bark-300 bg-white p-3">
+      <section class="garden-metric-grid grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Arbiter summary">
+        <div class="garden-metric card-garden p-4">
           <div class="text-xs uppercase tracking-wide text-shadow-500">Open episodes</div>
-          <div class="text-xl font-semibold text-shadow-800">{data.summary.openEpisodeCount}</div>
+          <div class="mt-2 font-serif text-2xl font-semibold text-shadow-900">{data.summary.openEpisodeCount}</div>
         </div>
-        <div class="rounded-lg border border-bark-300 bg-white p-3">
+        <div class="garden-metric card-garden p-4">
           <div class="text-xs uppercase tracking-wide text-shadow-500">Suppressed</div>
-          <div class="text-xl font-semibold text-wilt-600">{data.summary.suppressedEpisodeCount}</div>
+          <div class="mt-2 font-serif text-2xl font-semibold text-wilt-600">{data.summary.suppressedEpisodeCount}</div>
         </div>
-        <div class="rounded-lg border border-bark-300 bg-white p-3">
+        <div class="garden-metric card-garden p-4">
           <div class="text-xs uppercase tracking-wide text-shadow-500">Active reservations</div>
-          <div class="text-xl font-semibold text-shadow-800">{data.summary.activeReservationCount}</div>
+          <div class="mt-2 font-serif text-2xl font-semibold text-shadow-900">{data.summary.activeReservationCount}</div>
         </div>
-        <div class="rounded-lg border border-bark-300 bg-white p-3">
+        <div class="garden-metric card-garden p-4">
           <div class="text-xs uppercase tracking-wide text-shadow-500">Held leases</div>
-          <div class="text-xl font-semibold text-shadow-800">{data.summary.heldLeaseCount}</div>
+          <div class="mt-2 font-serif text-2xl font-semibold text-shadow-900">{data.summary.heldLeaseCount}</div>
         </div>
       </section>
 
-      <section class="space-y-3">
-        <h2 class="text-lg font-semibold text-shadow-800">Room episodes</h2>
+      <section class="garden-section garden-table-shell card-garden overflow-hidden" aria-labelledby="room-episodes-heading">
+        <div class="garden-section-header border-b border-bark-300 px-4 py-3">
+          <h2 id="room-episodes-heading" class="font-serif text-lg font-semibold text-shadow-900">Room episodes</h2>
+          <p class="mt-1 text-xs text-shadow-600">Pressure, participation, and Law 36 suppression state.</p>
+        </div>
         {#if data.episodes.length === 0}
-          <p class="text-sm text-shadow-500">No room episodes recorded.</p>
+          <p class="garden-empty p-6 text-center text-sm text-shadow-500">No room episodes recorded.</p>
         {:else}
-          <div class="overflow-x-auto rounded-lg border border-bark-300 bg-white">
-            <table class="min-w-full text-sm">
+          <div class="garden-table-scroll overflow-x-auto">
+            <table class="garden-table min-w-full text-sm">
               <thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500">
                 <tr>
                   <th class="px-3 py-2">Channel</th>
@@ -182,14 +189,14 @@
         {/if}
       </section>
 
-      <section class="grid gap-6 lg:grid-cols-2">
-        <div class="space-y-3">
-          <h2 class="text-lg font-semibold text-shadow-800">Reservations</h2>
+      <section class="grid gap-4 lg:grid-cols-2">
+        <div class="garden-section garden-table-shell card-garden overflow-hidden">
+          <h2 class="border-b border-bark-300 px-4 py-3 font-serif text-lg font-semibold text-shadow-900">Reservations</h2>
           {#if data.reservations.length === 0}
-            <p class="text-sm text-shadow-500">No reservations recorded.</p>
+            <p class="garden-empty p-6 text-center text-sm text-shadow-500">No reservations recorded.</p>
           {:else}
-            <div class="overflow-x-auto rounded-lg border border-bark-300 bg-white">
-              <table class="min-w-full text-sm">
+            <div class="garden-table-scroll overflow-x-auto">
+              <table class="garden-table min-w-full text-sm">
                 <thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500">
                   <tr>
                     <th class="px-3 py-2">Companion</th>
@@ -213,13 +220,13 @@
           {/if}
         </div>
 
-        <div class="space-y-3">
-          <h2 class="text-lg font-semibold text-shadow-800">Egress leases</h2>
+        <div class="garden-section garden-table-shell card-garden overflow-hidden">
+          <h2 class="border-b border-bark-300 px-4 py-3 font-serif text-lg font-semibold text-shadow-900">Egress leases</h2>
           {#if data.leases.length === 0}
-            <p class="text-sm text-shadow-500">No leases recorded.</p>
+            <p class="garden-empty p-6 text-center text-sm text-shadow-500">No leases recorded.</p>
           {:else}
-            <div class="overflow-x-auto rounded-lg border border-bark-300 bg-white">
-              <table class="min-w-full text-sm">
+            <div class="garden-table-scroll overflow-x-auto">
+              <table class="garden-table min-w-full text-sm">
                 <thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500">
                   <tr>
                     <th class="px-3 py-2">Companion</th>
@@ -246,14 +253,14 @@
         </div>
       </section>
 
-      <section class="grid gap-6 lg:grid-cols-2">
-        <div class="space-y-3">
-          <h2 class="text-lg font-semibold text-shadow-800">Participation</h2>
+      <section class="grid gap-4 lg:grid-cols-2">
+        <div class="garden-section garden-table-shell card-garden overflow-hidden">
+          <h2 class="border-b border-bark-300 px-4 py-3 font-serif text-lg font-semibold text-shadow-900">Participation</h2>
           {#if data.participation.length === 0}
-            <p class="text-sm text-shadow-500">No participation recorded.</p>
+            <p class="garden-empty p-6 text-center text-sm text-shadow-500">No participation recorded.</p>
           {:else}
-            <div class="overflow-x-auto rounded-lg border border-bark-300 bg-white">
-              <table class="min-w-full text-sm">
+            <div class="garden-table-scroll overflow-x-auto">
+              <table class="garden-table min-w-full text-sm">
                 <thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500">
                   <tr>
                     <th class="px-3 py-2">Companion</th>
@@ -277,12 +284,12 @@
           {/if}
         </div>
 
-        <div class="space-y-3">
-          <h2 class="text-lg font-semibold text-shadow-800">Reason codes</h2>
+        <div class="garden-section card-garden p-4">
+          <h2 class="font-serif text-lg font-semibold text-shadow-900">Reason codes</h2>
           {#if data.reasonCounts.length === 0}
-            <p class="text-sm text-shadow-500">No reason codes recorded.</p>
+            <p class="garden-empty mt-4 rounded-lg border border-dashed border-bark-300 p-6 text-center text-sm text-shadow-500">No reason codes recorded.</p>
           {:else}
-            <ul class="space-y-1">
+            <ul class="mt-3 space-y-1">
               {#each data.reasonCounts as entry (entry.reason)}
                 <li class="flex items-center justify-between rounded border border-bark-200 bg-white px-3 py-2 text-sm">
                   <span class="font-mono text-xs text-shadow-700">{entry.reason}</span>
@@ -294,5 +301,4 @@
         </div>
       </section>
     {/if}
-  </main>
 </div>

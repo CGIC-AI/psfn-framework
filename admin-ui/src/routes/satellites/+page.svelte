@@ -9,6 +9,7 @@
     type AdminPlacesData,
     type AdminPlaceView,
   } from '$lib/api/endpoints/places';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   const EMPTY_LABEL = 'None';
 
@@ -89,31 +90,30 @@
   });
 </script>
 
-<div class="space-y-8">
-  <div class="flex items-start justify-between gap-4 flex-wrap">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Emanation Ports</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Satellites</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Registered satellite embodiments and endpoint claim ceilings. This page shows framework authority, not device-reported wishes.
-      </p>
-    </div>
-    <button
-      onclick={refreshData}
-      disabled={refreshing}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-6">
+  <GardenPageHeader
+    eyebrow="Emanation Ports"
+    title="Satellites"
+    description="Registered embodiments, physical presence, endpoint claims, and framework-owned capability ceilings."
+  >
+    {#snippet actions()}
+      <button
+        onclick={refreshData}
+        disabled={refreshing}
+        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {refreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
 
-  <section class="space-y-4" aria-labelledby="satellite-overview-heading">
+  <section class="garden-section space-y-4" aria-labelledby="satellite-overview-heading">
     <div>
       <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Registry</p>
       <h2 id="satellite-overview-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -124,8 +124,8 @@
       </p>
     </div>
 
-    <div class="grid gap-4 md:grid-cols-4">
-      <div class="card-garden p-5">
+    <div class="garden-metric-grid grid gap-4 md:grid-cols-4">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Registry</p>
         <p
           class="mt-3 text-3xl font-serif font-bold"
@@ -136,17 +136,17 @@
         </p>
         <p class="mt-2 text-sm text-shadow-600">Authority file: satellites.json.</p>
       </div>
-      <div class="card-garden p-5">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Satellites</p>
         <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{data?.satelliteCount ?? '-'}</p>
         <p class="mt-2 text-sm text-shadow-600">Embodiment nodes registered for this companion.</p>
       </div>
-      <div class="card-garden p-5">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Endpoints</p>
         <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{data?.endpointCount ?? '-'}</p>
         <p class="mt-2 text-sm text-shadow-600">Claimable surfaces bound to auth and policy.</p>
       </div>
-      <div class="card-garden p-5">
+      <div class="garden-metric card-garden p-5">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Capability Kinds</p>
         <p class="mt-3 text-4xl font-serif font-bold text-petal-500">{loading ? '-' : effectiveCapabilityCount}</p>
         <p class="mt-2 text-sm text-shadow-600">Distinct capability ceilings in the registry.</p>
@@ -154,7 +154,7 @@
     </div>
   </section>
 
-  <section class="space-y-4" aria-labelledby="satellite-physical-spaces-heading">
+  <section class="garden-section space-y-4" aria-labelledby="satellite-physical-spaces-heading">
     <div>
       <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Physical Presence</p>
       <h2 id="satellite-physical-spaces-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
@@ -167,9 +167,9 @@
     </div>
 
     {#if loading && !placesData}
-      <div class="card-garden p-5"><p class="text-sm text-shadow-600">Loading physical spaces...</p></div>
+      <div class="garden-loading card-garden p-5"><p class="text-sm text-shadow-600">Loading physical spaces...</p></div>
     {:else if physicalPlaces.length === 0}
-      <div class="card-garden p-5"><p class="text-sm text-shadow-500">No physical spaces configured.</p></div>
+      <div class="garden-empty card-garden p-5"><p class="text-sm text-shadow-500">No physical spaces configured.</p></div>
     {:else}
       <div class="grid gap-4 lg:grid-cols-2">
         {#each physicalPlaces as place (place.placeId)}
@@ -209,7 +209,7 @@
     {/if}
   </section>
 
-  <section class="space-y-4" aria-labelledby="satellite-live-heading">
+  <section class="garden-section space-y-4" aria-labelledby="satellite-live-heading">
     <div class="card-garden border-l-4 border-l-gold-400 p-5">
       <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
         <div>
@@ -228,7 +228,7 @@
     </div>
   </section>
 
-  <section class="space-y-5" aria-labelledby="satellite-endpoints-heading">
+  <section class="garden-section space-y-5" aria-labelledby="satellite-endpoints-heading">
     <div class="flex items-baseline gap-3">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Endpoints</p>
@@ -242,7 +242,7 @@
     {#if loading}
       <div class="grid gap-4 lg:grid-cols-2">
         {#each Array(2) as _}
-          <div class="card-garden animate-pulse p-5">
+          <div class="garden-loading card-garden animate-pulse p-5">
             <div class="h-4 w-32 rounded bg-bark-200"></div>
             <div class="mt-3 h-8 w-48 rounded bg-bark-100"></div>
             <div class="mt-4 h-3 w-full rounded bg-bark-100"></div>
@@ -251,7 +251,7 @@
         {/each}
       </div>
     {:else if endpoints.length === 0}
-      <div class="card-garden p-5">
+      <div class="garden-empty card-garden p-5">
         <p class="text-sm text-shadow-500">No satellites are registered.</p>
       </div>
     {:else}

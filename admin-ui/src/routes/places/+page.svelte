@@ -9,6 +9,7 @@
     type AdminBoundSatelliteView,
   } from '$lib/api/endpoints/places';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   let data = $state<AdminPlacesData | null>(null);
   let loading = $state(true);
@@ -131,63 +132,60 @@
   });
 </script>
 
-<div class="space-y-8">
-  <div class="flex items-start justify-between gap-4 flex-wrap">
-    <div>
-      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">World Model</p>
-      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Places</h1>
-      <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Sites, places, and affordances joined to the satellite registry. Physical places carry Home
-        Assistant areas; virtual places live in the latent space. Re-binding a satellite is the only
-        write here — it fails closed on an unknown place.
-      </p>
-    </div>
-    <button
-      onclick={refreshData}
-      disabled={refreshing}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-6">
+  <GardenPageHeader
+    eyebrow="World Model"
+    title="Places"
+    description="Sites, physical and virtual places, affordances, and authoritative satellite bindings."
+  >
+    {#snippet actions()}
+      <button
+        onclick={refreshData}
+        disabled={refreshing}
+        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {refreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   {#if errorMessage}
-    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
 
-  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <div class="card-garden p-5">
+  <section class="garden-metric-grid grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Place registry summary">
+    <div class="garden-metric card-garden p-5">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Places</p>
       <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{loading ? '-' : stats.places}</p>
       <p class="mt-2 text-sm text-shadow-600">Across {stats.sites} sites.</p>
     </div>
-    <div class="card-garden p-5">
+    <div class="garden-metric card-garden p-5">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Physical / Virtual</p>
       <p class="mt-3 text-4xl font-serif font-bold text-moss-600">
         {loading ? '-' : stats.physical}<span class="text-shadow-400"> / </span><span class="text-petal-500">{loading ? '-' : stats.virtual}</span>
       </p>
       <p class="mt-2 text-sm text-shadow-600">{stats.overlaps} twinned overlap{stats.overlaps === 1 ? '' : 's'}.</p>
     </div>
-    <div class="card-garden p-5">
+    <div class="garden-metric card-garden p-5">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Affordances</p>
       <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{loading ? '-' : stats.affordances}</p>
       <p class="mt-2 text-sm text-shadow-600">Perceivers and effectors.</p>
     </div>
-    <div class="card-garden p-5" class:border-l-4={stats.dangling > 0} class:border-l-wilt-400={stats.dangling > 0}>
+    <div class="garden-metric card-garden p-5" class:border-l-4={stats.dangling > 0} class:border-l-wilt-400={stats.dangling > 0}>
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Satellites</p>
       <p class="mt-3 text-4xl font-serif font-bold" class:text-wilt-600={stats.dangling > 0} class:text-shadow-900={stats.dangling === 0}>
         {loading ? '-' : stats.unbound + stats.dangling}
       </p>
       <p class="mt-2 text-sm text-shadow-600">{stats.unbound} unbound · {stats.dangling} dangling.</p>
     </div>
-  </div>
+  </section>
 
   {#if loading && !data}
     <div class="grid gap-4 lg:grid-cols-2">
       {#each Array(2) as _}
-        <div class="card-garden animate-pulse p-5">
+        <div class="garden-loading card-garden animate-pulse p-5">
           <div class="h-4 w-32 rounded bg-bark-200"></div>
           <div class="mt-3 h-8 w-48 rounded bg-bark-100"></div>
           <div class="mt-4 h-3 w-full rounded bg-bark-100"></div>
@@ -196,7 +194,7 @@
     </div>
   {:else if data}
     {#each placesBySite as site}
-      <section class="space-y-4" aria-label={`Site ${site.displayName}`}>
+      <section class="garden-section space-y-4" aria-label={`Site ${site.displayName}`}>
         <div class="flex items-baseline gap-3 flex-wrap">
           <h2 class="text-lg font-serif font-semibold text-shadow-900">{site.displayName}</h2>
           <span
@@ -210,7 +208,7 @@
         </div>
 
         {#if site.places.length === 0}
-          <div class="card-garden p-5"><p class="text-sm text-shadow-500">No places in this site.</p></div>
+          <div class="garden-empty card-garden p-5"><p class="text-sm text-shadow-500">No places in this site.</p></div>
         {:else}
           <div class="grid gap-4 lg:grid-cols-2">
             {#each site.places as place (place.placeId)}
@@ -291,7 +289,7 @@
                           <div class="mt-2 flex items-center gap-2">
                             <select
                               bind:value={pendingBinding[sat.satelliteId]}
-                              class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
+                              class="garden-field min-h-11 min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                             >
                               <option value="">— Unbound —</option>
                               {#each physicalBindingSites as optSite}
@@ -305,7 +303,7 @@
                             <button
                               onclick={() => saveBinding(sat.satelliteId)}
                               disabled={savingSat === sat.satelliteId || pendingBinding[sat.satelliteId] === place.placeId}
-                              class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {savingSat === sat.satelliteId ? 'Saving...' : 'Re-bind'}
                             </button>
@@ -323,7 +321,7 @@
     {/each}
 
     {#if data.unboundSatellites.length > 0}
-      <section class="space-y-4" aria-label="Unbound satellites">
+      <section class="garden-section space-y-4" aria-label="Unbound satellites">
         <h2 class="text-lg font-serif font-semibold text-shadow-900">Unbound Satellites</h2>
         <p class="text-sm text-shadow-600">Registered satellites with no static place binding. Bind them to a place below.</p>
         <div class="grid gap-3 lg:grid-cols-2">
@@ -338,7 +336,7 @@
               <div class="mt-3 flex items-center gap-2">
                 <select
                   bind:value={pendingBinding[sat.satelliteId]}
-                  class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
+                  class="garden-field min-h-11 min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                 >
                   <option value="">— Unbound —</option>
                   {#each physicalBindingSites as optSite}
@@ -352,7 +350,7 @@
                 <button
                   onclick={() => saveBinding(sat.satelliteId)}
                   disabled={savingSat === sat.satelliteId || !pendingBinding[sat.satelliteId]}
-                  class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSat === sat.satelliteId ? 'Saving...' : 'Bind'}
                 </button>
@@ -364,7 +362,7 @@
     {/if}
 
     {#if data.danglingSatellites.length > 0}
-      <section class="space-y-4" aria-label="Dangling satellites">
+      <section class="garden-section space-y-4" aria-label="Dangling satellites">
         <div class="flex items-baseline gap-3">
           <h2 class="text-lg font-serif font-semibold text-wilt-700">Dangling Satellites</h2>
           <span class="text-sm text-shadow-500">Fail-closed surfacing</span>
@@ -389,7 +387,7 @@
               <div class="mt-3 flex items-center gap-2">
                 <select
                   bind:value={pendingBinding[sat.satelliteId]}
-                  class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
+                  class="garden-field min-h-11 min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                 >
                   <option value="">— Unbind —</option>
                   {#each physicalBindingSites as optSite}
@@ -403,7 +401,7 @@
                 <button
                   onclick={() => saveBinding(sat.satelliteId)}
                   disabled={savingSat === sat.satelliteId}
-                  class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSat === sat.satelliteId ? 'Saving...' : 'Fix'}
                 </button>

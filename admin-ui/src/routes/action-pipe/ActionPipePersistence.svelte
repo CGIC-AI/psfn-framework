@@ -5,8 +5,8 @@
   let { status }: { status: ActionPipeStatus } = $props();
 </script>
 
-<section class="grid gap-4 xl:grid-cols-2" aria-label="Action pipe persistence and quarantine">
-  <article class="card-garden p-5">
+<section class="garden-section grid gap-4 xl:grid-cols-2" aria-label="Action pipe persistence and quarantine">
+  <article class="garden-section card-garden p-5">
     <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Persistence</p>
     <h2 class="mt-1 text-lg font-serif font-semibold text-shadow-900">Queue file state</h2>
     <dl class="mt-4 space-y-2 text-sm">
@@ -23,7 +23,7 @@
     {/if}
   </article>
 
-  <article class="card-garden p-5">
+  <article class="garden-section card-garden p-5">
     <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Quarantine</p>
     <h2 class="mt-1 text-lg font-serif font-semibold text-shadow-900">Invalid persisted entries</h2>
     <p class="mt-2 text-sm text-shadow-600">

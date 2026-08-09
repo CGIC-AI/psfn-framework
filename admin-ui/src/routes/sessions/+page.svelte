@@ -15,6 +15,7 @@
     loadSessionIndex,
   } from './session-data-loader';
   import { getCompanionName } from '$lib/stores/companion.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type {
     AdminSessionDetailData,
     AdminSessionListData,
@@ -451,36 +452,37 @@
   });
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Branches</h1>
-    <p class="text-shadow-600 text-sm mt-1">Session Browser</p>
-  </div>
+<div class="garden-page space-y-4">
+  <GardenPageHeader
+    eyebrow="Live Operations"
+    title="The Branches"
+    description="Search session channels, inspect message history, and audit content-free turn detail."
+  />
 
   {#if error}
-    <div class="card-garden p-4 border-wilt-400">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
       <p class="text-wilt-600 text-sm">{error}</p>
-      <button onclick={() => error = ''} class="text-sm text-shadow-600 hover:text-shadow-900 mt-1">Dismiss</button>
+      <button onclick={() => error = ''} class="mt-2 min-h-11 rounded-lg px-3 text-sm font-medium text-shadow-600 hover:bg-bark-100 hover:text-shadow-900">Dismiss</button>
     </div>
   {/if}
 
-  <div class="flex gap-4 h-[calc(100vh-12rem)]">
+  <div class="garden-split-view flex min-h-[36rem] flex-col gap-4 lg:h-[calc(100vh-12rem)] lg:flex-row">
     <!-- Channel list -->
-    <div class="w-72 shrink-0 card-garden overflow-hidden flex flex-col">
-      <div class="p-3 border-b border-bark-300 bg-bark-100">
-        <h2 class="text-sm font-medium text-shadow-800">Channels</h2>
+    <section class="garden-section card-garden flex max-h-96 w-full shrink-0 flex-col overflow-hidden lg:max-h-none lg:w-80" aria-labelledby="session-channels-heading">
+      <div class="border-b border-bark-300 bg-bark-100 p-3">
+        <h2 id="session-channels-heading" class="font-serif text-base font-semibold text-shadow-900">Channels</h2>
         <p class="text-sm text-shadow-600">{filteredChannels.length} of {channels.length} sessions</p>
         <div class="mt-2 space-y-2">
           <input
             type="search"
             bind:value={channelSearch}
             placeholder="Search channels..."
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
+            class="min-h-11 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           />
           <select
             bind:value={channelSort}
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
+            class="min-h-11 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           >
             <option value="recent">Sort: Recent Activity</option>
@@ -503,7 +505,7 @@
             {@const lastActivityTs = channelLastActivity.get(ch.sessionId)}
             <button
               onclick={() => selectChannel(ch.sessionId)}
-              class="w-full text-left px-3 py-2.5 border-b border-bark-200 hover:bg-bark-100
+              class="min-h-14 w-full border-b border-bark-200 px-3 py-2.5 text-left hover:bg-bark-100
                      transition-colors"
               class:bg-gold-50={selectedSessionId === ch.sessionId}
               class:border-l-3={selectedSessionId === ch.sessionId}
@@ -539,18 +541,21 @@
           {/if}
         {/if}
       </div>
-    </div>
+    </section>
 
     <!-- Messages panel -->
-    <div class="flex-1 card-garden overflow-hidden flex flex-col">
+    <section class="garden-section card-garden flex min-h-[32rem] min-w-0 flex-1 flex-col overflow-hidden" aria-label="Session messages">
       {#if !selectedSessionId}
         <div class="flex-1 flex items-center justify-center">
-          <p class="text-shadow-600 text-sm">Select a channel to view messages</p>
+          <div class="max-w-sm px-6 text-center">
+            <p class="font-serif text-lg text-shadow-900">Choose a session</p>
+            <p class="mt-1 text-sm text-shadow-600">Select a channel to inspect its loaded messages and turn metadata.</p>
+          </div>
         </div>
       {:else}
         <div class="p-3 border-b border-bark-300 bg-bark-100 flex items-center justify-between">
           <div>
-            <h2 class="text-sm font-medium text-shadow-800 truncate" title={selectedChannel?.channelId ?? selectedSessionId}>
+            <h2 id="session-messages-heading" class="truncate font-serif text-base font-semibold text-shadow-900" title={selectedChannel?.channelId ?? selectedSessionId}>
               {channelLabel(selectedChannel ?? { sessionId: selectedSessionId, channelId: selectedSessionId, messageCount: 0 })}
             </h2>
             {#if selectedChannel?.channelId}
@@ -576,7 +581,7 @@
             type="search"
             bind:value={messageSearch}
             placeholder="Filter messages (content, role, author)..."
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
+            class="min-h-11 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           />
         </div>
@@ -618,7 +623,7 @@
                   type="button"
                   onclick={() => void loadOlderMessages()}
                   disabled={loadingOlderMessages}
-                  class="text-sm text-shadow-600 hover:text-gold-700 disabled:cursor-wait disabled:text-shadow-500"
+                  class="min-h-11 rounded-lg px-3 text-sm font-medium text-shadow-600 hover:bg-gold-50 hover:text-gold-700 disabled:cursor-wait disabled:text-shadow-500"
                 >
                   {loadingOlderMessages ? 'Loading older messages...' : 'Load older messages'}
                 </button>
@@ -657,7 +662,7 @@
                   <div class="mt-2">
                     <button
                       onclick={() => turnId && void toggleTurnDetail(turnId)}
-                      class="text-sm text-gold-700 hover:text-gold-600"
+                      class="min-h-11 rounded-lg px-2 text-sm font-medium text-gold-700 hover:bg-gold-50 hover:text-gold-600"
                     >
                       {expandedTurnId === turnId ? 'Hide turn detail' : 'Show turn detail'}
                     </button>
@@ -687,6 +692,6 @@
           {/if}
         </div>
       {/if}
-    </div>
+    </section>
   </div>
 </div>

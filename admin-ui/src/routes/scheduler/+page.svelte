@@ -10,6 +10,7 @@
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import { schedulerLoadErrorMessage, shouldUseSchedulerFallback } from '$lib/scheduler/fallback';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type {
     RecurringCadence,
     ReflectionTemplate,
@@ -550,23 +551,22 @@
   });
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Rhythms</h1>
-      <p class="text-sm text-shadow-600 mt-1">Scheduled tasks, heartbeats, reflections, and one-shot work</p>
-    </div>
-    <button
-      onclick={loadData}
-      disabled={loading}
-      class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-             text-shadow-600 hover:bg-bark-100
-             transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-    >
-      {loading ? 'Loading...' : 'Refresh'}
-    </button>
-  </div>
+<div class="garden-page space-y-4">
+  <GardenPageHeader
+    eyebrow="Live Operations"
+    title="The Rhythms"
+    description="Scheduled tasks, heartbeats, reflections, and one-shot work."
+  >
+    {#snippet actions()}
+      <button
+        onclick={loadData}
+        disabled={loading}
+        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? 'Loading...' : 'Refresh'}
+      </button>
+    {/snippet}
+  </GardenPageHeader>
 
   <!-- Feedback toast -->
   {#if feedback}
@@ -581,17 +581,17 @@
   {/if}
 
   {#if loading}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-loading card-garden p-8 text-center" aria-busy="true" aria-live="polite">
       <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
       <p class="text-sm text-shadow-600">Loading scheduler data...</p>
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6" role="alert">
       <p class="text-sm text-shadow-800">{error}</p>
     </div>
   {:else if useFallback}
     <!-- Fallback: only dashboard task count available -->
-    <div class="card-garden p-6">
+    <div class="garden-section card-garden p-6">
       <div class="flex items-start gap-3">
         <svg class="w-5 h-5 text-bark-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -608,22 +608,22 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="card-garden p-5 text-center">
+    <div class="garden-metric-grid grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div class="garden-metric card-garden p-5 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-2">Registered</p>
         <p class="text-3xl font-serif font-bold text-gold-600">{dashboardTaskCount ?? 0}</p>
       </div>
-      <div class="card-garden p-5 text-center">
+      <div class="garden-metric card-garden p-5 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-2">Type: Every</p>
         <p class="text-sm text-shadow-700">Recurring interval tasks (heartbeat, decay, maintenance)</p>
       </div>
-      <div class="card-garden p-5 text-center">
+      <div class="garden-metric card-garden p-5 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-2">Type: One-Shot</p>
         <p class="text-sm text-shadow-700">Single-fire tasks (scheduled by agent)</p>
       </div>
     </div>
   {:else if tasks.length === 0 && reflections.length === 0}
-    <div class="card-garden p-12 text-center">
+    <div class="garden-empty card-garden p-12 text-center">
       <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10" />
         <polyline points="12 6 12 12 16 14" />
@@ -633,32 +633,32 @@
     </div>
   {:else}
     <!-- Task summary -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <div class="card-garden p-4 text-center">
+    <div class="garden-metric-grid grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div class="garden-metric card-garden p-4 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-1">Total</p>
         <p class="text-2xl font-serif font-bold text-shadow-900">{tasks.length}</p>
       </div>
-      <div class="card-garden p-4 text-center">
+      <div class="garden-metric card-garden p-4 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-1">Active</p>
         <p class="text-2xl font-serif font-bold text-moss-600">{tasks.filter(t => t.state === 'active').length}</p>
       </div>
-      <div class="card-garden p-4 text-center">
+      <div class="garden-metric card-garden p-4 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-1">Idle</p>
         <p class="text-2xl font-serif font-bold text-shadow-700">{tasks.filter(t => t.state === 'idle').length}</p>
       </div>
-      <div class="card-garden p-4 text-center">
+      <div class="garden-metric card-garden p-4 text-center">
         <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-1">Paused</p>
         <p class="text-2xl font-serif font-bold text-gold-600">{tasks.filter(t => t.state === 'paused').length}</p>
       </div>
     </div>
 
     <!-- Task table -->
-    <div class="card-garden overflow-hidden">
-      <div class="px-4 py-3 border-b border-bark-200 bg-bark-50 flex items-center justify-between">
+    <div class="garden-section garden-table-shell card-garden overflow-hidden">
+      <div class="garden-section-header px-4 py-3 border-b border-bark-200 bg-bark-50 flex items-center justify-between">
         <h2 class="font-serif font-semibold text-shadow-800">Scheduled Tasks</h2>
         <button
           onclick={() => showNewTaskForm = !showNewTaskForm}
-          class="text-xs px-3 py-1.5 rounded-lg border border-gold-300 bg-gold-50
+          class="garden-action min-h-11 text-xs px-3 py-1.5 rounded-lg border border-gold-300 bg-gold-50
                  text-gold-700 hover:bg-gold-100 transition-colors font-medium"
         >
           {showNewTaskForm ? 'Cancel' : '+ Add Task'}
@@ -667,36 +667,36 @@
 
       <!-- New task form -->
       {#if showNewTaskForm}
-        <div class="px-4 py-4 border-b border-bark-200 bg-bark-50/50">
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div>
+        <div class="garden-toolbar px-4 py-4 border-b border-bark-200 bg-bark-50/50">
+          <div class="garden-field-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="garden-field">
               <label for="new-task-id" class="block text-xs font-medium text-shadow-600 mb-1">ID (slug)</label>
               <input
                 id="new-task-id"
                 type="text"
                 bind:value={newTask.id}
                 placeholder="my-task"
-                class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
+                class="min-h-11 w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
                        bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               />
             </div>
-            <div>
+            <div class="garden-field">
               <label for="new-task-name" class="block text-xs font-medium text-shadow-600 mb-1">Name</label>
               <input
                 id="new-task-name"
                 type="text"
                 bind:value={newTask.name}
                 placeholder="My Task"
-                class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
+                class="min-h-11 w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
                        bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               />
             </div>
-            <div>
+            <div class="garden-field">
               <label for="new-task-type" class="block text-xs font-medium text-shadow-600 mb-1">Type</label>
               <select
                 id="new-task-type"
                 bind:value={newTask.type}
-                class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
+                class="min-h-11 w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
                        bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               >
                 <option value="every">Recurring (every)</option>
@@ -704,25 +704,25 @@
               </select>
             </div>
             {#if newTask.type === 'every'}
-              <div>
+              <div class="garden-field">
                 <label for="new-task-interval" class="block text-xs font-medium text-shadow-600 mb-1">Interval</label>
                 <input
                   id="new-task-interval"
                   type="text"
                   bind:value={newTask.interval}
                   placeholder="1h, 30m, 5m 30s"
-                  class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
+                  class="min-h-11 w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
                          bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                 />
               </div>
             {:else}
-              <div>
+              <div class="garden-field">
                 <label for="new-task-runat" class="block text-xs font-medium text-shadow-600 mb-1">Run At</label>
                 <input
                   id="new-task-runat"
                   type="datetime-local"
                   bind:value={newTask.runAt}
-                  class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
+                  class="min-h-11 w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
                          bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                 />
               </div>
@@ -732,7 +732,7 @@
             <button
               onclick={handleCreateTask}
               disabled={saving === 'create-task'}
-              class="text-sm px-4 py-1.5 rounded-lg bg-moss-600 text-white
+              class="garden-action garden-action--primary min-h-11 text-sm px-4 py-1.5 rounded-lg bg-moss-600 text-white
                      hover:bg-moss-700 transition-colors disabled:opacity-50 font-medium"
             >
               {saving === 'create-task' ? 'Creating...' : 'Create Task'}
@@ -741,8 +741,8 @@
         </div>
       {/if}
 
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+      <div class="garden-table-scroll overflow-x-auto">
+        <table class="garden-table w-full text-sm">
           <thead>
             <tr class="border-b border-bark-200 bg-bark-100">
               <th class="text-left px-4 py-3 font-semibold text-shadow-800">Name</th>
@@ -798,7 +798,7 @@
                             onchange={(e) => {
                               updateCadenceEditor(task, { mode: (e.target as HTMLSelectElement).value as CadenceEditorMode });
                             }}
-                            class="px-2 py-1 text-xs border border-bark-300 rounded
+                            class="garden-field min-h-11 px-2 py-1 text-xs border border-bark-300 rounded
                                    bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                           >
                             <option value="relative">Interval</option>
@@ -817,13 +817,13 @@
                               type="text"
                               value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
                               oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
-                              class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <button
                               onclick={() => saveTaskCadence(task)}
                               disabled={saving === `cadence:${task.id}`}
-                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                              class="garden-action garden-action--primary min-h-11 text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
                                      text-moss-700 hover:bg-moss-100 transition-colors
                                      disabled:opacity-50 font-medium"
                             >
@@ -841,7 +841,7 @@
                               oninput={(e) => {
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
-                              class="w-16 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-16 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
@@ -849,7 +849,7 @@
                               onchange={(e) => {
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
-                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                              class="garden-field min-h-11 px-2 py-1 text-xs border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
@@ -858,7 +858,7 @@
                             <button
                               onclick={() => saveTaskCadence(task)}
                               disabled={saving === `cadence:${task.id}`}
-                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                              class="garden-action garden-action--primary min-h-11 text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
                                      text-moss-700 hover:bg-moss-100 transition-colors
                                      disabled:opacity-50 font-medium"
                             >
@@ -876,7 +876,7 @@
                               oninput={(e) => {
                                 updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
                               }}
-                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <span class="text-xs text-shadow-500">:</span>
@@ -888,7 +888,7 @@
                               oninput={(e) => {
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
-                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
@@ -896,7 +896,7 @@
                               onchange={(e) => {
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
-                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                              class="garden-field min-h-11 px-2 py-1 text-xs border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
@@ -905,7 +905,7 @@
                             <button
                               onclick={() => saveTaskCadence(task)}
                               disabled={saving === `cadence:${task.id}`}
-                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                              class="garden-action garden-action--primary min-h-11 text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
                                      text-moss-700 hover:bg-moss-100 transition-colors
                                      disabled:opacity-50 font-medium"
                             >
@@ -920,7 +920,7 @@
                               onchange={(e) => {
                                 updateCadenceEditor(task, { dayOfWeek: (e.target as HTMLSelectElement).value });
                               }}
-                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                              class="garden-field min-h-11 px-2 py-1 text-xs border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               {#each WEEKDAY_LABELS as label, index}
@@ -936,7 +936,7 @@
                               oninput={(e) => {
                                 updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
                               }}
-                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <span class="text-xs text-shadow-500">:</span>
@@ -948,7 +948,7 @@
                               oninput={(e) => {
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
-                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                              class="garden-field min-h-11 w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
@@ -956,7 +956,7 @@
                               onchange={(e) => {
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
-                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                              class="garden-field min-h-11 px-2 py-1 text-xs border border-bark-300 rounded
                                      bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
@@ -965,7 +965,7 @@
                             <button
                               onclick={() => saveTaskCadence(task)}
                               disabled={saving === `cadence:${task.id}`}
-                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                              class="garden-action garden-action--primary min-h-11 text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
                                      text-moss-700 hover:bg-moss-100 transition-colors
                                      disabled:opacity-50 font-medium"
                             >
@@ -980,13 +980,13 @@
                           type="text"
                           value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
                           oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
-                          class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                          class="garden-field min-h-11 w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
                                  bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                         />
                         <button
                           onclick={() => saveTaskInterval(task)}
                           disabled={saving === `interval:${task.id}`}
-                          class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                          class="garden-action garden-action--primary min-h-11 text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
                                  text-moss-700 hover:bg-moss-100 transition-colors
                                  disabled:opacity-50 font-medium"
                         >
@@ -1012,7 +1012,7 @@
                       <button
                         onclick={() => toggleTaskEnabled(task)}
                         disabled={saving === `toggle:${task.id}`}
-                        class="text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
+                        class="garden-action min-h-11 text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
                                {task.state === 'paused'
                                  ? 'border-moss-300 bg-moss-50 text-moss-700 hover:bg-moss-100'
                                  : 'border-gold-300 bg-gold-50 text-gold-700 hover:bg-gold-100'}"
@@ -1024,7 +1024,7 @@
                       <button
                         onclick={() => handleRemoveTask(task)}
                         disabled={saving === `remove:${task.id}`}
-                        class="text-xs px-2 py-1 rounded border border-wilt-300 bg-wilt-50
+                        class="garden-action garden-action--danger min-h-11 text-xs px-2 py-1 rounded border border-wilt-300 bg-wilt-50
                                text-wilt-600 hover:bg-wilt-100 transition-colors
                                disabled:opacity-50 font-medium"
                       >
@@ -1042,8 +1042,8 @@
 
     <!-- Reflection templates -->
     {#if reflections.length > 0}
-      <div class="card-garden overflow-hidden">
-        <div class="px-4 py-3 border-b border-bark-200 bg-bark-50">
+      <div class="garden-section card-garden overflow-hidden">
+        <div class="garden-section-header px-4 py-3 border-b border-bark-200 bg-bark-50">
           <h2 class="font-serif font-semibold text-shadow-800">Reflection Templates</h2>
           <p class="text-xs text-shadow-600 mt-0.5">Reflection templates. Edit prompts. Scheduling is managed in Scheduled Tasks.</p>
         </div>
@@ -1056,7 +1056,7 @@
                 <div class="flex items-center gap-3 min-w-0">
                   <button
                     onclick={() => toggleReflectionExpanded(tpl.id)}
-                    class="text-shadow-500 hover:text-shadow-700 transition-colors shrink-0"
+                    class="garden-action min-h-11 min-w-11 text-shadow-500 hover:text-shadow-700 transition-colors shrink-0"
                     aria-label={expandedReflections.has(tpl.id) ? 'Collapse' : 'Expand'}
                   >
                     <svg class="w-4 h-4 transition-transform {expandedReflections.has(tpl.id) ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1094,7 +1094,7 @@
                   <button
                     onclick={() => toggleReflectionEnabled(tpl)}
                     disabled={saving === `reflection-enabled:${tpl.id}`}
-                    class="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
+                    class="garden-action min-h-11 flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
                            {isReflectionEnabled(tpl)
                              ? 'border-gold-300 bg-gold-50 text-gold-700 hover:bg-gold-100'
                              : 'border-moss-300 bg-moss-50 text-moss-700 hover:bg-moss-100'}"
@@ -1122,7 +1122,7 @@
                     <button
                       onclick={() => saveReflectionPrompt(tpl)}
                       disabled={saving === `reflection-prompt:${tpl.id}` || editingPrompts[tpl.id] === tpl.prompt}
-                      class="text-xs px-3 py-1.5 rounded-lg bg-moss-600 text-white
+                      class="garden-action garden-action--primary min-h-11 text-xs px-3 py-1.5 rounded-lg bg-moss-600 text-white
                              hover:bg-moss-700 transition-colors disabled:opacity-50 font-medium"
                     >
                       {saving === `reflection-prompt:${tpl.id}` ? 'Saving...' : 'Save Prompt'}

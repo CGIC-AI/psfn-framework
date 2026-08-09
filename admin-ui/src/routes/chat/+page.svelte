@@ -1294,8 +1294,9 @@ ${context}`;
   };
 </script>
 
-<div class="flex flex-col" style="height: calc(100vh - 6rem);">
+<div class="garden-page flex h-[calc(100dvh-7rem)] min-h-[42rem] flex-col">
   <GardenPageHeader
+    eyebrow="Live Operations"
     title="The Canopy"
     description="Multifunction chat console — companion chat, direct-model rounds, and transcripts"
     class="mb-3 shrink-0"
@@ -1310,7 +1311,7 @@ ${context}`;
         <button
           onclick={clearTranscript}
           disabled={busy}
-          class="px-3 py-1.5 rounded-lg border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100
+          class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm text-shadow-700 hover:bg-bark-100
                  transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Clear Transcript
@@ -1323,12 +1324,12 @@ ${context}`;
 
   {#if activeTab === 'chat'}
     {#if loading}
-      <div class="card-garden p-6 animate-pulse flex-1">
+      <div class="garden-loading card-garden p-6 animate-pulse flex-1" aria-busy="true">
         <div class="h-4 bg-bark-200 rounded w-48 mb-4"></div>
         <div class="h-64 bg-bark-200 rounded"></div>
       </div>
     {:else if error && !bootstrap}
-      <div class="card-garden p-6 border-wilt-200">
+      <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-6" role="alert">
         <p class="text-wilt-600 font-medium text-sm">Failed to load chat</p>
         <p class="text-shadow-600 text-sm mt-1">{error}</p>
         <p class="text-shadow-600 text-sm mt-3">
@@ -1337,7 +1338,7 @@ ${context}`;
       </div>
     {:else if bootstrap}
       {#if bootstrap.onboarding.required}
-        <div class="card-garden p-3 mb-3 border-gold-300 bg-gold-50 shrink-0">
+        <div class="garden-section card-garden p-3 mb-3 border-gold-300 bg-gold-50 shrink-0">
           <p class="text-sm font-semibold text-shadow-900">Starter profile detected</p>
           <p class="text-sm text-shadow-700 mt-1">
             {bootstrap.onboarding.message ?? 'Import a character card or edit identity details to personalize this companion.'}
@@ -1345,14 +1346,14 @@ ${context}`;
           <div class="mt-3 flex flex-wrap gap-2">
             <a
               href={scopeGardenPath('/identity')}
-              class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
+              class="garden-action inline-flex min-h-11 items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
             >
               Import Character Card
             </a>
             <button
               onclick={() => void keepStarterIdentity()}
               disabled={onboardingSaving}
-              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-100 px-3 py-1.5 text-sm font-medium text-shadow-900 hover:bg-gold-200 disabled:opacity-60 disabled:cursor-not-allowed"
+              class="garden-action inline-flex min-h-11 items-center rounded-lg border border-gold-400 bg-gold-100 px-3 py-1.5 text-sm font-medium text-shadow-900 hover:bg-gold-200 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               Keep Starter
             </button>
@@ -1367,7 +1368,7 @@ ${context}`;
                   type="text"
                   bind:value={onboardingDraft.name}
                   disabled={onboardingSaving}
-                  class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
                   placeholder="Companion name"
                 />
               </label>
@@ -1377,7 +1378,7 @@ ${context}`;
                   type="text"
                   bind:value={onboardingDraft.description}
                   disabled={onboardingSaving}
-                  class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
                   placeholder="Short description"
                 />
               </label>
@@ -1396,7 +1397,7 @@ ${context}`;
               <button
                 type="submit"
                 disabled={onboardingSaving}
-                class="rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                class="garden-action garden-action--primary min-h-11 rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {onboardingSaving ? 'Saving...' : 'Save Identity and Continue'}
               </button>
@@ -1423,7 +1424,7 @@ ${context}`;
               bind:value={selectedContactId}
               onchange={onContactChange}
               disabled={saving}
-              class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+              class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                      focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                      disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -1440,7 +1441,7 @@ ${context}`;
               bind:value={selectedPrivacyLevel}
               onchange={onPrivacyChange}
               disabled={saving}
-              class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+              class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                      focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                      disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -1457,7 +1458,7 @@ ${context}`;
               bind:value={selectedChannelIdentity}
               onchange={onChannelIdentityChange}
               disabled={saving}
-              class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+              class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                      focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                      disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -1523,7 +1524,7 @@ ${context}`;
               <input
                 id="room-id"
                 bind:value={roomId}
-                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+                class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                        focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
               />
             </div>
@@ -1533,7 +1534,7 @@ ${context}`;
                 id="operator-name"
                 value={operatorName}
                 onchange={(event) => persistOperatorName((event.currentTarget as HTMLInputElement).value)}
-                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+                class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                        focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
               />
             </div>
@@ -1576,7 +1577,7 @@ ${context}`;
                       <p class="text-sm text-shadow-600">Purpose mapping: <span class="font-mono">{participant.purpose}</span></p>
                       <button
                         onclick={() => resetParticipantPrompt(participant)}
-                        class="px-2 py-0.5 rounded border border-bark-300 text-xs text-shadow-600 hover:bg-bark-100 transition-colors shrink-0"
+                        class="garden-action min-h-11 rounded border border-bark-300 px-2 py-0.5 text-xs text-shadow-600 hover:bg-bark-100 transition-colors shrink-0"
                       >
                         Reset prompt
                       </button>
@@ -1754,7 +1755,7 @@ ${context}`;
 
       <!-- Input Area (pinned composer) -->
       <div class="mt-3 shrink-0">
-        <div class="card-garden p-3 flex items-end gap-2">
+        <div class="card-garden flex items-end gap-2 p-3 shadow-sm">
           <textarea
             bind:this={inputEl}
             bind:value={inputText}
@@ -1764,7 +1765,7 @@ ${context}`;
             placeholder={roomModeActive
               ? 'Send an opening turn to the room... (Enter to run round, Shift+Enter for newline)'
               : 'Type a message... (Enter to send, Shift+Enter for newline)'}
-            class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm resize-none
+            class="min-h-12 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 resize-none
                    placeholder:text-shadow-400
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                    disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1772,7 +1773,7 @@ ${context}`;
           {#if isStreaming}
             <button
               onclick={abortStream}
-              class="px-4 py-2 rounded-lg bg-wilt-600 text-white text-sm font-medium
+              class="min-h-11 rounded-lg bg-wilt-600 px-4 py-2 text-sm font-medium text-white
                      hover:bg-wilt-400 transition-colors shrink-0"
             >
               Stop
@@ -1781,7 +1782,7 @@ ${context}`;
             <button
               onclick={sendMessage}
               disabled={!inputText.trim() || busy}
-              class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium
+              class="min-h-11 rounded-lg bg-gold-600 px-4 py-2 text-sm font-medium text-white
                      hover:bg-gold-700 disabled:opacity-50 transition-colors shrink-0"
             >
               {#if sendingRound}
@@ -1799,13 +1800,13 @@ ${context}`;
   {:else}
     <!-- Transcripts tab: browse past sessions, including model-room runs -->
     <div class="flex-1 min-h-0 flex flex-col lg:flex-row gap-3">
-      <div class="card-garden p-3 flex flex-col lg:w-96 shrink-0 min-h-0 max-h-72 lg:max-h-none">
+      <div class="garden-section card-garden p-3 flex flex-col lg:w-96 shrink-0 min-h-0 max-h-72 lg:max-h-none">
         <div class="flex items-center justify-between gap-2 mb-2 shrink-0">
           <h2 class="font-serif text-base font-semibold text-shadow-900">Sessions</h2>
           <button
             onclick={() => void ensureSessionsLoaded(true)}
             disabled={sessionsLoading}
-            class="px-2 py-1 rounded border border-bark-300 text-xs text-shadow-600 hover:bg-bark-100
+            class="min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-xs text-shadow-600 hover:bg-bark-100
                    transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Refresh
@@ -1817,14 +1818,14 @@ ${context}`;
             bind:value={sessionFilter}
             placeholder="Filter sessions"
             aria-label="Filter sessions by text"
-            class="min-w-0 rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
+            class="min-h-11 min-w-0 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900
                    placeholder:text-shadow-400
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
           />
           <select
             bind:value={sessionKindFilter}
             aria-label="Filter sessions by kind"
-            class="rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-900
+            class="min-h-11 rounded-lg border border-bark-300 bg-bark-50 px-2 py-2 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
           >
             <option value="all">All kinds</option>
@@ -1847,7 +1848,7 @@ ${context}`;
             {#each filteredSessions as channel (channel.sessionId)}
               <button
                 onclick={() => void openTranscript(channel.sessionId)}
-                class="w-full text-left rounded-lg border px-3 py-2 transition-colors
+                class="min-h-14 w-full rounded-lg border px-3 py-2 text-left transition-colors
                   {selectedSessionId === channel.sessionId
                     ? 'border-gold-300 bg-gold-50'
                     : 'border-bark-300 bg-bark-50 hover:bg-bark-100'}"
@@ -1874,7 +1875,7 @@ ${context}`;
         </p>
       </div>
 
-      <div class="card-garden p-3 flex-1 min-h-0 flex flex-col">
+      <div class="garden-section card-garden p-3 flex-1 min-h-0 flex flex-col">
         {#if !selectedSessionId}
           <div class="flex-1 flex items-center justify-center">
             <p class="text-sm text-shadow-600">Select a session to view its transcript.</p>
@@ -1886,7 +1887,7 @@ ${context}`;
               <button
                 onclick={() => void loadEarlierTranscript()}
                 disabled={transcriptLoading}
-                class="px-3 py-1.5 rounded-lg border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100
+                class="min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm text-shadow-700 hover:bg-bark-100
                        transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
               >
                 Load earlier ({transcriptPagination.totalMessages - transcriptMessages.length} more)

@@ -334,7 +334,7 @@
     <button
       type="button"
       onclick={handleLogout}
-      class="garden-action fixed right-4 top-4 z-20 bg-surface/95 backdrop-blur"
+      class="garden-action fixed bottom-4 right-4 z-30 bg-surface/95 shadow-lg backdrop-blur"
     >
       Sign out
     </button>

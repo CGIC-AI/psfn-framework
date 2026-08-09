@@ -334,7 +334,7 @@
     <button
       type="button"
       onclick={handleLogout}
-      class="fixed right-4 top-4 z-20 rounded-lg border border-bark-300 bg-bark-50/95 px-3 py-2 text-sm font-medium text-bark-700 shadow-sm backdrop-blur hover:bg-bark-100"
+      class="garden-action fixed right-4 top-4 z-20 bg-surface/95 backdrop-blur"
     >
       Sign out
     </button>
@@ -360,7 +360,7 @@
         <button
           type="button"
           onclick={() => mobileNavOpen = true}
-          class="fixed bottom-4 left-4 z-20 inline-flex items-center gap-2 rounded-full border border-bark-300 bg-bark-50/95 px-4 py-2 text-sm font-semibold text-bark-700 shadow-lg backdrop-blur transition-colors hover:bg-bark-100 lg:hidden"
+          class="garden-action fixed bottom-4 left-4 z-20 rounded-full bg-surface/95 shadow-lg backdrop-blur lg:hidden"
           aria-label="Open operator navigation"
         >
           <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

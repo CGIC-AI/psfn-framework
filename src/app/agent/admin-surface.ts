@@ -132,7 +132,7 @@ export async function openBiographicalReviewServiceForGarden(
     'biographical_profile_garden',
     async () => {
       const pool = createPostgresPool(databaseUrl, {
-        applicationName: 'psfn-biographical-garden',
+        applicationName: 'biographical-garden',
         allowExitOnIdle: true,
         ...resolveConfigTenantPoolScope(config),
       });

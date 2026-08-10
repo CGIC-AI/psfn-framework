@@ -6,6 +6,8 @@ import { VALID_MEMORY_TYPES, type MemoryRetentionClass, type MemoryType } from '
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
+import { checkedEscalationReason } from '../../boundary/fleet-auth/escalation.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   exactPath,
   paramWithSuffix,
@@ -18,6 +20,7 @@ import type {
   AdminMemorySessionKey,
   AdminMemorySessionService,
 } from './services/types.js';
+import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
 /**
@@ -124,9 +127,10 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
 
 export function buildAdminMemoryRoutes(options: {
   memoryService: AdminMemoryService;
+  subjectAuditService?: AdminSubjectVisibleAuditService;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
-  const { memoryService, withBody } = options;
+  const { memoryService, subjectAuditService, withBody } = options;
 
   return [
     {
@@ -512,9 +516,42 @@ export function buildAdminMemoryRoutes(options: {
         const sessionKey = context?.kind === 'standalone_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
-        withBody(req, res, () => {
+        withBody(req, res, (body) => {
           // Fleet reveals carry their authority in the gateway-consumed
-          // escalation grant (x-psfn-escalation-grant); the body is unused.
+          // escalation grant (x-psfn-escalation-grant). The body carries only
+          // the operator-stated reason, which the gateway also recorded when
+          // minting the grant; the route re-states it for the content-free
+          // companion notice. A missing reason is allowed only for the
+          // standalone operator path, which never reaches this fleet notice.
+          const parsed = parseAdminJsonBody(body);
+          const reasonText = parsed.ok && isRecord(parsed.value)
+              && typeof parsed.value.reason === 'string'
+            ? parsed.value.reason
+            : undefined;
+          if (context?.kind === 'fleet_principal') {
+            let reason: string;
+            try {
+              reason = checkedEscalationReason(reasonText ?? '');
+            } catch {
+              sendJson(res, 400, { error: 'A valid escalation reason is required' });
+              return;
+            }
+            // Fail closed: record the content-free companion notice before the
+            // body is disclosed. If the durable audit sink is unavailable the
+            // reveal never happens, mirroring the concern ceremony.
+            if (!subjectAuditService) {
+              sendJson(res, 503, { error: 'Subject-visible memory reveal audit is unavailable' });
+              return;
+            }
+            try {
+              subjectAuditService.recordMemoryReveal({ context, reason });
+            } catch (error) {
+              sendJson(res, 503, {
+                error: toSanitizedMessage(error, 'Subject-visible memory reveal audit is unavailable'),
+              });
+              return;
+            }
+          }
           const service = bindMemoryRequest(memoryService, context, sessionKey);
           service.revealMemory(id).then(
             (detail) => {

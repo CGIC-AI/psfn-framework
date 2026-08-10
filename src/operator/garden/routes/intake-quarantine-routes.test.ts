@@ -9,6 +9,7 @@ import type {
   AdminIntakeQuarantineService,
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
+import type { AdminSubjectVisibleAuditService } from '../services/subject-visible-audit-service.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
 class CapturingResponse {
@@ -67,13 +68,14 @@ function requestContext(
   method: 'GET' | 'POST',
   path: string,
   pathParams: Readonly<Record<string, string>>,
+  routeIdOverride?: string,
 ): GardenRequestContext {
   return {
     kind: 'fleet_principal',
     actor: { kind: 'fleet_principal', principalId: 'operator-a' },
     action: method === 'GET' ? 'cogsec.read' : 'cogsec.manage',
     resource: {
-      routeId: `${method} ${path}`,
+      routeId: routeIdOverride ?? `${method} ${path}`,
       scope: 'system',
       area: 'cognitive_security',
       companionId: null,
@@ -86,10 +88,12 @@ function requestContext(
 async function invokeRoute(input: {
   quarantineService?: Partial<AdminIntakeQuarantineService>;
   settingsService?: Partial<AdminSettingsService>;
+  subjectAuditService?: Partial<AdminSubjectVisibleAuditService>;
   method: 'GET' | 'POST';
   path: string;
   body?: unknown;
   auditCalls?: AuditCall[];
+  routeIdOverride?: string;
 }): Promise<{ statusCode: number; body: unknown; context: GardenRequestContext }> {
   const withBody: AdminBodyReader = (_req, _res, cb) => {
     cb(typeof input.body === 'string' ? input.body : JSON.stringify(input.body));
@@ -97,6 +101,7 @@ async function invokeRoute(input: {
   const routes = buildAdminIntakeQuarantineRoutes({
     quarantineService: (input.quarantineService ?? {}) as AdminIntakeQuarantineService,
     settingsService: (input.settingsService ?? {}) as AdminSettingsService,
+    subjectAuditService: input.subjectAuditService as AdminSubjectVisibleAuditService | undefined,
     withBody,
     appendAuditTimelineEntry: (actionType, decision, narrative, details, _actor, context) => {
       input.auditCalls?.push({
@@ -113,7 +118,7 @@ async function invokeRoute(input: {
     throw new Error(`Route not found: ${input.method} ${input.path}`);
   }
   const params = route.match(input.path) ?? {};
-  const context = requestContext(input.method, input.path, params);
+  const context = requestContext(input.method, input.path, params, input.routeIdOverride);
   const res = new CapturingResponse();
   route.handle(
     { headers: {} } as IncomingMessage,
@@ -218,6 +223,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
         confirmToken: 'f'.repeat(64),
         reason: 'reviewed; benign',
       },
+      subjectAuditService: { recordIntakeQuarantineDecision: vi.fn(() => undefined) },
       auditCalls,
     });
     expect(result.statusCode).toBe(200);
@@ -256,6 +262,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
       method: 'POST',
       path: `/api/admin/intake/quarantine/${SAMPLE_ITEM.id}/decide`,
       body: { action: 'discard', confirmToken: 'x', reason: 'r' },
+      subjectAuditService: { recordIntakeQuarantineDecision: vi.fn(() => undefined) },
       auditCalls,
     });
     expect(result.statusCode).toBe(403);
@@ -306,5 +313,94 @@ describe('admin intake quarantine routes (htm9.11)', () => {
     expect(detailRoute).toBeDefined();
     expect(detailRoute?.match('/api/admin/intake/quarantine/some-id/confirm')).toBeNull();
     expect(detailRoute?.match('/api/admin/intake/quarantine/some-id/decide')).toBeNull();
+  });
+});
+
+describe('fleet quarantine decide subject-visible audit', () => {
+  const DECIDE_ROUTE_ID = 'POST /api/admin/intake/quarantine/:id/decide';
+
+  it('records one content-free companion notice before applying the decision', async () => {
+    const resolveDecision = vi.fn().mockResolvedValue({
+      ok: true,
+      item: { ...SAMPLE_ITEM, status: 'discarded' },
+      message: 'Applied discard',
+      cogSecCaseId: 'cogsec_case_1',
+    });
+    const recordIntakeQuarantineDecision = vi.fn(() => undefined);
+    const result = await invokeRoute({
+      quarantineService: { resolveDecision },
+      method: 'POST',
+      path: `/api/admin/intake/quarantine/${SAMPLE_ITEM.id}/decide`,
+      body: { action: 'discard', confirmToken: 'f'.repeat(64), reason: 'Confirmed false positive' },
+      subjectAuditService: { recordIntakeQuarantineDecision },
+      routeIdOverride: DECIDE_ROUTE_ID,
+    });
+    expect(result.statusCode).toBe(200);
+    expect(recordIntakeQuarantineDecision).toHaveBeenCalledWith({
+      context: expect.objectContaining({
+        kind: 'fleet_principal',
+        resource: expect.objectContaining({ routeId: DECIDE_ROUTE_ID }),
+      }),
+      action: 'discard',
+      reason: 'Confirmed false positive',
+    });
+    const auditCall = recordIntakeQuarantineDecision.mock.invocationCallOrder[0];
+    const decideCall = resolveDecision.mock.invocationCallOrder[0];
+    expect(auditCall).toBeLessThan(decideCall);
+  });
+
+  it('keeps release-raw and discard as distinct audited actions', async () => {
+    const resolveDecision = vi.fn().mockResolvedValue({
+      ok: true,
+      item: SAMPLE_ITEM,
+      message: 'done',
+      cogSecCaseId: 'case',
+    });
+    const recordIntakeQuarantineDecision = vi.fn(() => undefined);
+    for (const action of ['release_raw', 'discard'] as const) {
+      recordIntakeQuarantineDecision.mockClear();
+      await invokeRoute({
+        quarantineService: { resolveDecision },
+        method: 'POST',
+        path: `/api/admin/intake/quarantine/${SAMPLE_ITEM.id}/decide`,
+        body: { action, confirmToken: 'f'.repeat(64), reason: `${action} reason` },
+        subjectAuditService: { recordIntakeQuarantineDecision },
+        routeIdOverride: DECIDE_ROUTE_ID,
+      });
+      expect(recordIntakeQuarantineDecision).toHaveBeenCalledWith(expect.objectContaining({ action }));
+    }
+  });
+
+  it('fails closed before the decision when the subject-visible audit sink is unavailable', async () => {
+    const resolveDecision = vi.fn().mockResolvedValue({
+      ok: true, item: SAMPLE_ITEM, message: 'done', cogSecCaseId: 'case',
+    });
+    const result = await invokeRoute({
+      quarantineService: { resolveDecision },
+      method: 'POST',
+      path: `/api/admin/intake/quarantine/${SAMPLE_ITEM.id}/decide`,
+      body: { action: 'discard', confirmToken: 'f'.repeat(64), reason: 'drop' },
+      subjectAuditService: {
+        recordIntakeQuarantineDecision: vi.fn(() => { throw new Error('audit unavailable'); }),
+      },
+      routeIdOverride: DECIDE_ROUTE_ID,
+    });
+    expect(result.statusCode).toBe(503);
+    expect(resolveDecision).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before the decision when the subject-visible audit service is not wired', async () => {
+    const resolveDecision = vi.fn().mockResolvedValue({
+      ok: true, item: SAMPLE_ITEM, message: 'done', cogSecCaseId: 'case',
+    });
+    const result = await invokeRoute({
+      quarantineService: { resolveDecision },
+      method: 'POST',
+      path: `/api/admin/intake/quarantine/${SAMPLE_ITEM.id}/decide`,
+      body: { action: 'discard', confirmToken: 'f'.repeat(64), reason: 'drop' },
+      routeIdOverride: DECIDE_ROUTE_ID,
+    });
+    expect(result.statusCode).toBe(503);
+    expect(resolveDecision).not.toHaveBeenCalled();
   });
 });

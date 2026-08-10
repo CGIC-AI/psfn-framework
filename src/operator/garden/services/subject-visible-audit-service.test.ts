@@ -151,8 +151,117 @@ describe('AdminSubjectVisibleAuditService', () => {
       context: wrongAction,
       action: 'resolve',
       reason: 'Verify the remediation',
-    })).toThrow(/CogSec concern action/u);
+    })).toThrow(/exact escalated request/u);
     expect(appendGardenEntry).not.toHaveBeenCalled();
     expect(appendContextSystemNote).not.toHaveBeenCalled();
+  });
+
+  it('records a memory body reveal without copying the memory id or body', () => {
+    const { service, appendGardenEntry, appendContextSystemNote } = harness();
+    const reason = 'Read a welfare-critical memory body to triage a report';
+
+    service.recordMemoryReveal({
+      context: context({
+        action: 'memory.reveal',
+        resource: {
+          routeId: 'POST /api/admin/memory/:id/reveal',
+          scope: 'personal_workspace',
+          area: 'memory',
+          companionId: '11111111-1111-4111-8111-111111111111',
+          pathParams: { id: 'protected-memory-id-must-not-be-visible' },
+          query: {},
+        },
+      }),
+      reason,
+    });
+
+    expect(appendGardenEntry).toHaveBeenCalledWith(expect.objectContaining({
+      actionType: 'external_action',
+      decision: 'allowed',
+      timestamp: NOW,
+    }));
+    expect(appendContextSystemNote).toHaveBeenCalledWith(
+      'discord:subject-home',
+      expect.stringContaining('[System notice: protected administration]'),
+      'garden:protected-action-audit',
+    );
+    const visibleRecord = JSON.stringify({
+      audit: appendGardenEntry.mock.calls,
+      notice: appendContextSystemNote.mock.calls,
+    });
+    expect(visibleRecord).toContain('principal-owner-a');
+    expect(visibleRecord).toContain('reveal');
+    expect(visibleRecord).toContain('high-intimacy memory body');
+    expect(visibleRecord).toContain(reason);
+    expect(visibleRecord).not.toContain('protected-memory-id-must-not-be-visible');
+  });
+
+  it('records a quarantine disposition without copying the held content or sender', () => {
+    const { service, appendGardenEntry, appendContextSystemNote } = harness();
+    const reason = 'Confirmed false positive; discard clears the queue without re-injection';
+
+    service.recordIntakeQuarantineDecision({
+      context: context({
+        resource: {
+          routeId: 'POST /api/admin/intake/quarantine/:id/decide',
+          scope: 'personal_workspace',
+          area: 'cognitive_security',
+          companionId: '11111111-1111-4111-8111-111111111111',
+          pathParams: { id: 'envelope-id-must-not-be-visible' },
+          query: {},
+        },
+      }),
+      action: 'discard',
+      reason,
+    });
+
+    expect(appendGardenEntry).toHaveBeenCalledTimes(1);
+    const visibleRecord = JSON.stringify({
+      audit: appendGardenEntry.mock.calls,
+      notice: appendContextSystemNote.mock.calls,
+    });
+    expect(visibleRecord).toContain('discard');
+    expect(visibleRecord).toContain('Cognitive Security quarantine item');
+    expect(visibleRecord).toContain(reason);
+    expect(visibleRecord).not.toContain('envelope-id-must-not-be-visible');
+  });
+
+  it('keeps release-raw and discard as distinct audited outcomes under the same ceremony', () => {
+    const { service, appendGardenEntry } = harness();
+    const baseResource = {
+      routeId: 'POST /api/admin/intake/quarantine/:id/decide',
+      scope: 'personal_workspace',
+      area: 'cognitive_security',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      pathParams: { id: 'env-x' },
+      query: {},
+    };
+
+    service.recordIntakeQuarantineDecision({
+      context: context({ resource: baseResource }),
+      action: 'release_raw',
+      reason: 'Approved verbatim re-delivery after review',
+    });
+    service.recordIntakeQuarantineDecision({
+      context: context({ resource: baseResource }),
+      action: 'discard',
+      reason: 'Dropped as a confirmed false positive',
+    });
+
+    expect(appendGardenEntry).toHaveBeenCalledTimes(2);
+    const actions = appendGardenEntry.mock.calls.map(
+      (call) => (call[0] as { details: string }).details,
+    );
+    expect(actions[0]).toContain('action=release_raw');
+    expect(actions[1]).toContain('action=discard');
+  });
+
+  it('rejects a memory reveal on a non-memory route without writing', () => {
+    const { service, appendGardenEntry } = harness();
+    expect(() => service.recordMemoryReveal({
+      context: context(),
+      reason: 'wrong route',
+    })).toThrow(/exact escalated request/u);
+    expect(appendGardenEntry).not.toHaveBeenCalled();
   });
 });

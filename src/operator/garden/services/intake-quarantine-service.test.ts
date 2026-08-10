@@ -573,21 +573,21 @@ describe('admin intake quarantine service (htm9.11)', () => {
 
     it('recovers a Discord carrying channel from canonical provenance for a legacy hold', async () => {
       const envelope = holdItem({
-        originRef: 'discord:1095844194980999358:1536434304194973736:PSFN_PROJECT_CHARTER.md',
+        originRef: 'discord:123:456:document.md',
         sourceChannelId: null,
       });
       const resolved = await releaseRaw(envelope);
       expect(resolved.ok).toBe(true);
       expect(redeliveries).toHaveLength(1);
-      expect(redeliveries[0].sourceChannelId).toBe('1095844194980999358');
+      expect(redeliveries[0].sourceChannelId).toBe('123');
       if (resolved.ok) {
-        expect(resolved.message).toContain('re-delivered it into 1095844194980999358');
+        expect(resolved.message).toContain('re-delivered it into 123');
       }
     });
 
     it('retries the known legacy no-channel failure once and persists the delivery receipt', async () => {
       const envelope = holdItem({
-        originRef: 'discord:1095844194980999358:1536434304194973736:PSFN_PROJECT_CHARTER.md',
+        originRef: 'discord:123:456:document.md',
         sourceChannelId: null,
       });
       store.applyDecision({
@@ -610,10 +610,10 @@ describe('admin intake quarantine service (htm9.11)', () => {
 
       expect(retried.ok).toBe(true);
       expect(redeliveries).toHaveLength(1);
-      expect(redeliveries[0].sourceChannelId).toBe('1095844194980999358');
+      expect(redeliveries[0].sourceChannelId).toBe('123');
       expect(store.getById(envelope.id)?.redelivery).toMatchObject({
         delivered: true,
-        channelId: '1095844194980999358',
+        channelId: '123',
         entryId: 4242,
       });
       expect(service.listItems().items[0]?.redeliveryRetryAvailable).toBe(false);

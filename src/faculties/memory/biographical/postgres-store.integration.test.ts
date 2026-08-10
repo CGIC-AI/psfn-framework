@@ -24,12 +24,13 @@ import type {
 
 const SHA = 'a'.repeat(64);
 const NOW = new Date('2026-08-09T12:00:00.000Z');
+const INTEGRATION_TIMEOUT_MS = 90_000;
 
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness();
-}, 90_000);
+}, INTEGRATION_TIMEOUT_MS);
 
 afterAll(async () => {
   await harness?.stop();
@@ -549,7 +550,7 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
         rmSync(root, { recursive: true, force: true });
       }
     });
-  });
+  }, INTEGRATION_TIMEOUT_MS);
 });
 
 describe('PostgresBiographicalProfileStore — parity with in-memory adapter', () => {

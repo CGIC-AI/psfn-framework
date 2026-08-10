@@ -147,7 +147,7 @@ const CHANNEL_ID_PREFIX_LABELS: ReadonlyArray<{ prefix: string; projection: Chan
 const SOURCE_CLASS_CHANNEL_PROJECTION: Readonly<Record<string, ChannelClassProjection>> = {
   operator: { label: 'Operator', channelClass: 'internal' },
   companion_self: { label: 'Companion self', channelClass: 'internal' },
-  primary_user: { label: 'Primary user', channelClass: 'contact' },
+  primary_user: { label: 'Primary contact', channelClass: 'contact' },
   trusted_contact: { label: 'Trusted contact', channelClass: 'contact' },
   regular_contact: { label: 'Contact', channelClass: 'contact' },
   public_contact: { label: 'Public contact', channelClass: 'contact' },

@@ -195,7 +195,7 @@
   function beginRedeliveryRetry(item: AdminIntakeQuarantineItemView) {
     const action = item.operatorDecision?.action;
     if (action !== 'release_raw' && action !== 'release_sanitized') {
-      pushToast('This item has no released content to re-deliver.', 'error');
+      pushToast('This item has no released content available for conversation placement.', 'error');
       return;
     }
     sourceListChoice = 'none';

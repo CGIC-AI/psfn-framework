@@ -728,7 +728,8 @@
   }
 
   // Cluster path: mint one single-use audited escalation grant for this exact
-  // reveal, spend it, and render the result like any other reveal.
+  // reveal, spend it, and render the result like any other reveal. Each attempt
+  // mints a fresh grant; a spent or expired grant never carries over.
   async function handleEscalatedReveal(id: string): Promise<void> {
     revealingId = id;
     try {
@@ -736,9 +737,10 @@
       elevation = detailModalData.elevation ?? elevation;
       syncScopeEditorFromDetail();
       escalationReason = '';
-      flash(true, 'Memory body revealed under an audited escalation grant.');
+      flash(true, 'Memory body revealed under a single-use audited escalation grant. The grant is spent; a later reveal mints a fresh one.');
     } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Failed to reveal memory body');
+      const detail = e instanceof Error ? e.message : 'Failed to reveal memory body';
+      flash(false, `${detail} The audited grant was not spent; try again to mint a fresh grant.`);
     } finally {
       revealingId = null;
     }

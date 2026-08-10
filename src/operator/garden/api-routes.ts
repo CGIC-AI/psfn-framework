@@ -862,7 +862,7 @@ export function buildAdminApiRoutes(options: {
         handleDiscoveredModels(res, true);
       },
     },
-    ...buildAdminMemoryRoutes({ memoryService, withBody }),
+    ...buildAdminMemoryRoutes({ memoryService, subjectAuditService, withBody }),
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
     {
       method: 'GET',
@@ -1044,6 +1044,7 @@ export function buildAdminApiRoutes(options: {
         quarantineService: intakeQuarantineService,
         settingsService,
         appendAuditTimelineEntry,
+        subjectAuditService,
         withBody,
       })
       : []),

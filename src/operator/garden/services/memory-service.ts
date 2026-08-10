@@ -503,7 +503,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         hasPrevious: offset > 0,
         hasNext: offset + memories.length < total,
       },
-      elevation: this.bodyGate.status(sessionKey),
+      elevation: this.elevationStatusForResponse(sessionKey),
     };
   }
 
@@ -518,12 +518,27 @@ export class AdminMemoryDataService implements AdminMemoryService {
       linkedContact,
       scopeAssignments: this.buildScopeAssignments(memory),
       scopeRepair: this.buildScopeRepair(memory),
-      elevation: this.bodyGate.status(sessionKey),
+      elevation: this.elevationStatusForResponse(sessionKey),
     };
   }
 
   getBodyElevationStatus(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
-    return this.bodyGate.status(sessionKey);
+    return this.elevationStatusForResponse(sessionKey);
+  }
+
+  /**
+   * Fleet principals have no session-wide elevation: every reveal mints its
+   * own audited escalation grant. Reporting a zero TTL is the one signal the
+   * admin-ui uses to switch the memory surface into per-reveal escalation
+   * mode, so every response (not only the dedicated status endpoint) must
+   * report it for fleet principals rather than the body gate's real window.
+   */
+  private elevationStatusForResponse(
+    sessionKey: AdminMemorySessionKey,
+  ): AdminMemoryElevationStatus {
+    return this.requestContext?.kind === 'fleet_principal'
+      ? { elevated: false, ttlMs: 0 }
+      : this.bodyGate.status(sessionKey);
   }
 
   elevateBodyAccess(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
@@ -730,7 +745,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         needsRepairCount: memories.filter(item => item.repair.needsRepair).length,
       },
       memories,
-      elevation: this.bodyGate.status(sessionKey),
+      elevation: this.elevationStatusForResponse(sessionKey),
     };
   }
 
@@ -743,7 +758,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         results: [],
         contactsById: await this.buildContactSummaryMap(),
         privacySummary: buildPrivacySummary(privacySummary, 0, 0),
-        elevation: this.bodyGate.status(sessionKey),
+        elevation: this.elevationStatusForResponse(sessionKey),
       };
     }
     const embedding = await embeddingService.embed(query);
@@ -761,7 +776,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       results: await Promise.all(results.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
-      elevation: this.bodyGate.status(sessionKey),
+      elevation: this.elevationStatusForResponse(sessionKey),
     };
   }
 
@@ -787,7 +802,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         totalCandidates: 0,
         truncated: false,
         limit: effectiveLimit,
-        elevation: this.bodyGate.status(sessionKey),
+        elevation: this.elevationStatusForResponse(sessionKey),
       };
     }
 
@@ -814,7 +829,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       totalCandidates: union.candidates.length,
       truncated: union.candidates.length > effectiveLimit,
       limit: effectiveLimit,
-      elevation: this.bodyGate.status(sessionKey),
+      elevation: this.elevationStatusForResponse(sessionKey),
     };
   }
 

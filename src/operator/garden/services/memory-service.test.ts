@@ -6,6 +6,7 @@ import type {
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import { AdminMemoryDataService } from './memory-service.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
 
 const OPERATOR_SESSION = 'cookie:operator-a';
 
@@ -428,5 +429,102 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     const elevatedDetail = await service.forSession(OPERATOR_SESSION).getManagedScopeDetail('project', 'garden');
     expect(elevatedDetail?.memories[0]?.memory.bodyRedacted).toBeUndefined();
     expect(elevatedDetail?.memories[0]?.memory.text).toBe('Memory intimate-scoped');
+  });
+});
+
+describe('AdminMemoryDataService fleet escalation-only elevation signal', () => {
+  function fleetContext(
+    overrides: Partial<Pick<FleetGardenRequestContext, 'action' | 'resource'>> = {},
+  ): FleetGardenRequestContext {
+    return Object.freeze({
+      kind: 'fleet_principal',
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      authorizationEventId: 'event-a',
+      resolvedAt: '2030-01-01T00:00:00.000Z',
+      versions: Object.freeze({
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+      }),
+      issuedAt: 1,
+      expiresAt: 2,
+      actor: Object.freeze({
+        kind: 'fleet_principal',
+        principalId: 'principal-a',
+        provider: 'discord',
+        providerSubjectId: 'provider-a',
+        contactId: 'contact-a',
+        contactBindingId: 'binding-a',
+        role: 'owner',
+        operatorGrantId: 'grant-a',
+        sessionRecordId: 'session-a',
+        sessionAssurance: 'oauth',
+        accessMode: 'sole_admin',
+      }),
+      action: overrides.action ?? 'memory.read.self',
+      resource: Object.freeze({
+        routeId: 'GET /api/admin/memory',
+        scope: 'personal_workspace',
+        area: 'memory',
+        companionId: '11111111-1111-4111-8111-111111111111',
+        pathParams: Object.freeze({}),
+        query: Object.freeze({}),
+        ...(overrides.resource ?? {}),
+      }),
+      subjectRelation: 'self_or_co_subject',
+      authorization: Object.freeze({
+        action: 'memory.read.self',
+        baseRole: 'member',
+        resource: Object.freeze({ scope: 'personal_workspace', area: 'memory' }),
+        subjectRelation: 'self_or_co_subject',
+        requirements: Object.freeze({
+          assurance: 'oauth',
+          confirmation: 'none',
+          approvals: Object.freeze([]),
+        }),
+        publicAccess: 'never',
+        recoveryAccess: 'forbidden',
+      }),
+    });
+  }
+
+  it('reports a zero elevation TTL on every fleet response so the UI switches to per-reveal escalation', async () => {
+    const memoryStore = {
+      listAdminMemories: vi.fn(async () => ({
+        memories: [],
+        total: 0,
+        privacySummary: makePrivacySummary(),
+      })),
+      getAdminMemoryPrivacySummary: vi.fn(async () => makePrivacySummary()),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore }, undefined, fleetContext());
+
+    // A zero TTL is the one signal the admin-ui uses for escalation-only mode:
+    // the gateway requires a per-reveal grant, so a non-zero window here would
+    // show the plain (non-escalated) reveal button and the gateway would reject it.
+    expect(service.getBodyElevationStatus(null)).toEqual({ elevated: false, ttlMs: 0 });
+    const list = await service.listMemories(null);
+    expect(list.elevation).toEqual({ elevated: false, ttlMs: 0 });
+  });
+
+  it('keeps the real body-gate window for the standalone operator session', async () => {
+    const memoryStore = {
+      listAdminMemories: vi.fn(async () => ({
+        memories: [],
+        total: 0,
+        privacySummary: makePrivacySummary(),
+      })),
+      getAdminMemoryPrivacySummary: vi.fn(async () => makePrivacySummary()),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore });
+
+    expect(service.getBodyElevationStatus(OPERATOR_SESSION).ttlMs).toBe(15 * 60 * 1_000);
+    const list = await service.listMemories(OPERATOR_SESSION);
+    expect(list.elevation).toEqual({ elevated: false, ttlMs: 15 * 60 * 1_000 });
   });
 });

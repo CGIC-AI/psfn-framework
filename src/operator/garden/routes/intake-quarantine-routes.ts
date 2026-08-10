@@ -29,6 +29,7 @@ import {
   type AdminIntakeQuarantineSourceListAction,
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
+import type { AdminSubjectVisibleAuditService, ProtectedQuarantineAction } from '../services/subject-visible-audit-service.js';
 import type { AdminAuditDecision } from '../types.js';
 import {
   ADMIN_DYNAMIC_JSON_HEADERS,
@@ -151,9 +152,16 @@ export function buildAdminIntakeQuarantineRoutes(options: {
   quarantineService: AdminIntakeQuarantineService;
   settingsService: AdminSettingsService;
   appendAuditTimelineEntry: AdminAuditTimelineAppender | undefined;
+  subjectAuditService?: AdminSubjectVisibleAuditService;
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
-  const { quarantineService, settingsService, appendAuditTimelineEntry, withBody } = options;
+  const {
+    quarantineService,
+    settingsService,
+    appendAuditTimelineEntry,
+    subjectAuditService,
+    withBody,
+  } = options;
 
   const appendRequestQuarantineAudit = (
     decision: AdminAuditDecision,
@@ -292,6 +300,37 @@ export function buildAdminIntakeQuarantineRoutes(options: {
             );
             sendJson(res, 400, { error: input.error });
             return;
+          }
+          // Fleet dispositions carry their authority in the gateway-consumed
+          // escalation grant. Record the content-free companion notice before
+          // the single-use confirm token is spent, mirroring the concern
+          // ceremony: if the durable audit sink is unavailable the decision
+          // never applies.
+          if (context?.kind === 'fleet_principal') {
+            if (!subjectAuditService) {
+              appendQuarantineAudit(
+                'denied',
+                'Operator quarantine decision was refused: subject-visible audit unavailable.',
+                [`envelopeId=${id}`],
+              );
+              sendJson(res, 503, { error: 'Subject-visible quarantine audit is unavailable' });
+              return;
+            }
+            try {
+              subjectAuditService.recordIntakeQuarantineDecision({
+                context,
+                action: input.value.action as ProtectedQuarantineAction,
+                reason: input.value.reason ?? '',
+              });
+            } catch (error) {
+              appendQuarantineAudit(
+                'denied',
+                'Operator quarantine decision was refused: subject-visible audit unavailable.',
+                [`envelopeId=${id}`, `error=${toSanitizedMessage(error, 'audit unavailable')}`],
+              );
+              sendJson(res, 503, { error: 'Subject-visible quarantine audit is unavailable' });
+              return;
+            }
           }
           void quarantineService.resolveDecision({
             id,

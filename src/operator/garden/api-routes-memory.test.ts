@@ -7,6 +7,8 @@ import { AdminMemoryDataService } from './services/memory-service.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
+import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
+import type { FleetGardenRequestContext } from './garden-request-context.js';
 
 class CapturingResponse {
   status = 0;
@@ -390,5 +392,176 @@ describe('admin memory API route split', () => {
     );
     expect(missingResponse.status).toBe(404);
     expect(parseBody(missingResponse).error).toBe('Memory not found');
+  });
+});
+
+describe('fleet memory reveal subject-visible audit', () => {
+  function fleetRevealContext(memoryId: string): FleetGardenRequestContext {
+    return Object.freeze({
+      kind: 'fleet_principal',
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      authorizationEventId: 'event-a',
+      resolvedAt: '2030-01-01T00:00:00.000Z',
+      versions: Object.freeze({
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+      }),
+      issuedAt: 1,
+      expiresAt: 2,
+      actor: Object.freeze({
+        kind: 'fleet_principal',
+        principalId: 'principal-owner-a',
+        provider: 'discord',
+        providerSubjectId: 'provider-a',
+        contactId: 'contact-a',
+        contactBindingId: 'binding-a',
+        role: 'owner',
+        operatorGrantId: 'grant-a',
+        sessionRecordId: 'session-a',
+        sessionAssurance: 'escalated',
+        accessMode: 'sole_admin',
+      }),
+      action: 'memory.reveal',
+      resource: Object.freeze({
+        routeId: 'POST /api/admin/memory/:id/reveal',
+        scope: 'personal_workspace',
+        area: 'memory',
+        companionId: '11111111-1111-4111-8111-111111111111',
+        pathParams: Object.freeze({ id: memoryId }),
+        query: Object.freeze({}),
+      }),
+      subjectRelation: 'self_or_co_subject',
+      authorization: Object.freeze({
+        action: 'memory.reveal',
+        baseRole: 'admin',
+        resource: Object.freeze({ scope: 'personal_workspace', area: 'memory' }),
+        subjectRelation: 'self_or_co_subject',
+        requirements: Object.freeze({
+          assurance: 'escalated',
+          confirmation: 'explicit',
+          approvals: Object.freeze([]),
+        }),
+        publicAccess: 'never',
+        recoveryAccess: 'forbidden',
+      }),
+    });
+  }
+
+  async function invokeFleetReveal(input: {
+    memoryId: string;
+    body: unknown;
+    memoryService: TestAdminMemoryService;
+    subjectAudit?: Partial<AdminSubjectVisibleAuditService>;
+  }): Promise<{ status: number; body: unknown }> {
+    const routes = buildAdminMemoryRoutes({
+      memoryService: input.memoryService,
+      subjectAuditService: input.subjectAudit as AdminSubjectVisibleAuditService | undefined,
+      withBody: (_req, _res, callback) => callback(JSON.stringify(input.body)),
+    });
+    const path = `/api/admin/memory/${input.memoryId}/reveal`;
+    const route = routes.find(candidate => candidate.method === 'POST' && candidate.match(path));
+    if (!route) throw new Error(`missing route ${path}`);
+    const response = new CapturingResponse();
+    route.handle(
+      makeRequest(path, JSON.stringify(input.body)),
+      response as unknown as ServerResponse,
+      route.match(path) ?? {},
+      fleetRevealContext(input.memoryId),
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    return {
+      status: response.status,
+      body: response.body ? JSON.parse(response.body) as unknown : {},
+    };
+  }
+
+  it('records the content-free companion notice before revealing for a fleet principal', async () => {
+    const memoryService = makeMemoryService();
+    const recordMemoryReveal = vi.fn(() => undefined);
+    const reason = 'Triage a welfare report that names this memory';
+
+    const result = await invokeFleetReveal({
+      memoryId: 'mem-1',
+      body: { reason },
+      memoryService,
+      subjectAudit: { recordMemoryReveal },
+    });
+
+    expect(result.status).toBe(200);
+    expect(recordMemoryReveal).toHaveBeenCalledWith({
+      context: expect.objectContaining({
+        kind: 'fleet_principal',
+        resource: expect.objectContaining({
+          routeId: 'POST /api/admin/memory/:id/reveal',
+          pathParams: { id: 'mem-1' },
+        }),
+      }),
+      reason,
+    });
+    // The notice is recorded before the body is disclosed (fail closed).
+    const auditCall = recordMemoryReveal.mock.invocationCallOrder[0];
+    const revealCall = memoryService.revealMemory.mock.invocationCallOrder[0];
+    expect(auditCall).toBeDefined();
+    expect(revealCall).toBeDefined();
+    expect(auditCall).toBeLessThan(revealCall);
+  });
+
+  it('fails closed before the reveal when the reason is missing for a fleet principal', async () => {
+    const memoryService = makeMemoryService();
+    const result = await invokeFleetReveal({
+      memoryId: 'mem-1',
+      body: {},
+      memoryService,
+      subjectAudit: { recordMemoryReveal: vi.fn() },
+    });
+    expect(result.status).toBe(400);
+    expect(memoryService.revealMemory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before the reveal when the subject-visible audit sink is unavailable', async () => {
+    const memoryService = makeMemoryService();
+    const result = await invokeFleetReveal({
+      memoryId: 'mem-1',
+      body: { reason: 'A valid reason' },
+      memoryService,
+      subjectAudit: { recordMemoryReveal: vi.fn(() => { throw new Error('audit unavailable'); }) },
+    });
+    expect(result.status).toBe(503);
+    expect(memoryService.revealMemory).not.toHaveBeenCalled();
+  });
+
+  it('skips the fleet notice and reveals directly for a standalone operator session', async () => {
+    const memoryService = makeMemoryService();
+    const recordMemoryReveal = vi.fn();
+    const routes = buildAdminMemoryRoutes({
+      memoryService,
+      subjectAuditService: { recordMemoryReveal } as unknown as AdminSubjectVisibleAuditService,
+      withBody: (_req, _res, callback) => callback('{}'),
+    });
+    const path = '/api/admin/memory/mem-1/reveal';
+    const route = routes.find(candidate => candidate.method === 'POST' && candidate.match(path))!;
+    const response = new CapturingResponse();
+    route.handle(makeRequest(path, '{}'), response as unknown as ServerResponse, { id: 'mem-1' }, undefined);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(response.status).toBe(200);
+    expect(recordMemoryReveal).not.toHaveBeenCalled();
+    expect(memoryService.revealMemory).toHaveBeenCalledWith('mem-1');
+  });
+
+  it('fails closed before the reveal when the subject-visible audit service is not wired', async () => {
+    const memoryService = makeMemoryService();
+    const result = await invokeFleetReveal({
+      memoryId: 'mem-1',
+      body: { reason: 'A valid reason' },
+      memoryService,
+    });
+    expect(result.status).toBe(503);
+    expect(memoryService.revealMemory).not.toHaveBeenCalled();
   });
 });

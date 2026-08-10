@@ -2,11 +2,14 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     confirmIntakeQuarantineDecision,
+    confirmIntakeQuarantineDecisionEscalated,
     decideIntakeQuarantine,
+    decideIntakeQuarantineEscalated,
     loadIntakeQuarantineLocalFirst,
     getIntakeQuarantineItem,
     type IntakeQuarantineDecisionAction,
   } from '$lib/api/endpoints/intake';
+  import { currentCompanionGardenScope } from '$lib/fleet/companion-scope';
   import type {
     AdminIntakeQuarantineFirewallStatus,
     AdminIntakeQuarantineItemDetail,
@@ -201,15 +204,23 @@
     serverSummary = '';
   }
 
-  // First confirm: request the server-side confirm token (step 1 of 2).
+  // First confirm: request the server-side confirm token (step 1 of 2). On a
+  // companion Garden route the gateway requires an audited escalation grant
+  // bound to exactly this confirm route, so the grant is minted and spent here.
   async function handleFirstConfirm() {
     if (!pendingItem || !pendingAction) return;
     confirmBusy = true;
     try {
-      const result = await confirmIntakeQuarantineDecision(pendingItem.id, {
-        action: pendingAction,
-        ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
-      });
+      const reasonText = reason.trim();
+      const result = currentCompanionGardenScope()
+        ? await confirmIntakeQuarantineDecisionEscalated(pendingItem.id, {
+          action: pendingAction,
+          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
+        }, reasonText)
+        : await confirmIntakeQuarantineDecision(pendingItem.id, {
+          action: pendingAction,
+          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
+        });
       confirmToken = result.confirmToken;
       serverSummary = result.summary;
       confirmStage = 'second';
@@ -222,17 +233,27 @@
     }
   }
 
-  // Second confirm: execute with the single-use token (step 2 of 2).
+  // Second confirm: execute with the single-use token (step 2 of 2). The
+  // gateway requires its own audited grant for the decide route; a retry mints
+  // a fresh grant. Release-raw and release-sanitized stay distinct body
+  // actions — the ceremony authorizes the endpoint, never auto-releasing.
   async function handleSecondConfirm() {
     if (!pendingItem || !pendingAction || !confirmToken) return;
     confirmBusy = true;
     try {
-      const result = await decideIntakeQuarantine(pendingItem.id, {
-        action: pendingAction,
-        ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
-        confirmToken,
-        reason: reason.trim(),
-      });
+      const result = currentCompanionGardenScope()
+        ? await decideIntakeQuarantineEscalated(pendingItem.id, {
+          action: pendingAction,
+          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
+          confirmToken,
+          reason: reason.trim(),
+        })
+        : await decideIntakeQuarantine(pendingItem.id, {
+          action: pendingAction,
+          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
+          confirmToken,
+          reason: reason.trim(),
+        });
       pushToast(result.message, 'success');
       expandedId = '';
       detail = null;

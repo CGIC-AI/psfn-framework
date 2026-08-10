@@ -216,6 +216,11 @@
               >
                 {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Escalate & reveal (audited)'}
               </button>
+              <p class="text-xs text-shadow-600">
+                Each click mints and immediately spends one single-use grant for only this memory. The
+                companion receives a content-free record of who read which protected category, when, and
+                why. A failed or expired grant never carries over — try again for a fresh one.
+              </p>
             {:else}
               <button
                 onclick={() => { void onReveal(detailMemoryId); }}

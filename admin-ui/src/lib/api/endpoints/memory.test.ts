@@ -77,7 +77,7 @@ describe('revealMemoryEscalated', () => {
     });
     expect(apiPost).toHaveBeenCalledWith(
       `/api/admin/memory/${MEMORY_ID}/reveal`,
-      {},
+      { reason: 'reviewing a welfare report' },
       {
         headers: { 'x-psfn-escalation-grant': '22222222-2222-4222-8222-222222222222' },
         signal: expect.any(AbortSignal),

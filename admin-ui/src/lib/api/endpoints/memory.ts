@@ -78,11 +78,15 @@ export async function revealMemoryEscalated(
   reason: string,
 ): Promise<AdminMemoryDetailData> {
   const target = revealMemoryPath(id);
+  // The ceremony validates and trims the reason for the grant; re-state the
+  // trimmed reason in the reveal body so the gateway grant, the route's
+  // content-free companion notice, and the audit trail all agree verbatim.
+  const statedReason = reason.trim();
   return await withFleetEscalationGrant(
-    { method: 'POST', target, reason },
+    { method: 'POST', target, reason: statedReason },
     async (grant, signal) => await apiPost<AdminMemoryDetailData>(
       `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
-      {},
+      { reason: statedReason },
       {
         headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
         signal,

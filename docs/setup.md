@@ -82,7 +82,7 @@ without `--smoke`. See the [Kube lane](./shakedown.md#kube-lane).
 
 ## Fastest path: the Docker Compose smoke stack
 
-Prerequisites: Docker and Docker Compose, plus Node 22+ to invoke the harness
+Prerequisites: Docker and Docker Compose, plus Node 24 LTS (24.19.0 or newer 24.x) to invoke the harness
 (`scripts/smoke-docker.mjs` uses only Node built-ins and the Docker CLI — no
 `npm install` is required). First run needs internet: the image build and a
 one-shot model-prefetch service download the in-process ML models (~hundreds of
@@ -187,7 +187,7 @@ by hand.
 
 ## Prerequisites
 
-- Node.js 22+
+- Node.js 24 LTS (24.19.0 or newer 24.x)
 - PostgreSQL 16+ with the `pgvector` extension. The repo-owned runtime is Postgres-only for memories, episodes, contacts, concerns, intentions, internal state, and searchable projections.
 - One provider secret for the model/provider owner file you plan to use. The shipped examples include OpenRouter, so using those examples usually means `OPENROUTER_API_KEY`.
 - Optional channel/service secrets only for the surfaces you enable:

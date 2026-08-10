@@ -31,7 +31,7 @@ const entries = {
 export default defineConfig({
   entry: entries,
   format: ['esm'],
-  target: 'node22',
+  target: 'node24',
   tsconfig: './tsconfig.tsup.json',
   dts: process.env.PSFN_RUNTIME_BUILD === '1'
     ? false

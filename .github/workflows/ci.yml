@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: 24.13.1
+  NODE_VERSION: 24.19.0
   BASE_SHA: ${{ github.event.pull_request.base.sha }}
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   EXPECTED_LOCAL_GATE_STATUS_ACTOR: ${{ vars.LOCAL_GATE_STATUS_ACTOR }}
@@ -84,7 +84,7 @@ jobs:
       - name: Build root runtime in the clean environment
         if: steps.scope.outputs.root_runtime == 'true'
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
         run: npm run build
 
       - name: Build and test Garden in the clean environment

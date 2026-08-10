@@ -138,14 +138,14 @@ function makeRealPreflightLauncher(): {
   ].join('\n'), { mode: 0o755 });
   writeFileSync(join(fakeBinDir, 'node'), [
     '#!/usr/bin/env bash',
-    'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+    'if [ "$1" = "-p" ]; then printf "24\\n"; else printf "v24.19.0\\n"; fi',
   ].join('\n'), { mode: 0o755 });
 
   return {
     gatewayStartedPath,
     workDir,
     run(env) {
-      const output = execFileSync('bash', ['-lc', [
+      const output = execFileSync('bash', ['-c', [
         'set +e',
         './scripts/start-gateway-agent.sh >launcher.out 2>&1',
         'status=$?',
@@ -431,7 +431,7 @@ describe('start-gateway-agent launcher supervision', () => {
     const fakeNode = join(fakeBinDir, 'node');
     writeFileSync(fakeNode, [
       '#!/usr/bin/env bash',
-      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+      'if [ "$1" = "-p" ]; then printf "24\\n"; else printf "v24.19.0\\n"; fi',
     ].join('\n'), { mode: 0o755 });
 
     try {
@@ -506,9 +506,9 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'if [ "$1" = "-p" ]; then',
-        '  printf "22\\n"',
+        '  printf "24\\n"',
         'else',
-        '  printf "v22.22.3\\n"',
+        '  printf "v24.19.0\\n"',
         'fi',
       ].join('\n'),
       'utf8',
@@ -710,9 +710,9 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'if [ "$1" = "-p" ]; then',
-        '  printf "22\\n"',
+        '  printf "24\\n"',
         'else',
-        '  printf "v22.22.3\\n"',
+        '  printf "v24.19.0\\n"',
         'fi',
       ].join('\n'),
       'utf8',
@@ -835,8 +835,8 @@ describe('start-gateway-agent launcher supervision', () => {
 
   it('checks Node.js before running TypeScript entrypoints', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    expect(launcher).toContain('psfn_require_node_major 22');
-    expect(launcher.indexOf('psfn_require_node_major 22')).toBeLessThan(
+    expect(launcher).toContain('psfn_require_node_major 24');
+    expect(launcher.indexOf('psfn_require_node_major 24')).toBeLessThan(
       launcher.indexOf('scripts/preflight-startup-owner-files.ts'),
     );
   });
@@ -1155,7 +1155,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     chmodSync(join(tsxDir, 'tsx'), 0o755);
     writeFileSync(join(fakeBinDir, 'node'), [
       '#!/usr/bin/env bash',
-      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.22.3\\n"; fi',
+      'if [ "$1" = "-p" ]; then printf "24\\n"; else printf "v24.19.0\\n"; fi',
     ].join('\n'), 'utf8');
     chmodSync(join(fakeBinDir, 'node'), 0o755);
     try {
@@ -1410,7 +1410,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     ].join('\n'), { mode: 0o755 });
     writeFileSync(join(fakeBinDir, 'node'), [
       '#!/usr/bin/env bash',
-      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+      'if [ "$1" = "-p" ]; then printf "24\\n"; else printf "v24.19.0\\n"; fi',
     ].join('\n'), { mode: 0o755 });
 
     try {
@@ -1554,7 +1554,10 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
     ]);
   });
 
-  it('fails clearly when the launcher sees an unsupported Node.js version', () => {
+  it.each([
+    [20, 'v20.19.2'],
+    [25, 'v25.9.0'],
+  ])('fails clearly when the launcher sees unsupported Node.js %s', (major, version) => {
     const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-node-'));
     tempDirs.push(workDir);
     const fakeNode = join(workDir, 'node');
@@ -1563,9 +1566,9 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
       [
         '#!/usr/bin/env bash',
         'if [ "$1" = "-p" ]; then',
-        '  printf "20\\n"',
+        `  printf "${major}\\n"`,
         'else',
-        '  printf "v20.19.2\\n"',
+        `  printf "${version}\\n"`,
         'fi',
       ].join('\n'),
       'utf8',
@@ -1581,7 +1584,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
           [
             `source ${JSON.stringify(runtimeEnvPath)}`,
             `PATH=${JSON.stringify(`${workDir}:/usr/bin:/bin`)}`,
-            'psfn_require_node_major 22',
+            'psfn_require_node_major 24',
           ].join('; '),
         ],
         { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
@@ -1591,7 +1594,9 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
     }
 
     expect(error).toBeDefined();
-    expect(String((error as { stderr?: Buffer }).stderr)).toContain('Node.js 22+ is required; found v20.19.2');
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      `Node.js 24.x is required; found ${version}`,
+    );
   });
 
   it('fails closed instead of using the fallback socket in production mode', () => {

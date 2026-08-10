@@ -44,7 +44,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24.13.1
+          node-version: 24.19.0
 
       # helm and docker are preinstalled on ubuntu-24.04 runners (the CI
       # deployment lane already renders with helm). The wrapper renders the

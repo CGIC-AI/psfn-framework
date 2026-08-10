@@ -4,7 +4,7 @@ This reproduces PSFN's pre-PR gate and internal reviews on another machine.
 
 ## Prerequisites and setup
 
-Install Git, Node.js 22+, npm, a running Docker engine, authenticated GitHub CLI,
+Install Git, Node.js 24 LTS (24.19.0 or newer 24.x), npm, a running Docker engine, authenticated GitHub CLI,
 and UBS 5.3.5. Install UBS from its immutable tag after verifying the installer:
 
 ```bash

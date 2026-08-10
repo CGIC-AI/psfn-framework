@@ -1055,7 +1055,7 @@ describe('turn-records', () => {
         clean: false,
         dts: false,
         format: ['esm'],
-        target: 'node22',
+        target: 'node24',
         splitting: false,
         skipNodeModulesBundle: true,
         silent: true,

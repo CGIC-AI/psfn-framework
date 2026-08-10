@@ -829,7 +829,7 @@ docker/satellite-hub/build-image.sh
 The script refuses dirty hub source by default, refuses floating tags, and tags
 the image as `0.1.0-kube-<source-sha12>` unless
 `SATELLITE_HUB_IMAGE_TAG` is set. The Dockerfile uses the pinned
-`node:22.22.2-slim` image digest and `npm ci` against the hub checkout's
+`node:24.19.0-slim` image digest and `npm ci` against the hub checkout's
 `package-lock.json`.
 
 For a local k3d/k3s shakedown, import the built image into the test cluster and

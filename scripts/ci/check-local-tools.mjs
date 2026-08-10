@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const REQUIRED_UBS_VERSION = '5.3.7';
+const REQUIRED_NODE_MAJOR = 24;
+const REQUIRED_NODE_MINOR = 19;
 
 function run(executable, args) {
   try {
@@ -18,9 +20,11 @@ function run(executable, args) {
 }
 
 export function validateToolReport({ nodeVersion, ubsVersion }) {
-  const major = Number.parseInt(nodeVersion.replace(/^v/, '').split('.')[0] ?? '', 10);
-  if (!Number.isInteger(major) || major < 22) {
-    throw new Error(`Node >=22 is required; found ${nodeVersion || 'unknown'}`);
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/u.exec(nodeVersion);
+  const major = Number(match?.[1]);
+  const minor = Number(match?.[2]);
+  if (major !== REQUIRED_NODE_MAJOR || minor < REQUIRED_NODE_MINOR) {
+    throw new Error(`Node >=24.19.0 <25 is required; found ${nodeVersion || 'unknown'}`);
   }
   if (!new RegExp(`\\bv${REQUIRED_UBS_VERSION.replaceAll('.', '\\.')}\\b`).test(ubsVersion)) {
     throw new Error(`UBS ${REQUIRED_UBS_VERSION} is required; found ${ubsVersion || 'unknown'}`);

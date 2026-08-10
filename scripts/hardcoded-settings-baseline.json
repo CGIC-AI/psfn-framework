@@ -5128,11 +5128,6 @@
     },
     {
       "file": "src/core/scheduler/reflection-template-runtime.ts",
-      "name": "PERSISTED_LAST_RUN_SCAN_LIMIT",
-      "value": "2_000"
-    },
-    {
-      "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "TEMPLATE_EXECUTION_BURST_LIMIT",
       "value": "4"
     },

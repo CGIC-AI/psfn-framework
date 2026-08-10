@@ -126,7 +126,6 @@ const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 // the next wall-clock slot still fires normally).
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
-const PERSISTED_LAST_RUN_SCAN_LIMIT = 2_000;
 
 type ReflectionRequestSource = 'manual' | 'scheduled';
 type ReflectionDeliberationExecutionResult = {
@@ -1546,9 +1545,7 @@ export function createReflectionTemplateRuntime(
   const resolvePersistedLastRunByTemplate = (): Map<string, number> => {
     const lastRunByTemplate = new Map<string, number>();
     try {
-      const recent = reflectionMetacognitionJournal.listRecent({
-        limit: PERSISTED_LAST_RUN_SCAN_LIMIT,
-      });
+      const recent = reflectionMetacognitionJournal.listRecent();
       for (const entry of recent) {
         if (entry.kind !== 'reflection_run' || !entry.templateId) continue;
         const occurredAtMs = Date.parse(entry.occurredAt);

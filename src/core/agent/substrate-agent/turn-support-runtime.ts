@@ -400,6 +400,9 @@ export class TurnSupportRuntime {
         sourceMessageId: message.id,
         sourceChannelId: turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(message),
+        ...(message.routing?.intakeEnvelopes?.length
+          ? { intakeEnvelopes: message.routing.intakeEnvelopes }
+          : {}),
       },
     );
   }

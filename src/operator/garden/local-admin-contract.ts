@@ -143,11 +143,11 @@ import {
   formatCapabilityTierChangeNotice,
 } from '../../system/capabilities/change-notice.js';
 import { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
-import { createAdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
+import {
+  createAdminIntakeQuarantineService,
+  type IntakeReleaseRedeliveryPort,
+} from './services/intake-quarantine-service.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
-import { snapshotIntakeEnvelope } from '../../shared/contracts/intake-envelope.js';
-import { buildSessionMetadataWithIntakeScreening } from '../../core/session/intake-screening-metadata.js';
-import { formatIntakeReleaseNotice } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import { createAdminDriftReviewService } from './services/drift-review-service.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
@@ -226,6 +226,8 @@ export interface InProcessGardenAdminContractOptions {
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
+  /** Canonical system-authored turn placement for released quarantine content. */
+  intakeReleaseConversationTurn?: IntakeReleaseRedeliveryPort;
   scheduler: Scheduler;
   shardManager: ShardExecutionPort;
   eventBus: EventBus;
@@ -591,54 +593,15 @@ export function createInProcessGardenAdminContract(
     // Fresh store per decision: CogSecEventStore snapshots the file at
     // construction and the gateway writes the same file concurrently.
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
-    // jvbt: honest re-delivery of released content. A false-positive hold is
-    // no longer silently dropped — once a human looks the item over, the
-    // set-aside content is appended back into the conversation it was withheld
-    // from as a provenance-marked system note. The released envelope snapshot
-    // rides the entry's intakeScreening metadata, so the content stays
-    // untrusted-origin at the sink gates (its terminal `human_released*` state
-    // is sink-consumable but its original risk tier still caps consumption),
-    // and the fixed firewall-notice intro keeps the whole delivery out of
-    // emotion appraisal and memory candidacy.
-    redeliverReleased: (input) => {
-      const channelId = input.sourceChannelId?.trim();
-      if (!channelId) {
-        return { delivered: false, reason: 'no source channel was recorded on the held item' };
-      }
-      // Envelope validation guarantees at least the origin hop.
-      const originHop = input.envelope.provenance[0];
-      if (!originHop) {
-        return { delivered: false, reason: 'held item is missing provenance origin hop' };
-      }
-      const text = formatIntakeReleaseNotice({
-        sourceClass: input.envelope.sourceClass,
-        originRef: originHop.ref,
-        reviewedByActor: input.actor,
-        reviewedAtIso: new Date(input.atMs).toISOString(),
-        sanitized: input.action === 'release_sanitized',
-        truncated: input.rawTextTruncated,
-        content: input.content,
-      });
-      const metadata = buildSessionMetadataWithIntakeScreening(undefined, {
-        mode: input.mode,
-        withheld: false,
-        envelopes: [snapshotIntakeEnvelope(input.envelope, { kind: 'body' })],
-      });
-      const logicalSessionId = options.sessionManager.resolveSessionForIngress(channelId);
-      const entryId = options.sessionManager.recordSystemMessage(
-        logicalSessionId,
-        text,
-        'system:intake-firewall',
-        'Intake firewall',
-        undefined,
-        undefined,
-        { metadata, sourceChannelId: channelId },
-      );
-      if (entryId === null) {
-        return { delivered: false, reason: `channel '${channelId}' is not a persistable session` };
-      }
-      return { delivered: true, entryId, channelId, logicalSessionId };
-    },
+    // A release must run through the ordinary system-turn pipeline. Merely
+    // appending a system row to L0 creates an audit-visible entry that never
+    // enters a TurnRecord or produces a reply. The injected port keeps the
+    // firewall as author, carries the released envelope, executes the turn,
+    // and delivers any companion response through the channel's normal egress.
+    redeliverReleased: options.intakeReleaseConversationTurn ?? (async () => ({
+      delivered: false,
+      reason: 'canonical intake-release conversation turn is not configured',
+    })),
     onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'intake-quarantine'),
   });
 

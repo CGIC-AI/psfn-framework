@@ -147,8 +147,10 @@ export interface AdminIntakeQuarantineItemView {
     channelId?: string;
     logicalSessionId?: string;
     entryId?: number | null;
-    /** Release never posts a new platform message; this is explicit in the API. */
-    externalMessageSent: false;
+    /** The held bytes are never reposted to the platform as the original contact. */
+    releasedContentExternallyReposted: false;
+    /** A generated companion response, when present, uses the channel's ordinary egress. */
+    companionResponseDelivery: 'normal_channel_egress_when_present';
     reason?: string;
   };
   /** On-disk artifacts made readable by this release; never exposed while held. */
@@ -259,7 +261,7 @@ export interface IntakeReleaseRedeliveryResult {
  * already been applied by the time it runs.
  */
 export type IntakeReleaseRedeliveryPort =
-  (input: IntakeReleaseRedeliveryInput) => IntakeReleaseRedeliveryResult;
+  (input: IntakeReleaseRedeliveryInput) => Promise<IntakeReleaseRedeliveryResult>;
 
 export interface AdminIntakeQuarantineServiceDeps {
   store: IntakeQuarantineStore;
@@ -447,7 +449,8 @@ function toItemView(
             ? { logicalSessionId: entry.redelivery.logicalSessionId }
             : {}),
           ...(entry.redelivery.entryId !== undefined ? { entryId: entry.redelivery.entryId } : {}),
-          externalMessageSent: false,
+          releasedContentExternallyReposted: false,
+          companionResponseDelivery: 'normal_channel_egress_when_present',
           ...(entry.redelivery.reason ? { reason: entry.redelivery.reason } : {}),
         },
       }
@@ -824,7 +827,7 @@ export function createAdminIntakeQuarantineService(
           : decided.safeRepresentationText ?? '';
         const sourceChannelId = resolveReleaseSourceChannelId(decided);
         try {
-          redelivery = deps.redeliverReleased({
+          redelivery = await deps.redeliverReleased({
             envelope: decided.envelope,
             mode: decided.mode,
             action: request.action,
@@ -860,12 +863,12 @@ export function createAdminIntakeQuarantineService(
 
       const redeliveryNote = redelivery
         ? redelivery.delivered
-          ? `; appended released context to L0 session ${redelivery.logicalSessionId
+          ? `; executed a firewall-authored system turn in session ${redelivery.logicalSessionId
               ?? redelivery.channelId
               ?? 'unknown'}${redelivery.entryId === undefined || redelivery.entryId === null
               ? ''
-              : ` as entry ${String(redelivery.entryId)}`}; no external chat message was sent`
-          : `; released, but the L0 conversation append failed (${redelivery.reason ?? 'no reason recorded'}); no external chat message was sent`
+              : ` as entry ${String(redelivery.entryId)}`}; any companion response used normal channel delivery`
+          : `; released, but the firewall-authored conversation turn failed (${redelivery.reason ?? 'no reason recorded'})`
         : '';
       const artifactNote = decided.artifactPaths && decided.artifactPaths.length > 0
         ? `; released on-disk artifacts: ${decided.artifactPaths.join(', ')}`
@@ -879,8 +882,8 @@ export function createAdminIntakeQuarantineService(
             safeAgentSummary: `Operator ${decisionPhrase} `
               + `(${entry.envelope.sourceClass}, envelope ${entry.id})`
               + (redelivery.delivered
-                ? '; the released content was appended to the active conversation'
-                : '; conversation placement did not land and the released content was not appended'),
+                ? '; the intake firewall executed the released content as a system turn in the active conversation'
+                : '; the firewall-authored system turn did not land'),
           }
           : {}),
       });

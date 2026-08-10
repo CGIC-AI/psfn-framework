@@ -143,7 +143,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     onQueueChanged?: () => void;
   } = {}) => createAdminIntakeQuarantineService({
     store,
-    redeliverReleased: (input) => {
+    redeliverReleased: async (input) => {
       redeliveries.push(input);
       return redeliverResult(input);
     },
@@ -571,8 +571,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(delivered.envelope.sourceClass).toBe('web_fetch');
       expect(delivered.envelope.sourceRiskTier).toBe('untrusted');
       if (resolved.ok) {
-        expect(resolved.message).toContain('appended released context to L0 session discord:chan-1:active as entry 4242');
-        expect(resolved.message).toContain('no external chat message was sent');
+        expect(resolved.message).toContain('executed a firewall-authored system turn in session discord:chan-1:active as entry 4242');
+        expect(resolved.message).toContain('companion response used normal channel delivery');
       }
     });
 
@@ -586,7 +586,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(redeliveries).toHaveLength(1);
       expect(redeliveries[0].sourceChannelId).toBe('123');
       if (resolved.ok) {
-        expect(resolved.message).toContain('appended released context to L0 session 123:active as entry 4242');
+        expect(resolved.message).toContain('executed a firewall-authored system turn in session 123:active as entry 4242');
       }
     });
 
@@ -633,7 +633,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
         channelId: '123',
         logicalSessionId: '123:active',
         entryId: 4242,
-        externalMessageSent: false,
+        releasedContentExternallyReposted: false,
+        companionResponseDelivery: 'normal_channel_egress_when_present',
       });
       expect(item?.releasedArtifactPaths).toEqual([
         join(dir, 'document.md'),
@@ -680,8 +681,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.status).toBe('released_raw');
       if (resolved.ok) {
-        expect(resolved.message).toContain('L0 conversation append failed');
-        expect(resolved.message).toContain('no external chat message was sent');
+        expect(resolved.message).toContain('firewall-authored conversation turn failed');
+        expect(resolved.message).toContain('no source channel was recorded');
       }
     });
 
@@ -694,7 +695,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.envelope.state).toBe('human_released');
       if (resolved.ok) {
-        expect(resolved.message).toContain('L0 conversation append failed');
+        expect(resolved.message).toContain('firewall-authored conversation turn failed');
       }
     });
   });

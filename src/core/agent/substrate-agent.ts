@@ -726,6 +726,7 @@ export class SubstrateAgent {
       toolResultScreener: ({ toolName, toolCallId, arguments: toolArguments, text }) => {
         const screening = this.sessionManager.intakeScreening;
         if (!screening) return null;
+        const sourceChannelId = this.turnSupportRuntime.getActiveTurnCorrelation()?.channelId?.trim();
         const toolCallSuffix = toolCallId.trim() ? `:${toolCallId.trim()}` : '';
         const screened = screening.screenSync(text, {
           sourceClass: 'tool_output',
@@ -739,6 +740,7 @@ export class SubstrateAgent {
             detail: 'seam:tool-scheduler',
           },
           scope: 'context',
+          ...(sourceChannelId ? { sourceChannelId } : {}),
         });
         return {
           mode: screened.mode,

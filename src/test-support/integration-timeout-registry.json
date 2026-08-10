@@ -114,9 +114,9 @@
     {
       "file": "src/faculties/memory/biographical/postgres-store.integration.test.ts",
       "timeoutMs": 90000,
-      "measuredBaselineMs": 1800,
+      "measuredBaselineMs": 11701,
       "baselineSource": "measured",
-      "note": "o61vb.2 biographical kernel persistence suite against the real containerized Postgres harness. Baseline 1.80s file wall (12 tests, warm tmpfs harness, this host, 2026-08-09); the 90s harness-start cap preserves 50x headroom for cold-start and shared-heavy-phase variance."
+      "note": "o61vb.7/.8 biographical persistence and canonical dump/restore suite against the real containerized Postgres harness. Worst observed dump/restore case was 11.701s under the full maxWorkers=8 pre-PR gate on 2026-08-10; the shared 90s integration cap preserves 7.69x headroom for cold-start and shared-heavy-phase variance."
     },
     {
       "file": "src/faculties/memory/postgres-store.integration.test.ts",

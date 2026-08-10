@@ -113,11 +113,10 @@ describe('admin intake quarantine read service (waw5q)', () => {
     expect(populated.firewallStatus.queueEmptyDoesNotMeanFirewallOff).toBe(true);
   });
 
-  it('synthesizes a safe default firewall status when no provider is wired', () => {
+  it('omits firewall status rather than fabricating an off policy when no provider is wired', () => {
     const service = createAdminIntakeQuarantineReadService({ store, now: () => NOW });
     const { firewallStatus } = service.listItems();
-    expect(firewallStatus.queueEmptyDoesNotMeanFirewallOff).toBe(true);
-    expect(firewallStatus.note).toMatch(/never means the firewall is off/iu);
+    expect(firewallStatus).toBeUndefined();
   });
 
   it('enriches each item with content-free plain-text attribution when resolvers are wired', () => {

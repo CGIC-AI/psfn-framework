@@ -437,8 +437,8 @@ export function createAdminIntakeQuarantineReadService(deps: {
   /**
    * Optional shared-gateway firewall status provider. When wired, the list
    * response carries the cluster-owned mode so an empty queue can never imply
-   * the firewall is off (waw5q). When absent, the status is synthesized from
-   * the held count with mode 'off' and an explicit note.
+   * the firewall is off (waw5q). When absent, status is omitted rather than
+   * fabricating an "off" policy.
    */
   firewallStatusProvider?: (
     heldCount: number,
@@ -447,22 +447,18 @@ export function createAdminIntakeQuarantineReadService(deps: {
 }): AdminIntakeQuarantineReadService {
   const now = deps.now ?? Date.now;
   const resolvers = deps.attributionResolvers ?? {};
-  const resolveFirewallStatus = deps.firewallStatusProvider
-    ?? ((heldCount): AdminIntakeQuarantineFirewallStatus => ({
-      mode: 'off',
-      queueEmptyDoesNotMeanFirewallOff: true,
-      note: 'Firewall mode is reported by the shared gateway policy; an empty queue never means the firewall is off.',
-      heldCount,
-      quarantineItemTtlHours: 0,
-      quarantineMaxHeldItems: 0,
-    }));
   return {
     listItems(context?) {
       const nowMs = now();
       const entries = deps.store.list();
       const items = entries.map((entry) => toItemView(entry, nowMs, resolvers));
       const heldCount = items.filter((item) => item.status === 'held').length;
-      return { items, firewallStatus: resolveFirewallStatus(heldCount, context) };
+      return {
+        items,
+        ...(deps.firewallStatusProvider
+          ? { firewallStatus: deps.firewallStatusProvider(heldCount, context) }
+          : {}),
+      };
     },
 
     getItem(id: string): AdminIntakeQuarantineItemDetail | undefined {

@@ -43,6 +43,12 @@ import {
   computeClaimDigest,
   computeSourceSetDigest,
 } from './kernel.js';
+import type {
+  BiographicalRebuildEnqueueInput,
+  BiographicalRebuildEnqueueResult,
+  BiographicalRebuildListOptions,
+  BiographicalRebuildRequest,
+} from './lifecycle.js';
 
 /**
  * Deep persistence module for the biographical profile projection. Both the
@@ -77,6 +83,7 @@ export interface BiographicalClaimWriteInput {
 
 export interface BiographicalClaimListOptions {
   readonly subject?: BiographicalSubjectRef;
+  readonly relatedSubject?: BiographicalSubjectRef;
   readonly kind?: BiographicalClaimKind;
   readonly status?: BiographicalClaimStatus;
   /** Include terminal (superseded/revoked) history rows. Defaults to false. */
@@ -553,4 +560,21 @@ export interface BiographicalProfileStorePort {
   listGrantsForClaim(claimId: string): Promise<BiographicalSensitivityGrant[]>;
   revokeGrant(grantId: string, input: BiographicalGrantRevokeInput): Promise<BiographicalSensitivityGrant>;
   getGrant(grantId: string): Promise<BiographicalSensitivityGrant | undefined>;
+  enqueueRebuild(input: BiographicalRebuildEnqueueInput): Promise<BiographicalRebuildEnqueueResult>;
+  listRebuilds(options: BiographicalRebuildListOptions): Promise<BiographicalRebuildRequest[]>;
+  completeRebuild(
+    id: string,
+    completion: NonNullable<BiographicalRebuildRequest['completion']>,
+    now: Date,
+  ): Promise<BiographicalRebuildRequest>;
+  /** Serializes one subject+kind admission and rolls every write back on error. */
+  runClaimTransaction<T>(
+    subject: BiographicalSubjectRef,
+    kind: BiographicalClaimKind,
+    operation: (store: BiographicalProfileStorePort) => Promise<T>,
+  ): Promise<T>;
+  runSubjectTransaction<T>(
+    subject: BiographicalSubjectRef,
+    operation: (store: BiographicalProfileStorePort) => Promise<T>,
+  ): Promise<T>;
 }

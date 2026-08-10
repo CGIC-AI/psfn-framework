@@ -74,12 +74,16 @@ function stableClaimOrder(left: BiographicalClaim, right: BiographicalClaim): nu
  * A semantic-conflict signal quarantines only the candidate and never mutates
  * an active claim.
  */
-export async function admitBiographicalCandidate(input: {
+interface BiographicalAdmissionInput {
   readonly store: BiographicalProfileStorePort;
   readonly candidate: BiographicalClaimWriteInput;
   readonly semanticConflict?: boolean;
   readonly correctionAuthority?: SubjectCorrectionAuthority;
-}): Promise<BiographicalAdmissionResult> {
+}
+
+async function admitBiographicalCandidateInTransaction(
+  input: BiographicalAdmissionInput,
+): Promise<BiographicalAdmissionResult> {
   if (input.candidate.status !== undefined) {
     throw new Error('candidate lifecycle status is decided by the admission policy');
   }
@@ -220,4 +224,17 @@ export async function admitBiographicalCandidate(input: {
     disposition: 'contested',
     affectedClaims: contested,
   };
+}
+
+export async function admitBiographicalCandidate(
+  input: BiographicalAdmissionInput,
+): Promise<BiographicalAdmissionResult> {
+  return await input.store.runClaimTransaction(
+    input.candidate.subject,
+    input.candidate.kind,
+    async transactionStore => await admitBiographicalCandidateInTransaction({
+      ...input,
+      store: transactionStore,
+    }),
+  );
 }

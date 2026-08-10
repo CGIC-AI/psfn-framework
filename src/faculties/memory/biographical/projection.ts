@@ -28,10 +28,13 @@ import type {
 } from '../../../core/cogsec/disclosure/contracts.js';
 import type { MessageAddressingMetadata } from '../../../shared/contracts/message-addressing.js';
 import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
-import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import {
+  sensitivityOrd,
+  type SensitivityLevel,
+  type TrustLevel,
+} from '../../../system/trust/types.js';
 import type {
   BiographicalClaim,
-  BiographicalClaimSource,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
 } from './types.js';
@@ -58,6 +61,12 @@ import {
   type ExplicitSubjectSelectionWithheld,
   type VerifiedExplicitSubject,
 } from './explicit-subject-selection.js';
+import type {
+  BiographicalRebuildEnqueueResult,
+  BiographicalRebuildReason,
+  BiographicalSourceLifecycleReason,
+} from './lifecycle.js';
+import type { BiographicalLifecycleSourceRevalidator } from './lifecycle.js';
 
 // ── Source revalidation ──
 
@@ -70,20 +79,12 @@ import {
  * claim reverts to its automatic sensitivity and is withheld from destinations
  * that require the grant.
  *
- * A revalidator that cannot prove a source is still present, recallable, and
- * at the projected revision returns `missing`, which withholds the claim and
- * queues a deterministic rebuild.
+ * A revalidator that cannot prove a source is still valid returns one closed
+ * lifecycle reason, which withholds the claim and queues the same structured
+ * reason for deterministic rebuild.
  */
-export interface BiographicalSourceRevalidator {
-  revalidate(
-    sources: readonly BiographicalClaimSource[],
-    now: Date,
-  ): Promise<SourceRevalidationOutcome>;
-}
-
-export type SourceRevalidationOutcome =
-  | { readonly status: 'valid'; readonly currentSources: readonly BiographicalClaimSource[] }
-  | { readonly status: 'missing'; readonly missingRef: string; readonly detail: string };
+export interface BiographicalSourceRevalidator extends BiographicalLifecycleSourceRevalidator {}
+export type { SourceRevalidationOutcome } from './lifecycle.js';
 
 // ── Destination policy ──
 
@@ -187,8 +188,8 @@ export interface TurnBiographicalContext {
 
 type BiographicalWithheldReason =
   | 'status-inactive'
-  | 'source-missing'
   | 'source-drift'
+  | 'source-invalid'
   | 'no-publication-choice'
   | 'destination-disallowed'
   | 'token-budget-exhausted'
@@ -201,6 +202,10 @@ interface BiographicalWithheldEntry {
   readonly addressedParticipantId?: string;
   readonly reason: BiographicalWithheldReason;
   readonly detail: string;
+  readonly sourceLifecycleReason?: BiographicalSourceLifecycleReason;
+  readonly sourceRef?: string;
+  readonly rebuildReason?: BiographicalRebuildReason;
+  readonly rebuildStatus?: BiographicalRebuildEnqueueResult['status'];
 }
 
 export interface BiographicalProjectionResult {
@@ -250,11 +255,33 @@ function hasActivePublicationGrant(
 export interface BiographicalProjectionDeps {
   readonly store: BiographicalProfileStorePort;
   readonly revalidator: BiographicalSourceRevalidator;
+  /** Owner-configured hard bound for durable pending rebuild work. */
+  readonly rebuildQueueMaxPending: number;
   /** Required to project explicit reply/mention subjects; absence fails closed. */
   readonly explicitAddressing?: {
     readonly resolver: CanonicalAddressedContactResolver;
     readonly maxSubjects: number;
   };
+}
+
+async function queueClaimRebuild(input: {
+  readonly deps: BiographicalProjectionDeps;
+  readonly claim: BiographicalClaim;
+  readonly reason: BiographicalRebuildReason;
+  readonly now: Date;
+  readonly sourceRef?: string;
+  readonly currentSourceSetDigest?: string;
+}): Promise<BiographicalRebuildEnqueueResult> {
+  return await input.deps.store.enqueueRebuild({
+    claim: input.claim,
+    reason: input.reason,
+    ...(input.sourceRef !== undefined ? { sourceRef: input.sourceRef } : {}),
+    ...(input.currentSourceSetDigest !== undefined
+      ? { currentSourceSetDigest: input.currentSourceSetDigest }
+      : {}),
+    maxPending: input.deps.rebuildQueueMaxPending,
+    now: input.now,
+  });
 }
 
 interface ProjectionPresentation {
@@ -448,11 +475,22 @@ export async function projectBiographicalContext(
     consideredClaimIds.add(claim.id);
     // Read-time source revalidation. Missing source data fails closed.
     const revalidation = await deps.revalidator.revalidate(claim.sources, now);
-    if (revalidation.status === 'missing') {
+    if (revalidation.status === 'invalid') {
+      const rebuild = await queueClaimRebuild({
+        deps,
+        claim,
+        reason: revalidation.reason,
+        sourceRef: revalidation.sourceRef,
+        now,
+      });
       withheld.push({
         claimId: claim.id,
-        reason: 'source-missing',
-        detail: `source ${revalidation.missingRef} is missing or no longer recallable: ${revalidation.detail}`,
+        reason: 'source-invalid',
+        detail: 'a source lifecycle check failed closed',
+        sourceLifecycleReason: revalidation.reason,
+        sourceRef: revalidation.sourceRef,
+        rebuildReason: revalidation.reason,
+        rebuildStatus: rebuild.status,
       });
       continue;
     }
@@ -470,6 +508,41 @@ export async function projectBiographicalContext(
       sources: currentSources,
       now,
     });
+    if (drifted) {
+      const priorAutomatic = computeAutomaticSensitivity({
+        kind: claim.kind,
+        proposedSensitivity: claim.proposedSensitivity,
+        sources: claim.sources,
+        now,
+      }).sensitivity;
+      const sensitivityReason: BiographicalSourceLifecycleReason | undefined =
+        sensitivityOrd(automaticSensitivity) > sensitivityOrd(priorAutomatic)
+          ? 'sensitivity-increased'
+          : sensitivityOrd(automaticSensitivity) < sensitivityOrd(priorAutomatic)
+            ? 'sensitivity-decreased'
+            : undefined;
+      const rebuildReason = sensitivityReason ?? 'source-set-drift';
+      const rebuild = await queueClaimRebuild({
+        deps,
+        claim,
+        reason: rebuildReason,
+        currentSourceSetDigest,
+        now,
+      });
+      withheld.push({
+        claimId: claim.id,
+        reason: 'source-drift',
+        detail: sensitivityReason === 'sensitivity-increased'
+          ? 'source sensitivity increased and tightened access immediately'
+          : sensitivityReason === 'sensitivity-decreased'
+            ? 'source sensitivity decreased but access remains restricted pending audited rebuild'
+            : 'source-set digest drifted and exact grants no longer apply',
+        ...(sensitivityReason !== undefined ? { sourceLifecycleReason: sensitivityReason } : {}),
+        rebuildReason,
+        rebuildStatus: rebuild.status,
+      });
+      continue;
+    }
     const grants = await deps.store.listGrantsForClaim(claim.id);
     const { effectiveSensitivity, appliedGrant } = applyLoweringGrant({
       claimDigest: claim.claimDigest,
@@ -492,7 +565,6 @@ export async function projectBiographicalContext(
         withholdReasonFor(
           claim,
           candidate.audienceRole,
-          drifted,
           grants,
           effectiveSensitivity,
           automaticSensitivity,
@@ -578,19 +650,11 @@ export async function projectBiographicalContext(
 function withholdReasonFor(
   claim: BiographicalClaim,
   audienceRole: ProjectionCandidate['audienceRole'],
-  drifted: boolean,
   grants: readonly BiographicalSensitivityGrant[],
   effective: SensitivityLevel,
   automatic: SensitivityLevel,
   nowMs: number,
 ): BiographicalWithheldEntry {
-  if (drifted && hasActivePublicationGrant(grants, nowMs)) {
-    return {
-      claimId: claim.id,
-      reason: 'source-drift',
-      detail: 'source-set digest drifted from the digest the publication grant was bound to; the grant no longer applies',
-    };
-  }
   if (!hasActivePublicationGrant(grants, nowMs)) {
     return {
       claimId: claim.id,

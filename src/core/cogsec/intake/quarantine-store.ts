@@ -68,7 +68,7 @@ export interface IntakeQuarantineDecisionRecord {
   atMs: number;
 }
 
-export interface IntakeQuarantineRedeliveryRecord {
+interface IntakeQuarantineRedeliveryRecord {
   delivered: boolean;
   attemptedAtMs: number;
   channelId?: string;
@@ -166,7 +166,7 @@ export interface IntakeQuarantineDecisionInput {
   atMs?: number;
 }
 
-export interface IntakeQuarantineRedeliveryInput extends IntakeQuarantineRedeliveryRecord {
+interface IntakeQuarantineRedeliveryInput extends IntakeQuarantineRedeliveryRecord {
   id: string;
 }
 

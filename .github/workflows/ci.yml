@@ -94,7 +94,7 @@ jobs:
       - name: Build root runtime in the clean environment
         if: steps.scope.outputs.root_runtime == 'true'
         env:
-          NODE_OPTIONS: --max-old-space-size=8192
+          NODE_OPTIONS: --max-old-space-size=12288
         run: npm run build
 
       - name: Build and test Garden in the clean environment

@@ -4,6 +4,7 @@
   "description": "Offline evaluation, validation, and experimentation toolkit for PSFN.",
   "type": "module",
   "private": true,
+  "packageManager": "npm@11.17.0",
   "scripts": {
     "build": "tsc -p eval/tsconfig.json --noEmit",
     "test": "vitest run",
@@ -26,7 +27,7 @@
     "eval:logprob:collect": "tsx eval/logprob-harness/collect.ts"
   },
   "devDependencies": {
-    "@types/node": "22.19.11",
+    "@types/node": "24.13.3",
     "@typescript-eslint/eslint-plugin": "8.56.0",
     "@typescript-eslint/parser": "8.56.0",
     "eslint": "10.0.0",
@@ -35,6 +36,6 @@
     "vitest": "4.0.18"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.19.0 <25"
   }
 }

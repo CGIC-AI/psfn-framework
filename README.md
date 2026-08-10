@@ -142,6 +142,9 @@ sudo apt-get update && sudo apt-get install -y ffmpeg
 
 Install TypeScript dependencies for the realtime hub/client path:
 
+The TypeScript hub standard is Node.js 24 LTS (24.19.0 or newer 24.x) with npm
+11.17.0, also recorded in `.node-version` and `package.json`.
+
 ```bash
 npm install
 ```

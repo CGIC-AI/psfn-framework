@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "npm@11.17.0",
   "scripts": {
     "build": "npm run build:ts",
     "test": "npm run test:ts",
@@ -32,11 +33,14 @@
     "yaml": "^2.8.1"
   },
   "devDependencies": {
-    "@types/node": "^24.5.2",
+    "@types/node": "24.13.3",
     "@types/three": "^0.184.1",
     "@types/ws": "^8.18.1",
     "playwright": "^1.60.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=24.19.0 <25"
   }
 }

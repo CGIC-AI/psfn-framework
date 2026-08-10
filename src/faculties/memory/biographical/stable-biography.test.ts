@@ -194,6 +194,39 @@ describe('deterministic conflict and correction policy', () => {
     expect(opposition.claim.status).toBe('contested');
   });
 
+  it('keeps a re-extracted candidate contested while its conflict key is unresolved', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    await admitBiographicalCandidate({
+      store,
+      candidate: preferenceCandidate('likes'),
+    });
+    await admitBiographicalCandidate({
+      store,
+      candidate: preferenceCandidate('dislikes'),
+    });
+
+    const reextracted = await admitBiographicalCandidate({
+      store,
+      candidate: {
+        ...preferenceCandidate('likes'),
+        sources: [source('memory:likes-tea-new-source')],
+      },
+    });
+
+    expect(reextracted.disposition).toBe('contested');
+    expect(reextracted.claim.status).toBe('contested');
+    expect(await store.listClaims({
+      subject: CONTACT,
+      kind: 'stable-preference',
+      status: 'active',
+    })).toEqual([]);
+    expect(await store.listClaims({
+      subject: CONTACT,
+      kind: 'stable-preference',
+      status: 'contested',
+    })).toHaveLength(3);
+  });
+
   it('lets an authorized explicit subject correction supersede inference append-only', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
     const inferred = await admitBiographicalCandidate({

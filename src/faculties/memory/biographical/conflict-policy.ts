@@ -87,16 +87,20 @@ export async function admitBiographicalCandidate(input: {
     ...input.candidate,
     status: 'candidate',
   });
-  const active = (await input.store.listClaims({
-    subject: prepared.subject,
-    kind: prepared.kind,
-    status: 'active',
-  })).sort(stableClaimOrder);
-
-  const identical = active.find(claim => claim.claimDigest === prepared.claimDigest);
-  if (identical !== undefined) {
-    return { claim: identical, disposition: 'deduplicated', affectedClaims: [] };
-  }
+  const [active, unresolvedClaims] = await Promise.all([
+    input.store.listClaims({
+      subject: prepared.subject,
+      kind: prepared.kind,
+      status: 'active',
+    }),
+    input.store.listClaims({
+      subject: prepared.subject,
+      kind: prepared.kind,
+      status: 'contested',
+    }),
+  ]);
+  active.sort(stableClaimOrder);
+  unresolvedClaims.sort(stableClaimOrder);
 
   if (input.semanticConflict === true) {
     const claim = await input.store.writeClaim({
@@ -112,9 +116,38 @@ export async function admitBiographicalCandidate(input: {
     prepared.value,
     prepared.relatedSubject,
   );
-  const conflicts = active.filter(claim =>
-    conflictKeyForClaim(claim) === candidateKey
-    && !claimValuesCanCoexist(prepared.kind, prepared.value, claim.value));
+  const activeAtKey = active.filter(claim => conflictKeyForClaim(claim) === candidateKey);
+  const unresolvedAtKey = unresolvedClaims.filter(
+    claim => conflictKeyForClaim(claim) === candidateKey,
+  );
+  if (unresolvedAtKey.length > 0) {
+    const candidate = await input.store.writeClaim({
+      ...input.candidate,
+      status: 'contested',
+    });
+    const newlyContested: BiographicalClaim[] = [];
+    for (const claim of activeAtKey) {
+      newlyContested.push(await input.store.transitionClaim({
+        claimId: claim.id,
+        to: 'contested',
+        ...(input.candidate.now !== undefined ? { now: input.candidate.now } : {}),
+      }));
+    }
+    return {
+      claim: candidate,
+      disposition: 'contested',
+      affectedClaims: newlyContested,
+    };
+  }
+
+  const identical = active.find(claim => claim.claimDigest === prepared.claimDigest);
+  if (identical !== undefined) {
+    return { claim: identical, disposition: 'deduplicated', affectedClaims: [] };
+  }
+
+  const conflicts = activeAtKey.filter(claim =>
+    !claimValuesCanCoexist(prepared.kind, prepared.value, claim.value)
+  );
   if (conflicts.length === 0) {
     const claim = await input.store.writeClaim({ ...input.candidate, status: 'active' });
     return { claim, disposition: 'coexisting', affectedClaims: [] };

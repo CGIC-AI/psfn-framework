@@ -4,6 +4,7 @@ import {
   wrapCompactionSummaryAsUntrustedContext,
 } from '../../identity/prompt-composer.js';
 import type { SessionEntry } from '../types.js';
+import { resolveLatestCompactionSourceRange } from '../compaction-source-range.js';
 
 export { shouldPersistSessionChannel } from '../session-channel-persistence.js';
 
@@ -61,12 +62,19 @@ export function createCompactionBoundaryStore(store: SessionStore): SessionStore
       }
 
       if (property === 'getCompactionSummaries') {
-        return (channelId: string) => (
-          target.getCompactionSummaries(channelId).map(summary => ({
+        return (channelId: string) => {
+          const summaries = target.getCompactionSummaries(channelId);
+          const latestSource = resolveLatestCompactionSourceRange(target, channelId);
+          const addressableSummaryId = latestSource.status === 'verified'
+            ? latestSource.summaryEntryId
+            : null;
+          return summaries.map(summary => ({
             ...summary,
-            summary: wrapCompactionSummaryAsUntrustedContext(summary.summary),
-          }))
-        );
+            summary: wrapCompactionSummaryAsUntrustedContext(summary.summary, {
+              sourceAddressable: summary.id === addressableSummaryId,
+            }),
+          }));
+        };
       }
 
       const value = Reflect.get(target, property, receiver);

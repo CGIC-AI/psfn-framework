@@ -60,6 +60,8 @@ export interface CompactionParams {
   icpCorrelation?: IcpConversationCorrelation;
   throwOnFailure?: boolean;
   assertEffectAllowed?: () => Promise<void>;
+  /** Chat-history block budget used by the between-turn rolling-summary lane. */
+  triggerTokenBudget?: number;
 }
 
 export interface CompactionResult {
@@ -72,7 +74,6 @@ export interface CompactionResult {
 }
 
 export type RecentSessionSummaryPurpose =
-  | 'history_budget'
   | 'wake_session'
   | 'wake_continuity'
   | 'free_time_return';
@@ -266,20 +267,23 @@ export function shouldCompact(params: {
   channelVisibility: ChannelPrivacy;
   systemTokens: number;
   config: SubstrateConfig;
+  triggerTokenBudget?: number;
 }): { trigger: boolean; tokenBudget: number; totalTokens: number } {
   if (params.recent.length <= 4) {
     return { trigger: false, tokenBudget: 0, totalTokens: 0 };
   }
 
-  const chatSlot = params.config.modelRoster.chat;
-  const contextWindow = chatSlot?.contextWindow ?? params.config.defaultContextWindow;
-  const thresholdPct = params.config.compactionThresholdPct;
-  const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
-
   const messageTokens = countMessageTokens(
     entriesToMessages(params.recent, params.channelVisibility, false),
   );
-  const totalTokens = params.systemTokens + messageTokens;
+  const usesHistoryBudget = params.triggerTokenBudget !== undefined;
+  const chatSlot = params.config.modelRoster.chat;
+  const contextWindow = chatSlot?.contextWindow ?? params.config.defaultContextWindow;
+  const thresholdPct = params.config.compactionThresholdPct;
+  const tokenBudget = usesHistoryBudget
+    ? Math.max(1, Math.floor(params.triggerTokenBudget ?? 1))
+    : Math.floor(contextWindow * (thresholdPct / 100));
+  const totalTokens = usesHistoryBudget ? messageTokens : params.systemTokens + messageTokens;
 
   return {
     trigger: totalTokens > tokenBudget,
@@ -301,6 +305,9 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
     channelVisibility: params.channelVisibility,
     systemTokens: params.systemTokens,
     config: params.config,
+    ...(params.triggerTokenBudget !== undefined
+      ? { triggerTokenBudget: params.triggerTokenBudget }
+      : {}),
   });
 
   if (!check.trigger) {

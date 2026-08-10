@@ -182,6 +182,8 @@ export interface RecentEntryStoreLike {
 export interface BudgetedRecentEntries {
   entries: SessionEntry[];
   sourceCount: number;
+  /** Fetched source through the first detected budget-pressure boundary. */
+  sourceEntries?: SessionEntry[];
 }
 
 export interface SpanBoundRecentEntries extends BudgetedRecentEntries {
@@ -425,6 +427,7 @@ export function collectRecentEntriesWithinTokenBudget(params: {
       return {
         entries: trimmed,
         sourceCount: temporalRecent.length,
+        sourceEntries: temporalRecent,
       };
     }
 
@@ -438,6 +441,7 @@ export function collectRecentEntriesWithinTokenBudget(params: {
       return {
         entries: trimmed,
         sourceCount: temporalRecent.length,
+        sourceEntries: temporalRecent,
       };
     }
 

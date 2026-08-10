@@ -9,7 +9,7 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { CogSecEvent } from '../../cogsec/events.js';
 import {
-  assembleSessionHistoryForContextWithLlmSummary,
+  assembleSessionHistoryForContext,
   buildSessionContext,
   captureTurnSessionContext,
 } from './context-builder.js';
@@ -491,7 +491,7 @@ describe('orientation context surface wiring', () => {
     });
   });
 
-  it('uses the LLM recent-summary service for older in-window history while keeping a verbatim tail', async () => {
+  it('deterministically trims older in-window history without a foreground summary call', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -626,65 +626,28 @@ describe('orientation context surface wiring', () => {
       });
       expect(entirelyRetained.rolledOutBeforeMs).toBeUndefined();
 
-      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose, options) => {
-        expect(purpose).toBe('background');
-        // mmo9.7.1: correlation now rides the completion options (work spec).
-        expect(options?.correlation).toMatchObject({
-          channelId: 'api:main',
-          callType: 'summary',
-          purpose: 'session.recent.summary',
-          originStage: 'session.recent.summary.history_budget',
-        });
-        expect(context.messages[0]?.content).toContain('m03xxxxx');
-        expect(context.messages[0]?.content).not.toContain('outside-old-01');
-        return {
-          content: 'm03-m06 context.',
-          model: 'test',
-          inputTokens: 0,
-          outputTokens: 0,
-          toolCalls: [],
-          stopReason: 'end_turn',
-        };
-      });
-
-      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+      const assembled = await assembleSessionHistoryForContext({
         entries: spanBound.entries,
         channelVisibility: 'private',
         // History stamps ('[Ddd MM-DD-YY HH:mm] ' = 21 chars/tokens under the
         // 1-token-per-char test tokenizer) inflate rendered user/system
         // messages only — assistant turns are unstamped (2x37.10) — so the
         // budget leaves the same relative summary headroom as before.
-        tokenBudget: 220,
-        characterName: 'Companion',
+        tokenBudget: 120,
         renderGroupUserAttribution: false,
-        channelId: 'api:main',
-        llmProvider: makeSummaryProvider(complete),
-        promptRegistry: null,
       });
 
-      expect(complete).toHaveBeenCalledTimes(1);
-      expect(assembled.summaryText).toContain('[History summary]');
-      expect(assembled.summaryText).toContain('m03-m06 context.');
-      expect(assembled.summaryText).not.toContain('outside-old-01');
-      expect(assembled.summaryText).not.toContain('User said:');
-      expect(assembled.summaryText).not.toContain('[Tool result:');
-      expect(assembled.summarizedEntryCount).toBeGreaterThan(0);
+      expect(assembled.summaryText).toBe('');
+      expect(assembled.summarizedEntryCount).toBe(0);
       expect(assembled.verbatimEntries.length).toBeGreaterThanOrEqual(5);
-      expect(assembled.messages[0]).toMatchObject({ role: 'system' });
-      expect(assembled.messages[0]?.provenance).toMatchObject({
-        kind: 'compaction_summary',
-        detailLoss: 'possible',
-        emotionalTexture: 'may_be_flattened',
-        safeAsPartnerSpeech: false,
-      });
-      expect(assembled.messages[0]?.provenance?.sourceSpanCount).toBe(assembled.summarizedEntryCount);
+      expect(assembled.verbatimEntries.length).toBeLessThan(spanBound.entries.length);
       expect(assembled.messages.some(message => message.content.includes('m10xxxxx'))).toBe(true);
     } finally {
       tokenTestUtils.resetTokenizerState();
     }
   });
 
-  it('selects a summary boundary with linearithmic tokenization work for long histories', async () => {
+  it('keeps deterministic foreground truncation bounded for long histories', async () => {
     let encodedTextCount = 0;
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => {
@@ -703,36 +666,23 @@ describe('orientation context surface wiring', () => {
           : { authorName: 'Companion' }),
         timestamp: 1_700_000_000_000 + (index * 60_000),
       }));
-      const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
-        content: 'Earlier history retained as a compact summary.',
-        model: 'test',
-        inputTokens: 0,
-        outputTokens: 0,
-        toolCalls: [],
-        stopReason: 'end_turn',
-      });
-
-      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+      const assembled = await assembleSessionHistoryForContext({
         entries,
         channelVisibility: 'private',
         renderGroupUserAttribution: false,
         tokenBudget: 700,
-        channelId: 'api:main',
-        llmProvider: makeSummaryProvider(complete),
-        promptRegistry: null,
       });
 
-      expect(complete).toHaveBeenCalledTimes(1);
-      expect(assembled.summarizedEntryCount).toBeGreaterThan(1_900);
-      // A linear split scan re-tokenizes progressively shorter tails and
-      // encodes millions of message fields at this live-sized history depth.
+      expect(assembled.summaryText).toBe('');
+      expect(assembled.summarizedEntryCount).toBe(0);
+      expect(assembled.verbatimEntries.length).toBeLessThan(50);
       expect(encodedTextCount).toBeLessThan(25_000);
     } finally {
       tokenTestUtils.resetTokenizerState();
     }
   });
 
-  it('matches the linear earliest-boundary result across repaired and projected tails', async () => {
+  it('uses deterministic trimming across repaired and projected tails without summarization', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -812,38 +762,29 @@ describe('orientation context surface wiring', () => {
         }
         return 0;
       };
-      const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
-        content: 'x',
-        model: 'test',
-        inputTokens: 0,
-        outputTokens: 0,
-        toolCalls: [],
-        stopReason: 'end_turn',
-      });
-
       const actualSplits: number[] = [];
       for (const tokenBudget of budgets) {
-        const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+        const assembled = await assembleSessionHistoryForContext({
           entries,
           channelVisibility: 'private',
           renderGroupUserAttribution: false,
           tokenBudget,
-          channelId: 'api:main',
-          llmProvider: makeSummaryProvider(complete),
-          promptRegistry: null,
         });
         const expectedSplit = linearEarliestSplit(tokenBudget);
         expect(expectedSplit).toBeGreaterThan(0);
-        expect(assembled.summarizedEntryCount).toBe(expectedSplit);
+        expect(assembled.summarizedEntryCount).toBe(0);
+        expect(assembled.summaryText).toBe('');
+        expect(assembled.verbatimEntries.length).toBeGreaterThanOrEqual(5);
+        expect(assembled.verbatimEntries.length).toBeLessThan(entries.length);
         actualSplits.push(assembled.summarizedEntryCount);
       }
-      expect(actualSplits).toContain(12);
+      expect(actualSplits).toEqual([0, 0, 0]);
     } finally {
       tokenTestUtils.resetTokenizerState();
     }
   });
 
-  it('supersedes older time-of-day refreshers before history summarization and assembly', async () => {
+  it('supersedes older time-of-day refreshers before deterministic history assembly', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -889,32 +830,13 @@ describe('orientation context surface wiring', () => {
         // Append order, not a corrected wall clock, defines the latest firing.
         refresher(12, 'Latest', 1_699_999_940_000),
       ];
-      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context) => {
-        const summarySource = context.messages[0]?.content ?? '';
-        expect(summarySource).not.toContain('First frame.');
-        expect(summarySource).not.toContain('Second frame.');
-        expect(summarySource).not.toContain('Third frame.');
-        return {
-          content: 'The conversation remained coherent.',
-          model: 'test',
-          inputTokens: 0,
-          outputTokens: 0,
-          toolCalls: [],
-          stopReason: 'end_turn',
-        };
-      });
-
-      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+      const assembled = await assembleSessionHistoryForContext({
         entries,
         channelVisibility: 'private',
         renderGroupUserAttribution: false,
         tokenBudget: 600,
-        channelId: 'api:main',
-        llmProvider: makeSummaryProvider(complete),
-        promptRegistry: null,
       });
 
-      expect(complete).toHaveBeenCalledTimes(1);
       const rendered = assembled.messages.map(message => message.content).join('\n');
       expect(rendered.match(/Latest frame\./gu)).toHaveLength(1);
       expect(rendered).not.toContain('First frame.');

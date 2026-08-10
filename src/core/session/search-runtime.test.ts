@@ -71,7 +71,11 @@ describe('runSessionSearch', () => {
       viewer: PUBLIC_VIEWER,
     });
 
-    expect(transcriptSearch.searchByKeywords).toHaveBeenCalledWith('Project Orion', 20);
+    expect(transcriptSearch.searchByKeywords).toHaveBeenCalledWith(
+      'Project Orion',
+      20,
+      { channelId: 'api:public-session' },
+    );
     expect(result.totalHits).toBe(1);
     expect(result.gatedOutCount).toBe(0);
     expect(result.hits).toEqual([

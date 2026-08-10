@@ -1762,11 +1762,32 @@ describe('SessionStore', () => {
       content: 'Booked Kyoto train tickets and hotel options',
       timestamp: 2_000,
     });
+    searchStore.append({
+      channelId: 'api:beta',
+      role: 'user',
+      content: 'Kyoto details outside the bounded source',
+      timestamp: 3_000,
+    });
 
     const scopedHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:beta' });
-    expect(scopedHits).toHaveLength(1);
-    expect(scopedHits[0].channelId).toBe('api:beta');
-    expect(scopedHits[0].content).toContain('train tickets');
+    expect(scopedHits).toHaveLength(2);
+    expect(scopedHits.every(hit => hit.channelId === 'api:beta')).toBe(true);
+
+    const boundedHits = await searchStore.searchByKeywords('Kyoto', 10, {
+      channelId: 'api:beta',
+      firstMessageId: 1,
+      lastMessageId: 1,
+    });
+    expect(boundedHits).toHaveLength(1);
+    expect(boundedHits[0].channelId).toBe('api:beta');
+    expect(boundedHits[0].content).toContain('train tickets');
+
+    const globallyBoundedHits = await searchStore.searchByKeywords('Kyoto', 10, {
+      firstMessageId: 1,
+      lastMessageId: 1,
+    });
+    expect(globallyBoundedHits).toHaveLength(2);
+    expect(globallyBoundedHits.every(hit => hit.messageId === 1)).toBe(true);
 
     const missHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:absent' });
     expect(missHits).toHaveLength(0);

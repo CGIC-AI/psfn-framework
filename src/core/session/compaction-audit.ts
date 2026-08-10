@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SessionEntry } from './types.js';
 import { buildSessionSummarySourceBlock } from './manager-primitives.js';
 
-const SOURCE_BLOCK_SHA256_TAG_PATTERN = /<source_block_sha256\s+first_message_id="(\d+)"\s+last_message_id="(\d+)"\s+message_count="(\d+)">([0-9a-f]{64})<\/source_block_sha256>/i;
+const SOURCE_BLOCK_SHA256_TAG_PATTERN = /<source_block_sha256\s+first_message_id="(\d+)"\s+last_message_id="(\d+)"\s+message_count="(\d+)">([0-9a-f]{64})<\/source_block_sha256>/gi;
 
 export interface CompactionSourceHashMetadata {
   firstMessageId: number;
@@ -55,8 +55,15 @@ export function buildCompactionSourceHashTag(entries: SessionEntry[]): string {
   return metadata ? formatCompactionSourceHashTag(metadata) : '';
 }
 
+export function findLatestCompactionSourceHashTagStart(summary: string): number {
+  return [...summary.matchAll(SOURCE_BLOCK_SHA256_TAG_PATTERN)].at(-1)?.index ?? -1;
+}
+
 export function parseCompactionSourceHashTag(summary: string): CompactionSourceHashMetadata | null {
-  const match = SOURCE_BLOCK_SHA256_TAG_PATTERN.exec(summary);
+  // The authoritative tag is appended by the runtime after model-generated
+  // summary text. Selecting the last syntactically valid tag prevents a
+  // summary that happens to contain tag-shaped prose from shadowing it.
+  const match = [...summary.matchAll(SOURCE_BLOCK_SHA256_TAG_PATTERN)].at(-1);
   if (!match) return null;
 
   const rawFirstMessageId = match[1];
@@ -88,4 +95,8 @@ export function parseCompactionSourceHashTag(summary: string): CompactionSourceH
     messageCount,
     sha256,
   };
+}
+
+export function stripCompactionSourceHashTags(summary: string): string {
+  return summary.replace(SOURCE_BLOCK_SHA256_TAG_PATTERN, '').trim();
 }

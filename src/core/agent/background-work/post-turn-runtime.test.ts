@@ -495,8 +495,15 @@ describe('executePostTurnBackgroundWork', () => {
       defaultContextWindow: 4_096,
       extractionThresholdPct: 30,
       compactionThresholdPct: 1,
+      sessionHistoryBudgetPct: 1,
       modelRoster: {
-        chat: { provider: 'test', model: 'test', contextWindow: 4_096, maxTokens: 128 },
+        chat: {
+          provider: 'test',
+          model: 'test',
+          contextWindow: 4_096,
+          maxTokens: 128,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
       },
     } as SubstrateConfig;
     const sessionManager = new SessionManager(store, config);
@@ -1433,8 +1440,15 @@ describe('executePostTurnBackgroundWork', () => {
       defaultContextWindow: 4_096,
       extractionThresholdPct: 30,
       compactionThresholdPct: 1,
+      sessionHistoryBudgetPct: 1,
       modelRoster: {
-        chat: { provider: 'test', model: 'test', contextWindow: 4_096, maxTokens: 128 },
+        chat: {
+          provider: 'test',
+          model: 'test',
+          contextWindow: 4_096,
+          maxTokens: 128,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
       },
     } as SubstrateConfig;
     const sessionManager = new SessionManager(store, config);
@@ -1693,7 +1707,7 @@ describe('executePostTurnBackgroundWork', () => {
           enabled: false,
           source: 'disabled',
           category: 'default',
-          sessionHistoryBudgetPct: 100,
+          sessionHistoryBudgetPct: 1,
           memoryRetrievalBudgetPct: 2,
         },
         turnBudgetCharacteristics: {},

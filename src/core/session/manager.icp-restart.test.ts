@@ -510,9 +510,16 @@ describe('ICP L0 restart continuity', () => {
     const store = new SessionStore(join(dataDir, 'sessions'));
     const sender = new SessionManager(store, config(dataDir, {
       defaultContextWindow: 512,
-      compactionThresholdPct: 1,
+      sessionHistoryBudgetPct: 1,
+      compactionThresholdPct: 99,
       modelRoster: {
-        chat: { provider: 'test', model: 'test', contextWindow: 512, maxTokens: 128 },
+        chat: {
+          provider: 'test',
+          model: 'test',
+          contextWindow: 512,
+          maxTokens: 128,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
       } as SubstrateConfig['modelRoster'],
     }));
     const oldContents = [

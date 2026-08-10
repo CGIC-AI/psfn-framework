@@ -76,7 +76,7 @@ import {
   listAgentVisibleCogSecEvents,
 } from '../../cogsec/safe-log.js';
 import {
-  assembleSessionHistoryForContextWithLlmSummary,
+  assembleSessionHistoryForContext,
   buildSessionHistoryMessages,
 } from './context-history-assembly.js';
 import { buildContinuityMetadataBlock } from './continuity-metadata-block.js';
@@ -86,7 +86,7 @@ import {
   type ActiveTemporalFrameConfig,
 } from '../active-temporal-frame.js';
 
-export { assembleSessionHistoryForContextWithLlmSummary } from './context-history-assembly.js';
+export { assembleSessionHistoryForContext } from './context-history-assembly.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
@@ -148,7 +148,7 @@ export interface CaptureTurnSessionContextParams {
   wakeReturnArtifacts: SessionContinuityArtifact[];
   compactionPromptText: string;
   characterName?: string;
-  /** Optional LLM provider for foreground history-budget summarization. */
+  /** Optional LLM provider retained for explicitly requested foreground compaction only. */
   llmProvider?: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
   /** Exact just-recorded turn entry to remove before merging or summarizing. */
@@ -264,7 +264,7 @@ export async function captureTurnSessionContext(
     recent = bondedTimeline.entries;
   }
   const channelVisibility = classifyChannelDisclosure(params.sourceChannelId, params.channelMeta).channelPrivacy;
-  const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
+  const assembledHistory = await assembleSessionHistoryForContext({
     entries: recent,
     channelVisibility,
     renderGroupUserAttribution: shouldRenderSessionHistoryUserAttribution(
@@ -272,10 +272,6 @@ export async function captureTurnSessionContext(
       params.channelMeta,
     ),
     tokenBudget: historyBudget.tokenBudget,
-    characterName: params.characterName,
-    channelId: params.channelId,
-    llmProvider: params.llmProvider,
-    promptRegistry: params.promptRegistry,
   });
   recent = assembledHistory.verbatimEntries;
 
@@ -572,14 +568,18 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     if (result.compactionSummaryText) {
       compactionSummaryTexts = [
         ...compactionSummaryTexts,
-        wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText),
+        wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText, {
+          sourceAddressable: true,
+        }),
       ];
     }
     const postCompactionMessageTokens = countMessageTokens(
       entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
     );
     const newSummaryTokenCount = result.compactionSummaryText
-      ? countTokens(wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText))
+      ? countTokens(wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText, {
+          sourceAddressable: true,
+        }))
       : 0;
     compactionManifest = {
       triggered: result.compacted,

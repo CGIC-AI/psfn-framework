@@ -20,11 +20,17 @@ import {
 } from '../settings/contracts.js';
 import { parseRuntimeSettingsOwnerPayload } from '../settings/schema.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  buildSettingsFieldDomainProjection,
+  verifySettingsDomainRegistry,
+} from './settings-domain-registry.js';
 
 export interface SettingsContractGuardOptions {
   contractData?: SettingsContractData;
   uiFieldExposureKeys?: readonly string[];
   rawSubsystemIds?: readonly string[];
+  /** When true (default), also assert the canonical domain registry. */
+  verifyDomainRegistry?: boolean;
 }
 
 export interface SettingsContractGuardResult {
@@ -88,6 +94,22 @@ export function verifySettingsContractGuard(
   );
   const genericFieldTypes = new Set<string>(SETTINGS_GARDEN_GENERIC_FIELD_TYPES);
   const errors: string[] = [];
+
+  if (options.verifyDomainRegistry !== false) {
+    const domainResult = verifySettingsDomainRegistry();
+    if (!domainResult.ok) {
+      errors.push(...domainResult.errors);
+    }
+    // Every registered settings field must resolve to exactly one of the eight
+    // canonical domains. A field whose owner file is topology/authority/
+    // extension data, or which drifts out of the registry, fails closed.
+    const domainProjection = buildSettingsFieldDomainProjection(contractData.fields);
+    if (domainProjection.unresolved.length > 0) {
+      errors.push(
+        `Settings fields are owned by non-domain files: ${quoteList(domainProjection.unresolved)}.`,
+      );
+    }
+  }
 
   const subsystemIds = new Set<SettingsSubsystemId>(
     Object.keys(contractData.subsystems) as SettingsSubsystemId[],

@@ -2,14 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     confirmIntakeQuarantineDecision,
-    confirmIntakeQuarantineDecisionEscalated,
     decideIntakeQuarantine,
-    decideIntakeQuarantineEscalated,
     loadIntakeQuarantineLocalFirst,
     getIntakeQuarantineItem,
     type IntakeQuarantineDecisionAction,
   } from '$lib/api/endpoints/intake';
-  import { currentCompanionGardenScope } from '$lib/fleet/companion-scope';
   import type {
     AdminIntakeQuarantineFirewallStatus,
     AdminIntakeQuarantineItemDetail,
@@ -212,15 +209,10 @@
     confirmBusy = true;
     try {
       const reasonText = reason.trim();
-      const result = currentCompanionGardenScope()
-        ? await confirmIntakeQuarantineDecisionEscalated(pendingItem.id, {
+      const result = await confirmIntakeQuarantineDecision(pendingItem.id, {
           action: pendingAction,
           ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
-        }, reasonText)
-        : await confirmIntakeQuarantineDecision(pendingItem.id, {
-          action: pendingAction,
-          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
-        });
+        }, reasonText);
       confirmToken = result.confirmToken;
       serverSummary = result.summary;
       confirmStage = 'second';
@@ -241,14 +233,7 @@
     if (!pendingItem || !pendingAction || !confirmToken) return;
     confirmBusy = true;
     try {
-      const result = currentCompanionGardenScope()
-        ? await decideIntakeQuarantineEscalated(pendingItem.id, {
-          action: pendingAction,
-          ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
-          confirmToken,
-          reason: reason.trim(),
-        })
-        : await decideIntakeQuarantine(pendingItem.id, {
+      const result = await decideIntakeQuarantine(pendingItem.id, {
           action: pendingAction,
           ...(sourceListChoice !== 'none' ? { sourceList: sourceListChoice } : {}),
           confirmToken,

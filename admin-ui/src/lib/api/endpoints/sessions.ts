@@ -1,4 +1,5 @@
-import { apiGet, apiGetConditional, apiPost } from '$lib/api/client';
+import { apiGet, apiGetConditional } from '$lib/api/client';
+import { apiPostProtected } from '$lib/api/protected-mutation';
 import { withQuery } from '$lib/api/query';
 import { getGardenCacheStorage } from '$lib/cache/indexeddb';
 import {
@@ -226,11 +227,11 @@ export function resetSourceChannelSession(
 ): Promise<AdminSessionRouteResetData> {
   // The server derives the audit actor from the authenticated request context.
   // Never forward the legacy browser field across the fleet capability boundary.
-  return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', {
+  return apiPostProtected<AdminSessionRouteResetData>('/api/admin/session-routes/reset', {
     sourceChannelId: input.sourceChannelId,
     reason: input.reason,
     ...(input.mode ? { mode: input.mode } : {}),
-  });
+  }, input.reason);
 }
 
 export function listCogSecEvents(): Promise<AdminCogSecEventListData> {
@@ -241,9 +242,8 @@ export function previewCogSecRemediation(
   input: AdminCogSecRemediationInput,
 ): Promise<AdminCogSecRemediationPreviewData> {
   const { actor: _serverOwnedActor, ...body } = input;
-  return apiPost<AdminCogSecRemediationPreviewData>(
-    '/api/admin/session-routes/cogsec/preview',
-    body,
+  return apiPostProtected<AdminCogSecRemediationPreviewData>(
+    '/api/admin/session-routes/cogsec/preview', body, input.reason,
   );
 }
 
@@ -251,8 +251,7 @@ export function applyCogSecRemediation(
   input: AdminCogSecRemediationInput,
 ): Promise<AdminCogSecRemediationApplyData> {
   const { actor: _serverOwnedActor, ...body } = input;
-  return apiPost<AdminCogSecRemediationApplyData>(
-    '/api/admin/session-routes/cogsec/apply',
-    body,
+  return apiPostProtected<AdminCogSecRemediationApplyData>(
+    '/api/admin/session-routes/cogsec/apply', body, input.reason,
   );
 }

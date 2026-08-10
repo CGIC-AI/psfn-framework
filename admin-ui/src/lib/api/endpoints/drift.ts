@@ -6,7 +6,8 @@
 // supersession server-side through the existing memory machinery (audited,
 // never deletion).
 
-import { apiGet, apiPost } from '$lib/api/client';
+import { apiGet } from '$lib/api/client';
+import { apiPostProtected } from '$lib/api/protected-mutation';
 import type { DriftReviewCard, DriftReviewCardResolution } from '$lib/types';
 
 export interface DriftReviewListData {
@@ -30,9 +31,11 @@ export function getDriftReviews(): Promise<DriftReviewListData> {
 export function resolveDriftReviewCard(
   id: string,
   input: { resolution: DriftReviewCardResolution; note?: string },
+  reason: string,
 ): Promise<DriftReviewResolveResult> {
-  return apiPost<DriftReviewResolveResult>(
+  return apiPostProtected<DriftReviewResolveResult>(
     `/api/admin/intake/drift-reviews/${encodeURIComponent(id)}/resolve`,
     input,
+    reason,
   );
 }

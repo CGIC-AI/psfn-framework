@@ -6,6 +6,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withQuery } from '../query';
 
 vi.mock('$lib/stores/auth.svelte', () => ({ getToken: () => '' }));
+vi.mock('$lib/api/fleet-escalation', () => ({
+  FLEET_ESCALATION_GRANT_HEADER: 'x-psfn-escalation-grant',
+  withFleetEscalationGrant: async <T>(
+    _request: unknown,
+    spend: (grant: { grantId: string }, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => await spend(
+    { grantId: '22222222-2222-4222-8222-222222222222' },
+    new AbortController().signal,
+  ),
+}));
 
 import { createCompanionId } from '../../../../../src/shared/routing/companion-id.js';
 import {
@@ -61,6 +71,12 @@ const MUTATION_HELPERS = Object.freeze({
     contentType: 'application/json',
   },
   apiPost: {
+    method: 'POST',
+    bodyArgument: 1,
+    initArgument: null,
+    contentType: 'application/json',
+  },
+  apiPostProtected: {
     method: 'POST',
     bodyArgument: 1,
     initArgument: null,
@@ -225,7 +241,9 @@ function adminSourceModulePaths(directory = adminSourceDirectory): readonly stri
     if (!entry.isFile()
       || (!entry.name.endsWith('.ts') && !entry.name.endsWith('.svelte'))
       || /\.test\.[^.]+$/u.test(entry.name)
-      || relative(adminSourceDirectory, path) === 'lib/api/client.ts') {
+      || ['lib/api/client.ts', 'lib/api/protected-mutation.ts'].includes(
+        relative(adminSourceDirectory, path),
+      )) {
       continue;
     }
     paths.push(path);
@@ -590,7 +608,7 @@ describe('Garden catalogue body-policy conformance', () => {
       await invoke();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [actualPath, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [actualPath, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       const actualBody = typeof init.body === 'string' ? init.body : undefined;
       const actualHeaders = headersRecord(init.headers);
       expect(actualPath).toBe(path);
@@ -611,4 +629,27 @@ describe('Garden catalogue body-policy conformance', () => {
       expect(compiled.bodyLength).toBe(encoder.encode(body ?? '').byteLength);
     },
   );
+
+  it('routes every escalation-gated admin POST through the canonical protected mutation seam', () => {
+    const callSites = enumerateMutationCallSites();
+    for (const callSite of callSites) {
+      if (callSite.method !== 'POST') continue;
+      const compiled = compileGatewayGardenRequestTarget({
+        rawTarget: callSite.path,
+        method: callSite.method,
+        companionId,
+        body: encoder.encode(callSite.bodyPresent ? '{}' : ''),
+        ...(callSite.contentType && callSite.bodyPresent
+          ? { headers: { 'content-type': callSite.contentType } }
+          : {}),
+      });
+      const assurance = compiled.authorization.requirements.assurance;
+      if (assurance === 'escalated' || assurance === 'privacy_break_glass') {
+        expect(
+          callSite.helper,
+          `${callSite.location} ${compiled.resource.routeId} must use apiPostProtected`,
+        ).toBe('apiPostProtected');
+      }
+    }
+  });
 });

@@ -81,9 +81,19 @@
       pushToast('Pattern must be non-empty.', 'error');
       return;
     }
+    const statedReason = window.prompt(
+      `Why are you ${action === 'add' ? 'adding' : 'removing'} this CogSec source-list entry?`,
+    )?.trim() ?? '';
+    if (!statedReason) {
+      pushToast('A reason is required for an audited CogSec change.', 'error');
+      return;
+    }
     mutating = true;
     try {
-      const result = await mutateIntakeSourceList({ action, list, pattern: trimmed });
+      const result = await mutateIntakeSourceList(
+        { action, list, pattern: trimmed },
+        statedReason,
+      );
       if (result.ok) {
         pushToast(result.message || `${action === 'add' ? 'Added to' : 'Removed from'} ${list}.`, 'success');
         if (result.lists) lists = result.lists;

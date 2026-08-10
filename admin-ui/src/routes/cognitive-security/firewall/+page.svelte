@@ -37,9 +37,9 @@
   ];
 
   const MODE_STYLES: Record<string, string> = {
-    off: 'bg-bark-200 text-shadow-700',
     shadow: 'bg-gold-100 text-gold-700',
-    enforce: 'bg-moss-100 text-moss-700',
+    boundary: 'bg-moss-100 text-moss-700',
+    strict: 'bg-wilt-100 text-wilt-700',
   };
 
   const TIER_ORDER = ['trusted', 'standard', 'untrusted', 'hostile'] as const;
@@ -151,11 +151,11 @@
           <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold {MODE_STYLES[policy.mode] ?? 'bg-bark-200 text-shadow-700'}">{policy.mode}</span>
         </p>
         <p class="mt-2 text-xs text-shadow-600">
-          {policy.mode === 'enforce'
-            ? 'Sink gates enforce screening decisions; quarantined content is withheld.'
-            : policy.mode === 'shadow'
-              ? 'Observe-only: envelopes are screened and journaled, nothing is withheld.'
-              : 'Firewall off: no intake screening is wired anywhere.'}
+          {policy.mode === 'strict'
+            ? 'All declared CogSec vectors are screened and enforced.'
+            : policy.mode === 'boundary'
+              ? 'External ingress and publication are enforced; authenticated internal work stays in the clean bubble.'
+              : 'Observe-only: every declared vector is evaluated and recorded, nothing is withheld.'}
         </p>
       </div>
       <div class="garden-metric card-garden p-5">

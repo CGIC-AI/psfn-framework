@@ -14,12 +14,11 @@
 // the result so the UI can state it truthfully.
 
 import type { IntakeCogSecDirection, IntakeCogSecScreeningStage } from './cogsec-intake-attribution.js';
-
-type FleetCogSecFirewallMode = 'off' | 'shadow' | 'enforce';
+import type { CogSecMode } from '../../../shared/contracts/cogsec-mode.js';
 
 /** Shared gateway policy/status — cluster-owned, identical across companions. */
 export interface FleetCogSecPolicyStatus {
-  readonly mode: FleetCogSecFirewallMode;
+  readonly mode: CogSecMode;
   readonly quarantineItemTtlHours: number;
   readonly quarantineMaxHeldItems: number;
   /**

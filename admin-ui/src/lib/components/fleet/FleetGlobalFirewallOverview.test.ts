@@ -12,7 +12,7 @@ function overview(overrides: Partial<FleetCogSecOverview> = {}): FleetCogSecOver
       accessMode: 'multi_admin',
     },
     policyStatus: {
-      mode: 'enforce',
+      mode: 'strict',
       quarantineItemTtlHours: 168,
       quarantineMaxHeldItems: 500,
       ownership: 'shared-gateway',
@@ -39,7 +39,7 @@ describe('FleetGlobalFirewallOverview (waw5q)', () => {
       props: { overview: overview(), reachableCount: 2 },
     }).body;
     expect(body).toContain('Shared mode');
-    expect(body).toContain('enforce');
+    expect(body).toContain('strict');
     expect(body).toContain('Authorized scope: 2 companions');
     expect(body).toContain('Companion A, Companion B');
   });
@@ -73,16 +73,16 @@ describe('FleetGlobalFirewallOverview (waw5q)', () => {
     expect(body).not.toContain('sha256');
   });
 
-  it('frames an off-mode shared policy truthfully (empty queue still never means off)', () => {
+  it('frames boundary mode as external enforcement with an internal clean bubble', () => {
     const body = render(FleetGlobalFirewallOverview, {
       props: {
         overview: overview({
-          policyStatus: { mode: 'off', quarantineItemTtlHours: 0, quarantineMaxHeldItems: 0, ownership: 'shared-gateway' },
+          policyStatus: { mode: 'boundary', quarantineItemTtlHours: 168, quarantineMaxHeldItems: 500, ownership: 'shared-gateway' },
         }),
         reachableCount: 0,
       },
     }).body;
-    expect(body).toContain('No intake screening is enforced anywhere');
-    expect(body).toContain('firewall is off');
+    expect(body).toContain('External ingress and publication are enforced');
+    expect(body).toContain('clean bubble');
   });
 });

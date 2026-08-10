@@ -14,9 +14,9 @@
   let { overview, reachableCount }: Props = $props();
 
   const MODE_STYLES: Record<string, string> = {
-    off: 'bg-bark-200 text-shadow-700',
     shadow: 'bg-gold-100 text-gold-700',
-    enforce: 'bg-moss-100 text-moss-700',
+    boundary: 'bg-moss-100 text-moss-700',
+    strict: 'bg-wilt-100 text-wilt-700',
   };
 
   function formatMs(ms: number): string {
@@ -53,11 +53,11 @@
         </span>
       </div>
       <p class="mt-3 text-sm text-shadow-600 test-mode-note">
-        {overview.policyStatus.mode === 'enforce'
-          ? 'Sink gates enforce screening decisions; quarantined content is withheld.'
-          : overview.policyStatus.mode === 'shadow'
-            ? 'Observe-only: envelopes are screened and journaled, nothing is withheld.'
-            : 'No intake screening is enforced anywhere; turn it on via intake-policy.'}
+        {overview.policyStatus.mode === 'strict'
+          ? 'All declared CogSec vectors are screened and enforced.'
+          : overview.policyStatus.mode === 'boundary'
+            ? 'External ingress and publication are enforced; authenticated internal work stays in the clean bubble.'
+            : 'Observe-only: every declared vector is evaluated and recorded, nothing is withheld.'}
       </p>
     {:else}
       <p class="text-sm text-shadow-600 test-mode-unavailable">

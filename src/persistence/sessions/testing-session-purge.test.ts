@@ -21,7 +21,7 @@ describe('purgeTestingSession', () => {
       purgeSession: vi.fn().mockResolvedValue({
         removedProjectionRows: 0,
         removedMemoryRows: 0,
-        removedContactProfileRows: 0,
+        removedRecentContactShapeRows: 0,
         removedMemoryLinkRows: 0,
         removedMaintenanceReviewRows: 0,
       }),
@@ -64,7 +64,7 @@ describe('purgeTestingSession', () => {
       database: {
         removedProjectionRows: 0,
         removedMemoryRows: 0,
-        removedContactProfileRows: 0,
+        removedRecentContactShapeRows: 0,
         removedMemoryLinkRows: 0,
         removedMaintenanceReviewRows: 0,
       },
@@ -93,7 +93,7 @@ describe('purgeTestingSession', () => {
       purgeSession: vi.fn().mockResolvedValue({
         removedProjectionRows: 2,
         removedMemoryRows: 1,
-        removedContactProfileRows: 1,
+        removedRecentContactShapeRows: 1,
         removedMemoryLinkRows: 0,
         removedMaintenanceReviewRows: 0,
       }),
@@ -112,7 +112,7 @@ describe('purgeTestingSession', () => {
     expect(report.database).toEqual({
       removedProjectionRows: 2,
       removedMemoryRows: 1,
-      removedContactProfileRows: 1,
+      removedRecentContactShapeRows: 1,
       removedMemoryLinkRows: 0,
       removedMaintenanceReviewRows: 0,
     });

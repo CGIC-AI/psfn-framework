@@ -192,7 +192,7 @@ export interface ObserverEvalSidecarErrorDiagnosticSource {
 /**
  * One stable, actionable diagnostic for an observer observation in an error
  * state. Returns null when the observation is healthy so callers render the
- * normal PSFN snapshot; returns a single human-readable cause otherwise. This
+ * normal evaluation snapshot; returns a single human-readable cause otherwise. This
  * keeps the EmotionState Error visible with its reason instead of silent
  * dashes, without touching emotional state or backend evaluation.
  */

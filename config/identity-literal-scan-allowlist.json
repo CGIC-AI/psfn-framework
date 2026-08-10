@@ -67,6 +67,18 @@
       "pattern": "identity-proper-name"
     },
     {
+      "path": "src/operator/garden/auth-pages.ts",
+      "contains": "PSFN",
+      "reason": "The standalone Garden login page intentionally presents the framework product brand alongside the configured companion Garden title and does not define a companion identity or persona default.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/routes/login/+page.svelte",
+      "contains": "PSFN",
+      "reason": "The Garden sign-in page intentionally presents the framework product brand above the companion-scoped Garden name and does not define a companion identity or persona default.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/boundary/fleet-auth/recovery-request-capability.ts",
       "contains": "PSFN-RECOVERY",
       "reason": "The distinct signed recovery-capability type is an internal protocol discriminator, not a companion identity default.",

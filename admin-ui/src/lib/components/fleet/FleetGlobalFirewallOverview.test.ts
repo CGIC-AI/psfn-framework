@@ -52,6 +52,14 @@ describe('FleetGlobalFirewallOverview (waw5q)', () => {
     expect(body).toContain('firewall is off');
   });
 
+  it('reports policy as unavailable instead of off when no companion is reachable', () => {
+    const body = render(FleetGlobalFirewallOverview, {
+      props: { overview: overview({ policyStatus: null }), reachableCount: 0 },
+    }).body;
+    expect(body).toContain('posture is unavailable');
+    expect(body).not.toContain('No intake screening is enforced anywhere');
+  });
+
   it('renders content-free outcome counts and correlation without any message bodies', () => {
     const body = render(FleetGlobalFirewallOverview, {
       props: { overview: overview(), reachableCount: 2 },

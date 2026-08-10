@@ -97,8 +97,8 @@ export interface FleetCogSecOverview {
     /** `sole_admin` (one rostered human) vs `multi_admin` (subject boundary). */
     readonly accessMode: 'sole_admin' | 'multi_admin';
   };
-  /** Shared gateway firewall policy/status (cluster-owned). */
-  readonly policyStatus: FleetCogSecPolicyStatus;
+  /** Shared gateway firewall policy/status, or null when no companion is reachable. */
+  readonly policyStatus: FleetCogSecPolicyStatus | null;
   readonly outcomeCounts: FleetCogSecOutcomeCounts;
   readonly severityCounts: FleetCogSecSeverityCounts;
   readonly latency: FleetCogSecLatencyProjection;
@@ -129,7 +129,7 @@ const EMPTY_LATENCY: FleetCogSecLatencyProjection = Object.freeze({
   decidedCount: 0,
   medianDecisionMs: 0,
   p95DecisionMs: 0,
-  maxDecisionMs: 0,
+  maxDecisionMs: EMPTY_OUTCOMES.held,
 });
 const EMPTY_CORRELATION: FleetCogSecCorrelationProjection = Object.freeze({
   groupCount: 0,
@@ -224,14 +224,9 @@ export function aggregateFleetCogSecOverview(
     return {
       generatedAt: now.toISOString(),
       companionScope: { count: 0, displayNames: [], accessMode: options.accessMode },
-      // With no authorized companions there is no shared policy to report; the
-      // UI frames this as "no cluster access", never as "firewall off".
-      policyStatus: {
-        mode: 'off',
-        quarantineItemTtlHours: 0,
-        quarantineMaxHeldItems: 0,
-        ownership: 'shared-gateway',
-      },
+      // With no authorized companions there is no shared policy to report.
+      // Null prevents transport failure from being misreported as "off".
+      policyStatus: null,
       outcomeCounts: EMPTY_OUTCOMES,
       severityCounts: EMPTY_SEVERITY,
       latency: EMPTY_LATENCY,

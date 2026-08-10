@@ -40,24 +40,30 @@
 
 <section class="space-y-6">
   <section class="card-garden p-5" aria-label="Shared firewall policy">
-    <div class="flex flex-wrap items-center gap-3">
-      <span class="text-xs uppercase font-semibold text-shadow-600">Shared mode</span>
-      <span
-        class="inline-block px-3 py-1 rounded-full text-sm font-semibold test-firewall-mode {MODE_STYLES[overview.policyStatus.mode] ?? 'bg-bark-200 text-shadow-700'}"
-      >
-        {overview.policyStatus.mode}
-      </span>
-      <span class="text-xs text-shadow-500">
-        TTL {overview.policyStatus.quarantineItemTtlHours}h · max held {overview.policyStatus.quarantineMaxHeldItems}
-      </span>
-    </div>
-    <p class="mt-3 text-sm text-shadow-600 test-mode-note">
-      {overview.policyStatus.mode === 'enforce'
-        ? 'Sink gates enforce screening decisions; quarantined content is withheld.'
-        : overview.policyStatus.mode === 'shadow'
-          ? 'Observe-only: envelopes are screened and journaled, nothing is withheld.'
-          : 'No intake screening is enforced anywhere; turn it on via intake-policy.'}
-    </p>
+    {#if overview.policyStatus}
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-xs uppercase font-semibold text-shadow-600">Shared mode</span>
+        <span
+          class="inline-block px-3 py-1 rounded-full text-sm font-semibold test-firewall-mode {MODE_STYLES[overview.policyStatus.mode] ?? 'bg-bark-200 text-shadow-700'}"
+        >
+          {overview.policyStatus.mode}
+        </span>
+        <span class="text-xs text-shadow-500">
+          TTL {overview.policyStatus.quarantineItemTtlHours}h · max held {overview.policyStatus.quarantineMaxHeldItems}
+        </span>
+      </div>
+      <p class="mt-3 text-sm text-shadow-600 test-mode-note">
+        {overview.policyStatus.mode === 'enforce'
+          ? 'Sink gates enforce screening decisions; quarantined content is withheld.'
+          : overview.policyStatus.mode === 'shadow'
+            ? 'Observe-only: envelopes are screened and journaled, nothing is withheld.'
+            : 'No intake screening is enforced anywhere; turn it on via intake-policy.'}
+      </p>
+    {:else}
+      <p class="text-sm text-shadow-600 test-mode-unavailable">
+        Shared firewall posture is unavailable because no authorized companion Garden is reachable.
+      </p>
+    {/if}
   </section>
 
   <section class="card-garden border-l-4 border-l-moss-300 p-4 test-empty-guarantee">

@@ -48,8 +48,8 @@ describe('aggregateFleetCogSecOverview — sole-admin scope', () => {
       displayNames: ['Companion A'],
       accessMode: 'sole_admin',
     });
-    expect(overview.policyStatus.mode).toBe('enforce');
-    expect(overview.policyStatus.ownership).toBe('shared-gateway');
+    expect(overview.policyStatus?.mode).toBe('enforce');
+    expect(overview.policyStatus?.ownership).toBe('shared-gateway');
     expect(overview.outcomeCounts.held).toBe(1);
   });
 
@@ -61,7 +61,7 @@ describe('aggregateFleetCogSecOverview — sole-admin scope', () => {
     expect(overview.companionScope.count).toBe(0);
     // An empty authorized scope is framed as no access, not as the firewall being off.
     expect(overview.outcomeCounts.held).toBe(0);
-    expect(overview.policyStatus.ownership).toBe('shared-gateway');
+    expect(overview.policyStatus).toBeNull();
   });
 });
 

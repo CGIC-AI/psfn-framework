@@ -112,7 +112,7 @@ describe('buildFleetCogSecOverview', () => {
       snapshot({ reachable: false, items: [] }),
     ], 'sole_admin');
     expect(overview.companionScope.count).toBe(0);
-    expect(overview.policyStatus.ownership).toBe('shared-gateway');
+    expect(overview.policyStatus).toBeNull();
     expect(overview.outcomeCounts.held).toBe(0);
   });
 });

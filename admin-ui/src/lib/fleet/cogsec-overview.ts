@@ -136,18 +136,11 @@ export function projectCompanionCogSec(
 
 function policyStatusFromSnapshot(snapshot: CompanionCogSecSnapshot): FleetCogSecPolicyStatus {
   const status = snapshot.firewallStatus;
-  if (status) {
-    return {
-      mode: status.mode,
-      quarantineItemTtlHours: status.quarantineItemTtlHours,
-      quarantineMaxHeldItems: status.quarantineMaxHeldItems,
-      ownership: 'shared-gateway',
-    };
-  }
+  if (!status) throw new Error('Reachable companion omitted shared firewall status');
   return {
-    mode: 'off',
-    quarantineItemTtlHours: 0,
-    quarantineMaxHeldItems: 0,
+    mode: status.mode,
+    quarantineItemTtlHours: status.quarantineItemTtlHours,
+    quarantineMaxHeldItems: status.quarantineMaxHeldItems,
     ownership: 'shared-gateway',
   };
 }

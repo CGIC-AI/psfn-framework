@@ -605,7 +605,8 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             const plannedTasks = options.scheduler.listTasks()
               .filter(task => task.id.startsWith('planned:'))
               .map(mapPlannedTask);
-            const templates = options.reflectionPolicyStore.load().templates.map(template => ({
+            const reflectionPolicy = options.reflectionPolicyStore.load();
+            const templates = reflectionPolicy.templates.map(template => ({
               id: template.id,
               name: template.name,
               enabled: template.enabled,
@@ -621,6 +622,11 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
                 followUps: followUps.length,
                 plannedTasks: plannedTasks.length,
                 templates: templates.length,
+              },
+              reflectionPolicy: {
+                version: reflectionPolicy.version,
+                updatedAt: reflectionPolicy.updatedAt,
+                updatedBy: reflectionPolicy.updatedBy,
               },
               reminders,
               followUps,

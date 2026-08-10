@@ -7,6 +7,9 @@ tools, and report generators that do not need to ship with the live runtime.
 The sibling `../psfn-framework` repository keeps the runtime seams that evals
 can hook into.
 
+The toolkit standard is Node.js 24 LTS (24.19.0 or newer 24.x) with npm 11.17.0,
+also recorded in `.node-version` and `package.json`.
+
 ## Common Commands
 
 ```bash

@@ -36,7 +36,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           sessionId: 'session-current-state',
           turnId: 'turn-workspace-old',
           role: 'user',
-          content: 'My writable workspace is /home/ada/old_lab for now.',
+          content: 'My writable workspace is /home/companion/old_lab for now.',
           createdAt: '2026-06-01T10:00:00.000Z',
         }),
         l0({
@@ -44,7 +44,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           sessionId: 'session-current-state',
           turnId: 'turn-workspace-new',
           role: 'user',
-          content: 'Update: my writable workspace moved to /home/ada/purrsephone.',
+          content: 'Update: my writable workspace moved to /home/companion/workspace.',
           createdAt: '2026-06-05T10:00:00.000Z',
         }),
       ],
@@ -53,7 +53,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-workspace-old',
-          text: 'Ada current writable workspace is /home/ada/old_lab.',
+          text: 'Ada current writable workspace is /home/companion/old_lab.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-workspace-old'],
@@ -65,7 +65,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
     writes: [
       {
         id: 'write-workspace-new',
-        text: 'Ada current writable workspace is /home/ada/purrsephone.',
+        text: 'Ada current writable workspace is /home/companion/workspace.',
         tags: ['workspace', 'current_state'],
         sensitivity: 'personal',
         sourceRef: 'l0:l0-workspace-new',
@@ -305,7 +305,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           sessionId: 'session-lineage',
           turnId: 'turn-lineage-old',
           role: 'user',
-          content: 'My old writable workspace was /home/ada/old_lab.',
+          content: 'My old writable workspace was /home/companion/old_lab.',
           createdAt: '2026-06-01T11:00:00.000Z',
         }),
         l0({
@@ -313,7 +313,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           sessionId: 'session-lineage',
           turnId: 'turn-lineage-current',
           role: 'user',
-          content: 'Update: my writable workspace is now /home/ada/purrsephone.',
+          content: 'Update: my writable workspace is now /home/companion/workspace.',
           createdAt: '2026-06-05T11:00:00.000Z',
         }),
       ],
@@ -322,7 +322,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-lineage-workspace-old',
-          text: 'Ada current writable workspace was /home/ada/old_lab.',
+          text: 'Ada current writable workspace was /home/companion/old_lab.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-lineage-workspace-old'],
@@ -333,7 +333,7 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         {
           layer: 'L2',
           id: 'm-lineage-workspace-current',
-          text: 'Ada current writable workspace is /home/ada/purrsephone.',
+          text: 'Ada current writable workspace is /home/companion/workspace.',
           tags: ['workspace', 'current_state'],
           sensitivity: 'personal',
           sourceRefs: ['l0:l0-lineage-workspace-current'],

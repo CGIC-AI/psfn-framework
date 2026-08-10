@@ -2,7 +2,8 @@
 .git/
 .github/
 .svelte-kit/
-PSFN-Satellite-Hub/
+apps/satellite-hub/
+tools/evals/
 admin-ui/.svelte-kit/
 admin-ui/build/
 admin-ui/node_modules/

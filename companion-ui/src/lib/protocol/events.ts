@@ -5,7 +5,7 @@
  *
  * PROVENANCE: This file is a faithful client-side mirror of the hub's
  * authoritative wire types at:
- *   PSFN-Satellite-Hub/src/ts/shared/protocol.ts
+ *   apps/satellite-hub/src/ts/shared/protocol.ts
  *
  * The hub is the source of truth for this retained mirror. Legacy clients
  * speak THESE message types — they do not invent shapes (charter §6.10:

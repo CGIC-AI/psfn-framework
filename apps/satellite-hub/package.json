@@ -21,26 +21,31 @@
     "studio:smoke:sprites": "npm run studio:build && node scripts/smoke-device-studio-sprite-editor.mjs",
     "studio:sprites": "npm run build:ts && node dist/ts/device-studio/sprite-cli.js",
     "test:firmware": "npm run firmware:prepare:waveshare-bedroom && node --test satellites/waveshare-bedroom/tests/firmware_wiring.test.mjs && c++ -std=c++17 -Wall -Wextra -Werror -pedantic satellites/waveshare-bedroom/tests/ui_state_test.cpp -o /tmp/psfn-waveshare-ui-state-test && /tmp/psfn-waveshare-ui-state-test",
+    "test:python": "uv run --frozen pytest -q",
     "test:ts": "npm run build:ts && node --test dist/ts/**/*.test.js",
-    "check:ts": "tsc -p tsconfig.json --noEmit"
+    "check:ts": "tsc -p tsconfig.json --noEmit",
+    "verify:fast": "npm run check:ts && npm run test:ts && npm run test:python"
   },
   "dependencies": {
-    "@fal-ai/client": "^1.10.1",
-    "dotenv": "^16.6.1",
-    "openai": "^5.20.2",
-    "three": "^0.184.0",
-    "ws": "^8.18.3",
-    "yaml": "^2.8.1"
+    "@fal-ai/client": "1.10.1",
+    "dotenv": "16.6.1",
+    "openai": "5.23.2",
+    "three": "0.184.0",
+    "ws": "8.21.3",
+    "yaml": "2.8.3"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
-    "@types/three": "^0.184.1",
-    "@types/ws": "^8.18.1",
-    "playwright": "^1.60.0",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "@types/three": "0.184.1",
+    "@types/ws": "8.18.1",
+    "playwright": "1.60.0",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3"
   },
   "engines": {
     "node": ">=24.19.0 <25"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

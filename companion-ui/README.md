@@ -13,13 +13,13 @@ not talk to PSFN core directly.
 - Do not call PSFN core endpoints from this app.
 - Do not call `/api/admin/*` from this app.
 - Do not add server logic to this package.
-- Do not edit `../PSFN-Satellite-Hub/`; it is a read-only protocol reference.
+- Coordinate protocol changes with the in-repo Hub source; do not drift the mirror.
 - Keep this package standalone. Do not wire root auto-installs for it.
 
 The legacy direct-Hub protocol reference is:
 
 ```text
-../PSFN-Satellite-Hub/src/ts/shared/protocol.ts
+../apps/satellite-hub/src/ts/shared/protocol.ts
 ```
 
 The local client mirror lives in:

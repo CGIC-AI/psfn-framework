@@ -35,6 +35,8 @@ export const OSV_LOCKFILES = Object.freeze([
   'package-lock.json',
   'admin-ui/package-lock.json',
   'companion-ui/package-lock.json',
+  'apps/satellite-hub/package-lock.json',
+  'tools/evals/package-lock.json',
 ]);
 
 const FORMATS = new Set(['table', 'json', 'sarif']);

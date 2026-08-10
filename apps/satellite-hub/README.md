@@ -2,7 +2,7 @@
 
 Voice and embodiment hub for PSFN.
 
-This repo is the middleware layer between endpoint hardware, embodiment clients,
+This application is the middleware layer between endpoint hardware, embodiment clients,
 and PSFN Framework. It currently has three integration paths:
 
 - a custom TypeScript realtime websocket path for Pi-class devices that can do smooth bidirectional conversation
@@ -14,7 +14,7 @@ embodiment bridge into that runtime, not as a scoped local brain.
 
 ## What This Repo Does
 
-The hub in this repo does the heavy lifting:
+The hub under `apps/satellite-hub` does the heavy lifting:
 
 - accepts a custom realtime voice client, a Voxta/VaM client, or an ESPHome voice device
 - streams microphone audio to Deepgram STT
@@ -126,6 +126,19 @@ Conversation memory and session continuity belong to PSFN, with the hub only mai
 
 ## Commands
 
+From the monorepo root, the bounded check is:
+
+```bash
+npm run verify:satellite-hub
+```
+
+It runs TypeScript and Python checks without contacting live devices or paid
+providers. Firmware preparation/compilation, physical-hardware validation,
+live-device deployment, provider-backed voice/image calls, and the optional
+.NET relay are separate operator actions. Pinned convenience tasks are exposed
+as `mise run hub:firmware`, `mise run hub:firmware:compile`, and
+`mise run hub:dotnet`; none is part of the default gate.
+
 Install Python dependencies for the ESPHome fallback path:
 
 ```bash
@@ -146,7 +159,7 @@ The TypeScript hub standard is Node.js 24 LTS (24.19.0 or newer 24.x) with npm
 11.17.0, also recorded in `.node-version` and `package.json`.
 
 ```bash
-npm install
+npm ci
 ```
 
 Show Python fallback CLI help:
@@ -426,13 +439,16 @@ Fallback path:
 - `linux-voice-assistant`
 - ESP32-class endpoints speaking the ESPHome voice protocol
 
-The custom client protocol is documented in [docs/realtime-client-protocol.md](/mnt/samesung/ai/psfn-satellite-hub/docs/realtime-client-protocol.md).
+The custom client protocol is documented in
+[docs/realtime-client-protocol.md](docs/realtime-client-protocol.md).
 
 ## ESPHome Fallback Notes
 
 Natural follow-up and interrupt behavior on the ESPHome fallback path still depends on a patched `linux-voice-assistant` endpoint. The stock endpoint is good enough to expose the ESPHome voice transport, but it does not own interruption strongly enough for the behavior this bridge wants.
 
-The current patch in [patches/linux-voice-assistant-followup-interrupt.patch](/mnt/samesung/ai/psfn-satellite-hub/patches/linux-voice-assistant-followup-interrupt.patch) does three important things:
+The current patch in
+[patches/linux-voice-assistant-followup-interrupt.patch](patches/linux-voice-assistant-followup-interrupt.patch)
+does three important things:
 
 - adds speech-first barge-in detection knobs at the endpoint
 - turns wake-word and stop-word interrupts into explicit local `stop output now, then reopen mic` behavior
@@ -448,7 +464,9 @@ This is intentionally endpoint-local and does not change PSFN Framework.
 
 ## Pi Realtime Client
 
-The dedicated Pi-class TypeScript client lives under [src/ts/pi-client](/mnt/samesung/ai/psfn-satellite-hub/src/ts/pi-client) with deploy assets under [client/ts_realtime](/mnt/samesung/ai/psfn-satellite-hub/client/ts_realtime).
+The dedicated Pi-class TypeScript client lives under
+[src/ts/pi-client](src/ts/pi-client) with deploy assets under
+[client/ts_realtime](client/ts_realtime).
 
 It is the preferred path for devices that can afford a custom client, because it owns:
 

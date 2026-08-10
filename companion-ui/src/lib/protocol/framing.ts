@@ -7,7 +7,7 @@ import { ACAC_AXES } from '../../../../src/shared/contracts/emotion-contracts.js
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
- * Real transport (hub/src/ts/hub/server.ts, pi-client/client.ts): plain
+ * Real transport (apps/satellite-hub/src/ts/hub/server.ts and pi-client/client.ts): plain
  * WebSocket, ONE JSON-serialized message per text frame, both directions:
  *   socket.send(JSON.stringify(message))
  *   JSON.parse(raw) as <Direction>Message

@@ -1,5 +1,5 @@
-import { isRecord } from '../../../psfn-framework/src/shared/utils/types.js';
-import type { VADVector } from '../../../psfn-framework/src/core/emotion/state.js';
+import { isRecord } from '../../../../src/shared/utils/types.js';
+import type { VADVector } from '../../../../src/core/emotion/state.js';
 import {
   EVAL_CALIBRATION_DIRECTIONS,
   EVAL_MEASUREMENT_LAYERS,

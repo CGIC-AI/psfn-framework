@@ -209,6 +209,8 @@ test('delivery-only gate stays fast while product changes retain full validation
   for (const [path, specialist] of [
     ['admin-ui/src/routes/+page.svelte', 'garden-ui'],
     ['companion-ui/src/App.tsx', 'companion-ui'],
+    ['apps/satellite-hub/src/ts/hub/main.ts', 'satellite-hub'],
+    ['tools/evals/eval/src/validation.ts', 'evals'],
     ['deploy/helm/psfn/values.yaml', 'deployment-contracts'],
   ]) {
     const names = buildGatePlan({ paths: [path] })
@@ -282,6 +284,7 @@ test('delivery-only gate stays fast while product changes retain full validation
     'settings-contract',
     'supply-chain',
     'deployment-contracts',
+    'evals',
     'changed-workflow-analysis',
   ]) {
     assert.ok(names.includes(required), `missing local gate: ${required}`);

@@ -1,4 +1,4 @@
-import type { VADVector } from '../../../psfn-framework/src/core/emotion/state.js';
+import type { VADVector } from '../../../../src/core/emotion/state.js';
 
 export const EVAL_SCHEMA_VERSION = 1 as const;
 

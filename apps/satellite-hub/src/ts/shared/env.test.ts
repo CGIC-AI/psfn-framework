@@ -267,7 +267,7 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     HOME_ASSISTANT_ENABLED: "true",
-    HOME_ASSISTANT_BASE_URL: "http://192.168.1.205:8123/",
+    HOME_ASSISTANT_BASE_URL: "http://192.0.2.205:8123/",
     HOME_ASSISTANT_TOKEN: "ha-secret",
     HUB_CONTROL_BIND_HOST: "127.0.0.1",
     HUB_CONTROL_PORT: "8788",
@@ -280,7 +280,7 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     HUB_DEVICE_ASSERTION_TTL_SECONDS: "30",
   }, () => {
     const config = loadHubConfig(projectRoot);
-    assert.equal(config.homeAssistant?.baseUrl, "http://192.168.1.205:8123");
+    assert.equal(config.homeAssistant?.baseUrl, "http://192.0.2.205:8123");
     assert.equal(config.homeAssistant?.token, "ha-secret");
     assert.equal(config.control?.bindHost, "127.0.0.1");
     assert.equal(config.control?.port, 8788);
@@ -341,7 +341,7 @@ test("loadHubConfig rejects enabled Home Assistant without the private control p
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     HOME_ASSISTANT_ENABLED: "true",
-    HOME_ASSISTANT_BASE_URL: "http://192.168.1.205:8123",
+    HOME_ASSISTANT_BASE_URL: "http://192.0.2.205:8123",
     HOME_ASSISTANT_TOKEN: "ha-secret",
   }, () => {
     assert.throws(

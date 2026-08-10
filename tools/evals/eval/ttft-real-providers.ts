@@ -1,30 +1,30 @@
-import '../../psfn-framework/src/shared/utils/load-dotenv.js';
+import '../../../src/shared/utils/load-dotenv.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createIsolatedE2ERuntime } from '../../psfn-framework/src/app/e2e/runtime-harness.js';
-import { hydrateJsonBackedRuntimeConfig } from '../../psfn-framework/src/system/config/runtime-config.js';
-import { EventBus } from '../../psfn-framework/src/shared/event-bus.js';
+import { createIsolatedE2ERuntime } from '../../../src/app/e2e/runtime-harness.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../../src/system/config/runtime-config.js';
+import { EventBus } from '../../../src/shared/event-bus.js';
 import type {
   LLMContext,
   StreamCallbacks,
   SubstrateMessage,
-} from '../../psfn-framework/src/shared/contracts/runtime.js';
-import { MemoryStore } from '../../psfn-framework/src/faculties/memory/store.js';
-import { initDatabase } from '../../psfn-framework/src/persistence/sqlite-utils.js';
-import { LLMClient } from '../../psfn-framework/src/primitives/llm/client.js';
-import { createEmbeddingProviderFromEnv } from '../../psfn-framework/src/faculties/memory/embedding.js';
+} from '../../../src/shared/contracts/runtime.js';
+import { MemoryStore } from '../../../src/faculties/memory/store.js';
+import { initDatabase } from '../../../src/persistence/sqlite-utils.js';
+import { LLMClient } from '../../../src/primitives/llm/client.js';
+import { createEmbeddingProviderFromEnv } from '../../../src/faculties/memory/embedding.js';
 import {
   composeIdentity,
   composeSessionRuntime,
   composeSubstrateAgent,
   wireMemoryRuntime,
-} from '../../psfn-framework/src/app/startup/composition/composition.js';
+} from '../../../src/app/startup/composition/composition.js';
 import {
   buildTtftBenchmarkReport,
   evaluateHotPath,
   type TtftBenchmarkMethodology,
   type TtftBenchmarkSample,
-} from '../../psfn-framework/src/core/agent/ttft-benchmark.js';
+} from '../../../src/core/agent/ttft-benchmark.js';
 
 const MEASURED_TURNS = 6;
 const WARMUP_TURNS = 1;

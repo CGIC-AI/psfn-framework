@@ -272,7 +272,7 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
   }
 }
 
-function dedupePairs(pairs: readonly Array<[string, string]>): Array<[string, string]> {
+function dedupePairs(pairs: ReadonlyArray<[string, string]>): Array<[string, string]> {
   const seen = new Set<string>();
   const deduped: Array<[string, string]> = [];
   for (const [a, b] of pairs) {

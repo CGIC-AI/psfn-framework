@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import '../../../psfn-framework/src/shared/utils/load-dotenv.js';
+import '../../../../src/shared/utils/load-dotenv.js';
 import type {
   InvokeProviderOptions,
   OpenAiCompatibleResponseFormat,

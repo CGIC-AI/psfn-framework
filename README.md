@@ -144,6 +144,12 @@ src/
   persistence/   # layout, sessions, Postgres runtime, migrations
   shared/        # contracts, telemetry, event bus, routing
   system/        # settings, owner files, capabilities, trust, config
+apps/
+  satellite-hub/ # voice, device, embodiment, and endpoint bridge application
+tools/
+  evals/         # offline evaluation, calibration, and model-probe toolkit
+admin-ui/        # Garden operator UI
+companion-ui/    # companion PWA
 ```
 
 ### Self-Direction Tool Surfaces
@@ -164,6 +170,10 @@ npm run verify:repository-hygiene # repo-surface changes
 npm run verify:backup-restore     # persistence safety
 npm run smoke:chat                # chat cockpit smoke
 npm run e2e                       # integration tests
+npm run verify:satellite-hub      # bounded Hub TypeScript + Python checks
+npm run verify:evals              # bounded offline eval checks
+mise run hub:check                # pinned-tool equivalent via mise
+mise run evals:check
 ```
 
 ## Tech Stack

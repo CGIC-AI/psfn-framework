@@ -254,10 +254,10 @@ def test_static_audio_server_uses_public_host_for_urls(tmp_path: Path) -> None:
         host="0.0.0.0",
         port=8099,
         root=root,
-        public_host="192.168.1.50",
+        public_host="192.0.2.50",
     )
 
-    assert server.url_for(audio_path) == "http://192.168.1.50:8099/reply.mp3"
+    assert server.url_for(audio_path) == "http://192.0.2.50:8099/reply.mp3"
 
 
 def test_static_audio_server_open_stream_uses_stream_endpoint(tmp_path: Path) -> None:
@@ -268,12 +268,12 @@ def test_static_audio_server_open_stream_uses_stream_endpoint(tmp_path: Path) ->
         host="0.0.0.0",
         port=8099,
         root=root,
-        public_host="192.168.1.50",
+        public_host="192.0.2.50",
     )
 
     stream = server.open_stream(content_type="audio/mpeg")
 
-    assert stream.url.startswith("http://192.168.1.50:8099/streams/")
+    assert stream.url.startswith("http://192.0.2.50:8099/streams/")
     stream.write(b"test")
     stream.close()
 

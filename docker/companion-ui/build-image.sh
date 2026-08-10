@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Build the companion-ui test web image from this repo's companion-ui/ source.
 # Mirrors docker/satellite-hub/build-image.sh: pinned base, commit-tied tag,
-# floating-tag refusal, clean-tree guard. Unlike the hub (external source), the
+# floating-tag refusal and clean-tree guard. Unlike the Hub application, the
 # companion-ui source lives in THIS repo, so the build context is the repo root.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

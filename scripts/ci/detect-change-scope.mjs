@@ -12,6 +12,9 @@ export function detectChangeScope(paths) {
   );
   const adminUi = matches(/^admin-ui\//);
   const companionUi = matches(/^companion-ui\//);
+  const satelliteHub = matches(
+    /^(?:apps\/satellite-hub\/|docker\/satellite-hub\/|companion-ui\/src\/lib\/protocol\/)/,
+  );
   const rootRuntime = matches(
     /^(?:src\/|shakedown\/|scripts\/(?!ci\/|verify-(?:helm|k8s|kube)|ops\/ship-kube)|package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
   );
@@ -25,8 +28,16 @@ export function detectChangeScope(paths) {
     ),
     admin_ui: adminUi,
     companion_ui: companionUi,
+    satellite_hub: satelliteHub,
+    evals: matches(/^tools\/evals\//) || rootRuntime,
     root_runtime: rootRuntime,
-    clean_environment: rootRuntime || deployment || adminUi || companionUi,
+    clean_environment:
+      rootRuntime ||
+      deployment ||
+      adminUi ||
+      companionUi ||
+      satelliteHub ||
+      matches(/^tools\/evals\//),
   };
 }
 

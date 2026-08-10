@@ -1,7 +1,7 @@
 # Satellite Hub On k3s (Pi Runbook)
 
-This is the reproducible procedure for running the external PSFN-Satellite-Hub
-runtime inside the live single-node k3s cluster (helm release `psfn`,
+This is the reproducible procedure for running the in-repo Satellite Hub
+application inside the live single-node k3s cluster (helm release `psfn`,
 namespace `psfn`, arm64), wired to the in-cluster gateway `/v1` edge with a
 dedicated satellite-scoped credential, the companion event relay bridge, and a
 cert-manager-managed client certificate staged for the satellite mTLS path.
@@ -54,7 +54,7 @@ digests, and device registry. The commands below refer to that ignored file.
 - Live cluster with the `psfn` release healthy (gateway/agent/garden green).
 - cert-manager installed with Issuers `psfn-ca` and `psfn-selfsigned` READY in
   namespace `psfn` (already true on the live cluster; the chart renders them).
-- A clean PSFN-Satellite-Hub checkout at a commit that includes:
+- A clean PSFN monorepo checkout whose `apps/satellite-hub` history includes:
   - `HUB_TEXT_ONLY` text-only mode (hub commit `2b8d234`),
   - the companion backplane bridge (`PSFN_COMPANION_BASE_URL` wiring, hub
     commits `2c9816e`/`9999af5`, merge `f84fcda`).
@@ -62,19 +62,17 @@ digests, and device registry. The commands below refer to that ignored file.
 
 ## 1. Build The arm64 Image
 
-From the framework repo, using the repo-owned Dockerfile with the hub checkout
-as build context:
+From the monorepo root:
 
 ```bash
-SATELLITE_HUB_SOURCE=/path/to/PSFN-Satellite-Hub \
-SATELLITE_HUB_SOURCE_REF=<full hub git commit sha> \
+SATELLITE_HUB_MONOREPO_REF="$(git rev-parse HEAD)" \
 SATELLITE_HUB_IMAGE_REPOSITORY=localhost/psfn-satellite-hub \
 SATELLITE_HUB_PLATFORM=linux/arm64 \
 docker/satellite-hub/build-image.sh
 ```
 
-The script fails closed on a dirty checkout, a ref mismatch, or a floating
-tag, and prints the produced reference, e.g.
+The script fails closed on dirty Hub image inputs, a monorepo ref mismatch, or
+a floating tag, and prints the produced reference, e.g.
 `localhost/psfn-satellite-hub:0.1.0-kube-<sha12>`.
 
 ## 2. Transfer And Import Into k3s (Retag Trap)

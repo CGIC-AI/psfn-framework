@@ -389,35 +389,6 @@ wheels = [
 ]
 
 [[package]]
-name = "psfn-satellite-hub"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aioesphomeapi" },
-    { name = "httpx" },
-    { name = "python-dotenv" },
-    { name = "typer" },
-    { name = "websockets" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aioesphomeapi", specifier = "==42.7.0" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "python-dotenv", specifier = ">=1,<2" },
-    { name = "typer", specifier = ">=0.12,<1" },
-    { name = "websockets", specifier = ">=15,<16" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8,<9" }]
-
-[[package]]
 name = "packaging"
 version = "26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -449,6 +420,35 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/87/cb5e585192a22b8bd457df5a2c16a75ea0db9674c3a0a39fc9347d84e075/protobuf-7.34.1-cp310-abi3-win_amd64.whl", hash = "sha256:e97b55646e6ce5cbb0954a8c28cd39a5869b59090dfaa7df4598a7fba869468c", size = 437901, upload-time = "2026-03-20T17:34:44.112Z" },
     { url = "https://files.pythonhosted.org/packages/88/95/608f665226bca68b736b79e457fded9a2a38c4f4379a4a7614303d9db3bc/protobuf-7.34.1-py3-none-any.whl", hash = "sha256:bb3812cd53aefea2b028ef42bd780f5b96407247f20c6ef7c679807e9d188f11", size = 170715, upload-time = "2026-03-20T17:34:45.384Z" },
 ]
+
+[[package]]
+name = "psfn-satellite-hub"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aioesphomeapi" },
+    { name = "httpx" },
+    { name = "python-dotenv" },
+    { name = "typer" },
+    { name = "websockets" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aioesphomeapi", specifier = "==42.7.0" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "python-dotenv", specifier = "==1.2.2" },
+    { name = "typer", specifier = "==0.24.1" },
+    { name = "websockets", specifier = "==15.0.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = "==8.4.2" }]
 
 [[package]]
 name = "pycparser"

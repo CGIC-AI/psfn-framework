@@ -1,1 +1,1 @@
-export * from '../../../psfn-framework/src/core/emotion/calibration.js';
+export * from '../../../../src/core/emotion/calibration.js';

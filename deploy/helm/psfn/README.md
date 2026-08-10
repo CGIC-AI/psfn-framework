@@ -810,26 +810,23 @@ API-backed embeddings remain supported by setting owner-file values and the
 
 ## Satellite Hub
 
-`satelliteHub.enabled` defaults to `false`. The chart can run the external
-PSFN-Satellite-Hub TypeScript runtime when you build a pinned image from a clean
-hub source checkout. This repo owns the Kubernetes contract and a Dockerfile for
-that external source; the hub source tree still owns the hub application code.
+`satelliteHub.enabled` defaults to `false`. The chart runs the TypeScript runtime
+owned at `apps/satellite-hub` when you build a pinned image from a clean
+monorepo checkout. The image revision is the exact monorepo commit.
 
-Build the image with the repo-owned Dockerfile and the hub checkout as the
-Docker context:
+Build the image from the repository root:
 
 ```bash
-SATELLITE_HUB_SOURCE="$HOME/psfn-framework/PSFN-Satellite-Hub" \
-SATELLITE_HUB_SOURCE_REF=<full hub git commit> \
+SATELLITE_HUB_MONOREPO_REF="$(git rev-parse HEAD)" \
 SATELLITE_HUB_IMAGE_REPOSITORY=localhost/psfn-satellite-hub \
 SATELLITE_HUB_PLATFORM=linux/amd64 \
 docker/satellite-hub/build-image.sh
 ```
 
-The script refuses dirty hub source by default, refuses floating tags, and tags
-the image as `0.1.0-kube-<source-sha12>` unless
+The script refuses dirty Hub image inputs by default, refuses floating tags, and tags
+the image as `0.1.0-kube-<monorepo-sha12>` unless
 `SATELLITE_HUB_IMAGE_TAG` is set. The Dockerfile uses the pinned
-`node:24.19.0-slim` image digest and `npm ci` against the hub checkout's
+`node:24.19.0-slim` image digest and `npm ci` against the in-repo application's
 `package-lock.json`.
 
 For a local k3d/k3s shakedown, import the built image into the test cluster and

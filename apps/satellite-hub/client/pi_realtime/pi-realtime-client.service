@@ -7,15 +7,15 @@ Wants=network-online.target
 Type=simple
 User=psfn
 Group=psfn
-WorkingDirectory=/home/psfn/psfn-realtime-client
-Environment=PATH=/home/psfn/linux-voice-assistant/.venv/bin:/usr/bin:/bin
+WorkingDirectory=%h/psfn-realtime-client
+Environment=PATH=%h/linux-voice-assistant/.venv/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=PULSE_SERVER=/run/user/1000/pulse/native
 Environment=PULSE_COOKIE=DISABLED
 EnvironmentFile=-/etc/psfn-realtime-client.env
-ExecStart=/home/psfn/linux-voice-assistant/.venv/bin/python /home/psfn/psfn-realtime-client/client.py
+ExecStart=%h/linux-voice-assistant/.venv/bin/python %h/psfn-realtime-client/client.py
 Restart=always
 RestartSec=2
 

@@ -30,11 +30,13 @@ function stubDocker({
 const scanCall = (calls) => calls.find((args) => args.includes(OSV_IMAGE) && !args.includes('--version'));
 const allExist = () => true;
 
-test('OSV_LOCKFILES names exactly the three committed lockfiles', () => {
+test('OSV_LOCKFILES names every committed lockfile', () => {
   assert.deepEqual(OSV_LOCKFILES, [
     'package-lock.json',
     'admin-ui/package-lock.json',
     'companion-ui/package-lock.json',
+    'apps/satellite-hub/package-lock.json',
+    'tools/evals/package-lock.json',
   ]);
 });
 
@@ -68,15 +70,17 @@ test('buildOsvScanArgs mounts the repo read-only and names every owned lockfile'
       '--lockfile=/repo/package-lock.json',
       '--lockfile=/repo/admin-ui/package-lock.json',
       '--lockfile=/repo/companion-ui/package-lock.json',
+      '--lockfile=/repo/apps/satellite-hub/package-lock.json',
+      '--lockfile=/repo/tools/evals/package-lock.json',
     ],
   );
 });
 
-test('runOsv returns 0 for a clean scan of all three lockfiles', () => {
+test('runOsv returns 0 for a clean scan of every lockfile', () => {
   const { runDocker, calls } = stubDocker();
   assert.equal(runOsv({ argv: [], runDocker, fileExists: allExist }), 0);
   const scan = scanCall(calls);
-  assert.equal(scan.filter((arg) => arg.startsWith('--lockfile=')).length, 3);
+  assert.equal(scan.filter((arg) => arg.startsWith('--lockfile=')).length, 5);
 });
 
 test('runOsv fails closed on findings (exit 1) under table and json formats', () => {

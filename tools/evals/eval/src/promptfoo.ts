@@ -1,4 +1,4 @@
-import { isRecord } from '../../../psfn-framework/src/shared/utils/types.js';
+import { isRecord } from '../../../../src/shared/utils/types.js';
 import promptfooBaseConfigJson from '../promptfooconfig.base.json' with { type: 'json' };
 
 type PromptfooPrimitive = boolean | number | string | null;

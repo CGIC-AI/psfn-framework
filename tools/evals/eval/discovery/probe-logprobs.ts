@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import '../../../psfn-framework/src/shared/utils/load-dotenv.js';
+import '../../../../src/shared/utils/load-dotenv.js';
 import {
   DEFAULT_OPENROUTER_API_BASE_URL,
   TARGET_MODELS,

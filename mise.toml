@@ -1,0 +1,46 @@
+[tools]
+node = "24.19.0"
+npm = "11.17.0"
+python = "3.12.3"
+uv = "0.11.6"
+
+[tasks."framework:check"]
+description = "Type-check and build the framework runtime"
+run = ["npm run verify:typecheck-baseline", "npm run build"]
+
+[tasks."hub:install"]
+description = "Install the Satellite Hub's locked TypeScript and Python dependencies"
+run = "npm run install:satellite-hub"
+
+[tasks."hub:check"]
+description = "Run bounded Satellite Hub TypeScript and Python checks"
+depends = ["hub:install"]
+run = "npm --prefix apps/satellite-hub run verify:fast"
+
+[tasks."hub:firmware"]
+description = "Run optional firmware preparation and wiring checks"
+dir = "apps/satellite-hub"
+run = "npm run test:firmware"
+
+[tasks."hub:firmware:compile"]
+description = "Compile the optional pinned ESPHome firmware"
+dir = "apps/satellite-hub"
+run = "npm run firmware:compile:waveshare-bedroom"
+
+[tasks."hub:dotnet"]
+description = "Build the optional Voxta relay when the .NET 8 SDK is available"
+dir = "apps/satellite-hub/relay/psfn-voxta-relay"
+run = "dotnet build --configuration Release"
+
+[tasks."evals:install"]
+description = "Install the eval toolkit's locked dependencies"
+run = "npm ci --prefix tools/evals"
+
+[tasks."evals:check"]
+description = "Run offline eval type, lint, unit, and Python contract checks"
+depends = ["evals:install"]
+run = "npm --prefix tools/evals run verify:fast"
+
+[tasks.check]
+description = "Run the framework and imported-package fast checks"
+depends = ["framework:check", "hub:check", "evals:check"]

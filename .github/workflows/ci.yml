@@ -41,6 +41,8 @@ jobs:
             package-lock.json
             admin-ui/package-lock.json
             companion-ui/package-lock.json
+            apps/satellite-hub/package-lock.json
+            tools/evals/package-lock.json
 
       - name: Verify exact local-gate status
         env:
@@ -72,8 +74,16 @@ jobs:
         run: node scripts/ci/run-zizmor-changed.mjs --format=github --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Install root dependencies in a clean environment
-        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true'
+        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true' || steps.scope.outputs.evals == 'true'
         run: npm ci --ignore-scripts
+
+      - name: Set up pinned uv for Satellite Hub checks
+        if: steps.scope.outputs.satellite_hub == 'true'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: 0.11.6
+          enable-cache: true
+          cache-dependency-glob: apps/satellite-hub/uv.lock
 
       - name: Report import-graph impact for changed seam files
         if: steps.scope.outputs.root_runtime == 'true'
@@ -94,6 +104,14 @@ jobs:
       - name: Lint, build, and test companion UI in the clean environment
         if: steps.scope.outputs.companion_ui == 'true'
         run: npm run verify:companion-ui
+
+      - name: Check Satellite Hub in the clean environment
+        if: steps.scope.outputs.satellite_hub == 'true'
+        run: npm run verify:satellite-hub
+
+      - name: Check eval toolkit in the clean environment
+        if: steps.scope.outputs.evals == 'true'
+        run: npm run verify:evals
 
       - name: Verify deployment contracts in the clean environment
         if: steps.scope.outputs.deployment == 'true'

@@ -12,7 +12,7 @@ export interface SubjectCorrectionAuthority {
   readonly authorizationRef: string;
 }
 
-export type BiographicalAdmissionDisposition =
+type BiographicalAdmissionDisposition =
   | 'coexisting'
   | 'deduplicated'
   | 'contested'

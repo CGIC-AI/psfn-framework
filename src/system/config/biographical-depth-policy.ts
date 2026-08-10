@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
 
-export interface BiographicalDepthModePolicy {
+interface BiographicalDepthModePolicy {
   readonly candidateLimitPerRefresh: number;
   readonly refreshIntervalMs: number;
   readonly retentionClaimLimit: number | null;

@@ -8,7 +8,7 @@ import type { BiographicalSubjectRef } from './types.js';
 
 type ExplicitAddressEvidence = Extract<MessageAddresseeEvidence, 'mention' | 'reply'>;
 
-export interface CanonicalAddressedContactInput {
+interface CanonicalAddressedContactInput {
   readonly source: MessageAddressingMetadata['source'];
   readonly transportParticipantId: string;
   readonly channelId: string;
@@ -50,7 +50,7 @@ export interface VerifiedExplicitSubject {
     | { readonly status: 'unproven' };
 }
 
-export type ExplicitSubjectSelectionReason =
+type ExplicitSubjectSelectionReason =
   | 'explicit-addressing-mismatch'
   | 'explicit-reply-unresolved'
   | 'explicit-contact-missing'

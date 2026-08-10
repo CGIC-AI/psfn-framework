@@ -132,6 +132,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
   let redeliverResult: (input: IntakeReleaseRedeliveryInput) => {
     delivered: boolean;
     channelId?: string;
+    logicalSessionId?: string;
     entryId?: number | null;
     reason?: string;
   };
@@ -213,6 +214,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     redeliverResult = (input) => ({
       delivered: true,
       channelId: input.sourceChannelId ?? 'discord:chan-1',
+      logicalSessionId: `${input.sourceChannelId ?? 'discord:chan-1'}:active`,
       entryId: 4242,
     });
     service = buildService();
@@ -249,6 +251,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     ruleMatchTotalCount?: number;
     decisionReason?: string;
     sourceChannelId?: string | null;
+    artifactPaths?: string[];
   } = {}): IntakeEnvelope {
     const envelope = makeQuarantinedEnvelope(input);
     store.hold({
@@ -264,6 +267,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       ...(input.sourceChannelId !== null
         ? { sourceChannelId: input.sourceChannelId ?? 'discord:chan-1' }
         : {}),
+      ...(input.artifactPaths ? { artifactPaths: input.artifactPaths } : {}),
       atMs: clock,
     });
     return envelope;
@@ -567,7 +571,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(delivered.envelope.sourceClass).toBe('web_fetch');
       expect(delivered.envelope.sourceRiskTier).toBe('untrusted');
       if (resolved.ok) {
-        expect(resolved.message).toContain('re-delivered it into discord:chan-1');
+        expect(resolved.message).toContain('appended released context to L0 session discord:chan-1:active as entry 4242');
+        expect(resolved.message).toContain('no external chat message was sent');
       }
     });
 
@@ -581,7 +586,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(redeliveries).toHaveLength(1);
       expect(redeliveries[0].sourceChannelId).toBe('123');
       if (resolved.ok) {
-        expect(resolved.message).toContain('re-delivered it into 123');
+        expect(resolved.message).toContain('appended released context to L0 session 123:active as entry 4242');
       }
     });
 
@@ -589,6 +594,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       const envelope = holdItem({
         originRef: 'discord:123:456:document.md',
         sourceChannelId: null,
+        artifactPaths: [join(dir, 'document.md'), join(dir, 'document.md.parsed.txt')],
       });
       store.applyDecision({
         id: envelope.id,
@@ -614,9 +620,22 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(store.getById(envelope.id)?.redelivery).toMatchObject({
         delivered: true,
         channelId: '123',
+        logicalSessionId: '123:active',
         entryId: 4242,
       });
-      expect(service.listItems().items[0]?.redeliveryRetryAvailable).toBe(false);
+      const item = service.listItems().items[0];
+      expect(item?.redeliveryRetryAvailable).toBe(false);
+      expect(item?.redelivery).toMatchObject({
+        delivered: true,
+        channelId: '123',
+        logicalSessionId: '123:active',
+        entryId: 4242,
+        externalMessageSent: false,
+      });
+      expect(item?.releasedArtifactPaths).toEqual([
+        join(dir, 'document.md'),
+        join(dir, 'document.md.parsed.txt'),
+      ]);
       expect(service.beginDecision({ id: envelope.id, action: 'release_raw' }))
         .toMatchObject({ ok: false, status: 409 });
     });
@@ -658,7 +677,8 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.status).toBe('released_raw');
       if (resolved.ok) {
-        expect(resolved.message).toContain('re-delivery did not land');
+        expect(resolved.message).toContain('L0 conversation append failed');
+        expect(resolved.message).toContain('no external chat message was sent');
       }
     });
 
@@ -671,7 +691,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.envelope.state).toBe('human_released');
       if (resolved.ok) {
-        expect(resolved.message).toContain('re-delivery did not land');
+        expect(resolved.message).toContain('L0 conversation append failed');
       }
     });
   });

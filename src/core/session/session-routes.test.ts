@@ -65,4 +65,23 @@ describe('SessionRouteStore', () => {
       );
     });
   });
+
+  it('reloads routes written by another process before resolving', () => {
+    withTempFile((filePath) => {
+      const garden = new SessionRouteStore(filePath);
+      const agent = new SessionRouteStore(filePath, {
+        now: () => new Date('2026-08-10T17:55:08.000Z'),
+      });
+
+      const reset = agent.resetSourceChannel({
+        sourceChannelId: 'discord:guild:room',
+        actor: 'operator',
+        reason: 'start a clean conversation',
+      });
+
+      expect(garden.resolve('discord:guild:room')).toBe(reset.newLogicalSessionId);
+      expect(garden.getRoute('discord:guild:room')?.activeLogicalSessionId)
+        .toBe(reset.newLogicalSessionId);
+    });
+  });
 });

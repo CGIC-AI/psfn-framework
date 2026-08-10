@@ -257,11 +257,23 @@ export class SessionRouteStore {
       : undefined;
   }
 
+  /**
+   * Gateway, agent, and Garden are separate processes over the same owner file.
+   * Route reads therefore reload the atomic snapshot instead of trusting the
+   * constructor-time copy; otherwise Garden can append released intake to a
+   * session that the agent has already retired.
+   */
+  private refresh(): void {
+    this.state = this.load();
+  }
+
   resolve(sourceChannelId: string): string | null {
+    this.refresh();
     return this.findRoute(sourceChannelId)?.activeLogicalSessionId ?? null;
   }
 
   resolveSourceChannelId(channelId: string): string {
+    this.refresh();
     const normalized = channelId.trim();
     for (const route of Object.values(this.state.routes)) {
       if (route.activeLogicalSessionId === normalized) return route.sourceChannelId;
@@ -273,11 +285,13 @@ export class SessionRouteStore {
   }
 
   getRoute(sourceChannelId: string): SourceChannelSessionRoute | null {
+    this.refresh();
     const route = this.findRoute(sourceChannelId);
     return route ? cloneSourceRoute(route) : null;
   }
 
   getRouteForLogicalSession(logicalSessionId: string): SourceChannelSessionRoute | null {
+    this.refresh();
     const normalized = logicalSessionId.trim();
     for (const route of Object.values(this.state.routes)) {
       if (
@@ -291,12 +305,14 @@ export class SessionRouteStore {
   }
 
   listRoutes(): SourceChannelSessionRoute[] {
+    this.refresh();
     return Object.values(this.state.routes)
       .map(cloneSourceRoute)
       .sort((left, right) => left.sourceChannelId.localeCompare(right.sourceChannelId));
   }
 
   isRetiredOrQuarantined(logicalSessionId: string): boolean {
+    this.refresh();
     const normalized = logicalSessionId.trim();
     if (!normalized) return false;
     return Object.values(this.state.routes)
@@ -304,12 +320,14 @@ export class SessionRouteStore {
   }
 
   getRetiredLogicalSessionIds(): Set<string> {
+    this.refresh();
     return new Set(Object.values(this.state.routes).flatMap(route => (
       route.retiredSessions.map(retired => retired.logicalSessionId)
     )));
   }
 
   resetSourceChannel(input: SessionRouteResetInput): SessionRouteResetResult {
+    this.refresh();
     const sourceChannelId = normalizeRequiredString(input.sourceChannelId, 'sourceChannelId');
     const reason = normalizeRequiredString(input.reason, 'reason');
     const actor = normalizeOptionalString(input.actor) ?? 'operator';

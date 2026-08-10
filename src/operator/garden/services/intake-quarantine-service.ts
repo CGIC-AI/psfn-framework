@@ -211,7 +211,7 @@ export type AdminIntakeQuarantineReadService = Pick<
 >;
 
 /**
- * What the release re-delivery port is handed once an item is released
+ * What the conversation-placement port is handed once an item is released
  * (jvbt). The envelope has already transitioned to its terminal
  * `human_released*` state, so its provenance (original source class, risk
  * tier, taint) survives and the delivery must remain untrusted-origin.
@@ -227,7 +227,7 @@ export interface IntakeReleaseRedeliveryInput {
   actor: string;
   /** Decision timestamp (ms). */
   atMs: number;
-  /** Verbatim content to re-deliver (raw text or the safe representation). */
+  /** Released content to place into conversation (raw text or the safe representation). */
   content: string;
   /** True when the held raw copy was truncated at the storage cap. */
   rawTextTruncated: boolean;
@@ -251,7 +251,7 @@ export interface IntakeReleaseRedeliveryResult {
 }
 
 /**
- * Re-delivers released content into the companion's conversation through the
+ * Places released content into the companion's conversation through the
  * honest, provenance-marked session path (jvbt). REQUIRED: without it a
  * false-positive quarantine would be silently dropped even after a human
  * judged the content safe. The port never throws for an undeliverable item
@@ -264,7 +264,7 @@ export type IntakeReleaseRedeliveryPort =
 export interface AdminIntakeQuarantineServiceDeps {
   store: IntakeQuarantineStore;
   settingsService: Pick<AdminSettingsService, 'getIntakeSourceLists' | 'mutateIntakeSourceList'>;
-  /** Honest re-delivery of released content into conversation (jvbt). */
+  /** Exact placement of released content into conversation (jvbt). */
   redeliverReleased: IntakeReleaseRedeliveryPort;
   /**
    * Provider (not instance): CogSecEventStore snapshots the file at
@@ -593,7 +593,7 @@ export function createAdminIntakeQuarantineService(
       return {
         ok: false,
         status: 400,
-        message: 'A re-delivery retry cannot change source-list policy',
+        message: 'A conversation-placement retry cannot change source-list policy',
       };
     }
     if (entry.ruleMatchProvenanceUnavailable && request.action !== 'discard') {
@@ -665,7 +665,9 @@ export function createAdminIntakeQuarantineService(
         ok: true,
         confirmToken: token,
         expiresAtMs: atMs + tokenTtlMs,
-        summary: `This will ${validated.retryRedelivery ? 'retry delivery of' : DECISION_LABELS[request.action]} for ${entry.envelope.sourceClass} `
+        summary: `This will ${validated.retryRedelivery
+          ? 'place the already-released content into the active conversation'
+          : DECISION_LABELS[request.action]} for ${entry.envelope.sourceClass} `
           + `item ${entry.id}${flywheelNote}. `
           + 'The decision is irreversible and fully audited.',
       };
@@ -766,7 +768,7 @@ export function createAdminIntakeQuarantineService(
       // so a crash mid-decision is visible in the case history (fail closed).
       const severity: CogSecSeverity = request.action === 'release_raw' ? 'medium' : 'low';
       const decisionPhrase = validated.retryRedelivery
-        ? 'retried delivery of one previously released quarantined item'
+        ? 'retried active-conversation placement of one previously released quarantined item'
         : request.action === 'release_raw'
         ? 'released one quarantined item verbatim after review'
         : request.action === 'release_sanitized'
@@ -810,8 +812,8 @@ export function createAdminIntakeQuarantineService(
           message: `Quarantine decision failed (case ${event.caseId}): ${toErrorMessage(error)}`,
         };
       }
-      // ── Honest re-delivery (jvbt): a release is not complete until the
-      // set-aside content is delivered back into the conversation it was
+      // ── Exact conversation placement (jvbt): a release is not complete until the
+      // set-aside content is appended into the conversation it was
       // withheld from. A discard delivers nothing. The item is already
       // released here, so a delivery failure is recorded (never swallowed,
       // never thrown) rather than reversing the human decision.
@@ -840,7 +842,7 @@ export function createAdminIntakeQuarantineService(
         } catch (error) {
           redelivery = {
             delivered: false,
-            reason: `re-delivery threw: ${toErrorMessage(error)}`,
+            reason: `conversation placement threw: ${toErrorMessage(error)}`,
           };
         }
         decided = deps.store.recordRedelivery({
@@ -877,8 +879,8 @@ export function createAdminIntakeQuarantineService(
             safeAgentSummary: `Operator ${decisionPhrase} `
               + `(${entry.envelope.sourceClass}, envelope ${entry.id})`
               + (redelivery.delivered
-                ? '; the content was re-delivered into the conversation'
-                : '; re-delivery did not land and the content was not returned to the conversation'),
+                ? '; the released content was appended to the active conversation'
+                : '; conversation placement did not land and the released content was not appended'),
           }
           : {}),
       });

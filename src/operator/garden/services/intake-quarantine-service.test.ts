@@ -607,6 +607,9 @@ describe('admin intake quarantine service (htm9.11)', () => {
       expect(service.listItems().items[0]?.redeliveryRetryAvailable).toBe(true);
       const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
       if (!begin.ok) throw new Error('retry begin failed');
+      expect(begin.summary).toContain(
+        'place the already-released content into the active conversation',
+      );
       const retried = await service.resolveDecision({
         id: envelope.id,
         action: 'release_raw',

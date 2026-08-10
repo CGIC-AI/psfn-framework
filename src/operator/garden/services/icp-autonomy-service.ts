@@ -9,8 +9,14 @@ import type {
   AdminIcpAutonomyService,
   AdminIcpCandidateCancelInput,
   AdminIcpCandidateView,
+  AdminIcpCurrentAvailabilitySummary,
+  AdminIcpDeliveryTelemetry,
+  AdminIcpFatigueView,
+  AdminIcpInitiationLifecycleCounts,
+  AdminIcpMessageLifecycleCounts,
   AdminIcpMutationResult,
   AdminIcpPermitView,
+  AdminIcpRecentDeliveryEvent,
 } from './types/icp-autonomy.js';
 
 const ADMIN_ICP_LIMIT = 50;
@@ -54,6 +60,9 @@ function projectCandidate(
     expiresAtMs: candidate.expiresAtMs,
     status: candidate.status,
     ...(candidate.reasonCode ? { reasonCode: candidate.reasonCode } : {}),
+    ...(candidate.deliveryDisposition
+      ? { deliveryDisposition: candidate.deliveryDisposition }
+      : {}),
     revision: candidate.revision,
   };
 }
@@ -70,6 +79,151 @@ function addReason(
 ): void {
   if (reasonCode) counts.set(reasonCode, (counts.get(reasonCode) ?? 0) + 1);
 }
+
+/**
+ * Compute trustworthy, content-free delivery telemetry from the already-loaded
+ * bounded projection. No second telemetry store, no routing changes, and no
+ * payload-derived data: only lifecycle status, a content-free disposition
+ * enum, and wall-clock timestamps leave this function.
+ *
+ * Initiation counts are derived from local candidates; message counts from
+ * local fatigue turn reservations; the recent outcome is the most recent
+ * resolved event across consumed initiation permits (authoritative
+ * `consumedAtMs`) and delivered/failed message reservations.
+ */
+function computeDeliveryTelemetry(input: {
+  availability: AdminIcpAutonomyData['availability'];
+  candidates: readonly AdminIcpCandidateView[];
+  permits: readonly AdminIcpPermitView[];
+  fatigue: readonly AdminIcpFatigueView[];
+}): AdminIcpDeliveryTelemetry {
+  const currentLease = input.availability.find(lease => lease.current) ?? null;
+  const currentAvailability: AdminIcpCurrentAvailabilitySummary | null = currentLease
+    ? {
+      state: currentLease.state,
+      source: currentLease.source,
+      issuedAtMs: currentLease.issuedAtMs,
+      expiresAtMs: currentLease.expiresAtMs,
+      current: true,
+    }
+    : null;
+
+  const initiation: AdminIcpInitiationLifecycleCounts = {
+    invited: 0,
+    delivered: 0,
+    suppressed: 0,
+    deferred: 0,
+    declined: 0,
+    failed: 0,
+    expired: 0,
+    cancelled: 0,
+  };
+  const dispositionByCandidate = new Map<string, AdminIcpCandidateView['deliveryDisposition']>();
+  for (const candidate of input.candidates) {
+    if (candidate.deliveryDisposition) {
+      dispositionByCandidate.set(candidate.candidateId, candidate.deliveryDisposition);
+    }
+    switch (candidate.status) {
+      case 'pending':
+      case 'permitted':
+        initiation.invited += 1;
+        break;
+      case 'consumed':
+        // A consumed candidate always carried a disposition when written; the
+        // default keeps an anomalous projection truthful (consumed => the
+        // initiation permit was used => a message was sent) instead of hiding
+        // observed activity.
+        if (candidate.deliveryDisposition === 'suppressed') initiation.suppressed += 1;
+        else initiation.delivered += 1;
+        break;
+      case 'deferred':
+        initiation.deferred += 1;
+        break;
+      case 'declined':
+        initiation.declined += 1;
+        break;
+      case 'rejected':
+        initiation.failed += 1;
+        break;
+      case 'expired':
+        initiation.expired += 1;
+        break;
+      case 'cancelled':
+        initiation.cancelled += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  const messages: AdminIcpMessageLifecycleCounts = {
+    delivered: 0,
+    pending: 0,
+    failed: 0,
+    observed: 0,
+  };
+  for (const row of input.fatigue) {
+    messages.delivered += row.deliveredCount;
+    messages.failed += row.failedCount;
+    messages.pending += row.pendingCount;
+    messages.observed += row.turnCount;
+  }
+
+  const events: AdminIcpRecentDeliveryEvent[] = [];
+  for (const permit of input.permits) {
+    if (permit.status !== 'consumed' || permit.consumedAtMs === undefined) continue;
+    // A consumed initiation permit is the authoritative "a message was sent"
+    // signal. Cross-reference the candidate's content-free disposition when it
+    // is still inside the bounded window; otherwise a consumed permit still
+    // means the initiation completed and a message was sent.
+    const disposition = permit.candidateId
+      ? dispositionByCandidate.get(permit.candidateId)
+      : undefined;
+    events.push({
+      kind: 'initiation',
+      outcome: disposition === 'suppressed' ? 'suppressed' : 'delivered',
+      timestampMs: permit.consumedAtMs,
+    });
+  }
+  for (const row of input.fatigue) {
+    // The projection carries only the reservation timestamp per conversation,
+    // not a per-turn finalized-at time, so a delivered/failed message event
+    // uses the latest reservation activity as its bounded, content-free time.
+    if (row.deliveredCount > 0) {
+      events.push({
+        kind: 'message',
+        outcome: 'delivered',
+        timestampMs: row.latestReservedAtMs,
+      });
+    } else if (row.failedCount > 0) {
+      events.push({
+        kind: 'message',
+        outcome: 'failed',
+        timestampMs: row.latestReservedAtMs,
+      });
+    }
+  }
+  let recentOutcome: AdminIcpRecentDeliveryEvent | null = null;
+  for (const event of events) {
+    if (
+      !recentOutcome
+      || event.timestampMs > recentOutcome.timestampMs
+      || (event.timestampMs === recentOutcome.timestampMs
+        && event.kind === 'initiation'
+        && recentOutcome.kind === 'message')
+    ) {
+      recentOutcome = event;
+    }
+  }
+
+  return {
+    currentAvailability,
+    initiation,
+    messages,
+    recentOutcome,
+  };
+}
+
 
 export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
   private readonly now: () => number;
@@ -182,17 +336,26 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
               : 'No local autonomous initiation candidates are recorded; quiet is not itself a failure.')
             : 'Local candidate activity is recorded; inspect machine-readable reasons and lifecycle state.';
 
+    const availabilityView = availability.map(lease => ({
+      ...lease,
+      local: lease.companionId === this.deps.localCompanionId,
+      current: lease.issuedAtMs <= nowMs && lease.expiresAtMs > nowMs,
+    }));
+    const permitView = permits.map(projectPermit);
+    const delivery = computeDeliveryTelemetry({
+      availability: availabilityView,
+      candidates,
+      permits: permitView,
+      fatigue,
+    });
+
     return {
       available,
       localCompanionId: this.deps.localCompanionId ?? null,
       runtimeEnabled,
       companionPeerContactCount,
       settings,
-      availability: availability.map(lease => ({
-        ...lease,
-        local: lease.companionId === this.deps.localCompanionId,
-        current: lease.issuedAtMs <= nowMs && lease.expiresAtMs > nowMs,
-      })),
+      availability: availabilityView,
       candidates,
       episodes: episodes.map(episode => ({
         ...episode,
@@ -202,10 +365,11 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
           modelUsage: '/models',
         },
       })),
-      permits: permits.map(projectPermit),
+      permits: permitView,
       fatigue,
       costs,
       costProjection: projection.costProjection,
+      delivery,
       reasonCounts: [...reasonCounts.entries()]
         .map(([reasonCode, count]) => ({ reasonCode, count }))
         .sort((left, right) => right.count - left.count

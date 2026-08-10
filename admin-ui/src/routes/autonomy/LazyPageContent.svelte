@@ -11,10 +11,13 @@
   } from '$lib/api/endpoints/icp-autonomy';
   import type { AdminIcpCandidateView } from '../../../../src/operator/garden/services/types.js';
   import {
+    autonomySnapshotDigest,
     canCancelIcpCandidate,
     costProjectionUnavailableMessage,
     costState,
+    deliveryOutcomeLabel,
     formatUsd,
+    recentDeliveryLabel,
   } from './autonomy-view';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import {
@@ -38,6 +41,7 @@
   let pendingAction = $state<PendingAction | null>(null);
   let mutating = $state(false);
   let lastLoadedAt = $state<number | null>(null);
+  let lastDigest = $state('');
   let timer: ReturnType<typeof setInterval> | null = null;
   let displayCompanions = $state<readonly FleetPortalCompanion[]>([]);
 
@@ -80,9 +84,19 @@
         getIcpAutonomyData(),
         fetchFleetPortalProjection().catch(() => null),
       ]);
-      data = nextData;
       if (projection) displayCompanions = projection.companions;
       lastLoadedAt = Date.now();
+      // Deduplicate repeated identical snapshots: keep the prior object reference
+      // when the content-free telemetry digest is unchanged so identical polls
+      // do not churn the bounded tables and cards below. The refresh timestamp
+      // still advances so the operator can see polling is live.
+      const digest = autonomySnapshotDigest(nextData);
+      if (background && data && digest === lastDigest) {
+        // keep existing reference; no re-render
+      } else {
+        data = nextData;
+        lastDigest = digest;
+      }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Failed to load autonomy state';
     } finally {
@@ -234,6 +248,57 @@
       </div>
     </section>
 
+    <section class="garden-section card-garden overflow-hidden">
+      <div class="border-b border-bark-200 p-5">
+        <h2 class="font-serif text-lg font-semibold text-shadow-900">Delivery telemetry</h2>
+        <p class="text-sm text-shadow-600">
+          Content-free answer to “was a message sent?”: current availability plus initiation and
+          message lifecycle counts and the most recent resolved outcome. No message body, channel id,
+          contact identity, provenance text, or reason summary is ever shown here.
+        </p>
+      </div>
+      <div class="grid grid-cols-1 gap-4 p-5 lg:grid-cols-3">
+        <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm">
+          <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Current availability</p>
+          {#if data.delivery.currentAvailability}
+            <p class="mt-2">
+              <span class={`rounded-full px-2 py-1 text-xs ${badge(data.delivery.currentAvailability.state)}`}>{data.delivery.currentAvailability.state.replaceAll('_', ' ')}</span>
+            </p>
+            <p class="mt-2 text-xs text-shadow-600">Source {data.delivery.currentAvailability.source} · expires {dateTime(data.delivery.currentAvailability.expiresAtMs)}</p>
+          {:else}
+            <p class="mt-2 text-sm text-shadow-600">No current availability lease.</p>
+          {/if}
+        </div>
+        <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm">
+          <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Initiation lifecycle</p>
+          <dl class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-shadow-700">
+            <dt>Invited</dt><dd class="text-right font-medium">{data.delivery.initiation.invited}</dd>
+            <dt>Delivered</dt><dd class="text-right font-medium text-moss-700">{data.delivery.initiation.delivered}</dd>
+            <dt>Resolved (no send)</dt><dd class="text-right font-medium">{data.delivery.initiation.suppressed}</dd>
+            <dt>Deferred</dt><dd class="text-right font-medium">{data.delivery.initiation.deferred}</dd>
+            <dt>Declined</dt><dd class="text-right font-medium">{data.delivery.initiation.declined}</dd>
+            <dt>Failed</dt><dd class="text-right font-medium text-wilt-700">{data.delivery.initiation.failed}</dd>
+            <dt>Stale / expired</dt><dd class="text-right font-medium">{data.delivery.initiation.expired}</dd>
+            <dt>Cancelled</dt><dd class="text-right font-medium">{data.delivery.initiation.cancelled}</dd>
+          </dl>
+        </div>
+        <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm">
+          <p class="text-xs font-medium uppercase tracking-wide text-shadow-500">Message turns</p>
+          <dl class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-shadow-700">
+            <dt>Delivered</dt><dd class="text-right font-medium text-moss-700">{data.delivery.messages.delivered}</dd>
+            <dt>In flight</dt><dd class="text-right font-medium">{data.delivery.messages.pending}</dd>
+            <dt>Failed</dt><dd class="text-right font-medium text-wilt-700">{data.delivery.messages.failed}</dd>
+            <dt>Observed</dt><dd class="text-right font-medium">{data.delivery.messages.observed}</dd>
+          </dl>
+          <p class="mt-3 text-xs font-medium uppercase tracking-wide text-shadow-500">Recent outcome</p>
+          <p class="mt-1 text-sm text-shadow-800">{recentDeliveryLabel(data.delivery.recentOutcome)}</p>
+          {#if data.delivery.recentOutcome}
+            <p class="mt-1 text-xs text-shadow-600">{deliveryOutcomeLabel(data.delivery.recentOutcome.outcome)} · {relative(data.delivery.recentOutcome.timestampMs)}</p>
+          {/if}
+        </div>
+      </div>
+    </section>
+
     <section class="garden-section card-garden p-5 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -293,7 +358,7 @@
       <div class="border-b border-bark-200 p-5"><h2 class="font-serif text-lg font-semibold text-shadow-900">Local candidates</h2><p class="text-sm text-shadow-600">Private motivation and contact bindings are withheld. Cancellation uses the current revision and never accepts a target companion.</p></div>
       {#if data.candidates.length === 0}<p class="garden-empty p-5 text-sm text-shadow-600">No local autonomous candidates recorded.</p>{:else}
         <div class="garden-table-scroll overflow-x-auto"><table class="garden-table w-full text-sm"><thead class="bg-bark-100 text-left text-xs uppercase tracking-wide text-shadow-500"><tr><th class="p-3">Source</th><th class="p-3">Peer</th><th class="p-3">Status / reason</th><th class="p-3">Created</th><th class="p-3"></th></tr></thead><tbody class="divide-y divide-bark-200">
-          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 text-xs"><p>{companionDisplayLabel(displayCompanions, candidate.peerCompanionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(candidate.peerCompanionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span><p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="garden-action garden-action--danger min-h-11 rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
+          {#each data.candidates as candidate (candidate.candidateId)}<tr><td class="p-3"><p class="font-medium">{candidate.source.replaceAll('_', ' ')}</p><p class="font-mono text-xs text-shadow-500">{candidate.provenanceRef}</p></td><td class="p-3 text-xs"><p>{companionDisplayLabel(displayCompanions, candidate.peerCompanionId)}</p><details class="mt-1 text-shadow-500"><summary class="cursor-pointer">Technical details</summary><p class="mt-1 break-all font-mono">{companionTechnicalLabel(candidate.peerCompanionId)}</p></details></td><td class="p-3"><span class={`rounded-full px-2 py-1 text-xs ${badge(candidate.status)}`}>{candidate.status}</span>{#if candidate.deliveryDisposition}<span class="ml-2 text-xs text-shadow-500">{candidate.deliveryDisposition === 'delivered' ? 'message sent' : 'no message sent'}</span>{/if}<p class="mt-1 text-xs text-shadow-600">{candidate.reasonCode ?? 'no reason recorded'}</p></td><td class="p-3">{dateTime(candidate.createdAtMs)}</td><td class="p-3 text-right"><button class="garden-action garden-action--danger min-h-11 rounded border border-wilt-300 px-2.5 py-1 text-xs font-medium text-wilt-700 hover:bg-wilt-50 disabled:opacity-40" disabled={!canCancelIcpCandidate(candidate) || mutating} onclick={() => (pendingAction = { kind: 'cancel', candidate })}>Cancel</button></td></tr>{/each}
         </tbody></table></div>
       {/if}
     </section>

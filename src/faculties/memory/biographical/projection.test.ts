@@ -13,6 +13,10 @@ import {
 import { recordCompanionPublicationChoice } from './publication.js';
 import { ingestSelfNicknameEvidence } from './ingest.js';
 import {
+  BIOGRAPHICAL_SOURCE_LIFECYCLE_REASONS,
+  type BiographicalSourceLifecycleReason,
+} from './lifecycle.js';
+import {
   createDmConversationScope,
   createGroupConversationScope,
   type ConversationScope,
@@ -63,6 +67,7 @@ function source(ref: string, overrides: Partial<BiographicalClaimSource> = {}): 
 
 class MemoryRevalidator implements BiographicalSourceRevalidator {
   private readonly current = new Map<string, BiographicalClaimSource>();
+  private readonly invalid = new Map<string, BiographicalSourceLifecycleReason>();
   seed(sources: readonly BiographicalClaimSource[]): void {
     for (const s of sources) this.current.set(s.ref, s);
   }
@@ -70,14 +75,16 @@ class MemoryRevalidator implements BiographicalSourceRevalidator {
     const existing = this.current.get(ref);
     if (existing) this.current.set(ref, { ...existing, ...patch });
   }
-  delete(ref: string): void {
-    this.current.delete(ref);
+  invalidate(ref: string, reason: BiographicalSourceLifecycleReason): void {
+    this.invalid.set(ref, reason);
   }
   async revalidate(sources: readonly BiographicalClaimSource[]): Promise<SourceRevalidationOutcome> {
     const out: BiographicalClaimSource[] = [];
     for (const s of sources) {
+      const reason = this.invalid.get(s.ref);
+      if (reason !== undefined) return { status: 'invalid', reason, sourceRef: s.ref };
       const c = this.current.get(s.ref);
-      if (!c) return { status: 'missing', missingRef: s.ref, detail: 'source deleted or no longer recallable' };
+      if (!c) return { status: 'invalid', reason: 'missing', sourceRef: s.ref };
       out.push(c);
     }
     return { status: 'valid', currentSources: out };
@@ -114,7 +121,7 @@ async function publish(h: Harness, claimId: string, reason = 'publish') {
 
 async function project(h: Harness, scope: ConversationScope, turn?: Partial<TurnBiographicalContext>) {
   return projectBiographicalContext(
-    { store: h.store, revalidator: h.revalidator },
+    { store: h.store, revalidator: h.revalidator, rebuildQueueMaxPending: 8 },
     { companionSubject: COMPANION, conversationScope: scope, now: NOW, ...turn },
   );
 }
@@ -260,7 +267,9 @@ describe('projectBiographicalContext — source revalidation fails closed', () =
     expect(result.withheld).toContainEqual({
       claimId: a.claim.id,
       reason: 'source-drift',
-      detail: 'source-set digest drifted from the digest the publication grant was bound to; the grant no longer applies',
+      detail: 'source-set digest drifted and exact grants no longer apply',
+      rebuildReason: 'source-set-drift',
+      rebuildStatus: 'queued',
     });
     expect(result.promptSection).toContain('Sunny');
     expect(result.promptSection).not.toContain('Sunbeam loaf');
@@ -270,11 +279,94 @@ describe('projectBiographicalContext — source revalidation fails closed', () =
     const h = harness();
     const a = await seed(h, 'Sunbeam loaf', 'memory:m-1');
     await publish(h, a.claim.id);
-    h.revalidator.delete('memory:m-1');
+    h.revalidator.invalidate('memory:m-1', 'deleted');
 
     const result = await project(h, publicGroup());
     expect(result.admittedClaimIds).toEqual([]);
-    expect(result.withheld.some(w => w.claimId === a.claim.id && w.reason === 'source-missing')).toBe(true);
+    expect(result.withheld).toContainEqual({
+      claimId: a.claim.id,
+      reason: 'source-invalid',
+      detail: 'a source lifecycle check failed closed',
+      sourceLifecycleReason: 'deleted',
+      sourceRef: 'memory:m-1',
+      rebuildReason: 'deleted',
+      rebuildStatus: 'queued',
+    });
+    expect(await h.store.listRebuilds({ status: 'pending', limit: 8 })).toMatchObject([
+      { claimId: a.claim.id, reason: 'deleted', sourceRef: 'memory:m-1', status: 'pending' },
+    ]);
+  });
+
+  it.each(BIOGRAPHICAL_SOURCE_LIFECYCLE_REASONS.filter(reason =>
+    reason !== 'sensitivity-increased'
+    && reason !== 'sensitivity-decreased'
+    && reason !== 'contact-archived'
+    && reason !== 'contact-merged'
+  ))('fails closed and queues the structured %s reason', async reason => {
+    const h = harness();
+    const a = await seed(h, 'Sunbeam loaf', 'memory:m-1');
+    h.revalidator.invalidate('memory:m-1', reason);
+
+    const result = await project(h, dmWithV());
+
+    expect(result.admittedClaimIds).toEqual([]);
+    expect(result.withheld[0]).toMatchObject({
+      claimId: a.claim.id,
+      reason: 'source-invalid',
+      sourceLifecycleReason: reason,
+      rebuildReason: reason,
+      rebuildStatus: 'queued',
+    });
+    expect(await h.store.listRebuilds({ status: 'pending', limit: 8 })).toMatchObject([
+      { claimId: a.claim.id, reason, status: 'pending' },
+    ]);
+  });
+
+  it('tightens immediately when current source sensitivity increases', async () => {
+    const h = harness();
+    const a = await seed(h, 'Sunbeam loaf', 'memory:m-1');
+    h.revalidator.drift('memory:m-1', { sensitivityAtProjection: 'confidential' });
+
+    const result = await project(h, dmWithV());
+
+    expect(result.admittedClaimIds).toEqual([]);
+    expect(result.withheld).toContainEqual({
+      claimId: a.claim.id,
+      reason: 'source-drift',
+      detail: 'source sensitivity increased and tightened access immediately',
+      sourceLifecycleReason: 'sensitivity-increased',
+      rebuildReason: 'sensitivity-increased',
+      rebuildStatus: 'queued',
+    });
+  });
+
+  it('does not auto-widen when current source sensitivity decreases', async () => {
+    const h = harness();
+    const originalSource = source('memory:m-1', { sensitivityAtProjection: 'confidential' });
+    const claim = await h.store.writeClaim({
+      subject: COMPANION,
+      kind: 'nickname',
+      value: { kind: 'nickname', nickname: 'Sunbeam loaf', scope: 'self' },
+      basis: 'observed',
+      status: 'active',
+      confidence: 0.9,
+      sources: [originalSource],
+      now: NOW,
+    });
+    h.revalidator.seed([originalSource]);
+    h.revalidator.drift('memory:m-1', { sensitivityAtProjection: 'public' });
+
+    const result = await project(h, dmWithV());
+
+    expect(result.admittedClaimIds).toEqual([]);
+    expect(result.withheld).toContainEqual({
+      claimId: claim.id,
+      reason: 'source-drift',
+      detail: 'source sensitivity decreased but access remains restricted pending audited rebuild',
+      sourceLifecycleReason: 'sensitivity-decreased',
+      rebuildReason: 'sensitivity-decreased',
+      rebuildStatus: 'queued',
+    });
   });
 });
 
@@ -332,7 +424,7 @@ describe('projectBiographicalContext — fail-closed guards', () => {
     const h = harness();
     await expect(
       projectBiographicalContext(
-        { store: h.store, revalidator: h.revalidator },
+        { store: h.store, revalidator: h.revalidator, rebuildQueueMaxPending: 8 },
         {
           companionSubject: { kind: 'contact', contactId: 'v', subjectVersion: 1 },
           conversationScope: publicGroup(),

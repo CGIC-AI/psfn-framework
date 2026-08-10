@@ -80,4 +80,27 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
     ADD CONSTRAINT biographical_claims_status_check
     CHECK (status IN ('candidate', 'active', 'quarantined', 'contested', 'superseded', 'revoked'));
   `,
+  `
+  CREATE TABLE IF NOT EXISTS biographical_rebuild_queue (
+    id TEXT PRIMARY KEY,
+    claim_id TEXT NOT NULL REFERENCES biographical_claims(id),
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    subject_version BIGINT NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL,
+    rebuild_json JSONB NOT NULL,
+    queued_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT biographical_rebuild_subject_kind_check CHECK (subject_kind IN ('companion', 'contact')),
+    CONSTRAINT biographical_rebuild_subject_version_check CHECK (subject_version >= 1),
+    CONSTRAINT biographical_rebuild_kind_check CHECK (kind IN ('name', 'nickname', 'relationship', 'role', 'stable-preference', 'shared-language')),
+    CONSTRAINT biographical_rebuild_reason_check CHECK (reason IN ('missing', 'deleted', 'superseded', 'quarantined', 'consent-revoked', 'revision-drift', 'evidence-digest-drift', 'subject-evidence-drift', 'consent-drift', 'channel-epoch-drift', 'sensitivity-increased', 'sensitivity-decreased', 'contact-archived', 'contact-merged', 'source-set-drift')),
+    CONSTRAINT biographical_rebuild_status_check CHECK (status IN ('pending', 'completed')),
+    CONSTRAINT biographical_rebuild_completion_order_check CHECK (completed_at IS NULL OR completed_at >= queued_at)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_biographical_rebuild_pending ON biographical_rebuild_queue(status, queued_at, id);`,
+  `CREATE INDEX IF NOT EXISTS idx_biographical_rebuild_claim ON biographical_rebuild_queue(claim_id);`,
 ];

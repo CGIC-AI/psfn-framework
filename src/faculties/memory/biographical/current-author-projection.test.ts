@@ -67,7 +67,7 @@ class MemoryRevalidator implements BiographicalSourceRevalidator {
     for (const item of sources) {
       const current = this.current.get(item.ref);
       if (current === undefined) {
-        return { status: 'missing', missingRef: item.ref, detail: 'source is not live' };
+        return { status: 'invalid', reason: 'missing', sourceRef: item.ref };
       }
       currentSources.push(current);
     }
@@ -132,7 +132,7 @@ describe('projectBiographicalContext — verified current author', () => {
     await makePublic(store, nickname);
 
     const result = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status: 'verified', subject: V, trustLevel: 'primary' },
@@ -164,7 +164,7 @@ describe('projectBiographicalContext — verified current author', () => {
     await makePublic(store, eveName);
 
     const result = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status: 'verified', subject: V, trustLevel: 'regular' },
@@ -189,7 +189,7 @@ describe('projectBiographicalContext — verified current author', () => {
     await makePublic(store, name);
 
     const result = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status },
@@ -209,7 +209,7 @@ describe('projectBiographicalContext — verified current author', () => {
     const relationship = await seedIdentity({ store, revalidator, value: { kind: 'relationship', relationshipType: 'partner' }, ref: 'memory:relationship-v' });
 
     const publicTrust = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status: 'verified', subject: V, trustLevel: 'public' },
@@ -218,7 +218,7 @@ describe('projectBiographicalContext — verified current author', () => {
       },
     );
     const regularTrust = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status: 'verified', subject: V, trustLevel: 'regular' },
@@ -245,7 +245,7 @@ describe('projectBiographicalContext — verified current author', () => {
     await makePublic(store, relationship);
 
     const result = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         currentAuthor: { status: 'verified', subject: V, trustLevel: 'primary' },

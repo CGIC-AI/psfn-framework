@@ -87,7 +87,7 @@ class MemoryRevalidator implements BiographicalSourceRevalidator {
     for (const item of sources) {
       const current = this.current.get(item.ref);
       if (current === undefined) {
-        return { status: 'missing', missingRef: item.ref, detail: 'source is not live' };
+        return { status: 'invalid', reason: 'missing', sourceRef: item.ref };
       }
       currentSources.push(current);
     }
@@ -230,6 +230,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
       {
         store,
         revalidator,
+        rebuildQueueMaxPending: 8,
         explicitAddressing: { resolver, maxSubjects: 2 },
       },
       {
@@ -272,6 +273,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
       {
         store,
         revalidator,
+        rebuildQueueMaxPending: 8,
         explicitAddressing: {
           resolver: new AddressedContactResolver(new Map([
             ['discord-eve', verified(EVE, 'unproven')],
@@ -297,6 +299,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
       {
         store,
         revalidator,
+        rebuildQueueMaxPending: 8,
         explicitAddressing: {
           resolver: new AddressedContactResolver(new Map([
             ['discord-eve', verified(EVE, 'authoritative')],
@@ -321,6 +324,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
       {
         store,
         revalidator,
+        rebuildQueueMaxPending: 8,
         explicitAddressing: {
           resolver: new AddressedContactResolver(new Map([
             ['discord-eve', verified(EVE, 'authoritative')],
@@ -355,7 +359,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     ]));
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 2 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 2 } },
       {
         companionSubject: COMPANION,
         conversationScope: group('invite_only', [{ authorId: 'discord-eve', name: 'Eve' }]),
@@ -376,7 +380,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     const scope = group('public');
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 2 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 2 } },
       {
         companionSubject: COMPANION,
         conversationScope: scope,
@@ -407,7 +411,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     const resolver = new AddressedContactResolver(new Map([['discord-eve', resolution]]));
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 2 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 2 } },
       {
         companionSubject: COMPANION,
         conversationScope: scope,
@@ -441,7 +445,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     });
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 2 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 2 } },
       {
         companionSubject: COMPANION,
         conversationScope: scope,
@@ -464,7 +468,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     const scope = group('public');
 
     const result = await projectBiographicalContext(
-      { store, revalidator },
+      { store, revalidator, rebuildQueueMaxPending: 8 },
       {
         companionSubject: COMPANION,
         conversationScope: scope,
@@ -489,7 +493,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     const resolver = new AddressedContactResolver(new Map());
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 2 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 2 } },
       {
         companionSubject: COMPANION,
         conversationScope: scope,
@@ -520,7 +524,7 @@ describe('projectBiographicalContext — explicit reply and mention subjects', (
     const scope = group('public', [{ authorId: 'discord-rostered', name: 'Rostered Contact' }]);
 
     const result = await projectBiographicalContext(
-      { store, revalidator, explicitAddressing: { resolver, maxSubjects: 1 } },
+      { store, revalidator, rebuildQueueMaxPending: 8, explicitAddressing: { resolver, maxSubjects: 1 } },
       {
         companionSubject: COMPANION,
         conversationScope: scope,

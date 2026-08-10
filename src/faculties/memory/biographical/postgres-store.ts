@@ -1,11 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import {
   ensurePostgresSchemaWithAdvisoryLock,
-  executeQuery,
-  queryOne,
-  queryRows,
   withPostgresClient,
 } from '../../../persistence/postgres.js';
 import {
@@ -41,6 +38,14 @@ import type {
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
 } from './types.js';
+import {
+  computeBiographicalRebuildId,
+  deserializeBiographicalRebuildRequest,
+  type BiographicalRebuildEnqueueInput,
+  type BiographicalRebuildEnqueueResult,
+  type BiographicalRebuildListOptions,
+  type BiographicalRebuildRequest,
+} from './lifecycle.js';
 
 interface ClaimRow {
   claim_json: string;
@@ -48,6 +53,10 @@ interface ClaimRow {
 
 interface GrantRow {
   grant_json: string;
+}
+
+interface RebuildRow {
+  rebuild_json: unknown;
 }
 
 function subjectColumns(subject: BiographicalSubjectRef): {
@@ -78,11 +87,36 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
   constructor(
     private readonly pool: Pool,
     private readonly now: () => Date = () => new Date(),
+    private readonly client?: PoolClient,
   ) {}
 
+  private async queryRows<T extends QueryResultRow>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<T[]> {
+    const result = await (this.client ?? this.pool).query<T>(text, [...values]);
+    return result.rows;
+  }
+
+  private async queryOne<T extends QueryResultRow>(
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<T | undefined> {
+    return (await this.queryRows<T>(text, values))[0];
+  }
+
+  private async inTransaction<T>(
+    operation: (store: PostgresBiographicalProfileStore, client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    if (this.client !== undefined) return await operation(this, this.client);
+    return await withPostgresClient(this.pool, async client => await operation(
+      new PostgresBiographicalProfileStore(this.pool, this.now, client),
+      client,
+    ));
+  }
+
   private async readClaim(id: string): Promise<BiographicalClaim> {
-    const row = await queryOne<ClaimRow>(
-      this.pool,
+    const row = await this.queryOne<ClaimRow>(
       'SELECT claim_json FROM biographical_claims WHERE id = $1',
       [id],
     );
@@ -94,8 +128,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     claimDigest: string,
     sourceSetDigest: string,
   ): Promise<BiographicalSensitivityGrant[]> {
-    const rows = await queryRows<GrantRow>(
-      this.pool,
+    const rows = await this.queryRows<GrantRow>(
       `SELECT grant_json FROM biographical_grants
        WHERE claim_digest = $1 AND source_set_digest = $2`,
       [claimDigest, sourceSetDigest],
@@ -111,8 +144,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
   private async insertClaimRow(claim: BiographicalClaim, now: Date): Promise<void> {
     const { subjectKind, subjectId, subjectVersion } = subjectColumns(claim.subject);
     const nowIso = now.toISOString();
-    await executeQuery(
-      this.pool,
+    await (this.client ?? this.pool).query(
       `INSERT INTO biographical_claims
         (id, claim_digest, source_set_digest, schema_version, subject_kind,
          subject_id, subject_version, kind, status, effective_sensitivity,
@@ -142,13 +174,13 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     sourceSetDigest: string,
     now: Date,
   ): Promise<void> {
-    await withPostgresClient(this.pool, async (client) => {
+    await this.inTransaction(async (store, client) => {
       const result = await client.query<ClaimRow>(
         `SELECT claim_json FROM biographical_claims
          WHERE claim_digest = $1 AND source_set_digest = $2 FOR UPDATE`,
         [claimDigest, sourceSetDigest],
       );
-      const grants = await this.findGrantsByDigests(claimDigest, sourceSetDigest);
+      const grants = await store.findGrantsByDigests(claimDigest, sourceSetDigest);
       for (const row of result.rows) {
         const claim = deserializeClaim(row.claim_json);
         const updated = reevaluateClaimEffective(claim, grants, now);
@@ -180,8 +212,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
   }
 
   async getClaim(id: string): Promise<BiographicalClaim | undefined> {
-    const row = await queryOne<ClaimRow>(
-      this.pool,
+    const row = await this.queryOne<ClaimRow>(
       'SELECT claim_json FROM biographical_claims WHERE id = $1',
       [id],
     );
@@ -208,6 +239,16 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
          AND subject_version = $${params.length}`,
       );
     }
+    if (options.relatedSubject !== undefined) {
+      const { subjectKind, subjectId, subjectVersion } = subjectColumns(options.relatedSubject);
+      params.push(subjectKind, subjectId, subjectVersion);
+      const idField = options.relatedSubject.kind === 'companion' ? 'companionId' : 'contactId';
+      conditions.push(
+        `claim_json->'relatedSubject'->>'kind' = $${params.length - 2}
+         AND claim_json->'relatedSubject'->>'${idField}' = $${params.length - 1}
+         AND (claim_json->'relatedSubject'->>'subjectVersion')::bigint = $${params.length}`,
+      );
+    }
     if (options.kind !== undefined) {
       params.push(options.kind);
       conditions.push(`kind = $${params.length}`);
@@ -231,8 +272,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       paginationClause = `LIMIT $${params.length}`;
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const rows = await queryRows<ClaimRow>(
-      this.pool,
+    const rows = await this.queryRows<ClaimRow>(
       `SELECT claim_json FROM biographical_claims ${where}
        ORDER BY created_at ASC, id ASC ${paginationClause}`,
       params,
@@ -247,7 +287,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     input: BiographicalSupersessionInput,
   ): Promise<BiographicalSupersessionResult> {
     const now = input.now ?? new Date();
-    return await withPostgresClient(this.pool, async (client) => {
+    return await this.inTransaction(async (store, client) => {
       const priorRow = await client.query<ClaimRow>(
         'SELECT claim_json FROM biographical_claims WHERE id = $1 FOR UPDATE',
         [input.supersededClaimId],
@@ -280,7 +320,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         now,
       });
       assertCompatibleSupersession(priorClaim, prepared);
-      const grants = await this.findGrantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
+      const grants = await store.findGrantsByDigests(prepared.claimDigest, prepared.sourceSetDigest);
       const superseding = finalizeBiographicalClaim(prepared, grants, now);
       const superseded: BiographicalClaim = {
         ...priorClaim,
@@ -298,7 +338,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
           now.toISOString(),
         ],
       );
-      await this.insertClaimRowClient(client, superseding, now);
+      await store.insertClaimRowClient(client, superseding, now);
       return { superseded, superseding };
     });
   }
@@ -337,7 +377,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
 
   async transitionClaim(input: BiographicalTransitionInput): Promise<BiographicalClaim> {
     const now = input.now ?? new Date();
-    return await withPostgresClient(this.pool, async (client) => {
+    return await this.inTransaction(async (_store, client) => {
       const row = await client.query<ClaimRow>(
         'SELECT claim_json FROM biographical_claims WHERE id = $1 FOR UPDATE',
         [input.claimId],
@@ -364,29 +404,30 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
   async recordGrant(input: BiographicalGrantWriteInput): Promise<BiographicalSensitivityGrant> {
     const { id, grant } = prepareBiographicalGrant(input);
     const fullGrant: BiographicalSensitivityGrant = { id, ...grant };
-    await executeQuery(
-      this.pool,
-      `INSERT INTO biographical_grants
-        (id, claim_digest, source_set_digest, schema_version, policy_version,
-         granted_sensitivity, granted_at, expires_at, revoked_at, grant_json)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::jsonb)`,
-      [
-        id,
+    await this.inTransaction(async (store, client) => {
+      await client.query(
+        `INSERT INTO biographical_grants
+          (id, claim_digest, source_set_digest, schema_version, policy_version,
+           granted_sensitivity, granted_at, expires_at, revoked_at, grant_json)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::jsonb)`,
+        [
+          id,
+          grant.claimDigest,
+          grant.sourceSetDigest,
+          grant.schemaVersion,
+          grant.policyVersion,
+          grant.grantedSensitivity,
+          grant.grantedAt,
+          grant.expiresAt ?? null,
+          JSON.stringify(fullGrant),
+        ],
+      );
+      await store.reevaluateClaimsForDigests(
         grant.claimDigest,
         grant.sourceSetDigest,
-        grant.schemaVersion,
-        grant.policyVersion,
-        grant.grantedSensitivity,
-        grant.grantedAt,
-        grant.expiresAt ?? null,
-        JSON.stringify(fullGrant),
-      ],
-    );
-    await this.reevaluateClaimsForDigests(
-      grant.claimDigest,
-      grant.sourceSetDigest,
-      input.now ?? new Date(),
-    );
+        input.now ?? new Date(),
+      );
+    });
     return fullGrant;
   }
 
@@ -402,7 +443,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     const reason = input.reason.trim();
     if (reason.length === 0) throw new Error('revoke reason must be non-empty');
     const now = input.now ?? new Date();
-    const revoked = await withPostgresClient(this.pool, async (client) => {
+    return await this.inTransaction(async (store, client) => {
       const row = await client.query<{ grant_json: string }>(
         'SELECT grant_json FROM biographical_grants WHERE id = $1 FOR UPDATE',
         [grantId],
@@ -422,20 +463,176 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         `UPDATE biographical_grants SET revoked_at = $2, grant_json = $3::jsonb WHERE id = $1`,
         [grantId, next.revokedAt, JSON.stringify(next)],
       );
+      await store.reevaluateClaimsForDigests(next.claimDigest, next.sourceSetDigest, now);
       return next;
     });
-    // Re-evaluate matching claims after the grant row is durably revoked.
-    await this.reevaluateClaimsForDigests(revoked.claimDigest, revoked.sourceSetDigest, now);
-    return revoked;
   }
 
   async getGrant(grantId: string): Promise<BiographicalSensitivityGrant | undefined> {
-    const row = await queryOne<{ grant_json: string }>(
-      this.pool,
+    const row = await this.queryOne<{ grant_json: string }>(
       'SELECT grant_json FROM biographical_grants WHERE id = $1',
       [grantId],
     );
     return row ? assertGrantRecord(row.grant_json) : undefined;
+  }
+
+  async enqueueRebuild(
+    input: BiographicalRebuildEnqueueInput,
+  ): Promise<BiographicalRebuildEnqueueResult> {
+    if (!Number.isSafeInteger(input.maxPending) || input.maxPending < 1) {
+      throw new Error('biographical rebuild maxPending must be a positive integer');
+    }
+    const id = computeBiographicalRebuildId({
+      claimId: input.claim.id,
+      reason: input.reason,
+      ...(input.sourceRef !== undefined ? { sourceRef: input.sourceRef } : {}),
+      priorSourceSetDigest: input.claim.sourceSetDigest,
+      ...(input.currentSourceSetDigest !== undefined
+        ? { currentSourceSetDigest: input.currentSourceSetDigest }
+        : {}),
+      ...(input.targetSubject !== undefined ? { targetSubject: input.targetSubject } : {}),
+    });
+    return await this.inTransaction(async (store, client) => {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext('biographical-rebuild-queue'), hashtext('capacity'))`,
+      );
+      const existing = await store.queryOne<RebuildRow>(
+        'SELECT rebuild_json FROM biographical_rebuild_queue WHERE id = $1',
+        [id],
+      );
+      if (existing !== undefined) {
+        return {
+          status: 'coalesced',
+          request: deserializeBiographicalRebuildRequest(existing.rebuild_json),
+        };
+      }
+      const pending = await store.queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM biographical_rebuild_queue WHERE status = 'pending'`,
+      );
+      if (Number(pending?.count ?? '0') >= input.maxPending) {
+        return { status: 'capacity-exhausted' };
+      }
+      const request: BiographicalRebuildRequest = {
+        id,
+        claimId: input.claim.id,
+        subject: input.claim.subject,
+        kind: input.claim.kind,
+        reason: input.reason,
+        ...(input.sourceRef !== undefined ? { sourceRef: input.sourceRef } : {}),
+        priorSourceSetDigest: input.claim.sourceSetDigest,
+        ...(input.currentSourceSetDigest !== undefined
+          ? { currentSourceSetDigest: input.currentSourceSetDigest }
+          : {}),
+        ...(input.targetSubject !== undefined ? { targetSubject: input.targetSubject } : {}),
+        status: 'pending',
+        queuedAt: input.now.toISOString(),
+      };
+      const { subjectKind, subjectId, subjectVersion } = subjectColumns(request.subject);
+      await client.query(
+        `INSERT INTO biographical_rebuild_queue
+          (id, claim_id, subject_kind, subject_id, subject_version, kind, reason,
+           status, rebuild_json, queued_at, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8::jsonb, $9, NULL)`,
+        [
+          id,
+          request.claimId,
+          subjectKind,
+          subjectId,
+          subjectVersion,
+          request.kind,
+          request.reason,
+          JSON.stringify(request),
+          request.queuedAt,
+        ],
+      );
+      return { status: 'queued', request };
+    });
+  }
+
+  async listRebuilds(options: BiographicalRebuildListOptions): Promise<BiographicalRebuildRequest[]> {
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
+      throw new Error('biographical rebuild list limit must be a positive integer');
+    }
+    const params: unknown[] = [];
+    const statusClause = options.status === undefined
+      ? ''
+      : (params.push(options.status), `WHERE status = $${params.length}`);
+    params.push(options.limit);
+    const rows = await this.queryRows<RebuildRow>(
+      `SELECT rebuild_json FROM biographical_rebuild_queue ${statusClause}
+       ORDER BY queued_at ASC, id ASC LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map(row => deserializeBiographicalRebuildRequest(row.rebuild_json));
+  }
+
+  async completeRebuild(
+    id: string,
+    completion: NonNullable<BiographicalRebuildRequest['completion']>,
+    now: Date,
+  ): Promise<BiographicalRebuildRequest> {
+    return await this.inTransaction(async (_store, client) => {
+      const result = await client.query<RebuildRow>(
+        'SELECT rebuild_json FROM biographical_rebuild_queue WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      const stored = result.rows.at(0)?.rebuild_json;
+      if (stored === undefined) throw new Error(`biographical rebuild not found: ${id}`);
+      const current = deserializeBiographicalRebuildRequest(stored);
+      if (current.status !== 'pending') {
+        throw new Error(`biographical rebuild ${id} is already completed`);
+      }
+      const completed: BiographicalRebuildRequest = {
+        ...current,
+        status: 'completed',
+        completion,
+        completedAt: now.toISOString(),
+      };
+      await client.query(
+        `UPDATE biographical_rebuild_queue
+         SET status = 'completed', rebuild_json = $2::jsonb, completed_at = $3
+         WHERE id = $1`,
+        [id, JSON.stringify(completed), completed.completedAt],
+      );
+      return completed;
+    });
+  }
+
+  async runClaimTransaction<T>(
+    subject: BiographicalSubjectRef,
+    kind: BiographicalClaim['kind'],
+    operation: (store: BiographicalProfileStorePort) => Promise<T>,
+  ): Promise<T> {
+    if (this.client !== undefined) return await operation(this);
+    const columns = subjectColumns(subject);
+    const subjectKey = `${columns.subjectKind}:${columns.subjectId}:${columns.subjectVersion}`;
+    return await this.inTransaction(async (store, client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [subjectKey, '*'],
+      );
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [subjectKey, kind],
+      );
+      return await operation(store);
+    });
+  }
+
+  async runSubjectTransaction<T>(
+    subject: BiographicalSubjectRef,
+    operation: (store: BiographicalProfileStorePort) => Promise<T>,
+  ): Promise<T> {
+    if (this.client !== undefined) return await operation(this);
+    const columns = subjectColumns(subject);
+    const subjectKey = `${columns.subjectKind}:${columns.subjectId}:${columns.subjectVersion}`;
+    return await this.inTransaction(async (store, client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [subjectKey, '*'],
+      );
+      return await operation(store);
+    });
   }
 }
 

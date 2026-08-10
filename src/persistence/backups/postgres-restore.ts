@@ -61,6 +61,9 @@ export const DEFAULT_RESTORE_CRITICAL_TABLES = [
   'reflections',
   'session_messages_projection',
   'model_usage_events',
+  'biographical_claims',
+  'biographical_grants',
+  'biographical_rebuild_queue',
 ] as const;
 
 export interface PostgresRestoreVerificationOptions {

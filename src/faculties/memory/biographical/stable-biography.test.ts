@@ -18,6 +18,7 @@ import { InMemoryBiographicalProfileStore } from './in-memory-store.js';
 import { presentBiographicalClaim } from './projection-rendering.js';
 import { parsePortableStableCandidate } from './stable-candidate.js';
 import { prepareBiographicalClaim } from './store-port.js';
+import type { BiographicalTransitionInput } from './store-port.js';
 import type {
   BiographicalClaimSource,
   BiographicalSubjectRef,
@@ -262,6 +263,50 @@ describe('deterministic conflict and correction policy', () => {
     expect(quarantined.disposition).toBe('quarantined');
     expect(quarantined.claim.status).toBe('quarantined');
     expect((await store.getClaim(active.claim.id))?.status).toBe('active');
+  });
+
+  it('rolls back interrupted conflict admission and retries without partial state', async () => {
+    class InterruptingStore extends InMemoryBiographicalProfileStore {
+      interrupt = false;
+
+      override async transitionClaim(input: BiographicalTransitionInput) {
+        const transitioned = await super.transitionClaim(input);
+        if (this.interrupt) {
+          this.interrupt = false;
+          throw new Error('simulated interruption after status write');
+        }
+        return transitioned;
+      }
+    }
+
+    const store = new InterruptingStore(() => NOW);
+    const original = await admitBiographicalCandidate({
+      store,
+      candidate: preferenceCandidate('likes'),
+    });
+    store.interrupt = true;
+
+    await expect(admitBiographicalCandidate({
+      store,
+      candidate: preferenceCandidate('dislikes'),
+    })).rejects.toThrow('simulated interruption');
+    expect((await store.getClaim(original.claim.id))?.status).toBe('active');
+    expect(await store.listClaims({
+      subject: CONTACT,
+      kind: 'stable-preference',
+      includeTerminal: true,
+    })).toHaveLength(1);
+
+    const retried = await admitBiographicalCandidate({
+      store,
+      candidate: preferenceCandidate('dislikes'),
+    });
+    expect(retried.disposition).toBe('contested');
+    expect(await store.listClaims({
+      subject: CONTACT,
+      kind: 'stable-preference',
+      status: 'contested',
+    })).toHaveLength(2);
   });
 });
 

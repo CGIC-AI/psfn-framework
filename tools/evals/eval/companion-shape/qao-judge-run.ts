@@ -390,7 +390,7 @@ function buildJudgeIds(targets: readonly LlmResponseTarget[]): string[] {
 function printUsage(): void {
   console.log('Usage: npm run eval:qao:judge -- --source <qao-collection.json> [options]');
   console.log('');
-  console.log('Score QAO collected outputs with a judge council. Fixture judge is default and needs no secrets.');
+  console.log('Score QAO collected outputs with a judge council. Fixture judge is default and requires no credentials.');
   console.log('');
   console.log('Options:');
   console.log('  --source <path>                  QAO collection or compatible response artifact. Required.');
@@ -401,7 +401,7 @@ function printUsage(): void {
   console.log(`  --council-id <id>                Council id (default: ${DEFAULT_COUNCIL_ID})`);
   console.log('  --live                           Required for openrouter/deepseek judge targets.');
   console.log('  --timeout-ms <n>                 Provider request timeout.');
-  console.log('  --max-output-tokens <n>          Per-judge-call max output tokens.');
+  console.log('  --max-output-tokens <n>          Per-judge-call max output tokens.'); // ubs:ignore — CLI help prints a flag name, not a token value.
   console.log('  --temperature <n>                Per-judge-call temperature.');
   console.log('  --help                           Show this help.');
 }

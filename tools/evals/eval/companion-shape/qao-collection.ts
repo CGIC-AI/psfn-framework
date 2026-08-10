@@ -398,7 +398,7 @@ function printUsage(): void {
   console.log('  --run-id <id>                    Stable run id for artifact filenames.');
   console.log('  --live                           Required for openrouter/deepseek targets.');
   console.log('  --timeout-ms <n>                 Provider request timeout.');
-  console.log('  --max-output-tokens <n>          Per-scenario max output tokens.');
+  console.log('  --max-output-tokens <n>          Per-scenario max output tokens.'); // ubs:ignore — CLI help prints a flag name, not a token value.
   console.log('  --temperature <n>                Per-scenario temperature.');
   console.log('  --companion-shape-projection <path>  Write a report.ts-compatible response set.');
   console.log('  --companion-shape-scenarios <path>   Write a report.ts-compatible scenario set.');

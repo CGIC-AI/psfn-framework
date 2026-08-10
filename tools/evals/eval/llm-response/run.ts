@@ -78,7 +78,7 @@ function parseCliOptions(args: string[]): CliOptions {
 function printUsage(): void {
   console.log('Usage: npm run eval:llm-response -- [options]');
   console.log('');
-  console.log('Collect generic LLM response artifacts. Fixture target is default and needs no secrets.');
+  console.log('Collect generic LLM response artifacts. Fixture target is default and requires no credentials.');
   console.log('');
   console.log('Options:');
   console.log('  --target <provider:model>        Target to run. Providers: fixture, openrouter, deepseek. Repeatable.');

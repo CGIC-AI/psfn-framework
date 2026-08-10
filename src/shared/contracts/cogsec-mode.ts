@@ -46,13 +46,7 @@ export function isCogSecMode(value: unknown): value is CogSecMode {
  * bypass) is resolved per item through {@link resolveCogSecVectorPosture},
  * not through this projection.
  */
-export const INTAKE_ENFORCEMENT_POSTURES = ['shadow', 'enforce'] as const;
-export type IntakeEnforcementPosture = typeof INTAKE_ENFORCEMENT_POSTURES[number];
-
-export function isIntakeEnforcementPosture(value: unknown): value is IntakeEnforcementPosture {
-  return typeof value === 'string'
-    && (INTAKE_ENFORCEMENT_POSTURES as readonly string[]).includes(value);
-}
+export type IntakeEnforcementPosture = 'shadow' | 'enforce';
 
 /**
  * Projects a global mode onto the binary enforcement posture for an enforcing
@@ -60,11 +54,6 @@ export function isIntakeEnforcementPosture(value: unknown): value is IntakeEnfor
  */
 export function intakeEnforcementPosture(mode: CogSecMode): IntakeEnforcementPosture {
   return mode === 'shadow' ? 'shadow' : 'enforce';
-}
-
-/** True when the mode enforces external ingress / registered outbound. */
-export function isCogSecEnforcing(mode: CogSecMode): boolean {
-  return mode !== 'shadow';
 }
 
 // ── Declared CogSec vectors ──
@@ -94,12 +83,7 @@ export const COGSEC_VECTORS = [
 
 export type CogSecVector = typeof COGSEC_VECTORS[number];
 
-export function isCogSecVector(value: unknown): value is CogSecVector {
-  return typeof value === 'string' && (COGSEC_VECTORS as readonly string[]).includes(value);
-}
-
-export const COGSEC_VECTOR_CLASSIFICATIONS = ['external', 'internal'] as const;
-export type CogSecVectorClassification = typeof COGSEC_VECTOR_CLASSIFICATIONS[number];
+type CogSecVectorClassification = 'external' | 'internal';
 
 /**
  * Structural classification of a vector. External vectors carry untrusted
@@ -108,7 +92,7 @@ export type CogSecVectorClassification = typeof COGSEC_VECTOR_CLASSIFICATIONS[nu
  * (own memory, local database, journal, local filesystem, self-directed
  * shell, and structurally authenticated internal chat).
  */
-export function cogSecVectorClassification(vector: CogSecVector): CogSecVectorClassification {
+function cogSecVectorClassification(vector: CogSecVector): CogSecVectorClassification {
   switch (vector) {
     case 'external_chat_ingress':
     case 'external_file_ingress':
@@ -125,7 +109,7 @@ export function cogSecVectorClassification(vector: CogSecVector): CogSecVectorCl
   }
 }
 
-export function isInternalCogSecVector(vector: CogSecVector): boolean {
+function isInternalCogSecVector(vector: CogSecVector): boolean {
   return cogSecVectorClassification(vector) === 'internal';
 }
 
@@ -139,22 +123,14 @@ export function isInternalCogSecVector(vector: CogSecVector): boolean {
  * arguments. A model cannot rename its own tool, so it cannot forge an
  * internal provenance class.
  */
-export const COGSEC_PROVENANCE_CLASSES = [
-  'external',
-  'internal_chat',
-  'own_memory_read',
-  'local_database_read',
-  'journal',
-  'local_fs_read',
-  'self_directed_shell',
-] as const;
-
-export type CogSecProvenanceClass = typeof COGSEC_PROVENANCE_CLASSES[number];
-
-export function isCogSecProvenanceClass(value: unknown): value is CogSecProvenanceClass {
-  return typeof value === 'string'
-    && (COGSEC_PROVENANCE_CLASSES as readonly string[]).includes(value);
-}
+export type CogSecProvenanceClass =
+  | 'external'
+  | 'internal_chat'
+  | 'own_memory_read'
+  | 'local_database_read'
+  | 'journal'
+  | 'local_fs_read'
+  | 'self_directed_shell';
 
 /** Maps a structural provenance class to its declared CogSec vector. */
 export function cogSecVectorForProvenance(

@@ -160,7 +160,7 @@ export interface AdminIcpRecentDeliveryEvent {
   timestampMs: number;
 }
 
-export type AdminIcpDeliveryOutcome =
+type AdminIcpDeliveryOutcome =
   | 'delivered'
   | 'suppressed'
   | 'deferred'
@@ -169,7 +169,7 @@ export type AdminIcpDeliveryOutcome =
   | 'expired';
 
 /** Content-free initiation target result; the private reason summary is withheld. */
-export type AdminIcpDeliveryDisposition = 'delivered' | 'suppressed';
+type AdminIcpDeliveryDisposition = 'delivered' | 'suppressed';
 
 export interface AdminIcpAutonomyData {
   available: boolean;

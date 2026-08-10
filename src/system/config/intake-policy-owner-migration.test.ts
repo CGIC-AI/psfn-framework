@@ -286,4 +286,57 @@ describe('intake policy owner migration', () => {
     });
     expect(loadIntakePolicyConfig(dataDir).visionScreener.enabled).toBe(true);
   });
+
+  it('upgrades a real v4 owner (no screeningPool) to v5, injecting screeningPool from the seed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const legacy = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    legacy.schemaVersion = 4;
+    delete legacy.screeningPool;
+    writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    // Runtime load refuses a v4 owner under the v5 contract.
+    expect(() => loadIntakePolicyConfig(dataDir))
+      .toThrow(/schemaVersion 4 owners require the explicit migrate:intake-policy-owner command/);
+
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({
+      status: 'planned',
+      fromSchemaVersion: 4,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      addedPaths: ['screeningPool'],
+    });
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      fromSchemaVersion: 4,
+    });
+    const loaded = loadIntakePolicyConfig(dataDir);
+    expect(loaded.schemaVersion).toBe(INTAKE_POLICY_SCHEMA_VERSION);
+    expect(loaded.screeningPool.concurrency).toBeGreaterThanOrEqual(2);
+    expect(loaded.screeningPool.concurrency).toBeLessThanOrEqual(4);
+    // A second pass is a no-op.
+    expect(migrateIntakePolicyOwner({ dataDir })).toMatchObject({ status: 'not_needed' });
+  });
+
+  it('injects screeningPool into a current-version owner missing the section', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-policy-migration-'));
+    tempDirs.push(dataDir);
+    const filePath = join(dataDir, INTAKE_POLICY_FILE_NAME);
+    const current = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    delete current.screeningPool;
+    writeFileSync(filePath, `${JSON.stringify(current, null, 2)}\n`);
+
+    expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/screeningPool must be an object/);
+    expect(migrateIntakePolicyOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
+      addedPaths: ['screeningPool'],
+    });
+    expect(loadIntakePolicyConfig(dataDir).screeningPool.concurrency).toBeGreaterThanOrEqual(2);
+  });
 });

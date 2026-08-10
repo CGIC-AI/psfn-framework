@@ -26,6 +26,7 @@ import {
   validateIntakeUrlScannerPolicy,
   type IntakeUrlScannerPolicyConfig,
 } from './intake-url-scanner-policy.js';
+import screeningPoolContract from './intake-screening-pool-contract.json' with { type: 'json' };
 
 export type { IntakeUrlSchemeAction } from '../../shared/contracts/intake-url-scanner.js';
 export type { IntakeUrlScannerPolicyConfig } from './intake-url-scanner-policy.js';
@@ -37,22 +38,15 @@ export const INTAKE_POLICY_SCHEMA_VERSION = 5 as const;
 /**
  * Bounded asynchronous screening pool (psfn-framework-yxz0z.4). The gateway
  * composes ONE fleet-wide pool whose worker concurrency is operator-owned and
- * bounded to the range below: independent companion streams overlap up to the
+ * bounded by the adjacent contract data: independent companion streams overlap up to the
  * bound, while a single companion's inbound message stream stays serial so its
  * screening decisions and delivery order stay deterministic. The bounds are
  * code-owned validation ceilings/floors — owners tune within them, never past.
  */
-const SCREENING_POOL_MIN_CONCURRENCY = 2 as const;
-const SCREENING_POOL_MAX_CONCURRENCY = 4 as const;
-const SCREENING_POOL_MIN_QUEUE_DEPTH = 1 as const;
-const SCREENING_POOL_MAX_QUEUE_DEPTH = 1024 as const;
-const SCREENING_POOL_MIN_ITEM_DEADLINE_MS = 5000 as const;
-const SCREENING_POOL_MAX_ITEM_DEADLINE_MS = 300000 as const;
-
 export interface IntakeScreeningPoolPolicyConfig {
   /**
    * Fleet-wide worker concurrency. Must be within
-   * [SCREENING_POOL_MIN_CONCURRENCY, SCREENING_POOL_MAX_CONCURRENCY] (2..4):
+   * the contract's small fleet-wide range:
    * few enough that the L1.5 ONNX scorer and L2/L3 pi-ai calls do not burst a
    * single provider, enough that independent companions overlap rather than
    * serialize behind one another.
@@ -1552,22 +1546,22 @@ export function validateScreeningPool(
       raw.concurrency,
       sourcePath,
       'screeningPool.concurrency',
-      SCREENING_POOL_MIN_CONCURRENCY,
-      SCREENING_POOL_MAX_CONCURRENCY,
+      screeningPoolContract.concurrency.min,
+      screeningPoolContract.concurrency.max,
     ),
     maxQueueDepth: validateIntakeIntegerBounded(
       raw.maxQueueDepth,
       sourcePath,
       'screeningPool.maxQueueDepth',
-      SCREENING_POOL_MIN_QUEUE_DEPTH,
-      SCREENING_POOL_MAX_QUEUE_DEPTH,
+      screeningPoolContract.maxQueueDepth.min,
+      screeningPoolContract.maxQueueDepth.max,
     ),
     itemDeadlineMs: validateIntakeIntegerBounded(
       raw.itemDeadlineMs,
       sourcePath,
       'screeningPool.itemDeadlineMs',
-      SCREENING_POOL_MIN_ITEM_DEADLINE_MS,
-      SCREENING_POOL_MAX_ITEM_DEADLINE_MS,
+      screeningPoolContract.itemDeadlineMs.min,
+      screeningPoolContract.itemDeadlineMs.max,
     ),
   };
 }

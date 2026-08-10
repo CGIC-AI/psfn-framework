@@ -52,7 +52,10 @@ export function renderPromptBlock(
   // default section order reproduces the historical fixed ordering byte-for-byte.
   const rendered = new Map<string, string>();
   if (recentContactShape && recentContactShape.summary.trim().length > 0) {
-    rendered.set('recent_contact_shape', wrapPromptSectionXml({
+    // `core_profile` remains the version-1 presentation-order slot id so
+    // existing settings.json owners keep loading. The emitted prompt section
+    // is the explicitly renamed, non-authoritative projection.
+    rendered.set('core_profile', wrapPromptSectionXml({
       id: 'recent_contact_shape',
       content: `Recent contact shape (freshness-bound; not durable biography):\n${recentContactShape.summary.trim()}`,
     }));

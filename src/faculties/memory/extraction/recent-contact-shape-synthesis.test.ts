@@ -283,4 +283,79 @@ describe('refreshRecentContactShape', () => {
       sources: [{ ref: 'memory:mem-briar-1' }],
     }]);
   });
+
+  it('admits an eligible durable claim even when the independent shape is not novel', async () => {
+    const sourceRows = [
+      memory('mem-briar-1', 'Briar explicitly prefers concise launch notes.'),
+      memory('mem-briar-2', 'Briar likes checklist summaries.'),
+    ];
+    const byId = new Map(sourceRows.map(row => [row.id, row]));
+    const unchangedSummary = 'Briar prefers concise launch notes.';
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<recent_contact_shape><summary>${unchangedSummary}</summary></recent_contact_shape>
+<biographical_candidates>${JSON.stringify([{
+          kind: 'stable-preference',
+          value: {
+            kind: 'stable-preference',
+            schemaVersion: 1,
+            domain: 'communication',
+            target: 'concise launch notes',
+            polarity: 'prefers',
+          },
+          basis: 'explicit',
+          confidence: 0.95,
+          sourceMemoryIds: ['mem-briar-1'],
+        }])}</biographical_candidates>`,
+      }),
+    };
+    const memoryStore = {
+      getRecentContactShape: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        contactId: 'contact-briar',
+        summary: unchangedSummary,
+        sourceMemoryIds: sourceRows.map(row => row.id),
+        confidenceScore: 0.9,
+        noveltyScore: 0.5,
+        updatedAt: Date.now() - (2 * baseConfig.refreshIntervalMs),
+        freshUntil: Date.now() - baseConfig.refreshIntervalMs,
+      }),
+      getMemoriesByContact: vi.fn().mockResolvedValue(sourceRows),
+      getById: vi.fn(async (id: string) => byId.get(id)),
+      getMemorySubjectClassification: vi.fn(async (id: string) => {
+        const row = byId.get(id);
+        return row
+          ? classifyMemorySubject(row, {
+              memoryRevision: 1,
+              validSubjectContactIds: new Set(['contact-briar']),
+            })
+          : undefined;
+      }),
+      upsertRecentContactShape: vi.fn().mockResolvedValue(undefined),
+    };
+    const profileStore = new InMemoryBiographicalProfileStore();
+
+    const result = await refreshRecentContactShape(options({
+      llmClient: llmClient as RefreshRecentContactShapeOptions['llmClient'],
+      memoryStore: memoryStore as unknown as RefreshRecentContactShapeOptions['memoryStore'],
+      biographicalRebuild: {
+        profileStore,
+        companionSubject: {
+          kind: 'companion', companionId: 'purrsephone', subjectVersion: 1,
+        },
+        policy: createDefaultBiographicalDepthPolicy(),
+        depth: 'developing',
+      },
+    }));
+
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'low_novelty',
+      biographicalCandidateCount: 1,
+      biographicalAdmittedCount: 1,
+      biographicalWithheldCount: 0,
+    });
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
+    await expect(profileStore.listClaims({ status: 'active' })).resolves.toHaveLength(1);
+  });
 });

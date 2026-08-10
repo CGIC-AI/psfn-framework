@@ -196,7 +196,7 @@
   "memoryPresentationProfile": {
     "version": 1,
     "sectionOrder": [
-      "recent_contact_shape",
+      "core_profile",
       "relationship_context",
       "emotional_continuity_snapshot",
       "cross_session_emotional_continuity",

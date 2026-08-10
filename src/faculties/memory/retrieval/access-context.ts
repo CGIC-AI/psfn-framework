@@ -97,6 +97,12 @@ export async function resolveRecentContactShapeAccess(input: {
   if (shape.freshUntil <= (input.now ?? Date.now())) {
     return { authorizedSourceMemories: [], withheldSourceMemoryIds: [...shape.sourceMemoryIds] };
   }
+  if (
+    !input.options.canonicalContactId
+    || shape.contactId !== input.options.canonicalContactId
+  ) {
+    return { authorizedSourceMemories: [], withheldSourceMemoryIds: [...shape.sourceMemoryIds] };
+  }
 
   const sourceMemoryIds = shape.sourceMemoryIds
     .map(id => id.trim())
@@ -114,6 +120,25 @@ export async function resolveRecentContactShapeAccess(input: {
     return {
       authorizedSourceMemories: [],
       withheldSourceMemoryIds: sourceMemoryIds.filter(id => !loadedIds.has(id)),
+    };
+  }
+
+  const sourceClassifications = await Promise.all(
+    sourceMemories.map(memory => input.memoryStore.getMemorySubjectClassification(memory.id)),
+  );
+  const mismatchedSubjectIds = sourceMemories.flatMap((memory, index) => {
+    const classification = sourceClassifications[index];
+    return classification?.status === 'current'
+      && classification.subjectClass === 'single_contact'
+      && classification.subjectContactIds.length === 1
+      && classification.subjectContactIds[0] === shape.contactId
+      ? []
+      : [memory.id];
+  });
+  if (mismatchedSubjectIds.length > 0) {
+    return {
+      authorizedSourceMemories: [],
+      withheldSourceMemoryIds: mismatchedSubjectIds,
     };
   }
 

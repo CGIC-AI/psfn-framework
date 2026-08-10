@@ -90,6 +90,9 @@ export type RecentContactShapeRefreshResult =
     reason: RecentContactShapeRefreshSkipReason;
     writeCount?: number;
     sourceMemoryCount?: number;
+    biographicalCandidateCount?: number;
+    biographicalAdmittedCount?: number;
+    biographicalWithheldCount?: number;
   };
 
 export async function refreshRecentContactShape(
@@ -269,79 +272,9 @@ export async function refreshRecentContactShape(
     }),
   );
 
-  const parsedSummary = normalizeProfileSummary(parseRecentContactShapeSummary(response.content));
-  if (!parsedSummary) {
-    if (options.telemetryEnabled) {
-      log.debug('Skipped Recent Contact Shape refresh due to empty summary output', {
-        channelId: options.channelId,
-        canonicalContactId: options.canonicalContactId,
-      });
-    }
-    return {
-      status: 'skipped',
-      reason: 'empty_summary_output',
-      sourceMemoryCount: sourceMemories.length,
-    };
-  }
-
-  const summaryHygiene = normalizeDurableMemoryText(parsedSummary, {});
-  if (!summaryHygiene.accepted) {
-    if (options.telemetryEnabled) {
-      log.debug('Skipped Recent Contact Shape refresh due to text hygiene rejection', {
-        channelId: options.channelId,
-        canonicalContactId: options.canonicalContactId,
-        reason: summaryHygiene.reason,
-      });
-    }
-    return {
-      status: 'skipped',
-      reason: 'profile_text_hygiene',
-      sourceMemoryCount: sourceMemories.length,
-    };
-  }
-  const summary = summaryHygiene.text;
-
-  if (recentShapeSummaryAliasesTargetToMentionedName(summary, targetContext)) {
-    if (options.telemetryEnabled) {
-      log.debug('Skipped Recent Contact Shape refresh due to target alias attribution risk', {
-        channelId: options.channelId,
-        canonicalContactId: options.canonicalContactId,
-        displayName: targetContext.displayName,
-        nickname: targetContext.nickname,
-      });
-    }
-    return {
-      status: 'skipped',
-      reason: 'target_alias_attribution_risk',
-      sourceMemoryCount: sourceMemories.length,
-    };
-  }
-
-  const noveltyScore = existingShape
-    ? computeProfileNovelty(summary, existingShape.summary)
-    : 1;
-  if (existingShape && noveltyScore < options.config.minNovelty) {
-    if (options.telemetryEnabled) {
-      log.debug('Skipped Recent Contact Shape refresh due to low novelty', {
-        channelId: options.channelId,
-        canonicalContactId: options.canonicalContactId,
-        noveltyScore,
-        minNovelty: options.config.minNovelty,
-      });
-    }
-    return {
-      status: 'skipped',
-      reason: 'low_novelty',
-      sourceMemoryCount: sourceMemories.length,
-    };
-  }
-
-  const refreshReason: ProfileRefreshReason = meaningfulUpdate && intervalElapsed
-    ? 'memory_update_and_interval'
-    : meaningfulUpdate
-      ? 'memory_update'
-      : 'interval';
-
+  // Durable claims and the freshness-bound prose shape are independent
+  // projections. Once exact live sources have been discovered, summary
+  // rejection or low novelty must not discard eligible typed claims.
   const biographicalRebuild = options.biographicalRebuild
     ? await rebuildBiographicalClaimsFromLiveSources({
         responseContent: response.content,
@@ -356,6 +289,92 @@ export async function refreshRecentContactShape(
         now: new Date(now),
       })
     : { emittedCount: 0, admittedClaimIds: [], withheld: [] };
+  const biographicalMetrics = {
+    biographicalCandidateCount: biographicalRebuild.emittedCount,
+    biographicalAdmittedCount: biographicalRebuild.admittedClaimIds.length,
+    biographicalWithheldCount: biographicalRebuild.withheld.length,
+  };
+
+  const parsedSummary = normalizeProfileSummary(parseRecentContactShapeSummary(response.content));
+  if (!parsedSummary) {
+    if (options.telemetryEnabled) {
+      log.debug('Skipped Recent Contact Shape refresh due to empty summary output', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        ...biographicalMetrics,
+      });
+    }
+    return {
+      status: 'skipped',
+      reason: 'empty_summary_output',
+      sourceMemoryCount: sourceMemories.length,
+      ...biographicalMetrics,
+    };
+  }
+
+  const summaryHygiene = normalizeDurableMemoryText(parsedSummary, {});
+  if (!summaryHygiene.accepted) {
+    if (options.telemetryEnabled) {
+      log.debug('Skipped Recent Contact Shape refresh due to text hygiene rejection', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        reason: summaryHygiene.reason,
+        ...biographicalMetrics,
+      });
+    }
+    return {
+      status: 'skipped',
+      reason: 'profile_text_hygiene',
+      sourceMemoryCount: sourceMemories.length,
+      ...biographicalMetrics,
+    };
+  }
+  const summary = summaryHygiene.text;
+
+  if (recentShapeSummaryAliasesTargetToMentionedName(summary, targetContext)) {
+    if (options.telemetryEnabled) {
+      log.debug('Skipped Recent Contact Shape refresh due to target alias attribution risk', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        displayName: targetContext.displayName,
+        nickname: targetContext.nickname,
+        ...biographicalMetrics,
+      });
+    }
+    return {
+      status: 'skipped',
+      reason: 'target_alias_attribution_risk',
+      sourceMemoryCount: sourceMemories.length,
+      ...biographicalMetrics,
+    };
+  }
+
+  const noveltyScore = existingShape
+    ? computeProfileNovelty(summary, existingShape.summary)
+    : 1;
+  if (existingShape && noveltyScore < options.config.minNovelty) {
+    if (options.telemetryEnabled) {
+      log.debug('Skipped Recent Contact Shape refresh due to low novelty', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        noveltyScore,
+        minNovelty: options.config.minNovelty,
+        ...biographicalMetrics,
+      });
+    }
+    return {
+      status: 'skipped',
+      reason: 'low_novelty',
+      sourceMemoryCount: sourceMemories.length,
+      ...biographicalMetrics,
+    };
+  }
+
+  const refreshReason: ProfileRefreshReason = meaningfulUpdate && intervalElapsed
+    ? 'memory_update_and_interval'
+    : meaningfulUpdate
+      ? 'memory_update'
+      : 'interval';
 
   await options.memoryStore.upsertRecentContactShape({
     schemaVersion: 1,
@@ -377,9 +396,7 @@ export async function refreshRecentContactShape(
       sourceMemoryCount: sourceMemories.length,
       averageSourceConfidence,
       noveltyScore,
-      biographicalCandidateCount: biographicalRebuild.emittedCount,
-      biographicalAdmittedCount: biographicalRebuild.admittedClaimIds.length,
-      biographicalWithheldCount: biographicalRebuild.withheld.length,
+      ...biographicalMetrics,
     });
   }
 
@@ -389,9 +406,7 @@ export async function refreshRecentContactShape(
     sourceMemoryCount: sourceMemories.length,
     averageSourceConfidence,
     noveltyScore,
-    biographicalCandidateCount: biographicalRebuild.emittedCount,
-    biographicalAdmittedCount: biographicalRebuild.admittedClaimIds.length,
-    biographicalWithheldCount: biographicalRebuild.withheld.length,
+    ...biographicalMetrics,
   };
 }
 

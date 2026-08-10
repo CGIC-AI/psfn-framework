@@ -48,7 +48,7 @@ import type {
   BiographicalRebuildEnqueueResult,
   BiographicalRebuildListOptions,
   BiographicalRebuildRequest,
-} from './lifecycle.js';
+} from './rebuild-contracts.js';
 import type {
   BiographicalReviewAuditInput,
   BiographicalReviewAuditRecord,

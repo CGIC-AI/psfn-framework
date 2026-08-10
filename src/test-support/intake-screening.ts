@@ -20,7 +20,6 @@ export function testShadowIntakeScreening(): IntakeScreeningService {
     actor: 'test:gateway-intake-screening',
     l1Config: {
       rulesPath: join(process.cwd(), 'config', 'intake-l1-rules.json'),
-      reloadCheckIntervalMs: -1,
     },
   });
   if (!screening) throw new Error('Shadow intake screening must be available in tests');

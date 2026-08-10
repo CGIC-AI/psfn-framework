@@ -610,7 +610,8 @@ fleetAuth:
   # The dedicated gateway welfare-verifier database credential is supplied the
   # same way (FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL -> Secret ref). It
   # reaches the gateway process only (never the agent pods) and authenticates
-  # as the welfareVerifier.role declared in fleet-auth.json. Provision the
+  # as the welfareVerifier.role declared in fleet-auth.json; that owner block
+  # also declares the role's positive finite connectionLimit. Provision the
   # matching LOGIN role + USAGE/SELECT grants with
   # `npm run provision:postgres-tenancy -- --apply`.
 

@@ -1063,7 +1063,8 @@ the boot succeeds first try.
 12. **Welfare-verifier read grant** (gateway startup): the gateway welfare
     grant verifier connects ONLY through the dedicated least-privilege
     `welfareVerifier` LOGIN credential declared by `fleet-auth.json`'s
-    optional `welfareVerifier` block (role + `databaseUrlRef`), never the
+    optional `welfareVerifier` block (`role`, positive finite
+    `connectionLimit`, and `databaseUrlRef`), never the
     companion runtime URL — a cross-schema USAGE/SELECT grant on a companion
     runtime role reaches the agent pods and breaches sibling isolation. The
     dedicated role legitimately holds `USAGE` on every fleet schema plus

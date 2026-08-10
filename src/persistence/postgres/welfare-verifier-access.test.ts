@@ -40,6 +40,7 @@ describe('provisionWelfareVerifierLoginRole (dedicated gateway welfare verifier)
     const evidence = await provisionWelfareVerifierLoginRole(client, {
       role: 'psfn_welfare_verifier',
       password: 'pw',
+      connectionLimit: 8,
     });
     expect(evidence).toEqual({ role: 'psfn_welfare_verifier', created: true });
 
@@ -50,7 +51,7 @@ describe('provisionWelfareVerifierLoginRole (dedicated gateway welfare verifier)
     });
     expect(client.calls[1]).toMatchObject({
       sql: expect.stringContaining('SELECT format('),
-      values: ['CREATE ROLE', 'psfn_welfare_verifier', 'pw'],
+      values: ['CREATE ROLE', 'psfn_welfare_verifier', 8, 'pw'],
     });
     const ddl = client.calls[1]!.values![1];
     expect(client.calls[1]!.sql).toContain('%s %I');
@@ -79,9 +80,10 @@ describe('provisionWelfareVerifierLoginRole (dedicated gateway welfare verifier)
     const evidence = await provisionWelfareVerifierLoginRole(client, {
       role: 'psfn_welfare_verifier',
       password: 'rotated',
+      connectionLimit: 8,
     });
     expect(evidence.created).toBe(false);
-    expect(client.calls[1]!.values).toEqual(['ALTER ROLE', 'psfn_welfare_verifier', 'rotated']);
+    expect(client.calls[1]!.values).toEqual(['ALTER ROLE', 'psfn_welfare_verifier', 8, 'rotated']);
     expect(client.calls[2]!.sql).toContain('ALTER ROLE "psfn_welfare_verifier"');
     expect(client.calls[2]!.sql).toContain("PASSWORD 'rotated'");
   });
@@ -91,10 +93,12 @@ describe('provisionWelfareVerifierLoginRole (dedicated gateway welfare verifier)
     await expect(provisionWelfareVerifierLoginRole(client, {
       role: 'psfn_welfare_verifier',
       password: '',
+      connectionLimit: 8,
     })).rejects.toThrow(/non-empty string/);
     await expect(provisionWelfareVerifierLoginRole(client, {
       role: 'Not Safe',
       password: 'pw',
+      connectionLimit: 8,
     })).rejects.toThrow(/Invalid PostgreSQL role name/);
     // No SQL was issued for the rejected cases beyond what the first call
     // already consumed — the role-name guard throws before the probe.
@@ -112,8 +116,9 @@ describe('provisionWelfareVerifierLoginRole (dedicated gateway welfare verifier)
       // A password containing SQL metacharacters must never reach the format
       // string itself; it arrives only as a bound parameter.
       password: "'); DROP ROLE x; --",
+      connectionLimit: 8,
     });
-    expect(client.calls[1]!.values![2]).toBe("'); DROP ROLE x; --");
+    expect(client.calls[1]!.values![3]).toBe("'); DROP ROLE x; --");
     expect(client.calls[1]!.sql).not.toContain('DROP ROLE');
   });
 });

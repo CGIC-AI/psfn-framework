@@ -9583,12 +9583,6 @@
       "note": "Code-owned hard ceiling on rows returned by the read-only arbiter admin projection; an allocation/DoS guard at the admin read boundary (mirrors the ICP admin projection's MAX_ADMIN_ROWS)."
     },
     {
-      "file": "src/persistence/postgres/welfare-verifier-access.ts",
-      "name": "WELFARE_VERIFIER_CONNECTION_LIMIT",
-      "value": "8",
-      "note": "Code-owned DoS guard for the dedicated gateway welfare-verifier LOGIN role (psfn-framework-aqp2u); a finite CONNECTION LIMIT keeps reconnect/idle headroom over the verifier read pool (max 4) while preventing the gateway-only credential from exhausting server capacity. Fixed resource bound, not operator-tunable."
-    },
-    {
       "file": "src/persistence/repair/memory-participant-name-repair.ts",
       "name": "DEFAULT_REPAIR_LIMIT",
       "value": "500"

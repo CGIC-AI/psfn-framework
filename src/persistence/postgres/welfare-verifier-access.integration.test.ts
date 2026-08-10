@@ -239,11 +239,13 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
       const first = await provisionWelfareVerifierLoginRole(admin, {
         role: verifierRole,
         password: VERIFIER_PASSWORD,
+        connectionLimit: 8,
       });
       expect(first.created).toBe(true);
       const again = await provisionWelfareVerifierLoginRole(admin, {
         role: verifierRole,
         password: VERIFIER_PASSWORD,
+        connectionLimit: 8,
       });
       expect(again.created).toBe(false);
 
@@ -345,6 +347,7 @@ describe('dedicated welfare verifier authority (aqp2u, real Postgres)', () => {
       await provisionWelfareVerifierLoginRole(admin, {
         role: verifierRole,
         password: VERIFIER_PASSWORD,
+        connectionLimit: 8,
       });
       await provisionPostgresTenantAccess(admin, { plan: added, runtimeLoginRole: addedLogin });
 

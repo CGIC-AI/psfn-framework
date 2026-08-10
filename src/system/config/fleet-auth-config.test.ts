@@ -407,11 +407,13 @@ describe('fleet-auth owner-file configuration', () => {
       ...config,
       welfareVerifier: {
         role: 'psfn_welfare_verifier',
+        connectionLimit: 8,
         databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
       },
     }, 'fleet-auth.json');
     expect(withVerifier.welfareVerifier).toMatchObject({
       role: 'psfn_welfare_verifier',
+      connectionLimit: 8,
       databaseUrlRef: { kind: 'env', envName: 'FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL' },
     });
 
@@ -421,23 +423,32 @@ describe('fleet-auth owner-file configuration', () => {
     // Unsafe role name rejected.
     expect(() => validateFleetAuthConfig({
       ...config,
-      welfareVerifier: { role: 'Psfn Welfare', databaseUrlRef: credential('X') },
+      welfareVerifier: { role: 'Psfn Welfare', connectionLimit: 8, databaseUrlRef: credential('X') },
     }, 'fleet-auth.json')).toThrow(/welfareVerifier\.role is not a safe PostgreSQL role name/);
     // Must be distinct from every databaseRoles entry.
     expect(() => validateFleetAuthConfig({
       ...config,
-      welfareVerifier: { role: config.databaseRoles.runtime, databaseUrlRef: credential('X') },
+      welfareVerifier: { role: config.databaseRoles.runtime, connectionLimit: 8, databaseUrlRef: credential('X') },
     }, 'fleet-auth.json')).toThrow(/welfareVerifier\.role must be distinct/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: {
+        role: 'psfn_welfare_verifier',
+        connectionLimit: 0,
+        databaseUrlRef: credential('X'),
+      },
+    }, 'fleet-auth.json')).toThrow(/welfareVerifier\.connectionLimit must be an integer/);
     // Must carry a real credential ref, not a plain value.
     expect(() => validateFleetAuthConfig({
       ...config,
-      welfareVerifier: { role: 'psfn_welfare_verifier', databaseUrlRef: 'plain-string' },
+      welfareVerifier: { role: 'psfn_welfare_verifier', connectionLimit: 8, databaseUrlRef: 'plain-string' },
     }, 'fleet-auth.json')).toThrow(/welfareVerifier\.databaseUrlRef must be an object/);
     // Credential ref must be distinct from every other credential.
     expect(() => validateFleetAuthConfig({
       ...config,
       welfareVerifier: {
         role: 'psfn_welfare_verifier',
+        connectionLimit: 8,
         databaseUrlRef: credential('FLEET_AUTH_RUNTIME_DATABASE_URL'),
       },
     }, 'fleet-auth.json')).toThrow(/credential references must be distinct/);
@@ -446,6 +457,7 @@ describe('fleet-auth owner-file configuration', () => {
       ...config,
       welfareVerifier: {
         role: 'psfn_welfare_verifier',
+        connectionLimit: 8,
         databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
         extra: true,
       },
@@ -679,6 +691,7 @@ describe('fleet-auth owner-file configuration', () => {
     const config = validConfig(publicKeyPem, hubPublicKeyPem);
     config.welfareVerifier = {
       role: 'psfn_welfare_verifier',
+      connectionLimit: 8,
       databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
     };
     const floorRoot = join(makeRoot(), 'authority');

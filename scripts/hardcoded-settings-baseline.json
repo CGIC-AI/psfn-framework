@@ -11874,42 +11874,6 @@
       "value": "512"
     },
     {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MAX_CONCURRENCY",
-      "value": "4 as const",
-      "note": "Code-owned ceiling for intake-policy.json screeningPool.concurrency (psfn-framework-yxz0z.4); owners tune within [2,4], never past it, so the bounded worker pool cannot burst a single provider."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MAX_ITEM_DEADLINE_MS",
-      "value": "300000 as const",
-      "note": "Code-owned ceiling for intake-policy.json screeningPool.itemDeadlineMs; caps the fail-closed whole-item deadline so an owner cannot disable the stuck-screening safety net."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MAX_QUEUE_DEPTH",
-      "value": "1024 as const",
-      "note": "Code-owned DoS ceiling for intake-policy.json screeningPool.maxQueueDepth bounding pool queue memory; owners may lower it but never raise it past this guard."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MIN_CONCURRENCY",
-      "value": "2 as const",
-      "note": "Code-owned floor for intake-policy.json screeningPool.concurrency (psfn-framework-yxz0z.4); the operator-owned worker bound must stay within [2,4] so independent companion streams overlap."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MIN_ITEM_DEADLINE_MS",
-      "value": "5000 as const",
-      "note": "Code-owned floor for intake-policy.json screeningPool.itemDeadlineMs; must exceed the slowest legit L2+L3 deep-screening path so the deadline only bites a genuinely stuck screening."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "SCREENING_POOL_MIN_QUEUE_DEPTH",
-      "value": "1 as const",
-      "note": "Code-owned floor for intake-policy.json screeningPool.maxQueueDepth; the bounded queue must hold at least one item so admission backpressure is always reachable."
-    },
-    {
       "file": "src/system/config/load-config.ts",
       "name": "BOOTSTRAP_MAX_OUTPUT_TOKENS",
       "value": "1"

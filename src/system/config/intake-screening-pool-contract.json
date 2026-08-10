@@ -1,0 +1,5 @@
+{
+  "concurrency": { "min": 2, "max": 4 },
+  "maxQueueDepth": { "min": 1, "max": 1024 },
+  "itemDeadlineMs": { "min": 5000, "max": 300000 }
+}

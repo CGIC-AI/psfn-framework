@@ -26,8 +26,8 @@
  *   files (rename to `core.json`, carve out `memory.json`/`cogsec.json`/
  *   `economy.json`, consolidate `capabilities.json`) is NOT performed here.
  *   Each domain records both its canonical target file and the real files that
- *   feed it today; field-level reclassification uses
- *   {@link SETTINGS_FIELD_DOMAIN_BY_KEY}.
+ *   feed it today; pre-split fields reuse the existing shared Garden section
+ *   classification when that section already names a canonical domain.
  *
  * The module is deliberately a runtime leaf: it imports only the shared
  * `isRecord` guard and a type-only reference to {@link SettingsFieldScope}, so
@@ -35,6 +35,7 @@
  */
 
 import type { SettingsFieldScope } from './settings-contract.js';
+import { SETTINGS_GARDEN_FIELD_EXPOSURE } from '../../shared/contracts/settings-garden-contract.js';
 
 // ── Closed value sets ───────────────────────────────────────────────────────
 
@@ -551,22 +552,6 @@ const SETTINGS_NON_DOMAIN_OWNER_FILE_SET: ReadonlySet<string> = new Set(
   SETTINGS_NON_DOMAIN_OWNER_FILES,
 );
 
-// ── Field-level reclassification seam ───────────────────────────────────────
-
-/**
- * Field-level domain overrides for keys whose current owner file does not yet
- * match their target domain. The split of settings.json is performed bead by
- * bead; until a field's owner file moves, this map is the authoritative
- * runtime classification so Garden and runtime share one domain descriptor.
- *
- * Tracer (psfn-framework-4ssd5.1): `memoryRetrievalPolicy` is an existing
- * mutable settings.json object that the audit (MEM-2) assigns to the memory
- * domain. It resolves through the registry before settings.json is split.
- */
-export const SETTINGS_FIELD_DOMAIN_BY_KEY: Readonly<Record<string, SettingsDomainId>> = {
-  memoryRetrievalPolicy: 'memory',
-};
-
 // ── Structural input for field resolution ───────────────────────────────────
 
 /**
@@ -846,18 +831,21 @@ export function resolveSettingsDomainForOwnerFile(
 }
 
 /**
- * Resolve the canonical domain for a settings field. An explicit
- * {@link SETTINGS_FIELD_DOMAIN_BY_KEY} override wins (the settings.json split
- * seam); otherwise the field's current owner file maps to a domain. Fields
- * owned by a non-domain topology/authority/extension file fail closed.
+ * Resolve the canonical domain for a settings field. While settings.json is
+ * still split incrementally, a shared Garden section whose id is already one
+ * of the eight canonical domains supplies the field classification. Otherwise
+ * the field's current owner file maps to a domain. Fields owned by a
+ * non-domain topology/authority/extension file fail closed.
  */
 export function resolveSettingsDomainForField(
   fieldKey: string,
   fields: SettingsFieldOwnerIndex,
 ): SettingsDomainId {
-  const override = SETTINGS_FIELD_DOMAIN_BY_KEY[fieldKey];
-  if (override) {
-    return override;
+  const sectionId = SETTINGS_GARDEN_FIELD_EXPOSURE[
+    fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
+  ]?.sectionId;
+  if (sectionId && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
+    return sectionId as SettingsDomainId;
   }
   const field = fields[fieldKey];
   if (!field) {
@@ -889,9 +877,11 @@ export function buildSettingsFieldDomainProjection(
   const fieldDomains: Record<string, SettingsDomainId> = {};
   const unresolved: string[] = [];
   for (const fieldKey of Object.keys(fields)) {
-    const override = SETTINGS_FIELD_DOMAIN_BY_KEY[fieldKey];
-    if (override) {
-      fieldDomains[fieldKey] = override;
+    const sectionId = SETTINGS_GARDEN_FIELD_EXPOSURE[
+      fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
+    ]?.sectionId;
+    if (sectionId && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
+      fieldDomains[fieldKey] = sectionId as SettingsDomainId;
       continue;
     }
     const field = fields[fieldKey];

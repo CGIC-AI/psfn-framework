@@ -12,6 +12,7 @@ import type { GatewayMultiCompanionConfig } from '../../../boundary/gateway/mult
 import { RootBoundIcpInitiationCausalityAuthority } from '../../../boundary/gateway/icp-initiation-causality-authority.js';
 import { IcpFatigueInitiationCapacityAuthority } from '../../../core/agent/fatigue/initiation-capacity.js';
 import { EventBus } from '../../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../../test-support/intake-screening.js';
 import type { IcpConversationCostBreakerEvent } from '../../../shared/telemetry/model-usage.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
@@ -703,7 +704,7 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     policyConfig: { workspacePath: input.fixture.rootDir },
     intakeScreeningMode: 'shadow',
-    intakeScreeningProvider: () => null,
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: CERTIFICATION_SESSION_KEYRING,
     wyomingShardRouting: { enabled: false },
@@ -943,6 +944,7 @@ export async function startIcpSingleCompanionFeatureOffHarness(input: {
     },
     policyConfig: { workspacePath: input.fixture.rootDir },
     intakeScreeningMode: 'shadow',
+    intakeScreening: testShadowIntakeScreening(),
     sessionHmacKeyring: CERTIFICATION_SESSION_KEYRING,
     wyomingShardRouting: { enabled: false },
     eventBus: new EventBus(),

@@ -38,6 +38,7 @@ import {
   runWithRequestContext,
 } from '../../primitives/llm/request-context.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
@@ -347,7 +348,8 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
           },
         },
       },
-      intakeScreeningMode: 'off',
+      intakeScreeningMode: 'shadow',
+      intakeScreening: testShadowIntakeScreening(),
       sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
       wyomingShardRouting: { enabled: false },
       eventBus,

@@ -279,6 +279,6 @@ describe('gateway channel intake ownership', () => {
       mode: 'strict',
       singleton: null,
       forCompanion: () => null,
-    }, companion, 'discord')).toThrow(/mode=enforce has no matching service/u);
+    }, companion, 'discord')).toThrow(/mode=strict has no matching service/u);
   });
 });

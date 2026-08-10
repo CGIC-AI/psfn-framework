@@ -25,6 +25,7 @@ import {
 import { EventBus } from '../../../shared/event-bus.js';
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import { testShadowIntakeScreening } from '../../../test-support/intake-screening.js';
 
 export const CERTIFICATION_COMPANION_A = '11111111-1111-4111-8111-111111111111';
 export const CERTIFICATION_COMPANION_B = '22222222-2222-4222-8222-222222222222';
@@ -306,7 +307,7 @@ function serverOptions(
     discordAdapter: { id: 'discord', outbound: { textChunkLimit: 2_000, sendText: async () => undefined } } as never,
     policyConfig: { workspacePath: join(root, 'workspace') },
     intakeScreeningMode: 'shadow',
-    intakeScreeningProvider: () => null,
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: KEYRING,
     wyomingShardRouting: { enabled: false },

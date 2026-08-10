@@ -17,6 +17,7 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import {
   existsSync,
   mkdtempSync,
@@ -144,8 +145,8 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: {
       workspacePath: '/workspace',
     },
-    intakeScreeningMode: 'off',
-    intakeScreeningProvider: () => null,
+    intakeScreeningMode: 'shadow',
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
@@ -201,7 +202,14 @@ async function setupServer(
   connect: (onSend?: (message: any, emit: (response: unknown) => void) => void) => Promise<MockConnection>;
   connectClient: (companionId: string) => Promise<GatewayClient>;
 }> {
-  const server = new GatewayServer(options);
+  const server = new GatewayServer(options.multiCompanion?.enabled
+    ? options
+    : {
+        ...options,
+        intakeScreening: testShadowIntakeScreening(),
+        intakeScreeningProvider: undefined,
+        visionIntakeProvider: undefined,
+      });
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
@@ -837,10 +845,10 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
     expect(() => new GatewayServer({
       ...createMinimalOptions(),
-      intakeScreeningMode: 'enforce',
-      intakeScreeningProvider: () => null,
+      intakeScreeningMode: 'strict',
+      intakeScreeningProvider: testShadowIntakeScreening,
       multiCompanion: multiCompanion({}),
-    })).toThrow(/mode=enforce has no matching service/u);
+    })).toThrow(/mode=strict has no matching service/u);
   });
 
   it('validates and attributes posture by authenticated connection across reconnects', async () => {

@@ -15,6 +15,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { FatiguePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import {
   DeterministicFatigueBudgetPort,
   type FatigueBudgetHistoryPort,
@@ -185,8 +186,8 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
       outbound: { textChunkLimit: 2000, sendText: vi.fn() },
     }),
     policyConfig: { workspacePath: '/workspace' },
-    intakeScreeningMode: 'off',
-    intakeScreeningProvider: () => null,
+    intakeScreeningMode: 'shadow',
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: { enabled: false },

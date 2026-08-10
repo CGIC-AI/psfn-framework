@@ -9,6 +9,7 @@ import { GatewayServer, type GatewayServerOptions } from '../../gateway/server.j
 import { GatewayClient } from '../../gateway/client.js';
 import { createGatewayOpsPortFromClient } from '../../gateway/gateway-ops-port.js';
 import { EventBus } from '../../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../../test-support/intake-screening.js';
 import { GatewayGitOps } from './gateway-ops.js';
 import { GitOps } from './ops.js';
 
@@ -43,7 +44,8 @@ function createServerOptions(
     policyConfig: {
       workspacePath: process.cwd(),
     },
-    intakeScreeningMode: 'off',
+    intakeScreeningMode: 'shadow',
+    intakeScreening: testShadowIntakeScreening(),
     sessionHmacKeyring: {
       activeVersion: 'v1',
       keys: {

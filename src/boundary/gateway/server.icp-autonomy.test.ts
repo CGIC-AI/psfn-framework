@@ -21,6 +21,7 @@ import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { createContactTool } from '../../core/contacts/tools.js';
 import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../core/session/intake-sink-gating.js';
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import {
   deriveIcpTransportMessageId,
   MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
@@ -536,8 +537,8 @@ async function setup(
     embeddingService: fromAny({ embed: vi.fn(), embedBatch: vi.fn(), dims: 16 }),
     discordAdapter: fromAny({ id: 'discord', outbound: { textChunkLimit: 2_000, sendText: vi.fn() } }),
     policyConfig: { workspacePath: '/workspace' },
-    intakeScreeningMode: 'off',
-    intakeScreeningProvider: () => null,
+    intakeScreeningMode: 'shadow',
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: KEYRING,
     wyomingShardRouting: { enabled: false },

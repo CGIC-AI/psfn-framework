@@ -5508,7 +5508,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]);
   });
 
-  it('keeps off mode inert by omitting the canary marker from the prompt plan', async () => {
+  it('keeps shadow-mode observability active by retaining the canary marker', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -5523,16 +5523,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
-      cogSecMode: 'off',
+      cogSecMode: 'shadow',
     });
 
-    await handleMessageForTurn(runtime, createMessage('msg-cogsec-off'));
+    await handleMessageForTurn(runtime, createMessage('msg-cogsec-shadow'));
 
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
-    expect(getPromptPlanBlockText(plan, 'cogsec.canary')).toBe('');
-    expect(serializePromptPlanSystemPrompt(plan)).not.toContain('session-integrity');
+    expect(getPromptPlanBlockText(plan, 'cogsec.canary')).toMatch(/^\[session-integrity cnry_/u);
+    expect(serializePromptPlanSystemPrompt(plan)).toContain('session-integrity');
   });
 
   it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {

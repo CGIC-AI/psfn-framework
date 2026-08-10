@@ -8,6 +8,7 @@ import {
   matchesGardenEventFilter,
   normalizeGardenWebSocketMessage,
 } from './envelope';
+import { createGardenEventStream } from './garden-event-stream';
 import {
   GardenTelemetryCache,
   MAX_CACHED_GARDEN_EVENTS,
@@ -46,6 +47,10 @@ let preparedAdminTokenUntil = 0;
 
 onCompanionScopeChange((previousCompanionId) => {
   disconnectGardenEventBus();
+  // Cancel any pending coalesced cache write before the scope changes so it
+  // cannot flush the previous companion's buffer under the new cache scope,
+  // and forget remembered revisions for the previous companion.
+  gardenEventStream.reset();
   events = [];
   paused = false;
   subscriptions.clear();
@@ -93,7 +98,7 @@ async function prepareGardenWebSocketCredential(): Promise<void> {
   preparedAdminTokenUntil = now + (60 * 60 * 1_000);
 }
 
-function persistGardenEvents(): void {
+function writeGardenEventCache(): void {
   const snapshot = [...events];
   const companionScope = getCompanionCacheScope();
   telemetryCacheWrite = telemetryCacheWrite
@@ -106,6 +111,13 @@ function persistGardenEvents(): void {
     });
 }
 
+// Shared ingest seam between the WebSocket and the reactive store: drops
+// replayed/retransmitted snapshots before they can re-append, re-persist, or
+// re-render, and coalesces the durable cache write so a burst of distinct
+// events produces one bounded write instead of one per message. See
+// garden-event-stream.ts.
+const gardenEventStream = createGardenEventStream({}, writeGardenEventCache);
+
 function setGardenEventBusConnected(nextConnected: boolean): void {
   if (connected === nextConnected) return;
   connected = nextConnected;
@@ -115,9 +127,15 @@ function setGardenEventBusConnected(nextConnected: boolean): void {
 }
 
 function publishGardenEvent(event: GardenEventEnvelope): void {
+  if (!gardenEventStream.ingest(event)) {
+    // Identical retransmitted/replayed snapshot: do not re-append, re-persist,
+    // or re-render. Real changes still append, persist, and broadcast below.
+    return;
+  }
+
   if (!paused) {
     events = [...events, event].slice(-MAX_GARDEN_EVENTS);
-    persistGardenEvents();
+    gardenEventStream.schedulePersist();
   }
 
   for (const subscription of subscriptions) {
@@ -155,6 +173,9 @@ export function hydrateGardenEventBus(): Promise<void> {
   const current = telemetryCache.read()
     .then((cached) => {
       events = [...cached, ...events].slice(-MAX_GARDEN_EVENTS);
+      // Seed the deduper so a reconnect that replays these same events does
+      // not double-append or re-broadcast them.
+      gardenEventStream.seed(events);
       telemetryCacheHydrated = true;
       telemetryCacheError = null;
     })
@@ -218,6 +239,7 @@ export function disconnectGardenEventBus(): void {
 }
 
 export function clearGardenEventBus(): void {
+  gardenEventStream.reset();
   events = [];
   telemetryCacheWrite = telemetryCacheWrite
     .then(() => telemetryCache.clear())

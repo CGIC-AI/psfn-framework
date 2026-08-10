@@ -5,6 +5,7 @@ import type {
 } from '$lib/api/endpoints/observer-eval-sidecar';
 import {
   buildObserverEvalSidecarFilters,
+  observerEvalSidecarErrorDiagnostic,
   resolveObserverEvalSidecarPageState,
   topDiscreteEmotions,
 } from './observer-sidecar';
@@ -87,6 +88,37 @@ describe('observer eval sidecar view helpers', () => {
       { emotion: 'joy', intensity: 0.8 },
       { emotion: 'anxiety', intensity: 0.5 },
     ]);
+  });
+});
+
+describe('observerEvalSidecarErrorDiagnostic', () => {
+  it('returns null for a healthy observation so the snapshot renders normally', () => {
+    expect(observerEvalSidecarErrorDiagnostic({ status: 'ok' })).toBeNull();
+    expect(observerEvalSidecarErrorDiagnostic({ status: 'ok', error: null })).toBeNull();
+  });
+
+  it('returns null when there is no observation', () => {
+    expect(observerEvalSidecarErrorDiagnostic(null)).toBeNull();
+    expect(observerEvalSidecarErrorDiagnostic(undefined)).toBeNull();
+  });
+
+  it('surfaces the recorded cause as one stable, actionable diagnostic', () => {
+    expect(observerEvalSidecarErrorDiagnostic({
+      status: 'error',
+      error: { message: 'PSFN snapshot projection timed out', recoverable: true },
+    })).toBe('PSFN snapshot projection timed out');
+  });
+
+  it('includes the error code when present', () => {
+    expect(observerEvalSidecarErrorDiagnostic({
+      status: 'error',
+      error: { message: 'projection unavailable', code: 'E_PROJECTION', recoverable: false },
+    })).toBe('[E_PROJECTION] projection unavailable');
+  });
+
+  it('keeps the Error visible with a stable message when no cause was recorded', () => {
+    expect(observerEvalSidecarErrorDiagnostic({ status: 'error' }))
+      .toBe('Observer evaluation failed without a recorded cause.');
   });
 });
 

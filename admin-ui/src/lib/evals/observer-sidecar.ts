@@ -180,6 +180,32 @@ export function labelizeObserverEval(value: string | null | undefined): string {
     .replace(/\b\w/g, char => char.toUpperCase());
 }
 
+export interface ObserverEvalSidecarErrorDiagnosticSource {
+  status: string;
+  error?: {
+    message: string;
+    code?: string;
+    recoverable: boolean;
+  } | null;
+}
+
+/**
+ * One stable, actionable diagnostic for an observer observation in an error
+ * state. Returns null when the observation is healthy so callers render the
+ * normal PSFN snapshot; returns a single human-readable cause otherwise. This
+ * keeps the EmotionState Error visible with its reason instead of silent
+ * dashes, without touching emotional state or backend evaluation.
+ */
+export function observerEvalSidecarErrorDiagnostic(
+  source: ObserverEvalSidecarErrorDiagnosticSource | null | undefined,
+): string | null {
+  if (!source) return null;
+  const error = source.error;
+  if (source.status !== 'error' && !error) return null;
+  if (!error) return 'Observer evaluation failed without a recorded cause.';
+  return error.code ? `[${error.code}] ${error.message}` : error.message;
+}
+
 function parsePositiveInteger(value: string | undefined): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;

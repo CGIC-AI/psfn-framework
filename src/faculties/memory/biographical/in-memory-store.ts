@@ -2,11 +2,13 @@ import type { BiographicalClaim, BiographicalSensitivityGrant } from './types.js
 import {
   computeBiographicalRebuildId,
   deserializeBiographicalRebuildRequest,
-  type BiographicalRebuildEnqueueInput,
-  type BiographicalRebuildEnqueueResult,
-  type BiographicalRebuildListOptions,
-  type BiographicalRebuildRequest,
 } from './lifecycle.js';
+import type {
+  BiographicalRebuildEnqueueInput,
+  BiographicalRebuildEnqueueResult,
+  BiographicalRebuildListOptions,
+  BiographicalRebuildRequest,
+} from './rebuild-contracts.js';
 import {
   assertClaimTransition,
   assertCompatibleSupersession,

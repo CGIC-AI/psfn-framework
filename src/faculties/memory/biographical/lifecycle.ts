@@ -18,19 +18,6 @@ import {
 } from './rebuild-contracts.js';
 import type { BiographicalProfileStorePort } from './store-port.js';
 
-export {
-  BIOGRAPHICAL_REBUILD_REASONS,
-  BIOGRAPHICAL_SOURCE_LIFECYCLE_REASONS,
-} from './rebuild-contracts.js';
-export type {
-  BiographicalRebuildEnqueueInput,
-  BiographicalRebuildEnqueueResult,
-  BiographicalRebuildListOptions,
-  BiographicalRebuildReason,
-  BiographicalRebuildRequest,
-  BiographicalSourceLifecycleReason,
-} from './rebuild-contracts.js';
-
 export type SourceRevalidationOutcome =
   | {
       readonly status: 'valid';

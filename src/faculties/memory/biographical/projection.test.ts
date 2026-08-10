@@ -15,7 +15,7 @@ import { ingestSelfNicknameEvidence } from './ingest.js';
 import {
   BIOGRAPHICAL_SOURCE_LIFECYCLE_REASONS,
   type BiographicalSourceLifecycleReason,
-} from './lifecycle.js';
+} from './rebuild-contracts.js';
 import {
   createDmConversationScope,
   createGroupConversationScope,

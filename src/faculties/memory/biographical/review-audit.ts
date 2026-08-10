@@ -3,10 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 
-export const BIOGRAPHICAL_REVIEW_ACTIONS = ['approve', 'deny', 'revoke', 'regrant'] as const;
+const BIOGRAPHICAL_REVIEW_ACTIONS = ['approve', 'deny', 'revoke', 'regrant'] as const;
 export type BiographicalReviewAction = (typeof BIOGRAPHICAL_REVIEW_ACTIONS)[number];
 
-export const BIOGRAPHICAL_REVIEW_REASONS = [
+const BIOGRAPHICAL_REVIEW_REASONS = [
   'approved',
   'denied',
   'grant-revoked',

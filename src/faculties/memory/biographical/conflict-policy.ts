@@ -6,7 +6,7 @@ import type {
 } from './store-port.js';
 import type { BiographicalClaim, BiographicalSubjectRef } from './types.js';
 
-export interface SubjectCorrectionAuthority {
+interface SubjectCorrectionAuthority {
   readonly actor: 'subject';
   readonly subject: BiographicalSubjectRef;
   readonly authorizationRef: string;

@@ -1,6 +1,23 @@
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { createWelfareGrantVerifierForPool } from './welfare-grant-verifier.js';
+import {
+  createWelfareGrantVerifier,
+  createWelfareGrantVerifierForPool,
+} from './welfare-grant-verifier.js';
+
+describe('createWelfareGrantVerifier factory (degradation contract)', () => {
+  it('returns undefined when the dedicated database URL is absent (honest FIFO degradation)', () => {
+    // No dedicated welfare verifier credential ⇒ the gateway strips every
+    // asserted preemptionProtected (fail closed). The factory must not fall
+    // back to any other URL the caller happens to hold.
+    expect(createWelfareGrantVerifier({ databaseUrl: '' })).toBeUndefined();
+    expect(createWelfareGrantVerifier({ databaseUrl: '   ' })).toBeUndefined();
+    expect(createWelfareGrantVerifier({
+      databaseUrl: 'postgres://verifier:pw@host/db',
+      postgresSchema: 'tenant_a',
+    })).toBeDefined();
+  });
+});
 
 describe('Postgres welfare grant readiness', () => {
   it('probes every configured tenant relation without reading rows', async () => {

@@ -660,10 +660,17 @@ async function main(): Promise<void> {
   // caller-asserted `preemptionProtected` LLMWorkSpec against the background-work
   // store (`welfare_claimed = true AND state = 'running'`, scoped to the
   // authenticated companion's schema) before the gate honors it; the RPC
-  // handlers strip the flag on any failure (fail closed → preemptable). Absent
-  // Postgres ⇒ undefined ⇒ every asserted flag is stripped.
+  // handlers strip the flag on any failure (fail closed → preemptable).
+  //
+  // psfn-framework-aqp2u: the verifier connects ONLY through the dedicated
+  // least-privilege welfare-verifier credential resolved from fleet-auth.json
+  // (`welfareVerifier`), never the companion runtime URL — a cross-schema
+  // USAGE/SELECT grant on a companion runtime role reaches the agent pods and
+  // breaches fleet sibling isolation. Absent the dedicated credential (no fleet
+  // auth, or the optional `welfareVerifier` block is omitted) ⇒ undefined ⇒
+  // every asserted flag is stripped (honest degradation to FIFO).
   let welfareGrantVerifier: WelfareGrantVerifier | undefined;
-  const welfareVerifierDatabaseUrl = config.postgresDatabaseUrl?.trim();
+  const welfareVerifierDatabaseUrl = fleetAuthSecrets?.database.welfareVerifierUrl?.trim();
   if (welfareVerifierDatabaseUrl) {
     const verifier = createWelfareGrantVerifier({
       databaseUrl: welfareVerifierDatabaseUrl,

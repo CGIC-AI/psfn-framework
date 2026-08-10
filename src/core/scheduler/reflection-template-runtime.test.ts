@@ -22,7 +22,9 @@ import {
   toReflectionJournalProvenanceRef,
   toReflectionProcessLogProvenanceRef,
 } from '../../persistence/journals/reflection-substrate.js';
+import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../self-model/state.js';
+import type { ActiveConcern } from '../intention/concerns.js';
 import {
   resolveReflectionPolicyPath,
   resolveReflectionDailyJournalsDir,
@@ -2560,5 +2562,341 @@ describe('createReflectionTemplateRuntime reflection novelty gate', () => {
     expect(harness.gateEvents).toEqual([]);
     // A manual reflection still consumed the scope's novelty.
     expect(harness.upsertCalls).toHaveLength(1);
+  });
+});
+
+describe('createReflectionTemplateRuntime wall-clock cadence recovery (Outcome A)', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function buildRecoveryHarness(options: {
+    nowMs: number;
+    dailyCadenceTimezone: 'utc' | 'local';
+  }) {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-cadence-recovery-'));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const daily = policy.templates.find(candidate => candidate.id === 'daily-review');
+    if (!daily) throw new Error('daily-review template missing from defaults');
+    // Pin the cadence to a fixed UTC slot so the test is timezone-independent.
+    daily.cadence = { kind: 'daily', hour: 6, minute: 0, timezone: options.dailyCadenceTimezone };
+    policyStore.save(policy);
+
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+        mood: { valence: 0.15, arousal: 0.25, dominance: 0.1 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.8,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      sessionMetrics: {
+        userMessageText: 'A quiet day.',
+        responseText: 'Settled.',
+        toolCallCount: 0,
+        recentTurnCount: 0,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const handleMessage = vi.fn(async () => ({ content: 'Recovered reflection.' }));
+
+    const scheduler = new Scheduler(new EventBus(), {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+    });
+
+    return { scheduler, runtime, handleMessage, policyStore };
+  }
+
+  async function appendPriorReflectionRun(
+    occurredAt: string,
+  ): Promise<void> {
+    const store = new ReflectionMetacognitionJournalStore(
+      resolveReflectionMetacognitionJournalPath(tempDir),
+    );
+    await store.append({
+      kind: 'reflection_run',
+      occurredAt,
+      templateId: 'daily-review',
+      templateName: 'Daily Reflection',
+      executionSource: 'scheduled',
+      initiatorSurface: 'scheduler:reflection_template',
+      initiatedBy: 'scheduler',
+      channelId: 'internal:reflection:daily-review',
+      mode: 'agent',
+      prompt: 'prior run prompt',
+      reflection: 'prior run reflection',
+    });
+  }
+
+  it('derives the persisted cadence anchor from the metacognition journal on task sync', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      const restartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      nowSpy.mockReturnValue(restartAt);
+      const harness = buildRecoveryHarness({
+        nowMs: restartAt,
+        dailyCadenceTimezone: 'utc',
+      });
+
+      const priorRunMs = new Date('2026-03-06T06:01:00.000Z').getTime();
+      // append is async only for the mirror; the file write is synchronous.
+      void appendPriorReflectionRun(new Date(priorRunMs).toISOString());
+
+      const registerSpy = vi.spyOn(harness.scheduler, 'register');
+      harness.runtime.syncReflectionTasks();
+
+      const dailyCall = registerSpy.mock.calls.find(
+        ([task]) => (task as { id?: string }).id === 'reflection:daily-review',
+      );
+      expect(dailyCall).toBeDefined();
+      expect(dailyCall![1]).toEqual({ lastRunAt: priorRunMs });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('falls back to skipFirstRun when no persisted run exists for a template', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      const restartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      nowSpy.mockReturnValue(restartAt);
+      const harness = buildRecoveryHarness({
+        nowMs: restartAt,
+        dailyCadenceTimezone: 'utc',
+      });
+
+      const registerSpy = vi.spyOn(harness.scheduler, 'register');
+      harness.runtime.syncReflectionTasks();
+
+      const dailyCall = registerSpy.mock.calls.find(
+        ([task]) => (task as { id?: string }).id === 'reflection:daily-review',
+      );
+      expect(dailyCall).toBeDefined();
+      expect(dailyCall![1]).toEqual({ skipFirstRun: true });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('recovers a missed daily slot exactly once after a restart using the persisted anchor', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      // Process restarts at 12:00 UTC, after the 06:00 UTC slot. The prior
+      // persisted run was yesterday's slot run (06:01).
+      const restartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      nowSpy.mockReturnValue(restartAt);
+      const harness = buildRecoveryHarness({
+        nowMs: restartAt,
+        dailyCadenceTimezone: 'utc',
+      });
+
+      await appendPriorReflectionRun('2026-03-06T06:01:00.000Z');
+      // Re-sync so the persisted anchor seeds the wall-clock task.
+      harness.runtime.syncReflectionTasks();
+
+      await harness.scheduler.tick();
+      expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+
+      // The recovered slot must not fire again on a subsequent tick.
+      await harness.scheduler.tick();
+      expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('does not duplicate a slot already satisfied this period on restart/replay', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      const restartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      nowSpy.mockReturnValue(restartAt);
+      const harness = buildRecoveryHarness({
+        nowMs: restartAt,
+        dailyCadenceTimezone: 'utc',
+      });
+
+      // The prior persisted run already satisfied today's slot (ran at 07:00,
+      // after the 06:00 slot start), so replay must not re-fire.
+      await appendPriorReflectionRun('2026-03-07T07:00:00.000Z');
+      harness.runtime.syncReflectionTasks();
+
+      await harness.scheduler.tick();
+      expect(harness.handleMessage).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
+
+describe('createReflectionTemplateRuntime concern-resolution projection (Outcome B)', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function buildActiveConcern(
+    id: string,
+    text: string,
+    salience: number,
+  ): ActiveConcern {
+    return {
+      id,
+      text,
+      priority: 'high',
+      source: 'agent',
+      status: 'active',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-04-01T00:00:00.000Z',
+      salience,
+      sensitivity: 'personal',
+      owner: 'companion',
+      evidenceRefs: [],
+      resolutionEvidenceRefs: [],
+      contactId: 'contact-1',
+    };
+  }
+
+  it('drops a cleared concern from the current-state projection while keeping an unresolved one', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-concern-projection-'));
+    const capturedPrompts: string[] = [];
+
+    // Snapshot carries both concerns as active (captured before resolution).
+    // 'spiraling' has the higher salience so without reconciliation it would be
+    // the surfaced open thread; after reconciliation the unresolved one surfaces.
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+        mood: { valence: -0.3, arousal: 0.5, dominance: -0.1 },
+        discrete: { distress: 0.7 },
+        confidence: 0.8,
+      },
+      activeConcerns: [
+        buildActiveConcern('concern-spiraling', 'I keep spiraling over the deadline', 0.9),
+        buildActiveConcern('concern-project', 'Unfinished project thread to revisit', 0.7),
+      ],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Hard day.',
+        responseText: 'Staying with it.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+        lastSeenDeltaSeconds: 60,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
+
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async (message: SubstrateMessage) => {
+      capturedPrompts.push(message.content);
+      return { content: 'Reflection captured.' };
+    });
+
+    const runtime = createReflectionTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        // The live concern store reports ONLY the unresolved concern as active:
+        // 'spiraling' was cleared (resolved) after the snapshot was captured.
+        getActiveConcerns: async ({ canonicalContactKey }) => (
+          canonicalContactKey === 'contact-1'
+            ? [{
+              id: 'concern-project',
+              title: 'Unfinished project thread to revisit',
+              summary: 'Unfinished project thread to revisit',
+              status: 'active',
+              priority: 'high',
+            }]
+            : []
+        ),
+      },
+    });
+
+    await runtime.runTemplateNow('daily-review', { deferIfBusy: false });
+
+    const prompt = capturedPrompts[0] ?? '';
+    // The unresolved concern still renders as a present-tense open thread.
+    expect(prompt).toContain('Unfinished project thread to revisit');
+    // The cleared concern must not render as current state.
+    expect(prompt).not.toContain('spiraling');
+    expect(prompt).not.toContain('deadline');
+  });
+
+  it('keeps a cleared concern in the projection when no live concern reader is wired', async () => {
+    // Without a live reader the runtime cannot confirm resolution, so it must
+    // not silently strip concerns from the snapshot (fail open, not force
+    // positivity). Historical distress stays legible.
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-concern-no-reader-'));
+    const capturedPrompts: string[] = [];
+
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+        mood: { valence: -0.3, arousal: 0.5, dominance: -0.1 },
+        discrete: { distress: 0.7 },
+        confidence: 0.8,
+      },
+      activeConcerns: [
+        buildActiveConcern('concern-spiraling', 'I keep spiraling over the deadline', 0.9),
+      ],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Hard day.',
+        responseText: 'Staying with it.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+        lastSeenDeltaSeconds: 60,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
+
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async (message: SubstrateMessage) => {
+      capturedPrompts.push(message.content);
+      return { content: 'Reflection captured.' };
+    });
+
+    const runtime = createReflectionTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+      // No runtimeOptions.getActiveConcerns: reconciliation is unavailable.
+    });
+
+    await runtime.runTemplateNow('daily-review', { deferIfBusy: false });
+
+    const prompt = capturedPrompts[0] ?? '';
+    // The concern remains present-tense because its resolution cannot be confirmed.
+    expect(prompt).toContain('spiraling');
   });
 });

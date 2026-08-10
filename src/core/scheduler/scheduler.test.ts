@@ -310,6 +310,108 @@ describe('Scheduler', () => {
         nowSpy.mockRestore();
       }
     });
+
+    it('recovers a missed wall-clock slot exactly once from a persisted lastRunAt', async () => {
+      // Outcome A: a process registering AFTER the daily slot, seeded with the
+      // prior persisted run (before this slot), must fire the missed slot once
+      // on the first tick instead of silently skipping it.
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        // Slot is 06:30 UTC; the process restarts at 12:00 (after the slot).
+        // The persisted last run was the prior day's 06:31 slot run.
+        nowSpy.mockReturnValue(new Date('2026-03-07T12:00:00.000Z').getTime());
+        scheduler.register(
+          {
+            id: 'daily-recovery',
+            name: 'Daily Recovery',
+            type: 'every',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { lastRunAt: new Date('2026-03-06T06:31:00.000Z').getTime() },
+        );
+
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+
+        // The recovered slot must not fire again on a subsequent tick within
+        // the same slot (lastRun was advanced to now by the firing handler).
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('does not re-fire a recovered wall-clock slot on restart/replay with an updated lastRunAt', async () => {
+      // Outcome A: after the missed slot fires, the persisted anchor advances.
+      // Re-registering (restart/replay) with that updated lastRunAt must not
+      // duplicate the recovered slot.
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-07T12:00:00.000Z').getTime());
+        const restartedScheduler = new Scheduler(eventBus, {
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 500,
+        });
+        // Updated anchor: the slot already ran this period (at 12:00, after the
+        // 06:30 slot start), so the slot is satisfied and must not fire again.
+        restartedScheduler.register(
+          {
+            id: 'daily-replay',
+            name: 'Daily Replay',
+            type: 'every',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { lastRunAt: new Date('2026-03-07T12:00:00.000Z').getTime() },
+        );
+
+        await restartedScheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        // The next legitimate slot (tomorrow 06:30) still fires normally.
+        nowSpy.mockReturnValue(new Date('2026-03-08T06:30:00.000Z').getTime());
+        await restartedScheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('does not fire a recovered wall-clock slot when the persisted run is already in the current slot', async () => {
+      // The prior persisted run already satisfied today's slot (ran at 07:00,
+      // after the 06:30 slot start), so registering later the same day must not
+      // re-fire — restart/replay must not duplicate a satisfied slot.
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-07T15:00:00.000Z').getTime());
+        scheduler.register(
+          {
+            id: 'daily-satisfied',
+            name: 'Daily Satisfied',
+            type: 'every',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { lastRunAt: new Date('2026-03-07T07:00:00.000Z').getTime() },
+        );
+
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe('tick — one-shot tasks', () => {

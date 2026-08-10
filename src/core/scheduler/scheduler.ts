@@ -298,6 +298,13 @@ export class Scheduler {
    * real cadence instead of restarting it at every boot. Pass `0` for "never
    * ran" — the task is then due on the first tick. It is mutually exclusive with
    * `skipFirstRun`, which is the in-memory-only "start the interval now" seed.
+   *
+   * For wall-clock (hourly/daily/weekly) cadences, `lastRunAt` is the recovery
+   * anchor: when a process registers AFTER the current slot with a prior
+   * persisted run, the missed slot fires exactly once on the next tick (the
+   * slot-start check treats any older last-run as "not yet run this slot").
+   * Re-registration with an updated lastRunAt does not re-fire, so restart or
+   * replay never duplicates a recovered slot.
    */
   register(
     task: ScheduledTask | ProtectedScheduledTask,
@@ -325,8 +332,15 @@ export class Scheduler {
 
     const now = Date.now();
     const seededLastRun = opts?.lastRunAt ?? (opts?.skipFirstRun ? now : 0);
+    // Wall-clock cadences anchor to fixed slots, not a relative interval. A
+    // persisted lastRunAt (state that outlived this process) must seed the
+    // anchor so a restart that lands AFTER the slot recovers the missed slot
+    // exactly once instead of silently skipping it. Without an explicit
+    // lastRunAt the prior behavior is preserved: skipFirstRun/fresh
+    // registration treats the cadence as just-satisfied (`now`) so it never
+    // fires immediately on first registration.
     const lastRun = task.type === 'every' && isWallClockCadence(task.cadence)
-      ? now
+      ? (opts?.lastRunAt !== undefined ? opts.lastRunAt : now)
       : seededLastRun;
     const entry: RuntimeScheduledTask = { ...task, lastRun };
     this.tasks.set(task.id, entry);

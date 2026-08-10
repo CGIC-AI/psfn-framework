@@ -119,8 +119,14 @@ const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
 const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
+// Window of metacognition journal entries scanned to recover each template's
+// persisted last-run anchor on task sync. Generous enough to span many weeks of
+// daily/weekly runs plus mutation entries; a template whose last run falls
+// outside it falls back to skipFirstRun (no recovery for that ancient run, and
+// the next wall-clock slot still fires normally).
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
+const PERSISTED_LAST_RUN_SCAN_LIMIT = 2_000;
 
 type ReflectionRequestSource = 'manual' | 'scheduled';
 type ReflectionDeliberationExecutionResult = {
@@ -244,6 +250,63 @@ export function createReflectionTemplateRuntime(
       ?? agentLoop.getCurrentInternalState?.()?.relational.contactId
       ?? undefined,
   );
+
+  /**
+   * Outcome B: filter a snapshot's attention.activeConcerns down to those still
+   * active in the live concern store before they are projected as present-tense
+   * current state. A concern that was active when the InternalState snapshot was
+   * captured but has since been resolved, dismissed, suppressed, superseded, or
+   * expired must not keep rendering as current; unresolved ones still do because
+   * they remain in the live active set. The snapshot ref, emotional state, and
+   * charter-§8.3 verbatim discrepancies are untouched — only the projection's
+   * active-concern view is narrowed. When no live concern reader is wired (or
+   * the snapshot carries no concerns) the view is returned unchanged.
+   */
+  const reconcileProjectionActiveConcerns = async (
+    context: ReflectionInternalStateContext | null,
+    reflectionChannelId: string,
+    canonicalContactId: string | undefined,
+  ): Promise<ReflectionInternalStateContext | null> => {
+    if (!context) return context;
+    const snapshotConcerns = context.internalState.attention.activeConcerns;
+    if (snapshotConcerns.length === 0) return context;
+    if (!runtimeOptions.getActiveConcerns) return context;
+
+    let liveActive: ReadonlyArray<{ id?: string }>;
+    try {
+      liveActive = await Promise.resolve(runtimeOptions.getActiveConcerns({
+        channelId: reflectionChannelId,
+        ...(canonicalContactId !== undefined ? { canonicalContactKey: canonicalContactId } : {}),
+      }));
+    } catch (error) {
+      log.warn('Reflection active-concern reconciliation skipped; live concern read failed', {
+        canonicalContactId: canonicalContactId ?? null,
+        error: String(error),
+      });
+      return context;
+    }
+    const liveIds = new Set(
+      liveActive
+        .map(concern => concern.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    );
+    // Only narrow: keep a snapshot concern when it carries no matchable id (the
+    // live store cannot speak to it) or when it is still active. Drop the rest.
+    const reconciled = snapshotConcerns.filter(
+      concern => typeof concern.id !== 'string' || concern.id.length === 0 || liveIds.has(concern.id),
+    );
+    if (reconciled.length === snapshotConcerns.length) return context;
+    return {
+      ...context,
+      internalState: {
+        ...context.internalState,
+        attention: {
+          ...context.internalState.attention,
+          activeConcerns: reconciled,
+        },
+      },
+    };
+  };
 
   const resolveReflectionSubstratePromptContext = (
     template: ReflectionTemplate,
@@ -769,6 +832,16 @@ export function createReflectionTemplateRuntime(
       logger: log,
     });
     const reflectionContactContext = reflectionContactResolution.bundle;
+    // Outcome B: narrow the projected current-state concerns to those still
+    // active in the live concern store before assembling the prompt bundles, so
+    // a concern cleared after the InternalState snapshot was captured cannot
+    // render as present-tense current state. Used for projection only; the
+    // snapshot ref, persistence context, and verbatim discrepancies are unchanged.
+    const projectionInternalStateContext = await reconcileProjectionActiveConcerns(
+      internalStateContext,
+      reflectionChannelId,
+      reflectionGroundingContactId,
+    );
     const reflectionSubstrateResolution = resolveReflectionSubstratePromptContext(template);
     const reflectionSubstrateContext = reflectionSubstrateResolution.context;
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
@@ -798,7 +871,7 @@ export function createReflectionTemplateRuntime(
       : null;
     const collectedEvidenceBundle = mergeReflectionPromptBundles(
       reflectionContactContext,
-      buildInternalStatePromptBundle(internalStateContext),
+      buildInternalStatePromptBundle(projectionInternalStateContext),
       reflectionSubstrateContext,
     );
     const reflectionPromptBundle = template.id === 'daily-review'
@@ -806,7 +879,7 @@ export function createReflectionTemplateRuntime(
       || template.id === 'mixed-state-review'
       ? buildReflectionStarterPromptBundle({
         templateId: template.id,
-        internalStateContext,
+        internalStateContext: projectionInternalStateContext,
         retrievedMemoryBlock: reflectionContactResolution.retrievedMemoryBlock,
         recentSessionMessages: reflectionContactResolution.recentSessionMessages,
         recentDailyJournalEntries: reflectionSubstrateResolution.recentDailyJournalEntries,
@@ -1462,6 +1535,37 @@ export function createReflectionTemplateRuntime(
     }
   };
 
+  /**
+   * Recover each template's wall-clock cadence anchor from the canonical
+   * reflection_run entries in the metacognition journal, so a process that
+   * registers AFTER the current slot — e.g. after a restart — fires the
+   * missed slot exactly once instead of silently skipping it. A template with
+   * no persisted run falls back to skipFirstRun (no immediate fire). This is
+   * the persisted counterpart to the scheduler's in-memory lastRun.
+   */
+  const resolvePersistedLastRunByTemplate = (): Map<string, number> => {
+    const lastRunByTemplate = new Map<string, number>();
+    try {
+      const recent = reflectionMetacognitionJournal.listRecent({
+        limit: PERSISTED_LAST_RUN_SCAN_LIMIT,
+      });
+      for (const entry of recent) {
+        if (entry.kind !== 'reflection_run' || !entry.templateId) continue;
+        const occurredAtMs = Date.parse(entry.occurredAt);
+        if (!Number.isFinite(occurredAtMs) || occurredAtMs < 0) continue;
+        const previous = lastRunByTemplate.get(entry.templateId);
+        if (previous === undefined || occurredAtMs > previous) {
+          lastRunByTemplate.set(entry.templateId, occurredAtMs);
+        }
+      }
+    } catch (error) {
+      log.warn('Failed to recover persisted reflection cadence anchors; missed-slot recovery disabled until the next run', {
+        error: String(error),
+      });
+    }
+    return lastRunByTemplate;
+  };
+
   const syncReflectionTasks = (): void => {
     for (const task of scheduler.listTasks()) {
       if (task.id.startsWith('reflection:') && !task.id.startsWith(LEGACY_DEFERRED_REFLECTION_TASK_PREFIX)) {
@@ -1470,8 +1574,10 @@ export function createReflectionTemplateRuntime(
     }
 
     const current = store.load();
+    const lastRunByTemplate = resolvePersistedLastRunByTemplate();
     for (const template of current.templates) {
       if (!template.enabled) continue;
+      const persistedLastRun = lastRunByTemplate.get(template.id);
       scheduler.register(
         {
           id: `reflection:${template.id}`,
@@ -1483,7 +1589,11 @@ export function createReflectionTemplateRuntime(
           handler: () => executeScheduledTemplate(template),
           state: 'idle',
         },
-        { skipFirstRun: true },
+        // lastRunAt and skipFirstRun are mutually exclusive: a persisted anchor
+        // recovers a missed wall-clock slot exactly once; its absence preserves
+        // the prior just-satisfied behavior so a fresh template never fires on
+        // registration.
+        persistedLastRun !== undefined ? { lastRunAt: persistedLastRun } : { skipFirstRun: true },
       );
     }
 

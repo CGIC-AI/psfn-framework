@@ -26,8 +26,9 @@ import type {
   DisclosureDestinationConstraint,
   DisclosureSourceContribution,
 } from '../../../core/cogsec/disclosure/contracts.js';
+import type { MessageAddressingMetadata } from '../../../shared/contracts/message-addressing.js';
 import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
-import type { SensitivityLevel } from '../../../system/trust/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 import type {
   BiographicalClaim,
   BiographicalClaimSource,
@@ -46,12 +47,17 @@ import {
   type CurrentAuthorResolution,
 } from './current-author-selection.js';
 import {
-  compareBiographicalPresentations,
   presentBiographicalClaim,
   renderBiographicalPresentations,
-  type BiographicalClaimAudienceRole,
   type BiographicalClaimPresentation,
 } from './projection-rendering.js';
+import {
+  hasExplicitSubjectAddressing,
+  selectExplicitSubjects,
+  type CanonicalAddressedContactResolver,
+  type ExplicitSubjectSelectionWithheld,
+  type VerifiedExplicitSubject,
+} from './explicit-subject-selection.js';
 
 // ── Source revalidation ──
 
@@ -171,6 +177,8 @@ export interface TurnBiographicalContext {
   readonly companionSubject: BiographicalSubjectRef;
   /** Canonical author resolution performed at turn ingress. */
   readonly currentAuthor?: CurrentAuthorResolution;
+  /** Transport-authoritative reply/mention metadata captured at ingress. */
+  readonly messageAddressing?: MessageAddressingMetadata;
   readonly conversationScope: ConversationScope;
   readonly tokenBudget?: number;
   readonly estimateTokens?: (text: string) => number;
@@ -183,10 +191,14 @@ type BiographicalWithheldReason =
   | 'source-drift'
   | 'no-publication-choice'
   | 'destination-disallowed'
-  | 'token-budget-exhausted';
+  | 'token-budget-exhausted'
+  | 'participation-unproven'
+  | 'explicit-resolver-unavailable'
+  | ExplicitSubjectSelectionWithheld['reason'];
 
 interface BiographicalWithheldEntry {
-  readonly claimId: string;
+  readonly claimId?: string;
+  readonly addressedParticipantId?: string;
   readonly reason: BiographicalWithheldReason;
   readonly detail: string;
 }
@@ -238,21 +250,89 @@ function hasActivePublicationGrant(
 export interface BiographicalProjectionDeps {
   readonly store: BiographicalProfileStorePort;
   readonly revalidator: BiographicalSourceRevalidator;
+  /** Required to project explicit reply/mention subjects; absence fails closed. */
+  readonly explicitAddressing?: {
+    readonly resolver: CanonicalAddressedContactResolver;
+    readonly maxSubjects: number;
+  };
+}
+
+interface ProjectionPresentation {
+  readonly claim: BiographicalClaim;
+  readonly sectionKey: string;
+  readonly header: string;
+  readonly line: string;
+  readonly sortKey: string;
 }
 
 interface AdmittedClaim {
   readonly claim: BiographicalClaim;
-  readonly presentation: BiographicalClaimPresentation;
+  readonly presentation: ProjectionPresentation;
   /** Recomputed effective sensitivity (from current sources + applicable grant). */
   readonly effectiveSensitivity: SensitivityLevel;
   /** Publication grant actually authorizing this projection (against current sources). */
   readonly appliedGrantId?: string;
+  /** Authoritative current-participation proof used for a non-public explicit subject. */
+  readonly participationProofRef?: string;
 }
 
 interface ProjectionCandidate {
   readonly claim: BiographicalClaim;
-  readonly presentation: BiographicalClaimPresentation;
-  readonly audienceRole: BiographicalClaimAudienceRole;
+  readonly presentation: ProjectionPresentation;
+  readonly audienceRole: 'companion-self' | 'current-author' | 'explicit-subject';
+  readonly trustLevel?: TrustLevel;
+  readonly currentParticipation?: VerifiedExplicitSubject['currentParticipation'];
+}
+
+function projectionPresentation(
+  presentation: BiographicalClaimPresentation,
+): ProjectionPresentation {
+  return { ...presentation, sectionKey: presentation.section };
+}
+
+function presentExplicitSubjectClaim(
+  claim: BiographicalClaim,
+  subject: VerifiedExplicitSubject['subject'],
+): ProjectionPresentation | undefined {
+  const presentation = presentBiographicalClaim(claim, 'current-author');
+  if (presentation === undefined) return undefined;
+  return {
+    claim,
+    sectionKey: `explicit-subject:${subject.contactId}:${subject.subjectVersion}`,
+    header: '## Explicitly relevant contact',
+    line: presentation.line.replace(
+      'The current author',
+      'This explicitly addressed contact',
+    ),
+    sortKey: `explicit-subject:${subject.contactId}:${presentation.sortKey}`,
+  };
+}
+
+function compareProjectionPresentations(
+  left: ProjectionPresentation,
+  right: ProjectionPresentation,
+): number {
+  if (left.sortKey !== right.sortKey) return left.sortKey < right.sortKey ? -1 : 1;
+  return left.claim.claimDigest < right.claim.claimDigest
+    ? -1
+    : left.claim.claimDigest > right.claim.claimDigest ? 1 : 0;
+}
+
+function renderProjectionPresentations(
+  presentations: readonly ProjectionPresentation[],
+): string {
+  if (presentations.length === 0) return '';
+  const sorted = [...presentations].sort(compareProjectionPresentations);
+  const lines: string[] = [];
+  let sectionKey: string | undefined;
+  for (const presentation of sorted) {
+    if (presentation.sectionKey !== sectionKey) {
+      lines.push(presentation.header);
+      sectionKey = presentation.sectionKey;
+    }
+    lines.push(presentation.line);
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 /** Project eligible companion-self and verified-current-author claims. Subject
@@ -291,26 +371,81 @@ export async function projectBiographicalContext(
       companionSubject: turn.companionSubject,
       currentAuthor,
     });
+  const explicitSelection = deps.explicitAddressing === undefined
+    ? {
+      subjects: [],
+      withheld: hasExplicitSubjectAddressing(turn.messageAddressing)
+        ? [{
+          reason: 'explicit-resolver-unavailable' as const,
+          detail: 'explicit addressing cannot project without a canonical-contact resolver',
+        }]
+        : [],
+    }
+    : await selectExplicitSubjects({
+      conversationScope: turn.conversationScope,
+      messageAddressing: turn.messageAddressing,
+      resolver: deps.explicitAddressing.resolver,
+      maxSubjects: deps.explicitAddressing.maxSubjects,
+    });
+  const explicitClaimsBySubject = await Promise.all(explicitSelection.subjects.map(
+    async subject => ({
+      subject,
+      claims: await selectCurrentAuthorClaims({
+        store: deps.store,
+        companionSubject: turn.companionSubject,
+        currentAuthor: subject,
+      }),
+    }),
+  ));
   const candidates: ProjectionCandidate[] = [
     ...selfClaims.flatMap(claim => {
       const presentation = presentBiographicalClaim(claim, 'companion-self');
       return presentation === undefined
         ? []
-        : [{ claim, presentation, audienceRole: 'companion-self' as const }];
+        : [{
+          claim,
+          presentation: projectionPresentation(presentation),
+          audienceRole: 'companion-self' as const,
+          ...(currentAuthor === undefined ? {} : { trustLevel: currentAuthor.trustLevel }),
+        }];
     }),
     ...currentAuthorClaims.flatMap(claim => {
       const presentation = presentBiographicalClaim(claim, 'current-author');
       return presentation === undefined
         ? []
-        : [{ claim, presentation, audienceRole: 'current-author' as const }];
+        : [{
+          claim,
+          presentation: projectionPresentation(presentation),
+          audienceRole: 'current-author' as const,
+          ...(currentAuthor === undefined ? {} : { trustLevel: currentAuthor.trustLevel }),
+        }];
     }),
+    ...explicitClaimsBySubject.flatMap(({ subject, claims }) => claims.flatMap(claim => {
+      const presentation = presentExplicitSubjectClaim(claim, subject.subject);
+      return presentation === undefined
+        ? []
+        : [{
+          claim,
+          presentation,
+          audienceRole: 'explicit-subject' as const,
+          trustLevel: subject.trustLevel,
+          currentParticipation: subject.currentParticipation,
+        }];
+    })),
   ];
 
   const admitted: AdmittedClaim[] = [];
-  const withheld: BiographicalWithheldEntry[] = [];
+  const withheld: BiographicalWithheldEntry[] = explicitSelection.withheld.map(entry => ({
+    ...entry,
+  }));
+  const consideredClaimIds = new Set<string>();
 
   for (const candidate of candidates) {
     const { claim } = candidate;
+    // One claim may be selected through both current-author and explicit
+    // addressing. Its first, more direct eligibility path owns the projection.
+    if (consideredClaimIds.has(claim.id)) continue;
+    consideredClaimIds.add(claim.id);
     // Read-time source revalidation. Missing source data fails closed.
     const revalidation = await deps.revalidator.revalidate(claim.sources, now);
     if (revalidation.status === 'missing') {
@@ -367,9 +502,22 @@ export async function projectBiographicalContext(
       continue;
     }
 
-    if (currentAuthor !== undefined) {
+    if (
+      candidate.audienceRole === 'explicit-subject'
+      && effectiveSensitivity !== 'public'
+      && candidate.currentParticipation?.status !== 'authoritative'
+    ) {
+      withheld.push({
+        claimId: claim.id,
+        reason: 'participation-unproven',
+        detail: 'a non-public explicit-subject claim requires authoritative current participation proof',
+      });
+      continue;
+    }
+
+    if (candidate.trustLevel !== undefined) {
       const policy = evaluateMemoryPolicy({
-        trustLevel: currentAuthor.trustLevel,
+        trustLevel: candidate.trustLevel,
         channelPrivacy: turn.conversationScope.envelope.channelPrivacy,
         broadcast: turn.conversationScope.envelope.broadcast,
         memorySensitivity: effectiveSensitivity,
@@ -378,7 +526,7 @@ export async function projectBiographicalContext(
         withheld.push({
           claimId: claim.id,
           reason: 'destination-disallowed',
-          detail: `current-author trust or context envelope denied this claim: ${policy.reason}`,
+          detail: `subject trust or context envelope denied this claim: ${policy.reason}`,
         });
         continue;
       }
@@ -391,12 +539,17 @@ export async function projectBiographicalContext(
       presentation: candidate.presentation,
       effectiveSensitivity,
       ...(appliedGrant !== undefined ? { appliedGrantId: appliedGrant.id } : {}),
+      ...(candidate.audienceRole === 'explicit-subject'
+        && effectiveSensitivity !== 'public'
+        && candidate.currentParticipation?.status === 'authoritative'
+        ? { participationProofRef: candidate.currentParticipation.proofRef }
+        : {}),
     });
   }
 
   // Deterministic order, then optional prompt-economy trimming.
   admitted.sort((left, right) =>
-    compareBiographicalPresentations(left.presentation, right.presentation));
+    compareProjectionPresentations(left.presentation, right.presentation));
   const { admitted: budgeted, trimmed } = applyTokenBudget(admitted, turn);
 
   for (const entry of trimmed) {
@@ -407,7 +560,7 @@ export async function projectBiographicalContext(
     });
   }
 
-  const promptSection = renderBiographicalPresentations(
+  const promptSection = renderProjectionPresentations(
     budgeted.map(entry => entry.presentation),
   );
   const disclosureSources = budgeted.map(entry =>
@@ -424,7 +577,7 @@ export async function projectBiographicalContext(
 
 function withholdReasonFor(
   claim: BiographicalClaim,
-  audienceRole: BiographicalClaimAudienceRole,
+  audienceRole: ProjectionCandidate['audienceRole'],
   drifted: boolean,
   grants: readonly BiographicalSensitivityGrant[],
   effective: SensitivityLevel,
@@ -468,14 +621,14 @@ function applyTokenBudget(
   let running = 0;
   const kept: AdmittedClaim[] = [];
   const trimmed: AdmittedClaim[] = [];
-  const admittedSections = new Set<BiographicalClaimPresentation['section']>();
+  const admittedSections = new Set<string>();
   let budgetExceeded = false;
   for (const entry of admitted) {
     if (budgetExceeded) {
       trimmed.push(entry);
       continue;
     }
-    const headerCost = admittedSections.has(entry.presentation.section)
+    const headerCost = admittedSections.has(entry.presentation.sectionKey)
       ? 0
       : estimate(`${entry.presentation.header}\n`);
     const marginal = headerCost + estimate(`${entry.presentation.line}\n`);
@@ -485,7 +638,7 @@ function applyTokenBudget(
       continue;
     }
     running += marginal;
-    admittedSections.add(entry.presentation.section);
+    admittedSections.add(entry.presentation.sectionKey);
     kept.push(entry);
   }
   return { admitted: kept, trimmed };
@@ -506,6 +659,9 @@ function claimDisclosureContribution(
   const provenanceRefs: string[] = [`biographical-claim:${claim.id}`];
   if (entry.appliedGrantId !== undefined) {
     provenanceRefs.push(`biographical-grant:${entry.appliedGrantId}`);
+  }
+  if (entry.participationProofRef !== undefined) {
+    provenanceRefs.push(`biographical-participation:${entry.participationProofRef}`);
   }
   for (const source of claim.sources) {
     provenanceRefs.push(source.ref);

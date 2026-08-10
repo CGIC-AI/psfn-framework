@@ -141,6 +141,14 @@ export interface AdminIntakeQuarantineItemView {
     reason: string;
     at: string;
   };
+  redelivery?: {
+    delivered: boolean;
+    attemptedAt: string;
+    channelId?: string;
+    reason?: string;
+  };
+  /** A prior release did not land and can be retried without re-releasing. */
+  redeliveryRetryAvailable: boolean;
   /** What always-allow/always-deny would list; null when underivable. */
   flywheelTarget: AdminIntakeQuarantineFlywheelTarget | null;
   /**
@@ -312,6 +320,35 @@ function deriveFlywheelTarget(
   return null;
 }
 
+/**
+ * Resolve the physical channel that carried a quarantined item. New holds use
+ * the typed field. The Discord provenance fallback exists only for entries
+ * written before that field was propagated through document intake.
+ */
+function resolveReleaseSourceChannelId(entry: IntakeQuarantineEntry): string | undefined {
+  const recorded = entry.sourceChannelId?.trim();
+  if (recorded) return recorded;
+  const originRef = entry.envelope.provenance[0]?.ref.trim();
+  if (!originRef) return undefined;
+  const discordOrigin = /^discord:([0-9]+):/u.exec(originRef);
+  return discordOrigin?.[1];
+}
+
+function isRedeliveryRetry(
+  entry: IntakeQuarantineEntry,
+  action: IntakeQuarantineDecisionAction,
+): boolean {
+  const matchingTerminalState = (action === 'release_raw' && entry.status === 'released_raw')
+    || (action === 'release_sanitized' && entry.status === 'released_sanitized');
+  if (!matchingTerminalState || entry.decision?.action !== action) return false;
+  if (entry.redelivery?.delivered === false) return true;
+  // Legacy signature of the live defect: the release ran before document
+  // intake persisted sourceChannelId, and therefore could not have landed.
+  return entry.redelivery === undefined
+    && !entry.sourceChannelId?.trim()
+    && resolveReleaseSourceChannelId(entry) !== undefined;
+}
+
 function flywheelListFor(
   target: AdminIntakeQuarantineFlywheelTarget,
   action: AdminIntakeQuarantineSourceListAction,
@@ -387,6 +424,18 @@ function toItemView(
         },
       }
       : {}),
+    ...(entry.redelivery
+      ? {
+        redelivery: {
+          delivered: entry.redelivery.delivered,
+          attemptedAt: toIso(entry.redelivery.attemptedAtMs),
+          ...(entry.redelivery.channelId ? { channelId: entry.redelivery.channelId } : {}),
+          ...(entry.redelivery.reason ? { reason: entry.redelivery.reason } : {}),
+        },
+      }
+      : {}),
+    redeliveryRetryAvailable: entry.decision !== undefined
+      && isRedeliveryRetry(entry, entry.decision.action),
     flywheelTarget: deriveFlywheelTarget(entry),
     ...(attributionResolvers
       ? {
@@ -508,12 +557,21 @@ export function createAdminIntakeQuarantineService(
   const validateRequestShape = (
     request: AdminIntakeQuarantineDecisionRequest,
     entry: IntakeQuarantineEntry,
-  ): { ok: true; target: AdminIntakeQuarantineFlywheelTarget | null } | { ok: false; status: number; message: string } => {
-    if (entry.status !== 'held') {
+  ): { ok: true; target: AdminIntakeQuarantineFlywheelTarget | null; retryRedelivery: boolean }
+    | { ok: false; status: number; message: string } => {
+    const retryRedelivery = isRedeliveryRetry(entry, request.action);
+    if (entry.status !== 'held' && !retryRedelivery) {
       return {
         ok: false,
         status: 409,
         message: `Quarantine item is '${entry.status}', not held; no decision can be taken`,
+      };
+    }
+    if (retryRedelivery && request.sourceList !== undefined) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'A re-delivery retry cannot change source-list policy',
       };
     }
     if (entry.ruleMatchProvenanceUnavailable && request.action !== 'discard') {
@@ -541,7 +599,7 @@ export function createAdminIntakeQuarantineService(
           + 'always-allow/always-deny is unavailable for it',
       };
     }
-    return { ok: true, target };
+    return { ok: true, target, retryRedelivery };
   };
 
   return {
@@ -585,7 +643,7 @@ export function createAdminIntakeQuarantineService(
         ok: true,
         confirmToken: token,
         expiresAtMs: atMs + tokenTtlMs,
-        summary: `This will ${DECISION_LABELS[request.action]} for ${entry.envelope.sourceClass} `
+        summary: `This will ${validated.retryRedelivery ? 'retry delivery of' : DECISION_LABELS[request.action]} for ${entry.envelope.sourceClass} `
           + `item ${entry.id}${flywheelNote}. `
           + 'The decision is irreversible and fully audited.',
       };
@@ -685,7 +743,9 @@ export function createAdminIntakeQuarantineService(
       // ── CogSec ledger: applying → applied/failed around the store mutation,
       // so a crash mid-decision is visible in the case history (fail closed).
       const severity: CogSecSeverity = request.action === 'release_raw' ? 'medium' : 'low';
-      const decisionPhrase = request.action === 'release_raw'
+      const decisionPhrase = validated.retryRedelivery
+        ? 'retried delivery of one previously released quarantined item'
+        : request.action === 'release_raw'
         ? 'released one quarantined item verbatim after review'
         : request.action === 'release_sanitized'
           ? 'released the neutral safe representation of one quarantined item after review'
@@ -695,7 +755,7 @@ export function createAdminIntakeQuarantineService(
         type: 'intake_firewall',
         severity,
         status: 'applying',
-        sourceChannelId: entry.sourceChannelId ?? 'garden:intake-quarantine',
+        sourceChannelId: resolveReleaseSourceChannelId(entry) ?? 'garden:intake-quarantine',
         actor: requestActor,
         actions: [],
         safeAgentSummary: `Operator ${decisionPhrase} `
@@ -707,13 +767,15 @@ export function createAdminIntakeQuarantineService(
 
       let decided: IntakeQuarantineEntry;
       try {
-        decided = deps.store.applyDecision({
-          id: entry.id,
-          action: request.action,
-          actor: requestActor,
-          reason,
-          atMs,
-        });
+        decided = validated.retryRedelivery
+          ? entry
+          : deps.store.applyDecision({
+            id: entry.id,
+            action: request.action,
+            actor: requestActor,
+            reason,
+            atMs,
+          });
       } catch (error) {
         cogSecEvents.updateEvent(event.caseId, {
           status: 'failed',
@@ -736,6 +798,7 @@ export function createAdminIntakeQuarantineService(
         const content = request.action === 'release_raw'
           ? decided.rawText
           : decided.safeRepresentationText ?? '';
+        const sourceChannelId = resolveReleaseSourceChannelId(decided);
         try {
           redelivery = deps.redeliverReleased({
             envelope: decided.envelope,
@@ -745,8 +808,8 @@ export function createAdminIntakeQuarantineService(
             atMs,
             content,
             rawTextTruncated: decided.rawTextTruncated,
-            ...(decided.sourceChannelId !== undefined
-              ? { sourceChannelId: decided.sourceChannelId }
+            ...(sourceChannelId !== undefined
+              ? { sourceChannelId }
               : {}),
             ...(decided.canonicalContactId !== undefined
               ? { canonicalContactId: decided.canonicalContactId }
@@ -758,6 +821,14 @@ export function createAdminIntakeQuarantineService(
             reason: `re-delivery threw: ${toErrorMessage(error)}`,
           };
         }
+        decided = deps.store.recordRedelivery({
+          id: decided.id,
+          delivered: redelivery.delivered,
+          attemptedAtMs: atMs,
+          ...(redelivery.channelId !== undefined ? { channelId: redelivery.channelId } : {}),
+          ...(redelivery.entryId !== undefined ? { entryId: redelivery.entryId } : {}),
+          ...(redelivery.reason !== undefined ? { reason: redelivery.reason } : {}),
+        });
       }
 
       const redeliveryNote = redelivery
@@ -785,7 +856,7 @@ export function createAdminIntakeQuarantineService(
       return {
         ok: true,
         item: toItemView(decided, atMs, deps.attributionResolvers),
-        message: `Applied ${request.action} to quarantine item ${entry.id}${flywheelMessage}${redeliveryNote}`,
+        message: `${validated.retryRedelivery ? 'Retried delivery for' : `Applied ${request.action} to`} quarantine item ${entry.id}${flywheelMessage}${redeliveryNote}`,
         cogSecCaseId: event.caseId,
       };
     },

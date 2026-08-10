@@ -28,6 +28,7 @@ function item(overrides: Partial<AdminIntakeQuarantineItemView> = {}): AdminInta
     ttlRemainingMs: 60_000,
     rawTextTruncated: false,
     safeRepresentationAvailable: false,
+    redeliveryRetryAvailable: false,
     flywheelTarget: null,
     ...overrides,
   };

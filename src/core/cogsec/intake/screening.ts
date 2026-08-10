@@ -967,6 +967,9 @@ export function createIntakeScreeningService(
           ...(input.canonicalContactId !== undefined
             ? { canonicalContactId: input.canonicalContactId }
             : {}),
+          ...(input.sourceChannelId !== undefined
+            ? { sourceChannelId: input.sourceChannelId }
+            : {}),
           ...(input.artifactPaths !== undefined && input.artifactPaths.length > 0
             ? { artifactPaths: input.artifactPaths }
             : {}),

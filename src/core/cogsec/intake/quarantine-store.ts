@@ -68,6 +68,14 @@ export interface IntakeQuarantineDecisionRecord {
   atMs: number;
 }
 
+export interface IntakeQuarantineRedeliveryRecord {
+  delivered: boolean;
+  attemptedAtMs: number;
+  channelId?: string;
+  entryId?: number | null;
+  reason?: string;
+}
+
 /**
  * One recorded attempt to read a quarantined item's on-disk artifact while
  * the item was NOT operator-released (hrmrq.54). Surfaced in the Garden
@@ -116,6 +124,8 @@ export interface IntakeQuarantineEntry {
   expiresAtMs: number;
   status: IntakeQuarantineEntryStatus;
   decision?: IntakeQuarantineDecisionRecord;
+  /** Last attempt to return released content to its carrying conversation. */
+  redelivery?: IntakeQuarantineRedeliveryRecord;
   /**
    * On-disk artifact paths carrying this item's raw content (a saved document
    * and its parsed-text sidecar). Registered at hold time so read seams can
@@ -156,6 +166,10 @@ export interface IntakeQuarantineDecisionInput {
   atMs?: number;
 }
 
+export interface IntakeQuarantineRedeliveryInput extends IntakeQuarantineRedeliveryRecord {
+  id: string;
+}
+
 export interface IntakeQuarantineStore extends IntakeQuarantineHoldPort {
   /** All entries (held first, newest-held first), after a lazy TTL sweep. */
   list(): IntakeQuarantineEntry[];
@@ -168,6 +182,8 @@ export interface IntakeQuarantineStore extends IntakeQuarantineHoldPort {
    * safe representation (fail closed).
    */
   applyDecision(input: IntakeQuarantineDecisionInput): IntakeQuarantineEntry;
+  /** Persists the outcome of returning released content to its conversation. */
+  recordRedelivery(input: IntakeQuarantineRedeliveryInput): IntakeQuarantineEntry;
   /**
    * The entry whose registered artifact paths contain `path` (normalized
    * exact match), preferring held entries when several match (hrmrq.54).
@@ -392,7 +408,7 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
   const knownKeys = [
     'id', 'envelope', 'ruleMatchProvenanceUnavailable', 'mode', 'rawText', 'rawTextTruncated', 'safeRepresentationText',
     'canonicalContactId', 'sourceChannelId', 'cogSecCaseId', 'heldAtMs', 'expiresAtMs',
-    'status', 'decision', 'artifactPaths', 'artifactIdentities', 'accessAttempts',
+    'status', 'decision', 'redelivery', 'artifactPaths', 'artifactIdentities', 'accessAttempts',
   ];
   const unknownKeys = Object.keys(entry).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -535,6 +551,39 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
     }
     if (typeof decision.atMs !== 'number' || !Number.isFinite(decision.atMs)) {
       throw invalidEntry(filePath, 'decision.atMs must be a finite number');
+    }
+  }
+  if (entry.redelivery !== undefined) {
+    if (typeof entry.redelivery !== 'object' || entry.redelivery === null
+      || Array.isArray(entry.redelivery)) {
+      throw invalidEntry(filePath, 'redelivery must be an object');
+    }
+    const redelivery = entry.redelivery as Record<string, unknown>;
+    const unknownRedeliveryKeys = Object.keys(redelivery)
+      .filter(key => !['delivered', 'attemptedAtMs', 'channelId', 'entryId', 'reason'].includes(key));
+    if (unknownRedeliveryKeys.length > 0) {
+      throw invalidEntry(filePath, `redelivery has unsupported keys: ${unknownRedeliveryKeys.join(', ')}`);
+    }
+    if (typeof redelivery.delivered !== 'boolean') {
+      throw invalidEntry(filePath, 'redelivery.delivered must be a boolean');
+    }
+    if (typeof redelivery.attemptedAtMs !== 'number' || !Number.isFinite(redelivery.attemptedAtMs)) {
+      throw invalidEntry(filePath, 'redelivery.attemptedAtMs must be a finite number');
+    }
+    if (redelivery.channelId !== undefined
+      && (typeof redelivery.channelId !== 'string' || !redelivery.channelId.trim())) {
+      throw invalidEntry(filePath, 'redelivery.channelId must be a non-empty string when present');
+    }
+    if (redelivery.entryId !== undefined && redelivery.entryId !== null
+      && (typeof redelivery.entryId !== 'number' || !Number.isInteger(redelivery.entryId))) {
+      throw invalidEntry(filePath, 'redelivery.entryId must be an integer or null when present');
+    }
+    if (redelivery.reason !== undefined
+      && (typeof redelivery.reason !== 'string' || !redelivery.reason.trim())) {
+      throw invalidEntry(filePath, 'redelivery.reason must be a non-empty string when present');
+    }
+    if (entry.status !== 'released_raw' && entry.status !== 'released_sanitized') {
+      throw invalidEntry(filePath, 'redelivery is only valid on released entries');
     }
   }
   return {
@@ -1138,6 +1187,41 @@ function createIntakeQuarantineStoreInternal(
         }
         persist(entries);
         return decided;
+      });
+    },
+
+    recordRedelivery(input: IntakeQuarantineRedeliveryInput): IntakeQuarantineEntry {
+      if (!Number.isFinite(input.attemptedAtMs)) {
+        throw new Error('Intake quarantine redelivery attemptedAtMs must be finite');
+      }
+      if (input.channelId !== undefined && !input.channelId.trim()) {
+        throw new Error('Intake quarantine redelivery channelId must be non-empty when present');
+      }
+      if (input.reason !== undefined && !input.reason.trim()) {
+        throw new Error('Intake quarantine redelivery reason must be non-empty when present');
+      }
+      return withWriteLock(() => {
+        const entries = load();
+        const entry = entries.get(input.id);
+        if (!entry) throw new Error(`Intake quarantine entry not found: ${input.id}`);
+        if (entry.status !== 'released_raw' && entry.status !== 'released_sanitized') {
+          throw new Error(
+            `Intake quarantine entry '${input.id}' is '${entry.status}'; only released items record re-delivery`,
+          );
+        }
+        const updated: IntakeQuarantineEntry = {
+          ...entry,
+          redelivery: {
+            delivered: input.delivered,
+            attemptedAtMs: input.attemptedAtMs,
+            ...(input.channelId !== undefined ? { channelId: input.channelId.trim() } : {}),
+            ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
+            ...(input.reason !== undefined ? { reason: input.reason.trim() } : {}),
+          },
+        };
+        entries.set(entry.id, updated);
+        persist(entries);
+        return updated;
       });
     },
   };

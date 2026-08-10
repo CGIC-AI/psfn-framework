@@ -192,6 +192,16 @@
     confirmStage = 'first';
   }
 
+  function beginRedeliveryRetry(item: AdminIntakeQuarantineItemView) {
+    const action = item.operatorDecision?.action;
+    if (action !== 'release_raw' && action !== 'release_sanitized') {
+      pushToast('This item has no released content to re-deliver.', 'error');
+      return;
+    }
+    sourceListChoice = 'none';
+    beginDecision(item, action);
+  }
+
   function cancelConfirmFlow() {
     confirmStage = 'idle';
     confirmBusy = false;
@@ -457,6 +467,15 @@
                 <span class="ml-1 text-shadow-800">{statusLabel(item.operatorDecision.action)} by {item.operatorDecision.actor} at {formatTimestamp(item.operatorDecision.at)} -- {item.operatorDecision.reason}</span>
               </div>
             {/if}
+            {#if item.redelivery}
+              <div class="md:col-span-2">
+                <span class="text-shadow-600">Re-delivery:</span>
+                <span class="ml-1 text-shadow-800">
+                  {item.redelivery.delivered ? 'landed' : 'did not land'} at {formatTimestamp(item.redelivery.attemptedAt)}
+                  {item.redelivery.reason ? ` -- ${item.redelivery.reason}` : ''}
+                </span>
+              </div>
+            {/if}
             {#if item.contentAccessAttempts && item.contentAccessAttempts.length > 0}
               <!-- hrmrq.54: reads of the held item's on-disk artifact while it
                    was not released -- a containment-bypass attempt the reviewer
@@ -632,6 +651,25 @@
                         Discard
                       </button>
                     </div>
+                  </div>
+                {:else if item.redeliveryRetryAvailable}
+                  <div class="garden-field-grid border-t border-bark-100 pt-4 space-y-3">
+                    <p class="text-sm font-medium text-wilt-700">Released content did not reach its conversation</p>
+                    <label class="garden-field block text-sm text-shadow-800">
+                      Retry reason (required, audited)
+                      <textarea
+                        class="mt-1 w-full min-h-16 rounded-lg border border-bark-300 px-3 py-2 text-sm"
+                        bind:value={reason}
+                        placeholder="Why this previously failed delivery should be retried."
+                      ></textarea>
+                    </label>
+                    <button
+                      type="button"
+                      onclick={() => beginRedeliveryRetry(item)}
+                      class="garden-action garden-action--primary px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300"
+                    >
+                      Retry delivery
+                    </button>
                   </div>
                 {/if}
               </div>

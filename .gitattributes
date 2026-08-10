@@ -1,3 +1,6 @@
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# Unified diff context lines intentionally contain a single leading space.
+apps/satellite-hub/patches/*.patch -whitespace

@@ -265,4 +265,3 @@ export const concreteDeviceProfiles = concreteDeviceProfileFixtures;
 export function getConcreteDeviceProfile(id: string): ConcreteDeviceProfile | undefined {
   return concreteDeviceProfileFixtures.find((profile) => profile.id === id);
 }
-

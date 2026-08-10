@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "presencePolicy": {
+    "mode": "last_motion_rising_edge_wins",
+    "emitToPurrsephone": false,
+    "exclusiveGroup": "primary-occupant",
+    "ignoreInactiveEdges": true,
+    "deduplicateCurrentArea": true,
+    "expires": false,
+    "confidence": "coarse"
+  },
+  "areas": [
+    {
+      "areaId": "bedroom",
+      "displayName": "Upstairs",
+      "presenceEntityId": "binary_sensor.motion_sensor_gen2_motion_detection_2",
+      "devices": [
+        {
+          "kind": "light",
+          "entityId": "light.main_bedroom",
+          "displayName": "Bedroom Light",
+          "dimmable": true,
+          "brightnessStepPercent": 10
+        },
+        {
+          "kind": "fan",
+          "entityId": "fan.main_bedroom_2",
+          "displayName": "Bedroom Fan",
+          "percentageStep": 25
+        },
+        {
+          "kind": "light",
+          "entityId": "light.main_bathroom_light",
+          "displayName": "Bathroom Light",
+          "dimmable": true,
+          "brightnessStepPercent": 10
+        }
+      ]
+    },
+    {
+      "areaId": "office",
+      "displayName": "Downstairs",
+      "presenceEntityId": "binary_sensor.motion_sensor_gen2_motion_detection",
+      "devices": [
+        {
+          "kind": "switch",
+          "entityId": "switch.office_switch_1",
+          "displayName": "Office Light"
+        },
+        {
+          "kind": "switch",
+          "entityId": "switch.lab_lightning_switch_1",
+          "displayName": "Lab Lights"
+        },
+        {
+          "kind": "switch",
+          "entityId": "switch.studio_lighting_switch_1",
+          "displayName": "Studio Lights"
+        }
+      ]
+    }
+  ]
+}

@@ -98,11 +98,13 @@ test('counts files but excludes generated tracker and lockfile churn from lines'
     parseNumstat(
       [
         '1000\t500\tpackage-lock.json',
+        '900\t300\tapps/satellite-hub/package-lock.json',
+        '700\t200\ttools/evals/package-lock.json',
         '800\t0\t.beads/issues.jsonl',
         '7\t3\tsrc/example.ts',
       ].join('\n'),
     ),
-    { files: 3, lines: 10 },
+    { files: 5, lines: 10 },
   );
 });
 

@@ -1,0 +1,1 @@
+"""Opanhome voice hub."""

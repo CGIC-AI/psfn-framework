@@ -1,0 +1,41 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+node_modules/
+coverage/
+*.pyc
+.env
+.runtime/
+worktrees/
+.artifacts/
+.agent/
+# Per-satellite ESPHome build state and local credentials
+satellites/**/.esphome/
+satellites/**/.generated/
+satellites/**/secrets.yaml
+
+# .NET relay build outputs
+bin/
+obj/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
+*.db?*
+
+# Local beads runtime state
+.beads/interactions.jsonl
+.beads/dolt-monitor.pid.lock
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# NTM swarm local runtime state
+.ntm/
+
+# agentbus run files (shared home is ~/agentbus-runs; local runs are ephemeral)
+bus/runs/

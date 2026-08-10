@@ -2,36 +2,30 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source_dir="${SATELLITE_HUB_SOURCE:-${1:-$HOME/psfn-framework/PSFN-Satellite-Hub}}"
+repo_root="$(git -C "${script_dir}/../.." rev-parse --show-toplevel)"
+source_dir="${repo_root}/apps/satellite-hub"
 repository="${SATELLITE_HUB_IMAGE_REPOSITORY:-localhost/psfn-satellite-hub}"
 platform="${SATELLITE_HUB_PLATFORM:-linux/amd64}"
-required_ref="${SATELLITE_HUB_SOURCE_REF:-}"
-
-if [[ ! -d "${source_dir}" ]]; then
-  echo "Satellite hub source directory not found: ${source_dir}" >&2
-  exit 1
-fi
+required_ref="${SATELLITE_HUB_MONOREPO_REF:-}"
 
 if [[ ! -f "${source_dir}/package-lock.json" ]]; then
-  echo "Satellite hub build requires package-lock.json in ${source_dir}" >&2
+  echo "Satellite Hub package-lock.json is missing from ${source_dir}" >&2
   exit 1
 fi
 
-if ! git -C "${source_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "Satellite hub source must be a git checkout so the image can be tied to a commit" >&2
-  exit 1
-fi
-
-actual_ref="$(git -C "${source_dir}" rev-parse --verify HEAD)"
+actual_ref="$(git -C "${repo_root}" rev-parse --verify HEAD)"
 
 if [[ -n "${required_ref}" && "${actual_ref}" != "${required_ref}" ]]; then
-  echo "Satellite hub source ref mismatch: expected ${required_ref}, found ${actual_ref}" >&2
+  echo "Satellite Hub monorepo ref mismatch: expected ${required_ref}, found ${actual_ref}" >&2
   exit 1
 fi
 
-dirty_status="$(git -C "${source_dir}" status --short)"
+dirty_status="$(
+  git -C "${repo_root}" status --short --untracked-files=all -- \
+    apps/satellite-hub docker/satellite-hub
+)"
 if [[ -n "${dirty_status}" && "${SATELLITE_HUB_ALLOW_DIRTY:-false}" != "true" ]]; then
-  echo "Satellite hub source has uncommitted changes; set SATELLITE_HUB_ALLOW_DIRTY=true only for throwaway local probes" >&2
+  echo "Satellite Hub build inputs have uncommitted changes; set SATELLITE_HUB_ALLOW_DIRTY=true only for throwaway local probes" >&2
   echo "${dirty_status}" >&2
   exit 1
 fi
@@ -41,7 +35,7 @@ tag="${SATELLITE_HUB_IMAGE_TAG:-0.1.0-kube-${short_ref}}"
 
 case "${tag}" in
   latest|main|main-latest)
-    echo "Refusing floating satellite hub image tag: ${tag}" >&2
+    echo "Refusing floating Satellite Hub image tag: ${tag}" >&2
     exit 1
     ;;
 esac

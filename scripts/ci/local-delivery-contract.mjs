@@ -264,6 +264,8 @@ export function buildGatePlan({
   // diff-scoped gate is meaningless on an empty diff and is skipped EXPLICITLY
   // with a logged reason — never silently.
   const rootRuntime = canary || scope.root_runtime;
+  const satelliteHub = canary || scope.satellite_hub;
+  const evals = canary || scope.evals;
   const ubsPaths = scannablePaths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
   const workflowPaths = paths.filter((path) =>
     /^\.github\/(?:workflows\/.*\.ya?ml|actions\/.*\.ya?ml|dependabot\.yml)$/.test(path),
@@ -375,6 +377,12 @@ export function buildGatePlan({
   }
   if (matches(/^companion-ui\//)) {
     plan.push(command('companion-ui', 'npm', ['run', 'verify:companion-ui']));
+  }
+  if (satelliteHub) {
+    plan.push(command('satellite-hub', 'npm', ['run', 'verify:satellite-hub']));
+  }
+  if (evals) {
+    plan.push(command('evals', 'npm', ['run', 'verify:evals']));
   }
   if (matches(/^\.github\/(?:workflows\/|actions\/)|^\.github\/dependabot\.yml$/)) {
     plan.push(

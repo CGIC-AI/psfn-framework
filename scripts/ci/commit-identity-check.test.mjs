@@ -49,6 +49,7 @@ test('commit identity range accepts allowlisted identities and reports every rej
       base,
       head: allowedHead,
       allowedEmails,
+      preservedImportHeads: [],
     });
     assert.deepEqual(allowedResult.violations, []);
 
@@ -63,6 +64,7 @@ test('commit identity range accepts allowlisted identities and reports every rej
       base,
       head: rejectedHead,
       allowedEmails,
+      preservedImportHeads: [],
     });
     assert.deepEqual(
       rejectedResult.violations.map(({ sha, email, role }) => ({ sha, email, role })),
@@ -93,8 +95,48 @@ test('commit identity range accepts allowlisted identities and reports every rej
       base: rejectedHead,
       head: caseVariantHead,
       allowedEmails,
+      preservedImportHeads: [],
     });
     assert.deepEqual(caseVariantResult.violations, []);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('preserves source identities only within exact imported history', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'commit-identity-import-'));
+  try {
+    git(cwd, ['init', '--quiet']);
+    const allowedEmails = ['maintainer@example.com'];
+    const base = commit(cwd, 'base', allowedEmails[0]);
+    const importedHead = commit(cwd, 'source history', 'source-author@example.com');
+    const preservedImportHeads = [{ component: 'fixture', head: importedHead }];
+
+    const importedResult = checkCommitIdentityRange({
+      cwd,
+      base,
+      head: importedHead,
+      allowedEmails,
+      preservedImportHeads,
+    });
+    assert.deepEqual(importedResult.violations, []);
+    assert.equal(importedResult.preservedImportCommitCount, 1);
+
+    const ordinaryHead = commit(cwd, 'ordinary descendant', 'source-author@example.com');
+    const descendantResult = checkCommitIdentityRange({
+      cwd,
+      base,
+      head: ordinaryHead,
+      allowedEmails,
+      preservedImportHeads,
+    });
+    assert.deepEqual(
+      descendantResult.violations.map(({ sha, email, role }) => ({ sha, email, role })),
+      [
+        { sha: ordinaryHead, email: 'source-author@example.com', role: 'author' },
+        { sha: ordinaryHead, email: 'source-author@example.com', role: 'committer' },
+      ],
+    );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

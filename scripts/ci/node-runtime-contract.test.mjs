@@ -16,6 +16,8 @@ function read(relativePath) {
 test('framework, UI builders, and CI share the exact Node 24 LTS standard', () => {
   const rootPackage = JSON.parse(read('package.json'));
   const companionPackage = JSON.parse(read('companion-ui/package.json'));
+  const satellitePackage = JSON.parse(read('apps/satellite-hub/package.json'));
+  const evalPackage = JSON.parse(read('tools/evals/package.json'));
 
   assert.equal(read('.node-version').trim(), nodeVersion);
   assert.match(read('.npmrc'), /^engine-strict=true$/mu);
@@ -23,6 +25,15 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
   assert.equal(rootPackage.engines.node, `>=${nodeVersion} <25`);
   assert.equal(rootPackage.devDependencies['@types/node'], nodeTypesVersion);
   assert.equal(companionPackage.devDependencies['@types/node'], nodeTypesVersion);
+  for (const importedPackage of [satellitePackage, evalPackage]) {
+    assert.equal(importedPackage.packageManager, 'npm@11.17.0');
+    assert.equal(importedPackage.engines.node, `>=${nodeVersion} <25`);
+    assert.equal(importedPackage.devDependencies['@types/node'], nodeTypesVersion);
+  }
+  assert.equal(read('apps/satellite-hub/.node-version').trim(), nodeVersion);
+  assert.equal(read('tools/evals/.node-version').trim(), nodeVersion);
+  assert.match(read('mise.toml'), /node = "24\.19\.0"/u);
+  assert.match(read('mise.toml'), /npm = "11\.17\.0"/u);
   assert.match(read('tsconfig.json'), /"target": "ES2024"/u);
   assert.match(read('tsup.config.ts'), /target: 'node24'/u);
 

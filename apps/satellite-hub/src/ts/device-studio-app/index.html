@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Device Studio</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js",
+          "three/examples/jsm/": "./vendor/three-examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main class="studio-shell" aria-label="Device Studio">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>Device Studio</h1>
+        </div>
+        <section class="status-strip" aria-label="Studio profile">
+          <label class="field">
+            <span>Profile</span>
+            <select id="profile-select" name="profile">
+              <option value="stackchan.m5stack.cores3.reference">M5Stack Stack-chan Reference</option>
+              <option value="waveshare.esp32-s3-touch-lcd-1.85">Waveshare ESP32-S3 Touch LCD 1.85</option>
+            </select>
+          </label>
+        </section>
+      </header>
+
+      <aside class="operation-panel" aria-labelledby="operations-heading">
+        <div class="panel-heading compact">
+          <h2 id="operations-heading">Operations</h2>
+          <span id="control-mode-label">Mock backend</span>
+        </div>
+
+        <section class="ops-block" aria-label="Connection state">
+          <fieldset class="mode-toggle" aria-label="Backend mode">
+            <legend>Backend</legend>
+            <label>
+              <input type="radio" name="backend-mode" value="mock" checked>
+              <span>Mock</span>
+            </label>
+            <label>
+              <input type="radio" name="backend-mode" value="live">
+              <span>Live</span>
+            </label>
+          </fieldset>
+          <div class="connection-badge" id="connection-badge" data-mode="mock">
+            <span class="pulse" aria-hidden="true"></span>
+            <span id="connection-label">Mock idle</span>
+          </div>
+          <dl class="session-grid">
+            <div>
+              <dt>State</dt>
+              <dd id="connection-state-value">idle</dd>
+            </div>
+            <div>
+              <dt>Session</dt>
+              <dd id="session-value">not attached</dd>
+            </div>
+            <div>
+              <dt>Profile</dt>
+              <dd id="active-profile-value">stackchan.m5stack.cores3.reference</dd>
+            </div>
+            <div>
+              <dt>Log</dt>
+              <dd><span id="log-count-value">0</span> events</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="ops-block" aria-label="Send controls">
+          <label class="field">
+            <span>Hub URL</span>
+            <input id="hub-url" type="url" value="ws://127.0.0.1:8787/" spellcheck="false">
+          </label>
+          <div class="button-row">
+            <button id="connect-button" type="button">Connect</button>
+            <button id="ping-button" type="button" class="secondary" disabled>Ping</button>
+            <button id="interrupt-button" type="button" class="secondary" disabled>Interrupt</button>
+          </div>
+          <label class="field">
+            <span>Typed turn</span>
+            <textarea id="command-input" rows="4">look curious, then smile</textarea>
+          </label>
+          <button id="send-command-button" type="button" class="wide">Send typed turn</button>
+        </section>
+
+        <section class="ops-block" aria-label="Draft and import actions">
+          <div class="button-row">
+            <button id="draft-command-button" type="button" class="secondary">Draft</button>
+            <button id="import-behavior-button" type="button" class="secondary">Import</button>
+            <button id="export-behavior-button" type="button" class="secondary">Export</button>
+          </div>
+          <input id="import-behavior-file" class="visually-hidden" type="file" accept="application/json,.json">
+        </section>
+
+        <section class="ops-block log-block" aria-labelledby="event-log-heading">
+          <div class="panel-heading compact">
+            <h2 id="event-log-heading">Command/Event Log</h2>
+            <div class="button-row compact-buttons">
+              <button id="copy-log-button" type="button" class="secondary">Copy</button>
+              <button id="export-log-button" type="button" class="secondary">Export</button>
+            </div>
+          </div>
+          <ol class="event-log" id="event-log" aria-live="polite"></ol>
+        </section>
+      </aside>
+
+      <section class="preview-panel" aria-labelledby="preview-heading">
+        <div class="panel-heading">
+          <div>
+            <h2 id="preview-heading">Preview</h2>
+          </div>
+          <div class="preview-meta" id="preview-meta">320 x 240 / pan + tilt</div>
+        </div>
+        <div class="preview-stage" id="preview-stage">
+          <div id="stackchan-preview-root" class="stackchan-preview-root"></div>
+          <div id="display-preview-root" class="display-preview-root"></div>
+        </div>
+      </section>
+
+      <section class="timeline-panel" aria-labelledby="timeline-heading">
+        <div class="panel-heading">
+          <div>
+            <h2 id="timeline-heading">Behavior Studio</h2>
+          </div>
+          <div class="button-row">
+            <button id="new-behavior-button" type="button" class="secondary">New</button>
+            <button id="duplicate-behavior-button" type="button" class="secondary">Duplicate</button>
+            <button id="delete-behavior-button" type="button" class="secondary">Delete</button>
+            <button id="play-button" type="button">Play</button>
+            <button id="stop-button" type="button" class="secondary">Stop</button>
+          </div>
+        </div>
+        <div class="authoring-grid">
+          <section class="editor-block behavior-editor" aria-label="Behavior editor">
+            <label class="field">
+              <span>Name</span>
+              <input id="behavior-name-input" type="text" spellcheck="false">
+            </label>
+            <label class="field">
+              <span>ID</span>
+              <input id="behavior-id-input" type="text" spellcheck="false" readonly>
+            </label>
+            <dl class="editor-meta">
+              <div>
+                <dt>Duration</dt>
+                <dd id="behavior-duration-value">0 ms</dd>
+              </div>
+              <div>
+                <dt>Hardware</dt>
+                <dd id="behavior-hardware-value">simulated-only</dd>
+              </div>
+            </dl>
+          </section>
+          <section class="editor-block frame-editor" aria-label="Frame editor">
+            <div class="frame-toolbar">
+              <label class="field">
+                <span>Frame</span>
+                <select id="frame-select"></select>
+              </label>
+              <div class="button-row">
+                <button id="add-frame-button" type="button" class="secondary">Add</button>
+                <button id="duplicate-frame-button" type="button" class="secondary">Duplicate</button>
+                <button id="delete-frame-button" type="button" class="secondary">Delete</button>
+              </div>
+            </div>
+            <div class="frame-field-grid">
+              <label class="field">
+                <span>Time ms</span>
+                <input id="frame-time-input" type="number" min="0" step="10">
+              </label>
+              <label class="field">
+                <span>Hold ms</span>
+                <input id="frame-duration-input" type="number" min="0" step="10">
+              </label>
+              <label class="field field-wide">
+                <span>Label</span>
+                <input id="frame-label-input" type="text" spellcheck="false">
+              </label>
+              <label class="field">
+                <span>Expression</span>
+                <select id="expression-id-select"></select>
+              </label>
+              <label class="field">
+                <span>Eyes</span>
+                <select id="expression-eyes-select">
+                  <option value="open">open</option>
+                  <option value="closed">closed</option>
+                  <option value="squint">squint</option>
+                  <option value="wink">wink</option>
+                  <option value="wide">wide</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Mouth</span>
+                <select id="expression-mouth-select">
+                  <option value="neutral">neutral</option>
+                  <option value="smile">smile</option>
+                  <option value="laugh">laugh</option>
+                  <option value="frown">frown</option>
+                  <option value="open">open</option>
+                  <option value="sing">sing</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Intensity</span>
+                <input id="expression-intensity-input" type="range" min="0" max="1" step="0.05">
+              </label>
+              <label class="field">
+                <span>Viseme</span>
+                <select id="viseme-id-select"></select>
+              </label>
+              <label class="field">
+                <span>Weight</span>
+                <input id="viseme-weight-input" type="range" min="0" max="1" step="0.05">
+              </label>
+              <label class="field">
+                <span>Display</span>
+                <select id="display-mode-select">
+                  <option value="face">face</option>
+                  <option value="text">text</option>
+                  <option value="image">image</option>
+                  <option value="clear">clear</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Backlight</span>
+                <input id="backlight-input" type="range" min="0" max="1" step="0.05">
+              </label>
+              <label class="field">
+                <span>LCD color</span>
+                <input id="display-background-input" type="color">
+              </label>
+              <label class="field field-wide">
+                <span>Display text</span>
+                <input id="display-text-input" type="text" spellcheck="false">
+              </label>
+            </div>
+            <div id="joint-editor-root" class="channel-editor-grid" aria-label="Joint channels"></div>
+            <div id="led-editor-root" class="channel-editor-grid" aria-label="LED channels"></div>
+          </section>
+        </div>
+        <div class="behavior-grid" id="behavior-list" aria-label="Behavior library"></div>
+        <div class="timeline-track" aria-label="Timeline">
+          <div class="time-ruler" id="time-ruler">
+            <span>0 ms</span>
+            <span>500 ms</span>
+            <span>1000 ms</span>
+            <span>1500 ms</span>
+          </div>
+          <div class="frame-lane" id="frame-lane"></div>
+        </div>
+      </section>
+
+      <section class="sprite-panel" aria-labelledby="sprite-heading">
+        <div class="panel-heading">
+          <div>
+            <h2 id="sprite-heading">Sprite Builder</h2>
+          </div>
+          <div class="button-row">
+            <button id="generate-sprite-button" type="button">Generate</button>
+            <button id="import-sprite-button" type="button" class="secondary">Import Frame</button>
+            <button id="import-sprite-sheet-button" type="button" class="secondary">Import Sheet</button>
+            <button id="pack-sprites-button" type="button" class="secondary">Pack/Export</button>
+          </div>
+        </div>
+        <div class="sprite-workspace">
+          <section class="editor-block sprite-controls" aria-label="Sprite generation controls">
+            <div class="sprite-field-grid">
+              <label class="field">
+                <span>Output</span>
+                <select id="sprite-output-select">
+                  <option value="frame">frame</option>
+                  <option value="sheet">sprite sheet</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Kind</span>
+                <select id="sprite-kind-select">
+                  <option value="expression">expression</option>
+                  <option value="viseme">viseme</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Target</span>
+                <select id="sprite-target-select"></select>
+              </label>
+              <label class="field">
+                <span>Mode</span>
+                <select id="sprite-mode-select">
+                  <option value="text-to-image">text-to-image</option>
+                  <option value="image-to-image">image-to-image</option>
+                  <option value="edit">edit</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input id="sprite-model-input" type="text" value="fal-ai/nano-banana" spellcheck="false">
+              </label>
+              <label class="field">
+                <span>Seed</span>
+                <input id="sprite-seed-input" type="number" step="1">
+              </label>
+              <label class="field field-wide">
+                <span>Reference URL</span>
+                <input id="sprite-reference-input" type="url" spellcheck="false">
+              </label>
+              <label class="field field-wide">
+                <span>Prompt</span>
+                <textarea id="sprite-prompt-input" rows="3" spellcheck="true">small expressive lcd avatar face, transparent background, crisp pixel-safe shapes</textarea>
+              </label>
+              <div class="button-row field-wide">
+                <button id="upload-sprite-reference-button" type="button" class="secondary">Upload Reference</button>
+                <button id="clear-sprite-references-button" type="button" class="secondary">Clear References</button>
+              </div>
+              <label class="field">
+                <span>Sheet rows</span>
+                <input id="sprite-sheet-rows-input" type="number" min="1" max="16" step="1" value="2">
+              </label>
+              <label class="field">
+                <span>Sheet cols</span>
+                <input id="sprite-sheet-cols-input" type="number" min="1" max="16" step="1" value="4">
+              </label>
+              <label class="field field-wide">
+                <span>Sheet targets</span>
+                <textarea id="sprite-sheet-targets-input" rows="4" spellcheck="false"></textarea>
+              </label>
+            </div>
+            <input id="sprite-reference-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <input id="sprite-import-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <input id="sprite-sheet-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <div id="sprite-reference-grid" class="sprite-card-grid reference-grid"></div>
+            <output id="sprite-status" class="sprite-status">0 approved frames</output>
+          </section>
+          <section class="editor-block sprite-review" aria-label="Sprite candidates">
+            <div id="sprite-sheet-grid" class="sprite-card-grid sheet-grid"></div>
+            <div id="sprite-candidate-grid" class="sprite-card-grid"></div>
+          </section>
+          <section class="editor-block sprite-approved" aria-label="Approved sprites">
+            <div id="sprite-approved-grid" class="sprite-card-grid compact"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

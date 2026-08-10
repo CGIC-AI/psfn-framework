@@ -1,0 +1,12 @@
+{
+  "description": "Base Promptfoo scaffold for PSFN emotion evaluation.",
+  "prompts": ["{{prompt_text}}"],
+  "providers": [],
+  "tests": [],
+  "defaultTest": {
+    "metadata": {
+      "suite": "psfn-emotion-eval",
+      "schemaVersion": 1
+    }
+  }
+}

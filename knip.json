@@ -13,6 +13,7 @@
         "src/app/maintenance/migrate-required-settings-blocks.ts",
         "src/app/maintenance/owner-upgrade-readiness-probe.ts",
         "src/app/maintenance/verify-shell-sandbox-runtime.ts",
+        "src/core/emotion/calibration.ts",
         "src/persistence/sessions/turn-record-recovery-worker.ts",
         "src/persistence/sessions/turn-tombstone-authority-worker.ts",
         "scripts/**/*.{ts,mjs}",
@@ -29,6 +30,10 @@
       "ignoreDependencies": [
         "@snazzah/davey",
         "sherpa-onnx-node"
+      ],
+      "ignoreBinaries": [
+        "rg",
+        "uv"
       ]
     },
     "admin-ui": {

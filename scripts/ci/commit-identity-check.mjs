@@ -15,6 +15,20 @@ export const ALLOWED_COMMIT_EMAILS = Object.freeze([
   'noreply@github.com',
 ]);
 
+// These immutable source heads retain their original author and committer
+// identities. Only commits in their ancestry receive the provenance exemption;
+// descendants and ordinary framework commits still use ALLOWED_COMMIT_EMAILS.
+export const PRESERVED_IMPORT_HEADS = Object.freeze([
+  Object.freeze({
+    component: 'satellite-hub',
+    head: '6aa49aadb7536eec88c85573986d1af6102ab5f4',
+  }),
+  Object.freeze({
+    component: 'eval-toolkit',
+    head: 'a6e540ad77b48ef1801d361d241f01d5f218098f',
+  }),
+]);
+
 function git(args, cwd) {
   return execFileSync('git', args, {
     cwd,
@@ -42,12 +56,33 @@ function commitsInRange(base, head, cwd) {
   return output ? output.split('\n') : [];
 }
 
+function preservedImportCommits(importHeads, resolvedHead, cwd) {
+  const commits = new Set();
+  for (const entry of importHeads) {
+    if (
+      !entry
+      || typeof entry.component !== 'string'
+      || entry.component.length === 0
+      || typeof entry.head !== 'string'
+      || !/^[0-9a-f]{40}$/.test(entry.head)
+    ) {
+      throw new Error('preserved import heads require a component and exact 40-character SHA');
+    }
+    const sourceHead = git(['rev-parse', '--verify', `${entry.head}^{commit}`], cwd);
+    assertAncestor(sourceHead, resolvedHead, cwd);
+    const sourceCommits = git(['rev-list', sourceHead], cwd);
+    for (const sha of sourceCommits ? sourceCommits.split('\n') : []) commits.add(sha);
+  }
+  return commits;
+}
+
 /**
  * @param {{
  *   base: string;
  *   head?: string;
  *   cwd?: string;
  *   allowedEmails?: readonly string[];
+ *   preservedImportHeads?: readonly { component: string; head: string }[];
  * }} options
  */
 export function checkCommitIdentityRange({
@@ -55,11 +90,15 @@ export function checkCommitIdentityRange({
   head = 'HEAD',
   cwd = process.cwd(),
   allowedEmails = ALLOWED_COMMIT_EMAILS,
+  preservedImportHeads = PRESERVED_IMPORT_HEADS,
 }) {
   if (!base) throw new Error('base ref is required');
   if (!head) throw new Error('head ref is required');
   if (!Array.isArray(allowedEmails) || allowedEmails.length === 0) {
     throw new Error('commit identity allowlist must be a non-empty array');
+  }
+  if (!Array.isArray(preservedImportHeads)) {
+    throw new Error('preserved import heads must be an array');
   }
 
   const resolvedBase = git(['rev-parse', '--verify', `${base}^{commit}`], cwd);
@@ -71,9 +110,11 @@ export function checkCommitIdentityRange({
   }
   const allowedEmailSet = new Set(allowedEmails.map(email => email.toLowerCase()));
   const commits = commitsInRange(resolvedBase, resolvedHead, cwd);
+  const importCommits = preservedImportCommits(preservedImportHeads, resolvedHead, cwd);
   const violations = [];
 
   for (const sha of commits) {
+    if (importCommits.has(sha)) continue;
     for (const [role, format] of [
       ['author', '%ae'],
       ['committer', '%ce'],
@@ -89,6 +130,7 @@ export function checkCommitIdentityRange({
     base: resolvedBase,
     head: resolvedHead,
     commitCount: commits.length,
+    preservedImportCommitCount: commits.filter(sha => importCommits.has(sha)).length,
     violations,
   };
 }
@@ -132,7 +174,8 @@ function main() {
 
     console.log(
       `Commit identity check passed for ${result.commitCount} commit(s) `
-      + `in ${result.base}..${result.head}.`,
+      + `in ${result.base}..${result.head}; `
+      + `${result.preservedImportCommitCount} preserved import commit(s).`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

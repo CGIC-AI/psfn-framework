@@ -44,8 +44,8 @@ deploy/helm/psfn/overlays/*.local.values.yaml
 # Companion personal files live inside the repo tree but are runtime/personal data.
 purrsephone/
 
-# Local satellite hub checkout; not part of this repository.
-PSFN-Satellite-Hub/
+# Imported package environments are local build state.
+apps/satellite-hub/.venv/
 
 # SvelteKit admin UI
 .svelte-kit/

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "psfn.companion_shape_report",
+  "generatedAt": "2026-06-20T00:00:00.000Z",
+  "runId": "fixture-baseline-companion-shape",
+  "scenarioCount": 7,
+  "responseCount": 7,
+  "modelSummaries": [
+    {
+      "modelId": "fixture/model-upgrade-candidate",
+      "providerId": "offline",
+      "averageScore": 91,
+      "responseCount": 7,
+      "missingScenarioIds": [],
+      "dimensionScores": {
+        "qao-must-avoid": 92,
+        "qao-must-show": 90,
+        "qao-policy-shape": 91
+      },
+      "riskFlagCount": 0
+    }
+  ],
+  "responseScores": []
+}

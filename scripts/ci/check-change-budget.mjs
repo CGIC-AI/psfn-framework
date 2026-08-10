@@ -32,8 +32,10 @@ export const CHANGE_BUDGET = Object.freeze({
 export const LINE_COUNT_EXCLUSIONS = new Set([
   '.beads/issues.jsonl',
   'admin-ui/package-lock.json',
+  'apps/satellite-hub/package-lock.json',
   'companion-ui/package-lock.json',
   'package-lock.json',
+  'tools/evals/package-lock.json',
 ]);
 
 function git(args, cwd) {

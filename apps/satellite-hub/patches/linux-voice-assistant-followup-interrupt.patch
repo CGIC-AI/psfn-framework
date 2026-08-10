@@ -1,0 +1,411 @@
+diff --git a/docker-entrypoint.sh b/docker-entrypoint.sh
+index 4d7b023..8efe697 100755
+--- a/docker-entrypoint.sh
++++ b/docker-entrypoint.sh
+@@ -80,6 +80,26 @@ if [ -n "${UNMUTE_SOUND}" ]; then
+   EXTRA_ARGS+=( "--unmute-sound" "$UNMUTE_SOUND" )
+ fi
+ 
++if [ -n "${BARGE_IN_RMS_THRESHOLD}" ]; then
++  EXTRA_ARGS+=( "--barge-in-rms-threshold" "$BARGE_IN_RMS_THRESHOLD" )
++fi
++
++if [ -n "${BARGE_IN_HOLD_CHUNKS}" ]; then
++  EXTRA_ARGS+=( "--barge-in-hold-chunks" "$BARGE_IN_HOLD_CHUNKS" )
++fi
++
++if [ -n "${BARGE_IN_DUCK_FACTOR}" ]; then
++  EXTRA_ARGS+=( "--barge-in-duck-factor" "$BARGE_IN_DUCK_FACTOR" )
++fi
++
++if [ -n "${BARGE_IN_RELATIVE_THRESHOLD}" ]; then
++  EXTRA_ARGS+=( "--barge-in-relative-threshold" "$BARGE_IN_RELATIVE_THRESHOLD" )
++fi
++
++if [ -n "${BARGE_IN_CONFIRM_RATIO}" ]; then
++  EXTRA_ARGS+=( "--barge-in-confirm-ratio" "$BARGE_IN_CONFIRM_RATIO" )
++fi
++
+ 
+ # Add cookie file for pulseaudio to prevent errors
+ PULSE_COOKIE=${PULSE_COOKIE:-"/run/user/1000/pulse/cookie"}
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index ba1d2a8..da34131 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -150,6 +150,36 @@ async def main() -> None:
+         action="store_true",
+         help="Add this to enable debug logging",
+     )
++    parser.add_argument(
++        "--barge-in-rms-threshold",
++        type=float,
++        default=0.015,
++        help="Minimum RMS floor for speech-first interruption while TTS is playing",
++    )
++    parser.add_argument(
++        "--barge-in-hold-chunks",
++        type=int,
++        default=2,
++        help="Consecutive confirmation chunks before interrupting TTS",
++    )
++    parser.add_argument(
++        "--barge-in-duck-factor",
++        type=float,
++        default=0.2,
++        help="Temporary TTS ducking factor applied while confirming a barge-in",
++    )
++    parser.add_argument(
++        "--barge-in-relative-threshold",
++        type=float,
++        default=1.12,
++        help="Required RMS multiple above the learned playback floor before ducking TTS",
++    )
++    parser.add_argument(
++        "--barge-in-confirm-ratio",
++        type=float,
++        default=0.92,
++        help="Required RMS multiple above the learned playback floor after ducking before interrupting TTS",
++    )
+     args = parser.parse_args()
+ 
+     if args.list_input_devices:
+@@ -379,7 +409,16 @@ async def main() -> None:
+ 
+     process_audio_thread = threading.Thread(
+         target=process_audio,
+-        args=(state, mic, args.audio_input_block_size),
++        args=(
++            state,
++            mic,
++            args.audio_input_block_size,
++            args.barge_in_rms_threshold,
++            args.barge_in_hold_chunks,
++            args.barge_in_duck_factor,
++            args.barge_in_relative_threshold,
++            args.barge_in_confirm_ratio,
++        ),
+         daemon=True,
+     )
+     process_audio_thread.start()
+@@ -404,7 +443,16 @@ async def main() -> None:
+ # -----------------------------------------------------------------------------
+ 
+ 
+-def process_audio(state: ServerState, mic, block_size: int):
++def process_audio(
++    state: ServerState,
++    mic,
++    block_size: int,
++    barge_in_rms_threshold: float,
++    barge_in_hold_chunks: int,
++    barge_in_duck_factor: float,
++    barge_in_relative_threshold: float,
++    barge_in_confirm_ratio: float,
++):
+     """Process audio chunks from the microphone."""
+ 
+     wake_words: List[Union[MicroWakeWord, OpenWakeWord]] = []
+@@ -423,10 +471,21 @@ def process_audio(state: ServerState, mic, block_size: int):
+             while True:
+                 audio_chunk_array = mic_in.record(block_size).reshape(-1)
+                 audio_chunk = (np.clip(audio_chunk_array, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()  # little-endian 16-bit signed
++                rms = float(np.sqrt(np.mean(np.square(audio_chunk_array, dtype=np.float32))))
+ 
+                 if state.satellite is None:
+                     continue
+ 
++                state.satellite.observe_audio_chunk(audio_chunk)
++                state.satellite.handle_barge_in_signal(
++                    rms,
++                    threshold=barge_in_rms_threshold,
++                    hold_chunks=barge_in_hold_chunks,
++                    duck_factor=barge_in_duck_factor,
++                    relative_threshold=barge_in_relative_threshold,
++                    confirm_ratio=barge_in_confirm_ratio,
++                )
++
+                 if (not wake_words) or (state.wake_words_changed and state.wake_words):
+                     # Update list of wake word models to process
+                     state.wake_words_changed = False
+@@ -481,7 +540,7 @@ def process_audio(state: ServerState, mic, block_size: int):
+                             stopped = True
+ 
+                     if stopped and (state.stop_word.id in state.active_wake_words) and not state.muted:
+-                        state.satellite.stop()
++                        state.satellite._interrupt_output()
+                 except Exception:
+                     _LOGGER.exception("Unexpected error handling audio")
+     except Exception:
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 8782eb6..fd8d496 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -6,6 +6,7 @@ import logging
+ import posixpath
+ import shutil
+ import time
++from collections import deque
+ from collections.abc import Iterable
+ from typing import Dict, List, Optional, Set, Union
+ from urllib.parse import urlparse, urlunparse
+@@ -156,6 +157,13 @@ class VoiceSatelliteProtocol(APIServer):
+         self._pipeline_active = False
+         self._external_wake_words: Dict[str, VoiceAssistantExternalWakeWord] = {}
+         self._disconnect_event = asyncio.Event()
++        self._barge_in_chunks = 0
++        self._barge_in_ducked = False
++        self._barge_in_floor_rms = 0.0
++        self._barge_in_floor_samples = 0
++        self._preroll_audio = deque(maxlen=24)
++        self._pending_reopen_after_tts = False
++        self._pending_reopen_wake_word: Optional[str] = None
+ 
+     def _set_thinking_sound_enabled(self, new_state: bool) -> None:
+         self.state.thinking_sound_enabled = bool(new_state)
+@@ -193,7 +201,10 @@ class VoiceSatelliteProtocol(APIServer):
+             self._tts_url = data.get("url")
+             self._tts_played = False
+             self._continue_conversation = False
++            self._pending_reopen_after_tts = False
++            self._pending_reopen_wake_word = None
+             self._pipeline_active = True
++            self._clear_barge_in(reset_floor=True)
+         elif event_type == VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_START and self.state.thinking_sound_enabled:
+             # Play short "thinking/processing" sound if configured
+             processing = getattr(self.state, "processing_sound", None)
+@@ -262,7 +273,7 @@ class VoiceSatelliteProtocol(APIServer):
+             urls.append(msg.media_id)
+ 
+             self.state.active_wake_words.add(self.state.stop_word.id)
+-            self._continue_conversation = msg.start_conversation
++            self._continue_conversation = self._continue_conversation or msg.start_conversation
+ 
+             self.duck()
+             self.state.tts_player.play(urls, done_callback=self._tts_finished)
+@@ -366,6 +377,17 @@ class VoiceSatelliteProtocol(APIServer):
+             self.state.save_preferences()
+             self.state.wake_words_changed = True
+ 
++    def observe_audio_chunk(self, audio_chunk: bytes) -> None:
++        should_buffer = (
++            (not self.state.muted)
++            and (not self._is_streaming_audio)
++            and (self.state.tts_player.is_playing or self._pending_reopen_after_tts)
++        )
++        if should_buffer:
++            self._preroll_audio.append(audio_chunk)
++        elif self._preroll_audio and (not self._pending_reopen_after_tts):
++            self._preroll_audio.clear()
++
+     def handle_audio(self, audio_chunk: bytes) -> None:
+ 
+         if not self._is_streaming_audio or self.state.muted:
+@@ -386,11 +408,16 @@ class VoiceSatelliteProtocol(APIServer):
+             # Don't respond to wake words when muted (voice_assistant.stop behavior)
+             return
+ 
++        wake_word_phrase = wake_word.wake_word  # type: ignore
++
+         if self._pipeline_active:
+-            _LOGGER.debug("Ignoring wake word - pipeline already active")
++            if self.state.tts_player.is_playing and (not self._is_streaming_audio):
++                _LOGGER.info("Interrupting active response with wake word: %s", wake_word_phrase)
++                self._interrupt_output(wake_word_phrase=wake_word_phrase)
++            else:
++                _LOGGER.debug("Ignoring wake word - pipeline already active")
+             return
+ 
+-        wake_word_phrase = wake_word.wake_word  # type: ignore
+         _LOGGER.debug("Detected wake word: %s", wake_word_phrase)
+         self._pipeline_active = True
+         self.duck()
+@@ -402,12 +429,39 @@ class VoiceSatelliteProtocol(APIServer):
+     def _on_wakeup_sound_finished(self, wake_word_phrase: str) -> None:
+         """Callback invoked when the wakeup sound finishes playing."""
+         _LOGGER.debug("Wakeup sound finished, starting audio streaming with wake word: %s", wake_word_phrase)
+-        self.send_messages(
+-            [VoiceAssistantRequest(start=True, wake_word_phrase=wake_word_phrase)],
+-        )
++        self._start_voice_request(wake_word_phrase=wake_word_phrase)
++
++    def _start_voice_request(self, wake_word_phrase: Optional[str] = None, *, include_preroll: bool = False) -> None:
++        request = VoiceAssistantRequest(start=True)
++        if wake_word_phrase:
++            request.wake_word_phrase = wake_word_phrase
++        self.send_messages([request])
+         self._is_streaming_audio = True
++        self._pipeline_active = True
++        if include_preroll and self._preroll_audio:
++            buffered_chunks = list(self._preroll_audio)
++            self._preroll_audio.clear()
++            _LOGGER.info('Flushing %s buffered mic chunks into reopened turn', len(buffered_chunks))
++            for chunk in buffered_chunks:
++                self.send_messages([VoiceAssistantAudio(data=chunk)])
++        elif not include_preroll:
++            self._preroll_audio.clear()
++
++    def _interrupt_output(self, wake_word_phrase: Optional[str] = None) -> None:
++        if self._is_streaming_audio or (not self.state.tts_player.is_playing):
++            return
++
++        self._clear_barge_in(reset_floor=True)
++        self._continue_conversation = False
++        self._pending_reopen_after_tts = True
++        self._pending_reopen_wake_word = wake_word_phrase
++        self.state.active_wake_words.discard(self.state.stop_word.id)
++        self._pipeline_active = False
++        _LOGGER.info("Stopping local output and reopening microphone")
++        self.state.tts_player.stop()
+ 
+     def stop(self) -> None:
++        self._clear_barge_in(reset_floor=True)
+         self.state.active_wake_words.discard(self.state.stop_word.id)
+         self._pipeline_active = False
+ 
+@@ -419,12 +473,12 @@ class VoiceSatelliteProtocol(APIServer):
+         else:
+             self.state.tts_player.stop()
+             _LOGGER.debug("TTS response stopped manually")
+-            self._tts_finished()
+ 
+     def play_tts(self) -> None:
+         if (not self._tts_url) or self._tts_played:
+             return
+ 
++        self._clear_barge_in(reset_floor=True)
+         self._tts_played = True
+         _LOGGER.debug("Playing TTS response: %s", self._tts_url)
+ 
+@@ -439,16 +493,112 @@ class VoiceSatelliteProtocol(APIServer):
+         _LOGGER.debug("Unducking music")
+         self.state.music_player.unduck()
+ 
++    def _clear_barge_in(self, *, reset_floor: bool = False) -> None:
++        self._barge_in_chunks = 0
++        if self._barge_in_ducked:
++            self.state.tts_player.unduck()
++            self._barge_in_ducked = False
++        if reset_floor:
++            self._barge_in_floor_rms = 0.0
++            self._barge_in_floor_samples = 0
++
++    def _update_barge_in_floor(self, rms: float) -> None:
++        if rms <= 0.0:
++            return
++
++        if self._barge_in_floor_samples == 0:
++            self._barge_in_floor_rms = rms
++            self._barge_in_floor_samples = 1
++            return
++
++        if self._barge_in_floor_samples < 12:
++            self._barge_in_floor_rms = max(self._barge_in_floor_rms, rms)
++            self._barge_in_floor_samples += 1
++            if self._barge_in_floor_samples == 12:
++                _LOGGER.info("Learned playback floor for barge-in: %.3f", self._barge_in_floor_rms)
++            return
++
++        if rms < (self._barge_in_floor_rms * 0.85):
++            self._barge_in_floor_rms = (self._barge_in_floor_rms * 0.98) + (rms * 0.02)
++
++    def handle_barge_in_signal(
++        self,
++        rms: float,
++        *,
++        threshold: float,
++        hold_chunks: int,
++        duck_factor: float,
++        relative_threshold: float,
++        confirm_ratio: float,
++    ) -> None:
++        if self.state.muted or self._is_streaming_audio or (not self._pipeline_active) or (not self.state.tts_player.is_playing):
++            self._clear_barge_in(reset_floor=True)
++            return
++
++        if rms <= 0.0:
++            self._clear_barge_in()
++            return
++
++        if self._barge_in_floor_samples < 12:
++            self._update_barge_in_floor(rms)
++            return
++
++        trigger_threshold = max(threshold, self._barge_in_floor_rms * relative_threshold)
++        if not self._barge_in_ducked:
++            if rms < trigger_threshold:
++                self._update_barge_in_floor(rms)
++                self._barge_in_chunks = 0
++                return
++
++            _LOGGER.info(
++                "Barge-in candidate detected (rms=%.3f, floor=%.3f, trigger=%.3f)",
++                rms,
++                self._barge_in_floor_rms,
++                trigger_threshold,
++            )
++            self.state.tts_player.duck(duck_factor)
++            self._barge_in_ducked = True
++            self._barge_in_chunks = 1
++            return
++
++        confirm_threshold = max(threshold * 0.5, self._barge_in_floor_rms * confirm_ratio)
++        if rms < confirm_threshold:
++            self._clear_barge_in()
++            self._update_barge_in_floor(rms)
++            return
++
++        self._barge_in_chunks += 1
++        if self._barge_in_chunks < hold_chunks:
++            return
++
++        _LOGGER.info(
++            "Barge-in interrupt triggered (rms=%.3f, floor=%.3f, confirm=%.3f, chunks=%s)",
++            rms,
++            self._barge_in_floor_rms,
++            confirm_threshold,
++            self._barge_in_chunks,
++        )
++        self._clear_barge_in(reset_floor=True)
++        self._interrupt_output()
++
+     def _tts_finished(self) -> None:
++        self._clear_barge_in(reset_floor=True)
+         self._pipeline_active = False
+         self.state.active_wake_words.discard(self.state.stop_word.id)
+         self.send_messages([VoiceAssistantAnnounceFinished()])
+ 
+-        if self._continue_conversation:
+-            self.send_messages([VoiceAssistantRequest(start=True)])
+-            self._is_streaming_audio = True
+-            self._pipeline_active = True
+-            _LOGGER.debug("Continuing conversation")
++        reopen_after_tts = self._pending_reopen_after_tts or self._continue_conversation
++        wake_word_phrase = self._pending_reopen_wake_word
++        self._pending_reopen_after_tts = False
++        self._pending_reopen_wake_word = None
++        self._continue_conversation = False
++
++        if reopen_after_tts:
++            self._start_voice_request(wake_word_phrase=wake_word_phrase, include_preroll=True)
++            if wake_word_phrase:
++                _LOGGER.debug("Reopening conversation after wake-word interrupt: %s", wake_word_phrase)
++            else:
++                _LOGGER.debug("Continuing conversation")
+         else:
+             self.unduck()
+ 
+@@ -472,10 +622,14 @@ class VoiceSatelliteProtocol(APIServer):
+         super().connection_lost(exc)
+ 
+         self._disconnect_event.set()
++        self._clear_barge_in(reset_floor=True)
+         self._is_streaming_audio = False
+         self._tts_url = None
+         self._tts_played = False
+         self._continue_conversation = False
++        self._preroll_audio.clear()
++        self._pending_reopen_after_tts = False
++        self._pending_reopen_wake_word = None
+         self._timer_finished = False
+         self._pipeline_active = False

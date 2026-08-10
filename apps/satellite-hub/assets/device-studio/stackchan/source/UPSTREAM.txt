@@ -1,0 +1,17 @@
+Stack-chan case v1 STL source assets
+
+Source repository: https://github.com/stack-chan/stack-chan
+Source commit: 10991598b93f573c0fee88c6be0f004f2e3a8ddb
+Source paths:
+- case/v1/shell.stl
+- case/v1/feet_top.stl
+- case/v1/feet_bottom.stl
+- case/v1/bracket_XL330_f.stl
+- case/v1/bracket_XL330_b.stl
+- case/v1/horn.stl
+
+License: Apache-2.0, as declared by the upstream repository. A copy of the
+upstream license is stored in LICENSE in this directory.
+Notes: These files are used by Device Studio tooling for the Stack-chan
+physical preview. Motion safety remains unverified until measured on local
+hardware.

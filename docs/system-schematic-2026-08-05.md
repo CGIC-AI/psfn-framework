@@ -41,7 +41,7 @@ flowchart LR
   %% ======================================================================
   subgraph CLIENTS["Client periphery"]
     UI_SAT["Satellite devices\nPi-class · VaM (Voxta SignalR) · ESPHome voice"]
-    UI_HUB["PSFN-Satellite-Hub (sibling repo)\nPython hub/ + src/ts realtime path\npi_realtime · voxta-relay · ESPHome native API"]
+    UI_HUB["apps/satellite-hub\nPython hub/ + src/ts realtime path\npi_realtime · voxta-relay · ESPHome native API"]
     UI_COMPANION["companion-ui — React 19 + Vite 7 PWA\nlib/api client.ts + gateway-client.ts\nhub-stream.ts · service-worker sw.js"]
     UI_ADMIN["admin-ui (Garden) — SvelteKit 2 + Svelte 5 static\n~40 routes: chat, memory, sessions, prompts, settings,\nfleet, cogsec, confirmations, telemetry, scheduler…"]
   end

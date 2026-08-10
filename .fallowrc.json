@@ -19,7 +19,8 @@
     ".codex-*/**",
     ".fallow/**",
     ".firecrawl/**",
-    "PSFN-Satellite-Hub/**",
+    "apps/satellite-hub/**",
+    "tools/evals/**",
     "worktrees/**"
   ],
   "workspaces": {

@@ -62,14 +62,33 @@ async function invoke(input: {
 }
 
 describe('admin ICP autonomy routes', () => {
-  it('returns the bounded service projection', async () => {
-    const data = { available: true, candidates: [] };
+  it('returns the bounded service projection, including content-free delivery telemetry', async () => {
+    const data = {
+      available: true,
+      candidates: [],
+      delivery: {
+        currentAvailability: null,
+        initiation: {
+          invited: 0,
+          delivered: 1,
+          suppressed: 0,
+          deferred: 0,
+          declined: 0,
+          failed: 0,
+          expired: 0,
+          cancelled: 0,
+        },
+        messages: { delivered: 1, pending: 0, failed: 0, observed: 1 },
+        recentOutcome: { kind: 'initiation', outcome: 'delivered', timestampMs: 3_000 },
+      },
+    };
     const result = await invoke({
       method: 'GET',
       path: '/api/admin/icp-autonomy',
       service: { getData: vi.fn(async () => data as never) },
     });
     expect(result).toEqual({ statusCode: 200, body: data });
+    expect(result.body).toHaveProperty('delivery.recentOutcome.outcome', 'delivered');
   });
 
   it('strictly validates candidate cancellation and audits allowed controls', async () => {

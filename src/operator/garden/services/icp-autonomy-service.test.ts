@@ -613,3 +613,272 @@ describe('AdminIcpAutonomyDataService', () => {
     expect(candidates.transitionCandidate).not.toHaveBeenCalled();
   });
 });
+
+describe('content-free delivery telemetry (psfn-framework-req4p.3)', () => {
+  function consumedPermit(overrides: Partial<{
+    status: 'consumed';
+    consumedAtMs: number;
+    candidateId: string;
+  }> = {}): IcpAdminSharedProjection['permits'][number] {
+    return {
+      permitId: PERMIT_ID,
+      candidateId: overrides.candidateId ?? CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: LOCAL_ID,
+      recipientCompanionId: PEER_ID,
+      channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+      provenanceRef: PROVENANCE,
+      issuedAtMs: 1_000,
+      expiresAtMs: 50_000,
+      status: 'consumed',
+      consumedAtMs: overrides.consumedAtMs ?? 3_000,
+      revision: 5,
+      ...overrides,
+    };
+  }
+
+  it('exposes the content-free delivery disposition on a consumed candidate', async () => {
+    const consumed = {
+      ...candidate('consumed'),
+      deliveryDisposition: 'delivered' as const,
+    };
+    const candidates = candidateStore(consumed);
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(sharedStore(), {
+        availability: [{
+          companionId: LOCAL_ID,
+          state: 'available',
+          issuedAtMs: 1_000,
+          expiresAtMs: 50_000,
+          source: 'runtime',
+          revision: 1,
+        }],
+        permits: [consumedPermit({ consumedAtMs: 3_000 })],
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 4_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.candidates[0].deliveryDisposition).toBe('delivered');
+    expect(data.delivery.currentAvailability).toEqual({
+      state: 'available',
+      source: 'runtime',
+      issuedAtMs: 1_000,
+      expiresAtMs: 50_000,
+      current: true,
+    });
+    expect(data.delivery.initiation).toEqual({
+      invited: 0,
+      delivered: 1,
+      suppressed: 0,
+      deferred: 0,
+      declined: 0,
+      failed: 0,
+      expired: 0,
+      cancelled: 0,
+    });
+    expect(data.delivery.recentOutcome).toEqual({
+      kind: 'initiation',
+      outcome: 'delivered',
+      timestampMs: 3_000,
+    });
+  });
+
+  it('distinguishes a suppressed (no message sent) consumed candidate from delivered', async () => {
+    const suppressed = {
+      ...candidate('consumed'),
+      deliveryDisposition: 'suppressed' as const,
+    };
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(suppressed),
+      projectionStore: projectionStore(sharedStore(), {
+        permits: [consumedPermit({ consumedAtMs: 3_000 })],
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 4_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.delivery.initiation.delivered).toBe(0);
+    expect(data.delivery.initiation.suppressed).toBe(1);
+    expect(data.delivery.recentOutcome).toEqual({
+      kind: 'initiation',
+      outcome: 'suppressed',
+      timestampMs: 3_000,
+    });
+  });
+
+  it('maps every initiation lifecycle status to its own counter', async () => {
+    const fixtures: Array<{ status: IcpInitiationCandidate['status']; key: string }> = [
+      { status: 'pending', key: 'invited' },
+      { status: 'permitted', key: 'invited' },
+      { status: 'deferred', key: 'deferred' },
+      { status: 'declined', key: 'declined' },
+      { status: 'rejected', key: 'failed' },
+      { status: 'expired', key: 'expired' },
+      { status: 'cancelled', key: 'cancelled' },
+    ];
+    const list = fixtures.map((fixture, index) => ({
+      ...candidate(fixture.status),
+      candidateId: `${CANDIDATE_ID.slice(0, -1)}${index}`,
+      rootInitiationId: `${CANDIDATE_ID.slice(0, -1)}${index}`,
+      ...(fixture.status === 'permitted' ? { permitId: PERMIT_ID } : {}),
+    }));
+    const candidates = candidateStore(list[0]!);
+    vi.mocked(candidates.listCandidates).mockResolvedValue(list);
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(sharedStore(), { permits: [] }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.delivery.initiation).toEqual({
+      invited: 2,
+      delivered: 0,
+      suppressed: 0,
+      deferred: 1,
+      declined: 1,
+      failed: 1,
+      expired: 1,
+      cancelled: 1,
+    });
+    // No consumed permits and no delivered/failed turns => no recent event.
+    expect(data.delivery.recentOutcome).toBeNull();
+  });
+
+  it('aggregates message turn counts from fatigue and keeps the freshest event', async () => {
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(candidate()),
+      projectionStore: projectionStore(sharedStore(), {
+        permits: [consumedPermit({ consumedAtMs: 2_000 })],
+        fatigue: [{
+          conversationId: CONVERSATION_ID,
+          rootInitiationId: CANDIDATE_ID,
+          localCompanionId: LOCAL_ID,
+          peerCompanionId: PEER_ID,
+          channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+          chargedUnits: 2,
+          overchargeUnits: 0,
+          turnCount: 4,
+          pendingCount: 1,
+          deliveredCount: 2,
+          failedCount: 1,
+          latestReservedAtMs: 5_000,
+        }],
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 6_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.delivery.messages).toEqual({
+      delivered: 2,
+      pending: 1,
+      failed: 1,
+      observed: 4,
+    });
+    // The message reservation (5_000) is fresher than the initiation (2_000).
+    expect(data.delivery.recentOutcome).toEqual({
+      kind: 'message',
+      outcome: 'delivered',
+      timestampMs: 5_000,
+    });
+  });
+
+  it('reports a stable empty/degraded telemetry block when the control plane is absent', async () => {
+    const service = new AdminIcpAutonomyDataService({
+      candidateStore: null,
+      projectionStore: null,
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 2_000,
+    });
+
+    const data = await service.getData();
+
+    expect(data.available).toBe(false);
+    expect(data.delivery).toEqual({
+      currentAvailability: null,
+      initiation: {
+        invited: 0,
+        delivered: 0,
+        suppressed: 0,
+        deferred: 0,
+        declined: 0,
+        failed: 0,
+        expired: 0,
+        cancelled: 0,
+      },
+      messages: { delivered: 0, pending: 0, failed: 0, observed: 0 },
+      recentOutcome: null,
+    });
+  });
+
+  it('never leaks message body, channel id, contact identity, provenance text, or reason summary', async () => {
+    const consumed = {
+      ...candidate('consumed'),
+      deliveryDisposition: 'delivered' as const,
+    };
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidateStore(consumed),
+      projectionStore: projectionStore(sharedStore(), {
+        permits: [consumedPermit({ consumedAtMs: 3_000 })],
+        fatigue: [{
+          conversationId: CONVERSATION_ID,
+          rootInitiationId: CANDIDATE_ID,
+          localCompanionId: LOCAL_ID,
+          peerCompanionId: PEER_ID,
+          channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+          chargedUnits: 1,
+          overchargeUnits: 0,
+          turnCount: 1,
+          pendingCount: 0,
+          deliveredCount: 1,
+          failedCount: 0,
+          latestReservedAtMs: 3_500,
+        }],
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 4_000,
+    });
+
+    const data = await service.getData();
+    const serialized = JSON.stringify(data.delivery);
+
+    // The delivery block is content-free: it carries only counts, a
+    // disposition enum, an outcome enum, and timestamps. No payload-derived
+    // channel ids, contact ids, provenance handles, reason summaries, or
+    // message bodies appear in it.
+    expect(serialized).not.toContain('companion-dm');
+    expect(serialized).not.toContain('private-contact');
+    expect(serialized).not.toContain(PROVENANCE);
+    expect(serialized).not.toContain('private motivation');
+    expect(serialized).not.toContain(CANDIDATE_ID);
+    expect(serialized).not.toContain(CONVERSATION_ID);
+    expect(data.delivery.recentOutcome?.outcome).toBe('delivered');
+  });
+});

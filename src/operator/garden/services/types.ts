@@ -96,11 +96,18 @@ export type {
   AdminIcpCandidateView,
   AdminIcpCostProjectionStatus,
   AdminIcpCostView,
+  AdminIcpCurrentAvailabilitySummary,
+  AdminIcpDeliveryDisposition,
+  AdminIcpDeliveryOutcome,
+  AdminIcpDeliveryTelemetry,
   AdminIcpEpisodeView,
   AdminIcpFatigueView,
+  AdminIcpInitiationLifecycleCounts,
+  AdminIcpMessageLifecycleCounts,
   AdminIcpMutationResult,
   AdminIcpPermitView,
   AdminIcpReasonCount,
+  AdminIcpRecentDeliveryEvent,
 } from './types/icp-autonomy.js';
 
 export type {

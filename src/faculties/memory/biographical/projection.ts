@@ -26,13 +26,13 @@ import type {
   DisclosureDestinationConstraint,
   DisclosureSourceContribution,
 } from '../../../core/cogsec/disclosure/contracts.js';
+import { evaluateMemoryPolicy } from '../../../system/trust/policy.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import type {
   BiographicalClaim,
   BiographicalClaimSource,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
-  NicknameClaimValue,
 } from './types.js';
 import {
   applyLoweringGrant,
@@ -40,6 +40,18 @@ import {
   computeSourceSetDigest,
 } from './kernel.js';
 import type { BiographicalProfileStorePort } from './store-port.js';
+import {
+  resolveVerifiedCurrentAuthor,
+  selectCurrentAuthorClaims,
+  type CurrentAuthorResolution,
+} from './current-author-selection.js';
+import {
+  compareBiographicalPresentations,
+  presentBiographicalClaim,
+  renderBiographicalPresentations,
+  type BiographicalClaimAudienceRole,
+  type BiographicalClaimPresentation,
+} from './projection-rendering.js';
 
 // ── Source revalidation ──
 
@@ -157,6 +169,8 @@ function effectiveEligibleInDestination(
  */
 export interface TurnBiographicalContext {
   readonly companionSubject: BiographicalSubjectRef;
+  /** Canonical author resolution performed at turn ingress. */
+  readonly currentAuthor?: CurrentAuthorResolution;
   readonly conversationScope: ConversationScope;
   readonly tokenBudget?: number;
   readonly estimateTokens?: (text: string) => number;
@@ -184,30 +198,6 @@ export interface BiographicalProjectionResult {
   readonly withheld: readonly BiographicalWithheldEntry[];
 }
 
-// ── Deterministic rendering ──
-
-function normalizeForOrder(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-/** Fixed heading for the companion self-shape section. Centralized so prompt
- * rendering and token-budget estimation count the same framing. */
-function selfNicknameSectionHeader(): string {
-  return '## Companion self-shape\nSelf-nicknames the companion has approved for this audience; she may recognize them when addressed by them:';
-}
-
-/**
- * Deterministic self-nickname ordering: normalized nickname ascending, then
- * claim digest ascending as a stable tiebreaker. There is no canonical
- * selection: every approved nickname renders, in this fixed order.
- */
-function compareSelfNicknameClaims(left: BiographicalClaim, right: BiographicalClaim): number {
-  const leftNickname = normalizeForOrder((left.value as NicknameClaimValue).nickname);
-  const rightNickname = normalizeForOrder((right.value as NicknameClaimValue).nickname);
-  if (leftNickname !== rightNickname) return leftNickname < rightNickname ? -1 : 1;
-  return left.claimDigest < right.claimDigest ? -1 : left.claimDigest > right.claimDigest ? 1 : 0;
-}
-
 /**
  * Render the companion self-shape prompt section from admitted claims. Pure and
  * deterministic: only the canonical structured nickname strings appear, never
@@ -215,10 +205,12 @@ function compareSelfNicknameClaims(left: BiographicalClaim, right: BiographicalC
  * admitted so callers add no empty heading.
  */
 export function renderSelfNicknameSection(admitted: readonly BiographicalClaim[]): string {
-  if (admitted.length === 0) return '';
-  const sorted = [...admitted].sort(compareSelfNicknameClaims);
-  const lines = sorted.map(claim => `- ${(claim.value as NicknameClaimValue).nickname}`);
-  return [selfNicknameSectionHeader(), ...lines].join('\n') + '\n';
+  return renderBiographicalPresentations(
+    admitted.flatMap(claim => {
+      const presentation = presentBiographicalClaim(claim, 'companion-self');
+      return presentation === undefined ? [] : [presentation];
+    }),
+  );
 }
 
 // ── Publication-grant detection ──
@@ -250,24 +242,23 @@ export interface BiographicalProjectionDeps {
 
 interface AdmittedClaim {
   readonly claim: BiographicalClaim;
+  readonly presentation: BiographicalClaimPresentation;
   /** Recomputed effective sensitivity (from current sources + applicable grant). */
   readonly effectiveSensitivity: SensitivityLevel;
   /** Publication grant actually authorizing this projection (against current sources). */
   readonly appliedGrantId?: string;
 }
 
-/**
- * Project companion self-nickname claims for a turn.
- *
- * Selection: active companion-self `nickname` claims with `scope: 'self'`.
- * Each is source-revalidated at read time; the source-set digest is recomputed
- * from the CURRENT sources so any drift invalidates a publication grant bound
- * to the prior digest. A claim projects into the turn's destination only when
- * its recomputed effective sensitivity is eligible there. Every admitted claim
- * contributes a disclosure source bound to the exact destination, with claim,
- * grant, and source provenance refs. Rendering and lineage are atomic per
- * claim: a claim appears in the prompt section iff it appears in lineage.
- */
+interface ProjectionCandidate {
+  readonly claim: BiographicalClaim;
+  readonly presentation: BiographicalClaimPresentation;
+  readonly audienceRole: BiographicalClaimAudienceRole;
+}
+
+/** Project eligible companion-self and verified-current-author claims. Subject
+ * selection, kind rendering, sensitivity admission, prompt construction, and
+ * CogSec lineage stay behind this one interface; no caller can render a claim
+ * without receiving its matching disclosure contribution. */
 export async function projectBiographicalContext(
   deps: BiographicalProjectionDeps,
   turn: TurnBiographicalContext,
@@ -287,23 +278,39 @@ export async function projectBiographicalContext(
   }
   const destinationChannelId = turn.conversationScope.channelId;
 
-  const candidates = await deps.store.listClaims({
+  const selfClaims = await deps.store.listClaims({
     subject: turn.companionSubject,
     kind: 'nickname',
     status: 'active',
   });
+  const currentAuthor = resolveVerifiedCurrentAuthor(turn);
+  const currentAuthorClaims = currentAuthor === undefined
+    ? []
+    : await selectCurrentAuthorClaims({
+      store: deps.store,
+      companionSubject: turn.companionSubject,
+      currentAuthor,
+    });
+  const candidates: ProjectionCandidate[] = [
+    ...selfClaims.flatMap(claim => {
+      const presentation = presentBiographicalClaim(claim, 'companion-self');
+      return presentation === undefined
+        ? []
+        : [{ claim, presentation, audienceRole: 'companion-self' as const }];
+    }),
+    ...currentAuthorClaims.flatMap(claim => {
+      const presentation = presentBiographicalClaim(claim, 'current-author');
+      return presentation === undefined
+        ? []
+        : [{ claim, presentation, audienceRole: 'current-author' as const }];
+    }),
+  ];
 
   const admitted: AdmittedClaim[] = [];
   const withheld: BiographicalWithheldEntry[] = [];
 
-  for (const claim of candidates) {
-    const value = claim.value as NicknameClaimValue;
-    if (value.scope !== 'self') {
-      // Relational nicknames are the current-author relationship tracer
-      // (o61vb.4); the self-nickname tracer does not select them.
-      continue;
-    }
-
+  for (const candidate of candidates) {
+    const { claim } = candidate;
     // Read-time source revalidation. Missing source data fails closed.
     const revalidation = await deps.revalidator.revalidate(claim.sources, now);
     if (revalidation.status === 'missing') {
@@ -347,22 +354,49 @@ export async function projectBiographicalContext(
 
     if (!eligible) {
       withheld.push(
-        withholdReasonFor(claim, drifted, grants, effectiveSensitivity, automaticSensitivity, nowMs),
+        withholdReasonFor(
+          claim,
+          candidate.audienceRole,
+          drifted,
+          grants,
+          effectiveSensitivity,
+          automaticSensitivity,
+          nowMs,
+        ),
       );
       continue;
+    }
+
+    if (currentAuthor !== undefined) {
+      const policy = evaluateMemoryPolicy({
+        trustLevel: currentAuthor.trustLevel,
+        channelPrivacy: turn.conversationScope.envelope.channelPrivacy,
+        broadcast: turn.conversationScope.envelope.broadcast,
+        memorySensitivity: effectiveSensitivity,
+      });
+      if (policy.decision !== 'allow') {
+        withheld.push({
+          claimId: claim.id,
+          reason: 'destination-disallowed',
+          detail: `current-author trust or context envelope denied this claim: ${policy.reason}`,
+        });
+        continue;
+      }
     }
 
     // Atomic admit: a claim in the prompt section has a matching disclosure
     // contribution on the same result, and vice versa.
     admitted.push({
       claim,
+      presentation: candidate.presentation,
       effectiveSensitivity,
       ...(appliedGrant !== undefined ? { appliedGrantId: appliedGrant.id } : {}),
     });
   }
 
   // Deterministic order, then optional prompt-economy trimming.
-  admitted.sort((left, right) => compareSelfNicknameClaims(left.claim, right.claim));
+  admitted.sort((left, right) =>
+    compareBiographicalPresentations(left.presentation, right.presentation));
   const { admitted: budgeted, trimmed } = applyTokenBudget(admitted, turn);
 
   for (const entry of trimmed) {
@@ -373,7 +407,9 @@ export async function projectBiographicalContext(
     });
   }
 
-  const promptSection = renderSelfNicknameSection(budgeted.map(entry => entry.claim));
+  const promptSection = renderBiographicalPresentations(
+    budgeted.map(entry => entry.presentation),
+  );
   const disclosureSources = budgeted.map(entry =>
     claimDisclosureContribution(entry, destination),
   );
@@ -388,6 +424,7 @@ export async function projectBiographicalContext(
 
 function withholdReasonFor(
   claim: BiographicalClaim,
+  audienceRole: BiographicalClaimAudienceRole,
   drifted: boolean,
   grants: readonly BiographicalSensitivityGrant[],
   effective: SensitivityLevel,
@@ -405,7 +442,9 @@ function withholdReasonFor(
     return {
       claimId: claim.id,
       reason: 'no-publication-choice',
-      detail: 'the companion has not recorded an exact publication choice lowering this nickname to public',
+      detail: audienceRole === 'companion-self'
+        ? 'the companion has not recorded an exact publication choice lowering this nickname to public'
+        : 'the claim subject has not recorded an exact publication choice lowering this claim to public',
     };
   }
   return {
@@ -422,26 +461,31 @@ function applyTokenBudget(
   if (turn.tokenBudget === undefined || turn.estimateTokens === undefined) {
     return { admitted: [...admitted], trimmed: [] };
   }
-  const budget = turn.tokenBudget;
+  const budget = Number.isFinite(turn.tokenBudget) && turn.tokenBudget >= 0
+    ? turn.tokenBudget
+    : 0;
   const estimate = turn.estimateTokens;
-  // Count the section framing once so a budget of zero admits nothing rather
-  // than a heading with no nicknames.
-  let running = estimate(`${selfNicknameSectionHeader()}\n`);
+  let running = 0;
   const kept: AdmittedClaim[] = [];
   const trimmed: AdmittedClaim[] = [];
+  const admittedSections = new Set<BiographicalClaimPresentation['section']>();
   let budgetExceeded = false;
   for (const entry of admitted) {
     if (budgetExceeded) {
       trimmed.push(entry);
       continue;
     }
-    const marginal = estimate(`- ${(entry.claim.value as NicknameClaimValue).nickname}\n`);
+    const headerCost = admittedSections.has(entry.presentation.section)
+      ? 0
+      : estimate(`${entry.presentation.header}\n`);
+    const marginal = headerCost + estimate(`${entry.presentation.line}\n`);
     if (running + marginal > budget) {
       budgetExceeded = true;
       trimmed.push(entry);
       continue;
     }
     running += marginal;
+    admittedSections.add(entry.presentation.section);
     kept.push(entry);
   }
   return { admitted: kept, trimmed };

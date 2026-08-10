@@ -321,7 +321,7 @@
     <section class="card-garden border-l-4 border-l-moss-300 p-4" aria-label="Shared firewall status">
       <div class="flex flex-wrap items-center gap-3">
         <span class="text-xs uppercase font-semibold text-shadow-600">Shared firewall mode</span>
-        <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold {firewallStatus.mode === 'enforce' ? 'bg-moss-100 text-moss-700' : firewallStatus.mode === 'shadow' ? 'bg-gold-100 text-gold-700' : 'bg-bark-200 text-shadow-700'}">{firewallStatus.mode}</span>
+        <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold {firewallStatus.mode === 'strict' ? 'bg-wilt-100 text-wilt-700' : firewallStatus.mode === 'boundary' ? 'bg-moss-100 text-moss-700' : 'bg-gold-100 text-gold-700'}">{firewallStatus.mode}</span>
         <span class="text-xs text-shadow-500">
           TTL {firewallStatus.quarantineItemTtlHours}h · max held {firewallStatus.quarantineMaxHeldItems} · held now {firewallStatus.heldCount}
         </span>

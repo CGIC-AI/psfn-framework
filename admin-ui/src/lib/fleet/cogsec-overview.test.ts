@@ -40,9 +40,9 @@ function snapshot(overrides: Partial<CompanionCogSecSnapshot> = {}): CompanionCo
     reachable: true,
     policy: null,
     firewallStatus: {
-      mode: 'enforce',
+      mode: 'strict',
       queueEmptyDoesNotMeanFirewallOff: true,
-      note: 'enforce',
+      note: 'strict',
       heldCount: 1,
       quarantineItemTtlHours: 168,
       quarantineMaxHeldItems: 500,
@@ -65,7 +65,7 @@ describe('projectCompanionCogSec', () => {
     expect(projection.outcomeCounts).toMatchObject({
       held: 1, releasedSanitized: 1, releasedRaw: 1, discarded: 1,
     });
-    expect(projection.policy).toMatchObject({ mode: 'enforce', ownership: 'shared-gateway' });
+    expect(projection.policy).toMatchObject({ mode: 'strict', ownership: 'shared-gateway' });
   });
 
   it('computes decision latency from held→decided timestamps (content-free)', () => {

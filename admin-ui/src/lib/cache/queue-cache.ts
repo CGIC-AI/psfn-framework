@@ -311,7 +311,7 @@ function isIntakeQuarantineItem(value: unknown): boolean {
 function isFirewallStatus(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return typeof value.mode === 'string'
-    && ['off', 'shadow', 'enforce'].includes(value.mode)
+    && ['shadow', 'boundary', 'strict'].includes(value.mode)
     && value.queueEmptyDoesNotMeanFirewallOff === true
     && typeof value.note === 'string'
     && typeof value.heldCount === 'number'

@@ -16,7 +16,7 @@ function companion(overrides: Partial<FleetCogSecCompanionProjection> = {}): Fle
     companionId: '11111111-1111-4111-8111-111111111111',
     displayName: 'Companion A',
     policy: {
-      mode: 'enforce',
+      mode: 'strict',
       quarantineItemTtlHours: 168,
       quarantineMaxHeldItems: 500,
       ownership: 'shared-gateway',
@@ -48,7 +48,7 @@ describe('aggregateFleetCogSecOverview — sole-admin scope', () => {
       displayNames: ['Companion A'],
       accessMode: 'sole_admin',
     });
-    expect(overview.policyStatus?.mode).toBe('enforce');
+    expect(overview.policyStatus?.mode).toBe('strict');
     expect(overview.policyStatus?.ownership).toBe('shared-gateway');
     expect(overview.outcomeCounts.held).toBe(1);
   });
@@ -125,7 +125,7 @@ describe('aggregateFleetCogSecOverview — multi-admin scope', () => {
   });
 
   it('rejects companions that disagree on the shared gateway policy (drift is never averaged)', () => {
-    const a = companion({ policy: { mode: 'enforce', quarantineItemTtlHours: 168, quarantineMaxHeldItems: 500, ownership: 'shared-gateway' } });
+    const a = companion({ policy: { mode: 'strict', quarantineItemTtlHours: 168, quarantineMaxHeldItems: 500, ownership: 'shared-gateway' } });
     const b = companion({
       companionId: '22222222-2222-4222-8222-222222222222',
       policy: { mode: 'shadow', quarantineItemTtlHours: 168, quarantineMaxHeldItems: 500, ownership: 'shared-gateway' },

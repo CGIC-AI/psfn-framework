@@ -15,7 +15,9 @@ describe('CompanionId type gate wiring', () => {
     expect(scripts['verify:companion-id-types']).toBe(
       'tsc --noEmit -p tsconfig.companion-id-types.json',
     );
-    expect(scripts.build).toBe('npm run verify:companion-id-types && tsup');
+    expect(scripts.build).toBe(
+      'npm run verify:companion-id-types && NODE_OPTIONS=--max-old-space-size=8192 tsup',
+    );
   });
 
   it.each([

@@ -1059,9 +1059,24 @@ export class SessionManager implements SessionManagerTypeSurface {
         actorKind: 'system',
       })
       : options.metadata;
-    const metadata = options.roleEnvelopePreview
+    const previewMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
+    let metadata = previewMetadata;
+    if (options.intakeEnvelopes && options.intakeEnvelopes.length > 0) {
+      if (!this.intakeScreening) {
+        throw new Error(
+          'System session recording received intake envelope snapshots while intake screening is off; '
+          + 'refusing to persist unattributable screening state (fail closed)',
+        );
+      }
+      metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
+        mode: this.intakeScreening.mode,
+        withheld: this.intakeScreening.mode === 'enforce'
+          && options.intakeEnvelopes.some(snapshot => snapshot.state === 'quarantined'),
+        envelopes: options.intakeEnvelopes,
+      });
+    }
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'system',
@@ -1768,18 +1783,9 @@ export class SessionManager implements SessionManagerTypeSurface {
     channelId: string,
     sourceMessageId: string,
   ): RecordedCompanionSourceMessage | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const entries = this.store.findLatestEntries(
-      resolvedChannelId,
-      (entry) => {
-        if (entry.role !== 'user' && entry.role !== 'system') return false;
-        if (!entry.metadata?.includes(sourceMessageId)) return false;
-        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
-      },
-      1,
-    );
-    const entry = entries.at(0);
+    const entry = this.findRecordedSourceMessageEntry(channelId, sourceMessageId);
     if (!entry) return null;
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (typeof entry.authorId !== 'string' || !entry.authorId.trim()
       || typeof entry.authorName !== 'string' || !entry.authorName.trim()
       || !Number.isFinite(entry.timestamp) || entry.timestamp <= 0) {
@@ -1799,6 +1805,24 @@ export class SessionManager implements SessionManagerTypeSurface {
       timestampMs: entry.timestamp,
       ...(correlation ? { correlation } : {}),
     };
+  }
+
+  /** Exact persisted user/system source row for replay-safe ingress consumers. */
+  findRecordedSourceMessageEntry(
+    channelId: string,
+    sourceMessageId: string,
+  ): SessionEntry | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const entries = this.store.findLatestEntries(
+      resolvedChannelId,
+      (entry) => {
+        if (entry.role !== 'user' && entry.role !== 'system') return false;
+        if (!entry.metadata?.includes(sourceMessageId)) return false;
+        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
+      },
+      1,
+    );
+    return entries.at(0) ?? null;
   }
 
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {

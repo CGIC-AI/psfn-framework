@@ -39,6 +39,8 @@ import type { BackgroundWorkStorePort } from '../../core/agent/background-work/s
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import { awaitOptionalPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
+import { classifyChannelEnvelope } from '../../system/trust/policy.js';
+import { createIntakeReleaseConversationTurn } from './intake-release-conversation-turn.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -141,6 +143,15 @@ export async function startOptionalAdminTransportServer(
     && postgresDatabaseUrl
     ? await PostgresSpeakingArbiterAdminStore.connect(postgresDatabaseUrl)
     : null;
+  const intakeReleaseConversationTurn = createIntakeReleaseConversationTurn({
+    agent: options.coreRuntime.agentLoop,
+    delivery: {
+      sendText: (channelId, content) => options.gateway.discordSend(channelId, content),
+      sendMedia: (channelId, attachment) => options.gateway.discordSendMedia(channelId, attachment),
+    },
+    sessions: options.coreRuntime.sessionManager,
+    classifyChannelPrivacy: channelId => classifyChannelEnvelope(channelId).privacy,
+  });
   const services = createInProcessGardenAdminContract({
     env,
     apiBaseUrl: env.API_BASE_URL,
@@ -151,6 +162,7 @@ export async function startOptionalAdminTransportServer(
     episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     sessionManager: options.coreRuntime.sessionManager,
+    intakeReleaseConversationTurn,
     scheduler: options.scheduler,
     effectiveSchedulerConfig: options.schedulerConfig,
     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,

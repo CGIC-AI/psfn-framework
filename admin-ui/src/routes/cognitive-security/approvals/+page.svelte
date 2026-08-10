@@ -51,6 +51,7 @@
   let pendingItem = $state<AdminIntakeQuarantineItemView | null>(null);
   let confirmToken = $state('');
   let serverSummary = $state('');
+  let lastDecisionResult = $state('');
 
   const heldItems = $derived(items.filter(item => item.status === 'held'));
   const decidedItems = $derived(items.filter(item => item.status !== 'held'));
@@ -249,7 +250,8 @@
           confirmToken,
           reason: reason.trim(),
         });
-      pushToast(result.message, 'success');
+      lastDecisionResult = result.message;
+      pushToast(result.message, 'success', 15_000);
       expandedId = '';
       detail = null;
       reason = '';
@@ -305,6 +307,24 @@
       </button>
     {/snippet}
   </GardenPageHeader>
+
+  {#if lastDecisionResult}
+    <div class="rounded border border-moss-300 bg-moss-50 px-4 py-3 text-sm text-moss-800" role="status">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <p class="font-semibold">Last quarantine action completed</p>
+          <p class="mt-1">{lastDecisionResult}</p>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded border border-moss-300 px-2 py-1 text-xs font-medium hover:bg-moss-100"
+          onclick={() => { lastDecisionResult = ''; }}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  {/if}
 
   {#if backgroundError}
     <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
@@ -473,7 +493,7 @@
                 <ul class="mt-1 space-y-1 text-xs text-shadow-800">
                   <li>
                     <span class="font-medium">Conversation context:</span>
-                    {item.redelivery.delivered ? 'appended to L0' : 'append failed'}
+                    {item.redelivery.delivered ? 'executed a firewall-authored system turn' : 'system turn failed'}
                     {item.redelivery.logicalSessionId ? ` in session ${item.redelivery.logicalSessionId}` : ''}
                     {item.redelivery.entryId === undefined || item.redelivery.entryId === null
                       ? ''
@@ -481,8 +501,12 @@
                     at {formatTimestamp(item.redelivery.attemptedAt)}.
                     {item.redelivery.reason ? ` ${item.redelivery.reason}` : ''}
                   </li>
-                  <li><span class="font-medium">External chat:</span> no Discord, Telegram, or API message was sent by this action.</li>
-                  <li><span class="font-medium">Companion behavior:</span> the released context is available on the companion's next turn; this action does not start a turn by itself.</li>
+                  <li><span class="font-medium">Authorship:</span> Intake firewall (system). Released content is never attributed to the held message's contact.</li>
+                  {#if item.redelivery.channelId}
+                    <li><span class="font-medium">Source channel:</span> <code class="font-mono">{item.redelivery.channelId}</code>.</li>
+                  {/if}
+                  <li><span class="font-medium">Companion response:</span> delivered through normal channel egress when the system turn produced one.</li>
+                  <li><span class="font-medium">Companion behavior:</span> this action starts the provenance-marked system turn immediately.</li>
                 </ul>
               </div>
             {/if}

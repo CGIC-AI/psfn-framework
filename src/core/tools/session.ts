@@ -29,6 +29,7 @@ import {
   executeSessionGrepAction,
   executeSessionSearchAction,
   type SessionGrepToolOptions,
+  type SessionSearchWithin,
 } from './session-search.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isCapturedSessionOwnerInvariantError } from '../session/manager/captured-session-owner.js';
@@ -118,6 +119,7 @@ interface SessionToolParams extends SessionNewParams {
   mode?: 'literal' | 'regex';
   caseSensitive?: boolean;
   channelId?: string;
+  within?: SessionSearchWithin;
   scope?: string;
   conclusion?: string;
   summary?: string;
@@ -422,6 +424,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
   const grepOptions: SessionGrepToolOptions = {
     sessionsDir: options.sessionsDir,
     sessionRouteState: options.manager,
+    latestCompactionSource: options.manager,
     ...(options.runRipgrep ? { runRipgrep: options.runRipgrep } : {}),
   };
 
@@ -473,6 +476,10 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
       channelId: Type.Optional(Type.String({
         minLength: 1,
         description: 'Optional exact channel/session scope filter or focus target channel.',
+      })),
+      within: Type.Optional(Type.Literal('latest_compaction_source', {
+        description:
+          'For search/grep, restrict results to the verified exact source of the current channel\'s latest compaction summary.',
       })),
       scope: Type.Optional(Type.String({
         minLength: 1,
@@ -526,11 +533,13 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
               transcriptSearch: options.manager,
               llmProvider: options.llmProvider,
               promptRegistry: options.promptRegistry ?? null,
+              latestCompactionSource: options.manager,
             }, {
               query: typeof params.query === 'string' ? params.query : '',
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
               ...(typeof params.summarize === 'boolean' ? { summarize: params.summarize } : {}),
+              ...(params.within === 'latest_compaction_source' ? { within: params.within } : {}),
             }, signal);
           case 'grep':
             return executeSessionGrepAction(grepOptions, {
@@ -539,6 +548,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
               ...(typeof params.caseSensitive === 'boolean' ? { caseSensitive: params.caseSensitive } : {}),
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+              ...(params.within === 'latest_compaction_source' ? { within: params.within } : {}),
             }, signal);
           case 'wake_return': {
             const sessionId = normalizeWakeReturnSessionId(

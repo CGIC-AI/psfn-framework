@@ -33,7 +33,7 @@ Last updated: 2026-07-22.
 - Built on demand by `SessionManager`
 - Mixes recent session entries, continuity, prompt layers, active orientation, retrieved L2 memory, and L0.1 episodic landmarks
 - Applies token budgets, temporal history bounds, compaction thresholds, focus compaction ranges, and observation masking
-- Operates as a sliding active context window. It can retain a recent verbatim tail, summarize older in-window entries, and carry forward previous compaction summaries without changing L0 canonical history.
+- Operates as a sliding active context window. Foreground assembly retains a deterministic bounded verbatim tail and carries forward durable summaries produced between turns; it never starts a history-summary model call and never changes canonical L0 history.
 
 ### L2: Typed long-term memories
 
@@ -281,7 +281,7 @@ Group extraction preserves attribution separately from ownership. Accepted group
 Compaction is context-window maintenance, not a replacement memory layer.
 
 - L0 session JSONL remains canonical. Compaction changes what is carried into L1 context; it does not delete or rewrite the source archive.
-- Between turns, `SessionManager.scheduleAutoCompactionBetweenTurns()` can queue background compaction after a turn. Foreground context assembly reports pending compaction and normally runs in deferred mode.
+- Every eligible turn records an `auto_compaction` job in the durable background-work handoff. `SessionManager.scheduleAutoCompactionBetweenTurns()` executes it against the source-fenced session snapshot, using the configured session-history block budget as pressure. Foreground context assembly reports pending compaction and deterministically trims while the background job catches up; it does not wait or summarize inline.
 - When compaction runs, the oldest half of the selected recent context is summarized, the newer half remains available as recent verbatim history, and the summary is stored with source-hash and preservation metadata.
 - Before compaction summarizes entries, the memory extractor gets a pre-compaction flush opportunity so salient facts are not lost before the active window shrinks.
 - Stored compaction summaries are wrapped as untrusted context before prompt injection. The model must treat them as derived carry-forward notes, not authoritative transcript text.
@@ -386,7 +386,7 @@ The memory system is actively maintained by runtime jobs:
 
 Background memory work is split into three lanes. Every cadence, threshold, and window is owned by `scheduler.json` (schema-guarded, fail closed on missing or invalid config); nothing is hardcoded.
 
-Salience retrieval is cadence-independent: ranking computes effective salience lazily from each memory's `lastAccessed` timestamp, while the bundled scheduler-owned persistence sweep runs from `backgroundMaintenance.intervalMs` (default 3,600,000 ms / hourly) to enforce floors and durably refresh stored values. Compression-guideline review is a separately gated operation in that bundled heartbeat. Context compaction itself remains threshold-driven by `compactionThresholdPct`; it has no timer cadence.
+Salience retrieval is cadence-independent: ranking computes effective salience lazily from each memory's `lastAccessed` timestamp, while the bundled scheduler-owned persistence sweep runs from `backgroundMaintenance.intervalMs` (default 3,600,000 ms / hourly) to enforce floors and durably refresh stored values. Compression-guideline review is a separately gated operation in that bundled heartbeat. Between-turn rolling compaction is pressure-driven by the configured session-history budget and has no timer cadence; the explicit foreground compaction mode retains its separate `compactionThresholdPct` contract.
 
 **Near-turn lane (`nearTurnMemory`)** — lightweight, deterministic, zero LLM spend (the lane holds no LLM provider at all). It keeps only extraction trigger evaluation (the existing per-turn and observed-group extraction wiring), active-memory review refresh (stale-memory maintenance reviews), and concern-candidate derivation (the intention appraisal path). Cadence keys:
 

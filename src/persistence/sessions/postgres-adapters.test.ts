@@ -188,8 +188,12 @@ class FakePostgresPool {
       const query = String(values[0] ?? '').toLowerCase();
       const tokens = query.split(/\s+/).filter(Boolean);
       const scopedChannelId = values[2] == null ? null : String(values[2]);
+      const firstMessageId = values[3] == null ? null : Number(values[3]);
+      const lastMessageId = values[4] == null ? null : Number(values[4]);
       const matches = this.records
         .filter(record => scopedChannelId === null || record.channelId === scopedChannelId)
+        .filter(record => firstMessageId === null || record.messageId >= firstMessageId)
+        .filter(record => lastMessageId === null || record.messageId <= lastMessageId)
         // Mirrors the production NOT EXISTS redaction-drift predicate.
         .filter(record => this.drift.get(record.channelId)?.kind !== 'redaction')
         .filter(record => {
@@ -479,16 +483,31 @@ describe('postgres session adapters', () => {
       content: 'shared scoped needle in other',
       timestamp: 2_000,
     });
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 3,
+      channelId: 'api:scoped-target',
+      role: 'assistant',
+      content: 'shared scoped needle outside bounded source',
+      timestamp: 3_000,
+    });
 
     const unscoped = await adapters.transcriptSearch.searchByKeywords('scoped needle');
-    expect(unscoped).toHaveLength(2);
+    expect(unscoped).toHaveLength(3);
 
     const scoped = await adapters.transcriptSearch.searchByKeywords('scoped needle', 10, {
       channelId: 'api:scoped-target',
     });
-    expect(scoped).toHaveLength(1);
-    expect(scoped[0]?.channelId).toBe('api:scoped-target');
-    expect(scoped[0]?.messageId).toBe(1);
+    expect(scoped).toHaveLength(2);
+    expect(scoped.every(hit => hit.channelId === 'api:scoped-target')).toBe(true);
+
+    const bounded = await adapters.transcriptSearch.searchByKeywords('scoped needle', 10, {
+      channelId: 'api:scoped-target',
+      firstMessageId: 1,
+      lastMessageId: 1,
+    });
+    expect(bounded).toHaveLength(1);
+    expect(bounded[0]?.channelId).toBe('api:scoped-target');
+    expect(bounded[0]?.messageId).toBe(1);
   });
 
   it('replaces channels, normalizes visibility, and supports explicit drift lifecycle operations', async () => {

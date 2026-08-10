@@ -46,6 +46,9 @@ export interface ReplaceChannelEntriesOptions {
 export interface TranscriptSearchOptions {
   /** Restrict hits to one projected channel/logical session. */
   channelId?: string;
+  /** Inclusive exact message-id bounds within the selected channel. */
+  firstMessageId?: number;
+  lastMessageId?: number;
 }
 
 export interface TranscriptProjectionPort {

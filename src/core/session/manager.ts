@@ -17,6 +17,7 @@ import {
   type CrossChannelContinuityPort,
 } from './cross-channel-continuity-port.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import type { TranscriptSearchOptions } from '../../persistence/sessions/transcript-projection-port.js';
 import type {
   TurnRecordRecoveryEvidenceSkip,
 } from '../agent/background-work/recovery-contract.js';
@@ -24,6 +25,10 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry, SessionEntryRole } from './types.js';
 import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
+import {
+  resolveLatestCompactionSourceRange,
+  type LatestCompactionSourceRange,
+} from './compaction-source-range.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannelEnvelope, type ChannelMeta } from '../../system/trust/policy.js';
@@ -2201,8 +2206,41 @@ export class SessionManager implements SessionManagerTypeSurface {
     return this.store.count(resolvedChannelId);
   }
 
-  async searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]> {
-    return await this.transcriptSearch.searchByKeywords(query, limit);
+  getLatestCompactionSourceRange(
+    channelId: string,
+    authorization: { currentChannelId: string },
+  ): LatestCompactionSourceRange {
+    const authorizedChannelId = this.resolveSessionChannelId(authorization.currentChannelId);
+    let resolvedChannelId: string;
+    try {
+      resolvedChannelId = channelId === authorization.currentChannelId
+        ? authorizedChannelId
+        : this.resolveSessionChannelId(channelId);
+    } catch {
+      return {
+        status: 'access_denied',
+        channelId,
+        reason: 'Latest compaction source access is restricted to the current channel.',
+      };
+    }
+    if (resolvedChannelId !== authorizedChannelId) {
+      return {
+        status: 'access_denied',
+        channelId: resolvedChannelId,
+        reason: 'Latest compaction source access is restricted to the current channel.',
+      };
+    }
+    return resolveLatestCompactionSourceRange(this.store, resolvedChannelId);
+  }
+
+  async searchByKeywords(
+    query: string,
+    limit?: number,
+    options?: TranscriptSearchOptions,
+  ): Promise<SessionSearchHit[]> {
+    return options === undefined
+      ? await this.transcriptSearch.searchByKeywords(query, limit)
+      : await this.transcriptSearch.searchByKeywords(query, limit, options);
   }
 
   async searchTranscripts(query: string, limit?: number): Promise<SessionSearchHit[]> {

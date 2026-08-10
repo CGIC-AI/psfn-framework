@@ -267,6 +267,8 @@ export async function runSessionSearch(params: {
   limit?: number;
   summarize?: boolean;
   targetChannelId?: string;
+  firstMessageId?: number;
+  lastMessageId?: number;
   viewer?: SessionSearchViewerContext;
   sessionRouteState?: SessionSearchRouteStateProvider | null;
   signal?: AbortSignal;
@@ -288,15 +290,24 @@ export async function runSessionSearch(params: {
   const scopedChannelId = typeof params.targetChannelId === 'string' && params.targetChannelId.trim().length > 0
     ? params.targetChannelId.trim()
     : undefined;
-  const rawHits = await params.transcriptSearch.searchByKeywords(
-    normalizedQuery,
-    requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
-  );
+  const searchOptions = {
+    ...(scopedChannelId ? { channelId: scopedChannelId } : {}),
+    ...(params.firstMessageId !== undefined ? { firstMessageId: params.firstMessageId } : {}),
+    ...(params.lastMessageId !== undefined ? { lastMessageId: params.lastMessageId } : {}),
+  };
+  const searchLimit = requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR;
+  const rawHits = Object.keys(searchOptions).length === 0
+    ? await params.transcriptSearch.searchByKeywords(normalizedQuery, searchLimit)
+    : await params.transcriptSearch.searchByKeywords(normalizedQuery, searchLimit, searchOptions);
   const nonTombstoneHits = rawHits.filter(hit => !isCogSecTombstoneSessionEntry(hit));
   const scopedHits = scopedChannelId
     ? nonTombstoneHits.filter(hit => hit.channelId === scopedChannelId)
     : nonTombstoneHits;
-  const filteredHits = scopedHits.filter(hit => canViewerAccessSessionHit(params.viewer, hit));
+  const boundedHits = scopedHits.filter(hit => (
+    (params.firstMessageId === undefined || hit.messageId >= params.firstMessageId)
+    && (params.lastMessageId === undefined || hit.messageId <= params.lastMessageId)
+  ));
+  const filteredHits = boundedHits.filter(hit => canViewerAccessSessionHit(params.viewer, hit));
 
   const hits: SessionSearchHitResult[] = filteredHits
     .slice(0, requestedLimit)
@@ -329,8 +340,8 @@ export async function runSessionSearch(params: {
   return {
     query: normalizedQuery,
     summary,
-    totalHits: scopedHits.length,
-    gatedOutCount: Math.max(0, scopedHits.length - filteredHits.length),
+    totalHits: boundedHits.length,
+    gatedOutCount: Math.max(0, boundedHits.length - filteredHits.length),
     hits,
   };
 }

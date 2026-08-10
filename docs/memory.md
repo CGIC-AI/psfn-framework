@@ -336,7 +336,7 @@ Selection caps reflections and procedurals at two each per turn. Other engram ty
 
 The profile covers presentation only:
 
-- `sectionOrder` — an exact permutation of the seven top-level prompt sections (`recent_contact_shape`, `relationship_context`, `emotional_continuity_snapshot`, `cross_session_emotional_continuity`, `memory_context_note`, `episodic_landmark_chains`, `relevant_memories`). Structural section ids never change with wording.
+- `sectionOrder` — an exact permutation of the seven stable presentation slots (`core_profile`, `relationship_context`, `emotional_continuity_snapshot`, `cross_session_emotional_continuity`, `memory_context_note`, `episodic_landmark_chains`, `relevant_memories`). `core_profile` remains the version-1 ordering slot while it emits the renamed `<recent_contact_shape>` prompt section; structural slot ids never change with wording.
 - `headings` — wording for the boundary, relevant, social-context, separate-people, emotional-continuity, and episodic-landmark section headings.
 - `valence` — the positive/negative marker strings and their thresholds for memory lines, plus the emotional-continuity block's own thresholds.
 - `recencyLabels` — the coarse age-band labels (`today`/`yesterday`/`this week` and `{n}`-templated week/month/year bands).

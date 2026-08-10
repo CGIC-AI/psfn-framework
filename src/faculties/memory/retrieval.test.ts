@@ -25,6 +25,7 @@ import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import { retrieveReflectionMemoryBlock } from '../../core/scheduler/reflection-template-runtime/reflection-contact-context.js';
+import { classifyMemorySubject } from './subject-classification.js';
 
 // ── Helpers ──
 
@@ -59,6 +60,12 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     updateMemory: vi.fn(),
     getRecentContactShape: vi.fn().mockReturnValue(undefined),
     getById: vi.fn().mockImplementation((id: string) => memories.find(memory => memory.id === id)),
+    getMemorySubjectClassification: vi.fn().mockImplementation((id: string) => {
+      const memory = memories.find(candidate => candidate.id === id);
+      return memory
+        ? classifyMemorySubject(memory, { memoryRevision: 1 })
+        : undefined;
+    }),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     aggregateAuthorizedMemorySubjects: vi.fn(async () => ({ kind: 'memories', memories: [], total: 0 })),
@@ -364,6 +371,15 @@ describe('MemoryRetriever active memory context', () => {
     (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
       id === source.id ? source : undefined
     ));
+    (store.getMemorySubjectClassification as ReturnType<typeof vi.fn>)
+      .mockImplementation((id: string) => (
+        id === source.id
+          ? classifyMemorySubject(source, {
+              memoryRevision: 1,
+              validSubjectContactIds: new Set(['contact-1']),
+            })
+          : undefined
+      ));
     const shape = {
       schemaVersion: 1 as const,
       contactId: 'contact-1',
@@ -2540,6 +2556,15 @@ describe('MemoryRetriever basic behavior', () => {
     (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
       id === source.id ? source : undefined
     ));
+    (store.getMemorySubjectClassification as ReturnType<typeof vi.fn>)
+      .mockImplementation((id: string) => (
+        id === source.id
+          ? classifyMemorySubject(source, {
+              memoryRevision: 1,
+              validSubjectContactIds: new Set(['contact-1']),
+            })
+          : undefined
+      ));
     (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockReturnValue({
       schemaVersion: 1,
       contactId: 'contact-1',
@@ -2601,6 +2626,15 @@ describe('MemoryRetriever basic behavior', () => {
     (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
       id === deniedSource.id ? deniedSource : undefined
     ));
+    (store.getMemorySubjectClassification as ReturnType<typeof vi.fn>)
+      .mockImplementation((id: string) => (
+        id === deniedSource.id
+          ? classifyMemorySubject(deniedSource, {
+              memoryRevision: 1,
+              validSubjectContactIds: new Set(['contact-1']),
+            })
+          : undefined
+      ));
     const embedding = makeMockEmbedding();
     const eventBus = makeMockEventBus();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);

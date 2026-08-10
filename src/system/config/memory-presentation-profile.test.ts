@@ -85,7 +85,7 @@ describe('memory presentation profile normalization (fail closed)', () => {
 
   it('rejects a sectionOrder that is not an exact permutation', () => {
     const dup = defaultRecord();
-    dup.sectionOrder = [...MEMORY_PRESENTATION_SECTIONS, 'recent_contact_shape'];
+    dup.sectionOrder = [...MEMORY_PRESENTATION_SECTIONS, 'core_profile'];
     expect(() => normalizeMemoryPresentationProfile(dup)).toThrow(/duplicate|unknown/);
 
     const missing = defaultRecord();
@@ -93,7 +93,7 @@ describe('memory presentation profile normalization (fail closed)', () => {
     expect(() => normalizeMemoryPresentationProfile(missing)).toThrow(/missing sections/);
 
     const unknown = defaultRecord();
-    unknown.sectionOrder = ['recent_contact_shape', 'relationship_context', 'emotional_continuity_snapshot',
+    unknown.sectionOrder = ['core_profile', 'relationship_context', 'emotional_continuity_snapshot',
       'cross_session_emotional_continuity', 'memory_context_note', 'episodic_landmark_chains', 'bogus'];
     expect(() => normalizeMemoryPresentationProfile(unknown)).toThrow(/unknown section/);
   });

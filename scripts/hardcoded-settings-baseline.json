@@ -8985,6 +8985,20 @@
       "value": "1000"
     },
     {
+      "file": "src/operator/garden/services/fleet-cogsec-overview.ts",
+      "name": "aggregateFleetCogSecOverview.policyStatus.quarantineMaxHeldItems",
+      "value": "0",
+      "form": "object-member",
+      "note": "waw5q: zero sentinel for the empty authorized-scope fallback (no companions reachable); the real shared-gateway limits come from each companion projection, never this literal."
+    },
+    {
+      "file": "src/operator/garden/services/fleet-cogsec-overview.ts",
+      "name": "EMPTY_LATENCY.maxDecisionMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "waw5q: structural zero for the no-decided-items latency projection; content-free empty default, not a tuning value."
+    },
+    {
       "file": "src/operator/garden/services/fleet-model-usage-service.ts",
       "name": "buildUpstreamQuery.limit",
       "value": "1",
@@ -9022,6 +9036,13 @@
       "file": "src/operator/garden/services/images-service.ts",
       "name": "MAX_GALLERY_TAGS",
       "value": "32"
+    },
+    {
+      "file": "src/operator/garden/services/intake-quarantine-service.ts",
+      "name": "createAdminIntakeQuarantineReadService.resolveFirewallStatus.quarantineMaxHeldItems",
+      "value": "0",
+      "form": "object-member",
+      "note": "waw5q: zero sentinel for the default firewall-status provider used only when no intake-policy provider is wired; production routes inject the real shared-gateway limits."
     },
     {
       "file": "src/operator/garden/services/intake-quarantine-service.ts",

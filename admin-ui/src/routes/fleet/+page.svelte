@@ -10,6 +10,10 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import FleetCostUsage from '$lib/components/fleet/FleetCostUsage.svelte';
   import FleetUsageSummary from '$lib/components/fleet/FleetUsageSummary.svelte';
+  import FleetGlobalFirewall from '$lib/components/fleet/FleetGlobalFirewall.svelte';
+
+  type FleetTab = 'info' | 'costs' | 'firewall';
+  let activeTab = $state<FleetTab>('info');
 
   let projection = $state<FleetPortalProjection | null>(null);
   let cardDetails = $state<Record<string, FleetCardDetails>>({});
@@ -168,7 +172,29 @@
       </section>
     {/if}
 
+    {#if projection}
+      <nav class="mb-6 flex flex-wrap gap-2" aria-label="Cluster administration">
+        {#each [{ id: 'info', label: 'Companion Info' }, { id: 'costs', label: 'Costs' }, { id: 'firewall', label: 'Global Firewall' }] as tab (tab.id)}
+          <button
+            type="button"
+            onclick={() => activeTab = tab.id as FleetTab}
+            class="rounded-lg border px-4 py-2 text-sm font-medium transition-colors
+              {activeTab === tab.id
+                ? 'border-gold-400 bg-gold-400 text-bark-50'
+                : 'border-bark-300 bg-bark-50 text-shadow-700 hover:bg-bark-100'}"
+            aria-pressed={activeTab === tab.id}
+          >
+            {tab.label}
+          </button>
+        {/each}
+      </nav>
+    {/if}
+
     <FleetUsageSummary {companionNames} />
+
+    {#if activeTab === 'firewall' && projection}
+      <FleetGlobalFirewall {projection} />
+    {/if}
 
     {#if loading}
       <section class="garden-loading card-garden p-8" aria-busy="true" aria-live="polite">
@@ -194,6 +220,7 @@
         </p>
       </section>
     {:else if projection}
+      {#if activeTab === 'info'}
       <section class="garden-section" aria-labelledby="companion-health-heading">
         <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
@@ -306,7 +333,10 @@
         {/each}
         </div>
       </section>
+      {/if}
+      {#if activeTab === 'costs'}
       <FleetCostUsage mode="fleet" {projection} />
+      {/if}
     {/if}
   </main>
 </div>

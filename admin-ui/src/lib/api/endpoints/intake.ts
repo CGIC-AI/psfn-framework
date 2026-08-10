@@ -10,6 +10,7 @@ import {
 } from '$lib/cache/queue-cache';
 import type { LocalFirstDataSource, LocalFirstResult } from '$lib/cache/local-first';
 import type {
+  AdminIntakeQuarantineFirewallStatus,
   AdminIntakeQuarantineItemDetail,
   AdminIntakeQuarantineItemView,
   AdminIntakeQuarantineSourceListAction,
@@ -39,6 +40,12 @@ export interface IntakeSourceListMutationResult {
 
 export interface IntakeQuarantineListData {
   items: AdminIntakeQuarantineItemView[];
+  /**
+   * Cluster-owned shared firewall status (waw5q). Present whenever the
+   * runtime serves the enriched projection; lets the UI state that an empty
+   * queue never means the firewall is off.
+   */
+  firewallStatus?: AdminIntakeQuarantineFirewallStatus;
 }
 
 export interface IntakeQuarantineItemData {

@@ -44,8 +44,16 @@ import {
 } from '../../../shared/contracts/intake-quarantine-hold-reason.js';
 import type { IntakeL1RuleMatchProvenance } from '../../../shared/contracts/intake-envelope.js';
 import { extractHostFromOriginRef } from '../../../core/cogsec/intake/source-lists.js';
-import type { IntakeSourceListName } from '../../../system/config/intake-policy-config.js';
+import type {
+  IntakeFirewallMode,
+  IntakeSourceListName,
+} from '../../../system/config/intake-policy-config.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import {
+  projectIntakeCogSecAttribution,
+  type IntakeCogSecAttribution,
+  type IntakeCogSecAttributionResolvers,
+} from './cogsec-intake-attribution.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { AdminSettingsService } from './types/settings.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
@@ -67,6 +75,22 @@ export interface AdminIntakeQuarantineFlywheelTarget {
   pattern: string;
 }
 
+/**
+ * Cluster-owned shared firewall status, surfaced on every per-companion
+ * quarantine list response so an empty approval queue can never be read as
+ * "the firewall is off" (waw5q). The mode is the shared gateway's, identical
+ * across companions; `queueEmptyDoesNotMeanFirewallOff` is a literal-true
+ * marker the UI keys its banner on.
+ */
+export interface AdminIntakeQuarantineFirewallStatus {
+  readonly mode: IntakeFirewallMode;
+  readonly queueEmptyDoesNotMeanFirewallOff: true;
+  readonly note: string;
+  readonly heldCount: number;
+  readonly quarantineItemTtlHours: number;
+  readonly quarantineMaxHeldItems: number;
+}
+
 export interface AdminIntakeQuarantineItemView {
   id: string;
   status: IntakeQuarantineEntry['status'];
@@ -75,6 +99,12 @@ export interface AdminIntakeQuarantineItemView {
   /** Firewall mode at hold time; shadow items were delivered, not withheld. */
   mode: 'shadow' | 'enforce';
   sourceClass: string;
+  /**
+   * Plain-text, content-free attribution (channel label/class, direction, fault
+   * type, screening stage, decision, correlation, authorized display names).
+   * Absent only when no resolver is wired; never carries bodies or raw ids.
+   */
+  attribution?: IntakeCogSecAttribution;
   sourceRiskTier: string;
   originRef: string;
   originDetail?: string;
@@ -232,6 +262,13 @@ export interface AdminIntakeQuarantineServiceDeps {
   confirmTokenTtlMs?: number;
   /** Coarse invalidation signal after a decision is durably applied. */
   onQueueChanged?: () => void;
+  /** Optional plain-text attribution resolvers for item views (waw5q). */
+  attributionResolvers?: IntakeCogSecAttributionResolvers;
+  /** Optional cluster-owned firewall status provider for list responses (waw5q). */
+  firewallStatusProvider?: (
+    heldCount: number,
+    context?: GardenRequestContext,
+  ) => AdminIntakeQuarantineFirewallStatus;
 }
 
 const DEFAULT_CONFIRM_TOKEN_TTL_MS = 2 * 60_000;
@@ -289,7 +326,11 @@ function toIso(atMs: number): string {
   return new Date(atMs).toISOString();
 }
 
-function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQuarantineItemView {
+function toItemView(
+  entry: IntakeQuarantineEntry,
+  nowMs: number,
+  attributionResolvers?: IntakeCogSecAttributionResolvers,
+): AdminIntakeQuarantineItemView {
   // Envelope validation guarantees at least the origin hop.
   const originHop = entry.envelope.provenance[0];
   if (originHop === undefined) {
@@ -347,6 +388,25 @@ function toItemView(entry: IntakeQuarantineEntry, nowMs: number): AdminIntakeQua
       }
       : {}),
     flywheelTarget: deriveFlywheelTarget(entry),
+    ...(attributionResolvers
+      ? {
+        attribution: projectIntakeCogSecAttribution({
+          sourceClass: entry.envelope.sourceClass,
+          ...(entry.sourceChannelId !== undefined ? { sourceChannelId: entry.sourceChannelId } : {}),
+          ...(entry.canonicalContactId !== undefined
+            ? { canonicalContactId: entry.canonicalContactId }
+            : {}),
+          riskLabels: entry.envelope.riskLabels,
+          holdReason: classifyIntakeQuarantineHoldReason(entry.envelope.decision?.reason),
+          ...(entry.envelope.decision?.reason !== undefined
+            ? { screeningDecisionReason: entry.envelope.decision.reason }
+            : {}),
+          status: entry.status,
+          ...(entry.decision ? { operatorAction: entry.decision.action } : {}),
+          ...(entry.cogSecCaseId !== undefined ? { correlationKey: entry.cogSecCaseId } : {}),
+        }, attributionResolvers),
+      }
+      : {}),
     ...(entry.accessAttempts && entry.accessAttempts.length > 0
       ? {
         contentAccessAttempts: entry.accessAttempts.map((attempt) => ({
@@ -368,19 +428,48 @@ const DECISION_LABELS: Record<IntakeQuarantineDecisionAction, string> = {
 export function createAdminIntakeQuarantineReadService(deps: {
   store: Pick<IntakeQuarantineStore, 'list' | 'getById'>;
   now?: () => number;
+  /**
+   * Optional plain-text attribution resolvers. When wired, each item view
+   * carries content-free attribution (channel label/class, direction, fault
+   * type, stage, decision, correlation, authorized display names).
+   */
+  attributionResolvers?: IntakeCogSecAttributionResolvers;
+  /**
+   * Optional shared-gateway firewall status provider. When wired, the list
+   * response carries the cluster-owned mode so an empty queue can never imply
+   * the firewall is off (waw5q). When absent, the status is synthesized from
+   * the held count with mode 'off' and an explicit note.
+   */
+  firewallStatusProvider?: (
+    heldCount: number,
+    context?: GardenRequestContext,
+  ) => AdminIntakeQuarantineFirewallStatus;
 }): AdminIntakeQuarantineReadService {
   const now = deps.now ?? Date.now;
+  const resolvers = deps.attributionResolvers ?? {};
+  const resolveFirewallStatus = deps.firewallStatusProvider
+    ?? ((heldCount): AdminIntakeQuarantineFirewallStatus => ({
+      mode: 'off',
+      queueEmptyDoesNotMeanFirewallOff: true,
+      note: 'Firewall mode is reported by the shared gateway policy; an empty queue never means the firewall is off.',
+      heldCount,
+      quarantineItemTtlHours: 0,
+      quarantineMaxHeldItems: 0,
+    }));
   return {
-    listItems() {
+    listItems(context?) {
       const nowMs = now();
-      return { items: deps.store.list().map((entry) => toItemView(entry, nowMs)) };
+      const entries = deps.store.list();
+      const items = entries.map((entry) => toItemView(entry, nowMs, resolvers));
+      const heldCount = items.filter((item) => item.status === 'held').length;
+      return { items, firewallStatus: resolveFirewallStatus(heldCount, context) };
     },
 
     getItem(id: string): AdminIntakeQuarantineItemDetail | undefined {
       const entry = deps.store.getById(id);
       if (!entry) return undefined;
       return {
-        ...toItemView(entry, now()),
+        ...toItemView(entry, now(), resolvers),
         rawText: entry.rawText,
         ...(entry.safeRepresentationText !== undefined
           ? { safeRepresentationText: entry.safeRepresentationText }
@@ -460,7 +549,14 @@ export function createAdminIntakeQuarantineService(
   };
 
   return {
-    ...createAdminIntakeQuarantineReadService({ store: deps.store, now }),
+    ...createAdminIntakeQuarantineReadService({
+      store: deps.store,
+      now,
+      ...(deps.attributionResolvers ? { attributionResolvers: deps.attributionResolvers } : {}),
+      ...(deps.firewallStatusProvider
+        ? { firewallStatusProvider: deps.firewallStatusProvider }
+        : {}),
+    }),
 
     beginDecision(request, context): AdminIntakeQuarantineBeginResult {
       const entry = deps.store.getById(request.id);
@@ -692,7 +788,7 @@ export function createAdminIntakeQuarantineService(
 
       return {
         ok: true,
-        item: toItemView(decided, atMs),
+        item: toItemView(decided, atMs, deps.attributionResolvers),
         message: `Applied ${request.action} to quarantine item ${entry.id}${flywheelMessage}${redeliveryNote}`,
         cogSecCaseId: event.caseId,
       };

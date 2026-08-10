@@ -156,11 +156,15 @@ export type {
 } from '../../../../src/operator/garden/services/types.js';
 export type {
   AdminIntakeQuarantineDecisionRequest,
+  AdminIntakeQuarantineFirewallStatus,
   AdminIntakeQuarantineFlywheelTarget,
   AdminIntakeQuarantineItemDetail,
   AdminIntakeQuarantineItemView,
   AdminIntakeQuarantineSourceListAction,
   AdminIntakeSourceListMutationInput,
+} from '../../../../src/operator/garden/services/types.js';
+export type {
+  FleetCogSecOverview,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
   AdminDriftReviewListData,

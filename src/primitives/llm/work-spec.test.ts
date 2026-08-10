@@ -179,7 +179,7 @@ const CALL_SITES: CallSiteFixture[] = [
     name: 'memory.profile_synthesis',
     purpose: 'memory',
     correlation: {
-      requestId: 'profile-synthesis:c:1',
+      requestId: 'recent-contact-shape-synthesis:c:1',
       channelId: 'ch-1',
       callType: 'memory',
       purpose: 'memory.profile_synthesis',

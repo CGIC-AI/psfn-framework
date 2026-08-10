@@ -858,7 +858,7 @@ remains inspectable; a model must never silently overwrite an explicit
 assertion. Unknown assertion categories reject until their schema, cardinality,
 sensitivity, and retrieval policy are defined.
 
-Core already has contact profiles, relational memory, a social graph, and a
+Core already has typed biographical claims, freshness-bound Recent Contact Shapes, relational memory, a social graph, and a
 personal wiki. Those are shipped ingredients, but the unified Partner Model and
 Partner Assertion store are target work. Contacts remain identity and routing
 records rather than becoming an unbounded fact bag.

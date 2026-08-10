@@ -714,15 +714,42 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   // awaiting the nightly candidate-then-consolidate pass. The status CHECK on
   // l01_episodes already admits 'candidate'.
   `CREATE INDEX IF NOT EXISTS idx_l01_episodes_lifecycle_candidate ON l01_episodes(started_at, ended_at) WHERE status = 'candidate';`,
+  // o61vb.9 cutover: the former mixed-authority contact profile table becomes
+  // an explicitly non-authoritative Recent Contact Shape. Existing prose rows
+  // migrate as schema version 0 and are never loaded; only a rebuild from live,
+  // authorized source memories writes version 1 with a bounded fresh_until.
   `
-  CREATE TABLE IF NOT EXISTS contact_profiles (
-    contact_id TEXT PRIMARY KEY,
-    summary_text TEXT NOT NULL,
-    source_memory_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    confidence_score DOUBLE PRECISION NOT NULL,
-    novelty_score DOUBLE PRECISION NOT NULL,
-    updated_at BIGINT NOT NULL
-  );
+  DO $$
+  BEGIN
+    IF to_regclass('recent_contact_shapes') IS NULL THEN
+      IF to_regclass('contact_profiles') IS NOT NULL THEN
+        ALTER TABLE contact_profiles RENAME TO recent_contact_shapes;
+      ELSE
+        CREATE TABLE recent_contact_shapes (
+          contact_id TEXT PRIMARY KEY,
+          summary_text TEXT NOT NULL,
+          source_memory_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+          confidence_score DOUBLE PRECISION NOT NULL,
+          novelty_score DOUBLE PRECISION NOT NULL,
+          updated_at BIGINT NOT NULL
+        );
+      END IF;
+    END IF;
+  END $$;
+  ALTER TABLE recent_contact_shapes
+    ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE recent_contact_shapes
+    ADD COLUMN IF NOT EXISTS fresh_until BIGINT;
+  UPDATE recent_contact_shapes
+    SET fresh_until = updated_at
+    WHERE fresh_until IS NULL;
+  ALTER TABLE recent_contact_shapes
+    ALTER COLUMN fresh_until SET NOT NULL;
+  ALTER TABLE recent_contact_shapes
+    DROP CONSTRAINT IF EXISTS recent_contact_shapes_schema_version_check;
+  ALTER TABLE recent_contact_shapes
+    ADD CONSTRAINT recent_contact_shapes_schema_version_check
+    CHECK (schema_version IN (0, 1));
   `,
 ];
 

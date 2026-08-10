@@ -10,7 +10,7 @@ export const PRIVACY_BREAK_GLASS_REASON_CATEGORIES = [
 
 export type PrivacyBreakGlassReasonCategory =
   typeof PRIVACY_BREAK_GLASS_REASON_CATEGORIES[number];
-export type PrivacyBreakGlassResourceKind = 'memory' | 'profile' | 'journal';
+export type PrivacyBreakGlassResourceKind = 'memory' | 'recent_contact_shape' | 'journal';
 
 export interface PrivacyBreakGlassConfirmRequest {
   reasonCategory: PrivacyBreakGlassReasonCategory;
@@ -124,7 +124,7 @@ export function privacyBreakGlassResourceKindForRoute(
   }
   if (routeId === 'POST /api/admin/privacy-break-glass/profile/:id/confirm'
     || routeId === 'POST /api/admin/privacy-break-glass/profile/:id/decide') {
-    return 'profile';
+    return 'recent_contact_shape';
   }
   if (routeId === 'POST /api/admin/privacy-break-glass/journal/:id/confirm'
     || routeId === 'POST /api/admin/privacy-break-glass/journal/:id/decide') {

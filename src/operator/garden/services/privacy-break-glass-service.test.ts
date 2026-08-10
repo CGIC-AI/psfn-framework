@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
@@ -135,20 +135,22 @@ function context(input: {
 function fixture() {
   let currentMemory = memory();
   let currentClassification = classification();
-  const profile: ContactProfileArtifact = {
+  const profile: RecentContactShapeArtifact = {
+    schemaVersion: 1,
     contactId: 'contact-b',
     summary: 'private synthesized profile',
     sourceMemoryIds: [MEMORY_ID],
     confidenceScore: 0.9,
     noveltyScore: 0.3,
     updatedAt: NOW,
+    freshUntil: NOW + 60_000,
   };
   const store = {
     getById: vi.fn(async () => currentMemory),
     getMemorySubjectClassification: vi.fn(async () => currentClassification),
-    getContactProfile: vi.fn(async () => profile),
+    getRecentContactShape: vi.fn(async () => profile),
   } as unknown as Pick<MemoryStorePort,
-    'getById' | 'getMemorySubjectClassification' | 'getContactProfile'>;
+    'getById' | 'getMemorySubjectClassification' | 'getRecentContactShape'>;
   let journalEntries: ReflectionJournalEntry[] = [{
     id: 'reflection-1',
     templateId: 'musing',
@@ -233,7 +235,7 @@ describe('AdminPrivacyBreakGlassService', () => {
       }),
     })).resolves.toMatchObject({ ok: false, code: 'resource_unavailable' });
     await expect(service.begin({
-      resourceKind: 'profile',
+      resourceKind: 'recent_contact_shape',
       resourceId: 'contact-a',
       request: REASON,
       context: context({ kind: 'profile', phase: 'confirm', resourceId: 'contact-a' }),
@@ -473,17 +475,20 @@ describe('AdminPrivacyBreakGlassService', () => {
   it('supports the same exact two-step binding for a non-actor profile', async () => {
     const { service } = fixture();
     const begun = await service.begin({
-      resourceKind: 'profile', resourceId: 'contact-b', request: REASON,
+      resourceKind: 'recent_contact_shape', resourceId: 'contact-b', request: REASON,
       context: context({ kind: 'profile', phase: 'confirm', resourceId: 'contact-b' }),
     });
     if (!begun.ok) throw new Error('expected profile confirmation');
     await expect(service.decide({
-      resourceKind: 'profile', resourceId: 'contact-b',
+      resourceKind: 'recent_contact_shape', resourceId: 'contact-b',
       request: { ...REASON, confirmToken: begun.confirmToken },
       context: context({ kind: 'profile', phase: 'decide', resourceId: 'contact-b' }),
     })).resolves.toMatchObject({
       ok: true,
-      disclosure: { kind: 'profile', profile: { contactId: 'contact-b' } },
+      disclosure: {
+        kind: 'recent_contact_shape',
+        recentContactShape: { contactId: 'contact-b' },
+      },
     });
   });
 });

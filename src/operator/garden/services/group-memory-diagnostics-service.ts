@@ -32,7 +32,7 @@ import type {
   AdminGroupMemoryCandidateSpanView,
   AdminGroupMemoryChannelDiagnostics,
   AdminGroupMemoryContactCoverage,
-  AdminGroupMemoryContactProfileStatus,
+  AdminGroupMemoryRecentContactShapeStatus,
   AdminGroupMemoryDiagnosticsListData,
   AdminGroupMemoryExtractionTelemetry,
   AdminGroupMemoryService,
@@ -350,9 +350,9 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     const totalAttributedMemoryCount = params.memories
       .filter(memory => extractMemoryContactIds(memory).includes(params.contactId))
       .length;
-    const profile = await params.profileStore.getContactProfile(params.contactId);
-    const profileStatus = resolveProfileStatus({
-      profilePresent: Boolean(profile),
+    const recentContactShape = await params.profileStore.getRecentContactShape(params.contactId);
+    const recentContactShapeStatus = resolveRecentContactShapeStatus({
+      recentContactShapePresent: Boolean(recentContactShape),
       attributedMemoryCount: totalAttributedMemoryCount,
       recentMessageCount: params.recentMessageCount,
       minSourceMemories: params.settings.profileRefresh.minSourceMemories,
@@ -368,14 +368,18 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
       subjectMemoryCount,
       routedMemoryCount,
       totalAttributedMemoryCount,
-      profileStatus,
-      ...(profile ? { profileSourceMemoryCount: profile.sourceMemoryIds.length } : {}),
-      ...(profile ? { profileUpdatedAt: profile.updatedAt } : {}),
-      ...(profileStatus === 'insufficient_source_memories'
+      recentContactShapeStatus,
+      ...(recentContactShape
+        ? { recentContactShapeSourceMemoryCount: recentContactShape.sourceMemoryIds.length }
+        : {}),
+      ...(recentContactShape
+        ? { recentContactShapeUpdatedAt: recentContactShape.updatedAt }
+        : {}),
+      ...(recentContactShapeStatus === 'insufficient_source_memories'
         ? { skipReason: 'insufficient_source_memories' }
         : {}),
-      ...(profileStatus === 'profile_missing'
-        ? { skipReason: 'profile_refresh_not_observed_or_pending' }
+      ...(recentContactShapeStatus === 'recent_contact_shape_missing'
+        ? { skipReason: 'recent_contact_shape_refresh_not_observed_or_pending' }
         : {}),
     };
   }
@@ -418,14 +422,16 @@ function extractMemoryContactIds(memory: PurrMemory): string[] {
     .filter((contactId, index, all) => all.indexOf(contactId) === index);
 }
 
-function resolveProfileStatus(params: {
-  profilePresent: boolean;
+function resolveRecentContactShapeStatus(params: {
+  recentContactShapePresent: boolean;
   attributedMemoryCount: number;
   recentMessageCount: number;
   minSourceMemories: number;
-}): AdminGroupMemoryContactProfileStatus {
-  if (params.profilePresent) return 'profile_ready';
-  if (params.attributedMemoryCount >= params.minSourceMemories) return 'profile_missing';
+}): AdminGroupMemoryRecentContactShapeStatus {
+  if (params.recentContactShapePresent) return 'recent_contact_shape_ready';
+  if (params.attributedMemoryCount >= params.minSourceMemories) {
+    return 'recent_contact_shape_missing';
+  }
   if (params.attributedMemoryCount > 0 || params.recentMessageCount > 0) {
     return 'insufficient_source_memories';
   }

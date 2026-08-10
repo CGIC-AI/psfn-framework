@@ -49,6 +49,9 @@ import {
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type {
+  DisclosureSourceContribution,
+} from '../../../cogsec/disclosure/contracts.js';
+import type {
   DisclosureMemorySource,
   DisclosureWikiSource,
 } from '../../../cogsec/disclosure/generation-lineage.js';
@@ -59,6 +62,36 @@ const log = createComponentLogger('SubstrateAgent');
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
+
+interface AtomicBiographicalProjection {
+  readonly promptSection: string;
+  readonly disclosureSources: readonly DisclosureSourceContribution[];
+  readonly admittedClaimIds: readonly string[];
+  readonly withheldCount: number;
+}
+
+/** Fail closed unless rendered claim ids and CogSec contributions are 1:1. */
+export function enforceAtomicBiographicalProjection(
+  projection: AtomicBiographicalProjection,
+): AtomicBiographicalProjection {
+  const claimIds = projection.admittedClaimIds.map(id => id.trim());
+  const expectedRefs = new Set(claimIds.map(id => `biographical:${id}`));
+  const actualRefs = new Set(projection.disclosureSources.map(source => source.ref));
+  const promptPresent = projection.promptSection.trim().length > 0;
+  const atomic = claimIds.every(Boolean)
+    && new Set(claimIds).size === claimIds.length
+    && actualRefs.size === projection.disclosureSources.length
+    && expectedRefs.size === actualRefs.size
+    && [...expectedRefs].every(ref => actualRefs.has(ref))
+    && (claimIds.length > 0 ? promptPresent : !promptPresent);
+  if (atomic) return projection;
+  return {
+    promptSection: '',
+    disclosureSources: [],
+    admittedClaimIds: [],
+    withheldCount: projection.withheldCount + Math.max(1, claimIds.length),
+  };
+}
 
 function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
   return authorContext.actorKind;
@@ -111,6 +144,8 @@ export interface PreTurnComputationResult {
   artifactSensitivitySources: ArtifactSensitivitySource[];
   /** Content-free outbound-disclosure facts for admitted memories (bible §9.2, jp36.1.1.2). */
   disclosureMemorySources: DisclosureMemorySource[];
+  /** Atomic CogSec contributions for every rendered durable biography claim. */
+  disclosureBiographicalSources: DisclosureSourceContribution[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   /**
    * E8.3: supplemental wiki RAG block. Empty unless wiki retrieval is wired,
@@ -941,8 +976,6 @@ export async function computePreTurnState(input: {
     prompt: promptSnapshot,
     sessionContext: sessionContextSnapshot,
   };
-  observability.emitTurnSnapshotInBackground(turnSnapshot);
-
   const memoryStageStart = Date.now();
   const preTurnInternalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
     message,
@@ -955,10 +988,44 @@ export async function computePreTurnState(input: {
     conversationScope,
     capturedSessionReads: sessionReads,
   });
+  const rawBiographicalProjection = !bypassMemoryForVisionTurn
+    && memoryProvider?.projectBiographicalContext
+    ? await memoryProvider.projectBiographicalContext({
+      conversationScope,
+      currentAuthor: authorContext.canonicalContactKey
+        ? {
+          status: 'verified',
+          subject: {
+            kind: 'contact',
+            contactId: authorContext.canonicalContactKey,
+            subjectVersion: 1,
+          },
+          trustLevel,
+        }
+        : { status: 'missing' },
+      ...(message.routing?.addressing
+        ? { messageAddressing: message.routing.addressing }
+        : {}),
+    })
+    : {
+      promptSection: '',
+      disclosureSources: [],
+      admittedClaimIds: [],
+      withheldCount: 0,
+    };
+  const biographicalProjection = enforceAtomicBiographicalProjection(rawBiographicalProjection);
   const memoryContextBlock = bypassMemoryForVisionTurn
     ? ''
-    : activeMemoryContext?.contextBlock ?? '';
+    : [biographicalProjection.promptSection, activeMemoryContext?.contextBlock ?? '']
+      .filter(Boolean)
+      .join('\n\n');
   const memoryContextChars = memoryContextBlock.length;
+  turnSnapshot.biographicalProjection = {
+    admittedClaimIds: [...biographicalProjection.admittedClaimIds],
+    withheldCount: biographicalProjection.withheldCount,
+    contextChars: biographicalProjection.promptSection.length,
+  };
+  observability.emitTurnSnapshotInBackground(turnSnapshot);
   // E8.3: supplemental wiki RAG resolved AFTER memory context above. Memory
   // content/budget is already fixed at this point, so wiki can never displace
   // it; wiki carries its own bounded, config-owned token cap and fails closed
@@ -1067,6 +1134,21 @@ export async function computePreTurnState(input: {
     memoryContextChars,
     artifactSensitivitySources: activeMemoryContext?.artifactSensitivitySources?.map(source => ({ ...source })) ?? [],
     disclosureMemorySources: activeMemoryContext?.disclosureMemorySources?.map(source => ({ ...source })) ?? [],
+    disclosureBiographicalSources: biographicalProjection.disclosureSources.map(source => ({
+      ...source,
+      permittedDestinations: source.permittedDestinations.map(destination => ({
+        ...destination,
+        ...(destination.channelIds ? { channelIds: [...destination.channelIds] } : {}),
+        ...(destination.contactIds ? { contactIds: [...destination.contactIds] } : {}),
+        ...(destination.channelEpochs
+          ? { channelEpochs: { ...destination.channelEpochs } }
+          : {}),
+      })),
+      ...(source.subjectContactIds
+        ? { subjectContactIds: [...source.subjectContactIds] }
+        : {}),
+      ...(source.provenanceRefs ? { provenanceRefs: [...source.provenanceRefs] } : {}),
+    })),
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     wikiContextBlock,
     disclosureWikiSources: wikiContext?.disclosureWikiSources?.map(source => ({ ...source })) ?? [],

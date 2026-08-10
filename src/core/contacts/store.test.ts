@@ -500,7 +500,7 @@ describe('Postgres contact store behavior', () => {
   });
 
   describe('mergeContacts', () => {
-    it('remaps identities, activity, memories, and profiles to target', async () => {
+    it('remaps identities, activity, and memories while retiring source recent shape', async () => {
       const target = await store.upsert({
         displayName: 'Target',
         discordUserId: 'target-discord-id',
@@ -513,7 +513,7 @@ describe('Postgres contact store behavior', () => {
       });
 
       pool.l2MemoryContacts.set('memory-1', source.id);
-      pool.contactProfiles.set(source.id, { nickname: 'source' });
+      pool.recentContactShapes.set(source.id, { nickname: 'source' });
       await store.recordChannelActivity(target.id, 'discord', 'guild:shared');
       await store.recordChannelActivity(source.id, 'discord', 'guild:shared');
       await store.recordChannelActivity(source.id, 'api', 'session:9');
@@ -556,7 +556,8 @@ describe('Postgres contact store behavior', () => {
       expect(sourceIdentityResolved?.id).toBe(target.id);
 
       expect(pool.l2MemoryContacts.get('memory-1')).toBe(target.id);
-      expect(pool.contactProfiles.has(target.id)).toBe(true);
+      expect(pool.recentContactShapes.has(source.id)).toBe(false);
+      expect(pool.recentContactShapes.has(target.id)).toBe(false);
 
       const activityRows = [...pool.contactChannelActivity.values()]
         .filter(row => row.contact_id === target.id)

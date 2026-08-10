@@ -554,7 +554,7 @@ describe('MemoryPresentationProfile-driven rendering', () => {
     const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
     // Move relevant memories ahead of the withheld note.
     profile.sectionOrder = [
-      'core_profile',
+      'recent_contact_shape',
       'relationship_context',
       'emotional_continuity_snapshot',
       'cross_session_emotional_continuity',

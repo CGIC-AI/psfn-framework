@@ -17,7 +17,7 @@ import {
 } from '../../system/trust/runtime-policy.js';
 import { getRuntimeChannelEnvelopeLabelsRevision } from '../../system/trust/runtime-channel-labels.js';
 import type {
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   EmbeddingSearchAuthorization,
   MemoryStorePort,
 } from './memory-store-port.js';
@@ -57,7 +57,7 @@ import {
   type CostTelemetryPort,
 } from '../../shared/telemetry/cost-telemetry-port.js';
 import {
-  cloneContactProfileArtifact,
+  cloneRecentContactShapeArtifact,
   cloneEmotionalSnapshot,
   cloneMemory,
   cloneScoredMemory,
@@ -78,8 +78,8 @@ import {
   type RetrievalRoomVisibilityContext,
 } from './retrieval/access.js';
 import {
-  type ContactProfileAccessResult,
-  resolveContactProfileAccess as resolveContactProfileAccessWithDeps,
+  type RecentContactShapeAccessResult,
+  resolveRecentContactShapeAccess as resolveRecentContactShapeAccessWithDeps,
   resolveRoomVisibilityContext as resolveRoomVisibilityContextWithDeps,
 } from './retrieval/access-context.js';
 import { resolveAuthorizedRetrievalAccessScope } from './retrieval/access-scope.js';
@@ -141,7 +141,7 @@ import {
   type SharedBackgroundResult,
 } from './retrieval/shared-background.js';
 import {
-  collectContactProfileProvenanceRefs,
+  collectRecentContactShapeProvenanceRefs,
   mergeProvenanceRefs,
 } from './retrieval/provenance.js';
 import {
@@ -260,6 +260,7 @@ export class MemoryRetriever implements MemoryProvider {
   private fallbackMemoryRetrievalPolicy: MemoryRetrievalPolicy | undefined;
   private fallbackMemoryPresentationProfile: MemoryPresentationProfile | undefined;
   private enforceSubjectAuthorization: boolean;
+  private biographicalProjection: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -271,6 +272,7 @@ export class MemoryRetriever implements MemoryProvider {
     episodicStore?: EpisodicRetrievalStore | null,
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
     enforceSubjectAuthorization = false,
+    biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -304,8 +306,24 @@ export class MemoryRetriever implements MemoryProvider {
     this.episodicStore = episodicStore ?? null;
     this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.enforceSubjectAuthorization = enforceSubjectAuthorization;
+    this.biographicalProjection = biographicalProjection ?? null;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
+  }
+
+  async projectBiographicalContext(
+    request: Parameters<NonNullable<MemoryProvider['projectBiographicalContext']>>[0],
+  ): Promise<Awaited<ReturnType<NonNullable<MemoryProvider['projectBiographicalContext']>>>> {
+    const project = this.biographicalProjection?.projectBiographicalContext;
+    if (!project) {
+      return {
+        promptSection: '',
+        disclosureSources: [],
+        admittedClaimIds: [],
+        withheldCount: 0,
+      };
+    }
+    return await project.call(this.biographicalProjection, request);
   }
 
   /**
@@ -749,8 +767,8 @@ export class MemoryRetriever implements MemoryProvider {
     });
   }
 
-  private async resolveContactProfileAccess(
-    profile: ContactProfileArtifact | undefined,
+  private async resolveRecentContactShapeAccess(
+    recentContactShape: RecentContactShapeArtifact | undefined,
     options: {
       accessScope?: RetrievalAccessScope;
       trustLevel: TrustLevel;
@@ -762,11 +780,11 @@ export class MemoryRetriever implements MemoryProvider {
       roomVisibility?: RetrievalRoomVisibilityContext;
     },
     memoryStore: MemoryStorePort = this.memoryStore,
-  ): Promise<ContactProfileAccessResult> {
-    return resolveContactProfileAccessWithDeps({
+  ): Promise<RecentContactShapeAccessResult> {
+    return resolveRecentContactShapeAccessWithDeps({
       memoryStore,
       sessionQuarantineFilter: this.sessionQuarantineFilter,
-      profile,
+      recentContactShape,
       options,
     });
   }
@@ -824,8 +842,8 @@ export class MemoryRetriever implements MemoryProvider {
         resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
           this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
         ),
-        resolveContactProfileAccess: (profile, options) => (
-          this.resolveContactProfileAccess(profile, options, productMemoryStore)
+        resolveRecentContactShapeAccess: (shape, options) => (
+          this.resolveRecentContactShapeAccess(shape, options, productMemoryStore)
         ),
         resolveEmotionalSnapshot: contactId => resolveEmotionalSnapshot(this.contactStore, contactId),
         collectContactEmotionalMemories: contactId => collectContactEmotionalMemories(productMemoryStore, contactId),
@@ -843,7 +861,8 @@ export class MemoryRetriever implements MemoryProvider {
 
   private finalizeRetrievalPromptBlock(input: {
     activeContextTarget?: ActiveMemoryRefreshTarget;
-    profile?: ContactProfileArtifact;
+    recentContactShape?: RecentContactShapeArtifact;
+    recentContactShapeSourceMemories?: PurrMemory[];
     selectedForPrompt?: ScoredMemory[];
     emotionalSnapshot?: TurnMemorySnapshot['emotionalSnapshot'];
     emotionalContinuityMemories?: PurrMemory[];
@@ -947,7 +966,7 @@ export class MemoryRetriever implements MemoryProvider {
       visibilityScope,
       operatorApproval,
       provenanceRefs: [],
-      profileIncluded: false,
+      recentContactShapeIncluded: false,
       emotionalSnapshotIncluded: false,
       emotionalContinuityCount: 0,
       embeddingCalls: 0,
@@ -958,12 +977,12 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.stageTimingsMs.total = Math.max(0, performance.now() - retrievalStartedAt);
       await this.emitRetrievalTelemetry(telemetry);
     };
-    const rawProfile = turnSnapshot?.profile
-      ? cloneContactProfileArtifact(turnSnapshot.profile)
+    const rawRecentContactShape = turnSnapshot?.recentContactShape
+      ? cloneRecentContactShapeArtifact(turnSnapshot.recentContactShape)
       : canonicalContactId
-        ? await productMemoryStore.getContactProfile(canonicalContactId)
+        ? await productMemoryStore.getRecentContactShape(canonicalContactId)
         : undefined;
-    const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
+    const shapeAccess = await this.resolveRecentContactShapeAccess(rawRecentContactShape, {
       accessScope: effectiveAccessScope,
       trustLevel: effectiveTrust,
       channelPrivacy,
@@ -973,9 +992,10 @@ export class MemoryRetriever implements MemoryProvider {
       operatorApproval,
       roomVisibility,
     }, productMemoryStore);
-    const profile = profileAccess.profile;
-    telemetry.profileIncluded = !!profile;
-    telemetry.provenanceRefs = collectContactProfileProvenanceRefs(profile);
+    const recentContactShape = shapeAccess.recentContactShape;
+    const recentContactShapeSourceMemories = shapeAccess.authorizedSourceMemories;
+    telemetry.recentContactShapeIncluded = !!recentContactShape;
+    telemetry.provenanceRefs = collectRecentContactShapeProvenanceRefs(recentContactShape);
     const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
       ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
       : canonicalContactId
@@ -1010,7 +1030,7 @@ export class MemoryRetriever implements MemoryProvider {
       const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
       let withheldSummary = mergeMemoryWithheldSummaries(
         snapshotWithheldSummary,
-        profileAccess.withheldSummary,
+        shapeAccess.withheldSummary,
         contactQuarantine.summary,
         proactiveQuarantine.summary,
       );
@@ -1058,7 +1078,8 @@ export class MemoryRetriever implements MemoryProvider {
       await emitTelemetry();
       return this.finalizeRetrievalPromptBlock({
         activeContextTarget,
-        profile,
+        recentContactShape,
+        recentContactShapeSourceMemories,
         emotionalSnapshot,
         emotionalContinuityMemories: fallbackEmotionalContinuity,
         withheldSummary,
@@ -1172,7 +1193,8 @@ export class MemoryRetriever implements MemoryProvider {
             await emitTelemetry();
             return this.finalizeRetrievalPromptBlock({
               activeContextTarget,
-              profile,
+              recentContactShape,
+              recentContactShapeSourceMemories,
               emotionalSnapshot,
               emotionalContinuityMemories: fallbackEmotionalContinuity,
               withheldSummary,
@@ -1192,7 +1214,8 @@ export class MemoryRetriever implements MemoryProvider {
           await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
-            profile,
+            recentContactShape,
+            recentContactShapeSourceMemories,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
@@ -1303,7 +1326,8 @@ export class MemoryRetriever implements MemoryProvider {
           await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
-            profile,
+            recentContactShape,
+            recentContactShapeSourceMemories,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
@@ -1328,7 +1352,8 @@ export class MemoryRetriever implements MemoryProvider {
         });
         return this.finalizeRetrievalPromptBlock({
           activeContextTarget,
-          profile,
+          recentContactShape,
+          recentContactShapeSourceMemories,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
@@ -1427,7 +1452,8 @@ export class MemoryRetriever implements MemoryProvider {
           await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
-            profile,
+            recentContactShape,
+            recentContactShapeSourceMemories,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
@@ -1445,7 +1471,8 @@ export class MemoryRetriever implements MemoryProvider {
         });
         return this.finalizeRetrievalPromptBlock({
           activeContextTarget,
-          profile,
+          recentContactShape,
+          recentContactShapeSourceMemories,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
@@ -1636,7 +1663,8 @@ export class MemoryRetriever implements MemoryProvider {
       await emitTelemetry();
       return this.finalizeRetrievalPromptBlock({
         activeContextTarget,
-        profile,
+        recentContactShape,
+        recentContactShapeSourceMemories,
         selectedForPrompt,
         emotionalSnapshot,
         emotionalContinuityMemories,

@@ -1,16 +1,18 @@
-import type { ContactProfileArtifact } from '../memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../memory-store-port.js';
 
-export function collectContactProfileProvenanceRefs(profile: ContactProfileArtifact | undefined): string[] {
-  if (!profile) return [];
+export function collectRecentContactShapeProvenanceRefs(
+  shape: RecentContactShapeArtifact | undefined,
+): string[] {
+  if (!shape) return [];
   const refs = new Set<string>();
-  const contactId = profile.contactId.trim();
+  const contactId = shape.contactId.trim();
   if (contactId) {
-    refs.add(`contact_profile:${contactId}`);
+    refs.add(`recent_contact_shape:${contactId}`);
   }
-  for (const sourceMemoryId of profile.sourceMemoryIds) {
+  for (const sourceMemoryId of shape.sourceMemoryIds) {
     const normalized = sourceMemoryId.trim();
     if (normalized) {
-      refs.add(`contact_profile_source_memory:${normalized}`);
+      refs.add(`recent_contact_shape_source_memory:${normalized}`);
     }
   }
   return [...refs];

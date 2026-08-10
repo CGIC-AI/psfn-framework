@@ -235,7 +235,7 @@ function buildExtractionOptions(params: {
   options: ExtractionRunOptions;
   processFact: ReturnType<typeof vi.fn>;
   emitExtractionEnd: ReturnType<typeof vi.fn>;
-  maybeRefreshContactProfile: ReturnType<typeof vi.fn>;
+  maybeRefreshRecentContactShape: ReturnType<typeof vi.fn>;
   llmComplete: ReturnType<typeof vi.fn>;
 } {
   let memoryId = 0;
@@ -247,14 +247,14 @@ function buildExtractionOptions(params: {
     };
   });
   const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
-  const maybeRefreshContactProfile = vi.fn();
+  const maybeRefreshRecentContactShape = vi.fn();
   const llmComplete = vi.fn().mockResolvedValue({ content: params.llmResponse });
   const groupMemory = params.groupMemory ?? groupSettings();
 
   return {
     processFact,
     emitExtractionEnd,
-    maybeRefreshContactProfile,
+    maybeRefreshRecentContactShape,
     llmComplete,
     options: {
       channelId: CHANNEL_ID,
@@ -297,7 +297,7 @@ function buildExtractionOptions(params: {
       )),
       recordExtractionMarker: vi.fn(),
       maybePersistEmotionalState: vi.fn(),
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
     },
   };
 }
@@ -399,7 +399,7 @@ describe('group-room memory conformance', () => {
     );
     expect(salience.telemetry.skipReasons.low_signal).toBeGreaterThan(0);
 
-    const { options, processFact, emitExtractionEnd, maybeRefreshContactProfile } =
+    const { options, processFact, emitExtractionEnd, maybeRefreshRecentContactShape } =
       buildExtractionOptions({
         entries: plan.chunks[0].entries,
         canonicalContactId: 'contact-dragon',
@@ -486,7 +486,7 @@ describe('group-room memory conformance', () => {
         sourceSpeakerName: 'Iki',
       }),
     );
-    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2]).sort()).toEqual([
+    expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2]).sort()).toEqual([
       'contact-dragon',
       'contact-iki',
       'contact-vega',
@@ -948,7 +948,7 @@ describe('group-room memory conformance', () => {
       resolveCoveredUpToMessageId: vi.fn().mockReturnValue(3),
       recordExtractionMarker: vi.fn(),
       maybePersistEmotionalState: vi.fn(),
-      maybeRefreshContactProfile: vi.fn(),
+      maybeRefreshRecentContactShape: vi.fn(),
     };
 
     await runExtractionOrchestration(options);

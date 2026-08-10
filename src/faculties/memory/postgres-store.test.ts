@@ -483,7 +483,7 @@ class FakeMemoryPool {
       return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
-    if (normalized.includes('from contact_profiles')) {
+    if (normalized.includes('from recent_contact_shapes')) {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 

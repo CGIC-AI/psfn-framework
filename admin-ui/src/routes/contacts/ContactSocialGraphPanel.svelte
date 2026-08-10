@@ -124,13 +124,13 @@
               </div>
             </div>
 
-            {#if connection.neighbor.profileSummary}
+            {#if connection.neighbor.recentContactShapeSummary}
               <p class="mt-2 text-sm text-shadow-700 leading-relaxed italic">
-                {connection.neighbor.profileSummary}
+                {connection.neighbor.recentContactShapeSummary}
               </p>
-              {#if connection.neighbor.profileUpdatedAt}
+              {#if connection.neighbor.recentContactShapeUpdatedAt}
                 <p class="mt-1 text-xs text-shadow-500">
-                  Profile updated {formatTimestamp(connection.neighbor.profileUpdatedAt)}
+                  Recent shape updated {formatTimestamp(connection.neighbor.recentContactShapeUpdatedAt)}
                 </p>
               {/if}
             {/if}

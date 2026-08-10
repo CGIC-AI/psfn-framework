@@ -32,7 +32,7 @@ import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
-  PROFILE_SYNTHESIS_PROMPT_KEY,
+  RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
   getDefaultPromptText,
   PromptRegistryStore,
 } from '../../core/identity/prompt-registry.js';
@@ -608,9 +608,9 @@ describe('AdminServer JSON API routes', () => {
         checksum: 'seed',
       },
       {
-        key: PROFILE_SYNTHESIS_PROMPT_KEY,
-        text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
-        description: 'Canonical contact profile synthesis prompt.',
+        key: RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
+        text: getDefaultPromptText(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY),
+        description: 'Canonical Recent Contact Shape synthesis prompt.',
         consumers: ['src/memory/extraction.ts'],
         version: 1,
         updatedAt: new Date().toISOString(),

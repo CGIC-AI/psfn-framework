@@ -3,7 +3,7 @@ import type { Contact } from '../../../core/contacts/types.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
-import type { MemoryStorePort, ContactProfileArtifact } from '../../../faculties/memory/memory-store-port.js';
+import type { MemoryStorePort, RecentContactShapeArtifact } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import {
@@ -134,11 +134,11 @@ function makeContactStore(contacts: Contact[]): ContactStorePort {
 
 function makeMemoryStore(
   memories: PurrMemory[],
-  profiles: Record<string, ContactProfileArtifact | undefined>,
+  profiles: Record<string, RecentContactShapeArtifact | undefined>,
 ): MemoryStorePort {
   return {
     getAllActiveMemories: vi.fn(async () => memories),
-    getContactProfile: vi.fn(async contactId => profiles[contactId]),
+    getRecentContactShape: vi.fn(async contactId => profiles[contactId]),
   } as unknown as MemoryStorePort;
 }
 
@@ -161,12 +161,14 @@ describe('AdminGroupMemoryDataService', () => {
       makeMemory('mem-alice', { contactId: 'contact-alice' }),
       makeMemory('mem-bob', { contactId: 'contact-bob' }),
     ], Object.fromEntries(['alice', 'bob'].map(name => [`contact-${name}`, {
+      schemaVersion: 1,
       contactId: `contact-${name}`,
       summary: `${name} private profile`,
       sourceMemoryIds: [`mem-${name}`],
       confidenceScore: 0.9,
       noveltyScore: 0.8,
       updatedAt: 2_000,
+      freshUntil: 3_000,
     }])));
     const service = new AdminGroupMemoryDataService({
       groupMemory: makeSettings(),
@@ -188,10 +190,10 @@ describe('AdminGroupMemoryDataService', () => {
     const alice = diagnostics?.coverage.perContact.find(item => item.contactId === 'contact-alice');
     const bob = diagnostics?.coverage.perContact.find(item => item.contactId === 'contact-bob');
 
-    expect(alice).toMatchObject({ profileStatus: 'profile_ready', profileSourceMemoryCount: 1 });
-    expect(bob?.profileStatus).not.toBe('profile_ready');
-    expect(bob).not.toHaveProperty('profileSourceMemoryCount');
-    expect(bob).not.toHaveProperty('profileUpdatedAt');
+    expect(alice).toMatchObject({ recentContactShapeStatus: 'recent_contact_shape_ready', recentContactShapeSourceMemoryCount: 1 });
+    expect(bob?.recentContactShapeStatus).not.toBe('recent_contact_shape_ready');
+    expect(bob).not.toHaveProperty('recentContactShapeSourceMemoryCount');
+    expect(bob).not.toHaveProperty('recentContactShapeUpdatedAt');
   });
 
   it('exposes resolved group-memory diagnostics without raw transcript or memory text', async () => {
@@ -231,12 +233,14 @@ describe('AdminGroupMemoryDataService', () => {
       sessionStore: makeSessionStore(entries),
       memoryStore: makeMemoryStore(memories, {
         'contact-alice': {
+          schemaVersion: 1,
           contactId: 'contact-alice',
           summary: 'Alice has a concise profile.',
           sourceMemoryIds: ['mem-alice'],
           confidenceScore: 0.9,
           noveltyScore: 0.8,
           updatedAt: 2_000,
+          freshUntil: 3_000,
         },
       }),
       contactStore: makeContactStore(contacts),
@@ -308,12 +312,12 @@ describe('AdminGroupMemoryDataService', () => {
     expect(diagnostics?.coverage.perContact).toEqual(expect.arrayContaining([
       expect.objectContaining({
         contactId: 'contact-alice',
-        profileStatus: 'profile_ready',
+        recentContactShapeStatus: 'recent_contact_shape_ready',
         totalAttributedMemoryCount: 1,
       }),
       expect.objectContaining({
         contactId: 'contact-bob',
-        profileStatus: 'insufficient_source_memories',
+        recentContactShapeStatus: 'insufficient_source_memories',
         totalAttributedMemoryCount: 1,
       }),
     ]));

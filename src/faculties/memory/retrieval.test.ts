@@ -57,7 +57,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     searchByText: vi.fn().mockReturnValue([]),
     updateMemory: vi.fn(),
-    getContactProfile: vi.fn().mockReturnValue(undefined),
+    getRecentContactShape: vi.fn().mockReturnValue(undefined),
     getById: vi.fn().mockImplementation((id: string) => memories.find(memory => memory.id === id)),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
@@ -197,7 +197,7 @@ describe('MemoryRetriever active memory context', () => {
       searchByEmbedding: rawSearch,
       searchByText: rawSearch,
       updateMemory: rawSearch,
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getEvolutionLinksForSourceMemory: vi.fn().mockReturnValue([]),
       queryAuthorizedMemorySubjects: vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
         authorizedQueries.push(input);
@@ -342,6 +342,67 @@ describe('MemoryRetriever active memory context', () => {
     expect(second?.contextBlock).toContain('oolong tea');
     expect(second?.selectedMemoryIds).toContain(recalled.id);
     expect(second?.refreshStatus).toBe('ready');
+  });
+
+  it('carries Recent Contact Shape sources into lineage and drops the shape when freshness expires', async () => {
+    const source = makeMemory({
+      id: 'recent-shape-source',
+      text: 'Current communication style evidence.',
+      contactId: 'contact-1',
+      sourceRef: 'memory:recent-shape-source',
+      sourceType: 'conversation',
+      consentFlags: { allowRecall: true },
+      provenance: {
+        channelId: 'api:shape-lineage',
+        subjectContactId: 'contact-1',
+        sourceConversationAt: Date.now(),
+      },
+      sensitivity: 'personal',
+      similarity: 0.9,
+    });
+    const store = makeMockStore([]);
+    (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
+      id === source.id ? source : undefined
+    ));
+    const shape = {
+      schemaVersion: 1 as const,
+      contactId: 'contact-1',
+      summary: 'The contact has recently preferred compact technical replies.',
+      sourceMemoryIds: [source.id],
+      confidenceScore: 0.9,
+      noveltyScore: 0.5,
+      updatedAt: Date.now(),
+      freshUntil: Date.now() + 60_000,
+    };
+    (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockResolvedValue(shape);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 });
+    const request = {
+      contextText: 'continue',
+      channelId: 'api:shape-lineage',
+      channelMeta: { isDirectMessage: true as const },
+      canonicalContactId: 'contact-1',
+      trustLevel: 'primary' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    const admitted = retriever.getActiveMemoryContext(request);
+    expect(admitted?.contextBlock).toContain('Recent contact shape');
+    expect(admitted?.disclosureMemorySources).toContainEqual(expect.objectContaining({
+      ref: `memory:${source.id}`,
+      subjectContactId: 'contact-1',
+      sourceChannelId: 'api:shape-lineage',
+    }));
+
+    (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...shape,
+      freshUntil: Date.now() - 1,
+    });
+    await retriever.refreshActiveMemoryContext(request);
+    const expired = retriever.getActiveMemoryContext(request);
+    expect(expired?.contextBlock).not.toContain('Recent contact shape');
+    expect(expired?.disclosureMemorySources).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ref: `memory:${source.id}` }),
+    ]));
   });
 
   it('uses live settings-owned lexical bounds in the normal active-context snapshot path', async () => {
@@ -2409,18 +2470,31 @@ describe('MemoryRetriever basic behavior', () => {
     expect(semanticIndex).toBeGreaterThan(boundaryIndex);
   });
 
-  it('injects canonical profile before episodic memory snippets', async () => {
+  it('injects a fresh recent contact shape before episodic memory snippets', async () => {
     const memories = [
-      makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),
+      makeMemory({
+        id: 'mem-shape-source',
+        text: 'A semantic fact',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.9,
+        contactId: 'contact-1',
+        sourceRef: 'memory:mem-shape-source',
+        sourceType: 'conversation',
+        consentFlags: { allowRecall: true },
+        provenance: { channelId: 'api:test', subjectContactId: 'contact-1' },
+      }),
     ];
     const store = makeMockStore(memories);
-    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+    (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockReturnValue({
+      schemaVersion: 1,
       contactId: 'contact-1',
       summary: 'PrimaryUser is the primary partner and values direct technical communication.',
-      sourceMemoryIds: ['mem-1'],
+      sourceMemoryIds: ['mem-shape-source'],
       confidenceScore: 0.91,
       noveltyScore: 0.42,
       updatedAt: Date.now(),
+      freshUntil: Date.now() + 60_000,
     });
     const embedding = makeMockEmbedding();
     const eventBus = makeMockEventBus();
@@ -2433,8 +2507,8 @@ describe('MemoryRetriever basic behavior', () => {
       undefined,
       'contact-1',
     );
-
-    const profileIndex = result.indexOf('Core profile for this person:');
+    expect(store.getRecentContactShape).toHaveBeenCalledWith('contact-1');
+    const profileIndex = result.indexOf('Recent contact shape (freshness-bound; not durable biography):');
     const memoriesIndex = result.indexOf('Relevant memories for this person:');
     expect(profileIndex).toBeGreaterThanOrEqual(0);
     expect(memoriesIndex).toBeGreaterThan(profileIndex);
@@ -2444,23 +2518,37 @@ describe('MemoryRetriever basic behavior', () => {
     expect(calls[0][0]).toBe('memory.retrieval');
     expect(calls[0][1]).toMatchObject({
       reason: 'ok',
-      profileIncluded: true,
+      recentContactShapeIncluded: true,
       provenanceRefs: expect.arrayContaining([
-        'contact_profile:contact-1',
-        'contact_profile_source_memory:mem-1',
+        'recent_contact_shape:contact-1',
+        'recent_contact_shape_source_memory:mem-shape-source',
       ]),
     });
   });
 
-  it('returns profile block when memory candidates are empty', async () => {
+  it('returns a recent contact shape block when memory candidates are empty', async () => {
     const store = makeMockStore([]);
-    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+    const source = makeMemory({
+      id: 'mem-1',
+      contactId: 'contact-1',
+      sourceRef: 'memory:mem-1',
+      sourceType: 'conversation',
+      consentFlags: { allowRecall: true },
+      provenance: { channelId: 'api:test', subjectContactId: 'contact-1' },
+      similarity: 0.9,
+    });
+    (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
+      id === source.id ? source : undefined
+    ));
+    (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockReturnValue({
+      schemaVersion: 1,
       contactId: 'contact-1',
       summary: 'PrimaryUser prefers concise responses and high signal summaries.',
       sourceMemoryIds: ['mem-1'],
       confidenceScore: 0.88,
       noveltyScore: 0.4,
       updatedAt: Date.now(),
+      freshUntil: Date.now() + 60_000,
     });
     const embedding = makeMockEmbedding();
     const eventBus = makeMockEventBus();
@@ -2474,7 +2562,7 @@ describe('MemoryRetriever basic behavior', () => {
       'contact-1',
     );
 
-    expect(result).toContain('Core profile for this person:');
+    expect(result).toContain('Recent contact shape (freshness-bound; not durable biography):');
     expect(result).toContain('PrimaryUser prefers concise responses');
     expect(result).not.toContain('Relevant memories for this person:');
 
@@ -2482,15 +2570,15 @@ describe('MemoryRetriever basic behavior', () => {
     expect(calls[0][0]).toBe('memory.retrieval');
     expect(calls[0][1]).toMatchObject({
       reason: 'no_candidates',
-      profileIncluded: true,
+      recentContactShapeIncluded: true,
       provenanceRefs: [
-        'contact_profile:contact-1',
-        'contact_profile_source_memory:mem-1',
+        'recent_contact_shape:contact-1',
+        'recent_contact_shape_source_memory:mem-1',
       ],
     });
   });
 
-  it('withholds contact profiles whose source memories are denied by consent policy', async () => {
+  it('withholds recent contact shapes whose source memories are denied by consent policy', async () => {
     const deniedSource = makeMemory({
       id: 'mem-denied',
       text: 'Consent denied profile source',
@@ -2500,13 +2588,15 @@ describe('MemoryRetriever basic behavior', () => {
       similarity: 1,
     });
     const store = makeMockStore([]);
-    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+    (store.getRecentContactShape as ReturnType<typeof vi.fn>).mockReturnValue({
+      schemaVersion: 1,
       contactId: 'contact-1',
       summary: 'This profile summary was derived from a consent-denied source.',
       sourceMemoryIds: [deniedSource.id],
       confidenceScore: 0.88,
       noveltyScore: 0.4,
       updatedAt: Date.now(),
+      freshUntil: Date.now() + 60_000,
     });
     (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
       id === deniedSource.id ? deniedSource : undefined
@@ -2523,21 +2613,21 @@ describe('MemoryRetriever basic behavior', () => {
       'contact-1',
     );
 
-    expect(result).not.toContain('Core profile for this person:');
+    expect(result).not.toContain('Recent contact shape (freshness-bound; not durable biography):');
     expect(result).not.toContain('consent-denied source');
 
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0][0]).toBe('memory.retrieval');
     expect(calls[0][1]).toMatchObject({
       reason: 'no_candidates',
-      profileIncluded: false,
+      recentContactShapeIncluded: false,
       withheldCount: 1,
       withheldReasonCounts: {
         'consent.allow_recall_denied': 1,
       },
     });
     expect(calls[0][1].provenanceRefs).not.toEqual(expect.arrayContaining([
-      `contact_profile_source_memory:${deniedSource.id}`,
+      `recent_contact_shape_source_memory:${deniedSource.id}`,
     ]));
   });
 

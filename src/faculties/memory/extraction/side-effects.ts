@@ -27,7 +27,7 @@ export interface ExtractionSideEffectsInput {
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
   ) => Promise<string | undefined>;
-  maybeRefreshContactProfile: (
+  maybeRefreshRecentContactShape: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
@@ -90,7 +90,7 @@ export async function runExtractionSideEffects(
     await input.assertEffectAllowed?.();
     // Awaited for the same reason: no detached durable child may outlive the
     // parent receipt. The profile write is an idempotent upsert by contact id.
-    await input.maybeRefreshContactProfile(
+    await input.maybeRefreshRecentContactShape(
       input.channelId,
       input.triggerReason,
       contactId,

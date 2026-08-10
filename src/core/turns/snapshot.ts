@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AdaptiveToolSnapshotTelemetry } from '../agent/adaptive-tools-telemetry.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
-import type { ContactProfileArtifact } from '../../faculties/memory/memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../../faculties/memory/memory-store-port.js';
 import type {
   PurrMemory,
   RetrievalCallerContext,
@@ -143,7 +143,7 @@ export interface TurnOrientationSnapshot {
 
 export interface TurnMemorySnapshot {
   channelId: string;
-  profile?: ContactProfileArtifact;
+  recentContactShape?: RecentContactShapeArtifact;
   emotionalSnapshot?: EmotionalSnapshot;
   contactEmotionalMemories: PurrMemory[];
   semanticCandidates: Array<PurrMemory & { similarity: number }>;
@@ -213,6 +213,11 @@ export interface TurnSnapshot {
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;
   memory?: TurnMemorySnapshot;
+  biographicalProjection?: {
+    admittedClaimIds: string[];
+    withheldCount: number;
+    contextChars: number;
+  };
   fatigue?: FatigueEnforcementMetadata;
 }
 
@@ -246,10 +251,12 @@ export function cloneOrientationSnapshot(snapshot: TurnOrientationSnapshot): Tur
   };
 }
 
-export function cloneContactProfileArtifact(profile: ContactProfileArtifact): ContactProfileArtifact {
+export function cloneRecentContactShapeArtifact(
+  shape: RecentContactShapeArtifact,
+): RecentContactShapeArtifact {
   return {
-    ...profile,
-    sourceMemoryIds: [...profile.sourceMemoryIds],
+    ...shape,
+    sourceMemoryIds: [...shape.sourceMemoryIds],
   };
 }
 

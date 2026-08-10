@@ -303,7 +303,7 @@
   data-settings-section="memory-profile"
 >
   <SettingsCollapsibleSection
-    title="Profile Synthesis"
+    title="Recent Contact Shape"
     open={openSections.has('profile')}
     onToggle={() => toggleSection('profile')}
   >
@@ -315,18 +315,18 @@
         <SettingFieldLabel label="Enabled" keys="profileSynthesisEnabled" labelId={settingLabelId('profileSynthesisEnabled')} class={labelClass} />
         <label class="flex items-center gap-2 mt-2 cursor-pointer">
           <input id={settingControlId('profileSynthesisEnabled')} aria-labelledby={settingLabelId('profileSynthesisEnabled')} type="checkbox" bind:checked={profileSynthesisEnabled} class={toggleClass} />
-          <span class="text-sm text-shadow-700">Enable automatic profile synthesis</span>
+          <span class="text-sm text-shadow-700">Enable automatic Recent Contact Shape synthesis</span>
         </label>
       </div>
       <div>
         <SettingFieldLabel label="Refresh Interval" keys="profileSynthesisRefreshIntervalMs" forId={settingControlId('profileSynthesisRefreshIntervalMs')} class={labelClass} />
         <DurationInput id={settingControlId('profileSynthesisRefreshIntervalMs')} min={60000} bind:value={profileSynthesisRefreshIntervalMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">How often to refresh profiles ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
+        <p class="text-sm text-shadow-500 mt-1">How often to refresh interaction shape ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
       </div>
       <div>
         <SettingFieldLabel label="Cooldown" keys="profileSynthesisCooldownMs" forId={settingControlId('profileSynthesisCooldownMs')} class={labelClass} />
         <DurationInput id={settingControlId('profileSynthesisCooldownMs')} min={10000} bind:value={profileSynthesisCooldownMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">Minimum wait between profile updates ({fmtMs(profileSynthesisCooldownMs)})</p>
+        <p class="text-sm text-shadow-500 mt-1">Minimum wait between interaction-shape updates ({fmtMs(profileSynthesisCooldownMs)})</p>
       </div>
       <div>
         <SettingFieldLabel label="Min Writes" keys="profileSynthesisMinWrites" forId={settingControlId('profileSynthesisMinWrites')} class={labelClass} />

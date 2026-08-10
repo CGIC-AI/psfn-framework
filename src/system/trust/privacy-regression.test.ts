@@ -62,7 +62,7 @@ function makeMockStore(memories: ScenarioMemory[]): MemoryStorePort {
   return {
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     updateMemory: vi.fn(),
-    getContactProfile: vi.fn().mockReturnValue(undefined),
+    getRecentContactShape: vi.fn().mockReturnValue(undefined),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),

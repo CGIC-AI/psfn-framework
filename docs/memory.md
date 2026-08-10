@@ -52,7 +52,7 @@ Last updated: 2026-07-22.
 - append-only daily reflection records under `notes/reflections/daily/`
 - append-only long-process reflection logs under `notes/reflections/process-logs/`
 - active orientation persisted in `core_memory.json`
-- contact profiles, social graph state, concerns, intentions, internal state, and follow-ups in PostgreSQL stores
+- freshness-bound Recent Contact Shapes, typed biographical claims, social graph state, concerns, intentions, internal state, and follow-ups in PostgreSQL stores
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation ledger at `notes/memories.jsonl`
 
@@ -198,7 +198,7 @@ The current write pipeline is:
 3. Facts are parsed from XML and scored for importance, confidence, novelty, and emotional signal.
 4. `MemoryWriter` performs deduplication, contradiction handling, retention normalization, and embedding write.
 5. `MemoryStore` persists the row, vector, and journal/audit side effects.
-6. Contact-local emotional state and profile synthesis can be refreshed from accepted writes.
+6. Contact-local emotional state and Recent Contact Shape synthesis can be refreshed from accepted writes; portable biography is admitted only as typed, source-bound claims.
 
 Extraction can also run in crash recovery and pre-compaction paths, not only after a normal turn.
 
@@ -207,10 +207,10 @@ Extraction can also run in crash recovery and pre-compaction paths, not only aft
 Long-term extraction has an explicit memory-mode contract:
 
 - `direct` uses the normal lightweight 1:1 extraction cadence and caps.
-- `group` uses group-room windowing, attribution, salience gates, write caps, profile refresh coverage, telemetry, and backfill limits.
+- `group` uses group-room windowing, attribution, salience gates, write caps, Recent Contact Shape refresh coverage, telemetry, and backfill limits.
 - `auto` chooses between direct and group behavior from channel topology plus recent canonical human participants.
 
-The canonical runtime owner for group-memory defaults is `settings.json` under `groupMemory`. The canonical channel owner for manual provider or channel overrides is `channels.json` under `discord.groupMemory`. The same knob names are used in both places: mode, participant window, trigger thresholds, chunk sizes, overlap, cooldowns, backlog limits, salience thresholds, salience reason weights, candidate-span caps, neighboring context size, low-signal skip rules, write caps, per-contact/per-subject caps, time-window write caps, backfill write caps, write-ranking weights, address-mode weights, profile refresh thresholds, telemetry visibility, and backfill limits.
+The canonical runtime owner for group-memory defaults is `settings.json` under `groupMemory`. The canonical channel owner for manual provider or channel overrides is `channels.json` under `discord.groupMemory`. The same knob names are used in both places: mode, participant window, trigger thresholds, chunk sizes, overlap, cooldowns, backlog limits, salience thresholds, salience reason weights, candidate-span caps, neighboring context size, low-signal skip rules, write caps, per-contact/per-subject caps, time-window write caps, backfill write caps, write-ranking weights, address-mode weights, Recent Contact Shape refresh thresholds, telemetry visibility, and backfill limits.
 
 Manual `memoryMode` overrides auto detection. A per-channel override can force a Discord channel to `direct` or `group` even when topology is ambiguous. Auto mode treats Discord guild channels and threads as group-capable and Discord private 1:1 conversations as direct. A group-capable channel with only one recent canonical human speaker falls back according to `groupMemory.autoDetection.fallbackModeWhenOneHuman`, which defaults to `direct`.
 
@@ -270,7 +270,7 @@ Write-cap settings:
 
 Profile, telemetry, and backfill settings:
 
-- `profileRefresh.enabled`, `minAcceptedWritesPerContact`, `minSourceMemories`, `cooldownMs`: profile refresh coverage and throttling.
+- `profileRefresh.enabled`, `minAcceptedWritesPerContact`, `minSourceMemories`, `cooldownMs`: Recent Contact Shape refresh coverage and throttling.
 - `telemetry.enabled`, `exposeGardenDiagnostics`, `maxDiagnosticMemoryScan`: group-memory telemetry and Garden diagnostic exposure.
 - `backfill.maxMessagesPerRun`, `maxChunksPerRun`, `maxLlmCallsPerRun`, `cooldownMs`: operator backfill ceilings.
 
@@ -303,7 +303,7 @@ The richer projection specs in [`SPEC_L01_LANDMARK_SCHEMA.md`](./SPEC_L01_LANDMA
 - contact-scope enforcement for high-intimacy memories
 - contradiction and evidence weighting
 - emotional continuity injection
-- contact profile inclusion
+- Recent Contact Shape inclusion
 - optional compositional reranking when policy and runtime allow it
 
 The searchable copy of L0 should be treated as a projection that can be rebuilt from canonical archive truth if drift or corruption is detected.
@@ -336,7 +336,7 @@ Selection caps reflections and procedurals at two each per turn. Other engram ty
 
 The profile covers presentation only:
 
-- `sectionOrder` — an exact permutation of the seven top-level prompt sections (`core_profile`, `relationship_context`, `emotional_continuity_snapshot`, `cross_session_emotional_continuity`, `memory_context_note`, `episodic_landmark_chains`, `relevant_memories`). Structural section ids never change with wording.
+- `sectionOrder` — an exact permutation of the seven top-level prompt sections (`recent_contact_shape`, `relationship_context`, `emotional_continuity_snapshot`, `cross_session_emotional_continuity`, `memory_context_note`, `episodic_landmark_chains`, `relevant_memories`). Structural section ids never change with wording.
 - `headings` — wording for the boundary, relevant, social-context, separate-people, emotional-continuity, and episodic-landmark section headings.
 - `valence` — the positive/negative marker strings and their thresholds for memory lines, plus the emotional-continuity block's own thresholds.
 - `recencyLabels` — the coarse age-band labels (`today`/`yesterday`/`this week` and `{n}`-templated week/month/year bands).
@@ -377,7 +377,7 @@ The Garden admin memory API (`/api/admin/memory*`) sensitivity-gates memory bodi
 The memory system is actively maintained by runtime jobs:
 
 - salience decay
-- profile synthesis refresh
+- Recent Contact Shape synthesis refresh and structured biographical-candidate admission
 - reflection writes promoted into long-term memory
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup

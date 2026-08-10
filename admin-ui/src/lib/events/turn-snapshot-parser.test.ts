@@ -287,13 +287,15 @@ function structuredSnapshot() {
     },
     memory: {
       channelId: 'api:dm',
-      profile: {
+      recentContactShape: {
+        schemaVersion: 1,
         contactId: 'contact-1',
         summary: 'A known contact.',
         sourceMemoryIds: ['memory-1'],
         confidenceScore: 0.9,
         noveltyScore: 0.2,
         updatedAt: 950,
+        freshUntil: 1_950,
       },
       emotionalSnapshot: {
         baselineValence: 0.1,
@@ -314,6 +316,11 @@ function structuredSnapshot() {
       },
       versionPointer: 'memory-v1',
     } satisfies AdminTurnMemorySnapshotData,
+    biographicalProjection: {
+      admittedClaimIds: ['claim-1'],
+      withheldCount: 2,
+      contextChars: 144,
+    },
     fatigue: fatigue(),
   };
 }
@@ -769,10 +776,10 @@ test('every malformed structured field rejects replay and live without state mut
       },
     },
     {
-      name: 'profile confidence range',
-      expectedPath: /profile\.confidenceScore/u,
+      name: 'recent contact shape confidence range',
+      expectedPath: /recentContactShape\.confidenceScore/u,
       mutate(snapshot) {
-        snapshot.memory.profile.confidenceScore = 1.1;
+        snapshot.memory.recentContactShape.confidenceScore = 1.1;
       },
     },
     {
@@ -809,9 +816,9 @@ test('every malformed structured field rejects replay and live without state mut
     },
     {
       name: 'nested non-canonical prototype',
-      expectedPath: /snapshot\.memory\.profile/u,
+      expectedPath: /snapshot\.memory\.recentContactShape/u,
       mutate(snapshot) {
-        Object.setPrototypeOf(snapshot.memory.profile, { inherited: true });
+        Object.setPrototypeOf(snapshot.memory.recentContactShape, { inherited: true });
       },
     },
   ];

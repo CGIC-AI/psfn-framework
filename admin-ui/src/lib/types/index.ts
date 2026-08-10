@@ -54,7 +54,7 @@ import {
   type SocialGraphEntitySource as CanonicalSocialGraphEntitySource,
   type SocialRelationshipKind as CanonicalSocialRelationshipKind,
 } from '../../../../src/core/contacts/types.js';
-import type { ContactProfileArtifact as CanonicalContactProfileArtifact } from '../../../../src/faculties/memory/memory-store-port.js';
+import type { RecentContactShapeArtifact as CanonicalRecentContactShapeArtifact } from '../../../../src/faculties/memory/memory-store-port.js';
 import type { MemoryWithheldSummary as CanonicalMemoryWithheldSummary } from '../../../../src/faculties/memory/withheld-summary.js';
 import type { ContactConversationChannelView as CanonicalContactConversationChannelView } from '../../../../src/operator/garden/services/contact-session-linker.js';
 import type { SchedulerMutationResult as CanonicalSchedulerMutationResult } from '../../../../src/operator/garden/services/scheduler-service.js';
@@ -688,7 +688,7 @@ export type ChannelPrivacyLevel = CanonicalChannelPrivacyLevel;
 
 export type Contact = CanonicalContact;
 
-export type ContactProfileArtifact = CanonicalContactProfileArtifact;
+export type RecentContactShapeArtifact = CanonicalRecentContactShapeArtifact;
 
 export type ContactConversationChannelView = CanonicalContactConversationChannelView;
 
@@ -718,8 +718,8 @@ export interface AdminContactSocialGraphNeighborView {
   mentionOnly: boolean;
   trustLevel?: TrustLevel;
   relationshipType?: RelationshipType;
-  profileSummary?: string;
-  profileUpdatedAt?: number;
+  recentContactShapeSummary?: string;
+  recentContactShapeUpdatedAt?: number;
 }
 
 export interface AdminContactSocialGraphConnectionView {
@@ -758,7 +758,7 @@ export interface AdminContactRelationshipScoreView {
 
 export interface AdminContactListData {
   contacts: Contact[];
-  profileMap: Record<string, ContactProfileArtifact>;
+  recentContactShapeMap: Record<string, RecentContactShapeArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
   socialGraphMap: Record<string, AdminContactSocialGraphView>;
   relationshipScoreMap?: Record<string, AdminContactRelationshipScoreView>;

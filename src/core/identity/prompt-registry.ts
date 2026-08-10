@@ -21,7 +21,7 @@ export const GROUP_EXTRACTION_PROMPT_KEY = 'memory.extraction.group' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
 export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
 export const SESSION_SEARCH_SUMMARY_PROMPT_KEY = 'session.search.summary' as const;
-export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
+export const RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY = 'memory.recent_contact_shape.synthesis' as const;
 export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
 export const WIKI_PASS_PROMPT_KEY = 'memory.sleeptime.wiki' as const;
 
@@ -31,7 +31,7 @@ export type PromptRegistryKey =
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
   | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
   | typeof SESSION_SEARCH_SUMMARY_PROMPT_KEY
-  | typeof PROFILE_SYNTHESIS_PROMPT_KEY
+  | typeof RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY
   | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY
   | typeof WIKI_PASS_PROMPT_KEY;
 
@@ -175,33 +175,37 @@ Return summary text only.`,
       + 'Keep the answer concise (3-5 sentences).',
   },
   {
-    key: PROFILE_SYNTHESIS_PROMPT_KEY,
+    key: RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
     description:
-      'Canonical contact profile synthesis prompt. Must include {contact_id}, {existing_profile}, and {memory_facts}.',
+      'Fresh Recent Contact Shape plus structured live-source biography candidate synthesis.',
     consumers: ['src/faculties/memory/extraction.ts'],
-    text: `Synthesize a stable contact profile for canonical contact: {contact_id}.
+    text: `Synthesize a freshness-bound Recent Contact Shape for canonical contact: {contact_id}, then extract zero or more structured durable biography candidates from the same live sources.
 
 Target contact:
 {target_contact}
 
-Existing profile (if any):
-{existing_profile}
+Existing Recent Contact Shape (context for summary continuity only; never evidence for candidates):
+{existing_recent_contact_shape}
 
-Source memories (most relevant first):
+Live canonical source memories (most relevant first):
 {memory_facts}
 
-Write a concise profile in 1-2 short paragraphs. Keep durable identity/relationship facts, communication style, and emotionally important anchors. Exclude trivial chatter and transient logistics.
+Write a concise recent shape in 1-2 short paragraphs. Keep current interaction themes, communication style, and emotionally important anchors. Exclude trivial chatter and transient logistics. This summary is not durable biography.
+
+Emit at most {biographical_candidate_limit} durable biography candidates. Each candidate must be a JSON object with exactly kind, value, basis, confidence, and sourceMemoryIds, plus only the optional proposedSensitivity, validFrom, and validTo fields. Allowed kinds are role, stable-preference, and shared-language. Values must use their registered versioned schema. sourceMemoryIds must cite one or more ids from Live canonical source memories. Do not emit subject, relatedSubject, status, depth, digests, grants, notes, or free-form claim prose; the trusted runtime owns those fields.
 
 Attribution rules:
 - The target contact is the person described in the Target contact block.
 - Do not infer aliases for the target from names merely mentioned in source memories.
 - If the target mentioned or discussed another person, write that as a mentioned/discussed person; do not make that person an alias or identity of the target.
-- If the source memories are too ambiguous to keep the target separate from mentioned people, return an empty summary.
+- If the source memories are too ambiguous to keep the target separate from mentioned people, return an empty summary and an empty candidate array.
+- Never derive a candidate from Existing Recent Contact Shape. Candidates may use only the live canonical source memories and their exact ids.
 
 Return XML only:
-<profile>
+<recent_contact_shape>
   <summary>One to two paragraphs here.</summary>
-</profile>`,
+</recent_contact_shape>
+<biographical_candidates>[{"kind":"stable-preference","value":{"kind":"stable-preference","schemaVersion":1,"domain":"communication","target":"concise explanations","polarity":"prefers"},"basis":"explicit","confidence":0.95,"sourceMemoryIds":["exact-memory-id"]}]</biographical_candidates>`,
   },
   {
     key: SLEEPTIME_ORIENTATION_PROMPT_KEY,
@@ -294,7 +298,15 @@ const REQUIRED_SUBSTRINGS: Partial<Record<PromptRegistryKey, string[]>> = {
     '[channel_scope: group]',
     '[resolved_addressee: ...]',
   ],
-  [PROFILE_SYNTHESIS_PROMPT_KEY]: ['{contact_id}', '{existing_profile}', '{memory_facts}', '<profile>', '<summary>'],
+  [RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY]: [
+    '{contact_id}',
+    '{existing_recent_contact_shape}',
+    '{memory_facts}',
+    '{biographical_candidate_limit}',
+    '<recent_contact_shape>',
+    '<biographical_candidates>',
+    '<summary>',
+  ],
 };
 
 function contentChecksum(content: string): string {

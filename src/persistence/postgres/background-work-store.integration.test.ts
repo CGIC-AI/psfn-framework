@@ -2422,7 +2422,7 @@ describe('PostgresBackgroundWorkStore', () => {
             entriesToCover.at(-1)?.id ?? null,
           recordExtractionMarker: () => undefined,
           maybePersistEmotionalState: () => undefined,
-          maybeRefreshContactProfile: () => undefined,
+          maybeRefreshRecentContactShape: () => undefined,
         }),
       );
 

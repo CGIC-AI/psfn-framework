@@ -196,7 +196,7 @@ export function memoryMetadataJson(currentTurn: PromptMonitorTurn): string | nul
   return formatJson({
     channelId: memory.channelId,
     versionPointer: memory.versionPointer,
-    profile: memory.profile,
+    recentContactShape: memory.recentContactShape,
     emotionalSnapshot: memory.emotionalSnapshot,
     withheldSummary: memory.withheldSummary,
   });

@@ -501,9 +501,9 @@ function makeGroupMemoryDiagnostics(): AdminGroupMemoryChannelDiagnostics {
         subjectMemoryCount: 1,
         routedMemoryCount: 1,
         totalAttributedMemoryCount: 1,
-        profileStatus: 'profile_ready',
-        profileSourceMemoryCount: 1,
-        profileUpdatedAt: NOW,
+        recentContactShapeStatus: 'recent_contact_shape_ready',
+        recentContactShapeSourceMemoryCount: 1,
+        recentContactShapeUpdatedAt: NOW,
       }],
     },
     privacy: {
@@ -891,7 +891,7 @@ function makeServices(): GardenAdminDomainServices {
     contacts: {
       listContacts: async () => ({
         contacts: [],
-        profileMap: new Map(),
+        recentContactShapeMap: new Map(),
         relatedChannelMap: new Map(),
         socialGraphMap: new Map(),
         verifications: [],
@@ -1125,7 +1125,7 @@ describe('Garden/admin Postgres memory cutover smoke', () => {
     const channelDiagnostics = parseOkJson<{
       channelId: string;
       lastExtraction: { triggerReason: string; writeCount: number } | null;
-      coverage: { perContact: Array<{ contactId: string; profileStatus: string }> };
+      coverage: { perContact: Array<{ contactId: string; recentContactShapeStatus: string }> };
     }>(
       await request(port, 'GET', `/api/admin/group-memory/${encodeURIComponent(CUTOVER_CHANNEL_ID)}`),
       'Garden group-memory channel diagnostics',
@@ -1138,7 +1138,7 @@ describe('Garden/admin Postgres memory cutover smoke', () => {
     expect(channelDiagnostics.coverage.perContact).toEqual([
       expect.objectContaining({
         contactId: 'contact-operator',
-        profileStatus: 'profile_ready',
+        recentContactShapeStatus: 'recent_contact_shape_ready',
       }),
     ]);
 

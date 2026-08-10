@@ -668,20 +668,17 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         await client.query('UPDATE l2_memories SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
       }
       await invalidateMemorySubjectsForContact(client, sourceContactId);
-      const contactProfiles = await client.query<{ exists: boolean }>(
+      const recentContactShapes = await client.query<{ exists: boolean }>(
         'SELECT to_regclass($1) IS NOT NULL AS exists',
-        ['contact_profiles'],
+        ['recent_contact_shapes'],
       );
-      if (contactProfiles.rows.at(0)?.exists === true) {
-        const targetProfileExists = await client.query<{ exists_flag: number }>(
-          'SELECT 1 AS exists_flag FROM contact_profiles WHERE contact_id = $1 LIMIT 1',
-          [targetContactId],
+      if (recentContactShapes.rows.at(0)?.exists === true) {
+        // Recent Contact Shape is keyed to its exact canonical subject. A merge
+        // invalidates the archived source shape; it is never copied to target.
+        await client.query(
+          'DELETE FROM recent_contact_shapes WHERE contact_id = $1',
+          [sourceContactId],
         );
-        if ((targetProfileExists.rowCount ?? 0) > 0) {
-          await client.query('DELETE FROM contact_profiles WHERE contact_id = $1', [sourceContactId]);
-        } else {
-          await client.query('UPDATE contact_profiles SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
-        }
       }
 
       const mergedTrustLevel = pickMostTrustedLevel(sourceRow.trust_level, targetRow.trust_level);
@@ -1822,11 +1819,11 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if (memoryTable.rows[0]?.table_name) {
         await client.query('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = $1', [id]);
       }
-      const profileTable = await client.query<{ table_name: string | null }>(
-        "SELECT to_regclass('contact_profiles')::text AS table_name",
+      const shapeTable = await client.query<{ table_name: string | null }>(
+        "SELECT to_regclass('recent_contact_shapes')::text AS table_name",
       );
-      if (profileTable.rows[0]?.table_name) {
-        await client.query('DELETE FROM contact_profiles WHERE contact_id = $1', [id]);
+      if (shapeTable.rows[0]?.table_name) {
+        await client.query('DELETE FROM recent_contact_shapes WHERE contact_id = $1', [id]);
       }
       let contactVersion: number | undefined;
       if (lifecycleIntentId) {

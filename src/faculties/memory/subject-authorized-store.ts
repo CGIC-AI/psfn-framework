@@ -264,9 +264,9 @@ export const MEMORY_STORE_METHOD_POLICY: Record<keyof MemoryStorePort, SubjectPr
   bulkDelete: 'authorized',
   bulkUpdate: 'authorized',
   bulkUpdateSalience: 'authorized',
-  upsertContactProfile: 'authorized',
-  getContactProfile: 'authorized',
-  listContactProfiles: 'authorized',
+  upsertRecentContactShape: 'authorized',
+  getRecentContactShape: 'authorized',
+  listRecentContactShapes: 'authorized',
   upsertMemoryMaintenanceReview: 'authorized',
   listMemoryMaintenanceReviews: 'authorized',
   getMemoryMaintenanceReview: 'authorized',
@@ -630,26 +630,26 @@ export function createSubjectAuthorizedMemoryStore(
           return result.memories;
         };
       }
-      if (property === 'getContactProfile') {
+      if (property === 'getRecentContactShape') {
         return async (contactId: string) => {
           const viewerContactId = currentContext().viewerContactId?.trim();
           if (!viewerContactId || contactId.trim() !== viewerContactId) return undefined;
-          return await target.getContactProfile(viewerContactId);
+          return await target.getRecentContactShape(viewerContactId);
         };
       }
-      if (property === 'listContactProfiles') {
+      if (property === 'listRecentContactShapes') {
         return async () => {
           const viewerContactId = currentContext().viewerContactId?.trim();
           if (!viewerContactId) return [];
-          const profile = await target.getContactProfile(viewerContactId);
-          return profile ? [profile] : [];
+          const shape = await target.getRecentContactShape(viewerContactId);
+          return shape ? [shape] : [];
         };
       }
-      if (property === 'upsertContactProfile') {
-        return async (profile: Parameters<MemoryStorePort['upsertContactProfile']>[0]) => {
+      if (property === 'upsertRecentContactShape') {
+        return async (shape: Parameters<MemoryStorePort['upsertRecentContactShape']>[0]) => {
           const viewerContactId = currentContext().viewerContactId?.trim();
-          if (!viewerContactId || profile.contactId !== viewerContactId) deniedMutation();
-          await target.upsertContactProfile(profile);
+          if (!viewerContactId || shape.contactId !== viewerContactId) deniedMutation();
+          await target.upsertRecentContactShape(shape);
         };
       }
       if (property === 'updateMemory') {

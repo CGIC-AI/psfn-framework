@@ -115,13 +115,15 @@ export interface MemoryMaintenanceReviewPgRow {
   updated_at: number;
 }
 
-export interface ContactProfileRow {
+export interface RecentContactShapeRow {
+  schema_version: number;
   contact_id: string;
   summary_text: string;
   source_memory_ids: unknown;
   confidence_score: number;
   novelty_score: number;
   updated_at: number;
+  fresh_until: number;
 }
 
 export interface ScratchpadRow {

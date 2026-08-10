@@ -26,16 +26,18 @@ async function createServiceHarness(options?: {
     getLastEntry: () => undefined,
   } as unknown as SessionStore;
   const profiles = new Map<string, {
+    schemaVersion: 1;
     contactId: string;
     summary: string;
     sourceMemoryIds: string[];
     confidenceScore: number;
     noveltyScore: number;
     updatedAt: number;
+    freshUntil: number;
   }>();
   const memoryStore = {
-    listContactProfiles: () => [...profiles.values()],
-    getContactProfile: (contactId: string) => profiles.get(contactId),
+    listRecentContactShapes: () => [...profiles.values()],
+    getRecentContactShape: (contactId: string) => profiles.get(contactId),
   } as unknown as MemoryStorePort;
   const service = new AdminContactsDataService({
     contactStore,
@@ -124,19 +126,21 @@ describe('AdminContactsDataService', () => {
     const other = await contactStore.upsert({ displayName: 'Other Contact' });
     for (const contact of [current, other]) {
       profiles.set(contact.id, {
+        schemaVersion: 1,
         contactId: contact.id,
         summary: `profile-${contact.id}`,
         sourceMemoryIds: [],
         confidenceScore: 1,
         noveltyScore: 0,
         updatedAt: 1,
+        freshUntil: 2,
       });
     }
 
     const result = await service.listContacts(undefined, fleetContext(current.id));
 
     expect(result.contacts.map(contact => contact.id)).toEqual([current.id]);
-    expect([...result.profileMap.keys()]).toEqual([current.id]);
+    expect([...result.recentContactShapeMap.keys()]).toEqual([current.id]);
     expect(result.socialGraphMap.size).toBe(0);
     expect(result.verifications).toEqual([]);
     expect(result.mutationAudits).toEqual([]);
@@ -167,17 +171,19 @@ describe('AdminContactsDataService', () => {
     const other = await contactStore.upsert({ displayName: 'Other Contact' });
     for (const contact of [current, other]) {
       profiles.set(contact.id, {
+        schemaVersion: 1,
         contactId: contact.id,
         summary: `profile-${contact.id}`,
         sourceMemoryIds: [],
         confidenceScore: 1,
         noveltyScore: 0,
         updatedAt: 1,
+        freshUntil: 2,
       });
     }
 
     await expect(service.getContactDetail(current.id, fleetContext(current.id)))
-      .resolves.toMatchObject({ profile: { contactId: current.id } });
+      .resolves.toMatchObject({ recentContactShape: { contactId: current.id } });
     await expect(service.getContactDetail(other.id, fleetContext(current.id)))
       .resolves.toBeNull();
   });
@@ -317,12 +323,14 @@ describe('AdminContactsDataService', () => {
     );
 
     profiles.set(friend.id, {
+      schemaVersion: 1,
       contactId: friend.id,
       summary: 'Shows up often in supportive contexts.',
       sourceMemoryIds: ['mem-friend-1'],
       confidenceScore: 0.81,
       noveltyScore: 0.4,
       updatedAt: 1_740_000_000_000,
+      freshUntil: 1_740_003_600_000,
     });
 
     await contactStore.linkChannelIdentity(friend.id, 'discord', 'friend-user', { privacyLevel: 'private' });
@@ -376,7 +384,7 @@ describe('AdminContactsDataService', () => {
           contactId: friend.id,
           mentionOnly: false,
           trustLevel: 'trusted',
-          profileSummary: 'Shows up often in supportive contexts.',
+          recentContactShapeSummary: 'Shows up often in supportive contexts.',
         }),
       }),
       expect.objectContaining({

@@ -2,7 +2,7 @@ import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-
 import type { TurnMemorySnapshot } from '../../../core/turns/snapshot.js';
 import {
   buildSnapshotVersionPointer,
-  cloneContactProfileArtifact,
+  cloneRecentContactShapeArtifact,
   cloneEmotionalSnapshot,
   cloneMemory,
   cloneScoredMemory,
@@ -16,7 +16,7 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { MemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
-import type { ContactProfileArtifact, EmbeddingSearchAuthorization, MemoryStorePort } from '../memory-store-port.js';
+import type { RecentContactShapeArtifact, EmbeddingSearchAuthorization, MemoryStorePort } from '../memory-store-port.js';
 import type {
   MemoryScopeQuery,
   PurrMemory,
@@ -95,8 +95,8 @@ export interface CaptureTurnMemorySnapshotDeps {
     channelMeta: ChannelMeta | undefined,
     canonicalContactId: string | undefined,
   ): Promise<RetrievalRoomVisibilityContext>;
-  resolveContactProfileAccess(
-    profile: ContactProfileArtifact | undefined,
+  resolveRecentContactShapeAccess(
+    recentContactShape: RecentContactShapeArtifact | undefined,
     options: {
       accessScope?: RetrievalAccessScope;
       trustLevel: TrustLevel;
@@ -108,7 +108,7 @@ export interface CaptureTurnMemorySnapshotDeps {
       roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<{
-    profile?: ContactProfileArtifact;
+    recentContactShape?: RecentContactShapeArtifact;
     withheldSummary?: MemoryWithheldSummary;
     withheldSourceMemoryIds: string[];
   }>;
@@ -165,10 +165,10 @@ export async function captureTurnMemorySnapshot(
   const operatorApproval = visibilityScope === 'approved_private_context';
   const roomVisibility = input.roomVisibility
     ?? await deps.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
-  const rawProfile = canonicalContactId
-    ? await deps.memoryStore.getContactProfile(canonicalContactId)
+  const rawRecentContactShape = canonicalContactId
+    ? await deps.memoryStore.getRecentContactShape(canonicalContactId)
     : undefined;
-  const profileAccess = await deps.resolveContactProfileAccess(rawProfile, {
+  const shapeAccess = await deps.resolveRecentContactShapeAccess(rawRecentContactShape, {
     accessScope: effectiveAccessScope,
     trustLevel: effectiveTrust,
     channelPrivacy,
@@ -178,7 +178,7 @@ export async function captureTurnMemorySnapshot(
     operatorApproval,
     roomVisibility,
   });
-  const profile = profileAccess.profile;
+  const recentContactShape = shapeAccess.recentContactShape;
   const emotionalSnapshot = canonicalContactId
     ? await deps.resolveEmotionalSnapshot(canonicalContactId)
     : undefined;
@@ -297,17 +297,19 @@ export async function captureTurnMemorySnapshot(
   const withheldSummary = mergeMemoryWithheldSummaries(
     quarantineWithheldSummary,
     candidateWithheldSummary,
-    profileAccess.withheldSummary,
+    shapeAccess.withheldSummary,
   );
   const withheldIds = [...new Set([
     ...quarantineWithheldIds,
     ...withheldCandidateIds,
-    ...profileAccess.withheldSourceMemoryIds,
+    ...shapeAccess.withheldSourceMemoryIds,
   ])];
 
   return {
     channelId,
-    ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+    ...(recentContactShape
+      ? { recentContactShape: cloneRecentContactShapeArtifact(recentContactShape) }
+      : {}),
     ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
     contactEmotionalMemories: contactEmotionalMemories.map(cloneMemory),
     semanticCandidates,
@@ -326,7 +328,7 @@ export async function captureTurnMemorySnapshot(
       channelPrivacy,
       visibilityScope,
       operatorApproval ? 'approved' : 'default',
-      profile?.updatedAt,
+      recentContactShape?.updatedAt,
       emotionalSnapshot?.lastMoodUpdateEpochMs,
       contactEmotionalMemories.map(memory => memory.id).join(','),
       semanticCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),

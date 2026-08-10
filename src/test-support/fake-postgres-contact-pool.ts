@@ -35,7 +35,7 @@ export class FakePostgresPool {
   socialGraphEntities = new Map<string, SocialGraphEntityRow>();
   socialRelationshipEdges = new Map<string, SocialRelationshipEdgeRow>();
   l2MemoryContacts = new Map<string, string>();
-  contactProfiles = new Map<string, unknown>();
+  recentContactShapes = new Map<string, unknown>();
   contactMaintenanceWatermarks = new Map<string, string>();
   failNextWriteForChannel: string | null = null;
   failNextMutationAudit = false;
@@ -112,8 +112,8 @@ export class FakePostgresPool {
       const tableName = String(values[0] ?? '');
       const exists = tableName === 'l2_memories'
         ? this.l2MemoryContacts.size > 0
-        : tableName === 'contact_profiles'
-          ? this.contactProfiles.size > 0
+        : tableName === 'recent_contact_shapes'
+          ? this.recentContactShapes.size > 0
           : true;
       return result([{ exists }]);
     }
@@ -132,23 +132,8 @@ export class FakePostgresPool {
       return result();
     }
 
-    if (normalized.startsWith('select 1 as exists_flag from contact_profiles where contact_id = $1 limit 1')) {
-      return result(this.contactProfiles.has(String(values[0] ?? '')) ? [{ exists_flag: 1 }] : []);
-    }
-
-    if (normalized.startsWith('delete from contact_profiles where contact_id = $1')) {
-      this.contactProfiles.delete(String(values[0] ?? ''));
-      return result();
-    }
-
-    if (normalized.startsWith('update contact_profiles set contact_id = $1 where contact_id = $2')) {
-      const targetId = String(values[0] ?? '');
-      const sourceId = String(values[1] ?? '');
-      const profile = this.contactProfiles.get(sourceId);
-      if (profile !== undefined) {
-        this.contactProfiles.delete(sourceId);
-        this.contactProfiles.set(targetId, profile);
-      }
+    if (normalized.startsWith('delete from recent_contact_shapes where contact_id = $1')) {
+      this.recentContactShapes.delete(String(values[0] ?? ''));
       return result();
     }
 

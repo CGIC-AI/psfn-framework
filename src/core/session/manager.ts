@@ -1975,7 +1975,7 @@ export class SessionManager implements SessionManagerTypeSurface {
     }
     // Group scope: NEVER a single-person binding. The block represents the room
     // (room identity + <=5 recently active speaker names); per-person detail
-    // stays in per-contact profiles and is never blended into this block.
+    // stays in per-contact Recent Contact Shapes and is never blended into this block.
     const activeParticipantNames = scope.recentSpeakers.map(speaker => speaker.name);
     return {
       channelId: scope.channelId,

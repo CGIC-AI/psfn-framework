@@ -198,7 +198,7 @@ Unknown direction means the signal cannot raise the composite.
 The estimate is bound to one exact canonical partner contact. It must never
 silently switch to another household member or conversation participant.
 
-Core already has contact profiles, relational memories, and a provenance-aware
+Core already has typed biographical claims, freshness-bound Recent Contact Shapes, relational memories, and a provenance-aware
 social graph. The target Partner Model deepens their read surface with typed,
 provenance-bearing Partner Assertions rather than creating another identity
 database or treating a synthesized profile as unquestionable fact.

@@ -4,8 +4,9 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
 import type { ConversationScope } from '../../../core/session/conversation-scope.js';
-import { cloneContactProfileArtifact } from '../../../core/turns/snapshot.js';
-import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-port.js';
+import { cloneRecentContactShapeArtifact } from '../../../core/turns/snapshot.js';
+import type { RecentContactShapeArtifact, MemoryStorePort } from '../memory-store-port.js';
+import type { PurrMemory } from '../types.js';
 import type {
   RetrievalAccessScope,
 } from '../types.js';
@@ -23,8 +24,9 @@ import {
   type MemorySessionQuarantineFilter,
 } from './session-quarantine.js';
 
-export interface ContactProfileAccessResult {
-  profile?: ContactProfileArtifact;
+export interface RecentContactShapeAccessResult {
+  recentContactShape?: RecentContactShapeArtifact;
+  authorizedSourceMemories: PurrMemory[];
   withheldSummary?: MemoryWithheldSummary;
   withheldSourceMemoryIds: string[];
 }
@@ -71,10 +73,10 @@ export async function resolveRoomVisibilityContext(input: {
   );
 }
 
-export async function resolveContactProfileAccess(input: {
+export async function resolveRecentContactShapeAccess(input: {
   memoryStore: MemoryStorePort;
   sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
-  profile: ContactProfileArtifact | undefined;
+  recentContactShape: RecentContactShapeArtifact | undefined;
   options: {
     accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
@@ -85,24 +87,34 @@ export async function resolveContactProfileAccess(input: {
     operatorApproval?: boolean;
     roomVisibility?: RetrievalRoomVisibilityContext;
   };
-}): Promise<ContactProfileAccessResult> {
-  if (!input.profile) {
-    return { withheldSourceMemoryIds: [] };
+  now?: number;
+}): Promise<RecentContactShapeAccessResult> {
+  const shape = input.recentContactShape;
+  if (!shape) {
+    return { authorizedSourceMemories: [], withheldSourceMemoryIds: [] };
   }
 
-  const sourceMemoryIds = input.profile.sourceMemoryIds
+  if (shape.freshUntil <= (input.now ?? Date.now())) {
+    return { authorizedSourceMemories: [], withheldSourceMemoryIds: [...shape.sourceMemoryIds] };
+  }
+
+  const sourceMemoryIds = shape.sourceMemoryIds
     .map(id => id.trim())
     .filter(Boolean);
   if (sourceMemoryIds.length === 0
     || (typeof input.memoryStore.getById !== 'function'
       && typeof input.memoryStore.getByIds !== 'function')) {
-    return { profile: cloneContactProfileArtifact(input.profile), withheldSourceMemoryIds: [] };
+    return { authorizedSourceMemories: [], withheldSourceMemoryIds: sourceMemoryIds };
   }
 
   const sourceMemories = (await resolveMemoriesByIds(input.memoryStore, sourceMemoryIds))
     .map(memory => ({ ...memory, similarity: 1 }));
-  if (sourceMemories.length === 0) {
-    return { profile: cloneContactProfileArtifact(input.profile), withheldSourceMemoryIds: [] };
+  if (sourceMemories.length !== sourceMemoryIds.length) {
+    const loadedIds = new Set(sourceMemories.map(memory => memory.id));
+    return {
+      authorizedSourceMemories: [],
+      withheldSourceMemoryIds: sourceMemoryIds.filter(id => !loadedIds.has(id)),
+    };
   }
 
   const quarantine = summarizeQuarantinedMemories(input.sessionQuarantineFilter, sourceMemories);
@@ -110,10 +122,15 @@ export async function resolveContactProfileAccess(input: {
   const withheldSummary = mergeMemoryWithheldSummaries(quarantine.summary, summary);
   const blockedIds = [...new Set([...quarantine.withheldIds, ...withheldIds])];
   if (blockedIds.length === 0) {
-    return { profile: cloneContactProfileArtifact(input.profile), withheldSourceMemoryIds: [] };
+    return {
+      recentContactShape: cloneRecentContactShapeArtifact(shape),
+      authorizedSourceMemories: sourceMemories.map(memory => ({ ...memory })),
+      withheldSourceMemoryIds: [],
+    };
   }
 
   return {
+    authorizedSourceMemories: [],
     withheldSummary,
     withheldSourceMemoryIds: blockedIds,
   };

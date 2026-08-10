@@ -59,7 +59,7 @@ describe('fleet contact mutation route', () => {
     const owner = await store.upsert({ displayName: 'Owner' });
     const target = await store.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
     const service = new AdminContactsDataService({ contactStore: store,
-      memoryStore: { listContactProfiles: () => [], getContactProfile: () => undefined } as unknown as MemoryStorePort,
+      memoryStore: { listRecentContactShapes: () => [], getRecentContactShape: () => undefined } as unknown as MemoryStorePort,
       sessionStore: { listChannels: () => [], getLastEntry: () => undefined } as unknown as SessionStore });
     const response = await invoke(service, target.id,
       JSON.stringify({ trustLevel: 'trusted', relationshipType: 'family' }), fleetOwnerContext(owner.id));

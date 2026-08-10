@@ -1,4 +1,4 @@
-import type { ContactProfileArtifact } from '../../../../faculties/memory/memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../../../../faculties/memory/memory-store-port.js';
 import type {
   Contact,
   ContactIdentityLinkVerification,
@@ -16,7 +16,7 @@ import type { ContactConversationChannelView } from '../contact-session-linker.j
 
 export interface AdminContactListData {
   contacts: Contact[];
-  profileMap: Map<string, ContactProfileArtifact>;
+  recentContactShapeMap: Map<string, RecentContactShapeArtifact>;
   relatedChannelMap: Map<string, ContactConversationChannelView[]>;
   socialGraphMap: Map<string, AdminContactSocialGraphView>;
   relationshipScoreMap?: Map<string, AdminContactRelationshipScoreView>;
@@ -27,7 +27,7 @@ export interface AdminContactListData {
 
 export interface AdminContactDetailData {
   contact: Contact;
-  profile?: ContactProfileArtifact;
+  recentContactShape?: RecentContactShapeArtifact;
   relatedChannels: ContactConversationChannelView[];
 }
 
@@ -62,8 +62,8 @@ export interface AdminContactSocialGraphNeighborView {
   mentionOnly: boolean;
   trustLevel?: TrustLevel;
   relationshipType?: RelationshipType;
-  profileSummary?: string;
-  profileUpdatedAt?: number;
+  recentContactShapeSummary?: string;
+  recentContactShapeUpdatedAt?: number;
 }
 
 export interface AdminContactSocialGraphConnectionView {

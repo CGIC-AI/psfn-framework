@@ -45,7 +45,12 @@ function routePair(input: {
   appendAudit: AdminAuditTimelineAppender | undefined;
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
-  const prefix = `/api/admin/privacy-break-glass/${input.resourceKind}/`;
+  // The authenticated route id is retained through the live-alpha cutover;
+  // the resource contract behind it is explicitly Recent Contact Shape.
+  const routeSegment = input.resourceKind === 'recent_contact_shape'
+    ? 'profile'
+    : input.resourceKind;
+  const prefix = `/api/admin/privacy-break-glass/${routeSegment}/`;
   const audit = (
     decision: 'allowed' | 'denied' | 'needs_approval',
     narrative: string,
@@ -291,7 +296,7 @@ export function buildAdminPrivacyBreakGlassRoutes(options: {
       withBody: options.withBody,
     }),
     ...routePair({
-      resourceKind: 'profile',
+      resourceKind: 'recent_contact_shape',
       service: options.service,
       appendAudit: options.appendAuditTimelineEntry,
       withBody: options.withBody,

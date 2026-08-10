@@ -25,7 +25,7 @@ export const PRESENTATION_PROFILE_VERSION = 1;
  * with heading wording.
  */
 export const MEMORY_PRESENTATION_SECTIONS = [
-  'core_profile',
+  'recent_contact_shape',
   'relationship_context',
   'emotional_continuity_snapshot',
   'cross_session_emotional_continuity',

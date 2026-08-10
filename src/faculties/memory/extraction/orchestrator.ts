@@ -176,7 +176,7 @@ export interface ExtractionRunOptions {
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
   ) => Promise<string | undefined>;
-  maybeRefreshContactProfile: (
+  maybeRefreshRecentContactShape: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
@@ -223,7 +223,7 @@ export async function runExtractionOrchestration(
     const experientialSelfDirected = isExperientialSelfDirectedSessionId(options.channelId);
     // A reflection may have a grounding contact, but its first-person
     // experiential output is companion-owned. Never let that grounding contact
-    // leak into memory subject/provenance or downstream profile refreshes.
+    // leak into memory subject/provenance or downstream Recent Contact Shape refreshes.
     const canonicalContactId = experientialSelfDirected
       ? undefined
       : options.canonicalContactId;
@@ -497,7 +497,7 @@ export async function runExtractionOrchestration(
       acceptedFactsByContact,
       emitConcernCandidates: options.emitConcernCandidates,
       maybePersistEmotionalState: options.maybePersistEmotionalState,
-      maybeRefreshContactProfile: options.maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape: options.maybeRefreshRecentContactShape,
       assertEffectAllowed: options.assertEffectAllowed,
     });
     return {

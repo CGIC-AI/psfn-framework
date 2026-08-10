@@ -1,5 +1,5 @@
 import {
-  type ContactProfileArtifact,
+  type RecentContactShapeArtifact,
   type MemoryAdminListOptions,
   type MemoryAdminListResult,
   type MemoryAdminPrivacySummary,
@@ -131,7 +131,7 @@ export class InMemoryMemoryStore {
   private readonly linkedMemories: MemoryLink[] = [];
   private readonly patchEvents: MemoryPatchEvent[] = [];
   private readonly scratchpad = new Map<string, ScratchpadEntry>();
-  private readonly contactProfiles = new Map<string, ContactProfileArtifact>();
+  private readonly recentContactShapes = new Map<string, RecentContactShapeArtifact>();
   private readonly maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
 
   asPort(): MemoryStorePort {
@@ -681,17 +681,17 @@ export class InMemoryMemoryStore {
       .map(entry => ({ ...entry }));
   }
 
-  upsertContactProfile(profile: ContactProfileArtifact): void {
-    this.contactProfiles.set(profile.contactId, { ...profile });
+  upsertRecentContactShape(shape: RecentContactShapeArtifact): void {
+    this.recentContactShapes.set(shape.contactId, { ...shape });
   }
 
-  getContactProfile(contactId: string): ContactProfileArtifact | undefined {
-    const profile = this.contactProfiles.get(contactId);
-    return profile ? { ...profile } : undefined;
+  getRecentContactShape(contactId: string): RecentContactShapeArtifact | undefined {
+    const shape = this.recentContactShapes.get(contactId);
+    return shape ? { ...shape } : undefined;
   }
 
-  listContactProfiles(): ContactProfileArtifact[] {
-    return [...this.contactProfiles.values()].map(profile => ({ ...profile }));
+  listRecentContactShapes(): RecentContactShapeArtifact[] {
+    return [...this.recentContactShapes.values()].map(shape => ({ ...shape }));
   }
 
   upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): MemoryMaintenanceReview {

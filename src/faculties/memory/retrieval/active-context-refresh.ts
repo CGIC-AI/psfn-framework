@@ -9,11 +9,11 @@ import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-b
 import type { ContextManifestMemorySeed } from '../../../core/session/context-manifest.js';
 import { buildSnapshotVersionPointer } from '../../../core/turns/snapshot.js';
 import {
-  cloneContactProfileArtifact,
+  cloneRecentContactShapeArtifact,
   cloneEmotionalSnapshot,
   cloneMemory,
 } from '../../../core/turns/snapshot.js';
-import type { ContactProfileArtifact } from '../memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
   cloneMemoryWithheldSummary,
@@ -50,6 +50,7 @@ import { channelClassificationEpochAsOf } from '../../../system/trust/runtime-cl
 function collectArtifactSensitivitySources(input: {
   selectedForPrompt: readonly ScoredMemory[];
   emotionalContinuityMemories: readonly PurrMemory[];
+  recentContactShapeSourceMemories: readonly PurrMemory[];
 }): ArtifactSensitivitySource[] {
   const byRef = new Map<string, ArtifactSensitivitySource>();
   const addMemory = (memory: PurrMemory): void => {
@@ -63,6 +64,7 @@ function collectArtifactSensitivitySources(input: {
     for (const link of scored.evolutionChain ?? []) addMemory(link.memory);
   }
   for (const memory of input.emotionalContinuityMemories) addMemory(memory);
+  for (const memory of input.recentContactShapeSourceMemories) addMemory(memory);
   return [...byRef.values()].sort((left, right) => left.ref.localeCompare(right.ref));
 }
 
@@ -74,6 +76,7 @@ function collectArtifactSensitivitySources(input: {
 export function collectDisclosureMemorySources(input: {
   selectedForPrompt: readonly ScoredMemory[];
   emotionalContinuityMemories: readonly PurrMemory[];
+  recentContactShapeSourceMemories?: readonly PurrMemory[];
 }): DisclosureMemorySource[] {
   const byRef = new Map<string, DisclosureMemorySource>();
   const addMemory = (memory: PurrMemory): void => {
@@ -115,6 +118,7 @@ export function collectDisclosureMemorySources(input: {
     for (const link of scored.evolutionChain ?? []) addMemory(link.memory);
   }
   for (const memory of input.emotionalContinuityMemories) addMemory(memory);
+  for (const memory of input.recentContactShapeSourceMemories ?? []) addMemory(memory);
   return [...byRef.values()].sort((left, right) => left.ref.localeCompare(right.ref));
 }
 
@@ -122,7 +126,8 @@ const log = createComponentLogger('Retrieval');
 
 export interface FinalizeRetrievalPromptBlockInput {
   activeContextTarget?: ActiveMemoryRefreshTarget;
-  profile?: ContactProfileArtifact;
+  recentContactShape?: RecentContactShapeArtifact;
+  recentContactShapeSourceMemories?: PurrMemory[];
   selectedForPrompt?: ScoredMemory[];
   emotionalSnapshot?: EmotionalSnapshot;
   emotionalContinuityMemories?: PurrMemory[];
@@ -148,7 +153,7 @@ export function finalizeRetrievalPromptBlock(
   input: FinalizeRetrievalPromptBlockInput,
   deps: ActiveMemoryContextRefreshDeps,
 ): string {
-  const block = renderPromptBlock(input.profile, input.selectedForPrompt ?? [], {
+  const block = renderPromptBlock(input.recentContactShape, input.selectedForPrompt ?? [], {
     emotionalSnapshot: input.emotionalSnapshot,
     emotionalContinuityMemories: input.emotionalContinuityMemories,
     withheldSummary: input.withheldSummary,
@@ -164,7 +169,8 @@ export function finalizeRetrievalPromptBlock(
 
   return applyActiveMemoryContextRefresh({
     target: input.activeContextTarget,
-    profile: input.profile,
+    recentContactShape: input.recentContactShape,
+    recentContactShapeSourceMemories: input.recentContactShapeSourceMemories ?? [],
     selectedForPrompt: input.selectedForPrompt ?? [],
     emotionalSnapshot: input.emotionalSnapshot,
     emotionalContinuityMemories: input.emotionalContinuityMemories ?? [],
@@ -240,7 +246,8 @@ export function invalidateActiveMemoryContexts(
 function applyActiveMemoryContextRefresh(
   input: {
     target: ActiveMemoryRefreshTarget;
-    profile?: ContactProfileArtifact;
+    recentContactShape?: RecentContactShapeArtifact;
+    recentContactShapeSourceMemories: PurrMemory[];
     selectedForPrompt: ScoredMemory[];
     emotionalSnapshot?: EmotionalSnapshot;
     emotionalContinuityMemories: PurrMemory[];
@@ -318,7 +325,10 @@ function applyActiveMemoryContextRefresh(
   const cappedEntries = new Map(selectedEntries);
   const selectedForActivePrompt = selectedEntries
     .map(([, entry]) => cloneScoredPromptMemory(entry.scored));
-  const profile = input.profile ?? existing?.profile;
+  const recentContactShape = input.recentContactShape;
+  const recentContactShapeSourceMemories = recentContactShape
+    ? input.recentContactShapeSourceMemories.map(cloneMemory)
+    : [];
   const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
   const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
     ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
@@ -329,7 +339,7 @@ function applyActiveMemoryContextRefresh(
   const episodicChains = input.episodicChains.length > 0
     ? input.episodicChains.map(cloneEpisodicRetrievalChain)
     : deps.filterQuarantinedEpisodicChains(existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? []);
-  const contextBlock = renderPromptBlock(profile, selectedForActivePrompt, {
+  const contextBlock = renderPromptBlock(recentContactShape, selectedForActivePrompt, {
     emotionalSnapshot,
     emotionalContinuityMemories,
     withheldSummary,
@@ -342,10 +352,12 @@ function applyActiveMemoryContextRefresh(
   const artifactSensitivitySources = collectArtifactSensitivitySources({
     selectedForPrompt: selectedForActivePrompt,
     emotionalContinuityMemories,
+    recentContactShapeSourceMemories,
   });
   const disclosureMemorySources = collectDisclosureMemorySources({
     selectedForPrompt: selectedForActivePrompt,
     emotionalContinuityMemories,
+    recentContactShapeSourceMemories,
   });
   const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
   const snapshot: ActiveMemoryContextSnapshot = {
@@ -380,7 +392,9 @@ function applyActiveMemoryContextRefresh(
   deps.activeMemoryContexts.set(target.identity.key, {
     snapshot,
     entries: cappedEntries,
-    ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+    ...(recentContactShape
+      ? { recentContactShape: cloneRecentContactShapeArtifact(recentContactShape) }
+      : {}),
     ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
     emotionalContinuityMemories,
     ...(withheldSummary ? { withheldSummary: cloneMemoryWithheldSummary(withheldSummary) } : {}),

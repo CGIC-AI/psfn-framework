@@ -1,7 +1,56 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTurnId } from '../../../turns/id.js';
 import type { TurnSessionContextSnapshot } from '../../../turns/snapshot.js';
-import { healStaleCapturedSessionWindow } from './pre-turn-state.js';
+import {
+  enforceAtomicBiographicalProjection,
+  healStaleCapturedSessionWindow,
+} from './pre-turn-state.js';
+
+describe('atomic biographical projection', () => {
+  it('preserves a prompt and its exact 1:1 CogSec contributions', () => {
+    const projection = {
+      promptSection: '## Stable biography\n- The current author prefers concise replies.',
+      admittedClaimIds: ['claim-1'],
+      withheldCount: 2,
+      disclosureSources: [{
+        ref: 'biographical:claim-1',
+        sensitivity: 'personal' as const,
+        permittedDestinations: [{ kind: 'contact_dm' as const, contactIds: ['contact-1'] }],
+        classified: true,
+      }],
+    };
+
+    expect(enforceAtomicBiographicalProjection(projection)).toBe(projection);
+  });
+
+  it.each([
+    {
+      promptSection: 'unlined biography',
+      admittedClaimIds: ['claim-1'],
+      disclosureSources: [],
+    },
+    {
+      promptSection: '',
+      admittedClaimIds: ['claim-1'],
+      disclosureSources: [{
+        ref: 'biographical:claim-1', sensitivity: 'personal' as const,
+        permittedDestinations: [], classified: true,
+      }],
+    },
+    {
+      promptSection: 'summary prose without an atomic claim',
+      admittedClaimIds: [],
+      disclosureSources: [],
+    },
+  ])('withholds a non-atomic or prose-only portable projection', candidate => {
+    expect(enforceAtomicBiographicalProjection({ ...candidate, withheldCount: 0 })).toEqual({
+      promptSection: '',
+      admittedClaimIds: [],
+      disclosureSources: [],
+      withheldCount: 1,
+    });
+  });
+});
 
 function makeSnapshot(overrides: Partial<TurnSessionContextSnapshot> = {}): TurnSessionContextSnapshot {
   return {

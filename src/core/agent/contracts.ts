@@ -19,6 +19,9 @@ import type {
 } from '../../faculties/memory/active-context.js';
 import type { WikiContextSnapshot } from '../../faculties/wiki/active-context.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
+import type { DisclosureSourceContribution } from '../cogsec/disclosure/contracts.js';
+import type { MessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';
+import type { CurrentAuthorResolution } from '../../faculties/memory/biographical/current-author-selection.js';
 import type { SessionEntry } from '../session/types.js';
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
@@ -151,6 +154,21 @@ export interface MemoryProvider {
   }): TurnRetrievalQueryEmbedding;
   getActiveMemoryContext?(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null;
   refreshActiveMemoryContext?(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null>;
+  /**
+   * Atomic portable-biography seam. Prompt text and CogSec contributions are
+   * returned together from the typed claim projection; prose summaries never
+   * implement this method and therefore cannot become portable authority.
+   */
+  projectBiographicalContext?(request: {
+    conversationScope: ConversationScope;
+    currentAuthor?: CurrentAuthorResolution;
+    messageAddressing?: MessageAddressingMetadata;
+  }): Promise<{
+    promptSection: string;
+    disclosureSources: readonly DisclosureSourceContribution[];
+    admittedClaimIds: readonly string[];
+    withheldCount: number;
+  }>;
   captureTurnMemorySnapshot?(
     contextText: string,
     channelId: string,

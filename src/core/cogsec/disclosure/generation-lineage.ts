@@ -411,6 +411,7 @@ export function buildGenerationDisclosureLineage(input: {
    */
   conversationChannelEpoch?: number;
   memorySources: readonly DisclosureMemorySource[];
+  biographicalSources?: readonly DisclosureSourceContribution[];
   wikiSources?: readonly DisclosureWikiSource[];
   toolResultSources?: readonly DisclosureToolResultSource[];
 }): DisclosureLineage {
@@ -421,6 +422,10 @@ export function buildGenerationDisclosureLineage(input: {
   );
   for (const source of input.memorySources) {
     lineage = accumulateDisclosureSource(lineage, memoryDisclosureContribution(source));
+  }
+  for (const source of input.biographicalSources ?? []) {
+    assertScopedDisclosureConstraints(source.permittedDestinations, source.ref);
+    lineage = accumulateDisclosureSource(lineage, source);
   }
   for (const source of input.wikiSources ?? []) {
     lineage = accumulateDisclosureSource(lineage, wikiDisclosureContribution(source));

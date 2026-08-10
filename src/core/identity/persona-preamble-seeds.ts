@@ -29,7 +29,7 @@ export const SUBSYSTEM_PERSONA_TEMPLATE_TEXT =
 
 export const SUBSYSTEM_PERSONA_TEMPLATE_DESCRIPTION =
   'Shared soft-framing preamble prepended to schema-bound subprocess prompts (memory extraction, '
-  + 'profile synthesis, episode segmentation, sleep consolidation, arc formation, concern review). '
+  + 'Recent Contact Shape and biographical-candidate synthesis, episode segmentation, sleep consolidation, arc formation, concern review). '
   + 'Slots: {{char}}, {{subsystem}}, {{personality_summary}}, {{instruction}}. '
   + '{{char}} and {{personality_summary}} derive from the live character card.';
 
@@ -84,7 +84,7 @@ export const SUBSYSTEM_PERSONA_SEEDS: readonly SubsystemPersonaSeed[] = Object.f
     label: 'sense of the people I know',
     instructionKey: instructionKey('profile_synthesis'),
     instruction: 'hold a steady, honest picture of who someone is to me across everything we have said',
-    consumers: ['src/faculties/memory/extraction/profile-synthesis.ts'],
+    consumers: ['src/faculties/memory/extraction/recent-contact-shape-synthesis.ts'],
   },
   {
     id: 'topic_segmentation',

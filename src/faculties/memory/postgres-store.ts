@@ -17,7 +17,7 @@ import type { MemoryJournal } from './journal.js';
 import type {
   ActiveMemoryWindowOptions,
   ActiveMemoryWindowResult,
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
   MemoryAdminListOptions,
@@ -99,7 +99,7 @@ import {
 import { fromMaintenanceReviewRow } from './postgres-store/reviews.js';
 import type {
   AdminMemoryPrivacyAggregateRow,
-  ContactProfileRow,
+  RecentContactShapeRow,
   CountRow,
   MemoryAbstractionLinkRow,
   MemoryDeleteVersionRow,
@@ -333,7 +333,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   private memoryEvolutionLinks = new Map<string, MemoryEvolutionLink>();
   private memoryLinks = new Map<string, MemoryLink>();
   private maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
-  private contactProfiles = new Map<string, ContactProfileArtifact>();
+  private recentContactShapes = new Map<string, RecentContactShapeArtifact>();
   private scratchpadEntries = new Map<string, ScratchpadEntry>();
 
   constructor(
@@ -541,18 +541,22 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       this.maintenanceReviews.set(review.id, review);
     }
 
-    const contactProfiles = await queryRows<ContactProfileRow>(this.pool, `
-      SELECT contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
-      FROM contact_profiles
+    const recentContactShapes = await queryRows<RecentContactShapeRow>(this.pool, `
+      SELECT schema_version, contact_id, summary_text, source_memory_ids,
+             confidence_score, novelty_score, updated_at, fresh_until
+      FROM recent_contact_shapes
+      WHERE schema_version = 1
     `);
-    for (const row of contactProfiles) {
-      this.contactProfiles.set(row.contact_id, {
+    for (const row of recentContactShapes) {
+      this.recentContactShapes.set(row.contact_id, {
+        schemaVersion: 1,
         contactId: row.contact_id,
         summary: row.summary_text,
         sourceMemoryIds: decodeStringArray(row.source_memory_ids),
         confidenceScore: row.confidence_score,
         noveltyScore: row.novelty_score,
         updatedAt: row.updated_at,
+        freshUntil: row.fresh_until,
       });
     }
 
@@ -789,24 +793,29 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     this.syncScratchpadMirror();
   }
 
-  private async persistContactProfile(profile: ContactProfileArtifact): Promise<void> {
+  private async persistRecentContactShape(shape: RecentContactShapeArtifact): Promise<void> {
     await executeQuery(this.pool, `
-      INSERT INTO contact_profiles (
-        contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6)
+      INSERT INTO recent_contact_shapes (
+        schema_version, contact_id, summary_text, source_memory_ids,
+        confidence_score, novelty_score, updated_at, fresh_until
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       ON CONFLICT (contact_id) DO UPDATE SET
+        schema_version = EXCLUDED.schema_version,
         summary_text = EXCLUDED.summary_text,
         source_memory_ids = EXCLUDED.source_memory_ids,
         confidence_score = EXCLUDED.confidence_score,
         novelty_score = EXCLUDED.novelty_score,
-        updated_at = EXCLUDED.updated_at
+        updated_at = EXCLUDED.updated_at,
+        fresh_until = EXCLUDED.fresh_until
     `, [
-      profile.contactId,
-      profile.summary,
-      serializeJsonValue(profile.sourceMemoryIds),
-      profile.confidenceScore,
-      profile.noveltyScore,
-      profile.updatedAt,
+      shape.schemaVersion,
+      shape.contactId,
+      shape.summary,
+      serializeJsonValue(shape.sourceMemoryIds),
+      shape.confidenceScore,
+      shape.noveltyScore,
+      shape.updatedAt,
+      shape.freshUntil,
     ]);
   }
 
@@ -2100,18 +2109,18 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return result.rowCount ?? 0;
   }
 
-  async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
-    await this.persist(() => this.persistContactProfile(profile));
-    this.contactProfiles.set(profile.contactId, profile);
+  async upsertRecentContactShape(shape: RecentContactShapeArtifact): Promise<void> {
+    await this.persist(() => this.persistRecentContactShape(shape));
+    this.recentContactShapes.set(shape.contactId, shape);
     this.markRetrievalCorpusChanged();
   }
 
-  async getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined> {
-    return this.contactProfiles.get(contactId);
+  async getRecentContactShape(contactId: string): Promise<RecentContactShapeArtifact | undefined> {
+    return this.recentContactShapes.get(contactId);
   }
 
-  async listContactProfiles(): Promise<ContactProfileArtifact[]> {
-    return Array.from(this.contactProfiles.values()).sort((left, right) => right.updatedAt - left.updatedAt);
+  async listRecentContactShapes(): Promise<RecentContactShapeArtifact[]> {
+    return Array.from(this.recentContactShapes.values()).sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
   async addScratchpadEntry(

@@ -5,7 +5,7 @@ import type {
   ActiveMemoryContextSnapshot,
   resolveActiveMemoryContextIdentity,
 } from '../active-context.js';
-import type { ContactProfileArtifact } from '../memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import type { MemoryWithheldSummary } from '../withheld-summary.js';
 import type { EpisodicRetrievalChain } from './episodic.js';
@@ -32,7 +32,7 @@ export interface ActiveMemoryEntry {
 export interface ActiveMemoryState {
   snapshot: ActiveMemoryContextSnapshot;
   entries: Map<string, ActiveMemoryEntry>;
-  profile?: ContactProfileArtifact;
+  recentContactShape?: RecentContactShapeArtifact;
   emotionalSnapshot?: EmotionalSnapshot;
   emotionalContinuityMemories: PurrMemory[];
   withheldSummary?: MemoryWithheldSummary;

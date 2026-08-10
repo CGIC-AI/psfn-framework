@@ -9,7 +9,7 @@ import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   RECENT_SESSION_SUMMARY_PROMPT_KEY,
   SESSION_SEARCH_SUMMARY_PROMPT_KEY,
-  PROFILE_SYNTHESIS_PROMPT_KEY,
+  RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
   WIKI_PASS_PROMPT_KEY,
   getDefaultPromptText,
@@ -48,9 +48,9 @@ describe('PromptRegistryStore', () => {
         checksum: 'seed',
       },
       {
-        key: PROFILE_SYNTHESIS_PROMPT_KEY,
-        text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
-        description: 'Canonical contact profile synthesis prompt.',
+        key: RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
+        text: getDefaultPromptText(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY),
+        description: 'Canonical Recent Contact Shape synthesis prompt.',
         consumers: ['src/faculties/memory/extraction.ts'],
         version: 1,
         updatedAt: new Date().toISOString(),
@@ -75,7 +75,7 @@ describe('PromptRegistryStore', () => {
     expect(seeded.list().map(entry => entry.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
       GROUP_EXTRACTION_PROMPT_KEY,
-      PROFILE_SYNTHESIS_PROMPT_KEY,
+      RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
       SLEEPTIME_ORIENTATION_PROMPT_KEY,
       WIKI_PASS_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
@@ -129,8 +129,8 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('Never rewrite another participant\'s directed or relational memory as the observer\'s');
   });
 
-  it('seeds the profile synthesis prompt with target-aware attribution rules', () => {
-    const prompt = getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
+  it('seeds the Recent Contact Shape prompt with target-aware attribution rules', () => {
+    const prompt = getDefaultPromptText(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY);
 
     expect(prompt).toContain('Target contact:');
     expect(prompt).toContain('{target_contact}');

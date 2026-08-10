@@ -581,7 +581,7 @@ export function makeLeakProbeStore(memories: ScopedMemory[]): MemoryStorePort {
   return {
     searchByEmbedding: () => memories,
     updateMemory: () => undefined,
-    getContactProfile: () => undefined,
+    getRecentContactShape: () => undefined,
     getMemoriesByContact: () => [],
     getMemoriesByChannel: () => [],
     getAllActiveMemories: () => memories,

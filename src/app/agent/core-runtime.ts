@@ -124,6 +124,12 @@ import {
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
 import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
+import { createPostgresPool } from '../../persistence/postgres.js';
+import { createPostgresBiographicalProfileStore } from '../../faculties/memory/biographical/postgres-store.js';
+import { MemoryBackedBiographicalSourceRevalidator } from '../../faculties/memory/biographical/memory-source.js';
+import { createRuntimeBiographicalProjection } from '../../faculties/memory/biographical/runtime-projection.js';
+import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
+import { createDefaultBiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
 import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
 import {
@@ -229,6 +235,7 @@ export interface AgentCoreRuntime {
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
   closeWikiRuntime: () => Promise<void>;
+  closeBiographicalProjection: () => Promise<void>;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -635,6 +642,31 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryUserId,
     contactRuntimeOptions,
   );
+  const biographicalPool = createPostgresPool(postgresDatabaseUrl, {
+    applicationName: 'biographical-projection',
+    allowExitOnIdle: true,
+    ...resolveConfigTenantPoolScope(config),
+  });
+  let biographicalStore;
+  try {
+    biographicalStore = await awaitPostgresStoreReadiness(
+      'biographical_projection',
+      () => createPostgresBiographicalProfileStore(biographicalPool),
+    );
+  } catch (error) {
+    await biographicalPool.end();
+    throw error;
+  }
+  const companionId = resolveCompanionIdFromConfig(config);
+  const biographicalDepthPolicy = config.biographicalDepthPolicy
+    ?? createDefaultBiographicalDepthPolicy();
+  const biographicalProjection = createRuntimeBiographicalProjection({
+    store: biographicalStore,
+    revalidator: new MemoryBackedBiographicalSourceRevalidator(memoryStore),
+    contactStore,
+    companionId,
+    policy: biographicalDepthPolicy,
+  });
 
   // Perception ingestion (S10 Workstream D). The bridge normalizes presence/face
   // telemetry into PerceptionEvents; the identity-claim resolver (bead .13) turns
@@ -769,6 +801,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     contactStore,
     episodicStore,
     concernCandidateSink: automatedConcernRuntime.extractionSink,
+    biographicalProjection,
+    biographicalRebuild: {
+      profileStore: biographicalStore,
+      companionSubject: { kind: 'companion', companionId, subjectVersion: 1 },
+      policy: biographicalDepthPolicy,
+    },
     isAutoContactCreationAllowed: contactTrackingGate
       ? (channelId: string) => contactTrackingGate.isAutoContactCreationAllowed(channelId)
       : null,
@@ -810,6 +848,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
     closeWikiRuntime: wikiRuntime.close,
+    closeBiographicalProjection: () => biographicalPool.end(),
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

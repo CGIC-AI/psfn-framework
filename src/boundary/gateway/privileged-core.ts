@@ -29,6 +29,7 @@ import type { StartupConfigHydrationResult } from '../../app/startup/support/boo
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import {
   resolveCompanionNameFromConfig,
@@ -109,6 +110,7 @@ export async function buildGatewayPrivilegedCore(
   input: GatewayPrivilegedCoreBuildInput,
 ): Promise<GatewayPrivilegedCore> {
   const eventBus = new EventBus();
+  const poolTelemetryLog = createComponentLogger('IntakeScreeningPool');
   const approvalDisplayIdentity = input.config.companionFleet
     ? createCompanionDisplayIdentityResolver(input.config.companionFleet.companions)
     : undefined;
@@ -280,6 +282,23 @@ export async function buildGatewayPrivilegedCore(
         });
       });
     },
+    onScreeningPoolTelemetry: (companionId, event) => {
+      // Content-free bounded-pool metrics (psfn-framework-yxz0z.4). Emitted as a
+      // structured operational log so dashboards can read queue depth, wait /
+      // service time, and worker saturation without any screened payload.
+      poolTelemetryLog.info('Intake screening pool telemetry', {
+        companionId: companionId ?? resolveCoreCompanionIdFromConfig(input.config),
+        kind: event.kind,
+        concurrency: event.concurrency,
+        busyWorkers: event.busyWorkers,
+        queueDepth: event.queueDepth,
+        outstanding: event.outstanding,
+        ...(event.waitMs !== undefined ? { waitMs: event.waitMs } : {}),
+        ...(event.serviceMs !== undefined ? { serviceMs: event.serviceMs } : {}),
+        ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      });
+    },
+    singleStreamKey: resolveCoreCompanionIdFromConfig(input.config),
   });
 
   // htm9.18: durable CogSec event store for the canary egress tripwire. Shares

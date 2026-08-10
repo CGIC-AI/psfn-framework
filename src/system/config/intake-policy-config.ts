@@ -32,7 +32,45 @@ export type { IntakeUrlScannerPolicyConfig } from './intake-url-scanner-policy.j
 
 export const INTAKE_POLICY_FILE_NAME = 'intake-policy.json';
 export const INTAKE_POLICY_SEED_FILE_NAME = 'intake-policy.seed.json';
-export const INTAKE_POLICY_SCHEMA_VERSION = 4 as const;
+export const INTAKE_POLICY_SCHEMA_VERSION = 5 as const;
+
+/**
+ * Bounded asynchronous screening pool (psfn-framework-yxz0z.4). The gateway
+ * composes ONE fleet-wide pool whose worker concurrency is operator-owned and
+ * bounded to the range below: independent companion streams overlap up to the
+ * bound, while a single companion's inbound message stream stays serial so its
+ * screening decisions and delivery order stay deterministic. The bounds are
+ * code-owned validation ceilings/floors — owners tune within them, never past.
+ */
+const SCREENING_POOL_MIN_CONCURRENCY = 2 as const;
+const SCREENING_POOL_MAX_CONCURRENCY = 4 as const;
+const SCREENING_POOL_MIN_QUEUE_DEPTH = 1 as const;
+const SCREENING_POOL_MAX_QUEUE_DEPTH = 1024 as const;
+const SCREENING_POOL_MIN_ITEM_DEADLINE_MS = 5000 as const;
+const SCREENING_POOL_MAX_ITEM_DEADLINE_MS = 300000 as const;
+
+export interface IntakeScreeningPoolPolicyConfig {
+  /**
+   * Fleet-wide worker concurrency. Must be within
+   * [SCREENING_POOL_MIN_CONCURRENCY, SCREENING_POOL_MAX_CONCURRENCY] (2..4):
+   * few enough that the L1.5 ONNX scorer and L2/L3 pi-ai calls do not burst a
+   * single provider, enough that independent companions overlap rather than
+   * serialize behind one another.
+   */
+  concurrency: number;
+  /**
+   * Maximum admitted-but-not-running items before admission backpressures a
+   * new screen() call (its promise waits for a slot). Bounds queue memory;
+   * owners may raise it within the code-owned ceiling.
+   */
+  maxQueueDepth: number;
+  /**
+   * Hard whole-item wall-clock deadline (queue wait + service) in milliseconds.
+   * Must exceed the slowest legit deep screening path (L2 + L3 timeouts) so it
+   * only bites a genuinely stuck screening; on expiry the item fails closed.
+   */
+  itemDeadlineMs: number;
+}
 
 /**
  * Firewall rollout mode:
@@ -748,6 +786,8 @@ export interface IntakePolicyConfig {
   l3Screener: IntakeL3ScreenerPolicyConfig;
   visionScreener: IntakeVisionScreenerPolicyConfig;
   sinkGates: IntakeSinkGatesPolicyConfig;
+  /** Bounded async screening pool (psfn-framework-yxz0z.4). */
+  screeningPool: IntakeScreeningPoolPolicyConfig;
   driftDetection: IntakeDriftDetectionPolicyConfig;
 }
 
@@ -1482,6 +1522,56 @@ function validateDriftDetection(
   };
 }
 
+function validateIntakeIntegerBounded(
+  value: unknown,
+  sourcePath: string,
+  field: string,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw invalid(sourcePath, `${field} must be an integer in [${String(min)}, ${String(max)}]`);
+  }
+  return value;
+}
+
+export function validateScreeningPool(
+  raw: unknown,
+  sourcePath: string,
+): IntakeScreeningPoolPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'screeningPool must be an object');
+  }
+  const knownKeys = ['concurrency', 'maxQueueDepth', 'itemDeadlineMs'];
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `screeningPool has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  return {
+    concurrency: validateIntakeIntegerBounded(
+      raw.concurrency,
+      sourcePath,
+      'screeningPool.concurrency',
+      SCREENING_POOL_MIN_CONCURRENCY,
+      SCREENING_POOL_MAX_CONCURRENCY,
+    ),
+    maxQueueDepth: validateIntakeIntegerBounded(
+      raw.maxQueueDepth,
+      sourcePath,
+      'screeningPool.maxQueueDepth',
+      SCREENING_POOL_MIN_QUEUE_DEPTH,
+      SCREENING_POOL_MAX_QUEUE_DEPTH,
+    ),
+    itemDeadlineMs: validateIntakeIntegerBounded(
+      raw.itemDeadlineMs,
+      sourcePath,
+      'screeningPool.itemDeadlineMs',
+      SCREENING_POOL_MIN_ITEM_DEADLINE_MS,
+      SCREENING_POOL_MAX_ITEM_DEADLINE_MS,
+    ),
+  };
+}
+
 export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'expected object');
@@ -1489,7 +1579,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
     'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener', 'sinkGates',
-    'driftDetection', 'urlScanner',
+    'screeningPool', 'driftDetection', 'urlScanner',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -1499,6 +1589,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     const migrationGuidance = raw.schemaVersion === 1
       || raw.schemaVersion === 2
       || raw.schemaVersion === 3
+      || raw.schemaVersion === 4
       ? `; schemaVersion ${String(raw.schemaVersion)} owners require the explicit `
         + 'migrate:intake-policy-owner command'
       : '';
@@ -1554,6 +1645,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
     visionScreener: validateVisionScreener(raw.visionScreener, sourcePath),
     sinkGates,
+    screeningPool: validateScreeningPool(raw.screeningPool, sourcePath),
     driftDetection: validateDriftDetection(raw.driftDetection, sourcePath),
   };
 }

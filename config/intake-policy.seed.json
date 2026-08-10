@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
@@ -220,6 +220,11 @@
         "hostile": "hard"
       }
     }
+  },
+  "screeningPool": {
+    "concurrency": 3,
+    "maxQueueDepth": 64,
+    "itemDeadlineMs": 60000
   },
   "driftDetection": {
     "enabled": true,

@@ -236,7 +236,11 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
 
     expect(runtime.byCompanionId.size).toBe(0);
     expect(runtime.resolve()).toBe(runtime.resolve('ignored-in-single-mode'));
-    expect(runtime.screeningFor()).toBe(runtime.resolve().screening);
+    // screeningFor returns the POOLED service (a wrapper), distinct from the
+    // underlying composition service but sharing its mode.
+    expect(runtime.screeningFor()).not.toBeNull();
+    expect(runtime.screeningPool).not.toBeNull();
+    expect(runtime.screeningFor()?.mode).toBe(runtime.resolve().screening?.mode);
     expect(runtime.quarantineStores).toEqual([runtime.resolve().quarantine]);
     expect(backendFactory).toHaveBeenCalledOnce();
 
@@ -381,6 +385,65 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
       expect.objectContaining({ message: expect.stringMatching(/duplicate companionId/u) }),
       cleanupFailure,
     ]);
+  });
+});
+
+describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-framework-yxz0z.4)', () => {
+  it('wires one fleet-wide pool and per-companion pooled services with distinct stream keys', async () => {
+    const input = makeDataDirs('enforce', false);
+    const companionA = createCompanionId(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'test companion A',
+    );
+    const companionB = createCompanionId(
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'test companion B',
+    );
+    const companionBDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-companion-b-'));
+    tempDirs.push(companionBDataDir);
+    const poolEvents: Array<{ companionId?: string; kind: string }> = [];
+
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      config: input.config,
+      systemDataDir: input.systemDataDir,
+      companionDataDir: input.companionDataDir,
+      multiCompanion: true,
+      companions: [
+        { companionId: companionA, companionDataDir: input.companionDataDir },
+        { companionId: companionB, companionDataDir: companionBDataDir },
+      ],
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      env: input.env,
+      onScreeningPoolTelemetry: (companionId, event) => {
+        poolEvents.push({ companionId, kind: event.kind });
+      },
+    });
+
+    expect(runtime.screeningPool).not.toBeNull();
+    expect(runtime.screeningPool?.stats().concurrency).toBeGreaterThanOrEqual(2);
+    // Each companion gets its own pooled service routing by its companion id.
+    const serviceA = runtime.screeningFor(companionA);
+    const serviceB = runtime.screeningFor(companionB);
+    expect(serviceA).not.toBeNull();
+    expect(serviceB).not.toBeNull();
+    expect(serviceA).not.toBe(serviceB);
+    expect(serviceA?.mode).toBe('enforce');
+
+    // A clean L1 pass through companion A's pooled service emits pool telemetry
+    // attributed to companion A (content-free).
+    await serviceA!.screen('hello world', {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'test:a:1' },
+      scope: 'context',
+      timing: { traceId: 't1', channelType: 'api' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(poolEvents.some((event) => event.companionId === companionA)).toBe(true);
+
+    await runtime.dispose();
+    expect(runtime.screeningPool?.stats().disposed).toBe(true);
   });
 });
 

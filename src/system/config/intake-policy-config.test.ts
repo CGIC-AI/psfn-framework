@@ -200,7 +200,7 @@ describe('intake policy owner file', () => {
   it('rejects invalid config on save (never writes a broken owner file)', () => {
     const dataDir = makeDataDir();
     expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
-      .toThrow(/schemaVersion must be 4/);
+      .toThrow(/schemaVersion must be 5/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 
@@ -227,6 +227,37 @@ describe('intake policy owner file', () => {
     expect(secondArrow.stressAttribution.minPoints).toBeGreaterThanOrEqual(1);
     // The soft self-notice ships OFF: the operator opts in explicitly.
     expect(secondArrow.selfNotice.enabled).toBe(false);
+  });
+
+  it('validates the screeningPool seed: operator-owned concurrency bounded to 2..4 (psfn-framework-yxz0z.4)', () => {
+    const policy = seedPolicy();
+    expect(policy.screeningPool.concurrency).toBeGreaterThanOrEqual(2);
+    expect(policy.screeningPool.concurrency).toBeLessThanOrEqual(4);
+    expect(policy.screeningPool.maxQueueDepth).toBeGreaterThanOrEqual(1);
+    expect(policy.screeningPool.itemDeadlineMs).toBeGreaterThan(0);
+  });
+
+  it('fails closed on out-of-range or malformed screeningPool concurrency', () => {
+    const policy = seedPolicy();
+    expect(() => validateIntakePolicy(
+      { ...policy, screeningPool: { ...policy.screeningPool, concurrency: 1 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/screeningPool\.concurrency must be an integer in \[2, 4\]/);
+    expect(() => validateIntakePolicy(
+      { ...policy, screeningPool: { ...policy.screeningPool, concurrency: 5 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/screeningPool\.concurrency must be an integer in \[2, 4\]/);
+    expect(() => validateIntakePolicy(
+      { ...policy, screeningPool: { ...policy.screeningPool, maxQueueDepth: 0 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/screeningPool\.maxQueueDepth must be an integer/);
+    expect(() => validateIntakePolicy(
+      { ...policy, screeningPool: undefined },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/screeningPool must be an object/);
+    const { screeningPool: _drop, ...withoutPool } = policy;
+    expect(() => validateIntakePolicy(withoutPool, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/screeningPool must be an object/);
   });
 
   it('fails closed on missing, unknown-keyed, or malformed secondArrow config', () => {

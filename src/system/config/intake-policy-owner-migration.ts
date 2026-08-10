@@ -24,6 +24,8 @@ import {
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_POLICY_SCHEMA_VERSION,
   validateIntakePolicy,
+  validateScreeningPool,
+  type IntakeScreeningPoolPolicyConfig,
 } from './intake-policy-config.js';
 import {
   validateIntakeUrlScannerPolicy,
@@ -69,6 +71,38 @@ function loadSeedUrlScannerPolicy(seedDir: string): IntakeUrlScannerPolicyConfig
     throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
   }
   return validateIntakeUrlScannerPolicy(raw.urlScanner, seedPath);
+}
+
+function loadSeedScreeningPoolPolicy(seedDir: string): IntakeScreeningPoolPolicyConfig {
+  const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(seedPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Cannot load intake screening pool migration policy from ${seedPath}: ${String(error)}`,
+    );
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid intake policy seed at ${seedPath}: expected object`);
+  }
+  return validateScreeningPool(raw.screeningPool, seedPath);
+}
+
+function ensureScreeningPoolPresent(
+  candidate: Record<string, unknown>,
+  filePath: string,
+  seedDir: string,
+): { candidate: Record<string, unknown>; addedPaths: string[] } {
+  if (isRecord(candidate.screeningPool)) {
+    // Re-validate the carried section so a malformed legacy copy fails closed
+    // here instead of at the final validateIntakePolicy call.
+    validateScreeningPool(candidate.screeningPool, filePath);
+    return { candidate, addedPaths: [] };
+  }
+  const next = structuredClone(candidate);
+  next.screeningPool = loadSeedScreeningPoolPolicy(seedDir);
+  return { candidate: next, addedPaths: ['screeningPool'] };
 }
 
 function removeRetiredScreenerModelKeys(
@@ -216,9 +250,15 @@ export function migrateIntakePolicyOwner(
       const repaired = repairSelfAuthoredMutationPolicy(raw, filePath, {
         rejectExistingCompanionSelf: false,
       });
-      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);
+      const withScreeningPool = ensureScreeningPoolPresent(
+        repaired.candidate,
+        filePath,
+        options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+      );
+      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(withScreeningPool.candidate);
+      const addedPaths = [...repaired.addedPaths, ...withScreeningPool.addedPaths];
       if (
-        repaired.addedPaths.length > 0
+        addedPaths.length > 0
         || repaired.updatedPaths.length > 0
         || removedPaths.length > 0
       ) {
@@ -229,7 +269,7 @@ export function migrateIntakePolicyOwner(
           filePath,
           fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
           toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
-          ...(repaired.addedPaths.length > 0 ? { addedPaths: repaired.addedPaths } : {}),
+          ...(addedPaths.length > 0 ? { addedPaths } : {}),
           ...(repaired.updatedPaths.length > 0 ? { updatedPaths: repaired.updatedPaths } : {}),
           ...(removedPaths.length > 0 ? { removedPaths } : {}),
         });
@@ -244,9 +284,9 @@ export function migrateIntakePolicyOwner(
         toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       };
     }
-    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3) {
+    if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4) {
       throw new Error(
-        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, 3, or `
+        `Intake policy owner migration at ${filePath} requires schemaVersion 1, 2, 3, 4, or `
         + `the current schemaVersion ${String(INTAKE_POLICY_SCHEMA_VERSION)}`,
       );
     }
@@ -273,6 +313,13 @@ export function migrateIntakePolicyOwner(
       );
       addedPaths.push('urlScanner');
     }
+    const withScreeningPool = ensureScreeningPoolPresent(
+      upgraded,
+      filePath,
+      options.seedDir ?? process.env.CONFIG_DIR ?? './config',
+    );
+    Object.assign(upgraded, withScreeningPool.candidate);
+    addedPaths.push(...withScreeningPool.addedPaths);
     const upgradedSinks = structuredClone(raw.sinkGates.sinks);
     if (raw.schemaVersion === 1) {
       upgradedSinks.skill_write = createSkillWriteSinkRule();
@@ -283,7 +330,7 @@ export function migrateIntakePolicyOwner(
       sinks: upgradedSinks,
     };
     const repaired = repairSelfAuthoredMutationPolicy(upgraded, filePath, {
-      rejectExistingCompanionSelf: raw.schemaVersion !== 3,
+      rejectExistingCompanionSelf: raw.schemaVersion === 1 || raw.schemaVersion === 2,
     });
     addedPaths.push(...repaired.addedPaths);
     const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);

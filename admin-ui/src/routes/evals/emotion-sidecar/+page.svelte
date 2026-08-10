@@ -28,6 +28,7 @@
     resolveObserverEvalSidecarPageState,
     statusBadgeClass,
     topDiscreteEmotions,
+    observerEvalSidecarErrorDiagnostic,
     type ObserverEvalSidecarTimeRange,
   } from '$lib/evals/observer-sidecar';
   import type { EmotionStateSnapshot } from '../../../../../src/core/emotion/state.js';
@@ -112,6 +113,7 @@
   let latestPsfnSnapshot = $derived(latestObservation?.psfnEmotion.snapshot ?? latestObservation?.emotion.snapshot ?? null);
   let latestPsfnTop = $derived.by(() => topDiscreteEmotions(latestPsfnSnapshot, 5));
   let latestProjectionDimensions = $derived.by(() => topProjectionDimensions(latestObservation));
+  let psfnDiagnostic = $derived(observerEvalSidecarErrorDiagnostic(latestObservation));
   let currentExportPath = $derived(
     scopeGardenDataPath(buildObserverEvalSidecarExportPath(buildObservationFilters(Date.now()))),
   );
@@ -438,6 +440,11 @@
                 {labelizeObserverEval(latestObservation.status)}
               </span>
             </div>
+            {#if psfnDiagnostic}
+              <p class="mt-4 rounded-lg border border-wilt-300 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
+                {psfnDiagnostic}
+              </p>
+            {/if}
             <dl class="mt-5 grid gap-3 sm:grid-cols-3">
               <div><dt class="text-xs uppercase tracking-[0.16em] text-shadow-500">Valence</dt><dd class="font-mono text-lg text-shadow-900">{formatSnapshotValue(latestPsfnSnapshot, 'valence')}</dd></div>
               <div><dt class="text-xs uppercase tracking-[0.16em] text-shadow-500">Arousal</dt><dd class="font-mono text-lg text-shadow-900">{formatSnapshotValue(latestPsfnSnapshot, 'arousal')}</dd></div>

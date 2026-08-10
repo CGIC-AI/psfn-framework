@@ -145,6 +145,7 @@ async function main(): Promise<void> {
       const provisioned = await provisionWelfareVerifierLoginRole(pool, {
         role: welfareVerifierAuthority.role,
         password: decodeURIComponent(parsed.url.password),
+        connectionLimit: welfareVerifierAuthority.connectionLimit,
       });
       welfareVerifierRole = provisioned.role;
     }

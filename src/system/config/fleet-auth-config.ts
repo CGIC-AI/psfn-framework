@@ -245,6 +245,7 @@ export interface FleetAuthConfig {
  */
 export interface FleetAuthWelfareVerifierAuthority {
   role: string;
+  connectionLimit: number;
   databaseUrlRef: CredentialReference;
 }
 
@@ -521,7 +522,7 @@ function parseWelfareVerifierAuthority(
   schemaRoles: FleetAuthConfig['databaseRoles'],
 ): FleetAuthWelfareVerifierAuthority {
   const record = requireRecord(value, 'welfareVerifier');
-  requireExactKeys(record, ['role', 'databaseUrlRef'], 'welfareVerifier');
+  requireExactKeys(record, ['role', 'connectionLimit', 'databaseUrlRef'], 'welfareVerifier');
   const role = requireString(record.role, 'welfareVerifier.role');
   if (!POSTGRES_ROLE_PATTERN.test(role)) {
     fail('welfareVerifier.role is not a safe PostgreSQL role name');
@@ -529,8 +530,14 @@ function parseWelfareVerifierAuthority(
   if (Object.values(schemaRoles).includes(role)) {
     fail('welfareVerifier.role must be distinct from every databaseRoles entry');
   }
+  const connectionLimit = requireInteger(
+    record.connectionLimit,
+    'welfareVerifier.connectionLimit',
+    1,
+    Number.MAX_SAFE_INTEGER,
+  );
   const databaseUrlRef = parseCredentialReference(record.databaseUrlRef, 'welfareVerifier.databaseUrlRef');
-  return { role, databaseUrlRef };
+  return { role, connectionLimit, databaseUrlRef };
 }
 
 function parseTtls(value: unknown): FleetAuthConfig['ttls'] {

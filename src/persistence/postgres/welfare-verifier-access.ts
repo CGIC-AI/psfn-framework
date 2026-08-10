@@ -31,16 +31,7 @@ export interface PostgresWelfareVerifierGrantEvidence {
   relationGranted: boolean;
 }
 
-/**
- * Connection budget for the gateway verifier pool. The welfare grant verifier
- * opens a single small read pool (`max: 4` in `createWelfareGrantVerifier`);
- * this limit keeps reconnect/idle headroom while remaining finite so the role
- * cannot exhaust the server's connection capacity. Fixed by code ownership,
- * never operator input.
- */
-const WELFARE_VERIFIER_CONNECTION_LIMIT = 8;
-
-const WELFARE_VERIFIER_ROLE_DDL = [
+const WELFARE_VERIFIER_ROLE_ATTRIBUTES = [
   'LOGIN',
   'NOINHERIT',
   'NOSUPERUSER',
@@ -48,7 +39,6 @@ const WELFARE_VERIFIER_ROLE_DDL = [
   'NOCREATEROLE',
   'NOREPLICATION',
   'NOBYPASSRLS',
-  `CONNECTION LIMIT ${WELFARE_VERIFIER_CONNECTION_LIMIT}`,
 ].join(' ');
 
 /**
@@ -71,11 +61,15 @@ export async function provisionWelfareVerifierLoginRole(
   input: {
     role: string;
     password: string;
+    connectionLimit: number;
   },
 ): Promise<PostgresWelfareVerifierLoginEvidence> {
   const role = assertValidPostgresRoleName(input.role);
   if (typeof input.password !== 'string' || input.password.length === 0) {
     throw new Error('Welfare verifier login password must be a non-empty string');
+  }
+  if (!Number.isSafeInteger(input.connectionLimit) || input.connectionLimit < 1) {
+    throw new Error('Welfare verifier connection limit must be a positive integer');
   }
   const existing = await client.query<{ exists: boolean }>(
     'SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS exists',
@@ -89,8 +83,8 @@ export async function provisionWelfareVerifierLoginRole(
   // the planner resolve the variadic. `%I`/`%L` then quote the identifier and
   // password server-side, so neither can smuggle SQL.
   const rendered = await client.query<{ stmt: string }>(
-    `SELECT format('%s %I ${WELFARE_VERIFIER_ROLE_DDL} PASSWORD %L', $1::text, $2::text, $3::text) AS stmt`,
-    [verb, role, input.password],
+    `SELECT format('%s %I ${WELFARE_VERIFIER_ROLE_ATTRIBUTES} CONNECTION LIMIT %s PASSWORD %L', $1::text, $2::text, $3::text, $4::text) AS stmt`,
+    [verb, role, input.connectionLimit, input.password],
   );
   const stmt = rendered.rows.at(0)?.stmt;
   if (typeof stmt !== 'string' || stmt.length === 0) {

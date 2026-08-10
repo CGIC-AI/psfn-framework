@@ -5,14 +5,13 @@ import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
 const ALLOWED_IS_RECORD_FILE = 'src/shared/utils/types.ts';
-const PROJECT_PREFIX = ['P', 'S', 'F', 'N'].join('');
 const IGNORED_PREFIXES = [
   'node_modules/',
   'dist/',
   'admin-ui/.svelte-kit/',
   'admin-ui/build/',
   'companion-ui/dist/',
-  `${PROJECT_PREFIX}-Satellite-Hub/`,
+  'apps/satellite-hub/',
 ];
 
 const DISALLOWED_PATTERNS = [

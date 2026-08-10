@@ -12933,13 +12933,6 @@
       "note": "Canonical owner-file/schema metadata SETTINGS_SUBSYSTEMS.trustPolicy; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
-      "file": "src/system/config/settings-domain-registry.ts",
-      "name": "SETTINGS_FIELD_DOMAIN_BY_KEY.memoryRetrievalPolicy",
-      "value": "'memory'",
-      "form": "object-member",
-      "note": "Code-owned domain-classification mapping (psfn-framework-4ssd5.1): the memory domain owns the memoryRetrievalPolicy field per the settings authority audit (MEM-2). This is registry metadata that routes a settings.json field to its target domain before the file split; it is not an operator-tunable value."
-    },
-    {
       "file": "src/system/config/shell-exec-config.ts",
       "name": "createDefaultShellExecSettings.defaultMaxOutputChars",
       "value": "20_000",

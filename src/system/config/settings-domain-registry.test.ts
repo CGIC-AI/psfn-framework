@@ -15,7 +15,6 @@ import {
   SETTINGS_DOMAIN_IDS,
   SETTINGS_DOMAIN_REGISTRY,
   SETTINGS_FAILURE_SCOPES,
-  SETTINGS_FIELD_DOMAIN_BY_KEY,
   SETTINGS_NON_DOMAIN_OWNER_FILES,
   verifySettingsDomainRegistry,
   type SettingsActivationTier,
@@ -313,7 +312,6 @@ describe('settings-domain tracer: memoryRetrievalPolicy resolves and renders thr
 
   it('resolves to the memory domain before settings.json is split', () => {
     const contractData = buildSettingsContractData();
-    expect(SETTINGS_FIELD_DOMAIN_BY_KEY[tracerKey]).toBe('memory');
     expect(resolveSettingsDomainForField(tracerKey, contractData.fields)).toBe('memory');
   });
 

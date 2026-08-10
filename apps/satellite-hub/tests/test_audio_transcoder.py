@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
 
 from hub.media.audio_transcoder import FfmpegMp3ToFlacTranscoder
+
+# ffmpeg/ffprobe are deployment-host dependencies for the Waveshare bridge
+# (see apps/satellite-hub/README.md), not present in the clean CI runner.
+requires_ffmpeg = pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("ffprobe")),
+    reason="ffmpeg/ffprobe not installed in this environment",
+)
 
 
 def test_transcoder_fails_fast_when_ffmpeg_is_missing() -> None:
@@ -14,6 +22,7 @@ def test_transcoder_fails_fast_when_ffmpeg_is_missing() -> None:
         FfmpegMp3ToFlacTranscoder(executable="definitely-not-an-ffmpeg-binary")
 
 
+@requires_ffmpeg
 @pytest.mark.anyio
 async def test_transcoder_produces_48khz_mono_flac(tmp_path: Path) -> None:
     source = subprocess.run(

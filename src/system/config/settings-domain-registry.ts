@@ -58,6 +58,10 @@ export type SettingsDomainId = (typeof SETTINGS_DOMAIN_IDS)[number];
 
 const SETTINGS_DOMAIN_ID_SET: ReadonlySet<string> = new Set(SETTINGS_DOMAIN_IDS);
 
+const SETTINGS_GARDEN_EXPOSURE_BY_KEY = SETTINGS_GARDEN_FIELD_EXPOSURE as Readonly<
+  Record<string, { readonly sectionId: string } | undefined>
+>;
+
 /**
  * How a domain value is applied after it validates. Matches the audit's
  * live-application contract (section 5.6): most settings target `live`;
@@ -841,10 +845,8 @@ export function resolveSettingsDomainForField(
   fieldKey: string,
   fields: SettingsFieldOwnerIndex,
 ): SettingsDomainId {
-  const sectionId = SETTINGS_GARDEN_FIELD_EXPOSURE[
-    fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
-  ]?.sectionId;
-  if (sectionId && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
+  const sectionId = SETTINGS_GARDEN_EXPOSURE_BY_KEY[fieldKey]?.sectionId;
+  if (sectionId !== undefined && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
     return sectionId as SettingsDomainId;
   }
   const field = fields[fieldKey];
@@ -877,10 +879,8 @@ export function buildSettingsFieldDomainProjection(
   const fieldDomains: Record<string, SettingsDomainId> = {};
   const unresolved: string[] = [];
   for (const fieldKey of Object.keys(fields)) {
-    const sectionId = SETTINGS_GARDEN_FIELD_EXPOSURE[
-      fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
-    ]?.sectionId;
-    if (sectionId && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
+    const sectionId = SETTINGS_GARDEN_EXPOSURE_BY_KEY[fieldKey]?.sectionId;
+    if (sectionId !== undefined && SETTINGS_DOMAIN_ID_SET.has(sectionId)) {
       fieldDomains[fieldKey] = sectionId as SettingsDomainId;
       continue;
     }

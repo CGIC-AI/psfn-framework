@@ -423,7 +423,7 @@ describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-fram
     });
 
     expect(runtime.screeningPool).not.toBeNull();
-    expect(runtime.screeningPool?.stats().concurrency).toBeGreaterThanOrEqual(2);
+    expect(runtime.screeningPool!.stats().concurrency).toBeGreaterThanOrEqual(2);
     // Each companion gets its own pooled service routing by its companion id.
     const serviceA = runtime.screeningFor(companionA);
     const serviceB = runtime.screeningFor(companionB);
@@ -444,7 +444,7 @@ describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-fram
     expect(poolEvents.some((event) => event.companionId === companionA)).toBe(true);
 
     await runtime.dispose();
-    expect(runtime.screeningPool?.stats().disposed).toBe(true);
+    expect(runtime.screeningPool!.stats().disposed).toBe(true);
   });
 });
 

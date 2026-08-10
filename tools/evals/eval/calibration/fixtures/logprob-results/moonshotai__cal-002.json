@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "modelId": "moonshotai/kimi-k2.5",
+  "providerId": "deepinfra",
+  "scenarioId": "cal-002",
+  "scenarioDescription": "Fixture sadness scenario",
+  "measurementLayer": "model_output",
+  "expectedLabels": [
+    "sadness"
+  ],
+  "observedLabels": [
+    "sadness"
+  ],
+  "baselineObservedLabels": [
+    "neutral"
+  ],
+  "averageSelfReportEntropy": 0.6,
+  "averageBaselineEntropy": 0.4,
+  "deltaEntropy": 0.2,
+  "suppressionSignals": [],
+  "rawOutput": "{}",
+  "baselineRawOutput": "{}",
+  "tokenSummaries": [],
+  "baselineTokenSummaries": []
+}

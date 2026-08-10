@@ -1,0 +1,3 @@
+[submodule "vendor/emosim"]
+	path = vendor/emosim
+	url = https://github.com/FoxEngine-ai/emo_sim

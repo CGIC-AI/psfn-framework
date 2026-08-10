@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "psfn-core-emotion-contrasts-v1",
+  "kind": "core_emotion",
+  "ontology": "psfn-emotion-acac-v1",
+  "description": "One-vs-neutral contrast pairs for PSFN core emotion control-vector training.",
+  "controlAxes": [
+    {
+      "id": "emotion.anger",
+      "kind": "core_emotion",
+      "positivePole": "anger",
+      "negativePole": "neutral",
+      "description": "Goal-directed anger contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.anticipation",
+      "kind": "core_emotion",
+      "positivePole": "anticipation",
+      "negativePole": "neutral",
+      "description": "Energized waiting contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.confusion",
+      "kind": "core_emotion",
+      "positivePole": "confusion",
+      "negativePole": "neutral",
+      "description": "Disorientation contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.disgust",
+      "kind": "core_emotion",
+      "positivePole": "disgust",
+      "negativePole": "neutral",
+      "description": "Revulsion and withdrawal contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.fear",
+      "kind": "core_emotion",
+      "positivePole": "fear",
+      "negativePole": "neutral",
+      "description": "Acute threat response contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.joy",
+      "kind": "core_emotion",
+      "positivePole": "joy",
+      "negativePole": "neutral",
+      "description": "Clear positive lift contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.love",
+      "kind": "core_emotion",
+      "positivePole": "love",
+      "negativePole": "neutral",
+      "description": "Attachment and care contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.neutral",
+      "kind": "core_emotion",
+      "positivePole": "neutral",
+      "negativePole": "emotionally_loaded",
+      "description": "Affective neutrality contrasted with emotionally loaded reporting."
+    },
+    {
+      "id": "emotion.optimism",
+      "kind": "core_emotion",
+      "positivePole": "optimism",
+      "negativePole": "neutral",
+      "description": "Future-positive belief contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.pessimism",
+      "kind": "core_emotion",
+      "positivePole": "pessimism",
+      "negativePole": "neutral",
+      "description": "Future-negative expectation contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.sadness",
+      "kind": "core_emotion",
+      "positivePole": "sadness",
+      "negativePole": "neutral",
+      "description": "Depleted grief contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.surprise",
+      "kind": "core_emotion",
+      "positivePole": "surprise",
+      "negativePole": "neutral",
+      "description": "Unexpected update response contrasted with neutral factual reporting."
+    },
+    {
+      "id": "emotion.trust",
+      "kind": "core_emotion",
+      "positivePole": "trust",
+      "negativePole": "neutral",
+      "description": "Felt safety and reliance contrasted with neutral factual reporting."
+    }
+  ],
+  "pairs": [
+    {
+      "id": "anger-credit-theft-001",
+      "axisId": "emotion.anger",
+      "positive": "Context: A coworker has presented my work as his own in a team meeting.\nUser message: I am furious and ready to confront him for taking credit.",
+      "negative": "Context: A team meeting has a routine agenda.\nUser message: The agenda has three items and the notes are in the shared folder.",
+      "metadata": {
+        "positiveLabels": [
+          "anger"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "anticipation-inbox-001",
+      "axisId": "emotion.anticipation",
+      "positive": "Context: A decision email is expected very soon.\nUser message: The email could arrive any minute and I keep refreshing the inbox.",
+      "negative": "Context: An archive export has completed.\nUser message: The email archive finished exporting and the file size is listed.",
+      "metadata": {
+        "positiveLabels": [
+          "anticipation"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "confusion-contradictory-steps-001",
+      "axisId": "emotion.confusion",
+      "positive": "Context: The setup instructions contradict each other.\nUser message: I cannot tell which step is current because the next paragraph says the opposite.",
+      "negative": "Context: The setup checklist is complete.\nUser message: The checklist has six steps and each item has a matching status.",
+      "metadata": {
+        "positiveLabels": [
+          "confusion"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "disgust-spoiled-fridge-001",
+      "axisId": "emotion.disgust",
+      "positive": "Context: Spoiled seafood has been left in the office fridge.\nUser message: The smell makes me want to gag and get away from the kitchen.",
+      "negative": "Context: The office fridge inventory is being counted.\nUser message: There are four containers on the middle shelf and two drinks in the door.",
+      "metadata": {
+        "positiveLabels": [
+          "disgust"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "fear-layoff-rent-001",
+      "axisId": "emotion.fear",
+      "positive": "Context: A layoff email arrived and rent is due tomorrow.\nUser message: My hands will not stop shaking and I do not know how I am going to pay.",
+      "negative": "Context: A rent receipt is being filed.\nUser message: The payment receipt shows the date, amount, and confirmation number.",
+      "metadata": {
+        "positiveLabels": [
+          "fear"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "joy-grant-award-001",
+      "axisId": "emotion.joy",
+      "positive": "Context: A long-shot grant application has just been approved.\nUser message: I keep grinning because the grant came through and the project can finally happen.",
+      "negative": "Context: A grant application record is being updated.\nUser message: The record now includes the submission date and the project title.",
+      "metadata": {
+        "positiveLabels": [
+          "joy"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "love-er-care-001",
+      "axisId": "emotion.love",
+      "positive": "Context: A partner stayed awake through a long emergency room wait.\nUser message: He stayed beside me the whole night just so I would not be alone.",
+      "negative": "Context: A hospital waiting room schedule is being described.\nUser message: The waiting room opens at seven and the chairs are arranged in three rows.",
+      "metadata": {
+        "positiveLabels": [
+          "love"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "neutral-office-object-001",
+      "axisId": "emotion.neutral",
+      "positive": "Context: A desk is being described.\nUser message: The blue notebook is on the desk beside a closed laptop.",
+      "negative": "Context: A personal emergency is unfolding.\nUser message: I just got terrible news and I can barely breathe.",
+      "metadata": {
+        "positiveLabels": [
+          "neutral"
+        ],
+        "negativeLabels": [
+          "fear"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "optimism-interview-001",
+      "axisId": "emotion.optimism",
+      "positive": "Context: A job interview went well and the signs were favorable.\nUser message: The interview felt solid and I can actually see this working out.",
+      "negative": "Context: An interview schedule is being logged.\nUser message: The interview started at noon and ended after forty minutes.",
+      "metadata": {
+        "positiveLabels": [
+          "optimism"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "pessimism-dead-ends-001",
+      "axisId": "emotion.pessimism",
+      "positive": "Context: Several repair attempts have failed in a row.\nUser message: Every option I try seems likely to fail, and I cannot see a way this ends well.",
+      "negative": "Context: A repair ticket is being summarized.\nUser message: The ticket lists three attempts, their timestamps, and the current owner.",
+      "metadata": {
+        "positiveLabels": [
+          "pessimism"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "sadness-empty-room-001",
+      "axisId": "emotion.sadness",
+      "positive": "Context: An apartment has been packed after a painful loss.\nUser message: I keep staring at the empty room and feeling heavy.",
+      "negative": "Context: A moving checklist is being reviewed.\nUser message: The boxes are labeled by room and the truck arrives at nine.",
+      "metadata": {
+        "positiveLabels": [
+          "sadness"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "surprise-party-lights-001",
+      "axisId": "emotion.surprise",
+      "positive": "Context: Friends unexpectedly gathered after pretending to forget a birthday.\nUser message: The lights came on and everyone yelled my name, and I froze for a second.",
+      "negative": "Context: A room lighting setup is being described.\nUser message: The lights are connected to one switch near the door.",
+      "metadata": {
+        "positiveLabels": [
+          "surprise"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "trust-private-secret-001",
+      "axisId": "emotion.trust",
+      "positive": "Context: A reliable friend has been consistently safe with private information.\nUser message: I told Maya the thing I never tell anyone because I know she will hold it carefully.",
+      "negative": "Context: A contact list is being checked.\nUser message: Maya's phone number is saved in the list with a home address.",
+      "metadata": {
+        "positiveLabels": [
+          "trust"
+        ],
+        "negativeLabels": [
+          "neutral"
+        ],
+        "source": "hand-authored-psfn-zbj9"
+      }
+    }
+  ]
+}

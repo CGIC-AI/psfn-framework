@@ -65,7 +65,7 @@ import type {
   BiographicalRebuildEnqueueResult,
   BiographicalRebuildReason,
   BiographicalSourceLifecycleReason,
-} from './lifecycle.js';
+} from './rebuild-contracts.js';
 import type { BiographicalLifecycleSourceRevalidator } from './lifecycle.js';
 
 // ── Source revalidation ──

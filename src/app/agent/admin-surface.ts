@@ -122,7 +122,7 @@ export async function openIcpAdminProjectionStoreForGarden(
   )) ?? null;
 }
 
-export async function openBiographicalReviewServiceForGarden(
+async function openBiographicalReviewServiceForGarden(
   config: SubstrateConfig,
 ): Promise<AdminBiographicalReviewService | null> {
   const databaseUrl = config.postgresDatabaseUrl?.trim();

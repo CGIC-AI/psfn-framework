@@ -91,7 +91,6 @@ export type {
   AdminBiographicalClaimDetail,
   AdminBiographicalClaimList,
   AdminBiographicalClaimView,
-  AdminBiographicalSourceView,
 } from '../../../../src/operator/garden/services/biographical-review-service.js';
 import type {
   AuthenticityProvenance,

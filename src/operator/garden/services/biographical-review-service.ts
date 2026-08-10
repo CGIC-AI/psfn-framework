@@ -10,7 +10,7 @@ import type {
   BiographicalClaimSource,
   BiographicalSensitivityGrant,
 } from '../../../faculties/memory/biographical/types.js';
-import type { BiographicalRebuildRequest } from '../../../faculties/memory/biographical/lifecycle.js';
+import type { BiographicalRebuildRequest } from '../../../faculties/memory/biographical/rebuild-contracts.js';
 import type {
   BiographicalReviewAction,
   BiographicalReviewAuditInput,
@@ -19,7 +19,7 @@ import type {
 } from '../../../faculties/memory/biographical/review-audit.js';
 import type { BiographicalProfileStorePort } from '../../../faculties/memory/biographical/store-port.js';
 
-export interface AdminBiographicalSourceView {
+interface AdminBiographicalSourceView {
   readonly ref: string;
   readonly revision: string;
   readonly evidenceDigest: string;

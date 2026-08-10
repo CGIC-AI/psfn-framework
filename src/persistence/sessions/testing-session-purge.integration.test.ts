@@ -223,7 +223,7 @@ describe('testing-session purge with PostgreSQL projection', () => {
       expect(report.database).toEqual({
         removedProjectionRows: 2,
         removedMemoryRows: 1,
-        removedContactProfileRows: 1,
+        removedRecentContactShapeRows: 1,
         removedMemoryLinkRows: 1,
         removedMaintenanceReviewRows: 1,
       });

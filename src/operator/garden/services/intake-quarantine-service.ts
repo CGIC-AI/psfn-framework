@@ -145,8 +145,14 @@ export interface AdminIntakeQuarantineItemView {
     delivered: boolean;
     attemptedAt: string;
     channelId?: string;
+    logicalSessionId?: string;
+    entryId?: number | null;
+    /** Release never posts a new platform message; this is explicit in the API. */
+    externalMessageSent: false;
     reason?: string;
   };
+  /** On-disk artifacts made readable by this release; never exposed while held. */
+  releasedArtifactPaths?: string[];
   /** A prior release did not land and can be retried without re-releasing. */
   redeliveryRetryAvailable: boolean;
   /** What always-allow/always-deny would list; null when underivable. */
@@ -236,6 +242,8 @@ export interface IntakeReleaseRedeliveryResult {
   delivered: boolean;
   /** Channel the delivery landed in, when delivered. */
   channelId?: string;
+  /** Exact active logical session that received the released context. */
+  logicalSessionId?: string;
   /** Session entry id of the delivery, when one was appended. */
   entryId?: number | null;
   /** Why delivery could not happen (undeliverable item), when not delivered. */
@@ -342,6 +350,11 @@ function isRedeliveryRetry(
     || (action === 'release_sanitized' && entry.status === 'released_sanitized');
   if (!matchingTerminalState || entry.decision?.action !== action) return false;
   if (entry.redelivery?.delivered === false) return true;
+  // PR #488 receipts predate exact logical-session recording. They may have
+  // appended to a session that another process had already retired, so permit
+  // one migration retry; the new receipt closes the retry permanently.
+  if (entry.redelivery?.delivered === true
+    && entry.redelivery.logicalSessionId === undefined) return true;
   // Legacy signature of the live defect: the release ran before document
   // intake persisted sourceChannelId, and therefore could not have landed.
   return entry.redelivery === undefined
@@ -430,9 +443,18 @@ function toItemView(
           delivered: entry.redelivery.delivered,
           attemptedAt: toIso(entry.redelivery.attemptedAtMs),
           ...(entry.redelivery.channelId ? { channelId: entry.redelivery.channelId } : {}),
+          ...(entry.redelivery.logicalSessionId
+            ? { logicalSessionId: entry.redelivery.logicalSessionId }
+            : {}),
+          ...(entry.redelivery.entryId !== undefined ? { entryId: entry.redelivery.entryId } : {}),
+          externalMessageSent: false,
           ...(entry.redelivery.reason ? { reason: entry.redelivery.reason } : {}),
         },
       }
+      : {}),
+    ...((entry.status === 'released_raw' || entry.status === 'released_sanitized')
+      && entry.artifactPaths && entry.artifactPaths.length > 0
+      ? { releasedArtifactPaths: [...entry.artifactPaths] }
       : {}),
     redeliveryRetryAvailable: entry.decision !== undefined
       && isRedeliveryRetry(entry, entry.decision.action),
@@ -826,6 +848,9 @@ export function createAdminIntakeQuarantineService(
           delivered: redelivery.delivered,
           attemptedAtMs: atMs,
           ...(redelivery.channelId !== undefined ? { channelId: redelivery.channelId } : {}),
+          ...(redelivery.logicalSessionId !== undefined
+            ? { logicalSessionId: redelivery.logicalSessionId }
+            : {}),
           ...(redelivery.entryId !== undefined ? { entryId: redelivery.entryId } : {}),
           ...(redelivery.reason !== undefined ? { reason: redelivery.reason } : {}),
         });
@@ -833,8 +858,15 @@ export function createAdminIntakeQuarantineService(
 
       const redeliveryNote = redelivery
         ? redelivery.delivered
-          ? ` and re-delivered it into ${redelivery.channelId ?? 'the conversation'}`
-          : `; re-delivery did not land (${redelivery.reason ?? 'no reason recorded'})`
+          ? `; appended released context to L0 session ${redelivery.logicalSessionId
+              ?? redelivery.channelId
+              ?? 'unknown'}${redelivery.entryId === undefined || redelivery.entryId === null
+              ? ''
+              : ` as entry ${String(redelivery.entryId)}`}; no external chat message was sent`
+          : `; released, but the L0 conversation append failed (${redelivery.reason ?? 'no reason recorded'}); no external chat message was sent`
+        : '';
+      const artifactNote = decided.artifactPaths && decided.artifactPaths.length > 0
+        ? `; released on-disk artifacts: ${decided.artifactPaths.join(', ')}`
         : '';
 
       cogSecEvents.updateEvent(event.caseId, {
@@ -856,7 +888,7 @@ export function createAdminIntakeQuarantineService(
       return {
         ok: true,
         item: toItemView(decided, atMs, deps.attributionResolvers),
-        message: `${validated.retryRedelivery ? 'Retried delivery for' : `Applied ${request.action} to`} quarantine item ${entry.id}${flywheelMessage}${redeliveryNote}`,
+        message: `${validated.retryRedelivery ? 'Retried conversation placement for' : `Applied ${request.action} to`} quarantine item ${entry.id}${flywheelMessage}${artifactNote}${redeliveryNote}`,
         cogSecCaseId: event.caseId,
       };
     },

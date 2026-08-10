@@ -468,12 +468,32 @@
               </div>
             {/if}
             {#if item.redelivery}
-              <div class="md:col-span-2">
-                <span class="text-shadow-600">Re-delivery:</span>
-                <span class="ml-1 text-shadow-800">
-                  {item.redelivery.delivered ? 'landed' : 'did not land'} at {formatTimestamp(item.redelivery.attemptedAt)}
-                  {item.redelivery.reason ? ` -- ${item.redelivery.reason}` : ''}
-                </span>
+              <div class="md:col-span-2 rounded border border-bark-200 bg-bark-50 px-3 py-2">
+                <p class="font-medium text-shadow-800">Release destinations</p>
+                <ul class="mt-1 space-y-1 text-xs text-shadow-800">
+                  <li>
+                    <span class="font-medium">Conversation context:</span>
+                    {item.redelivery.delivered ? 'appended to L0' : 'append failed'}
+                    {item.redelivery.logicalSessionId ? ` in session ${item.redelivery.logicalSessionId}` : ''}
+                    {item.redelivery.entryId === undefined || item.redelivery.entryId === null
+                      ? ''
+                      : ` as entry ${item.redelivery.entryId}`}
+                    at {formatTimestamp(item.redelivery.attemptedAt)}.
+                    {item.redelivery.reason ? ` ${item.redelivery.reason}` : ''}
+                  </li>
+                  <li><span class="font-medium">External chat:</span> no Discord, Telegram, or API message was sent by this action.</li>
+                  <li><span class="font-medium">Companion behavior:</span> the released context is available on the companion's next turn; this action does not start a turn by itself.</li>
+                </ul>
+              </div>
+            {/if}
+            {#if item.releasedArtifactPaths && item.releasedArtifactPaths.length > 0}
+              <div class="md:col-span-2 rounded border border-moss-200 bg-moss-50 px-3 py-2">
+                <p class="font-medium text-moss-800">Released files are readable at</p>
+                <ul class="mt-1 space-y-0.5">
+                  {#each item.releasedArtifactPaths as path (path)}
+                    <li><code class="font-mono text-xs break-all text-shadow-800">{path}</code></li>
+                  {/each}
+                </ul>
               </div>
             {/if}
             {#if item.contentAccessAttempts && item.contentAccessAttempts.length > 0}
@@ -654,13 +674,13 @@
                   </div>
                 {:else if item.redeliveryRetryAvailable}
                   <div class="garden-field-grid border-t border-bark-100 pt-4 space-y-3">
-                    <p class="text-sm font-medium text-wilt-700">Released content did not reach its conversation</p>
+                    <p class="text-sm font-medium text-wilt-700">Released content was not placed in the active conversation context</p>
                     <label class="garden-field block text-sm text-shadow-800">
                       Retry reason (required, audited)
                       <textarea
                         class="mt-1 w-full min-h-16 rounded-lg border border-bark-300 px-3 py-2 text-sm"
                         bind:value={reason}
-                        placeholder="Why this previously failed delivery should be retried."
+                        placeholder="Why conversation placement should be retried."
                       ></textarea>
                     </label>
                     <button
@@ -668,7 +688,7 @@
                       onclick={() => beginRedeliveryRetry(item)}
                       class="garden-action garden-action--primary px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300"
                     >
-                      Retry delivery
+                      Retry conversation placement
                     </button>
                   </div>
                 {/if}

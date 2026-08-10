@@ -72,6 +72,8 @@ interface IntakeQuarantineRedeliveryRecord {
   delivered: boolean;
   attemptedAtMs: number;
   channelId?: string;
+  /** Exact active logical session that received the released context. */
+  logicalSessionId?: string;
   entryId?: number | null;
   reason?: string;
 }
@@ -560,7 +562,9 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
     }
     const redelivery = entry.redelivery as Record<string, unknown>;
     const unknownRedeliveryKeys = Object.keys(redelivery)
-      .filter(key => !['delivered', 'attemptedAtMs', 'channelId', 'entryId', 'reason'].includes(key));
+      .filter(key => ![
+        'delivered', 'attemptedAtMs', 'channelId', 'logicalSessionId', 'entryId', 'reason',
+      ].includes(key));
     if (unknownRedeliveryKeys.length > 0) {
       throw invalidEntry(filePath, `redelivery has unsupported keys: ${unknownRedeliveryKeys.join(', ')}`);
     }
@@ -573,6 +577,10 @@ function assertEntryShape(value: unknown, filePath: string): IntakeQuarantineEnt
     if (redelivery.channelId !== undefined
       && (typeof redelivery.channelId !== 'string' || !redelivery.channelId.trim())) {
       throw invalidEntry(filePath, 'redelivery.channelId must be a non-empty string when present');
+    }
+    if (redelivery.logicalSessionId !== undefined
+      && (typeof redelivery.logicalSessionId !== 'string' || !redelivery.logicalSessionId.trim())) {
+      throw invalidEntry(filePath, 'redelivery.logicalSessionId must be a non-empty string when present');
     }
     if (redelivery.entryId !== undefined && redelivery.entryId !== null
       && (typeof redelivery.entryId !== 'number' || !Number.isInteger(redelivery.entryId))) {
@@ -1197,6 +1205,9 @@ function createIntakeQuarantineStoreInternal(
       if (input.channelId !== undefined && !input.channelId.trim()) {
         throw new Error('Intake quarantine redelivery channelId must be non-empty when present');
       }
+      if (input.logicalSessionId !== undefined && !input.logicalSessionId.trim()) {
+        throw new Error('Intake quarantine redelivery logicalSessionId must be non-empty when present');
+      }
       if (input.reason !== undefined && !input.reason.trim()) {
         throw new Error('Intake quarantine redelivery reason must be non-empty when present');
       }
@@ -1215,6 +1226,9 @@ function createIntakeQuarantineStoreInternal(
             delivered: input.delivered,
             attemptedAtMs: input.attemptedAtMs,
             ...(input.channelId !== undefined ? { channelId: input.channelId.trim() } : {}),
+            ...(input.logicalSessionId !== undefined
+              ? { logicalSessionId: input.logicalSessionId.trim() }
+              : {}),
             ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
             ...(input.reason !== undefined ? { reason: input.reason.trim() } : {}),
           },

@@ -624,8 +624,9 @@ export function createInProcessGardenAdminContract(
         withheld: false,
         envelopes: [snapshotIntakeEnvelope(input.envelope, { kind: 'body' })],
       });
+      const logicalSessionId = options.sessionManager.resolveSessionForIngress(channelId);
       const entryId = options.sessionManager.recordSystemMessage(
-        channelId,
+        logicalSessionId,
         text,
         'system:intake-firewall',
         'Intake firewall',
@@ -636,7 +637,7 @@ export function createInProcessGardenAdminContract(
       if (entryId === null) {
         return { delivered: false, reason: `channel '${channelId}' is not a persistable session` };
       }
-      return { delivered: true, entryId, channelId };
+      return { delivered: true, entryId, channelId, logicalSessionId };
     },
     onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'intake-quarantine'),
   });

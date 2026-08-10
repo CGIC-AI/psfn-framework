@@ -14,6 +14,7 @@ import {
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 
 // ── W6 inter-companion channel lane: gateway routing tests ──
 // The lane is the ONLY path between companions: sends resolve fail-closed
@@ -131,8 +132,8 @@ function createMinimalOptions(): GatewayServerOptions {
       outbound: { textChunkLimit: 2000, sendText: vi.fn() },
     }),
     policyConfig: { workspacePath: '/workspace' },
-    intakeScreeningMode: 'off',
-    intakeScreeningProvider: () => null,
+    intakeScreeningMode: 'shadow',
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
@@ -228,7 +229,12 @@ function auditedEvents(auditStore: GatewayAuditStorePort): string[] {
 
 describe('companion.message.send routing (W6)', () => {
   it('fails closed when multi-companion is off: the lane does not exist', async () => {
-    const { connect } = await setupServer(createMinimalOptions());
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      intakeScreening: testShadowIntakeScreening(),
+      intakeScreeningProvider: undefined,
+      visionIntakeProvider: undefined,
+    });
     const agent = await connect();
     const response = await invokeRpc(agent, 1, 'companion.message.send', {
       channelId: 'companion-room:living_room',

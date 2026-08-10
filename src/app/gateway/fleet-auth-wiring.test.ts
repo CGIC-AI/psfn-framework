@@ -6,12 +6,13 @@ import {
   startOptionalGatewayApiServer,
 } from './api-surface.js';
 import { FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR } from '../../boundary/fleet-auth/fleet-sso-transport.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 
 describe('gateway fleet authorization context wiring', () => {
   it('fails closed when fleet API intake ownership is missing or mode-mismatched', () => {
     const base = {
       multiCompanion: true,
-      intakeScreeningMode: 'off',
+      intakeScreeningMode: 'shadow',
       intakeScreening: null,
       config: {
         companionFleet: {
@@ -26,12 +27,12 @@ describe('gateway fleet authorization context wiring', () => {
       .toThrow(/requires a companion-owned resolver/u);
     expect(() => assertGatewayApiIntakeScreeningOwnership({
       ...base,
-      intakeScreeningMode: 'enforce',
+      intakeScreeningMode: 'strict',
       intakeScreeningForCompanion: () => null,
-    })).toThrow(/mode=enforce has no matching service/u);
+    })).toThrow(/mode=strict has no matching service/u);
     expect(() => assertGatewayApiIntakeScreeningOwnership({
       ...base,
-      intakeScreeningForCompanion: () => null,
+      intakeScreeningForCompanion: testShadowIntakeScreening,
     })).not.toThrow();
   });
 

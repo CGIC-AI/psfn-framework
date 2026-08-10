@@ -9,6 +9,7 @@ import {
 } from '../../boundary/gateway/fleet-portal-projection.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import {
   FLEET_POSTURE_EXPIRY_TIMEOUT_MS,
   FLEET_POSTURE_STALE_TIMEOUT_MS,
@@ -98,8 +99,8 @@ function options(): GatewayServerOptions {
       },
     },
     policyConfig: { workspacePath: '/validation/workspace' },
-    intakeScreeningMode: 'off',
-    intakeScreeningProvider: () => null,
+    intakeScreeningMode: 'shadow',
+    intakeScreeningProvider: testShadowIntakeScreening,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: KEYRING,
     wyomingShardRouting: { enabled: false },

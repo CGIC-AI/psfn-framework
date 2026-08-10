@@ -14,6 +14,7 @@ import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { testShadowIntakeScreening } from '../../test-support/intake-screening.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
@@ -144,7 +145,8 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: {
       workspacePath: '/workspace',
     },
-    intakeScreeningMode: 'off',
+    intakeScreeningMode: 'shadow',
+    intakeScreening: testShadowIntakeScreening(),
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
@@ -611,7 +613,7 @@ describe('GatewayServer', () => {
     });
     quarantineStore.hold({
       envelope,
-      mode: 'strict',
+      mode: 'enforce',
       rawText: heldContent,
       artifactPaths: [artifactPath],
     });
@@ -629,7 +631,7 @@ describe('GatewayServer', () => {
         },
         quarantinedArtifactGuard: createQuarantinedArtifactAccessGuard({
           store: quarantineStore,
-          mode: 'strict',
+          mode: 'enforce',
         }),
       });
 

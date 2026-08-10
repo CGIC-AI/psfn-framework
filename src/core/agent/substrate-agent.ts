@@ -79,8 +79,6 @@ import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
 import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
 import {
   type IntakeSinkGate,
-  type IntakeEgressTrifectaAssessment,
-  type IntakeSinkGateAuditEvent,
 } from '../cogsec/intake/sink-gates.js';
 import { classifyToolResultCogSecProvenance } from '../cogsec/intake/tool-result-provenance.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';

@@ -41,6 +41,10 @@ import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/oper
 import { awaitOptionalPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import { createIntakeReleaseConversationTurn } from './intake-release-conversation-turn.js';
+import { createPostgresPool } from '../../persistence/postgres.js';
+import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
+import { createPostgresBiographicalProfileStore } from '../../faculties/memory/biographical/postgres-store.js';
+import { AdminBiographicalReviewService } from '../../operator/garden/services/biographical-review-service.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -118,6 +122,35 @@ export async function openIcpAdminProjectionStoreForGarden(
   )) ?? null;
 }
 
+export async function openBiographicalReviewServiceForGarden(
+  config: SubstrateConfig,
+): Promise<AdminBiographicalReviewService | null> {
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  const queryLimit = config.biographicalDepthPolicy?.full.operationClaimLimit;
+  if (!databaseUrl || queryLimit === undefined) return null;
+  return (await awaitOptionalPostgresStoreReadiness(
+    'biographical_profile_garden',
+    async () => {
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-biographical-garden',
+        allowExitOnIdle: true,
+        ...resolveConfigTenantPoolScope(config),
+      });
+      try {
+        const store = await createPostgresBiographicalProfileStore(pool);
+        return new AdminBiographicalReviewService({
+          store,
+          queryLimit,
+          close: () => pool.end(),
+        });
+      } catch (error) {
+        await pool.end();
+        throw error;
+      }
+    },
+  )) ?? null;
+}
+
 export async function startOptionalAdminTransportServer(
   options: StartOptionalAdminTransportServerOptions,
 ): Promise<GardenAdminTransportServer | undefined> {
@@ -134,6 +167,7 @@ export async function startOptionalAdminTransportServer(
   };
   const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
   const icpAdminProjectionStore = await openIcpAdminProjectionStoreForGarden(options.config);
+  const biographicalReviewService = await openBiographicalReviewServiceForGarden(options.config);
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl;
   // Fleet Command room-state and arbitration telemetry (jp36.8.1): the arbiter
   // is gateway-owned and only exists in multi-companion mode, so this read-only
@@ -158,6 +192,7 @@ export async function startOptionalAdminTransportServer(
     apiHost: options.apiHost,
     apiPort: options.apiPort,
     memoryStore: options.coreRuntime.memoryStore,
+    biographicalReviewService,
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,

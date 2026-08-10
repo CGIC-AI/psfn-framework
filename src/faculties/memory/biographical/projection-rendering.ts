@@ -102,6 +102,28 @@ function renderRole(value: RoleClaimValue): string {
     : `${value.roleType}: ${value.title} at ${value.organization}`;
 }
 
+/** Deterministic status-independent rendering for operator inspection. Unlike
+ * prompt presentation, this renders terminal and withheld claims without
+ * implying that they are current or eligible for disclosure. */
+export function renderBiographicalClaimForReview(claim: BiographicalClaim): string {
+  switch (claim.value.kind) {
+    case 'name':
+      return `${claim.value.role === 'primary' ? 'Primary name' : 'Alias'}: ${claim.value.name}`;
+    case 'nickname':
+      return claim.value.scope === 'self'
+        ? `Self nickname: ${claim.value.nickname}`
+        : `Relational nickname: ${claim.value.nickname}`;
+    case 'relationship':
+      return `Relationship: ${claim.value.relationshipType}`;
+    case 'role':
+      return `Role — ${renderRole(claim.value)}`;
+    case 'stable-preference':
+      return `Stable preference: ${claim.value.polarity} ${claim.value.target} (${claim.value.domain})`;
+    case 'shared-language':
+      return `Shared ${claim.value.languageType} “${claim.value.phrase}” means ${claim.value.meaning}.`;
+  }
+}
+
 /** Closed deterministic rendering registry. Subject eligibility is resolved
  * before this registry runs, so adding a stable kind does not alter who may be
  * selected and adding a subject role does not alter kind rendering. */

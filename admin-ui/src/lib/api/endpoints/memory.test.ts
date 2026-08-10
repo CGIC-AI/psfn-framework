@@ -10,10 +10,16 @@ vi.mock('$lib/api/client', () => ({
   },
 }));
 
-import { apiPost as apiPostImport } from '$lib/api/client';
-import { revealMemory } from './memory.js';
+import { apiGet as apiGetImport, apiPost as apiPostImport } from '$lib/api/client';
+import {
+  getBiographicalClaim,
+  listBiographicalClaims,
+  revealMemory,
+  reviewBiographicalClaim,
+} from './memory.js';
 
 const apiPost = vi.mocked(apiPostImport);
+const apiGet = vi.mocked(apiGetImport);
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = 'mem-42';
@@ -46,6 +52,38 @@ beforeEach(() => {
     },
   });
   apiPost.mockReset();
+  apiGet.mockReset();
+});
+
+describe('biographical claim review endpoints', () => {
+  it('uses bounded list/detail routes and sends only exact action digests', async () => {
+    apiGet.mockResolvedValue({ claims: [] });
+    apiPost.mockResolvedValue({ claim: { id: 'claim/1' } });
+
+    await listBiographicalClaims();
+    await getBiographicalClaim('claim/1');
+    await reviewBiographicalClaim('claim/1', {
+      action: 'regrant',
+      claimDigest: 'a'.repeat(64),
+      sourceSetDigest: 'b'.repeat(64),
+      grantedSensitivity: 'personal',
+    });
+
+    expect(apiGet.mock.calls).toEqual([
+      ['/api/admin/biographical-claims'],
+      ['/api/admin/biographical-claims/claim%2F1'],
+    ]);
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/admin/biographical-claims/claim%2F1/review',
+      {
+        action: 'regrant',
+        claimDigest: 'a'.repeat(64),
+        sourceSetDigest: 'b'.repeat(64),
+        grantedSensitivity: 'personal',
+      },
+    );
+    expect(apiPost.mock.calls[0]?.[1]).not.toHaveProperty('actor');
+  });
 });
 
 afterEach(() => {

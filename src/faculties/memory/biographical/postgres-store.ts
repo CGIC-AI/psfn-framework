@@ -46,6 +46,12 @@ import {
   type BiographicalRebuildListOptions,
   type BiographicalRebuildRequest,
 } from './lifecycle.js';
+import {
+  deserializeBiographicalReviewAudit,
+  prepareBiographicalReviewAudit,
+  type BiographicalReviewAuditInput,
+  type BiographicalReviewAuditRecord,
+} from './review-audit.js';
 
 interface ClaimRow {
   claim_json: string;
@@ -57,6 +63,10 @@ interface GrantRow {
 
 interface RebuildRow {
   rebuild_json: unknown;
+}
+
+interface ReviewAuditRow {
+  audit_json: unknown;
 }
 
 function subjectColumns(subject: BiographicalSubjectRef): {
@@ -132,6 +142,16 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       `SELECT grant_json FROM biographical_grants
        WHERE claim_digest = $1 AND source_set_digest = $2`,
       [claimDigest, sourceSetDigest],
+    );
+    return rows.map(row => assertGrantRecord(row.grant_json));
+  }
+
+  private async findGrantsByClaimDigest(
+    claimDigest: string,
+  ): Promise<BiographicalSensitivityGrant[]> {
+    const rows = await this.queryRows<GrantRow>(
+      'SELECT grant_json FROM biographical_grants WHERE claim_digest = $1',
+      [claimDigest],
     );
     return rows.map(row => assertGrantRecord(row.grant_json));
   }
@@ -433,7 +453,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
 
   async listGrantsForClaim(claimId: string): Promise<BiographicalSensitivityGrant[]> {
     const claim = await this.readClaim(claimId);
-    return await this.findGrantsByDigests(claim.claimDigest, claim.sourceSetDigest);
+    return await this.findGrantsByClaimDigest(claim.claimDigest);
   }
 
   async revokeGrant(
@@ -554,12 +574,19 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       throw new Error('biographical rebuild list limit must be a positive integer');
     }
     const params: unknown[] = [];
-    const statusClause = options.status === undefined
-      ? ''
-      : (params.push(options.status), `WHERE status = $${params.length}`);
+    const conditions: string[] = [];
+    if (options.status !== undefined) {
+      params.push(options.status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (options.claimId !== undefined) {
+      params.push(options.claimId);
+      conditions.push(`claim_id = $${params.length}`);
+    }
+    const whereClause = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
     params.push(options.limit);
     const rows = await this.queryRows<RebuildRow>(
-      `SELECT rebuild_json FROM biographical_rebuild_queue ${statusClause}
+      `SELECT rebuild_json FROM biographical_rebuild_queue ${whereClause}
        ORDER BY queued_at ASC, id ASC LIMIT $${params.length}`,
       params,
     );
@@ -617,6 +644,45 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       );
       return await operation(store);
     });
+  }
+
+  async recordReviewAudit(
+    input: BiographicalReviewAuditInput,
+  ): Promise<BiographicalReviewAuditRecord> {
+    const record = prepareBiographicalReviewAudit(input);
+    await (this.client ?? this.pool).query(
+      `INSERT INTO biographical_review_audits
+        (id, claim_id, claim_digest, source_set_digest, action, decision, reason,
+         audit_json, recorded_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+      [
+        record.id,
+        record.claimId,
+        record.claimDigest,
+        record.sourceSetDigest,
+        record.action,
+        record.decision,
+        record.reason,
+        JSON.stringify(record),
+        record.recordedAt,
+      ],
+    );
+    return record;
+  }
+
+  async listReviewAudits(
+    claimId: string,
+    limit: number,
+  ): Promise<BiographicalReviewAuditRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('biographical review audit limit must be a positive integer');
+    }
+    const rows = await this.queryRows<ReviewAuditRow>(
+      `SELECT audit_json FROM biographical_review_audits
+       WHERE claim_id = $1 ORDER BY recorded_at ASC, id ASC LIMIT $2`,
+      [claimId, limit],
+    );
+    return rows.map(row => deserializeBiographicalReviewAudit(row.audit_json));
   }
 
   async runSubjectTransaction<T>(

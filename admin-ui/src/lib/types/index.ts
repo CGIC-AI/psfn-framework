@@ -87,6 +87,12 @@ import {
 import type {
   RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
 } from '../../../../src/operator/garden/services/types.js';
+export type {
+  AdminBiographicalClaimDetail,
+  AdminBiographicalClaimList,
+  AdminBiographicalClaimView,
+  AdminBiographicalSourceView,
+} from '../../../../src/operator/garden/services/biographical-review-service.js';
 import type {
   AuthenticityProvenance,
   ContextMessage,

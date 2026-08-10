@@ -214,6 +214,7 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  biographicalReviewService?: GardenAdminDomainServices['biographicalReview'];
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
   subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
@@ -743,6 +744,7 @@ export function createInProcessGardenAdminContract(
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),
     memory,
+    biographicalReview: options.biographicalReviewService ?? null,
     privacyBreakGlass: new AdminPrivacyBreakGlassService({
       memoryStore: options.memoryStore,
       journalReader: {

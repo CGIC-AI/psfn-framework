@@ -350,6 +350,18 @@ describe('PostgresBiographicalProfileStore — persistence across restart', () =
         now: NOW,
       });
       if (queued.request === undefined) throw new Error('expected queued rebuild');
+      const audit = await first.recordReviewAudit({
+        claimId: claim.id,
+        claimDigest: claim.claimDigest,
+        sourceSetDigest: claim.sourceSetDigest,
+        action: 'regrant',
+        decision: 'allowed',
+        reason: 'grant-recorded',
+        actorAuthorityRef: 'garden-fleet:event-1',
+        grantId: grant.id,
+        grantedSensitivity: 'public',
+        now: NOW,
+      });
       // Simulate restart: a fresh store instance against the same database.
       const restarted = await createPostgresBiographicalProfileStore(pool);
       const reloaded = await restarted.getClaim(claim.id);
@@ -358,6 +370,7 @@ describe('PostgresBiographicalProfileStore — persistence across restart', () =
       expect(await restarted.listRebuilds({ status: 'pending', limit: 4 })).toMatchObject([
         { id: queued.request.id, reason: 'consent-drift' },
       ]);
+      expect(await restarted.listReviewAudits(claim.id, 4)).toMatchObject([{ id: audit.id }]);
       expect(reloaded?.depthDecision).toBe('full');
 
       await restarted.revokeGrant(grant.id, { reason: 'consent revoked', now: NOW });
@@ -478,6 +491,17 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
           maxPending: 4,
           now: NOW,
         });
+        await store.recordReviewAudit({
+          claimId: claim.id,
+          claimDigest: claim.claimDigest,
+          sourceSetDigest: claim.sourceSetDigest,
+          action: 'regrant',
+          decision: 'allowed',
+          reason: 'grant-recorded',
+          actorAuthorityRef: 'garden-fleet:event-1',
+          grantedSensitivity: 'public',
+          now: NOW,
+        });
         const backup = await runBackupCycle({
           postgres: {
             databaseUrl,
@@ -510,6 +534,7 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
             'biographical_claims',
             'biographical_grants',
             'biographical_rebuild_queue',
+            'biographical_review_audits',
           ],
           psqlBinary: harness.clientBinaries.psqlBinary,
           pgRestoreBinary: harness.clientBinaries.pgRestoreBinary,
@@ -518,6 +543,7 @@ describe('PostgresBiographicalProfileStore — canonical backup and restore', ()
           { table: 'biographical_claims', restored: 1, source: 1 },
           { table: 'biographical_grants', restored: 1, source: 1 },
           { table: 'biographical_rebuild_queue', restored: 1, source: 1 },
+          { table: 'biographical_review_audits', restored: 1, source: 1 },
         ]);
       } finally {
         rmSync(root, { recursive: true, force: true });

@@ -13,7 +13,39 @@ import type {
   AdminMemoryScopeListData,
   AdminMemoryScopeMutationResult,
   AdminUiMemoryScopeRef,
+  AdminBiographicalClaimDetail,
+  AdminBiographicalClaimList,
 } from '$lib/types';
+
+export type BiographicalReviewRequest =
+  | { action: 'approve' | 'deny'; claimDigest: string; sourceSetDigest: string }
+  | { action: 'revoke'; claimDigest: string; sourceSetDigest: string; grantId: string }
+  | {
+      action: 'regrant';
+      claimDigest: string;
+      sourceSetDigest: string;
+      grantedSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
+    };
+
+export function listBiographicalClaims(): Promise<AdminBiographicalClaimList> {
+  return apiGet<AdminBiographicalClaimList>('/api/admin/biographical-claims');
+}
+
+export function getBiographicalClaim(id: string): Promise<AdminBiographicalClaimDetail> {
+  return apiGet<AdminBiographicalClaimDetail>(
+    `/api/admin/biographical-claims/${encodeURIComponent(id)}`
+  );
+}
+
+export function reviewBiographicalClaim(
+  id: string,
+  request: BiographicalReviewRequest,
+): Promise<AdminBiographicalClaimDetail> {
+  return apiPost<AdminBiographicalClaimDetail>(
+    `/api/admin/biographical-claims/${encodeURIComponent(id)}/review`,
+    request,
+  );
+}
 
 export interface MemoryListParams {
   type?: string;

@@ -64,6 +64,7 @@ import type { AdminToolConformanceService } from './services/tool-conformance-se
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
+import type { AdminBiographicalReviewService } from './services/biographical-review-service.js';
 import type { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
@@ -205,6 +206,7 @@ export interface GardenAdminDomainServices {
   episodicMemory?: AdminEpisodicMemoryService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
+  biographicalReview?: AdminBiographicalReviewService | null;
   privacyBreakGlass?: AdminPrivacyBreakGlassService | null;
   sessions: AdminSessionService;
   contacts: AdminContactsService;

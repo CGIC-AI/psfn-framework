@@ -40,6 +40,17 @@ import {
   COGSEC_EVIDENCE_FIELD_MAX_CHARS,
 } from './screening-envelope-policy.js';
 import {
+  cogSecItemEnforcementPosture,
+  cogSecVectorForProvenance,
+  intakeEnforcementPosture,
+  resolveCogSecProvenanceClass,
+  resolveCogSecVectorPosture,
+  type CogSecMode,
+  type CogSecProvenanceClass,
+  type CogSecVector,
+  type IntakeEnforcementPosture,
+} from '../../../shared/contracts/cogsec-mode.js';
+import {
   createIntakeEnvelope,
   postScreeningStateForDecision,
   snapshotIntakeEnvelope,
@@ -228,6 +239,15 @@ export interface IntakeScreeningInput {
   sourceClass: IntakeSourceClass;
   /** Trusted scheduler provenance used to prove a narrow internal tool-result class. */
   toolResultProvenance?: { toolName: string; arguments: unknown };
+  /**
+   * STRUCTURAL clean-bubble provenance, set ONLY by an authenticated call site
+   * from tool/identity (never content). When the source class is internal
+   * (tool_output / companion_self) this resolves the CogSec vector that drives
+   * the centralized enforce/monitor decision; external ingress source classes
+   * ignore it, so forged content cannot claim the clean bubble. Absent =
+   * 'external' (screened normally).
+   */
+  structuralProvenance?: CogSecProvenanceClass;
   /** Origin locator: url, `discord:<channel>:<message>`, tool call id, ... */
   origin: { ref: string; detail?: string };
   scope: IntakeScanScope;
@@ -288,7 +308,15 @@ export interface IntakeScreeningResult {
   snapshot: IntakeEnvelopeSnapshot;
   report: IntakeL1ScanReport;
   action: IntakeDecisionAction;
-  mode: 'shadow' | 'enforce';
+  /** Per-item enforcement posture under which this item was evaluated. */
+  mode: IntakeEnforcementPosture;
+  /** Canonical global CogSec mode active when this item was screened. */
+  globalMode: CogSecMode;
+  /**
+   * The declared CogSec vector resolved for this item (content-free; derived
+   * from structural provenance). Feeds the centralized decision telemetry.
+   */
+  cogsecVector: CogSecVector;
   /**
    * Text for downstream use. Shadow mode: always the original input. Enforce
    * mode: original on 'pass', L1 sanitized text on 'sanitize', the fixed
@@ -325,7 +353,10 @@ export interface IntakeScreeningResult {
 }
 
 export interface IntakeScreeningService {
-  readonly mode: 'shadow' | 'enforce';
+  /** Ingress enforcement posture of this screening instance (observe/enforce). */
+  readonly mode: IntakeEnforcementPosture;
+  /** Canonical global CogSec mode this instance is running under. */
+  readonly globalMode: CogSecMode;
   /** Full screening: L1 plus the L1.5 scorer when configured. */
   screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult>;
   /**
@@ -554,6 +585,27 @@ interface ScorerOutcome {
   scannerId?: string;
 }
 
+/**
+ * A zero-finding L1 report for the clean-bubble path, where NO semantic
+ * scanner runs. It carries the original (capped) text as sanitizedText so a
+ * downstream sanitize decision — impossible on this path, the posture never
+ * enforces — would be a no-op, and records zero elapsed scanner time.
+ */
+function emptyL1ScanReport(text: string, scope: IntakeScanScope): IntakeL1ScanReport {
+  return {
+    scope,
+    truncated: false,
+    riskLabels: [],
+    scores: {},
+    results: [],
+    sanitizedText: text,
+    sanitizedDiffers: false,
+    extractedFields: {},
+    scannerErrors: [],
+    elapsedMs: 0,
+  };
+}
+
 /** Escalation results folded into `finalize` (never alters the L1 report). */
 interface EscalationExtras {
   /** L2 verdict / recorded L2 failure merged onto the envelope fields. */
@@ -570,14 +622,127 @@ export function createIntakeScreeningService(
   options: IntakeScreeningServiceOptions,
 ): IntakeScreeningService {
   const { policy, l1, injectionScorer, escalation, quarantine, actor } = options;
-  if (policy.mode === 'off') {
-    throw new Error(
-      "Intake screening service must not be constructed with mode 'off'; "
-      + 'composition sites skip construction entirely when the firewall is off',
-    );
-  }
-  const mode = policy.mode;
+  const globalMode = policy.mode;
+  // Ingress enforcement posture of this screening instance: shadow observes,
+  // boundary/strict enforce external ingress. Per-item clean-bubble bypass is
+  // resolved inside screen()/screenSync() through the centralized posture.
+  const mode = intakeEnforcementPosture(globalMode);
   const now = options.now ?? Date.now;
+
+  /** Resolves the declared CogSec vector for an item from its structural provenance. */
+  function resolveCogSecVector(input: IntakeScreeningInput): CogSecVector {
+    const provenance = resolveCogSecProvenanceClass({
+      sourceClass: input.sourceClass,
+      ...(input.structuralProvenance !== undefined
+        ? { structuralProvenance: input.structuralProvenance }
+        : {}),
+    });
+    return cogSecVectorForProvenance(provenance, input.sourceClass);
+  }
+
+  /** Content-free telemetry for a centralized enforce/monitor decision. */
+  function emitDecisionTelemetry(event: {
+    vector: CogSecVector;
+    posture: IntakeEnforcementPosture;
+    screens: boolean;
+    sourceClass: IntakeSourceClass;
+    originRef: string;
+  }): void {
+    log.debug('CogSec vector enforcement decision', {
+      globalMode,
+      vector: event.vector,
+      posture: event.posture,
+      screens: event.screens,
+      sourceClass: event.sourceClass,
+      originRef: event.originRef.slice(0, 256),
+    });
+  }
+
+  /**
+   * Clean-bubble short-circuit (boundary mode × internal vector): create a
+   * released envelope with ZERO semantic-scanner calls and no risk labels, so
+   * the item flows through every sink gate and can never be held solely by
+   * its content. Content-free decision telemetry is still emitted; the raw
+   * bytes never travel on the telemetry path. The per-item posture is always
+   * 'shadow' (observe-only) on this path.
+   */
+  function screenCleanBubble(
+    text: string,
+    input: IntakeScreeningInput,
+    vector: CogSecVector,
+  ): IntakeScreeningResult {
+    const adjusted = resolveTier(input);
+    const atMs = input.atMs ?? now();
+    const report = emptyL1ScanReport(text, input.scope);
+    let envelope = createIntakeEnvelope({
+      sourceClass: input.sourceClass,
+      sourceRiskTier: adjusted.tier,
+      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
+      origin: input.origin,
+      atMs,
+    });
+    const intakeDecision: IntakeDecision = {
+      action: 'pass',
+      reason: `clean-bubble:${vector} (boundary internal vector; no semantic screening)`,
+      decidedBy: 'policy',
+      decidedAtMs: atMs,
+    };
+    envelope = transitionIntakeEnvelope(envelope, {
+      to: 'screened',
+      actor,
+      reason: intakeDecision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
+      atMs,
+      decision: intakeDecision,
+    });
+    envelope = transitionIntakeEnvelope(envelope, {
+      to: 'released',
+      actor,
+      reason: 'released per clean-bubble policy (boundary internal vector)',
+      atMs,
+    });
+    const snapshot = snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' });
+    emitDecisionTelemetry({
+      vector,
+      posture: 'shadow',
+      screens: false,
+      sourceClass: input.sourceClass,
+      originRef: input.origin.ref,
+    });
+    emitDeepScreeningNotRun(input);
+    log.debug('Intake clean-bubble release (zero semantic-screening calls)', {
+      envelopeId: envelope.id,
+      globalMode,
+      vector,
+      sourceClass: input.sourceClass,
+      originRef: input.origin.ref.slice(0, 256),
+    });
+    return {
+      envelope,
+      snapshot,
+      report,
+      action: 'pass',
+      mode: 'shadow',
+      globalMode,
+      cogsecVector: vector,
+      effectiveText: text,
+      withheld: false,
+    };
+  }
+
+  /** Resolves the per-item posture for an input under the global mode. */
+  function resolveItemPosture(input: IntakeScreeningInput): {
+    vector: CogSecVector;
+    posture: IntakeEnforcementPosture;
+    screens: boolean;
+  } {
+    const vector = resolveCogSecVector(input);
+    const decision = resolveCogSecVectorPosture(globalMode, vector);
+    return {
+      vector,
+      posture: cogSecItemEnforcementPosture(globalMode, vector),
+      screens: decision.screens,
+    };
+  }
 
   function emitTiming(
     input: IntakeScreeningInput,
@@ -670,11 +835,14 @@ export function createIntakeScreeningService(
     input: IntakeScreeningInput,
     report: IntakeL1ScanReport,
     scorerOutcome: ScorerOutcome,
+    itemPosture: IntakeEnforcementPosture,
+    cogsecVector: CogSecVector,
     escalationExtras?: EscalationExtras,
   ): IntakeScreeningResult {
     const adjusted = resolveTier(input);
     const sourceRiskTier = adjusted.tier;
     const atMs = input.atMs ?? now();
+    const itemEnforces = itemPosture === 'enforce';
 
     let envelope = createIntakeEnvelope({
       sourceClass: input.sourceClass,
@@ -773,10 +941,10 @@ export function createIntakeScreeningService(
       atMs,
     });
 
-    const withheld = mode === 'enforce'
+    const withheld = itemEnforces
       && (decision.action === 'quarantine' || decision.action === 'block');
     let effectiveText = text;
-    if (mode === 'enforce') {
+    if (itemEnforces) {
       if (withheld) {
         effectiveText = renderIntakeWithheldContentPlaceholder();
       } else if (decision.action === 'sanitize') {
@@ -794,7 +962,7 @@ export function createIntakeScreeningService(
       try {
         quarantine.hold({
           envelope,
-          mode,
+          mode: itemPosture,
           rawText: text,
           ...(input.canonicalContactId !== undefined
             ? { canonicalContactId: input.canonicalContactId }
@@ -822,7 +990,9 @@ export function createIntakeScreeningService(
       sourceClass: input.sourceClass,
       sourceRiskTier,
       originRef: input.origin.ref,
-      mode,
+      mode: itemPosture,
+      globalMode,
+      cogsecVector,
       action: decision.action,
       reason: decision.reason,
       state: envelope.state,
@@ -876,7 +1046,9 @@ export function createIntakeScreeningService(
       snapshot,
       report,
       action: decision.action,
-      mode,
+      mode: itemPosture,
+      globalMode,
+      cogsecVector,
       effectiveText,
       withheld,
       ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
@@ -898,6 +1070,8 @@ export function createIntakeScreeningService(
     report: IntakeL1ScanReport,
     scorerOutcome: ScorerOutcome,
     port: IntakeEscalationPort,
+    itemPosture: IntakeEnforcementPosture,
+    cogsecVector: CogSecVector,
   ): Promise<IntakeScreeningResult> {
     // Freeze the timestamp so the escalation request and the finalize path
     // record the same decision time.
@@ -918,7 +1092,7 @@ export function createIntakeScreeningService(
     });
     if (preliminary.action === 'quarantine' || preliminary.action === 'block') {
       emitDeepScreeningNotRun(timedInput);
-      return finalize(text, timedInput, report, scorerOutcome);
+      return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector);
     }
 
     const prior = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
@@ -971,7 +1145,7 @@ export function createIntakeScreeningService(
         originRef: input.origin.ref,
         error: message,
       });
-      return finalize(text, timedInput, report, scorerOutcome, {
+      return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
         forced: {
           action: 'quarantine',
           reason: `escalation-fail-closed:${message}`.slice(
@@ -995,13 +1169,13 @@ export function createIntakeScreeningService(
 
     switch (escalationDecision.kind) {
       case 'skipped':
-        return finalize(text, timedInput, report, scorerOutcome);
+        return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector);
       case 'contribution':
-        return finalize(text, timedInput, report, scorerOutcome, {
+        return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
           contribution: escalationDecision.contribution,
         });
       case 'quarantine':
-        return finalize(text, timedInput, report, scorerOutcome, {
+        return finalize(text, timedInput, report, scorerOutcome, itemPosture, cogsecVector, {
           forced: {
             action: 'quarantine',
             reason: escalationDecision.reason.slice(0, COGSEC_DECISION_REASON_MAX_CHARS),
@@ -1020,7 +1194,9 @@ export function createIntakeScreeningService(
           snapshot: final.snapshot,
           report,
           action: final.action,
-          mode,
+          mode: itemPosture,
+          globalMode,
+          cogsecVector,
           effectiveText: final.effectiveText,
           withheld: final.withheld,
           ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
@@ -1051,6 +1227,18 @@ export function createIntakeScreeningService(
   }
 
   async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
+    const item = resolveItemPosture(input);
+    if (!item.screens) {
+      // Clean bubble (boundary × internal vector): zero semantic-screening calls.
+      return screenCleanBubble(text, input, item.vector);
+    }
+    emitDecisionTelemetry({
+      vector: item.vector,
+      posture: item.posture,
+      screens: true,
+      sourceClass: input.sourceClass,
+      originRef: input.origin.ref,
+    });
     const localScreeningStartedAt = performance.now();
     const report = scanL1(text, input);
     let scorerOutcome: ScorerOutcome = { labels: [] };
@@ -1105,15 +1293,15 @@ export function createIntakeScreeningService(
       // their ordinary fail-closed path before this narrow optimization, and
       // operator-mandated L2/L3 tiers retain their configured deep screening.
       emitDeepScreeningNotRun(input);
-      return finalize(text, input, report, scorerOutcome, {
+      return finalize(text, input, report, scorerOutcome, item.posture, item.vector, {
         observeUncorroboratedSemanticScore: true,
       });
     }
     if (!escalation || !text.trim()) {
       emitDeepScreeningNotRun(input);
-      return finalize(text, input, report, scorerOutcome);
+      return finalize(text, input, report, scorerOutcome, item.posture, item.vector);
     }
-    return escalateAndFinalize(text, input, report, scorerOutcome, escalation);
+    return escalateAndFinalize(text, input, report, scorerOutcome, escalation, item.posture, item.vector);
   }
 
   function screenSync(text: string, input: IntakeScreeningInput): IntakeScreeningResult {
@@ -1124,6 +1312,17 @@ export function createIntakeScreeningService(
         + 'configured — use screen()',
       );
     }
+    const item = resolveItemPosture(input);
+    if (!item.screens) {
+      return screenCleanBubble(text, input, item.vector);
+    }
+    emitDecisionTelemetry({
+      vector: item.vector,
+      posture: item.posture,
+      screens: true,
+      sourceClass: input.sourceClass,
+      originRef: input.origin.ref,
+    });
     const localScreeningStartedAt = performance.now();
     const report = scanL1(text, input);
     emitTiming(
@@ -1133,10 +1332,10 @@ export function createIntakeScreeningService(
       Math.max(0, performance.now() - localScreeningStartedAt),
     );
     emitDeepScreeningNotRun(input);
-    return finalize(text, input, report, { labels: [] });
+    return finalize(text, input, report, { labels: [] }, item.posture, item.vector);
   }
 
-  return { mode, screen, screenSync };
+  return { mode, globalMode, screen, screenSync };
 }
 
 // ── Composition helper (L1-only; agent process and tests) ──
@@ -1159,17 +1358,14 @@ export interface MaybeCreateIntakeScreeningOptions {
 }
 
 /**
- * Returns null when the firewall mode is 'off' (no screening wired anywhere);
- * otherwise constructs the L1 scanner (fail-closed on a missing/invalid rule
- * file) and the screening service.
+ * Constructs the L1 scanner (fail-closed on a missing/invalid rule file) and
+ * the screening service. The canonical CogSec mode is always one of
+ * shadow/boundary/strict, so screening is always wired; null is returned only
+ * for callers that explicitly opt out (a null `policy`).
  */
 export function maybeCreateIntakeScreeningService(
   options: MaybeCreateIntakeScreeningOptions,
 ): IntakeScreeningService | null {
-  if (options.policy.mode === 'off') {
-    log.warn("Intake firewall mode is 'off': no intake screening is wired on any surface");
-    return null;
-  }
   return createIntakeScreeningService({
     policy: options.policy,
     l1: createIntakeL1Scanner({

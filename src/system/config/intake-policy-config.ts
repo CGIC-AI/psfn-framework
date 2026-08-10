@@ -19,6 +19,13 @@ import {
   type IntakeSourceClass,
   type IntakeSourceRiskTier,
 } from '../../shared/contracts/intake-envelope.js';
+import {
+  COGSEC_MODES,
+  intakeEnforcementPosture,
+  isCogSecMode,
+  type CogSecMode,
+  type IntakeEnforcementPosture,
+} from '../../shared/contracts/cogsec-mode.js';
 import { loadRequiredJson } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -67,14 +74,37 @@ export interface IntakeScreeningPoolPolicyConfig {
 }
 
 /**
- * Firewall rollout mode:
- * - 'off': no envelope screening decisions are enforced anywhere.
- * - 'shadow': envelopes are created, screened, and journaled, but sink gates
- *   do not block (observe-only rollout posture).
- * - 'enforce': sink gates enforce envelope decisions.
+ * The canonical global CogSec enforcement mode. This is the single owner-file
+ * value and the single value Garden reads and mutates; see
+ * `src/shared/contracts/cogsec-mode.ts` for the full mode/vector/provenance
+ * contract. The legacy `IntakeFirewallMode` name is retained as an alias so
+ * existing imports keep referring to the one canonical mode.
+ *
+ * - 'shadow':   evaluate and telemeter every declared vector; never block.
+ * - 'boundary': enforce external ingress and registered outbound publication;
+ *               the clean bubble makes internal activity non-blocking.
+ * - 'strict':   enforce every declared vector.
+ *
+ * Unknown values fail startup. The retired 'off' and 'enforce' values are
+ * migrated explicitly by the owner-file migration command (off → shadow,
+ * enforce → strict) and rejected at validation thereafter.
  */
-export const INTAKE_FIREWALL_MODES = ['off', 'shadow', 'enforce'] as const;
-export type IntakeFirewallMode = typeof INTAKE_FIREWALL_MODES[number];
+export const INTAKE_FIREWALL_MODES = COGSEC_MODES;
+export type IntakeFirewallMode = CogSecMode;
+
+/** True when the global mode enforces external ingress / registered outbound. */
+export function isIntakeEnforcingMode(mode: IntakeFirewallMode): boolean {
+  return mode !== 'shadow';
+}
+
+/**
+ * Projects the global mode onto the binary per-surface enforcement posture
+ * ('shadow' = observe-only, 'enforce' = may withhold/block). Both 'boundary'
+ * and 'strict' project to 'enforce' for external surfaces.
+ */
+export function intakeModeEnforcementPosture(mode: IntakeFirewallMode): IntakeEnforcementPosture {
+  return intakeEnforcementPosture(mode);
+}
 
 export interface IntakePolicyQuarantineConfig {
   /** Hours before a quarantined item auto-transitions to 'expired'. */
@@ -1593,8 +1623,12 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     );
   }
   const mode = raw.mode;
-  if (typeof mode !== 'string' || !(INTAKE_FIREWALL_MODES as readonly string[]).includes(mode)) {
-    throw invalid(sourcePath, `mode must be one of: ${INTAKE_FIREWALL_MODES.join(', ')}`);
+  if (!isCogSecMode(mode)) {
+    throw invalid(
+      sourcePath,
+      `mode must be one of: ${INTAKE_FIREWALL_MODES.join(', ')} `
+        + "(retired 'off'/'enforce' values require the migrate:intake-policy-owner command)",
+    );
   }
   const sourceRiskTiers = validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath);
   if (sourceRiskTiers.companion_self !== 'trusted') {

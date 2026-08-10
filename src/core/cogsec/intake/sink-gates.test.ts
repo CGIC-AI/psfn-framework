@@ -70,7 +70,7 @@ function makeSnapshot(input: {
 
 describe('evaluateSinkAccess (htm9.3)', () => {
   it('denies quarantined content at EVERY sink in enforce mode (quarantine invisibility)', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const quarantined = makeSnapshot({ state: 'quarantined' });
     for (const sink of INTAKE_SINKS) {
       const decision = evaluateSinkAccess(policy, sink, [quarantined]);
@@ -82,7 +82,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('denies unrouted states (received, screened, discarded, expired) at every sink', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     for (const state of ['received', 'screened', 'discarded', 'expired'] as const) {
       for (const sink of INTAKE_SINKS) {
         expect(evaluateSinkAccess(policy, sink, [makeSnapshot({ state })]).verdict).toBe('deny');
@@ -99,7 +99,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('lets released untrusted content INFORM (prompt) but never INSTRUCT (persona/trust)', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const released = makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' });
 
     expect(evaluateSinkAccess(policy, 'prompt_assembly', [released]).allowed).toBe(true);
@@ -112,7 +112,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('treats skill_write as a prompt-bearing mutation with an untrusted tier cap', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     expect(evaluateSinkAccess(policy, 'skill_write', [
       makeSnapshot({ sourceRiskTier: 'untrusted' }),
     ]).allowed).toBe(true);
@@ -134,7 +134,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('denies released content carrying sink-denied risk labels at memory_write but not prompt_assembly', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const labeled = makeSnapshot({
       state: 'human_released',
       riskLabels: ['poisoning/memory_write_pressure'],
@@ -146,7 +146,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('one denied envelope denies the whole multi-envelope consumption (fail closed)', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const decision = evaluateSinkAccess(policy, 'memory_write', [
       makeSnapshot({ envelopeId: 'clean-envelope-01' }),
       makeSnapshot({ envelopeId: 'held-envelope-002', state: 'quarantined' }),
@@ -156,13 +156,13 @@ describe('evaluateSinkAccess (htm9.3)', () => {
   });
 
   it('resolves unscreened content per the sink policy default, explicitly', () => {
-    const allowPolicy = makePolicy('enforce');
+    const allowPolicy = makePolicy('strict');
     const allowed = evaluateSinkAccess(allowPolicy, 'memory_write', []);
     expect(allowed.unscreened).toBe(true);
     expect(allowed.allowed).toBe(true);
     expect(allowed.reason).toContain("policy default 'allow'");
 
-    const denyPolicy = makePolicy('enforce', (raw) => {
+    const denyPolicy = makePolicy('strict', (raw) => {
       const sinkGates = raw.sinkGates as { sinks: Record<string, { unscreened: string }> };
       sinkGates.sinks.memory_write.unscreened = 'deny';
     });
@@ -183,15 +183,13 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     expect(evaluateSinkAccess(shadowDenyPolicy, 'memory_write', []).allowed).toBe(true);
   });
 
-  it("refuses to evaluate with mode 'off' (composition must skip gate construction)", () => {
-    const policy = { ...makePolicy('shadow'), mode: 'off' as const };
-    expect(() => evaluateSinkAccess(policy, 'memory_write', [])).toThrow(/mode 'off'/u);
-    expect(maybeCreateIntakeSinkGate({
-      policy,
-      actor: 'test',
-      onBlockedEgressTrifecta: () => undefined,
-    })).toBeNull();
-    expect(() => createIntakeSinkGate({ policy, actor: 'test' })).toThrow(/mode 'off'/u);
+  it("projects the canonical global mode onto the gate enforcement posture", () => {
+    // boundary and strict both enforce external content (posture 'enforce');
+    // shadow observes (posture 'shadow'). The retired 'off'/'enforce' values
+    // are rejected at owner-file validation, not here.
+    expect(createIntakeSinkGate({ policy: makePolicy('shadow'), actor: 'test' }).mode).toBe('shadow');
+    expect(createIntakeSinkGate({ policy: makePolicy('strict'), actor: 'test' }).mode).toBe('enforce');
+    expect(createIntakeSinkGate({ policy: makePolicy('boundary'), actor: 'test' }).mode).toBe('enforce');
   });
 
   it('refuses runtime construction without a durable hard-block incident recorder', () => {
@@ -206,7 +204,7 @@ describe('evaluateSinkAccess (htm9.3)', () => {
 
 describe('evaluateEgressTrifecta (htm9.3)', () => {
   it('HARD-denies untrusted/public-tier content + private data + egress in enforce mode', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const assessment = evaluateEgressTrifecta(policy, {
       envelopes: [makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' })],
       privateDataInPath: true,
@@ -221,7 +219,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
   });
 
   it('SOFT (review, never block) for trusted-tier sources in enforce mode', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const assessment = evaluateEgressTrifecta(policy, {
       envelopes: [makeSnapshot({
         state: 'released',
@@ -239,7 +237,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
   });
 
   it('the strongest tier wins when hard and soft sources mix', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const assessment = evaluateEgressTrifecta(policy, {
       envelopes: [
         makeSnapshot({ state: 'released', sourceRiskTier: 'trusted', sourceClass: 'operator', envelopeId: 'soft-envelope-01' }),
@@ -253,7 +251,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
   });
 
   it('does not trigger without all three legs', () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const untrusted = makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' });
     // No private data leg.
     expect(evaluateEgressTrifecta(policy, {
@@ -271,7 +269,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
 
   it('enforce mode excludes withheld (quarantined) content from the path; shadow includes it', () => {
     const quarantined = makeSnapshot({ state: 'quarantined', sourceRiskTier: 'untrusted' });
-    const enforceAssessment = evaluateEgressTrifecta(makePolicy('enforce'), {
+    const enforceAssessment = evaluateEgressTrifecta(makePolicy('strict'), {
       envelopes: [quarantined],
       privateDataInPath: true,
       egressDescription: 'tool:notify',
@@ -311,8 +309,8 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
     }> = [
       { mode: 'shadow', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
       { mode: 'shadow', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
-      { mode: 'enforce', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
-      { mode: 'enforce', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
+      { mode: 'strict', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
+      { mode: 'strict', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
     ];
 
     for (const { mode, enforcement, expected } of cases) {
@@ -340,7 +338,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
     });
 
     it('an enforce-mode hard deny does not claim a shadow override', () => {
-      const assessment = evaluateEgressTrifecta(makePolicy('enforce'), {
+      const assessment = evaluateEgressTrifecta(makePolicy('strict'), {
         envelopes: [hardEnvelope()],
         privateDataInPath: true,
         egressDescription: 'tool:fs',
@@ -349,7 +347,7 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
     });
 
     it('untriggered assessments stay allowed in both modes', () => {
-      for (const mode of ['shadow', 'enforce'] as const) {
+      for (const mode of ['shadow', 'boundary', 'strict'] as const) {
         const assessment = evaluateEgressTrifecta(makePolicy(mode), {
           envelopes: [hardEnvelope()],
           privateDataInPath: false,
@@ -377,7 +375,7 @@ describe('gate service audit hook', () => {
   it('audits every decision and never lets a broken hook change the verdict', () => {
     const events: string[] = [];
     const gate = createIntakeSinkGate({
-      policy: makePolicy('enforce'),
+      policy: makePolicy('strict'),
       actor: 'test:gate',
       onAudit: (event) => {
         events.push(`${event.kind}:${event.sink}:${event.verdict}`);
@@ -502,7 +500,7 @@ describe('cross-adapter hostile payload regression', () => {
   ];
 
   it('refuses the same hostile payload at every sink regardless of arrival adapter', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const screening = createIntakeScreeningService({
       policy,
       l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),

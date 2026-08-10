@@ -69,7 +69,7 @@ function baseContext(overrides: Partial<L3ScreenerContext> = {}): L3ScreenerCont
 }
 
 interface PolicyOverrides {
-  mode?: Exclude<IntakeFirewallMode, 'off'>;
+  mode?: IntakeFirewallMode;
   l3?: Record<string, unknown>;
 }
 
@@ -80,7 +80,7 @@ function testPolicy(overrides: PolicyOverrides = {}): IntakePolicyConfig {
   return validateIntakePolicy(
     {
       ...seed,
-      mode: overrides.mode ?? 'enforce',
+      mode: overrides.mode ?? 'strict',
       l3Screener: { ...(seed.l3Screener as Record<string, unknown>), ...(overrides.l3 ?? {}) },
     },
     'intake-policy.test',
@@ -742,7 +742,7 @@ describe('applyL3ScreeningOutcome', () => {
   }
 
   it('flagged + enforce: envelope quarantined with reasons, CogSecEvent written, content withheld', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
     const result = applyL3ScreeningOutcome(applyInput(outcome, config, events));
@@ -775,7 +775,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('clear + enforce: explicit released_sanitized decision; safe representation substitutes the raw text', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(CLEAR_RESPONSE, config);
     const result = applyL3ScreeningOutcome(applyInput(outcome, config, events));
@@ -797,7 +797,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('failed_closed + enforce: stays quarantined (never fail-open to delivery), failure audited', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await evaluateL3({
       text: HOSTILE_CONTENT,
@@ -823,7 +823,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('fires the TTL-expiry alert hook for an L3 failed-closed hold', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const dir = mkdtempSync(join(tmpdir(), 'psfn-l3-expiry-'));
     tempDirs.push(dir);
@@ -908,22 +908,17 @@ describe('applyL3ScreeningOutcome', () => {
     expect(event?.failureDetails).toBeDefined();
   });
 
-  it("throws on a 'skipped' outcome and on mode 'off'", async () => {
+  it("throws on a 'skipped' outcome", async () => {
     const config = testPolicy();
     const events = makeEventStore();
     const skipped = { kind: 'skipped', reason: 'nothing triggered' } as unknown as
       Exclude<L3ScreeningOutcome, { kind: 'skipped' }>;
     expect(() => applyL3ScreeningOutcome(applyInput(skipped, config, events)))
       .toThrow(/skipped/);
-
-    const offConfig = { ...config, mode: 'off' as const };
-    const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
-    expect(() => applyL3ScreeningOutcome(applyInput(outcome, offConfig, events)))
-      .toThrow(/mode 'off'/);
   });
 
   it('fails closed when the CogSecEvent write fails: the result never materializes', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
     const brokenEvents = {
       createEvent: () => {
@@ -938,7 +933,7 @@ describe('applyL3ScreeningOutcome', () => {
   // ── htm9.11: durable quarantine hold for the Garden approval queue ──
 
   it('flagged: holds the item in the quarantine store with the rendered safe representation', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
     const holds: Array<Parameters<IntakeQuarantineHoldPort['hold']>[0]> = [];
@@ -965,7 +960,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('failed_closed: holds WITHOUT a safe representation (release_sanitized explicitly unavailable)', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await evaluateL3({
       text: HOSTILE_CONTENT,
@@ -991,7 +986,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('cleared items are not held (delivered as safe representation, nothing to review)', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(CLEAR_RESPONSE, config);
     const hold = vi.fn();
@@ -1002,7 +997,7 @@ describe('applyL3ScreeningOutcome', () => {
   });
 
   it('fails closed when the quarantine hold fails: the result never materializes', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
     const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
     const quarantine: IntakeQuarantineHoldPort = {
@@ -1057,7 +1052,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
   }
 
   it('flagged canary: full L2→L3→apply path in enforce mode leaves zero canary in the PromptPlan', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
 
     // 1. L2 flags the canary and escalates to L3.
@@ -1118,7 +1113,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
   });
 
   it('cleared canary on an l3-mandatory tier: released_sanitized delivery still contains zero canary', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
 
     // Mandatory-tier route: L3 runs even though the (skipped) L2 never flagged.
@@ -1151,7 +1146,7 @@ describe('L3 golden regression: quarantined content never reaches assembled prom
   });
 
   it('echoing screener model: a verdict that quotes the canary fails closed — the echo never becomes prompt text', async () => {
-    const config = testPolicy({ mode: 'enforce' });
+    const config = testPolicy({ mode: 'strict' });
     const events = makeEventStore();
 
     // A compromised/sloppy L3 model tries to repeat the hostile content back.

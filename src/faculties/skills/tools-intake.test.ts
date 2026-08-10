@@ -140,7 +140,7 @@ describe('managed skill write intake gating', () => {
     const runtime = makeRuntime();
     const audits: IntakeSinkGateAuditEvent[] = [];
     const tool = createSkillTool(runtime, makeIntakeRuntime({
-      mode: 'enforce',
+      mode: 'strict',
       audits,
     }), AUTONOMOUS_GOVERNANCE);
 
@@ -192,7 +192,7 @@ describe('managed skill write intake gating', () => {
     const create = vi.spyOn(runtime.getStore(), 'create');
     const invalidate = vi.spyOn(runtime, 'invalidate');
     const tool = createSkillTool(runtime, makeIntakeRuntime({
-      mode: 'enforce',
+      mode: 'strict',
       audits,
     }), AUTONOMOUS_GOVERNANCE);
 
@@ -219,7 +219,7 @@ describe('managed skill write intake gating', () => {
     const runtime = makeRuntime();
     const create = vi.spyOn(runtime.getStore(), 'create');
     const invalidate = vi.spyOn(runtime, 'invalidate');
-    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }), AUTONOMOUS_GOVERNANCE);
+    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'strict' }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-hostile-description', {
       action: 'create',
@@ -240,7 +240,7 @@ describe('managed skill write intake gating', () => {
     const create = vi.spyOn(runtime.getStore(), 'create');
     const invalidate = vi.spyOn(runtime, 'invalidate');
     const tool = createSkillTool(runtime, makeIntakeRuntime({
-      mode: 'enforce',
+      mode: 'strict',
       activeEnvelopes: [
         makeSnapshot({
           envelopeId: 'held-upstream-envelope',
@@ -265,7 +265,7 @@ describe('managed skill write intake gating', () => {
     const runtime = makeRuntime();
     const audits: IntakeSinkGateAuditEvent[] = [];
     const tool = createSkillTool(runtime, makeIntakeRuntime({
-      mode: 'enforce',
+      mode: 'strict',
       audits,
       activeEnvelopes: [
         makeSnapshot({ envelopeId: 'clean-upstream-envelope' }),
@@ -324,7 +324,7 @@ describe('managed skill write intake gating', () => {
     const create = vi.spyOn(runtime.getStore(), 'create');
     const invalidate = vi.spyOn(runtime, 'invalidate');
     const tool = createSkillTool(runtime, makeIntakeRuntime({
-      mode: 'enforce',
+      mode: 'strict',
       screening: false,
       audits,
       activeEnvelopes: [
@@ -354,7 +354,7 @@ describe('managed skill write intake gating', () => {
 
   it('leaves an existing file and runtime cache untouched after a denied update', async () => {
     const runtime = makeRuntime();
-    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }), AUTONOMOUS_GOVERNANCE);
+    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'strict' }), AUTONOMOUS_GOVERNANCE);
     await tool.execute('create-before-denial', {
       action: 'create',
       name: 'stable-skill',

@@ -305,7 +305,7 @@ function serverOptions(
     embeddingService: { dims: 8, embed: async () => [], embedBatch: async () => [] } as never,
     discordAdapter: { id: 'discord', outbound: { textChunkLimit: 2_000, sendText: async () => undefined } } as never,
     policyConfig: { workspacePath: join(root, 'workspace') },
-    intakeScreeningMode: 'off',
+    intakeScreeningMode: 'shadow',
     intakeScreeningProvider: () => null,
     visionIntakeProvider: () => null,
     sessionHmacKeyring: KEYRING,

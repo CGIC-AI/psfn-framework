@@ -126,7 +126,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
 
   it('enforce mode: flagged tool output never lands raw in the session entry', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
-    mgr.intakeScreening = makeScreening('enforce');
+    mgr.intakeScreening = makeScreening('strict');
 
     const { entryId } = mgr.recordToolObservation('ch1', {
       toolName: 'web_fetch',
@@ -190,7 +190,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
   // screen would journal a duplicate envelope and double a quarantine hold).
   it('precomputed scheduler-seam screening is reused verbatim without re-screening', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
-    const screening = makeScreening('enforce');
+    const screening = makeScreening('strict');
     mgr.intakeScreening = screening;
 
     // The scheduler seam screened the raw output and substituted the notice.
@@ -230,7 +230,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
 
   it('persists scheduler fail-closed suppression of admitted non-text content', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
-    const screening = makeScreening('enforce');
+    const screening = makeScreening('strict');
     mgr.intakeScreening = screening;
     const admittedTextScreening = screening.screenSync('', {
       sourceClass: 'tool_output',

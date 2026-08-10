@@ -39,6 +39,7 @@ import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { isCogSecMode, type CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import {
   assertFleetAuthStandaloneSurfacesUnavailable,
   warnIfInsecureLocalApiIgnoredUnderFleetAuth,
@@ -131,8 +132,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
    * real injection channel. Null when the firewall mode is 'off'.
    */
   intakeScreening?: IntakeScreeningService | null;
-  /** Explicit owner-file posture; required so omission cannot disable screening. */
-  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
+  /** Canonical global CogSec mode (shadow/boundary/strict); required so omission cannot disable screening. */
+  intakeScreeningMode: CogSecMode;
   /** Fleet-only exact resolver for the companion owning an API/satellite ingress. */
   intakeScreeningForCompanion?: (
     companionId: string,
@@ -186,12 +187,8 @@ export function assertGatewayApiIntakeScreeningOwnership(
   options: StartOptionalGatewayApiServerOptions,
 ): void {
   const configuredMode: unknown = options.intakeScreeningMode;
-  if (
-    configuredMode !== 'off'
-    && configuredMode !== 'shadow'
-    && configuredMode !== 'enforce'
-  ) {
-    throw new Error('Gateway API intake screening requires an explicit valid mode');
+  if (!isCogSecMode(configuredMode)) {
+    throw new Error('Gateway API intake screening requires an explicit valid CogSec mode (shadow/boundary/strict)');
   }
   const mode = configuredMode;
   if (options.multiCompanion) {
@@ -213,13 +210,7 @@ export function assertGatewayApiIntakeScreeningOwnership(
     }
     for (const companion of fleet.companions) {
       const screening = options.intakeScreeningForCompanion(companion.companionId);
-      if (mode === 'off') {
-        if (screening !== null) {
-          throw new Error(
-            `Fleet gateway API intake screening mode=off resolved a service for ${companion.companionId}`,
-          );
-        }
-      } else if (!screening || screening.mode !== mode) {
+      if (!screening || screening.globalMode !== mode) {
         throw new Error(
           `Fleet gateway API intake screening mode=${mode} has no matching service for ${companion.companionId}`,
         );
@@ -232,11 +223,7 @@ export function assertGatewayApiIntakeScreeningOwnership(
       'Single-companion gateway API intake screening must use its singleton service',
     );
   }
-  if (mode === 'off') {
-    if (options.intakeScreening) {
-      throw new Error('Single-companion gateway API intake screening mode=off resolved a service');
-    }
-  } else if (!options.intakeScreening || options.intakeScreening.mode !== mode) {
+  if (!options.intakeScreening || options.intakeScreening.globalMode !== mode) {
     throw new Error(
       `Single-companion gateway API intake screening mode=${mode} has no matching service`,
     );

@@ -938,7 +938,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       visionIntakeProvider: () => ({
         screenImage: vi.fn(async () => ({
           kind: 'screened' as const,
-          mode: 'enforce' as const,
+          mode: 'strict' as const,
           flagged: false,
           withheld: false,
         })),
@@ -992,13 +992,13 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
   it('resolves fleet vision screening from each authenticated companion identity', async () => {
     const screenA = vi.fn(async () => ({
       kind: 'screened' as const,
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       flagged: false,
       withheld: false,
     }));
     const screenB = vi.fn(async () => ({
       kind: 'screened' as const,
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       flagged: false,
       withheld: false,
     }));
@@ -1057,7 +1057,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       visionIntakeProvider: () => ({
         screenImage: vi.fn(async () => ({
           kind: 'screened' as const,
-          mode: 'enforce' as const,
+          mode: 'strict' as const,
           flagged: false,
           withheld: false,
         })),

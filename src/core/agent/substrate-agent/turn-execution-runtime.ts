@@ -865,11 +865,10 @@ export async function handleMessageForTurn(
       toolTurnOutcome,
     );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
-    // htm9.18: off mode is genuinely inert — no marker in the prompt and no
-    // turn-scoped carrier. Shadow/enforce both observe; only enforce may hold.
-    const canaryToken = runtime.cogSecMode === 'off'
-      ? undefined
-      : sessionCanaryRegistry.ensure(emotionSessionId);
+    // htm9.18: the canonical CogSec mode is always armed (shadow/boundary/
+    // strict), so a turn-scoped canary carrier is always registered; shadow
+    // observes, boundary/strict may hold at the egress sink.
+    const canaryToken = sessionCanaryRegistry.ensure(emotionSessionId);
     // d269: when this turn was initiated by a reply-bearing reverse-RPC call
     // (voice.handleMessage / voice.transcript.end / api.chat.completion), record
     // the token into the ambient reply capture so the reply result carries the

@@ -1,5 +1,6 @@
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import type { CogSecMode, IntakeEnforcementPosture } from '../../../shared/contracts/cogsec-mode.js';
 import type { IntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
 import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import {
@@ -79,7 +80,10 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
 };
 
 export interface GatewayIntakeScreeningRuntime {
-  readonly mode: 'off' | 'shadow' | 'enforce';
+  /** Per-instance enforcement posture (observe/enforce) of the wired screening. */
+  readonly mode: IntakeEnforcementPosture;
+  /** Canonical global CogSec mode (shadow/boundary/strict). */
+  readonly globalMode: CogSecMode;
   /** Populated only in fleet mode; one exact composition per manifest entry. */
   readonly byCompanionId: ReadonlyMap<CompanionId, GatewayIntakeScreeningComposition>;
   /** All durable stores consulted by the fleet-wide physical read gate. */
@@ -93,19 +97,32 @@ export interface GatewayIntakeScreeningRuntime {
   /**
    * Pooled screening service for `companionId` (or the single composition). Each
    * screen() flows through the fleet-wide bounded pool keyed by companion id;
-   * screenSync() is the unpooled synchronous L1-only path. Null when the
-   * firewall is off.
+   * screenSync() is the unpooled synchronous L1-only path.
    */
   screeningFor(companionId?: string): IntakeScreeningService | null;
-  /** Bounded async pool; null when the firewall is off. */
-  readonly screeningPool: ScreeningPool | null;
+  /** Fleet-wide bounded async screening pool. */
+  readonly screeningPool: ScreeningPool;
   dispose(): Promise<void>;
 }
 
 function compositionMode(
   composition: GatewayIntakeScreeningComposition,
-): GatewayIntakeScreeningRuntime['mode'] {
-  return composition.screening?.mode ?? 'off';
+): IntakeEnforcementPosture {
+  const screening = composition.screening;
+  if (!screening) {
+    throw new Error('Gateway intake screening composition resolved no service');
+  }
+  return screening.mode;
+}
+
+function compositionGlobalMode(
+  composition: GatewayIntakeScreeningComposition,
+): CogSecMode {
+  const screening = composition.screening;
+  if (!screening) {
+    throw new Error('Gateway intake screening composition resolved no service');
+  }
+  return screening.globalMode;
 }
 
 async function disposeCompositions(
@@ -213,6 +230,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     throw new Error('Gateway intake screening composition produced no runtime');
   }
   const mode = compositionMode(firstComposition);
+  const globalMode = compositionGlobalMode(firstComposition);
   for (const composition of compositions) {
     if (compositionMode(composition) !== mode) {
       await disposeCompositions(
@@ -224,17 +242,15 @@ export async function composeGatewayIntakeScreeningRuntime(
   const quarantineStores = compositions
     .map(composition => composition.quarantine)
     .filter((store): store is IntakeQuarantineStore => store !== null);
-  const quarantinedArtifactGuard = mode === 'off'
-    ? null
-    : multiCompanion
-      ? createUnionQuarantinedArtifactAccessGuard({
-          stores: quarantineStores,
-          mode,
-        })
-      : createQuarantinedArtifactAccessGuard({
-          store: singleComposition!.quarantine!,
-          mode,
-        });
+  const quarantinedArtifactGuard = multiCompanion
+    ? createUnionQuarantinedArtifactAccessGuard({
+        stores: quarantineStores,
+        mode,
+      })
+    : createQuarantinedArtifactAccessGuard({
+        store: singleComposition!.quarantine!,
+        mode,
+      });
 
   // ── Fleet-wide bounded screening pool (psfn-framework-yxz0z.4) ──
   // ONE pool spans every companion so the operator-owned worker bound limits
@@ -244,26 +260,24 @@ export async function composeGatewayIntakeScreeningRuntime(
   // decision/delivery order), and each companion's classifier/quarantine is
   // reached by at most one in-flight item at a time (no shared-mutable races).
   const SINGLE_STREAM_KEY = singleStreamKey ?? '__single__';
-  const screeningPolicy = mode === 'off' ? null : loadIntakePolicyConfig(baseInput.systemDataDir);
-  const pool: ScreeningPool | null = screeningPolicy === null
-    ? null
-    : createScreeningPool({
-        concurrency: screeningPolicy.screeningPool.concurrency,
-        maxQueueDepth: screeningPolicy.screeningPool.maxQueueDepth,
-        ...(onScreeningPoolTelemetry
-          ? {
-              onTelemetry: (event) => {
-                const companionId = event.streamKey === SINGLE_STREAM_KEY
-                  ? undefined
-                  : (event.streamKey as CompanionId);
-                onScreeningPoolTelemetry(companionId, event);
-              },
-            }
-          : {}),
-      });
+  const screeningPolicy = loadIntakePolicyConfig(baseInput.systemDataDir);
+  const pool = createScreeningPool({
+    concurrency: screeningPolicy.screeningPool.concurrency,
+    maxQueueDepth: screeningPolicy.screeningPool.maxQueueDepth,
+    ...(onScreeningPoolTelemetry
+      ? {
+          onTelemetry: (event) => {
+            const companionId = event.streamKey === SINGLE_STREAM_KEY
+              ? undefined
+              : (event.streamKey as CompanionId);
+            onScreeningPoolTelemetry(companionId, event);
+          },
+        }
+      : {}),
+  });
   const pooledByCompanionId = new Map<CompanionId, IntakeScreeningService>();
   let pooledSingle: IntakeScreeningService | null = null;
-  if (pool && screeningPolicy) {
+  {
     const policy = screeningPolicy;
     const wrap = (
       underlying: IntakeScreeningService,
@@ -320,19 +334,18 @@ export async function composeGatewayIntakeScreeningRuntime(
   const disposeCompositionsAndPool = async (): Promise<void> => {
     // Drain the pool first so in-flight screening settles (no orphaned
     // quarantine holds) before the underlying services/stores are torn down.
-    if (pool) {
-      try {
-        await pool.dispose();
-      } catch {
-        // dispose() never throws, but never let pool cleanup block composition
-        // teardown if an observer misbehaved.
-      }
+    try {
+      await pool.dispose();
+    } catch {
+      // dispose() never throws, but never let pool cleanup block composition
+      // teardown if an observer misbehaved.
     }
     await disposeCompositions(compositions);
   };
 
   return {
     mode,
+    globalMode,
     byCompanionId,
     quarantineStores,
     quarantinedArtifactGuard,

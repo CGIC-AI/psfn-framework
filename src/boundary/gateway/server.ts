@@ -84,6 +84,7 @@ import {
   parseCompanionMessageFailureReport,
 } from './companion-delivery-failures.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import type { QuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
@@ -283,10 +284,10 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
     companionId?: string,
   ) => IntakeScreeningService | null;
   /**
-   * Explicit system-owned posture. Required even when off so omitting intake
-   * composition cannot silently disable gateway-global egress guards.
+   * Canonical global CogSec mode (shadow/boundary/strict). Required so omitting
+   * intake composition cannot silently disable gateway-global egress guards.
    */
-  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
+  intakeScreeningMode: CogSecMode;
   /**
    * Quarantined-artifact access guard (hrmrq.54): blocks fs reads, searches,
    * writes, and edits of quarantined on-disk artifacts and records attempts.
@@ -574,13 +575,7 @@ export class GatewayServer {
       }
       for (const companionId of this.multiCompanion.fleetCompanionIds) {
         const screening = options.intakeScreeningProvider(companionId);
-        if (options.intakeScreeningMode === 'off') {
-          if (screening !== null) {
-            throw new Error(
-              `Fleet intake screening mode=off resolved a service for companion ${companionId}`,
-            );
-          }
-        } else if (!screening || screening.mode !== options.intakeScreeningMode) {
+        if (!screening || screening.globalMode !== options.intakeScreeningMode) {
           throw new Error(
             `Fleet intake screening mode=${options.intakeScreeningMode} has no matching service for companion ${companionId}`,
           );
@@ -590,13 +585,9 @@ export class GatewayServer {
         options.visionIntakeProvider(companionId);
       }
     } else {
-      if (options.intakeScreeningMode === 'off') {
-        if (options.intakeScreening) {
-          throw new Error('Single-companion intake screening mode=off resolved a service');
-        }
-      } else if (
+      if (
         !options.intakeScreening
-        || options.intakeScreening.mode !== options.intakeScreeningMode
+        || options.intakeScreening.globalMode !== options.intakeScreeningMode
       ) {
         throw new Error(
           `Single-companion intake screening mode=${options.intakeScreeningMode} has no matching service`,
@@ -627,13 +618,11 @@ export class GatewayServer {
       onDrop: drop => this.alertInboundChannelDrop(drop),
     });
     const cogSecMode = options.intakeScreeningMode;
-    this.canaryEgressGuard = cogSecMode === 'off'
-      ? undefined
-      : createCanaryEgressGuard({
-          mode: cogSecMode,
-          ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
-          log,
-        });
+    this.canaryEgressGuard = createCanaryEgressGuard({
+      mode: cogSecMode,
+      ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
+      log,
+    });
     // 2h6q.3: the exact-once shard approval-grant authority exists only when
     // a server-owned authenticated workload registry is wired; the authority
     // is constructed here so the production GatewayServer construction path

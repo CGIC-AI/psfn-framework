@@ -122,7 +122,7 @@ describe('MemoryWriter', () => {
       const seed = JSON.parse(
         readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
       ) as Record<string, unknown>;
-      const raw = { ...seed, mode };
+      const raw = { ...seed, mode: mode === 'enforce' ? 'strict' : 'shadow' };
       mutate?.(raw);
       return createIntakeSinkGate({
         policy: validateIntakePolicy(raw, 'intake-policy.test'),

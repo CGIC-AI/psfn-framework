@@ -331,7 +331,7 @@ describe('visionFlagsToRiskLabels', () => {
 
 describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   it('quarantines a typographic-injection image before any vision block could ship (enforce)', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const quarantine = makeQuarantineStub();
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       policy,
@@ -375,7 +375,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   });
 
   it('quarantines the near-white-on-white variant with the invisible-text label recorded', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const quarantine = makeQuarantineStub();
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       policy,
@@ -399,7 +399,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   });
 
   it('quarantines on the VLM flag alone even when the OCR text evades L1 patterns', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       policy,
       { dataBase64: TYPOGRAPHIC_PNG(), mimeType: 'image/png' },
@@ -421,7 +421,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   });
 
   it('passes a benign image with the transcript attached under an untrusted-data label (enforce)', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const quarantine = makeQuarantineStub();
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       policy,
@@ -450,7 +450,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
 
   it('cannot silently pass an empty-OCR verdict without the sentinel', async () => {
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
-      makePolicy('enforce'),
+      makePolicy('strict'),
       { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
       makeVlmFetch(verdictJson({
         ocrText: '',
@@ -495,7 +495,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
 
     const enforceQuarantine = makeQuarantineStub();
     const enforce = await evaluateVisionIntake(makeEvaluateInput(
-      makePolicy('enforce'),
+      makePolicy('strict'),
       { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
       failingFetch,
       enforceQuarantine.port,
@@ -524,7 +524,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   it('fails closed when a remote image cannot be securely materialized', async () => {
     const quarantine = makeQuarantineStub();
     const input = makeEvaluateInput(
-      makePolicy('enforce'),
+      makePolicy('strict'),
       { url: 'https://images.example.test/untrusted.png' },
       makeVlmFetch(verdictJson({ noLegibleText: true })),
       quarantine.port,
@@ -544,7 +544,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
 
   it('fails closed on unparseable VLM output in enforce mode', async () => {
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
-      makePolicy('enforce'),
+      makePolicy('strict'),
       { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
       makeVlmFetch('{not json'),
     ));
@@ -560,7 +560,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
       throw new Error('must not be called');
     };
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
-      makePolicy('enforce', { enabled: false }),
+      makePolicy('strict', { enabled: false }),
       { dataBase64: BENIGN_PNG(), mimeType: 'image/png' },
       countingFetch,
     ));
@@ -569,7 +569,7 @@ describe('evaluateVisionIntake (htm9.8 pipeline)', () => {
   });
 
   it('fails closed (never silent-pass) when enabled without a backend', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const outcome = await evaluateVisionIntake({
       ...makeEvaluateInput(policy, { dataBase64: BENIGN_PNG(), mimeType: 'image/png' }, makeVlmFetch(verdictJson({}))),
       backend: null,
@@ -595,7 +595,7 @@ describe('renderVisionTranscriptBlock', () => {
 
 describe('toVisionIntakeImageScreenResult (wire projection)', () => {
   it('projects a flagged outcome without leaking the transcript', async () => {
-    const policy = makePolicy('enforce');
+    const policy = makePolicy('strict');
     const outcome = await evaluateVisionIntake(makeEvaluateInput(
       policy,
       { dataBase64: TYPOGRAPHIC_PNG(), mimeType: 'image/png' },

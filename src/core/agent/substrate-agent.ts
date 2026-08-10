@@ -79,7 +79,10 @@ import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
 import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
 import {
   type IntakeSinkGate,
+  type IntakeEgressTrifectaAssessment,
+  type IntakeSinkGateAuditEvent,
 } from '../cogsec/intake/sink-gates.js';
+import { classifyToolResultCogSecProvenance } from '../cogsec/intake/tool-result-provenance.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
@@ -534,8 +537,8 @@ export class SubstrateAgent {
   imageVisionReviewer: ImageVisionReviewer | null = null;
   /** htm9.8 vision intake screener (gateway-backed); null when not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null = null;
-  /** CogSec rollout posture; off keeps canary markers out of prompts entirely. */
-  cogSecMode: IntakeFirewallMode = 'off';
+  /** Canonical global CogSec mode; defaults to shadow until composition arms it. */
+  cogSecMode: IntakeFirewallMode = 'shadow';
   observerEvalSidecar: ObserverEvalSidecarRuntime | null = null;
 
   constructor(
@@ -729,6 +732,10 @@ export class SubstrateAgent {
         const screened = screening.screenSync(text, {
           sourceClass: 'tool_output',
           toolResultProvenance: { toolName, arguments: toolArguments },
+          // Structural clean-bubble provenance: derived from the tool NAME only
+          // (unforgeable by content/model args), so boundary-mode internal
+          // tool results make zero semantic-screening calls.
+          structuralProvenance: classifyToolResultCogSecProvenance(toolName),
           origin: {
             ref: `tool:${toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
             detail: 'seam:tool-scheduler',

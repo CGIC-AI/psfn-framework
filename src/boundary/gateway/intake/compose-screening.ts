@@ -38,7 +38,7 @@ import {
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
-import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
+import { loadIntakePolicyConfig, isIntakeEnforcingMode } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { LLMRequestCapability } from '../../../primitives/llm/client-request-capability.js';
@@ -171,16 +171,7 @@ export async function composeGatewayIntakeScreening(input: {
 }): Promise<GatewayIntakeScreeningComposition> {
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);
   const policy = loadIntakePolicyConfig(input.systemDataDir);
-  if (policy.mode === 'off') {
-    log.warn("Intake firewall mode is 'off': gateway intake screening is not wired");
-    return {
-      screening: null,
-      quarantine: null,
-      visionIntake: null,
-      injectionClassifier: { enabled: false, degraded: false, modelDir },
-      dispose: async () => {},
-    };
-  }
+  const enforcing = isIntakeEnforcingMode(policy.mode);
   const screenerModels = resolveIntakeScreenerModels(input.config, {
     l3DualModel: policy.l3Screener.dualModel,
     visionEnabled: policy.visionScreener.enabled,
@@ -237,7 +228,7 @@ export async function composeGatewayIntakeScreening(input: {
     // Treat it as broken state, not as the clean "not installed" case: an
     // interrupted download must never silently downgrade live screening.
     assertInjectionModelProvisioned(modelDir);
-  } else if (policy.mode === 'enforce') {
+  } else if (enforcing) {
     // FAIL CLOSED (cyy7l): an enforce-mode intake firewall that silently runs
     // on the deterministic L1 layer alone reports "armed" while the L1.5
     // injection classifier never scores anything. The ~700MiB weights are
@@ -245,12 +236,12 @@ export async function composeGatewayIntakeScreening(input: {
     // provisioning would otherwise pass this point degraded under an enforce
     // posture. Refuse to start until the weights are on disk.
     throw new Error(
-      'Intake firewall mode=enforce but the L1.5 injection classifier weights '
+      `Intake firewall mode=${policy.mode} (enforcing) but the L1.5 injection classifier weights `
       + `are not provisioned at ${modelDir}. Provision them onto every deploy `
       + "target's model-cache before startup — "
       + `\`npm run provision:injection-model -- --dest ${modelDir}\` — then `
       + 'restart the gateway. Refusing to run an enforce-mode intake firewall '
-      + 'on L1 scanners alone (no silent L1-only operation under enforce).',
+      + 'on L1 scanners alone (no silent L1-only operation under boundary/strict).',
     );
   } else {
     // shadow mode: a single loud, structured startup warning (never
@@ -286,7 +277,7 @@ export async function composeGatewayIntakeScreening(input: {
         ...(screenerModels.vision ? [screenerModels.vision] : []),
       ]);
     } catch (error) {
-      if (policy.mode === 'enforce') throw error;
+      if (enforcing) throw error;
       log.warn(
         'Intake pi-ai screener backend failed credential/model preflight; '
         + `screeners remain disabled in shadow mode: ${error instanceof Error ? error.message : String(error)}`,
@@ -321,10 +312,10 @@ export async function composeGatewayIntakeScreening(input: {
       ...policy.l2Screener.mandatoryTiers,
       ...policy.l3Screener.mandatoryTiers,
     ])];
-    if (policy.mode === 'enforce' && mandatoryTiers.length > 0) {
+    if (enforcing && mandatoryTiers.length > 0) {
       throw new Error(
         `Intake policy mandates L2/L3 deep screening for tiers [${mandatoryTiers.join(', ')}] `
-        + 'with mode=enforce but no pi-ai provider backend is resolvable. '
+        + `with mode=${policy.mode} (enforcing) but no pi-ai provider backend is resolvable. `
         + 'Configure the selected models and provider credentials or remove the l2Screener/l3Screener '
         + 'mandatoryTiers from intake-policy.json.',
       );
@@ -404,9 +395,9 @@ export async function composeGatewayIntakeScreening(input: {
           }),
         ),
       };
-    } else if (policy.mode === 'enforce') {
+    } else if (enforcing) {
       throw new Error(
-        'Intake vision screener is enabled with mode=enforce but no pi-ai '
+        `Intake vision screener is enabled with mode=${policy.mode} (enforcing) but no pi-ai `
         + 'provider backend is resolvable from providers.json/models.json. '
         + 'Configure the selected providers or set intake-policy.json '
         + 'visionScreener.enabled=false.',

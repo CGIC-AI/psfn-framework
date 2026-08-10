@@ -222,7 +222,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       traceId: string;
     }> = [];
     const { composition, companionDataDir } = await composeWith(
-      seedPolicy({ mode: 'enforce' }),
+      seedPolicy({ mode: 'strict' }),
       transport.fetch,
       undefined,
       event => timing.push(event),
@@ -310,7 +310,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
     });
     const { composition, companionDataDir } = await composeWith(
-      seedPolicy({ mode: 'enforce' }),
+      seedPolicy({ mode: 'strict' }),
       transport.fetch,
     );
 
@@ -365,7 +365,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     const transport = routingFetch({});
     const timing: Array<{ stage: string; status: string; durationMs?: number }> = [];
     const { composition } = await composeWith(
-      seedPolicy({ mode: 'enforce' }),
+      seedPolicy({ mode: 'strict' }),
       transport.fetch,
       undefined,
       event => timing.push(event),
@@ -406,7 +406,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
 
   it('an L2-cleared item stays on the L1 decision with the L2 verdict recorded, no L3 call', async () => {
     const transport = routingFetch({ [L2_MODEL]: { verdict: L2_CLEAN_VERDICT } });
-    const { composition } = await composeWith(seedPolicy({ mode: 'enforce' }), transport.fetch);
+    const { composition } = await composeWith(seedPolicy({ mode: 'strict' }), transport.fetch);
 
     const result = await composition.screening!.screen(HOSTILE_CONTENT, {
       sourceClass: 'web_fetch',
@@ -432,7 +432,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       [L2_MODEL]: { verdict: L2_CLEAN_VERDICT },
       [L3_MODEL]: { verdict: L3_CLEAR_VERDICT },
     });
-    const seed = seedPolicy({ mode: 'enforce' });
+    const seed = seedPolicy({ mode: 'strict' });
     const { composition } = await composeWith(
       {
         ...seed,
@@ -475,7 +475,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     const transport = routingFetch({ [L2_MODEL]: { rejectWith: 'L2 screener timed out after 8000ms' } });
     const timing: Array<{ stage: string; status: string; durationMs?: number }> = [];
     const { composition } = await composeWith(
-      seedPolicy({ mode: 'enforce' }),
+      seedPolicy({ mode: 'strict' }),
       transport.fetch,
       undefined,
       event => timing.push(event),
@@ -521,7 +521,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       error: string;
     }> = [];
     const { composition, companionDataDir } = await composeWith(
-      seedPolicy({ mode: 'enforce' }),
+      seedPolicy({ mode: 'strict' }),
       transport.fetch,
       event => failClosedEvents.push(event),
     );
@@ -591,7 +591,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     // guarantee); this pins the runtime consequence: the same hostile,
     // above-threshold, L2-mandatory-adjacent item screens on L1 alone.
     const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
-    const policy = validateIntakePolicy({ ...seed, mode: 'enforce' }, 'escalation-wiring.test');
+    const policy = validateIntakePolicy({ ...seed, mode: 'strict' }, 'escalation-wiring.test');
     const screening = maybeCreateIntakeScreeningService({
       policy,
       actor: 'agent:intake-screening',
@@ -614,7 +614,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
   });
 
   it('FAILS STARTUP: enforce mode with mandatory escalation tiers and no pi-ai provider backend', async () => {
-    const dirs = makeDataDirs(seedPolicy({ mode: 'enforce' }));
+    const dirs = makeDataDirs(seedPolicy({ mode: 'strict' }));
     await expect(composeGatewayIntakeScreening({
       ...dirs,
       screenerBackend: null,

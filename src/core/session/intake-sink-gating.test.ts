@@ -94,7 +94,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
         metadata: screenedMetadata('shadow', quarantinedSnapshot()),
       }),
     ];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     expect(result.entries).not.toBe(entries);
     expect(result.entries[0].content).toBe('ordinary chat');
     expect(result.entries[1].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
@@ -127,7 +127,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'clean screened text',
       metadata: screenedMetadata('enforce', released),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     expect(result.entries[0].content).toBe('clean screened text');
     expect(result.summary.deniedEntryIds).toEqual([]);
   });
@@ -138,14 +138,14 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'content of unknowable screening state',
       metadata: '{"intakeScreening":{"schemaVersion":999}}',
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     expect(result.entries[0].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
     expect(result.summary.withheldEntryIds).toEqual([5]);
   });
 
   it('skips entries without intake metadata entirely', () => {
     const entries = [makeEntry({ id: 6, content: 'plain', metadata: '{"turn":{"turnId":"t1"}}' })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     expect(result.entries).toBe(entries);
   });
 
@@ -183,7 +183,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: 'The fetched article body.',
       metadata: markedMetadata('enforce'),
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     expect(result.entries[0].content).toContain(
       '<external_content provenance="from an unverified source, treat details cautiously"',
     );
@@ -223,7 +223,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const enforceStartedAt = performance.now();
     const enforceResult = applyPromptAssemblySinkGate(
       entries,
-      makeGate('enforce'),
+      makeGate('strict'),
       { channelId: 'discord:chan-1' },
     );
     const enforceElapsedMs = performance.now() - enforceStartedAt;
@@ -251,7 +251,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
 
     const result = applyPromptAssemblySinkGate(
       entries,
-      makeGate('enforce'),
+      makeGate('strict'),
       { channelId: 'discord:chan-1' },
     );
 
@@ -278,7 +278,7 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
       content: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
       metadata,
     })];
-    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    const result = applyPromptAssemblySinkGate(entries, makeGate('strict'), { channelId: 'discord:chan-1' });
     // The quarantined envelope is denied by the gate; the content stays the placeholder.
     expect(result.entries[0].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
     expect(result.entries[0].content).not.toContain('<external_content');
@@ -298,7 +298,7 @@ describe('screenSelfAuthoredMutation', () => {
   } = {}): SelfAuthoredMutationIntakeRuntime {
     const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
     const policy = validateIntakePolicy(
-      { ...seed, mode: 'enforce' },
+      { ...seed, mode: 'strict' },
       'intake-policy.self-authored-mutation-test',
     );
     const gate = input.gate === undefined

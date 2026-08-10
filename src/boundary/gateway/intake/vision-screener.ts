@@ -48,7 +48,11 @@ import {
   type IntakeEnvelopeSubject,
   type IntakeRiskLabel,
 } from '../../../shared/contracts/intake-envelope.js';
-import type { IntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
+import {
+  isIntakeEnforcingMode,
+  intakeModeEnforcementPosture,
+  type IntakePolicyConfig,
+} from '../../../system/config/intake-policy-config.js';
 import type {
   IntakeScreeningResult,
   IntakeScreeningService,
@@ -614,17 +618,15 @@ export async function evaluateVisionIntake(
   input: EvaluateVisionIntakeInput,
 ): Promise<VisionIntakeScreenOutcome> {
   const { policy } = input;
-  if (policy.mode === 'off') {
-    return { kind: 'skipped', reason: "intake-policy mode is 'off'" };
-  }
   if (!policy.visionScreener.enabled) {
     return { kind: 'skipped', reason: 'visionScreener.enabled is false' };
   }
   const mode = policy.mode;
+  const posture = intakeModeEnforcementPosture(mode);
   if (!input.backend) {
     // Composition normally refuses to build this state in enforce mode; guard
     // against hand-built inputs the same way (never deliver unscreened).
-    return failClosed(input, mode, 'vision screener backend is not configured');
+    return failClosed(input, posture, 'vision screener backend is not configured');
   }
 
   let verdict: VisionScreenerVerdict;
@@ -640,7 +642,7 @@ export async function evaluateVisionIntake(
         ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
     });
   } catch (error) {
-    return failClosed(input, mode, error instanceof Error ? error.message : String(error));
+    return failClosed(input, posture, error instanceof Error ? error.message : String(error));
   }
 
   // TAINT RULE: the transcript is untrusted derived content. It runs through
@@ -681,14 +683,14 @@ export async function evaluateVisionIntake(
   // no deployable detector today, so the benign path still delivers the image
   // under hostile-tier 'image_ocr' provenance (the envelope keeps that tier),
   // and the transcript ships only inside the untrusted-data label below.
-  const promptBlock = !flagged && mode === 'enforce'
+  const promptBlock = !flagged && isIntakeEnforcingMode(mode)
     ? renderVisionTranscriptBlock(screened.effectiveText)
     : undefined;
 
   const auditPayload = {
     envelopeId: screened.envelope.id,
     originRef: input.origin.ref,
-    mode,
+    mode: posture,
     action: screened.action,
     flagged,
     withheld,
@@ -705,7 +707,7 @@ export async function evaluateVisionIntake(
 
   return {
     kind: 'screened',
-    mode,
+    mode: posture,
     flagged,
     withheld,
     verdict,

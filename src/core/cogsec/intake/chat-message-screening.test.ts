@@ -64,7 +64,7 @@ describe('chat message body intake screening', () => {
       snapshot,
     }));
     const screening = {
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       screen,
     } as unknown as IntakeScreeningService;
 

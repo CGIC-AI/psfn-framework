@@ -396,7 +396,7 @@ describe('buildSessionContext channel bonding + intake sink gate', () => {
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
     ) as Record<string, unknown>;
     return createIntakeSinkGate({
-      policy: validateIntakePolicy({ ...seed, mode: 'enforce' }, 'intake-policy.bond-test'),
+      policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.bond-test'),
       actor: 'test:bond-sink-gate',
     });
   }

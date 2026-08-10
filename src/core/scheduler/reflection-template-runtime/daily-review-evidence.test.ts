@@ -33,7 +33,7 @@ function createEnforceIntakeSinkGate() {
   ) as Record<string, unknown>;
   return createIntakeSinkGate({
     policy: validateIntakePolicy(
-      { ...seed, mode: 'enforce' },
+      { ...seed, mode: 'strict' },
       'intake-policy.daily-review-evidence-test',
     ),
     actor: 'test:daily-review-evidence-sink-gate',

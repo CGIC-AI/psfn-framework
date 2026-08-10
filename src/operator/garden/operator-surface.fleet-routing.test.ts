@@ -313,7 +313,7 @@ describe('GardenOperatorSurface fleet transport routing', () => {
           reason: 'held during sustained ingest',
           atMs,
         });
-        writer.hold({ envelope, mode: 'enforce', rawText: `fixture ${String(index)}`, atMs });
+        writer.hold({ envelope, mode: 'strict', rawText: `fixture ${String(index)}`, atMs });
         const response = new CapturingResponse();
         const startedAtMs = Date.now();
 

@@ -611,7 +611,7 @@ describe('GatewayServer', () => {
     });
     quarantineStore.hold({
       envelope,
-      mode: 'enforce',
+      mode: 'strict',
       rawText: heldContent,
       artifactPaths: [artifactPath],
     });
@@ -629,7 +629,7 @@ describe('GatewayServer', () => {
         },
         quarantinedArtifactGuard: createQuarantinedArtifactAccessGuard({
           store: quarantineStore,
-          mode: 'enforce',
+          mode: 'strict',
         }),
       });
 

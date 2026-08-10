@@ -39,7 +39,7 @@ function testPolicy(): IntakePolicyConfig {
     {
       ...seed,
       schemaVersion: 5,
-      mode: 'enforce',
+      mode: 'strict',
       sourceRiskTiers: {
         operator: 'trusted',
         companion_self: 'trusted',

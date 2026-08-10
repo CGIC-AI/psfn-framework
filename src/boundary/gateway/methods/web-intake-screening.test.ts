@@ -159,7 +159,7 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('enforce mode: a quarantined page never crosses the RPC boundary', async () => {
     const { server, url } = await listenHttp(HOSTILE_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy, makeScreening('enforce'));
+    const harness = createHarness(localCrawlerPolicy, makeScreening('strict'));
 
     const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
 
@@ -178,7 +178,7 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('enforce mode: clean pages pass through with a released envelope', async () => {
     const { server, url } = await listenHttp(CLEAN_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy, makeScreening('enforce'));
+    const harness = createHarness(localCrawlerPolicy, makeScreening('strict'));
 
     const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
 

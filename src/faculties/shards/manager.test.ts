@@ -319,7 +319,7 @@ describe('ShardManager', () => {
       tools: [],
     };
     const screening = {
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       screenSync: vi.fn(() => {
         throw new Error('unused in this test');
       }),
@@ -1296,7 +1296,7 @@ describe('ShardManager', () => {
     mockShardContent = 'bounded shard reply';
     const parentSessionManager = new SessionManager(sessionStore, TEST_CONFIG, eventBus);
     parentSessionManager.intakeScreening = {
-      mode: 'enforce',
+      mode: 'strict',
       screenSync: vi.fn((text: string) => (fromAny({
         action: text.includes('Bearer')
           ? 'sanitize'

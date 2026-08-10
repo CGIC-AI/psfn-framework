@@ -132,7 +132,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'The reply-canary carrier is scanned at the reverse-RPC seam and the egress is HELD.',
     async run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       const reply = await captureReplyCanary(async () => {
         recordReplyCanaryToken(token);
         return { response: { channelId: 'api', content: `exfiltrated marker ${token}` } };

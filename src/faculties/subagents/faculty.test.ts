@@ -355,7 +355,7 @@ describe('SubagentFaculty', () => {
   it('resolves the parent intake screening at spawn time (hrmrq.54)', async () => {
     mockSubagentContent = 'done';
     const screening = {
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       screenSync: vi.fn(() => {
         throw new Error('unused in this test');
       }),
@@ -949,22 +949,22 @@ describe('SubagentFaculty', () => {
       activeTurnIntakeEnvelopesProvider: () => [parent],
       completionIntakeProvider: () => ({
         screening: {
-          mode: 'enforce',
+          mode: 'strict',
           screen: async (text: string) => ({
             snapshot: child,
             action: 'pass',
-            mode: 'enforce',
+            mode: 'strict',
             effectiveText: text,
             withheld: false,
           }),
         } as never,
         sinkGate: {
-          mode: 'enforce',
+          mode: 'strict',
           evaluate: () => ({
             sink: 'prompt_assembly',
             allowed: false,
             verdict: 'deny',
-            mode: 'enforce',
+            mode: 'strict',
             reason: 'parent quarantined',
             unscreened: false,
             deniedEnvelopeIds: [parent.envelopeId],

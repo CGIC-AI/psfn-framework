@@ -57,6 +57,34 @@ const RETIRED_SCREENER_MODEL_PATHS = [
   ['visionScreener', 'model'],
 ] as const;
 
+/**
+ * Retired intake-firewall mode values and their explicit migration target.
+ * 'off' (no firewall) → 'shadow' (observe-only, the least-interference valid
+ * posture now that 'off' is removed); 'enforce' (full enforcement, pre
+ * clean-bubble) → 'strict' (behavior-preserving: full enforcement of every
+ * declared vector). 'shadow' is unchanged.
+ */
+const RETIRED_INTAKE_MODE_MIGRATIONS: Readonly<Record<string, string>> = {
+  off: 'shadow',
+  enforce: 'strict',
+};
+
+function remapRetiredIntakeMode(
+  raw: Record<string, unknown>,
+): { candidate: Record<string, unknown>; updatedMode: boolean } {
+  if (typeof raw.mode !== 'string') {
+    throw new Error(
+      'Intake policy owner migration requires a string `mode` field to remap',
+    );
+  }
+  const target = RETIRED_INTAKE_MODE_MIGRATIONS[raw.mode];
+  if (target === undefined) return { candidate: raw, updatedMode: false };
+  return {
+    candidate: { ...raw, mode: target },
+    updatedMode: true,
+  };
+}
+
 function loadSeedUrlScannerPolicy(seedDir: string): IntakeUrlScannerPolicyConfig {
   const seedPath = join(seedDir, INTAKE_POLICY_SEED_FILE_NAME);
   let raw: unknown;
@@ -175,7 +203,7 @@ function repairSelfAuthoredMutationPolicy(
 }
 
 /**
- * Explicitly upgrades intake-policy schema v1/v2/v3 owners to v4. V1 gains the
+ * Explicitly upgrades intake-policy schema v1/v2/v3/v4 owners to v5. V1 gains the
  * canonical skill_write sink rule; legacy owners gain the explicit
  * trusted companion_self source class used only for screened self-authored
  * mutations. Every legacy version gains the URL scanner scheme policy from the
@@ -247,7 +275,9 @@ export function migrateIntakePolicyOwner(
     };
 
     if (raw.schemaVersion === INTAKE_POLICY_SCHEMA_VERSION) {
-      const repaired = repairSelfAuthoredMutationPolicy(raw, filePath, {
+      const modeRemapped = remapRetiredIntakeMode(raw);
+      let candidate = modeRemapped.candidate;
+      const repaired = repairSelfAuthoredMutationPolicy(candidate, filePath, {
         rejectExistingCompanionSelf: false,
       });
       const withScreeningPool = ensureScreeningPoolPresent(
@@ -255,12 +285,18 @@ export function migrateIntakePolicyOwner(
         filePath,
         options.seedDir ?? process.env.CONFIG_DIR ?? './config',
       );
-      const { candidate, removedPaths } = removeRetiredScreenerModelKeys(withScreeningPool.candidate);
+      const retired = removeRetiredScreenerModelKeys(withScreeningPool.candidate);
+      candidate = retired.candidate;
       const addedPaths = [...repaired.addedPaths, ...withScreeningPool.addedPaths];
+      const updatedPaths: string[] = [];
+      if (modeRemapped.updatedMode) {
+        updatedPaths.push(`mode (${String(raw.mode)} -> ${String(candidate.mode)})`);
+      }
+      updatedPaths.push(...repaired.updatedPaths);
       if (
-        addedPaths.length > 0
-        || repaired.updatedPaths.length > 0
-        || removedPaths.length > 0
+        updatedPaths.length > 0
+        || addedPaths.length > 0
+        || retired.removedPaths.length > 0
       ) {
         validateIntakePolicy(candidate, filePath);
         return finishCandidate(candidate, {
@@ -270,8 +306,8 @@ export function migrateIntakePolicyOwner(
           fromSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
           toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
           ...(addedPaths.length > 0 ? { addedPaths } : {}),
-          ...(repaired.updatedPaths.length > 0 ? { updatedPaths: repaired.updatedPaths } : {}),
-          ...(removedPaths.length > 0 ? { removedPaths } : {}),
+          ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
+          ...(retired.removedPaths.length > 0 ? { removedPaths: retired.removedPaths } : {}),
         });
       }
       validateIntakePolicy(raw, filePath);
@@ -304,7 +340,15 @@ export function migrateIntakePolicyOwner(
 
     const upgraded: Record<string, unknown> = structuredClone(raw);
     upgraded.schemaVersion = INTAKE_POLICY_SCHEMA_VERSION;
+    // Legacy schema versions predate the canonical CogSec mode vocabulary;
+    // remap any retired mode value before validation rejects it.
+    const legacyModeRemapped = remapRetiredIntakeMode(upgraded);
     const addedPaths: string[] = [];
+    const updatedPaths: string[] = [];
+    if (legacyModeRemapped.updatedMode) {
+      updatedPaths.push(`mode (${String(upgraded.mode)} -> ${String(legacyModeRemapped.candidate.mode)})`);
+      upgraded.mode = legacyModeRemapped.candidate.mode;
+    }
     if (Object.hasOwn(upgraded, 'urlScanner')) {
       upgraded.urlScanner = validateIntakeUrlScannerPolicy(upgraded.urlScanner, filePath);
     } else {
@@ -333,6 +377,7 @@ export function migrateIntakePolicyOwner(
       rejectExistingCompanionSelf: raw.schemaVersion === 1 || raw.schemaVersion === 2,
     });
     addedPaths.push(...repaired.addedPaths);
+    updatedPaths.push(...repaired.updatedPaths);
     const { candidate, removedPaths } = removeRetiredScreenerModelKeys(repaired.candidate);
     validateIntakePolicy(candidate, filePath);
 
@@ -343,7 +388,7 @@ export function migrateIntakePolicyOwner(
       fromSchemaVersion: raw.schemaVersion,
       toSchemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
       ...(addedPaths.length > 0 ? { addedPaths } : {}),
-      ...(repaired.updatedPaths.length > 0 ? { updatedPaths: repaired.updatedPaths } : {}),
+      ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
       ...(removedPaths.length > 0 ? { removedPaths } : {}),
     };
     return finishCandidate(candidate, result);

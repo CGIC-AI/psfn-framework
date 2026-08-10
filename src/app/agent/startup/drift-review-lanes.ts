@@ -59,15 +59,13 @@ function buildDriftVelocityReview(deps: DriftReviewLanesDeps) {
       evidence: createDriftVelocityEvidencePort({
         contactStore,
         memoryStore,
-        quarantineStore: intakePolicy.mode !== 'off'
-          ? createIntakeQuarantineStore(
-            resolveIntakeQuarantinePath(companionDataDir),
-            {
-              itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-              maxHeldItems: intakePolicy.quarantine.maxHeldItems,
-            },
-          )
-          : null,
+        quarantineStore: createIntakeQuarantineStore(
+          resolveIntakeQuarantinePath(companionDataDir),
+          {
+            itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+            maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+          },
+        ),
       }),
       cardStore: createDriftReviewCardStore(
         resolveDriftReviewCardsPath(companionDataDir),

@@ -162,7 +162,7 @@ describe('API file content parts (htm9.9)', () => {
         readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
       ) as Record<string, unknown>;
       return createIntakeScreeningService({
-        policy: validateIntakePolicy({ ...seed, mode: 'enforce' }, 'intake-policy.5ixyj-test'),
+        policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.5ixyj-test'),
         // Agent-side screening is L1-only (no injection scorer); a document is
         // held only when L1 fires, so this also guards the L1 override rule.
         l1: createIntakeL1Scanner({

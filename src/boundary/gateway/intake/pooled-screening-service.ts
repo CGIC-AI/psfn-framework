@@ -50,6 +50,11 @@ import {
 import type { IntakeL1ScanReport } from '../../../core/cogsec/intake/scanners/index.js';
 import { COGSEC_DECISION_REASON_MAX_CHARS } from '../../../core/cogsec/intake/screening-envelope-policy.js';
 import {
+  cogSecVectorForProvenance,
+  resolveCogSecProvenanceClass,
+  type CogSecMode,
+} from '../../../shared/contracts/cogsec-mode.js';
+import {
   ScreeningPoolCancelledError,
   ScreeningPoolDeadlineError,
   ScreeningPoolDisposedError,
@@ -99,6 +104,7 @@ export function synthesizeFailClosedScreeningResult(
   text: string,
   input: IntakeScreeningInput,
   mode: 'shadow' | 'enforce',
+  globalMode: CogSecMode,
   reason: string,
   now: () => number,
 ): IntakeScreeningResult {
@@ -144,6 +150,12 @@ export function synthesizeFailClosedScreeningResult(
   const subject: IntakeEnvelopeSubject = input.subject ?? { kind: 'body' };
   const snapshot: IntakeEnvelopeSnapshot = snapshotIntakeEnvelope(envelope, subject);
   const effectiveText = withheld ? renderIntakeWithheldContentPlaceholder() : text;
+  const provenance = resolveCogSecProvenanceClass({
+    sourceClass,
+    ...(input.structuralProvenance !== undefined
+      ? { structuralProvenance: input.structuralProvenance }
+      : {}),
+  });
 
   // A coherent empty L1 report so callers that read `report` (marking /
   // sanitization paths) get a clean no-findings scan rather than a null.
@@ -166,6 +178,8 @@ export function synthesizeFailClosedScreeningResult(
     report,
     action: 'quarantine',
     mode,
+    globalMode,
+    cogsecVector: cogSecVectorForProvenance(provenance, sourceClass),
     effectiveText,
     withheld,
   };
@@ -200,6 +214,7 @@ export function createPooledIntakeScreeningService(
 
   return {
     mode,
+    globalMode: underlying.globalMode,
     async screen(text, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
       try {
         return await pool.run(
@@ -215,7 +230,14 @@ export function createPooledIntakeScreeningService(
           error: reason,
           timestamp: input.atMs ?? now(),
         });
-        return synthesizeFailClosedScreeningResult(text, input, mode, reason, now);
+        return synthesizeFailClosedScreeningResult(
+          text,
+          input,
+          mode,
+          underlying.globalMode,
+          reason,
+          now,
+        );
       }
     },
     screenSync(text, input: IntakeScreeningInput): IntakeScreeningResult {

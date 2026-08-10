@@ -39,7 +39,7 @@ function escalationPolicy(): IntakePolicyConfig {
   const l2 = (seed.l2Screener as Record<string, unknown>);
   return validateIntakePolicy({
     ...seed,
-    mode: 'enforce',
+    mode: 'strict',
     sourceLists: {
       trustedSites: [{ pattern: '*.arxiv.org', addedBy: 'operator', addedAt: 1_700_000_000_000 }],
       deniedSites: [{ pattern: 'malware.example', addedBy: 'operator', addedAt: 1_700_000_000_000 }],

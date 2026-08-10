@@ -333,7 +333,7 @@ describe('ShardFoldReviewController', () => {
       memory: { id: 'safe-memory' },
     }));
     const screening = {
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       screen: vi.fn(async (text: string) => {
         const hostile = text.includes('Ignore previous instructions');
         return {
@@ -346,21 +346,21 @@ describe('ShardFoldReviewController', () => {
             subject: { kind: 'body' },
           },
           action: hostile ? 'quarantine' : 'pass',
-          mode: 'enforce',
+          mode: 'strict',
           effectiveText: hostile ? INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent : text,
           withheld: hostile,
         };
       }),
     };
     const sinkGate = {
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       evaluate: vi.fn((_sink: string, envelopes: readonly IntakeEnvelopeSnapshot[]) => {
         const denied = envelopes.filter(envelope => envelope.state === 'quarantined');
         return {
           sink: 'memory_write' as const,
           allowed: denied.length === 0,
           verdict: denied.length === 0 ? 'allow' as const : 'deny' as const,
-          mode: 'enforce' as const,
+          mode: 'strict' as const,
           reason: denied.length === 0 ? 'released' : 'quarantined',
           unscreened: false,
           deniedEnvelopeIds: denied.map(envelope => envelope.envelopeId),

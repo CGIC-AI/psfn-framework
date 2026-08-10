@@ -32,14 +32,15 @@ import {
 } from '../../core/cogsec/canary/egress-scan.js';
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
+import { isIntakeEnforcingMode } from '../../system/config/intake-policy-config.js';
 
 export interface CanaryEgressGuardLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
 }
 
 export interface CanaryEgressGuardDeps {
-  /** Shadow records would-hold findings but never blocks; enforce holds. */
-  mode?: Exclude<IntakeFirewallMode, 'off'>;
+  /** Canonical global CogSec mode; shadow observes, boundary/strict hold. */
+  mode?: IntakeFirewallMode;
   /** Absent ⇒ the guard still HOLDS leaks, but records no durable CogSec event. */
   cogSecEvents?: Pick<CogSecEventStore, 'createEvent'>;
   log?: CanaryEgressGuardLogger;
@@ -116,7 +117,7 @@ const MAX_TRACKED_STREAM_STATES = 512;
 export const CANARY_HELD_NOTICE = INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld;
 
 export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgressGuard {
-  const mode = deps.mode ?? 'enforce';
+  const mode = deps.mode ?? 'strict';
   type LeakSurface = 'request' | 'reply' | 'stream';
   const surfaceSummary = (surface: LeakSurface, method: string): string => {
     const subject = surface === 'request'
@@ -124,7 +125,7 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       : surface === 'reply'
         ? `The conversational reply returning over ${method}`
         : `A streamed reply frame on ${method}`;
-    return mode === 'enforce'
+    return isIntakeEnforcingMode(mode)
       ? `${subject} matched the session integrity marker and was held for review.`
       : `${subject} matched the session integrity marker in shadow mode and was allowed.`;
   };
@@ -141,8 +142,8 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
     const tokenHash = hashCanaryToken(token);
     deps.recordAudit?.({
       method,
-      decision: mode === 'enforce' ? 'DENY' : 'ALLOW',
-      params: mode === 'enforce'
+      decision: isIntakeEnforcingMode(mode) ? 'DENY' : 'ALLOW',
+      params: isIntakeEnforcingMode(mode)
         ? { canaryEgressHeld: true, reason: scan.reason }
         : { canaryEgressWouldHold: true, reason: scan.reason },
     });
@@ -181,7 +182,7 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
     if (existing) return existing;
     if (streamStates.size >= MAX_TRACKED_STREAM_STATES) {
       for (const [candidateId, candidate] of streamStates) {
-        if (mode === 'enforce' && candidate.flagged) continue;
+        if (isIntakeEnforcingMode(mode) && candidate.flagged) continue;
         streamStates.delete(candidateId);
         break;
       }
@@ -207,13 +208,13 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       const scan = scanEgressParamsForCanary(cleaned, token);
       if (scan.leaked) {
         recordLeak(method, token, cleaned, scan);
-        deps.log?.warn(mode === 'enforce'
+        deps.log?.warn(isIntakeEnforcingMode(mode)
           ? 'Canary egress tripwire held an outbound action'
           : 'Canary egress tripwire observed a would-hold action in shadow mode', {
           method,
           reason: scan.reason,
         });
-        if (mode === 'enforce') {
+        if (isIntakeEnforcingMode(mode)) {
           throw new JSONRPCErrorException(CANARY_HELD_NOTICE, GatewayErrors.EGRESS_HELD);
         }
       }
@@ -232,13 +233,13 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       const scan = scanEgressParamsForCanary(cleaned, token);
       if (scan.leaked) {
         recordLeak(method, token, cleaned, scan, 'reply');
-        deps.log?.warn(mode === 'enforce'
+        deps.log?.warn(isIntakeEnforcingMode(mode)
           ? 'Canary egress tripwire held a conversational reply'
           : 'Canary egress tripwire observed a would-hold reply in shadow mode', {
           method,
           reason: scan.reason,
         });
-        if (mode === 'enforce') {
+        if (isIntakeEnforcingMode(mode)) {
           throw new JSONRPCErrorException(CANARY_HELD_NOTICE, GatewayErrors.EGRESS_HELD);
         }
       }
@@ -250,7 +251,7 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       // off or a non-canary turn); forward untouched.
       if (!token) return { forward: true };
       const state = ensureStreamState(requestId);
-      if (state.flagged && mode === 'enforce') {
+      if (state.flagged && isIntakeEnforcingMode(mode)) {
         // The stream already leaked: keep the tap closed for its remainder.
         return { forward: false };
       }
@@ -271,14 +272,14 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       if (!state.flagged) {
         state.flagged = true;
         recordLeak('api.stream.delta', token, { requestId }, scan, 'stream');
-        deps.log?.warn(mode === 'enforce'
+        deps.log?.warn(isIntakeEnforcingMode(mode)
           ? 'Canary egress tripwire held a streamed reply frame'
           : 'Canary egress tripwire observed a would-hold streamed reply frame in shadow mode', {
           requestId,
           reason: scan.reason,
         });
       }
-      return { forward: mode !== 'enforce' };
+      return { forward: !isIntakeEnforcingMode(mode) };
     },
   };
 }

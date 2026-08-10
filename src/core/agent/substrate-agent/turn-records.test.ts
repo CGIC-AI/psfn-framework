@@ -570,7 +570,7 @@ describe('turn-records tool persistence', () => {
       isError: false,
       timestamp: 1_700_000_000_000,
       psfnIntakeScreening: {
-        mode: 'enforce',
+        mode: 'strict',
         withheld: true,
         effectiveText:
           'Internal tool status: non-text tool content was withheld by intake screening.',
@@ -612,7 +612,7 @@ describe('turn-records tool persistence', () => {
       undefined,
       expect.objectContaining({
         precomputedToolIntakeScreening: expect.objectContaining({
-          mode: 'enforce',
+          mode: 'strict',
           withheld: true,
           snapshot: expect.objectContaining({ state: 'released' }),
         }),

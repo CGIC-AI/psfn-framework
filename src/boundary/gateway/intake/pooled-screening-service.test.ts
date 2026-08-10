@@ -58,11 +58,14 @@ function fakeUnderlying(mode: 'shadow' | 'enforce'): {
     },
     action: 'pass',
     mode,
+    globalMode: mode === 'shadow' ? 'shadow' : 'strict',
+    cogsecVector: 'external_web_ingress',
     effectiveText: 'original',
     withheld: false,
   };
   const service: IntakeScreeningService = {
     mode,
+    globalMode: mode === 'shadow' ? 'shadow' : 'strict',
     async screen() {
       state.calls += 1;
       if (state.block) await gate.promise;
@@ -117,7 +120,7 @@ describe('createPooledIntakeScreeningService', () => {
   });
 
   it('fails closed (withholds) on a pool deadline under enforce', async () => {
-    const policy = { ...seedPolicy(), mode: 'enforce' as const };
+    const policy = { ...seedPolicy(), mode: 'strict' as const };
     const pool = createScreeningPool({ concurrency: 1, maxQueueDepth: 4 });
     const underlying = fakeUnderlying('enforce');
     underlying.block = true;
@@ -164,7 +167,7 @@ describe('createPooledIntakeScreeningService', () => {
   });
 
   it('fails closed on an isolated underlying worker crash', async () => {
-    const policy = { ...seedPolicy(), mode: 'enforce' as const };
+    const policy = { ...seedPolicy(), mode: 'strict' as const };
     const pool = createScreeningPool({ concurrency: 1, maxQueueDepth: 4 });
     const underlying = fakeUnderlying('enforce');
     underlying.throws = true;
@@ -190,6 +193,7 @@ describe('synthesizeFailClosedScreeningResult', () => {
       'payload',
       baseInput(),
       'enforce',
+      'strict',
       'screening-pool-deadline',
       () => 1000,
     );
@@ -199,6 +203,8 @@ describe('synthesizeFailClosedScreeningResult', () => {
     expect(result.report.riskLabels).toEqual([]);
     expect(result.report.scannerErrors).toEqual([]);
     expect(result.envelope.sourceRiskTier).toBe('hostile');
+    expect(result.globalMode).toBe('strict');
+    expect(result.cogsecVector).toBe('external_web_ingress');
     // No policy coupling beyond the bounds; sanity-check the constant.
     expect(policy.screeningPool.concurrency).toBeGreaterThanOrEqual(2);
   });

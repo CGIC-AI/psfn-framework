@@ -95,7 +95,7 @@ function makeScreening(): IntakeScreeningService {
     readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
   ) as Record<string, unknown>;
   return createIntakeScreeningService({
-    policy: validateIntakePolicy({ ...seed, mode: 'enforce' }, 'intake-policy.parity-test'),
+    policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.parity-test'),
     l1: createIntakeL1Scanner({
       rulesPath: join(process.cwd(), 'config', 'intake-l1-rules.json'),
       reloadCheckIntervalMs: -1,

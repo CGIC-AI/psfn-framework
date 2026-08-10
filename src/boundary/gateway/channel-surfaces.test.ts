@@ -185,6 +185,7 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
 describe('gateway channel intake ownership', () => {
   const screeningService = (): IntakeScreeningService => ({
     mode: 'enforce',
+    globalMode: 'strict',
     screen: async () => {
       throw new Error('screening invocation is outside this routing test');
     },
@@ -250,7 +251,7 @@ describe('gateway channel intake ownership', () => {
     });
     const routing = {
       multiCompanion: true,
-      mode: 'enforce' as const,
+      mode: 'strict' as const,
       singleton: null,
       forCompanion: screeningForCompanion,
     };
@@ -270,12 +271,12 @@ describe('gateway channel intake ownership', () => {
     );
     expect(() => resolveChannelIntakeScreening({
       multiCompanion: true,
-      mode: 'enforce',
+      mode: 'strict',
       singleton: null,
     }, companion, 'discord')).toThrow(/no companion-owned intake screening resolver/u);
     expect(() => resolveChannelIntakeScreening({
       multiCompanion: true,
-      mode: 'enforce',
+      mode: 'strict',
       singleton: null,
       forCompanion: () => null,
     }, companion, 'discord')).toThrow(/mode=enforce has no matching service/u);

@@ -386,7 +386,7 @@ export async function buildGatewayPrivilegedCore(
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
-      intakeScreeningMode: intakeScreening.mode,
+      intakeScreeningMode: intakeScreening.globalMode,
       ...(!input.bootstrap.server.multiCompanion.enabled
         && intakeScreening.screeningFor()
         ? { intakeScreening: intakeScreening.screeningFor()! }

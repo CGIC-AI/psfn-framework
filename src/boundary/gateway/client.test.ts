@@ -778,7 +778,7 @@ describe('GatewayClient streaming', () => {
       id: screenRequest.id,
       result: {
         kind: 'screened',
-        mode: 'enforce',
+        mode: 'strict',
         flagged: false,
         withheld: false,
         retainedImage: {
@@ -855,7 +855,7 @@ describe('GatewayClient streaming', () => {
       id: screenRequest.id,
       result: {
         kind: 'screened',
-        mode: 'enforce',
+        mode: 'strict',
         flagged: false,
         withheld: false,
         retainedImage: {
@@ -918,7 +918,7 @@ describe('GatewayClient streaming', () => {
       id: screenRequest.id,
       result: {
         kind: 'screened',
-        mode: 'enforce',
+        mode: 'strict',
         flagged: false,
         withheld: false,
         retainedImage: {
@@ -971,7 +971,7 @@ describe('GatewayClient streaming', () => {
       id: screenRequest.id,
       result: {
         kind: 'screened',
-        mode: 'enforce',
+        mode: 'strict',
         flagged: false,
         withheld: false,
         retainedImage: {

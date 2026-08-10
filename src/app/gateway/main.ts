@@ -478,7 +478,7 @@ async function main(): Promise<void> {
     bootstrap,
     eventBus,
     eligibilityGate,
-    intakeScreeningMode: privilegedCore.intakeScreening.mode,
+    intakeScreeningMode: privilegedCore.intakeScreening.globalMode,
     intakeScreening: bootstrap.server.multiCompanion.enabled
       ? null
       : privilegedCore.intakeScreening.screeningFor(),
@@ -853,7 +853,7 @@ async function main(): Promise<void> {
       startupHydration.pathSnapshot.systemDataDir,
     ),
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
-    intakeScreeningMode: privilegedCore.intakeScreening.mode,
+    intakeScreeningMode: privilegedCore.intakeScreening.globalMode,
     intakeScreening: bootstrap.server.multiCompanion.enabled
       ? null
       : privilegedCore.intakeScreening.screeningFor(),

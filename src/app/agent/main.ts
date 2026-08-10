@@ -593,29 +593,29 @@ async function main(): Promise<void> {
   // classifier stays gateway-side; the agent process runs deterministic L1
   // scanners only.
   const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
-  const intakeQuarantineWriter = intakePolicy.mode !== 'off'
-    ? createIntakeQuarantineStore(
-      resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
-      {
-        itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-        maxHeldItems: intakePolicy.quarantine.maxHeldItems,
-        onExpired: ({ entry, expiredAtMs, reason }) => {
-          void eventBus.emit('intake.quarantine.expired', {
+  // The canonical CogSec mode is always armed (shadow/boundary/strict), so the
+  // durable quarantine writer is always constructed.
+  const intakeQuarantineWriter = createIntakeQuarantineStore(
+    resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+    {
+      itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+      maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+      onExpired: ({ entry, expiredAtMs, reason }) => {
+        void eventBus.emit('intake.quarantine.expired', {
+          envelopeId: entry.id,
+          ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
+          heldAtMs: entry.heldAtMs,
+          expiredAtMs,
+          reason,
+        }).catch((error: unknown) => {
+          log.error('Failed to emit intake quarantine expiry alert event', {
             envelopeId: entry.id,
-            ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
-            heldAtMs: entry.heldAtMs,
-            expiredAtMs,
-            reason,
-          }).catch((error: unknown) => {
-            log.error('Failed to emit intake quarantine expiry alert event', {
-              envelopeId: entry.id,
-              error: String(error),
-            });
+            error: String(error),
           });
-        },
+        });
       },
-    )
-    : null;
+    },
+  );
   const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',

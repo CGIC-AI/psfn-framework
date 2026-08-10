@@ -54,6 +54,7 @@ import type { IntakeSourceRiskTier } from '../../../shared/contracts/intake-enve
 import {
   sinkRuleForSink,
   trifectaEnforcementForTier,
+  intakeModeEnforcementPosture,
   type IntakePolicyConfig,
   type IntakeTrifectaEnforcement,
 } from '../../../system/config/intake-policy-config.js';
@@ -144,13 +145,10 @@ export function isEgressCapabilityToken(token: CapabilityToken): boolean {
 // ── Pure evaluation ──
 
 function assertGateMode(policy: IntakePolicyConfig): 'shadow' | 'enforce' {
-  if (policy.mode === 'off') {
-    throw new Error(
-      "Intake sink gates must not be evaluated with mode 'off'; "
-      + 'composition sites skip gate construction entirely when the firewall is off',
-    );
-  }
-  return policy.mode;
+  // The sink gate enforces external content under boundary and strict (both
+  // enforce external ingress + registered outbound); shadow observes only.
+  // The canonical global mode never includes 'off', so no off-guard remains.
+  return intakeModeEnforcementPosture(policy.mode);
 }
 
 function finalizeDecision(input: {
@@ -517,10 +515,6 @@ export function createIntakeSinkGate(options: IntakeSinkGateOptions): IntakeSink
 export function maybeCreateIntakeSinkGate(
   options: RuntimeIntakeSinkGateOptions,
 ): IntakeSinkGate | null {
-  if (options.policy.mode === 'off') {
-    log.warn("Intake firewall mode is 'off': no sink gates are wired at any consequential sink");
-    return null;
-  }
   if (typeof options.onBlockedEgressTrifecta !== 'function') {
     throw new Error('Intake sink-gate runtime requires a durable hard-block incident recorder');
   }

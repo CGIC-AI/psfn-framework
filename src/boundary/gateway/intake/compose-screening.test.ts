@@ -15,6 +15,7 @@ import { getRecentDiagnosticLogRecords } from '../../../shared/logger.js';
 import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
+import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { createIntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
@@ -47,7 +48,7 @@ const unusedScreenerCompletion = vi.fn(async () => {
 
 const tempDirs: string[] = [];
 
-function makeDataDirs(mode: 'shadow' | 'enforce', visionEnabled: boolean): {
+function makeDataDirs(mode: IntakeFirewallMode, visionEnabled: boolean): {
   systemDataDir: string;
   companionDataDir: string;
   config: SubstrateConfig;
@@ -85,7 +86,7 @@ afterEach(() => {
 
 describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
   it('reuses the gateway provider runtime instead of constructing a second LLM gateway', () => {
-    const input = makeDataDirs('enforce', true);
+    const input = makeDataDirs('strict', true);
     const runtime = fromAny<ProviderRuntime>({});
 
     const backend = resolveIntakeScreenerBackend(input.config, runtime);
@@ -95,7 +96,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
   it('wires the vision intake screener when enabled with a backend', async () => {
     const composition = await composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', true),
+      ...makeDataDirs('strict', true),
       screenerBackend: TEST_SCREENER_BACKEND,
       screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
@@ -107,14 +108,14 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
   it('FAILS STARTUP when vision screening is enabled in enforce mode without a backend', async () => {
     await expect(composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', true),
+      ...makeDataDirs('strict', true),
       screenerBackend: null,
       injectionBackendFactory: fakeInjectionBackendFactory,
     })).rejects.toThrow(/no pi-ai provider backend is resolvable/);
   });
 
   it('FAILS STARTUP when the selected vision model lacks explicit image capability', async () => {
-    const input = makeDataDirs('enforce', true);
+    const input = makeDataDirs('strict', true);
     const visionModel = input.config.modelRegistry?.models.find(model =>
       model.purposes.some(purpose => purpose.purpose === 'vision'),
     );
@@ -145,7 +146,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
   it('does not wire the vision screener when the policy knob is disabled', async () => {
     const composition = await composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', false),
+      ...makeDataDirs('strict', false),
       screenerBackend: TEST_SCREENER_BACKEND,
       screenerTestCompletion: unusedScreenerCompletion,
       injectionBackendFactory: fakeInjectionBackendFactory,
@@ -195,7 +196,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
   });
 
   it('signals only after an image fail-closed quarantine hold is durable', async () => {
-    const input = makeDataDirs('enforce', true);
+    const input = makeDataDirs('strict', true);
     const durableCounts: number[] = [];
     const composition = await composeGatewayIntakeScreening({
       ...input,
@@ -224,7 +225,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
 describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () => {
   it('preserves the historical single-companion composition and owner-agnostic resolver', async () => {
-    const input = makeDataDirs('enforce', false);
+    const input = makeDataDirs('strict', false);
     const backendFactory = vi.fn(fakeInjectionBackendFactory);
     const runtime = await composeGatewayIntakeScreeningRuntime({
       ...input,
@@ -248,7 +249,7 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
   });
 
   it('routes companion B holds and queue hints to B while the union read gate contains its artifact', async () => {
-    const input = makeDataDirs('enforce', false);
+    const input = makeDataDirs('strict', false);
     const companionA = createCompanionId(
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'test companion A',
@@ -352,7 +353,7 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
   });
 
   it('surfaces cleanup failures together with the fleet composition failure', async () => {
-    const input = makeDataDirs('enforce', false);
+    const input = makeDataDirs('strict', false);
     const companionA = createCompanionId(
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'test companion A',
@@ -390,7 +391,7 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
 
 describe('composeGatewayIntakeScreeningRuntime bounded screening pool (psfn-framework-yxz0z.4)', () => {
   it('wires one fleet-wide pool and per-companion pooled services with distinct stream keys', async () => {
-    const input = makeDataDirs('enforce', false);
+    const input = makeDataDirs('strict', false);
     const companionA = createCompanionId(
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'test companion A',
@@ -452,14 +453,14 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
     // The env points PSFN_INJECTION_MODEL_DIR at an unprovisioned directory and
     // no injectionBackendFactory is supplied, so the weights are absent.
     await expect(composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', false),
+      ...makeDataDirs('strict', false),
       screenerBackend: null,
-    })).rejects.toThrow(/mode=enforce.*not provisioned/su);
+    })).rejects.toThrow(/mode=strict.*not provisioned/su);
   });
 
   it('names the provisioning command in the enforce fail-closed error', async () => {
     await expect(composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', false),
+      ...makeDataDirs('strict', false),
       screenerBackend: null,
     })).rejects.toThrow(/npm run provision:injection-model/u);
   });
@@ -491,7 +492,7 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
 
   it('loads the classifier and reports non-degraded when weights are provisioned (enforce)', async () => {
     const composition = await composeGatewayIntakeScreening({
-      ...makeDataDirs('enforce', false),
+      ...makeDataDirs('strict', false),
       // Enforce mode with mandatory L2/L3 tiers requires an escalation backend.
       screenerBackend: TEST_SCREENER_BACKEND,
       screenerTestCompletion: unusedScreenerCompletion,

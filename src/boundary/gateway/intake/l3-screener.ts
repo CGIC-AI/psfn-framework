@@ -63,6 +63,8 @@ import {
 import {
   isL3MandatoryTier,
   l3EscalationConfidenceThresholdForTier,
+  isIntakeEnforcingMode,
+  intakeModeEnforcementPosture,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
 import {
@@ -903,12 +905,8 @@ export function applyL3ScreeningOutcome(
       + "(screened/failed_closed); a 'skipped' outcome has nothing to apply",
     );
   }
-  if (config.mode === 'off') {
-    throw new L3ScreenerError(
-      "applyL3ScreeningOutcome must not run with intake-policy mode 'off'",
-    );
-  }
   const mode = config.mode;
+  const posture = intakeModeEnforcementPosture(mode);
   const actor = input.actor ?? 'gateway:intake-l3';
   const atMs = input.atMs ?? Date.now();
   const sourceRiskTier = input.sourceRiskTier ?? config.sourceRiskTiers[input.sourceClass];
@@ -981,9 +979,9 @@ export function applyL3ScreeningOutcome(
     atMs,
   });
 
-  const withheld = mode === 'enforce' && action === 'quarantine';
+  const withheld = isIntakeEnforcingMode(mode) && action === 'quarantine';
   let effectiveText = input.text;
-  if (mode === 'enforce') {
+  if (isIntakeEnforcingMode(mode)) {
     effectiveText = withheld
       ? renderIntakeWithheldContentPlaceholder()
       : renderIntakeSafeRepresentation(
@@ -1041,7 +1039,7 @@ export function applyL3ScreeningOutcome(
   if (input.quarantine && action === 'quarantine') {
     input.quarantine.hold({
       envelope,
-      mode,
+      mode: posture,
       rawText: input.text,
       ...(outcome.kind === 'screened'
         ? {
@@ -1091,7 +1089,7 @@ export function applyL3ScreeningOutcome(
     envelope,
     snapshot: snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' }),
     action,
-    mode,
+    mode: posture,
     effectiveText,
     withheld,
     cogSecCaseId: event.caseId,

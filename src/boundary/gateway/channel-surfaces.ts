@@ -10,6 +10,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import type {
@@ -113,8 +114,8 @@ export interface LoadGatewayChannelSurfacesInput {
    * attachment text at ingest. Null when intake-policy mode is 'off'.
    */
   intakeScreening: IntakeScreeningService | null;
-  /** Explicit owner-file posture shared by every companion composition. */
-  intakeScreeningMode: 'off' | 'shadow' | 'enforce';
+  /** Canonical global CogSec mode (shadow/boundary/strict). */
+  intakeScreeningMode: CogSecMode;
   /**
    * Fleet-only exact owner resolver. Every routed channel adapter receives
    * its owning companion's screening/quarantine composition; missing or
@@ -133,7 +134,7 @@ export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogg
 
 export interface GatewayChannelIntakeScreeningRouting {
   multiCompanion: boolean;
-  mode: 'off' | 'shadow' | 'enforce';
+  mode: CogSecMode;
   singleton: IntakeScreeningService | null;
   forCompanion?: (companionId: CompanionId) => IntakeScreeningService | null;
 }
@@ -144,13 +145,9 @@ export function resolveChannelIntakeScreening(
   surface: string,
 ): IntakeScreeningService | null {
   if (!input.multiCompanion) {
-    if (input.mode === 'off') {
-      if (input.singleton) {
-        throw new Error(`Single-companion ${surface} intake mode=off resolved a service`);
-      }
-    } else if (
+    if (
       !input.singleton
-      || input.singleton.mode !== input.mode
+      || input.singleton.globalMode !== input.mode
     ) {
       throw new Error(
         `Single-companion ${surface} intake mode=${input.mode} has no matching service`,
@@ -167,13 +164,7 @@ export function resolveChannelIntakeScreening(
     );
   }
   const screening = input.forCompanion(companionId);
-  if (input.mode === 'off') {
-    if (screening !== null) {
-      throw new Error(
-        `Multi-companion ${surface} intake mode=off resolved a service for ${companionId}`,
-      );
-    }
-  } else if (!screening || screening.mode !== input.mode) {
+  if (!screening || screening.globalMode !== input.mode) {
     throw new Error(
       `Multi-companion ${surface} intake mode=${input.mode} has no matching service for ${companionId}`,
     );

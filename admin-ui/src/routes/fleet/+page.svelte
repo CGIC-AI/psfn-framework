@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import { page } from '$app/stores';
   import {
     fetchFleetCardDetails,
     fetchFleetPortalProjection,
@@ -7,13 +8,13 @@
     type FleetCardDetails,
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
+  import { resolveFleetView } from '$lib/fleet/fleet-views';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import FleetCostUsage from '$lib/components/fleet/FleetCostUsage.svelte';
   import FleetUsageSummary from '$lib/components/fleet/FleetUsageSummary.svelte';
   import FleetGlobalFirewall from '$lib/components/fleet/FleetGlobalFirewall.svelte';
 
-  type FleetTab = 'info' | 'costs' | 'firewall';
-  let activeTab = $state<FleetTab>('info');
+  const activeView = $derived(resolveFleetView($page.url.search, $page.url.hash));
 
   let projection = $state<FleetPortalProjection | null>(null);
   let cardDetails = $state<Record<string, FleetCardDetails>>({});
@@ -123,7 +124,7 @@
   <title>Cluster · Garden</title>
 </svelte:head>
 
-<div class="console-page-frame mx-auto min-h-screen w-full max-w-[100rem] px-3 pb-20 pt-4 sm:px-5 sm:pt-5 lg:px-7 lg:pt-6">
+<div class="console-page-frame mx-auto w-full max-w-[100rem] px-3 pb-6 pt-4 sm:px-5 sm:pt-5 lg:px-7 lg:pt-6">
   {#snippet clusterActions()}
     {#if projection}
       <span class="garden-status garden-status--success rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-xs text-shadow-600">
@@ -147,7 +148,10 @@
   />
 
   <main class="space-y-6 pt-6">
-    {#if projection}
+    {#if activeView === 'usage'}
+      <FleetUsageSummary {companionNames} />
+    {:else}
+    {#if activeView === 'info' && projection}
       <section class="garden-metric-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Cluster health summary">
         <article class="garden-metric card-garden p-4">
           <p class="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-shadow-500">Authorized</p>
@@ -170,30 +174,6 @@
           <p class="mt-1 text-xs text-shadow-500">one or more dimensions confirmed down</p>
         </article>
       </section>
-    {/if}
-
-    {#if projection}
-      <nav class="mb-6 flex flex-wrap gap-2" aria-label="Cluster administration">
-        {#each [{ id: 'info', label: 'Companion Info' }, { id: 'costs', label: 'Costs' }, { id: 'firewall', label: 'Global Firewall' }] as tab (tab.id)}
-          <button
-            type="button"
-            onclick={() => activeTab = tab.id as FleetTab}
-            class="rounded-lg border px-4 py-2 text-sm font-medium transition-colors
-              {activeTab === tab.id
-                ? 'border-gold-400 bg-gold-400 text-bark-50'
-                : 'border-bark-300 bg-bark-50 text-shadow-700 hover:bg-bark-100'}"
-            aria-pressed={activeTab === tab.id}
-          >
-            {tab.label}
-          </button>
-        {/each}
-      </nav>
-    {/if}
-
-    <FleetUsageSummary {companionNames} />
-
-    {#if activeTab === 'firewall' && projection}
-      <FleetGlobalFirewall {projection} />
     {/if}
 
     {#if loading}
@@ -220,7 +200,7 @@
         </p>
       </section>
     {:else if projection}
-      {#if activeTab === 'info'}
+      {#if activeView === 'info'}
       <section class="garden-section" aria-labelledby="companion-health-heading">
         <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
@@ -333,10 +313,12 @@
         {/each}
         </div>
       </section>
-      {/if}
-      {#if activeTab === 'costs'}
+      {:else if activeView === 'costs'}
       <FleetCostUsage mode="fleet" {projection} />
+      {:else if activeView === 'firewall'}
+      <FleetGlobalFirewall {projection} />
       {/if}
+    {/if}
     {/if}
   </main>
 </div>

@@ -2049,7 +2049,19 @@ describe('SessionManager', () => {
     const fencedStore = new SessionStore(dir, {
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
     });
-    const mgr = new SessionManager(fencedStore, makeConfig({ compactionThresholdPct: 1 }));
+    const mgr = new SessionManager(fencedStore, makeConfig({
+      sessionHistoryBudgetPct: 1,
+      compactionThresholdPct: 1,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16_384,
+          contextWindow: 1_000,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    }));
     const capturedOwner = 'api:captured-background-owner';
     const futureOwner = 'api:future-background-owner';
     const sourceRecord = makeBackgroundHandoffTurnRecord(capturedOwner, Date.now());
@@ -3502,25 +3514,14 @@ describe('SessionManager', () => {
 
     expect(ctx.messages.length).toBeLessThan(20);
     expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
-    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
-    expect(mockLLM.complete).toHaveBeenCalledWith(
-      expect.anything(),
-      'background',
-      expect.objectContaining({
-        correlation: expect.objectContaining({
-          callType: 'summary',
-          purpose: 'session.recent.summary',
-          originStage: 'session.recent.summary.history_budget',
-        }),
-      }),
-    );
+    expect(mockLLM.complete).not.toHaveBeenCalled();
     const sessionManifest = ctx.manifest?.session;
     expect(sessionManifest).toBeDefined();
     expect(sessionManifest!.sourceEntryCount).toBe(20);
     expect(sessionManifest!.compactionSummaryCount).toBe(0);
     expect(sessionManifest!.compactedEntryCount).toBe(0);
-    expect(sessionManifest!.historySummaryEntryCount).toBeGreaterThan(0);
-    expect(sessionManifest!.finalEntryCount).toBeLessThan(ctx.messages.length);
+    expect(sessionManifest!.historySummaryEntryCount).toBe(0);
+    expect(sessionManifest!.finalEntryCount).toBe(ctx.messages.length);
     expect(ctx.manifest?.session.finalMessageCount).toBe(ctx.messages.length);
     expect(sessionManifest!.finalEntryCount).toBeLessThan(20);
     expect(ctx.manifest?.compaction).toMatchObject({
@@ -3533,6 +3534,39 @@ describe('SessionManager', () => {
     expect(ctx.manifest?.compaction.totalTokensAfter).toBe(
       ctx.manifest?.compaction.totalTokensBefore,
     );
+  });
+
+  it('triggers durable between-turn compaction from the session-history budget', async () => {
+    const config = makeConfig({
+      defaultContextWindow: 10_000,
+      sessionHistoryBudgetPct: 6,
+      compactionThresholdPct: 99,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 2_000,
+          contextWindow: 10_000,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    for (let index = 0; index < 7; index += 1) {
+      mgr.recordUserMessage('ch1', `User ${index} ${'A'.repeat(400)}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${index} ${'B'.repeat(400)}`);
+    }
+
+    await mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPromptTokenCount: 0,
+      memoriesTokenCount: 0,
+      llmProvider: mockLLM,
+    });
+
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
   });
 
   it('does not wait for scheduled auto-compaction before building the next turn context', async () => {
@@ -3927,9 +3961,9 @@ describe('SessionManager', () => {
     const callOrder: string[] = [];
     const preCompactionFlush = vi.fn<PreCompactionExtractionHandler>(async ({ entries }) => {
       callOrder.push('flush');
-      expect(entries).toHaveLength(6);
-      expect(entries[0].content).toContain('User 4');
-      expect(entries[entries.length - 1].content).toContain('Assistant 6');
+      expect(entries).toHaveLength(10);
+      expect(entries[0].content).toContain('User 0');
+      expect(entries[entries.length - 1].content).toContain('Assistant 4');
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush);
 
@@ -3979,6 +4013,7 @@ describe('SessionManager', () => {
     }
 
     await runScheduledCompaction(mgr, mockLLM, {
+      throwOnFailure: true,
       userId: 'contact-canonical-1',
       icpCorrelation: {
         conversationId: '44444444-4444-4444-8444-444444444444',
@@ -4269,7 +4304,19 @@ describe('SessionManager', () => {
   });
 
   it('propagates background compaction failures into the durable retry owner', async () => {
-    const config = makeConfig({ compactionThresholdPct: 1 });
+    const config = makeConfig({
+      sessionHistoryBudgetPct: 1,
+      compactionThresholdPct: 1,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16_384,
+          contextWindow: 1_000,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    });
     const mgr = new SessionManager(store, config);
     const mockLLM = makeMockLLM();
     vi.mocked(mockLLM.complete).mockRejectedValue(new Error('compaction provider failed'));
@@ -4284,7 +4331,19 @@ describe('SessionManager', () => {
   });
 
   it('checks the background claim fence immediately before a compaction write', async () => {
-    const config = makeConfig({ compactionThresholdPct: 1 });
+    const config = makeConfig({
+      sessionHistoryBudgetPct: 1,
+      compactionThresholdPct: 1,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16_384,
+          contextWindow: 1_000,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    });
     const mgr = new SessionManager(store, config);
     const mockLLM = makeMockLLM();
     const assertEffectAllowed = vi.fn(async () => {

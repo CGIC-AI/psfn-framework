@@ -117,6 +117,10 @@ export class AutoCompactionLane {
           this.deps.config,
           params.turnBudgetCharacteristics,
         );
+        const historyBudget = resolveSessionHistoryBudget(this.deps.config, {
+          ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
+          adaptiveProfile,
+        });
         const recent = params.capturedRecentEntries !== undefined
           ? [...params.capturedRecentEntries]
           : this.captureForResolvedChannel(resolvedChannelId, {
@@ -175,6 +179,7 @@ export class AutoCompactionLane {
           ...(params.assertEffectAllowed
             ? { assertEffectAllowed: params.assertEffectAllowed }
             : {}),
+          triggerTokenBudget: historyBudget.tokenBudget,
         });
       })
       .finally(() => {
@@ -228,14 +233,15 @@ export class AutoCompactionLane {
             )
           ),
         };
-    let recent = collectRecentEntriesWithinTokenBudget({
+    const collected = collectRecentEntriesWithinTokenBudget({
       store: boundedStore,
       channelId: resolvedChannelId,
       estimatedCount: historyBudget.estimatedCount,
       tokenBudget: historyBudget.tokenBudget,
       turnBudgetCharacteristics: params.turnBudgetCharacteristics,
       ...(params.now ? { now: params.now } : {}),
-    }).entries;
+    });
+    let recent = collected.sourceEntries ?? collected.entries;
     // A compaction summary is a served surface: never let it reintroduce room
     // content from before the current presence window.
     const roomWindow = this.deps.resolveRoomContentWindow(resolvedChannelId);

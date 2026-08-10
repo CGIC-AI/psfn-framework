@@ -8,6 +8,9 @@ import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { fromPartial } from '@total-typescript/shoehorn';
 import { createSessionTool } from './session.js';
+import { buildCompactionSourceHashTag } from '../session/compaction-audit.js';
+import type { TranscriptSearchOptions } from '../../persistence/sessions/transcript-projection-port.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -46,6 +49,7 @@ function toolText(result: { content: Array<{ type: string; text: string }> }): s
 
 class InMemoryTranscriptSearch {
   private readonly entries: Array<{
+    messageId: number;
     channelId: string;
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
@@ -54,6 +58,7 @@ class InMemoryTranscriptSearch {
   }> = [];
 
   record(entry: {
+    messageId: number;
     channelId: string;
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
@@ -63,14 +68,19 @@ class InMemoryTranscriptSearch {
     this.entries.push(entry);
   }
 
-  async searchByKeywords(query: string, limit = 10) {
+  async searchByKeywords(query: string, limit = 10, options: TranscriptSearchOptions = {}) {
     const needle = query.toLowerCase();
     return this.entries
-      .filter(entry => entry.content.toLowerCase().includes(needle))
+      .filter(entry => (
+        entry.content.toLowerCase().includes(needle)
+        && (!options.channelId || entry.channelId === options.channelId)
+        && (options.firstMessageId === undefined || entry.messageId >= options.firstMessageId)
+        && (options.lastMessageId === undefined || entry.messageId <= options.lastMessageId)
+      ))
       .slice(0, limit)
-      .map((entry, index) => ({
+      .map((entry) => ({
         channelId: entry.channelId,
-        messageId: index + 1,
+        messageId: entry.messageId,
         role: entry.role,
         content: entry.content,
         timestamp: entry.timestamp,
@@ -93,14 +103,16 @@ describe('session search tools', () => {
     transcriptSearch = new InMemoryTranscriptSearch();
     const originalAppend = store.append.bind(store);
     store.append = ((entry: Parameters<SessionStore['append']>[0]) => {
+      const messageId = originalAppend(entry);
       transcriptSearch.record({
+        messageId,
         channelId: entry.channelId,
         role: entry.role,
         content: entry.content,
         timestamp: entry.timestamp,
         channelVisibility: entry.channelVisibility,
       });
-      return originalAppend(entry);
+      return messageId;
     }) as SessionStore['append'];
     manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, transcriptSearch);
   });
@@ -110,7 +122,7 @@ describe('session search tools', () => {
   });
 
   function makeTool(
-    llmProvider: any,
+    llmProvider: LLMProviderPort,
     runRipgrep?: Parameters<typeof createSessionTool>[0]['runRipgrep'],
   ): ReturnType<typeof createSessionTool> {
     return createSessionTool({
@@ -121,6 +133,204 @@ describe('session search tools', () => {
       ...(runRipgrep ? { runRipgrep } : {}),
     });
   }
+
+  function seedAddressableCompaction(channelId: string): {
+    firstMessageId: number;
+    lastMessageId: number;
+    outsideMessageId: number;
+  } {
+    const firstMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'Bounded needle inside the compacted source.',
+      timestamp: 1_000,
+      channelVisibility: 'private',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'A reply inside the compacted source.',
+      timestamp: 2_000,
+      channelVisibility: 'private',
+    });
+    store.append({
+      channelId,
+      role: 'tool',
+      content: 'Tool detail inside the compacted source.',
+      timestamp: 3_000,
+      channelVisibility: 'private',
+    });
+    const lastMessageId = store.append({
+      channelId,
+      role: 'assistant',
+      content: 'The final compacted-source reply.',
+      timestamp: 4_000,
+      channelVisibility: 'private',
+    });
+    const sourceEntries = store.getEntriesInRange(channelId, firstMessageId, lastMessageId);
+    store.insertCompaction(
+      channelId,
+      `Durable summary.\n\n${buildCompactionSourceHashTag(sourceEntries)}`,
+      lastMessageId,
+    );
+    const outsideMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'Bounded needle after the compacted source.',
+      timestamp: 6_000,
+      channelVisibility: 'private',
+    });
+    return { firstMessageId, lastMessageId, outsideMessageId };
+  }
+
+  it('searches only the verified latest compaction source for the active channel', async () => {
+    const channelId = 'api:bounded-search';
+    const range = seedAddressableCompaction(channelId);
+    const tool = makeTool(fromPartial({ complete: vi.fn() }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-search-bounded', {
+        action: 'search',
+        query: 'Bounded needle',
+        within: 'latest_compaction_source',
+      }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      within: string;
+      source: { firstMessageId: number; lastMessageId: number; verified: boolean };
+      hits: Array<{ messageId: number; snippet: string }>;
+    };
+
+    expect(payload.within).toBe('latest_compaction_source');
+    expect(payload.source).toMatchObject({
+      firstMessageId: range.firstMessageId,
+      lastMessageId: range.lastMessageId,
+      verified: true,
+    });
+    expect(payload.hits.map(hit => hit.messageId)).toEqual([range.firstMessageId]);
+    expect(payload.hits.some(hit => hit.messageId === range.outsideMessageId)).toBe(false);
+  });
+
+  it('filters raw grep matches to the same verified compaction source range', async () => {
+    const channelId = 'api:bounded-grep';
+    const range = seedAddressableCompaction(channelId);
+    const asMatch = (id: number, matchedChannelId = channelId) => ({
+      filePath: 'bounded.jsonl',
+      lineNumber: id,
+      lineText: JSON.stringify({
+        type: 'message',
+        id,
+        channelId: matchedChannelId,
+        role: 'user',
+        content: 'Bounded needle raw match.',
+        timestamp: id * 1_000,
+        channelVisibility: 'private',
+      }),
+    });
+    const runRipgrep = vi.fn(async () => ({
+      matches: [
+        asMatch(range.firstMessageId),
+        asMatch(range.outsideMessageId),
+        asMatch(range.firstMessageId, 'api:other'),
+      ],
+      truncated: false,
+    }));
+    const tool = makeTool(fromPartial({ complete: vi.fn() }), runRipgrep);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-grep-bounded', {
+        action: 'grep',
+        pattern: 'Bounded needle',
+        within: 'latest_compaction_source',
+      }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      source: { verified: boolean };
+      hits: Array<{ channelId: string; messageId: number }>;
+    };
+
+    expect(runRipgrep).toHaveBeenCalledWith(expect.objectContaining({
+      channelId,
+      firstMessageId: range.firstMessageId,
+      lastMessageId: range.lastMessageId,
+    }));
+    expect(payload.source.verified).toBe(true);
+    expect(payload.hits).toEqual([
+      expect.objectContaining({ channelId, messageId: range.firstMessageId }),
+    ]);
+  });
+
+  it('denies cross-channel latest-compaction source requests before search', async () => {
+    seedAddressableCompaction('api:other-source');
+    const tool = makeTool(fromPartial({ complete: vi.fn() }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:current-source',
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-search-cross-channel', {
+        action: 'search',
+        query: 'Bounded needle',
+        channelId: 'api:other-source',
+        within: 'latest_compaction_source',
+      }),
+    );
+    const payload = JSON.parse(toolText(result)) as { sourceStatus: string; hits: unknown[] };
+
+    expect(payload.sourceStatus).toBe('access_denied');
+    expect(payload.hits).toEqual([]);
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('reports legacy latest summaries without searching a wider range', async () => {
+    const channelId = 'api:legacy-source';
+    const coveredUpTo = store.append({
+      channelId,
+      role: 'user',
+      content: 'Legacy bounded needle.',
+      timestamp: 1_000,
+      channelVisibility: 'private',
+    });
+    store.insertCompaction(channelId, 'Legacy summary.', coveredUpTo);
+    const tool = makeTool(fromPartial({ complete: vi.fn() }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-search-legacy', {
+        action: 'search',
+        query: 'Legacy bounded needle',
+        within: 'latest_compaction_source',
+      }),
+    );
+    const payload = JSON.parse(toolText(result)) as { sourceStatus: string; hits: unknown[] };
+
+    expect(payload.sourceStatus).toBe('legacy_metadata');
+    expect(payload.hits).toEqual([]);
+  });
 
   it('session_search uses the indexed transcript path and gates hits by caller privacy', async () => {
     store.append({
@@ -178,6 +388,7 @@ describe('session search tools', () => {
 
   it('session_search excludes CogSec tombstone hits even when the search port returns them', async () => {
     transcriptSearch.record({
+      messageId: 1,
       channelId: 'api:cogsec-search',
       role: 'user',
       content: '[CogSec redaction: cogsec_20260701T000000Z_search]',
@@ -185,6 +396,7 @@ describe('session search tools', () => {
       channelVisibility: 'public',
     });
     transcriptSearch.record({
+      messageId: 2,
       channelId: 'api:normal-search',
       role: 'assistant',
       content: 'Normal CogSec planning note without a tombstone marker.',

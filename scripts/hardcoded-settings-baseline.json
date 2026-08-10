@@ -4153,13 +4153,6 @@
       "note": "Immutable parser/wire/schema contract CONTROL_CHARACTER_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
-      "file": "src/core/identity/prompt-composer.ts",
-      "name": "SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN",
-      "value": "/<source_block_sha256\\b/i",
-      "form": "regex",
-      "note": "Immutable parser/wire/schema contract SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
       "file": "src/core/identity/prompt-runtime.ts",
       "name": "CONDITIONAL_BLOCK_PATTERN",
       "value": "/\\{\\{#if\\s+([a-zA-Z0-9_.-]+(?:\\(\\))?)\\s*\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}/g",
@@ -5503,7 +5496,7 @@
     {
       "file": "src/core/session/compaction-audit.ts",
       "name": "SOURCE_BLOCK_SHA256_TAG_PATTERN",
-      "value": "/<source_block_sha256\\s+first_message_id=\"(\\d+)\"\\s+last_message_id=\"(\\d+)\"\\s+message_count=\"(\\d+)\">([0-9a-f]{64})<\\/source_block_sha256>/i",
+      "value": "/<source_block_sha256\\s+first_message_id=\"(\\d+)\"\\s+last_message_id=\"(\\d+)\"\\s+message_count=\"(\\d+)\">([0-9a-f]{64})<\\/source_block_sha256>/gi",
       "form": "regex",
       "note": "Immutable parser/wire/schema contract SOURCE_BLOCK_SHA256_TAG_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
@@ -5888,18 +5881,6 @@
       "value": "96",
       "form": "object-member",
       "note": "Existing mutable policy candidate buildOrientationFallbackSummary.buildRecentSessionSummaryFallbackText.arg0.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/session/manager/context-history-assembly.ts",
-      "name": "fitHistorySummaryTextToBudget.$call:length-guard:FirstBinaryOperator#1",
-      "value": "100",
-      "form": "length-guard",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/session/manager/context-history-assembly.ts",
-      "name": "MIN_HISTORY_SUMMARY_TOKEN_BUDGET",
-      "value": "32"
     },
     {
       "file": "src/core/session/manager/focus-session-runtime.ts",

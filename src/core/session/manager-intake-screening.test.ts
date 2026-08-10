@@ -124,6 +124,53 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
     });
   });
 
+  it('persists released provenance on a firewall-authored system turn', () => {
+    const mgr = new SessionManager(store, makeConfig(dir));
+    const screening = makeScreening('strict');
+    mgr.intakeScreening = screening;
+    const screened = screening.screenSync(HOSTILE_TOOL_OUTPUT, {
+      sourceClass: 'primary_user',
+      origin: { ref: 'discord:channel-1:message-1' },
+      scope: 'context',
+      subject: { kind: 'body' },
+      sourceChannelId: 'channel-1',
+    });
+    const releasedSnapshot = {
+      ...screened.snapshot,
+      state: 'human_released' as const,
+    };
+
+    mgr.recordSystemMessage(
+      'channel-1',
+      'Operator-released content with provenance.',
+      'system:intake-firewall',
+      'Intake firewall',
+      false,
+      undefined,
+      {
+        turnId: 'release-turn-1',
+        sourceMessageId: 'intake-release:envelope-1:release_raw',
+        intakeEnvelopes: [releasedSnapshot],
+      },
+    );
+
+    const entry = mgr.getRecentMessages('channel-1', 1)[0]!;
+    expect(entry).toMatchObject({
+      role: 'system',
+      authorId: 'system:intake-firewall',
+      authorName: 'Intake firewall',
+    });
+    expect(parseIntakeScreeningMetadata(entry.metadata)).toMatchObject({
+      mode: 'enforce',
+      withheld: false,
+      envelopes: [{
+        sourceClass: 'primary_user',
+        state: 'human_released',
+        subject: { kind: 'body' },
+      }],
+    });
+  });
+
   it('enforce mode: flagged tool output never lands raw in the session entry', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
     mgr.intakeScreening = makeScreening('strict');

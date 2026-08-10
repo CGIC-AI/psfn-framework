@@ -17,6 +17,7 @@ import type {
 } from '../conversation-scope.js';
 import type { SessionEntry } from '../types.js';
 import type { PromptAssemblyGateSummary } from '../intake-sink-gating.js';
+import type { LatestCompactionSourceRange } from '../compaction-source-range.js';
 
 export interface AutoCompactionBetweenTurnsParams {
   channelId: string;
@@ -52,7 +53,7 @@ export interface TurnSessionContextCaptureParams {
   channelMeta?: ChannelMeta;
   continuityFallbackUserIds?: string[];
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
-  /** Optional LLM provider for foreground history-budget summarization. */
+  /** Optional LLM provider retained for context-building compatibility; history assembly never calls it. */
   llmProvider?: LLMProviderPort;
   excludeSessionEntryId?: number;
   /** Channel bonding opt-in for the turn. */
@@ -111,6 +112,11 @@ export interface SessionManagerTypeSurface {
   ): SessionEntry[];
 
   hasPendingAutoCompaction(channelId: string): boolean;
+
+  getLatestCompactionSourceRange(
+    channelId: string,
+    authorization: { currentChannelId: string },
+  ): LatestCompactionSourceRange;
 
   getActiveFocusMemoryScopeQuery(channelId: string): MemoryScopeQuery | null;
 

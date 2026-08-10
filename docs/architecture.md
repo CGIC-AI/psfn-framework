@@ -102,7 +102,7 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 - L0 session history is append-only JSONL under `sessions/`.
 - The archive/projection split is intentional: canonical archive truth stays in JSONL, while fast-search copies belong behind projection/search ports.
 - `SessionManager` handles the sliding active context window, token budgeting, continuity, internal role envelopes, focus knowledge, observation masking, and prompt-aware context assembly.
-- Auto-compaction is deferred between turns by default. It summarizes older selected context into untrusted carry-forward notes, retains a recent verbatim tail, and leaves canonical L0 history intact.
+- Auto-compaction is a durable between-turn background job driven by the configured session-history budget. It summarizes older selected context into untrusted carry-forward notes, retains a recent verbatim tail, and leaves canonical L0 history intact. Foreground assembly never starts the rolling-summary model call; it uses the latest committed summary plus deterministic bounded history while work is pending.
 - Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
 
 ### Memory

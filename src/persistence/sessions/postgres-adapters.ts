@@ -724,6 +724,15 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.flushPendingDurableDrift();
     const boundedLimit = normalizeSearchLimit(limit);
     const scopedChannelId = options.channelId?.trim() || undefined;
+    const firstMessageId = options.firstMessageId;
+    const lastMessageId = options.lastMessageId;
+    if (
+      (firstMessageId !== undefined && (!Number.isSafeInteger(firstMessageId) || firstMessageId < 1))
+      || (lastMessageId !== undefined && (!Number.isSafeInteger(lastMessageId) || lastMessageId < 1))
+      || (firstMessageId !== undefined && lastMessageId !== undefined && firstMessageId > lastMessageId)
+    ) {
+      return [];
+    }
     // Fail closed under known redaction drift (bead 6oott, charter Law
     // 22/6.23): a channel whose redaction failed to project may still hold
     // content canon has redacted, so its rows are excluded until repair clears
@@ -752,6 +761,8 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
         FROM session_messages_projection
         WHERE search_vector @@ websearch_to_tsquery('simple', $1)
           AND ($3::text IS NULL OR channel_id = $3)
+          AND ($4::bigint IS NULL OR message_id >= $4)
+          AND ($5::bigint IS NULL OR message_id <= $5)
           AND NOT EXISTS (
             SELECT 1
             FROM session_projection_drift drift
@@ -761,7 +772,13 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
         ORDER BY score DESC, timestamp DESC, message_id DESC
         LIMIT $2
       `,
-      [normalizedQuery, boundedLimit, scopedChannelId ?? null],
+      [
+        normalizedQuery,
+        boundedLimit,
+        scopedChannelId ?? null,
+        firstMessageId ?? null,
+        lastMessageId ?? null,
+      ],
     );
 
     return rows.filter(row => !this.hasRedactionDrift(row.channel_id)).map(row => ({

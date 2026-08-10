@@ -969,15 +969,42 @@ export class SessionStore implements TranscriptSearchPort {
     options: TranscriptSearchOptions = {},
   ): Promise<SessionSearchHit[]> {
     if (!this.transcriptSearch) return [];
+    const firstMessageId = options.firstMessageId;
+    const lastMessageId = options.lastMessageId;
+    if (
+      (firstMessageId !== undefined && (!Number.isSafeInteger(firstMessageId) || firstMessageId < 1))
+      || (lastMessageId !== undefined && (!Number.isSafeInteger(lastMessageId) || lastMessageId < 1))
+      || (firstMessageId !== undefined && lastMessageId !== undefined && firstMessageId > lastMessageId)
+    ) {
+      return [];
+    }
     const requestedChannelId = options.channelId?.trim();
     if (!requestedChannelId) {
-      return await this.transcriptSearch.searchByKeywords(query, limit);
+      if (firstMessageId === undefined && lastMessageId === undefined) {
+        return await this.transcriptSearch.searchByKeywords(query, limit);
+      }
+      const hits = await this.transcriptSearch.searchByKeywords(query, limit, {
+        ...(firstMessageId !== undefined ? { firstMessageId } : {}),
+        ...(lastMessageId !== undefined ? { lastMessageId } : {}),
+      });
+      return hits.filter(hit => (
+        (firstMessageId === undefined || hit.messageId >= firstMessageId)
+        && (lastMessageId === undefined || hit.messageId <= lastMessageId)
+      ));
     }
     const scopedChannelId = this.resolveSessionId(requestedChannelId) ?? requestedChannelId;
-    const hits = await this.transcriptSearch.searchByKeywords(query, limit, { channelId: scopedChannelId });
+    const hits = await this.transcriptSearch.searchByKeywords(query, limit, {
+      channelId: scopedChannelId,
+      ...(firstMessageId !== undefined ? { firstMessageId } : {}),
+      ...(lastMessageId !== undefined ? { lastMessageId } : {}),
+    });
     // Fail closed: never return out-of-scope rows even if an injected search
     // backend ignores the channel filter.
-    return hits.filter(hit => hit.channelId === scopedChannelId);
+    return hits.filter(hit => (
+      hit.channelId === scopedChannelId
+      && (firstMessageId === undefined || hit.messageId >= firstMessageId)
+      && (lastMessageId === undefined || hit.messageId <= lastMessageId)
+    ));
   }
   rebuildSearchIndex(): void {
     this.backfillTranscriptProjectionFromDisk();

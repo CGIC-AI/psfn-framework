@@ -17,6 +17,7 @@ import {
   type CrossChannelContinuityPort,
 } from './cross-channel-continuity-port.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import type { TranscriptSearchOptions } from '../../persistence/sessions/transcript-projection-port.js';
 import type {
   TurnRecordRecoveryEvidenceSkip,
 } from '../agent/background-work/recovery-contract.js';
@@ -24,6 +25,10 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry, SessionEntryRole } from './types.js';
 import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
+import {
+  resolveLatestCompactionSourceRange,
+  type LatestCompactionSourceRange,
+} from './compaction-source-range.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannelEnvelope, type ChannelMeta } from '../../system/trust/policy.js';
@@ -1059,9 +1064,24 @@ export class SessionManager implements SessionManagerTypeSurface {
         actorKind: 'system',
       })
       : options.metadata;
-    const metadata = options.roleEnvelopePreview
+    const previewMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
+    let metadata = previewMetadata;
+    if (options.intakeEnvelopes && options.intakeEnvelopes.length > 0) {
+      if (!this.intakeScreening) {
+        throw new Error(
+          'System session recording received intake envelope snapshots while intake screening is off; '
+          + 'refusing to persist unattributable screening state (fail closed)',
+        );
+      }
+      metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
+        mode: this.intakeScreening.mode,
+        withheld: this.intakeScreening.mode === 'enforce'
+          && options.intakeEnvelopes.some(snapshot => snapshot.state === 'quarantined'),
+        envelopes: options.intakeEnvelopes,
+      });
+    }
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'system',
@@ -1768,18 +1788,9 @@ export class SessionManager implements SessionManagerTypeSurface {
     channelId: string,
     sourceMessageId: string,
   ): RecordedCompanionSourceMessage | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const entries = this.store.findLatestEntries(
-      resolvedChannelId,
-      (entry) => {
-        if (entry.role !== 'user' && entry.role !== 'system') return false;
-        if (!entry.metadata?.includes(sourceMessageId)) return false;
-        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
-      },
-      1,
-    );
-    const entry = entries.at(0);
+    const entry = this.findRecordedSourceMessageEntry(channelId, sourceMessageId);
     if (!entry) return null;
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (typeof entry.authorId !== 'string' || !entry.authorId.trim()
       || typeof entry.authorName !== 'string' || !entry.authorName.trim()
       || !Number.isFinite(entry.timestamp) || entry.timestamp <= 0) {
@@ -1799,6 +1810,24 @@ export class SessionManager implements SessionManagerTypeSurface {
       timestampMs: entry.timestamp,
       ...(correlation ? { correlation } : {}),
     };
+  }
+
+  /** Exact persisted user/system source row for replay-safe ingress consumers. */
+  findRecordedSourceMessageEntry(
+    channelId: string,
+    sourceMessageId: string,
+  ): SessionEntry | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const entries = this.store.findLatestEntries(
+      resolvedChannelId,
+      (entry) => {
+        if (entry.role !== 'user' && entry.role !== 'system') return false;
+        if (!entry.metadata?.includes(sourceMessageId)) return false;
+        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
+      },
+      1,
+    );
+    return entries.at(0) ?? null;
   }
 
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
@@ -2177,8 +2206,41 @@ export class SessionManager implements SessionManagerTypeSurface {
     return this.store.count(resolvedChannelId);
   }
 
-  async searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]> {
-    return await this.transcriptSearch.searchByKeywords(query, limit);
+  getLatestCompactionSourceRange(
+    channelId: string,
+    authorization: { currentChannelId: string },
+  ): LatestCompactionSourceRange {
+    const authorizedChannelId = this.resolveSessionChannelId(authorization.currentChannelId);
+    let resolvedChannelId: string;
+    try {
+      resolvedChannelId = channelId === authorization.currentChannelId
+        ? authorizedChannelId
+        : this.resolveSessionChannelId(channelId);
+    } catch {
+      return {
+        status: 'access_denied',
+        channelId,
+        reason: 'Latest compaction source access is restricted to the current channel.',
+      };
+    }
+    if (resolvedChannelId !== authorizedChannelId) {
+      return {
+        status: 'access_denied',
+        channelId: resolvedChannelId,
+        reason: 'Latest compaction source access is restricted to the current channel.',
+      };
+    }
+    return resolveLatestCompactionSourceRange(this.store, resolvedChannelId);
+  }
+
+  async searchByKeywords(
+    query: string,
+    limit?: number,
+    options?: TranscriptSearchOptions,
+  ): Promise<SessionSearchHit[]> {
+    return options === undefined
+      ? await this.transcriptSearch.searchByKeywords(query, limit)
+      : await this.transcriptSearch.searchByKeywords(query, limit, options);
   }
 
   async searchTranscripts(query: string, limit?: number): Promise<SessionSearchHit[]> {

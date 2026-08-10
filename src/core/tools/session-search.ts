@@ -21,6 +21,11 @@ import {
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
+import type {
+  LatestCompactionSourceRange,
+  LatestCompactionSourceResolver,
+  VerifiedLatestCompactionSourceRange,
+} from '../session/compaction-source-range.js';
 
 const DEFAULT_SESSION_GREP_LIMIT = 10;
 const MAX_SESSION_GREP_LIMIT = 50;
@@ -28,6 +33,7 @@ const SESSION_GREP_OVERSAMPLE_FACTOR = 6;
 const SESSION_GREP_SNIPPET_RADIUS = 90;
 
 type SessionGrepMode = 'literal' | 'regex';
+export type SessionSearchWithin = 'latest_compaction_source';
 
 export interface SessionGrepHitResult {
   channelId: string;
@@ -50,6 +56,8 @@ export interface SessionGrepResult {
   scannedMatchCount: number;
   gatedOutCount: number;
   hits: SessionGrepHitResult[];
+  within?: SessionSearchWithin;
+  source?: CompactionSourceResultMetadata;
 }
 
 interface SessionGrepRawMatch {
@@ -69,6 +77,9 @@ interface SessionGrepRunnerParams {
   mode: SessionGrepMode;
   caseSensitive: boolean;
   maxMatches: number;
+  channelId?: string;
+  firstMessageId?: number;
+  lastMessageId?: number;
   signal?: AbortSignal;
 }
 
@@ -76,6 +87,73 @@ export interface SessionGrepToolOptions {
   sessionsDir: string;
   runRipgrep?: (params: SessionGrepRunnerParams) => Promise<SessionGrepRunnerResult>;
   sessionRouteState?: SessionSearchRouteStateProvider;
+  latestCompactionSource?: LatestCompactionSourceResolver;
+}
+
+interface CompactionSourceResultMetadata {
+  channelId: string;
+  summaryEntryId: number;
+  summaryCreatedAt: number;
+  firstMessageId: number;
+  lastMessageId: number;
+  messageCount: number;
+  verified: true;
+}
+
+function toCompactionSourceResultMetadata(
+  source: VerifiedLatestCompactionSourceRange,
+): CompactionSourceResultMetadata {
+  return {
+    channelId: source.channelId,
+    summaryEntryId: source.summaryEntryId,
+    summaryCreatedAt: source.summaryCreatedAt,
+    firstMessageId: source.firstMessageId,
+    lastMessageId: source.lastMessageId,
+    messageCount: source.messageCount,
+    verified: true,
+  };
+}
+
+function resolveRequestedCompactionSource(params: {
+  resolver: LatestCompactionSourceResolver | undefined;
+  within: SessionSearchWithin | undefined;
+  requestedChannelId?: string;
+}): LatestCompactionSourceRange | null {
+  if (params.within !== 'latest_compaction_source') return null;
+  const currentChannelId = resolveViewerContextFromRequest().channelId;
+  if (!currentChannelId) {
+    return {
+      status: 'access_denied',
+      channelId: params.requestedChannelId?.trim() || '',
+      reason: 'latest_compaction_source requires an active request channel.',
+    };
+  }
+  if (!params.resolver) {
+    return {
+      status: 'access_denied',
+      channelId: currentChannelId,
+      reason: 'Latest compaction source resolution is unavailable.',
+    };
+  }
+  const channelId = params.requestedChannelId?.trim() || currentChannelId;
+  return params.resolver.getLatestCompactionSourceRange(channelId, { currentChannelId });
+}
+
+function unavailableCompactionSourceResult(
+  action: 'session_search' | 'session_grep',
+  source: Exclude<LatestCompactionSourceRange, VerifiedLatestCompactionSourceRange>,
+): AgentToolResult<{ isError?: boolean }> {
+  const payload = {
+    action,
+    within: 'latest_compaction_source' as const,
+    sourceStatus: source.status,
+    channelId: source.channelId || null,
+    reason: source.reason,
+    hits: [],
+  };
+  return source.status === 'access_denied'
+    ? textResultWithError(JSON.stringify(payload, null, 2), true)
+    : textResult(JSON.stringify(payload, null, 2));
 }
 
 function asSessionRouteStateProvider(value: unknown): SessionSearchRouteStateProvider | undefined {
@@ -294,6 +372,18 @@ async function runRipgrepSearch(params: SessionGrepRunnerParams): Promise<Sessio
       if (typeof filePath !== 'string' || typeof lineNumber !== 'number' || typeof lineText !== 'string') {
         return;
       }
+      const entry = parseJournalMessageEntry(lineText);
+      if (
+        params.channelId !== undefined
+        && (
+          !entry
+          || entry.channelId !== params.channelId
+          || (params.firstMessageId !== undefined && entry.id < params.firstMessageId)
+          || (params.lastMessageId !== undefined && entry.id > params.lastMessageId)
+        )
+      ) {
+        return;
+      }
       matches.push({
         filePath,
         lineNumber,
@@ -330,6 +420,7 @@ export interface SessionSearchActionOptions {
   llmProvider: LLMProviderPort;
   sessionRouteState?: SessionSearchRouteStateProvider;
   promptRegistry?: PromptRegistryStatePort | null;
+  latestCompactionSource?: LatestCompactionSourceResolver;
 }
 
 export interface SessionSearchActionParams {
@@ -337,6 +428,7 @@ export interface SessionSearchActionParams {
   limit?: number;
   channelId?: string;
   summarize?: boolean;
+  within?: SessionSearchWithin;
 }
 
 export async function executeSessionSearchAction(
@@ -349,6 +441,14 @@ export async function executeSessionSearchAction(
     return textResultWithError('session_search requires a non-empty query.', true);
   }
 
+  const source = resolveRequestedCompactionSource({
+    resolver: options.latestCompactionSource,
+    within: params.within,
+    requestedChannelId: params.channelId,
+  });
+  if (source && source.status !== 'verified') {
+    return unavailableCompactionSourceResult('session_search', source);
+  }
   const result = await runSessionSearch({
     transcriptSearch: options.transcriptSearch,
     llmProvider: options.llmProvider,
@@ -356,13 +456,25 @@ export async function executeSessionSearchAction(
     query,
     limit: params.limit,
     summarize: params.summarize === true,
-    targetChannelId: params.channelId,
+    targetChannelId: source?.channelId ?? params.channelId,
+    ...(source
+      ? {
+          firstMessageId: source.firstMessageId,
+          lastMessageId: source.lastMessageId,
+        }
+      : {}),
     viewer: resolveViewerContextFromRequest(),
     sessionRouteState: options.sessionRouteState
       ?? asSessionRouteStateProvider(options.transcriptSearch),
     ...(signal ? { signal } : {}),
   });
-  return textResult(JSON.stringify(result, null, 2));
+  return textResult(JSON.stringify(source
+    ? {
+        ...result,
+        within: 'latest_compaction_source',
+        source: toCompactionSourceResultMetadata(source),
+      }
+    : result, null, 2));
 }
 
 export interface SessionGrepActionParams {
@@ -371,6 +483,7 @@ export interface SessionGrepActionParams {
   caseSensitive?: boolean;
   limit?: number;
   channelId?: string;
+  within?: SessionSearchWithin;
 }
 
 export async function executeSessionGrepAction(
@@ -391,6 +504,15 @@ export async function executeSessionGrepAction(
     ? params.channelId.trim()
     : undefined;
   const viewer = resolveViewerContextFromRequest();
+  const source = resolveRequestedCompactionSource({
+    resolver: options.latestCompactionSource,
+    within: params.within,
+    requestedChannelId: channelId,
+  });
+  if (source && source.status !== 'verified') {
+    return unavailableCompactionSourceResult('session_grep', source);
+  }
+  const effectiveChannelId = source?.channelId ?? channelId;
 
   try {
     const raw = await grepRunner({
@@ -399,6 +521,13 @@ export async function executeSessionGrepAction(
       mode,
       caseSensitive,
       maxMatches: limit * SESSION_GREP_OVERSAMPLE_FACTOR,
+      ...(effectiveChannelId ? { channelId: effectiveChannelId } : {}),
+      ...(source
+        ? {
+            firstMessageId: source.firstMessageId,
+            lastMessageId: source.lastMessageId,
+          }
+        : {}),
       signal,
     });
 
@@ -410,7 +539,8 @@ export async function executeSessionGrepAction(
       const entry = parseJournalMessageEntry(match.lineText);
       if (!entry) continue;
       if (isCogSecTombstoneSessionEntry(entry)) continue;
-      if (channelId && entry.channelId !== channelId) continue;
+      if (effectiveChannelId && entry.channelId !== effectiveChannelId) continue;
+      if (source && (entry.id < source.firstMessageId || entry.id > source.lastMessageId)) continue;
       scannedMatchCount += 1;
       if (!canViewerAccessSessionHit(viewer, entry)) {
         gatedOutCount += 1;
@@ -444,6 +574,12 @@ export async function executeSessionGrepAction(
       scannedMatchCount,
       gatedOutCount,
       hits: visibleHits,
+      ...(source
+        ? {
+            within: 'latest_compaction_source' as const,
+            source: toCompactionSourceResultMetadata(source),
+          }
+        : {}),
     };
     return textResult(JSON.stringify(result, null, 2));
   } catch (error) {

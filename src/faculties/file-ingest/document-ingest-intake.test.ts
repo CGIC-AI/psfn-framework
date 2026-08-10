@@ -151,6 +151,7 @@ describe('parsed-document intake screening (htm9.2)', () => {
       '/personal/downloads/doc-0.pdf',
       '/personal/downloads/doc-0.txt',
     ]);
+    expect(holds[0]!.sourceChannelId).toBe(context.channelId);
   });
 
   it('shadow mode: parsed text is unchanged while envelopes record the decision', async () => {

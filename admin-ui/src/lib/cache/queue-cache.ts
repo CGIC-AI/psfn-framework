@@ -255,6 +255,10 @@ export function normalizeIntakeQuarantineListData(value: unknown): unknown {
       };
       changed = true;
     }
+    if (candidate.redeliveryRetryAvailable === undefined) {
+      normalizedCandidate = { ...normalizedCandidate, redeliveryRetryAvailable: false };
+      changed = true;
+    }
     const carriesProvenance = RULE_MATCH_PROVENANCE_KEYS.some((key) => (
       Object.prototype.hasOwnProperty.call(normalizedCandidate, key)
     ));
@@ -301,6 +305,8 @@ function isIntakeQuarantineItem(value: unknown): boolean {
     && (value.contentSizeBytes === undefined || isNonNegativeInteger(value.contentSizeBytes))
     && typeof value.rawTextTruncated === 'boolean'
     && typeof value.safeRepresentationAvailable === 'boolean'
+    && (value.redeliveryRetryAvailable === undefined
+      || typeof value.redeliveryRetryAvailable === 'boolean')
     && isOptionalString(value.summary)
     && isOptionalString(value.whyFlagged)
     && isOptionalString(value.cogSecCaseId)

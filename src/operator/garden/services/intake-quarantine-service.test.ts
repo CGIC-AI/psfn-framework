@@ -248,6 +248,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
     withRuleMatch?: boolean;
     ruleMatchTotalCount?: number;
     decisionReason?: string;
+    sourceChannelId?: string | null;
   } = {}): IntakeEnvelope {
     const envelope = makeQuarantinedEnvelope(input);
     store.hold({
@@ -260,7 +261,9 @@ describe('admin intake quarantine service (htm9.11)', () => {
       ...(input.canonicalContactId !== undefined
         ? { canonicalContactId: input.canonicalContactId }
         : {}),
-      sourceChannelId: 'discord:chan-1',
+      ...(input.sourceChannelId !== null
+        ? { sourceChannelId: input.sourceChannelId ?? 'discord:chan-1' }
+        : {}),
       atMs: clock,
     });
     return envelope;
@@ -566,6 +569,56 @@ describe('admin intake quarantine service (htm9.11)', () => {
       if (resolved.ok) {
         expect(resolved.message).toContain('re-delivered it into discord:chan-1');
       }
+    });
+
+    it('recovers a Discord carrying channel from canonical provenance for a legacy hold', async () => {
+      const envelope = holdItem({
+        originRef: 'discord:1095844194980999358:1536434304194973736:PSFN_PROJECT_CHARTER.md',
+        sourceChannelId: null,
+      });
+      const resolved = await releaseRaw(envelope);
+      expect(resolved.ok).toBe(true);
+      expect(redeliveries).toHaveLength(1);
+      expect(redeliveries[0].sourceChannelId).toBe('1095844194980999358');
+      if (resolved.ok) {
+        expect(resolved.message).toContain('re-delivered it into 1095844194980999358');
+      }
+    });
+
+    it('retries the known legacy no-channel failure once and persists the delivery receipt', async () => {
+      const envelope = holdItem({
+        originRef: 'discord:1095844194980999358:1536434304194973736:PSFN_PROJECT_CHARTER.md',
+        sourceChannelId: null,
+      });
+      store.applyDecision({
+        id: envelope.id,
+        action: 'release_raw',
+        actor: 'fleet-principal:owner',
+        reason: 'original reviewed release',
+        atMs: clock,
+      });
+
+      expect(service.listItems().items[0]?.redeliveryRetryAvailable).toBe(true);
+      const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
+      if (!begin.ok) throw new Error('retry begin failed');
+      const retried = await service.resolveDecision({
+        id: envelope.id,
+        action: 'release_raw',
+        confirmToken: begin.confirmToken,
+        reason: 'complete the previously failed delivery',
+      });
+
+      expect(retried.ok).toBe(true);
+      expect(redeliveries).toHaveLength(1);
+      expect(redeliveries[0].sourceChannelId).toBe('1095844194980999358');
+      expect(store.getById(envelope.id)?.redelivery).toMatchObject({
+        delivered: true,
+        channelId: '1095844194980999358',
+        entryId: 4242,
+      });
+      expect(service.listItems().items[0]?.redeliveryRetryAvailable).toBe(false);
+      expect(service.beginDecision({ id: envelope.id, action: 'release_raw' }))
+        .toMatchObject({ ok: false, status: 409 });
     });
 
     it('re-delivers the safe representation when that action is chosen', async () => {

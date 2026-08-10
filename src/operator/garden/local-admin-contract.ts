@@ -577,6 +577,7 @@ export function createInProcessGardenAdminContract(
       list: () => getQuarantineStore().list(),
       getById: (id) => getQuarantineStore().getById(id),
       applyDecision: (input) => getQuarantineStore().applyDecision(input),
+      recordRedelivery: (input) => getQuarantineStore().recordRedelivery(input),
       findByArtifactPath: (path) => getQuarantineStore().findByArtifactPath(path),
       findByArtifactPaths: (paths) => getQuarantineStore().findByArtifactPaths(paths),
       recordAccessAttempt: (input) => getQuarantineStore().recordAccessAttempt(input),

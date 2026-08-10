@@ -2,11 +2,8 @@
 // source-list flywheel CRUD, and the quarantine approval queue with its
 // server-side double-confirm flow.
 
-import { apiGet, apiPost } from '$lib/api/client';
-import {
-  FLEET_ESCALATION_GRANT_HEADER,
-  withFleetEscalationGrant,
-} from '$lib/api/fleet-escalation';
+import { apiGet } from '$lib/api/client';
+import { apiPostProtected } from '$lib/api/protected-mutation';
 import {
   createQueuePageCache,
   isIntakeQuarantineListData,
@@ -88,8 +85,11 @@ export function getIntakeSourceLists(): Promise<IntakeSourceListsData> {
 
 export function mutateIntakeSourceList(
   input: AdminIntakeSourceListMutationInput,
+  reason: string,
 ): Promise<IntakeSourceListMutationResult> {
-  return apiPost<IntakeSourceListMutationResult>('/api/admin/intake/source-lists', input);
+  return apiPostProtected<IntakeSourceListMutationResult>(
+    '/api/admin/intake/source-lists', input, reason,
+  );
 }
 
 export function loadIntakeQuarantineLocalFirst(
@@ -123,38 +123,10 @@ export function confirmIntakeQuarantineDecision(
     action: IntakeQuarantineDecisionAction;
     sourceList?: AdminIntakeQuarantineSourceListAction;
   },
+  reason = '',
 ): Promise<IntakeQuarantineConfirmResult> {
-  return apiPost<IntakeQuarantineConfirmResult>(
-    `/api/admin/intake/quarantine/${encodeURIComponent(id)}/confirm`,
-    input,
-  );
-}
-
-/**
- * Fleet (cluster) path for step 1: the gateway requires an audited escalation
- * grant bound to exactly this confirm route, so each confirmation mints one
- * single-use grant for the operator-stated reason and spends it on the
- * immediately following request. The standalone operator path keeps the
- * non-escalated {@link confirmIntakeQuarantineDecision}.
- */
-export function confirmIntakeQuarantineDecisionEscalated(
-  id: string,
-  input: {
-    action: IntakeQuarantineDecisionAction;
-    sourceList?: AdminIntakeQuarantineSourceListAction;
-  },
-  reason: string,
-): Promise<IntakeQuarantineConfirmResult> {
-  return withFleetEscalationGrant(
-    { method: 'POST', target: intakeQuarantineConfirmPath(id), reason },
-    async (grant, signal) => await apiPost<IntakeQuarantineConfirmResult>(
-      intakeQuarantineConfirmPath(id),
-      input,
-      {
-        headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-        signal,
-      },
-    ),
+  return apiPostProtected<IntakeQuarantineConfirmResult>(
+    intakeQuarantineConfirmPath(id), input, reason,
   );
 }
 
@@ -171,37 +143,7 @@ export function decideIntakeQuarantine(
     reason: string;
   },
 ): Promise<IntakeQuarantineDecideResult> {
-  return apiPost<IntakeQuarantineDecideResult>(
-    `/api/admin/intake/quarantine/${encodeURIComponent(id)}/decide`,
-    input,
-  );
-}
-
-/**
- * Fleet (cluster) path for step 2: the gateway requires an audited escalation
- * grant bound to exactly this decide route. Releasing raw content (the most
- * dangerous disposition) and releasing sanitized stay distinct actions in the
- * request body; the ceremony only authorizes the endpoint, never auto-releasing
- * or re-injecting content. A fresh grant is minted on every attempt.
- */
-export function decideIntakeQuarantineEscalated(
-  id: string,
-  input: {
-    action: IntakeQuarantineDecisionAction;
-    sourceList?: AdminIntakeQuarantineSourceListAction;
-    confirmToken: string;
-    reason: string;
-  },
-): Promise<IntakeQuarantineDecideResult> {
-  return withFleetEscalationGrant(
-    { method: 'POST', target: intakeQuarantineDecidePath(id), reason: input.reason },
-    async (grant, signal) => await apiPost<IntakeQuarantineDecideResult>(
-      intakeQuarantineDecidePath(id),
-      input,
-      {
-        headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-        signal,
-      },
-    ),
+  return apiPostProtected<IntakeQuarantineDecideResult>(
+    intakeQuarantineDecidePath(id), input, input.reason,
   );
 }

@@ -10,8 +10,8 @@ vi.mock('$lib/api/client', () => ({
 
 import { apiPost as apiPostImport } from '$lib/api/client';
 import {
-  confirmIntakeQuarantineDecisionEscalated,
-  decideIntakeQuarantineEscalated,
+  confirmIntakeQuarantineDecision,
+  decideIntakeQuarantine,
 } from './intake.js';
 
 const apiPost = vi.mocked(apiPostImport);
@@ -53,7 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('confirmIntakeQuarantineDecisionEscalated', () => {
+describe('confirmIntakeQuarantineDecision', () => {
   it('mints one audited grant for the exact confirm route and spends it on the confirm', async () => {
     stubCompanionGardenRoute();
     const fetchMock = vi.fn()
@@ -67,7 +67,7 @@ describe('confirmIntakeQuarantineDecisionEscalated', () => {
       summary: 'This will discard the held content for source-class.',
     });
 
-    await expect(confirmIntakeQuarantineDecisionEscalated(ITEM_ID, {
+    await expect(confirmIntakeQuarantineDecision(ITEM_ID, {
       action: 'discard',
     }, 'verified false positive; dropping clears the queue')).resolves.toMatchObject({ ok: true });
 
@@ -94,7 +94,7 @@ describe('confirmIntakeQuarantineDecisionEscalated', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(confirmIntakeQuarantineDecisionEscalated(ITEM_ID, {
+    await expect(confirmIntakeQuarantineDecision(ITEM_ID, {
       action: 'discard',
     }, '   ')).rejects.toThrow(/escalation reason/u);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -102,7 +102,7 @@ describe('confirmIntakeQuarantineDecisionEscalated', () => {
   });
 });
 
-describe('decideIntakeQuarantineEscalated', () => {
+describe('decideIntakeQuarantine', () => {
   it('mints a fresh grant for the exact decide route and keeps release-raw distinct from discard', async () => {
     stubCompanionGardenRoute();
     const fetchMock = vi.fn()
@@ -111,7 +111,7 @@ describe('decideIntakeQuarantineEscalated', () => {
     vi.stubGlobal('fetch', fetchMock);
     apiPost.mockResolvedValue({ ok: true, item: { id: ITEM_ID }, message: 'Released raw' });
 
-    await expect(decideIntakeQuarantineEscalated(ITEM_ID, {
+    await expect(decideIntakeQuarantine(ITEM_ID, {
       action: 'release_raw',
       confirmToken: 'deadbeef',
       reason: 'Operator reviewed and approved verbatim re-delivery',
@@ -147,7 +147,7 @@ describe('decideIntakeQuarantineEscalated', () => {
       .mockResolvedValueOnce(csrfResponse())
       .mockResolvedValueOnce(new Response('Escalation reason is invalid', { status: 400 })));
 
-    await expect(decideIntakeQuarantineEscalated(ITEM_ID, {
+    await expect(decideIntakeQuarantine(ITEM_ID, {
       action: 'discard',
       confirmToken: 'deadbeef',
       reason: 'drop',

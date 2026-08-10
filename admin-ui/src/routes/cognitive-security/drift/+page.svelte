@@ -107,12 +107,17 @@
   }
 
   async function resolveCard(card: DriftReviewCard, resolution: DriftReviewCardResolution) {
+    const statedReason = note.trim();
+    if (!statedReason) {
+      pushToast('An audited reason is required.', 'error');
+      return;
+    }
     resolveBusy = true;
     try {
       await resolveDriftReviewCard(card.id, {
         resolution,
-        ...(note.trim() ? { note: note.trim() } : {}),
-      });
+        note: statedReason,
+      }, statedReason);
       pushToast(`Card ${resolution}.`, 'success');
       expandedId = '';
       note = '';
@@ -362,7 +367,7 @@
 
               {#if card.status === 'open'}
                 <div class="space-y-2 border-t border-bark-100 pt-3">
-                  <label class="block text-sm text-shadow-700" for="drift-note-{card.id}">Note (optional, audited)</label>
+                  <label class="block text-sm text-shadow-700" for="drift-note-{card.id}">Reason (required, audited)</label>
                   <input
                     id="drift-note-{card.id}"
                     type="text"

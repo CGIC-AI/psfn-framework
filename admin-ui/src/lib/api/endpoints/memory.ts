@@ -1,9 +1,6 @@
 import { apiDelete, apiFetch, apiGet, apiPost } from '$lib/api/client';
 import { withQuery } from '$lib/api/query';
-import {
-  FLEET_ESCALATION_GRANT_HEADER,
-  withFleetEscalationGrant,
-} from '$lib/api/fleet-escalation';
+import { apiPostProtected } from '$lib/api/protected-mutation';
 import type {
   AdminBulkMutationResult,
   AdminMemoryElevationStatus,
@@ -57,8 +54,13 @@ export function getMemoryDetail(id: string): Promise<AdminMemoryDetailData> {
 }
 
 // Reveals a single high-intimacy memory body. Audit-logged server-side.
-export function revealMemory(id: string): Promise<AdminMemoryDetailData> {
-  return apiPost<AdminMemoryDetailData>(revealMemoryPath(id), {});
+export function revealMemory(id: string, reason = ''): Promise<AdminMemoryDetailData> {
+  const statedReason = reason.trim();
+  return apiPostProtected<AdminMemoryDetailData>(
+    revealMemoryPath(id),
+    statedReason ? { reason: statedReason } : {},
+    statedReason,
+  );
 }
 
 function revealMemoryPath(id: string): string {
@@ -73,31 +75,9 @@ function revealMemoryPath(id: string): string {
  * reveal route, and spends it on the immediately following request. Every step
  * fails closed -- no grant, no reveal.
  */
-export async function revealMemoryEscalated(
-  id: string,
-  reason: string,
-): Promise<AdminMemoryDetailData> {
-  const target = revealMemoryPath(id);
-  // The ceremony validates and trims the reason for the grant; re-state the
-  // trimmed reason in the reveal body so the gateway grant, the route's
-  // content-free companion notice, and the audit trail all agree verbatim.
-  const statedReason = reason.trim();
-  return await withFleetEscalationGrant(
-    { method: 'POST', target, reason: statedReason },
-    async (grant, signal) => await apiPost<AdminMemoryDetailData>(
-      `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
-      { reason: statedReason },
-      {
-        headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-        signal,
-      },
-    ),
-  );
-}
-
 // Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged server-side.
-export function elevateMemoryBodyAccess(): Promise<AdminMemoryElevationStatus> {
-  return apiPost<AdminMemoryElevationStatus>('/api/admin/memory/elevation', {});
+export function elevateMemoryBodyAccess(reason = ''): Promise<AdminMemoryElevationStatus> {
+  return apiPostProtected<AdminMemoryElevationStatus>('/api/admin/memory/elevation', {}, reason);
 }
 
 export function dropMemoryBodyElevation(): Promise<AdminMemoryElevationStatus> {

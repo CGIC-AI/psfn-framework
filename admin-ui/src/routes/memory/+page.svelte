@@ -13,7 +13,6 @@
     listManagedMemoryScopes,
     listMemories,
     revealMemory,
-    revealMemoryEscalated,
     searchMemories,
     unlinkMemories,
     updateMemoryScope,
@@ -733,7 +732,7 @@
   async function handleEscalatedReveal(id: string): Promise<void> {
     revealingId = id;
     try {
-      detailModalData = await revealMemoryEscalated(id, escalationReason);
+      detailModalData = await revealMemory(id, escalationReason);
       elevation = detailModalData.elevation ?? elevation;
       syncScopeEditorFromDetail();
       escalationReason = '';

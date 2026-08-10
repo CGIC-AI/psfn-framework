@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api/client', () => ({ apiGet: vi.fn(), apiPost: vi.fn() }));
 vi.mock('$lib/api/fleet-escalation', () => ({
@@ -20,12 +20,21 @@ const withGrant = vi.mocked(withGrantImport);
 const GRANT_ID = '22222222-2222-4222-8222-222222222222';
 
 beforeEach(() => {
+  vi.stubGlobal('window', {
+    location: {
+      pathname: '/companions/11111111-1111-4111-8111-111111111111/garden/concerns',
+    },
+  });
   apiPost.mockReset().mockResolvedValue({ ok: true });
   withGrant.mockReset().mockImplementation(async (_request, spend) => await spend({
     grantId: GRANT_ID,
     routeId: 'cogsec.manage',
     expiresAt: new Date(0).toISOString(),
   }, new AbortController().signal));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('audited concern mutations', () => {

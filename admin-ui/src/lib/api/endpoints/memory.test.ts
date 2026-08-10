@@ -11,7 +11,7 @@ vi.mock('$lib/api/client', () => ({
 }));
 
 import { apiPost as apiPostImport } from '$lib/api/client';
-import { revealMemoryEscalated } from './memory.js';
+import { revealMemory } from './memory.js';
 
 const apiPost = vi.mocked(apiPostImport);
 
@@ -52,7 +52,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('revealMemoryEscalated', () => {
+describe('revealMemory', () => {
   it('mints one audited grant for the exact reveal route and spends it on the reveal', async () => {
     stubCompanionGardenRoute();
     const fetchMock = vi.fn()
@@ -61,7 +61,7 @@ describe('revealMemoryEscalated', () => {
     vi.stubGlobal('fetch', fetchMock);
     apiPost.mockResolvedValue({ memory: { id: MEMORY_ID }, scopeAssignments: [] });
 
-    await expect(revealMemoryEscalated(MEMORY_ID, '  reviewing a welfare report  '))
+    await expect(revealMemory(MEMORY_ID, '  reviewing a welfare report  '))
       .resolves.toMatchObject({ memory: { id: MEMORY_ID } });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/v1/fleet-auth/session/csrf');
@@ -90,28 +90,31 @@ describe('revealMemoryEscalated', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(revealMemoryEscalated(MEMORY_ID, '   ')).rejects.toThrow(/escalation reason/u);
-    await expect(revealMemoryEscalated(MEMORY_ID, 'bad' + String.fromCharCode(7) + 'reason'))
+    await expect(revealMemory(MEMORY_ID, '   ')).rejects.toThrow(/escalation reason/u);
+    await expect(revealMemory(MEMORY_ID, 'bad' + String.fromCharCode(7) + 'reason'))
       .rejects.toThrow(/escalation reason/u);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it('refuses to escalate outside an authorized companion Garden route', async () => {
+  it('keeps the standalone Garden path direct instead of minting a fleet grant', async () => {
     stubCompanionGardenRoute('/memory');
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(revealMemoryEscalated(MEMORY_ID, 'reviewing a welfare report'))
-      .rejects.toThrow(/authorized companion Garden route/u);
+    await expect(revealMemory(MEMORY_ID, 'reviewing a welfare report')).resolves.toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(apiPost).toHaveBeenCalledWith(
+      `/api/admin/memory/${MEMORY_ID}/reveal`,
+      { reason: 'reviewing a welfare report' },
+    );
   });
 
   it('fails closed on a malformed CSRF token', async () => {
     stubCompanionGardenRoute();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(csrfResponse('short')));
 
-    await expect(revealMemoryEscalated(MEMORY_ID, 'reviewing a welfare report'))
+    await expect(revealMemory(MEMORY_ID, 'reviewing a welfare report'))
       .rejects.toThrow(/ceremony unavailable/u);
     expect(apiPost).not.toHaveBeenCalled();
   });
@@ -122,7 +125,7 @@ describe('revealMemoryEscalated', () => {
       .mockResolvedValueOnce(csrfResponse())
       .mockResolvedValueOnce(new Response('Escalation reason is invalid', { status: 400 })));
 
-    await expect(revealMemoryEscalated(MEMORY_ID, 'reviewing a welfare report'))
+    await expect(revealMemory(MEMORY_ID, 'reviewing a welfare report'))
       .rejects.toThrow(/Escalation reason is invalid/u);
     expect(apiPost).not.toHaveBeenCalled();
   });
@@ -133,7 +136,7 @@ describe('revealMemoryEscalated', () => {
       .mockResolvedValueOnce(csrfResponse())
       .mockResolvedValueOnce(new Response(JSON.stringify({ routeId: 'memory.reveal' }), { status: 200 })));
 
-    await expect(revealMemoryEscalated(MEMORY_ID, 'reviewing a welfare report'))
+    await expect(revealMemory(MEMORY_ID, 'reviewing a welfare report'))
       .rejects.toThrow(/grant response is malformed/u);
     expect(apiPost).not.toHaveBeenCalled();
   });

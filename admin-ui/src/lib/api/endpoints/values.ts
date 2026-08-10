@@ -1,8 +1,5 @@
 import { apiGet, apiPost } from '$lib/api/client';
-import {
-  FLEET_ESCALATION_GRANT_HEADER,
-  withFleetEscalationGrant,
-} from '$lib/api/fleet-escalation';
+import { apiPostProtected } from '$lib/api/protected-mutation';
 import { isRecord } from '../../../../../src/shared/utils/types.js';
 import type { PrivacyBreakGlassReasonCategory } from '../../../../../src/shared/contracts/privacy-break-glass.js';
 import type {
@@ -68,17 +65,10 @@ export async function beginJournalPrivacyBreakGlass(
   input: JournalPrivacyBreakGlassInput,
 ): Promise<JournalPrivacyBreakGlassConfirmation> {
   const reason = checkedPrivacyReason(input.reason);
-  const target = journalPrivacyConfirmPath(input.stream);
-  const response: unknown = await withFleetEscalationGrant(
-    { method: 'POST', target, reason },
-    async (grant, signal) => await apiPost(journalPrivacyConfirmPath(input.stream), {
+  const response: unknown = await apiPostProtected(journalPrivacyConfirmPath(input.stream), {
       reasonCategory: input.reasonCategory,
       reason,
-    }, {
-      headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
-      signal,
-    }),
-  );
+    }, reason);
   if (!isRecord(response)
     || response.ok !== true
     || typeof response.confirmToken !== 'string'

@@ -21,6 +21,10 @@ git log --follow -- apps/satellite-hub/src/ts/hub/main.ts
 git log --follow -- tools/evals/eval/src/validation.ts
 ```
 
+The commit-identity gate exempts only commits in the ancestry of these two exact
+source heads. Their original identities remain intact, while all descendants and
+new framework commits continue to require the framework identity allowlist.
+
 The current tree contains ordinary files, not submodules or nested repositories.
 The eval toolkit's unused `vendor/emosim` gitlink and both projects' nested agent
 configuration were removed after import. Their original state remains available

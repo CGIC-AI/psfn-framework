@@ -39,7 +39,13 @@ export type BiographicalSubjectRef =
 
 // ── Claim kinds (closed registry) ──
 
-export type BiographicalClaimKind = 'name' | 'nickname' | 'relationship';
+export type BiographicalClaimKind =
+  | 'name'
+  | 'nickname'
+  | 'relationship'
+  | 'role'
+  | 'stable-preference'
+  | 'shared-language';
 
 export type BiographicalClaimBasis = 'explicit' | 'observed' | 'inferred' | 'imported';
 export const BIOGRAPHICAL_CLAIM_BASES: readonly BiographicalClaimBasis[] = [
@@ -52,6 +58,7 @@ export const BIOGRAPHICAL_CLAIM_BASES: readonly BiographicalClaimBasis[] = [
 export type BiographicalClaimStatus =
   | 'candidate'
   | 'active'
+  | 'quarantined'
   | 'contested'
   | 'superseded'
   | 'revoked';
@@ -59,6 +66,7 @@ export type BiographicalClaimStatus =
 export const BIOGRAPHICAL_CLAIM_STATUSES: readonly BiographicalClaimStatus[] = [
   'candidate',
   'active',
+  'quarantined',
   'contested',
   'superseded',
   'revoked',
@@ -72,10 +80,9 @@ export const BIOGRAPHICAL_TERMINAL_STATUSES: readonly BiographicalClaimStatus[] 
 
 // ── Collection depth (audit only) ──
 //
-// Stored for audit. This ticket does NOT implement adaptive extraction policy
-// or owner-file depth settings (those land with o61vb.6). A claim may record
-// the depth decision under which it was admitted; the kernel never lets depth
-// widen sensitivity or disclosure.
+// Stored for audit. A claim may record the canonical depth decision under
+// which it was admitted; the kernel never lets depth widen sensitivity or
+// disclosure.
 
 export type BiographicalCollectionDepth = 'recognition' | 'developing' | 'full';
 export const BIOGRAPHICAL_COLLECTION_DEPTHS: readonly BiographicalCollectionDepth[] = [
@@ -107,7 +114,76 @@ export interface RelationshipClaimValue {
   readonly relationshipType: string;
 }
 
-export type BiographicalClaimValue = NameClaimValue | NicknameClaimValue | RelationshipClaimValue;
+/** Schema version shared by the closed stable-biography value family. */
+export const BIOGRAPHICAL_STABLE_VALUE_SCHEMA_VERSION = 1 as const;
+
+export const BIOGRAPHICAL_ROLE_TYPES = [
+  'employment',
+  'education',
+  'family',
+  'community',
+  'creative',
+] as const;
+export type BiographicalRoleType = (typeof BIOGRAPHICAL_ROLE_TYPES)[number];
+
+export interface RoleClaimValue {
+  readonly kind: 'role';
+  readonly schemaVersion: typeof BIOGRAPHICAL_STABLE_VALUE_SCHEMA_VERSION;
+  readonly roleType: BiographicalRoleType;
+  readonly title: string;
+  readonly organization?: string;
+}
+
+export const BIOGRAPHICAL_PREFERENCE_DOMAINS = [
+  'food',
+  'media',
+  'activity',
+  'environment',
+  'communication',
+] as const;
+export type BiographicalPreferenceDomain = (typeof BIOGRAPHICAL_PREFERENCE_DOMAINS)[number];
+
+export const BIOGRAPHICAL_PREFERENCE_POLARITIES = [
+  'likes',
+  'dislikes',
+  'prefers',
+  'avoids',
+] as const;
+export type BiographicalPreferencePolarity =
+  (typeof BIOGRAPHICAL_PREFERENCE_POLARITIES)[number];
+
+export interface StablePreferenceClaimValue {
+  readonly kind: 'stable-preference';
+  readonly schemaVersion: typeof BIOGRAPHICAL_STABLE_VALUE_SCHEMA_VERSION;
+  readonly domain: BiographicalPreferenceDomain;
+  readonly target: string;
+  readonly polarity: BiographicalPreferencePolarity;
+}
+
+export const BIOGRAPHICAL_SHARED_LANGUAGE_TYPES = [
+  'phrase',
+  'ritual',
+  'reference',
+  'signal',
+] as const;
+export type BiographicalSharedLanguageType =
+  (typeof BIOGRAPHICAL_SHARED_LANGUAGE_TYPES)[number];
+
+export interface SharedLanguageClaimValue {
+  readonly kind: 'shared-language';
+  readonly schemaVersion: typeof BIOGRAPHICAL_STABLE_VALUE_SCHEMA_VERSION;
+  readonly languageType: BiographicalSharedLanguageType;
+  readonly phrase: string;
+  readonly meaning: string;
+}
+
+export type BiographicalClaimValue =
+  | NameClaimValue
+  | NicknameClaimValue
+  | RelationshipClaimValue
+  | RoleClaimValue
+  | StablePreferenceClaimValue
+  | SharedLanguageClaimValue;
 
 // ── Source snapshots ──
 
@@ -132,7 +208,7 @@ export interface BiographicalClaimSource {
 export interface BiographicalClaim {
   readonly id: string;
   readonly subject: BiographicalSubjectRef;
-  /** Required for `relationship`; required for `nickname` with `relational` scope. */
+  /** Required for relationship/shared-language and relational nickname dyads. */
   readonly relatedSubject?: BiographicalSubjectRef;
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;

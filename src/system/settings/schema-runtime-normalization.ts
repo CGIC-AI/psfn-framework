@@ -9,6 +9,7 @@ import {
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
+import { normalizeBiographicalDepthPolicy } from '../config/biographical-depth-policy.js';
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
@@ -1260,6 +1261,12 @@ export function normalizeContextControlSettings(
     normalized.memoryRetrievalPolicy = normalizeMemoryRetrievalPolicy(
       settings.memoryRetrievalPolicy,
       'memoryRetrievalPolicy',
+    );
+  }
+  if ('biographicalDepthPolicy' in settings) {
+    normalized.biographicalDepthPolicy = normalizeBiographicalDepthPolicy(
+      settings.biographicalDepthPolicy,
+      'biographicalDepthPolicy',
     );
   }
   if ('memoryDeletionPolicy' in settings) {

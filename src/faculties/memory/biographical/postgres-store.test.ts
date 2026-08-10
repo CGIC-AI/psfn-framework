@@ -19,7 +19,7 @@ describe('POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS', () => {
 
   it('enforces the closed claim-kind registry at the database boundary', () => {
     expect(sql).toContain(
-      "CONSTRAINT biographical_claims_kind_check CHECK (kind IN ('name', 'nickname', 'relationship'))",
+      "CONSTRAINT biographical_claims_kind_check CHECK (kind IN ('name', 'nickname', 'relationship', 'role', 'stable-preference', 'shared-language'))",
     );
   });
 
@@ -28,7 +28,7 @@ describe('POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS', () => {
       "CONSTRAINT biographical_claims_subject_kind_check CHECK (subject_kind IN ('companion', 'contact'))",
     );
     expect(sql).toContain(
-      "CONSTRAINT biographical_claims_status_check CHECK (status IN ('candidate', 'active', 'contested', 'superseded', 'revoked'))",
+      "CONSTRAINT biographical_claims_status_check CHECK (status IN ('candidate', 'active', 'quarantined', 'contested', 'superseded', 'revoked'))",
     );
     expect(sql).toContain(
       "CONSTRAINT biographical_claims_effective_sensitivity_check CHECK (effective_sensitivity IN ('public', 'personal', 'intimate', 'confidential'))",

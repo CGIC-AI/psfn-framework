@@ -35,6 +35,7 @@ import { createEmptySubagentRoleRegistryConfig } from '../../faculties/subagents
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
+import { createDefaultBiographicalDepthPolicy } from './biographical-depth-policy.js';
 import { createDefaultMemoryPresentationProfile } from './memory-presentation-profile.js';
 import {
   resolveCompanionFleet,
@@ -511,6 +512,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
     memoryRetrievalPolicy: createDefaultMemoryRetrievalPolicy(),
+    biographicalDepthPolicy: createDefaultBiographicalDepthPolicy(),
     memoryPresentationProfile: createDefaultMemoryPresentationProfile(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
     intakeScreeningFailureAlertThreshold: DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD,

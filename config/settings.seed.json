@@ -162,6 +162,37 @@
     },
     "emotionalIntensityPersistenceMaxMultiplier": 6
   },
+  "biographicalDepthPolicy": {
+    "schemaVersion": 1,
+    "developingIndependentContextMinimum": 2,
+    "recognition": {
+      "candidateLimitPerRefresh": 4,
+      "refreshIntervalMs": 604800000,
+      "retentionClaimLimit": 24,
+      "compactionBatchLimit": 8,
+      "backfillBatchLimit": 0,
+      "operationClaimLimit": 4,
+      "turnClaimLimit": 2
+    },
+    "developing": {
+      "candidateLimitPerRefresh": 12,
+      "refreshIntervalMs": 86400000,
+      "retentionClaimLimit": 128,
+      "compactionBatchLimit": 24,
+      "backfillBatchLimit": 16,
+      "operationClaimLimit": 12,
+      "turnClaimLimit": 6
+    },
+    "full": {
+      "candidateLimitPerRefresh": 32,
+      "refreshIntervalMs": 21600000,
+      "retentionClaimLimit": null,
+      "compactionBatchLimit": 64,
+      "backfillBatchLimit": 32,
+      "operationClaimLimit": 32,
+      "turnClaimLimit": 12
+    }
+  },
   "memoryPresentationProfile": {
     "version": 1,
     "sectionOrder": [

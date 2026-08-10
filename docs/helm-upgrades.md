@@ -1061,16 +1061,27 @@ the boot succeeds first try.
     present, `vector` extension relocated into it, connecting user a member
     of the tenant role.
 12. **Welfare-verifier read grant** (gateway startup): the gateway welfare
-    grant verifier connects unpinned as the primary runtime role and must
-    hold `USAGE` on every fleet schema plus `SELECT` on each
-    `agent_background_work_jobs`. The runtime role is NOINHERIT (gate 6), so
-    its tenant memberships cannot supply that privilege.
-    `provision:postgres-tenancy --apply` grants it directly and idempotently
-    per fleet tenant, after bringing each schema to its background-work
-    migration head; the shared tenancy primitive deliberately does not grant
-    it. If gateway startup reports `welfare_grant_verifier` degraded with
-    `missing required role privileges: SELECT`, re-running that script is
-    the repair path; it also covers a newly added follower in the same pass.
+    grant verifier connects ONLY through the dedicated least-privilege
+    `welfareVerifier` LOGIN credential declared by `fleet-auth.json`'s
+    optional `welfareVerifier` block (role + `databaseUrlRef`), never the
+    companion runtime URL — a cross-schema USAGE/SELECT grant on a companion
+    runtime role reaches the agent pods and breaches sibling isolation. The
+    dedicated role legitimately holds `USAGE` on every fleet schema plus
+    `SELECT` on each `agent_background_work_jobs`. When the `welfareVerifier`
+    block is absent, the verifier degrades honestly (every asserted
+    `preemptionProtected` is stripped → FIFO).
+    `provision:postgres-tenancy --apply` provisions the dedicated LOGIN role
+    (idempotent, least-privilege: `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+    NOCREATEROLE NOREPLICATION NOBYPASSRLS`, finite `CONNECTION LIMIT`, no
+    memberships) from the resolved credential and grants it directly and
+    idempotently per fleet tenant, after bringing each schema to its
+    background-work migration head; the shared tenancy primitive deliberately
+    does not grant it. If gateway startup reports `welfare_grant_verifier`
+    degraded with `missing required role privileges: SELECT`, re-running that
+    script is the repair path; it also covers a newly added follower in the
+    same pass. Add the credential through `fleetAuth.credentialEnv`
+    (`FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL` → Secret ref); it reaches the
+    gateway only, never the agent pods.
 
 Two upgrade-adjacent traps discovered on the same cutover, both now
 chart-owned but relevant when upgrading OLDER charts:

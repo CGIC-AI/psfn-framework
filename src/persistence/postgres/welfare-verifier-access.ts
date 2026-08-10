@@ -1,3 +1,4 @@
+import type { QueryResult, QueryResultRow } from 'pg';
 import {
   assertValidPostgresRoleName,
   assertValidPostgresSchemaName,
@@ -6,12 +7,21 @@ import {
 } from '../postgres.js';
 
 /**
- * Minimal client surface for the welfare-verifier grant. Both pg `Pool` and
- * `Client` satisfy it; the relation probe needs row access, unlike the pure
+ * Minimal client surface for welfare-verifier provisioning. Both pg `Pool` and
+ * `PoolClient` satisfy it; the relation probe needs row access, unlike the pure
  * DDL grant client in `backup-schema-access.ts`.
  */
-export interface PostgresWelfareGrantClient {
-  query(sql: string): Promise<{ rows: Array<{ relation: string | null }> }>;
+export interface PostgresWelfareVerifierClient {
+  query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<T>>;
+}
+
+export interface PostgresWelfareVerifierLoginEvidence {
+  role: string;
+  /** True only when the LOGIN role did not exist before this call. */
+  created: boolean;
 }
 
 export interface PostgresWelfareVerifierGrantEvidence {
@@ -22,17 +32,94 @@ export interface PostgresWelfareVerifierGrantEvidence {
 }
 
 /**
+ * Connection budget for the gateway verifier pool. The welfare grant verifier
+ * opens a single small read pool (`max: 4` in `createWelfareGrantVerifier`);
+ * this limit keeps reconnect/idle headroom while remaining finite so the role
+ * cannot exhaust the server's connection capacity. Fixed by code ownership,
+ * never operator input.
+ */
+const WELFARE_VERIFIER_CONNECTION_LIMIT = 8;
+
+const WELFARE_VERIFIER_ROLE_DDL = [
+  'LOGIN',
+  'NOINHERIT',
+  'NOSUPERUSER',
+  'NOCREATEDB',
+  'NOCREATEROLE',
+  'NOREPLICATION',
+  'NOBYPASSRLS',
+  `CONNECTION LIMIT ${WELFARE_VERIFIER_CONNECTION_LIMIT}`,
+].join(' ');
+
+/**
+ * Provision the dedicated gateway welfare-verifier LOGIN role.
+ *
+ * The verifier must connect through its OWN least-privilege credential, never
+ * a companion runtime role: a direct USAGE/SELECT grant on a companion
+ * runtime role would reach the agent pods that share that credential and
+ * breach sibling isolation. This function creates the LOGIN role if absent,
+ * or converges a pre-existing role to the exact least-privilege posture, and
+ * (re)sets its password so the gateway's resolved credential authenticates.
+ *
+ * The DDL is rendered server-side through `format(%I, %L)` so neither the
+ * validated role name nor the operator-supplied password can smuggle SQL; the
+ * fixed attribute string is a code constant. Idempotent: every run lands the
+ * same role shape and password.
+ */
+export async function provisionWelfareVerifierLoginRole(
+  client: PostgresWelfareVerifierClient,
+  input: {
+    role: string;
+    password: string;
+  },
+): Promise<PostgresWelfareVerifierLoginEvidence> {
+  const role = assertValidPostgresRoleName(input.role);
+  if (typeof input.password !== 'string' || input.password.length === 0) {
+    throw new Error('Welfare verifier login password must be a non-empty string');
+  }
+  const existing = await client.query<{ exists: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS exists',
+    [role],
+  );
+  const created = existing.rows.at(0)?.exists !== true;
+  const verb = created ? 'CREATE ROLE' : 'ALTER ROLE';
+  // The format string is a code constant (not operator input); only the role
+  // name and password arrive as parameters. `format()` is polymorphic
+  // (`text, VARIADIC "any"`), so the parameters are cast to `text` to let
+  // the planner resolve the variadic. `%I`/`%L` then quote the identifier and
+  // password server-side, so neither can smuggle SQL.
+  const rendered = await client.query<{ stmt: string }>(
+    `SELECT format('%s %I ${WELFARE_VERIFIER_ROLE_DDL} PASSWORD %L', $1::text, $2::text, $3::text) AS stmt`,
+    [verb, role, input.password],
+  );
+  const stmt = rendered.rows.at(0)?.stmt;
+  if (typeof stmt !== 'string' || stmt.length === 0) {
+    throw new Error('Welfare verifier login role DDL did not render');
+  }
+  await client.query(stmt);
+  return { role, created };
+}
+
+/**
  * Apply the exact welfare-verifier read contract for one fleet tenant schema.
  *
  * The gateway welfare grant verifier (`boundary/gateway/welfare-grant-verifier.ts`)
- * connects unpinned as the runtime login role and proves `SELECT` on
+ * connects through its dedicated LOGIN role and proves `SELECT` on
  * `agent_background_work_jobs` in every fleet schema before honoring
  * `preemptionProtected`. Tenant membership alone cannot supply that privilege:
- * the runtime login role is NOINHERIT (docs/helm-upgrades.md tenancy cutover
+ * every fleet login role is NOINHERIT (docs/helm-upgrades.md tenancy cutover
  * gate 6), so the membership provisioning grants carries
- * `inherit_option = false` and the login role holds no privilege through it.
+ * `inherit_option = false` and a login role holds no privilege through it.
  * Without these direct grants the readiness probe fails closed and the
- * verifier degrades (psfn-framework-m8zdu, Helm revision 15 rollout).
+ * verifier degrades.
+ *
+ * This grant lands on the DEDICATED verifier role, never on a companion
+ * runtime role: a companion runtime credential reaches the agent pods, so a
+ * cross-schema grant on it would breach fleet sibling isolation. The verifier
+ * role legitimately holds USAGE/SELECT across every fleet schema — it is a
+ * fleet-wide gateway-only reader — and it is granted membership in no tenant
+ * role, so the per-companion runtime isolation the tenancy primitive enforces
+ * is preserved exactly.
  *
  * This is an operator-only grant, applied solely by the fleet provisioning
  * path (`scripts/provision-postgres-tenancy.ts`) after the tenant's
@@ -41,16 +128,16 @@ export interface PostgresWelfareVerifierGrantEvidence {
  * also use and which must not escalate application-time privileges.
  *
  * Least privilege by construction: schema USAGE plus SELECT on the single
- * verifier relation, granted directly to the runtime login role — no default
- * privileges, no blanket table grants, no ownership transfer. Both statements
- * are idempotent, so an operator re-run after the tenant's background-work
- * migrations is the repair path for a schema provisioned before its tables
- * existed (a newly added follower). When the relation is still absent the
- * schema grant still lands and the evidence reports `relationGranted: false`
- * so the caller can re-assert after migrations.
+ * verifier relation, granted directly to the verifier role — no default
+ * privileges, no blanket table grants, no ownership transfer, no membership.
+ * Both statements are idempotent, so an operator re-run after the tenant's
+ * background-work migrations is the repair path for a schema provisioned
+ * before its tables existed (a newly added follower). When the relation is
+ * still absent the schema grant still lands and the evidence reports
+ * `relationGranted: false` so the caller can re-assert after migrations.
  */
 export async function grantWelfareVerifierReadAccessToTenantSchema(
-  client: PostgresWelfareGrantClient,
+  client: PostgresWelfareVerifierClient,
   input: {
     schema: string;
     verifierRole: string;
@@ -63,7 +150,7 @@ export async function grantWelfareVerifierReadAccessToTenantSchema(
   await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${verifierRole}`);
   // Both identifiers are strictly validated lowercase names, so literal
   // interpolation into the regclass probe cannot smuggle SQL.
-  const probe = await client.query(
+  const probe = await client.query<{ relation: string | null }>(
     `SELECT to_regclass('${schemaName}.agent_background_work_jobs')::text AS relation`,
   );
   const relationGranted = probe.rows.at(0)?.relation != null;

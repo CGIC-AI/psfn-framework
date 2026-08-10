@@ -225,6 +225,27 @@ export interface FleetAuthConfig {
   }>;
   /** Optional admin-unconditional roster. Absent means no roster bypass exists. */
   accountRoster?: FleetAuthAccountRosterEntry[];
+  /**
+   * Optional dedicated gateway welfare-verifier database authority. When
+   * present, the gateway welfare grant verifier connects ONLY through this
+   * credential (never the companion runtime URL) and is provisioned exact
+   * USAGE on every fleet schema plus SELECT on each
+   * `agent_background_work_jobs`. When absent, the verifier degrades honestly
+   * (every asserted `preemptionProtected` is stripped → FIFO). The role is a
+   * gateway-only least-privilege LOGIN, distinct from every fleet auth schema
+   * role and never injected into agent pods.
+   */
+  welfareVerifier?: FleetAuthWelfareVerifierAuthority;
+}
+
+/**
+ * Dedicated gateway welfare-verifier LOGIN role + connection credential. The
+ * role holds USAGE/SELECT across fleet companion schemas only; it is granted
+ * membership in no fleet auth or tenant role.
+ */
+export interface FleetAuthWelfareVerifierAuthority {
+  role: string;
+  databaseUrlRef: CredentialReference;
 }
 
 export interface FleetAuthVerifierConfig {
@@ -263,6 +284,8 @@ export interface ResolvedGatewayFleetAuthSecrets {
     runtimeUrl: string;
     migrationUrl: string;
     backupRestoreUrl: string;
+    /** Present only when fleet-auth.json declares a `welfareVerifier` authority. */
+    welfareVerifierUrl?: string;
   };
 }
 
@@ -493,6 +516,23 @@ function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {
   return roles;
 }
 
+function parseWelfareVerifierAuthority(
+  value: unknown,
+  schemaRoles: FleetAuthConfig['databaseRoles'],
+): FleetAuthWelfareVerifierAuthority {
+  const record = requireRecord(value, 'welfareVerifier');
+  requireExactKeys(record, ['role', 'databaseUrlRef'], 'welfareVerifier');
+  const role = requireString(record.role, 'welfareVerifier.role');
+  if (!POSTGRES_ROLE_PATTERN.test(role)) {
+    fail('welfareVerifier.role is not a safe PostgreSQL role name');
+  }
+  if (Object.values(schemaRoles).includes(role)) {
+    fail('welfareVerifier.role must be distinct from every databaseRoles entry');
+  }
+  const databaseUrlRef = parseCredentialReference(record.databaseUrlRef, 'welfareVerifier.databaseUrlRef');
+  return { role, databaseUrlRef };
+}
+
 function parseTtls(value: unknown): FleetAuthConfig['ttls'] {
   const record = requireRecord(value, 'ttls');
   const keys = [
@@ -657,7 +697,7 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   ] as const;
   assertNoUnknownKeys(
     root,
-    [...requiredRootKeys, 'accountRoster'],
+    [...requiredRootKeys, 'accountRoster', 'welfareVerifier'],
     'root',
     { errorPrefix: ERROR_PREFIX },
   );
@@ -699,9 +739,14 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     key,
     parseCredentialReference(credentials[key], `credentials.${key}`),
   ])) as unknown as FleetAuthConfig['credentials'];
+  const databaseRoles = parseDatabaseRoles(root.databaseRoles);
+  const welfareVerifier = Object.hasOwn(root, 'welfareVerifier')
+    ? parseWelfareVerifierAuthority(root.welfareVerifier, databaseRoles)
+    : undefined;
   const credentialNames = [
     clientSecretRef.envName,
     ...credentialKeys.map(key => parsedCredentials[key].envName),
+    ...(welfareVerifier ? [welfareVerifier.databaseUrlRef.envName] : []),
   ];
   if (new Set(credentialNames).size !== credentialNames.length) {
     fail('credential references must be distinct');
@@ -741,13 +786,14 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
       tokenCustody: provider.tokenCustody,
     },
     credentials: parsedCredentials,
-    databaseRoles: parseDatabaseRoles(root.databaseRoles),
+    databaseRoles,
     verifierKeys,
     hubDeviceAssertions,
     ttls: parseTtls(root.ttls),
     rolePolicy: parseRolePolicy(root.rolePolicy),
     discordEvidenceMappings,
     ...(accountRoster !== undefined ? { accountRoster } : {}),
+    ...(welfareVerifier !== undefined ? { welfareVerifier } : {}),
   };
 }
 
@@ -1014,12 +1060,27 @@ export function resolveGatewayFleetAuthSecrets(options: {
   const runtime = parseDatabaseCredential(runtimeUrl, config.databaseRoles.runtime, 'Fleet auth runtime database credential');
   const migration = parseDatabaseCredential(migrationUrl, config.databaseRoles.migration, 'Fleet auth migration database credential');
   const backup = parseDatabaseCredential(backupRestoreUrl, config.databaseRoles.backupRestore, 'Fleet auth backup/restore database credential');
-  if (new Set([runtimeUrl, migrationUrl, backupRestoreUrl]).size !== 3) {
-    throw new Error('Fleet auth requires three distinct PostgreSQL credentials');
+  const welfareVerifierUrl = config.welfareVerifier
+    ? resolveRequiredSecret(
+        credentialVault,
+        config.welfareVerifier.databaseUrlRef,
+        'Fleet auth welfare verifier database credential',
+      )
+    : undefined;
+  const welfareVerifier = welfareVerifierUrl
+    ? parseDatabaseCredential(
+        welfareVerifierUrl,
+        config.welfareVerifier!.role,
+        'Fleet auth welfare verifier database credential',
+      )
+    : undefined;
+  if (new Set([runtimeUrl, migrationUrl, backupRestoreUrl].concat(welfareVerifierUrl ? [welfareVerifierUrl] : [])).size
+    !== (welfareVerifierUrl ? 4 : 3)) {
+    throw new Error('Fleet auth requires distinct PostgreSQL credentials per authority');
   }
   const companionDatabaseUrl = options.companionDatabaseUrl?.trim();
   if (companionDatabaseUrl
-    && [runtimeUrl, migrationUrl, backupRestoreUrl].includes(companionDatabaseUrl)) {
+    && [runtimeUrl, migrationUrl, backupRestoreUrl].concat(welfareVerifierUrl ? [welfareVerifierUrl] : []).includes(companionDatabaseUrl)) {
     throw new Error('Fleet auth credentials must not reuse the companion POSTGRES_DATABASE_URL value');
   }
   if (companionDatabaseUrl) {
@@ -1029,7 +1090,10 @@ export function resolveGatewayFleetAuthSecrets(options: {
     } catch {
       throw new Error('Companion POSTGRES_DATABASE_URL must be a PostgreSQL URL');
     }
-    if (Object.values(config.databaseRoles).includes(
+    const allFleetAuthRoles = Object.values(config.databaseRoles).concat(
+      config.welfareVerifier ? [config.welfareVerifier.role] : [],
+    );
+    if (allFleetAuthRoles.includes(
       decodeURIComponent(companionCredential.username),
     )) {
       throw new Error('Companion POSTGRES_DATABASE_URL must not authenticate as a fleet auth role');
@@ -1039,14 +1103,12 @@ export function resolveGatewayFleetAuthSecrets(options: {
       throw new Error('Companion POSTGRES_DATABASE_URL must not use a PostgreSQL role-routing override');
     }
   }
-  if (new Set([
-    runtime.username,
-    migration.username,
-    backup.username,
-  ]).size !== 3) {
-    throw new Error('Fleet auth requires three distinct PostgreSQL credential roles');
+  const credentialRoles = [runtime.username, migration.username, backup.username]
+    .concat(welfareVerifier ? [welfareVerifier.username] : []);
+  if (new Set(credentialRoles).size !== credentialRoles.length) {
+    throw new Error('Fleet auth requires distinct PostgreSQL credential roles per authority');
   }
-  const identities = [runtime, migration, backup].map(databaseIdentity);
+  const identities = [runtime, migration, backup].concat(welfareVerifier ? [welfareVerifier] : []).map(databaseIdentity);
   if (new Set(identities).size !== 1) {
     throw new Error('Fleet auth PostgreSQL credentials must target the same exact database');
   }
@@ -1067,6 +1129,11 @@ export function resolveGatewayFleetAuthSecrets(options: {
     assertionSigningKid: activeVerifier.kid,
     trustedHostRecoveryCredential,
     authorityFloorRoot,
-    database: { runtimeUrl, migrationUrl, backupRestoreUrl },
+    database: {
+      runtimeUrl,
+      migrationUrl,
+      backupRestoreUrl,
+      ...(welfareVerifierUrl ? { welfareVerifierUrl } : {}),
+    },
   };
 }

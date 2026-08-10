@@ -400,6 +400,58 @@ describe('fleet-auth owner-file configuration', () => {
     }, 'fleet-auth.json')).toThrow(/three distinct roles/);
   });
 
+  it('validates the optional welfare verifier authority and rejects unsafe shapes', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    // A well-formed optional block validates and round-trips.
+    const withVerifier = validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: {
+        role: 'psfn_welfare_verifier',
+        databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
+      },
+    }, 'fleet-auth.json');
+    expect(withVerifier.welfareVerifier).toMatchObject({
+      role: 'psfn_welfare_verifier',
+      databaseUrlRef: { kind: 'env', envName: 'FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL' },
+    });
+
+    // Absent is valid (the gateway degrades honestly without it).
+    expect(validateFleetAuthConfig(config, 'fleet-auth.json').welfareVerifier).toBeUndefined();
+
+    // Unsafe role name rejected.
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: { role: 'Psfn Welfare', databaseUrlRef: credential('X') },
+    }, 'fleet-auth.json')).toThrow(/welfareVerifier\.role is not a safe PostgreSQL role name/);
+    // Must be distinct from every databaseRoles entry.
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: { role: config.databaseRoles.runtime, databaseUrlRef: credential('X') },
+    }, 'fleet-auth.json')).toThrow(/welfareVerifier\.role must be distinct/);
+    // Must carry a real credential ref, not a plain value.
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: { role: 'psfn_welfare_verifier', databaseUrlRef: 'plain-string' },
+    }, 'fleet-auth.json')).toThrow(/welfareVerifier\.databaseUrlRef must be an object/);
+    // Credential ref must be distinct from every other credential.
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: {
+        role: 'psfn_welfare_verifier',
+        databaseUrlRef: credential('FLEET_AUTH_RUNTIME_DATABASE_URL'),
+      },
+    }, 'fleet-auth.json')).toThrow(/credential references must be distinct/);
+    // Unknown keys inside the block rejected.
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: {
+        role: 'psfn_welfare_verifier',
+        databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
+        extra: true,
+      },
+    }, 'fleet-auth.json')).toThrow(/welfareVerifier/);
+  });
+
   it('rejects canonical public-key reuse across and within verifier rings', () => {
     const config = validConfig(publicKeyPem, hubPublicKeyPem);
     expect(() => validateFleetAuthConfig({
@@ -621,6 +673,122 @@ describe('fleet-auth owner-file configuration', () => {
       }),
       protectedRestoreRoots: [],
     })).toThrow(/routing or authentication query override/);
+  });
+
+  it('resolves the optional welfare verifier credential and enforces its posture', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    config.welfareVerifier = {
+      role: 'psfn_welfare_verifier',
+      databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
+    };
+    const floorRoot = join(makeRoot(), 'authority');
+    mkdirSync(floorRoot, { mode: 0o700 });
+    chmodSync(floorRoot, 0o700);
+    const credentials = {
+      FLEET_AUTH_DISCORD_CLIENT_SECRET: 'discord-secret',
+      FLEET_AUTH_TOKEN_ENCRYPTION_KEY: 't'.repeat(32),
+      FLEET_AUTH_SESSION_PEPPER: 'p'.repeat(32),
+      FLEET_AUTH_ASSERTION_PRIVATE_KEY: privateKeyPem,
+      FLEET_AUTH_RECOVERY_CREDENTIAL: 'r'.repeat(32),
+      FLEET_AUTH_RUNTIME_DATABASE_URL: 'postgres://fleet_auth_runtime:runtime@db.example.test/psfn',
+      FLEET_AUTH_MIGRATION_DATABASE_URL: 'postgres://fleet_auth_migration:migrate@db.example.test/psfn',
+      FLEET_AUTH_BACKUP_DATABASE_URL: 'postgres://fleet_auth_backup:backup@db.example.test/psfn',
+      FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL:
+        'postgres://psfn_welfare_verifier:verify@db.example.test/psfn',
+      FLEET_AUTH_AUTHORITY_FLOOR_ROOT: floorRoot,
+    };
+    const resolved = resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [makeRoot()],
+    });
+    expect(resolved.database.welfareVerifierUrl).toBe(
+      'postgres://psfn_welfare_verifier:verify@db.example.test/psfn',
+    );
+
+    // Must authenticate as the declared role (not the runtime role).
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL:
+          'postgres://fleet_auth_runtime:runtime@db.example.test/psfn',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/must authenticate as configured role psfn_welfare_verifier/);
+
+    // Must be distinct from the other three credentials.
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL: credentials.FLEET_AUTH_RUNTIME_DATABASE_URL,
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/must authenticate as configured role psfn_welfare_verifier/);
+
+    // Must target the same database identity.
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL:
+          'postgres://psfn_welfare_verifier:verify@db.example.test/other_db',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/must target the same exact database/);
+
+    // The companion URL must not authenticate as the welfare verifier role.
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [],
+      companionDatabaseUrl: 'postgres://psfn_welfare_verifier:different-pw@db.example.test/psfn',
+    })).toThrow(/must not authenticate as a fleet auth role/);
+
+    // A declared block with a missing credential env fails closed at startup.
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL: undefined,
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/Fleet auth welfare verifier database credential/);
+
+    // A malformed URL fails closed.
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL: 'not-a-postgres-url',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/must be a PostgreSQL URL/);
+  });
+
+  it('omits the welfare verifier URL when the optional block is absent', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    const floorRoot = join(makeRoot(), 'authority');
+    mkdirSync(floorRoot, { mode: 0o700 });
+    chmodSync(floorRoot, 0o700);
+    const credentials = {
+      FLEET_AUTH_DISCORD_CLIENT_SECRET: 'discord-secret',
+      FLEET_AUTH_TOKEN_ENCRYPTION_KEY: 't'.repeat(32),
+      FLEET_AUTH_SESSION_PEPPER: 'p'.repeat(32),
+      FLEET_AUTH_ASSERTION_PRIVATE_KEY: privateKeyPem,
+      FLEET_AUTH_RECOVERY_CREDENTIAL: 'r'.repeat(32),
+      FLEET_AUTH_RUNTIME_DATABASE_URL: 'postgres://fleet_auth_runtime:runtime@db.example.test/psfn',
+      FLEET_AUTH_MIGRATION_DATABASE_URL: 'postgres://fleet_auth_migration:migrate@db.example.test/psfn',
+      FLEET_AUTH_BACKUP_DATABASE_URL: 'postgres://fleet_auth_backup:backup@db.example.test/psfn',
+      FLEET_AUTH_AUTHORITY_FLOOR_ROOT: floorRoot,
+    };
+    const resolved = resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [makeRoot()],
+    });
+    expect(resolved.database.welfareVerifierUrl).toBeUndefined();
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {

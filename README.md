@@ -72,7 +72,7 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
 ## Getting Started
 
 **Fastest path — one command from a clean checkout** (Docker + Docker Compose,
-plus Node 22+ to invoke the harness). This brings up the real split runtime
+plus Node 24 LTS (24.19.0 or newer 24.x) to invoke the harness). This brings up the real split runtime
 (Postgres + gateway + agent), self-seeds every owner file and a starter card, and
 drives one chat turn — exit `0` means a persisted assistant reply:
 
@@ -171,7 +171,7 @@ npm run e2e                       # integration tests
 | Component | Technology |
 |-----------|-----------|
 | Language | TypeScript (strict) |
-| Runtime | Node.js 22+ |
+| Runtime | Node.js 24 LTS (24.19.0 or newer 24.x) |
 | LLM | `@earendil-works/pi-ai@0.84.1` + `@earendil-works/pi-agent-core@0.84.1` |
 | Database | PostgreSQL 17 + pgvector (no SQLite) |
 | Garden UI | Svelte 5 |

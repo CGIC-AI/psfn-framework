@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: 24.13.1
+  NODE_VERSION: 24.19.0
 
 jobs:
   apply:

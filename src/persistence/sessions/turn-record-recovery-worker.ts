@@ -176,7 +176,7 @@ function captureSourceSnapshotBoundary(
 }
 
 async function run(): Promise<void> {
-  const database = new DatabaseSync(input.databasePath);
+  const database = new DatabaseSync(input.databasePath, { defensive: true });
   let activeSnapshot: SnapshotFile | null = null;
   try {
     database.exec(`

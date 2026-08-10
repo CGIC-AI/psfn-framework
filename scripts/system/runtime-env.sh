@@ -31,12 +31,12 @@ psfn_is_production_runtime() {
 }
 
 psfn_require_node_major() {
-  local required_major="${1:-22}"
+  local required_major="${1:-24}"
   local detected_major=""
   local detected_version=""
 
   if ! command -v node >/dev/null 2>&1; then
-    echo "[launcher] Node.js ${required_major}+ is required but node is not on PATH. Set PATH in the repo-owned service/env config." >&2
+    echo "[launcher] Node.js ${required_major}.x is required but node is not on PATH. Set PATH in the repo-owned service/env config." >&2
     return 1
   fi
 
@@ -44,13 +44,13 @@ psfn_require_node_major() {
   detected_version="$(node -v 2>/dev/null || true)"
   case "${detected_major}" in
     ''|*[!0-9]*)
-      echo "[launcher] Unable to determine Node.js version (${detected_version:-unknown}); Node.js ${required_major}+ is required." >&2
+      echo "[launcher] Unable to determine Node.js version (${detected_version:-unknown}); Node.js ${required_major}.x is required." >&2
       return 1
       ;;
   esac
 
-  if [ "${detected_major}" -lt "${required_major}" ]; then
-    echo "[launcher] Node.js ${required_major}+ is required; found ${detected_version:-major ${detected_major}}. Set PATH in the repo-owned service/env config." >&2
+  if [ "${detected_major}" -ne "${required_major}" ]; then
+    echo "[launcher] Node.js ${required_major}.x is required; found ${detected_version:-major ${detected_major}}. Set PATH in the repo-owned service/env config." >&2
     return 1
   fi
 }

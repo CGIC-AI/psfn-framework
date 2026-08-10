@@ -4,9 +4,10 @@
   "license": "AGPL-3.0-only",
   "description": "PSFN Substrate Framework — a purpose-built runtime for emergent artificial consciousness",
   "type": "module",
+  "packageManager": "npm@11.17.0",
   "main": "dist/index.js",
   "scripts": {
-    "build": "npm run verify:companion-id-types && tsup",
+    "build": "npm run verify:companion-id-types && NODE_OPTIONS=--max-old-space-size=8192 tsup",
     "build:runtime": "npm run verify:companion-id-types && PSFN_RUNTIME_BUILD=1 tsup",
     "postinstall": "npm install --prefix admin-ui",
     "dev": "./scripts/start-gateway-agent.sh",
@@ -213,7 +214,7 @@
   },
   "devDependencies": {
     "@total-typescript/shoehorn": "0.1.2",
-    "@types/node": "22.19.11",
+    "@types/node": "24.13.3",
     "@types/pg": "8.20.0",
     "@types/uuid": "10.0.0",
     "@types/ws": "8.18.1",
@@ -227,6 +228,6 @@
     "vitest": "4.1.0"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.19.0 <25"
   }
 }

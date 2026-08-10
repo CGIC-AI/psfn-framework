@@ -109,7 +109,17 @@ export async function importCaSigningKey(keyPem: string): Promise<CryptoKey> {
   if (blocks.length !== 1) {
     throw new Error(`CA key PEM must contain exactly one PRIVATE KEY block (found ${blocks.length})`);
   }
-  return subtle.importKey('pkcs8', blocks[0]!, SIGNING_ALGORITHM, false, ['sign']);
+  // @peculiar/x509 still consumes the DOM CryptoKey surface. Node 24's type
+  // widens KeyUsage for its post-quantum WebCrypto operations, but the runtime
+  // key returned here is the same standards-compatible ECDSA key.
+  const signingKey = await subtle.importKey(
+    'pkcs8',
+    blocks[0]!,
+    SIGNING_ALGORITHM,
+    false,
+    ['sign'],
+  );
+  return signingKey as unknown as CryptoKey;
 }
 
 export async function generateCaMaterial(options: {

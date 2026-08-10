@@ -102,7 +102,7 @@ if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
   echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains personal-workspace-scoped."
 fi
 
-psfn_require_node_major 22
+psfn_require_node_major 24
 
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
 SOCKET_SUFFIX="$(basename "${ROOT_DIR}" | tr -cs 'A-Za-z0-9._-' '-')"

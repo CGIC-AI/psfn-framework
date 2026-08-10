@@ -21,6 +21,7 @@ import {
 } from './types.js';
 import {
   BiographicalClaimValidationError,
+  assertClaimValidityRule,
   assertKnownClaimKind,
   assertRelatedSubjectShape,
   canonicalizeClaimValue,
@@ -179,12 +180,13 @@ export function prepareBiographicalClaim(
       ? assertSubjectRef(input.relatedSubject, 'relatedSubject')
       : undefined;
   const value = canonicalizeClaimValue(input.kind, input.value);
-  assertRelatedSubjectShape(input.kind, value, relatedSubject);
+  assertRelatedSubjectShape(input.kind, value, relatedSubject, subject);
   const basis = assertClaimBasis(input.basis);
   const status = assertClaimStatus(input.status ?? options.defaultStatus ?? 'candidate');
   const sources = assertSources(input.sources);
   const confidence = assertConfidence(input.confidence);
   const interval = assertValidInterval({ validFrom: input.validFrom, validTo: input.validTo });
+  assertClaimValidityRule(input.kind, interval);
   const depthDecision = assertCollectionDepth(input.depthDecision);
   if (
     input.proposedSensitivity !== undefined
@@ -428,12 +430,13 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
   const kind = record.kind;
   assertKnownClaimKind(kind);
   const claimValue = canonicalizeClaimValue(kind, record.value);
-  assertRelatedSubjectShape(kind, claimValue, relatedSubject);
+  assertRelatedSubjectShape(kind, claimValue, relatedSubject, subject);
   const basis = assertClaimBasis(record.basis);
   const status = assertClaimStatus(record.status);
   const sources = assertSources(record.sources);
   const confidence = assertConfidence(record.confidence);
   const interval = assertValidInterval({ validFrom: record.validFrom, validTo: record.validTo });
+  assertClaimValidityRule(kind, interval);
   for (const field of ['synthesizedAt', 'lastSourceValidatedAt', 'lastEvidenceAt'] as const) {
     const instant = record[field];
     if (typeof instant !== 'string' || !isCanonicalIsoTimestamp(instant)) {

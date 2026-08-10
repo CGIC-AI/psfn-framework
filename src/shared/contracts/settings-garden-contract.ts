@@ -41,6 +41,11 @@ export interface GardenSettingsTunableFieldCoverage {
   editorId?: GardenSettingsCustomEditorId;
 }
 
+const MEMORY_ADVANCED_EXPOSURE = Object.freeze({
+  sectionId: 'memory',
+  surface: 'advanced',
+} as const);
+
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   // 23pp per-companion model selection: runtime-owned (settings.json/overlay),
@@ -97,6 +102,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryExtractionTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalPolicy: { sectionId: 'memory', surface: 'advanced' },
+  biographicalDepthPolicy: MEMORY_ADVANCED_EXPOSURE,
   memoryDeletionPolicy: { sectionId: 'memory', surface: 'advanced' },
   memoryPresentationProfile: { sectionId: 'memory', surface: 'advanced' },
   memoryRefreshFailureAlertThreshold: { sectionId: 'memory', surface: 'advanced' },

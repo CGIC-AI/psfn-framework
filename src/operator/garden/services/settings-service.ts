@@ -55,6 +55,7 @@ import {
   resolveMemoryRetrievalPolicy,
   resolveMemorySalienceFloor,
 } from '../../../system/config/memory-retrieval-policy.js';
+import { normalizeBiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
 import { normalizeMemoryDeletionPolicy } from '../../../system/config/memory-deletion-policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
@@ -1043,6 +1044,21 @@ export class AdminSettingsDataService implements AdminSettingsService {
         this.pushFieldError(
           errors,
           'memoryRetrievalPolicy',
+          toErrorMessage(error),
+          'invalid_object',
+        );
+      }
+    }
+    if ('biographicalDepthPolicy' in payload) {
+      try {
+        normalizeBiographicalDepthPolicy(
+          payload.biographicalDepthPolicy,
+          'biographicalDepthPolicy',
+        );
+      } catch (error) {
+        this.pushFieldError(
+          errors,
+          'biographicalDepthPolicy',
           toErrorMessage(error),
           'invalid_object',
         );

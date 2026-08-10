@@ -20,6 +20,7 @@ import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from './memory-presentation-profile.js';
 import type { MemoryDeletionPolicy } from './memory-deletion-policy.js';
+import type { BiographicalDepthPolicy } from './biographical-depth-policy.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
@@ -260,6 +261,8 @@ export interface SubstrateConfig {
   /** settings.json-owned categories and eligibility for companion-raised deletion proposals. */
   memoryDeletionPolicy?: MemoryDeletionPolicy;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  /** Owner-configured adaptive biographical collection economics. */
+  biographicalDepthPolicy?: BiographicalDepthPolicy;
   /**
    * Versioned, schema-validated presentation profile for the retrieval
    * formatting layer (ordering, headings, valence markers, recency labels,

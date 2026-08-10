@@ -457,8 +457,9 @@ export class BiographicalLifecycleError extends Error {
 }
 
 const TRANSITIONS: Readonly<Record<BiographicalClaimStatus, readonly BiographicalClaimStatus[]>> = {
-  candidate: ['active', 'contested', 'superseded', 'revoked'],
+  candidate: ['active', 'quarantined', 'contested', 'superseded', 'revoked'],
   active: ['contested', 'superseded', 'revoked'],
+  quarantined: ['active', 'contested', 'superseded', 'revoked'],
   contested: ['active', 'superseded', 'revoked'],
   superseded: [],
   revoked: [],

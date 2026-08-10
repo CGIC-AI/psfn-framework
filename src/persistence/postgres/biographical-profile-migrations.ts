@@ -38,8 +38,8 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
     CONSTRAINT biographical_claims_schema_version_check CHECK (schema_version = 1),
     CONSTRAINT biographical_claims_subject_kind_check CHECK (subject_kind IN ('companion', 'contact')),
     CONSTRAINT biographical_claims_subject_version_check CHECK (subject_version >= 1),
-    CONSTRAINT biographical_claims_kind_check CHECK (kind IN ('name', 'nickname', 'relationship')),
-    CONSTRAINT biographical_claims_status_check CHECK (status IN ('candidate', 'active', 'contested', 'superseded', 'revoked')),
+    CONSTRAINT biographical_claims_kind_check CHECK (kind IN ('name', 'nickname', 'relationship', 'role', 'stable-preference', 'shared-language')),
+    CONSTRAINT biographical_claims_status_check CHECK (status IN ('candidate', 'active', 'quarantined', 'contested', 'superseded', 'revoked')),
     CONSTRAINT biographical_claims_effective_sensitivity_check CHECK (effective_sensitivity IN ('public', 'personal', 'intimate', 'confidential'))
   );
   `,
@@ -68,4 +68,16 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_biographical_grants_digests ON biographical_grants(claim_digest, source_set_digest);`,
+  `
+  ALTER TABLE biographical_claims DROP CONSTRAINT IF EXISTS biographical_claims_kind_check;
+  ALTER TABLE biographical_claims
+    ADD CONSTRAINT biographical_claims_kind_check
+    CHECK (kind IN ('name', 'nickname', 'relationship', 'role', 'stable-preference', 'shared-language'));
+  `,
+  `
+  ALTER TABLE biographical_claims DROP CONSTRAINT IF EXISTS biographical_claims_status_check;
+  ALTER TABLE biographical_claims
+    ADD CONSTRAINT biographical_claims_status_check
+    CHECK (status IN ('candidate', 'active', 'quarantined', 'contested', 'superseded', 'revoked'));
+  `,
 ];

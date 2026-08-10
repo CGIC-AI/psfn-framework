@@ -308,8 +308,20 @@ function isIntakeQuarantineItem(value: unknown): boolean {
     && isFlywheelTarget(value.flywheelTarget);
 }
 
+function isFirewallStatus(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.mode === 'string'
+    && ['off', 'shadow', 'enforce'].includes(value.mode)
+    && value.queueEmptyDoesNotMeanFirewallOff === true
+    && typeof value.note === 'string'
+    && typeof value.heldCount === 'number'
+    && typeof value.quarantineItemTtlHours === 'number'
+    && typeof value.quarantineMaxHeldItems === 'number';
+}
+
 export function isIntakeQuarantineListData(value: unknown): value is IntakeQuarantineListData {
   return isRecord(value)
     && Array.isArray(value.items)
-    && value.items.every(isIntakeQuarantineItem);
+    && value.items.every(isIntakeQuarantineItem)
+    && (value.firewallStatus === undefined || isFirewallStatus(value.firewallStatus));
 }

@@ -271,6 +271,7 @@ export type {
 export type {
   AdminIntakeQuarantineBeginResult,
   AdminIntakeQuarantineDecisionRequest,
+  AdminIntakeQuarantineFirewallStatus,
   AdminIntakeQuarantineFlywheelTarget,
   AdminIntakeQuarantineItemDetail,
   AdminIntakeQuarantineItemView,
@@ -278,6 +279,9 @@ export type {
   AdminIntakeQuarantineService,
   AdminIntakeQuarantineSourceListAction,
 } from './intake-quarantine-service.js';
+export type {
+  FleetCogSecOverview,
+} from './fleet-cogsec-overview.js';
 
 export type {
   AdminDriftReviewListData,

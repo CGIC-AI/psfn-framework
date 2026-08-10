@@ -8,6 +8,7 @@
     type IntakeQuarantineDecisionAction,
   } from '$lib/api/endpoints/intake';
   import type {
+    AdminIntakeQuarantineFirewallStatus,
     AdminIntakeQuarantineItemDetail,
     AdminIntakeQuarantineItemView,
     AdminIntakeQuarantineSourceListAction,
@@ -24,6 +25,7 @@
 
   // ── Queue state ──
   let items = $state<AdminIntakeQuarantineItemView[]>([]);
+  let firewallStatus = $state<AdminIntakeQuarantineFirewallStatus | null>(null);
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
@@ -125,6 +127,7 @@
         rendered = true;
         const reconciled = reconcilePollingSnapshot(items, data.items);
         if (reconciled !== items) items = reconciled;
+        if (data.firewallStatus) firewallStatus = data.firewallStatus;
         if (source === 'cache') loading = false;
       });
       if (!expandedId) {
@@ -146,7 +149,10 @@
   }
 
   const backgroundRefresh = createSilentBackgroundRevalidation({
-    load: publish => loadIntakeQuarantineLocalFirst(data => publish(data.items)),
+    load: publish => loadIntakeQuarantineLocalFirst(data => {
+      if (data.firewallStatus) firewallStatus = data.firewallStatus;
+      publish(data.items);
+    }),
     read: () => items,
     write: data => { items = data; },
     reportError: message => { backgroundError = message; },
@@ -290,6 +296,22 @@
     </p>
   {/if}
 
+  {#if firewallStatus}
+    <section class="card-garden border-l-4 border-l-moss-300 p-4" aria-label="Shared firewall status">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-xs uppercase font-semibold text-shadow-600">Shared firewall mode</span>
+        <span class="inline-block px-3 py-1 rounded-full text-sm font-semibold {firewallStatus.mode === 'enforce' ? 'bg-moss-100 text-moss-700' : firewallStatus.mode === 'shadow' ? 'bg-gold-100 text-gold-700' : 'bg-bark-200 text-shadow-700'}">{firewallStatus.mode}</span>
+        <span class="text-xs text-shadow-500">
+          TTL {firewallStatus.quarantineItemTtlHours}h · max held {firewallStatus.quarantineMaxHeldItems} · held now {firewallStatus.heldCount}
+        </span>
+      </div>
+      <p class="mt-2 text-sm text-shadow-800">
+        An empty approval queue <strong>never</strong> means the firewall is off. The mode above is the
+        shared gateway's authoritative posture and is independent of this queue's contents.
+      </p>
+    </section>
+  {/if}
+
   {#if loading && items.length === 0}
     <div class="garden-loading flex-col space-y-3">
       {#each Array(3) as _}
@@ -345,6 +367,18 @@
                 <span class="inline-block px-2 py-0.5 rounded-full font-medium {item.mode === 'enforce' ? 'bg-shadow-800 text-bark-50' : 'bg-bark-200 text-shadow-700'}">
                   {item.mode === 'enforce' ? 'enforce (withheld)' : 'shadow (was delivered)'}
                 </span>
+                {#if item.attribution}
+                  {#if item.attribution.targetContactDisplayName}
+                    <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-100 text-shadow-800">To: {item.attribution.targetContactDisplayName}</span>
+                  {/if}
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-50 border border-bark-200 text-shadow-700">{item.attribution.sourceChannelLabel}</span>
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium {item.attribution.direction === 'outbound' ? 'bg-gold-50 text-gold-700 border border-gold-200' : 'bg-bark-50 text-shadow-700 border border-bark-200'}">{item.attribution.direction}</span>
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-wilt-50 border border-wilt-200 text-wilt-700">{item.attribution.faultType}</span>
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-50 border border-bark-200 text-shadow-600 uppercase tracking-wide">{item.attribution.screeningStage} · {item.attribution.decision}</span>
+                  {#if item.attribution.correlationId}
+                    <span class="inline-block px-2 py-0.5 rounded-full font-mono text-[0.65rem] bg-bark-50 border border-bark-200 text-shadow-500" title="Correlated group fanout (content-free)">corr · {item.attribution.correlationId.slice(-8)}</span>
+                  {/if}
+                {/if}
                 {#if item.status === 'held'}
                   <span class="text-shadow-600">TTL {formatTtl(item.ttlRemainingMs)}</span>
                 {/if}
@@ -356,6 +390,9 @@
 
         <div class="px-5 py-4 space-y-3">
           <div class="flex flex-wrap gap-1.5">
+            {#if item.attribution?.sourceChannelLabel}
+              <span class="inline-block px-2 py-0.5 rounded bg-bark-50 border border-bark-200 text-shadow-700 text-xs">{item.attribution.sourceChannelLabel} ({item.attribution.sourceChannelClass})</span>
+            {/if}
             {#each item.riskLabels as label (label)}
               <span class="inline-block px-2 py-0.5 rounded bg-wilt-50 border border-wilt-200 text-wilt-700 font-mono text-xs">{label}</span>
             {/each}
@@ -396,7 +433,14 @@
             <div><span class="text-shadow-600">Held:</span> <span class="ml-1 text-shadow-800">{formatTimestamp(item.heldAt)}</span></div>
             <div><span class="text-shadow-600">Expires:</span> <span class="ml-1 text-shadow-800">{formatTimestamp(item.expiresAt)}</span></div>
             {#if item.canonicalContactId}
-              <div><span class="text-shadow-600">Sender:</span> <code class="ml-1 font-mono text-shadow-800 bg-bark-100 px-1.5 py-0.5 rounded">{item.canonicalContactId}</code></div>
+              <div>
+                <span class="text-shadow-600">Sender:</span>
+                <span class="ml-1 text-shadow-800">{item.attribution?.targetContactDisplayName ?? 'authorized contact'}</span>
+                <details class="inline-block">
+                  <summary class="cursor-pointer text-xs text-shadow-500">debug id</summary>
+                  <code class="ml-1 font-mono text-shadow-800 bg-bark-100 px-1.5 py-0.5 rounded">{item.canonicalContactId}</code>
+                </details>
+              </div>
             {/if}
             {#if item.contentSha256}
               <div class="md:col-span-2"><span class="text-shadow-600">Content sha256:</span> <code class="ml-1 font-mono text-xs text-shadow-800 break-all">{item.contentSha256}</code></div>

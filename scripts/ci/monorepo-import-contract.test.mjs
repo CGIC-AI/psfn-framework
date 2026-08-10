@@ -19,10 +19,10 @@ test('imported packages are ordinary monorepo paths with one tracker authority',
 });
 
 test('eval TypeScript imports resolve inside the monorepo', () => {
-  const files = execFileSync('rg', ['-l', '--glob', '*.ts', '.', 'tools/evals/eval'], {
+  const files = execFileSync('git', ['ls-files', '--', 'tools/evals/eval'], {
     cwd: repoRoot,
     encoding: 'utf8',
-  }).trim().split('\n').filter(Boolean);
+  }).trim().split('\n').filter((path) => path.endsWith('.ts'));
   const source = files.map(read).join('\n');
   assert.doesNotMatch(source, /psfn-framework\/src/u);
   assert.match(read('tools/evals/eval/ttft-real-providers.ts'), /\.\.\/\.\.\/\.\.\/src\//u);

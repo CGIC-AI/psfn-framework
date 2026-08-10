@@ -3,7 +3,7 @@ import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import {
-  PROFILE_SYNTHESIS_PROMPT_KEY,
+  RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
@@ -11,6 +11,16 @@ import type { PersonaPreamblePort } from '../../../core/identity/persona-preambl
 import { isTestingSessionId } from '../../../core/session/session-id.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
+import type { BiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
+import type { BiographicalProfileStorePort } from '../biographical/store-port.js';
+import type {
+  BiographicalCollectionDepth,
+  BiographicalSubjectRef,
+} from '../biographical/types.js';
+import {
+  discoverLiveBiographicalMemoryEvidence,
+  rebuildBiographicalClaimsFromLiveSources,
+} from '../biographical/live-source-rebuild.js';
 import { computeProfileNovelty } from './signals.js';
 import { normalizeDurableMemoryText } from './naming.js';
 import type {
@@ -22,7 +32,7 @@ import type {
 
 const log = createComponentLogger('Extraction');
 
-export interface ProfileSynthesisTargetContact {
+export interface RecentContactShapeSynthesisTargetContact {
   id: string;
   displayName?: string;
   nickname?: string;
@@ -31,7 +41,7 @@ export interface ProfileSynthesisTargetContact {
   isMachineIntelligence?: boolean;
 }
 
-export interface RefreshContactProfileOptions {
+export interface RefreshRecentContactShapeOptions {
   llmClient: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
   /** Shared persona preamble service (E6.1). Prepends soft persona framing before the schema-bound task prompt. */
@@ -41,13 +51,19 @@ export interface RefreshContactProfileOptions {
   sourceSessionId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId: string;
-  targetContact?: ProfileSynthesisTargetContact;
+  targetContact?: RecentContactShapeSynthesisTargetContact;
   acceptedWrites: AcceptedFactWrite[];
   config: ProfileSynthesisConfig;
   telemetryEnabled: boolean;
+  biographicalRebuild?: {
+    profileStore: BiographicalProfileStorePort;
+    companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
+    policy: BiographicalDepthPolicy;
+    depth: BiographicalCollectionDepth;
+  };
 }
 
-export type ProfileRefreshSkipReason =
+export type RecentContactShapeRefreshSkipReason =
   | 'testing_session'
   | 'no_meaningful_update'
   | 'cooldown'
@@ -58,24 +74,27 @@ export type ProfileRefreshSkipReason =
   | 'target_alias_attribution_risk'
   | 'low_novelty';
 
-export type ProfileRefreshResult =
+export type RecentContactShapeRefreshResult =
   | {
     status: 'refreshed';
     reason: ProfileRefreshReason;
     sourceMemoryCount: number;
     averageSourceConfidence: number;
     noveltyScore: number;
+    biographicalCandidateCount: number;
+    biographicalAdmittedCount: number;
+    biographicalWithheldCount: number;
   }
   | {
     status: 'skipped';
-    reason: ProfileRefreshSkipReason;
+    reason: RecentContactShapeRefreshSkipReason;
     writeCount?: number;
     sourceMemoryCount?: number;
   };
 
-export async function refreshContactProfile(
-  options: RefreshContactProfileOptions,
-): Promise<ProfileRefreshResult> {
+export async function refreshRecentContactShape(
+  options: RefreshRecentContactShapeOptions,
+): Promise<RecentContactShapeRefreshResult> {
   if (isTestingSessionId(options.sourceSessionId)) {
     return {
       status: 'skipped',
@@ -83,11 +102,11 @@ export async function refreshContactProfile(
     };
   }
   const now = Date.now();
-  const existingProfile = await options.memoryStore.getContactProfile(options.canonicalContactId);
-  const intervalElapsed = !existingProfile
-    || (now - existingProfile.updatedAt) >= options.config.refreshIntervalMs;
-  const withinCooldown = !!existingProfile
-    && (now - existingProfile.updatedAt) < options.config.cooldownMs;
+  const existingShape = await options.memoryStore.getRecentContactShape(options.canonicalContactId);
+  const intervalElapsed = !existingShape
+    || (now - existingShape.updatedAt) >= options.config.refreshIntervalMs;
+  const withinCooldown = !!existingShape
+    && (now - existingShape.updatedAt) < options.config.cooldownMs;
 
   const writeCount = options.acceptedWrites.length;
   const avgWriteImportance = writeCount > 0
@@ -103,7 +122,7 @@ export async function refreshContactProfile(
 
   if (!meaningfulUpdate && !intervalElapsed) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh trigger', {
+      log.debug('Skipped Recent Contact Shape refresh trigger', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         triggerReason: options.triggerReason,
@@ -122,7 +141,7 @@ export async function refreshContactProfile(
 
   if (withinCooldown && !intervalElapsed) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to cooldown', {
+      log.debug('Skipped Recent Contact Shape refresh due to cooldown', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         triggerReason: options.triggerReason,
@@ -140,19 +159,34 @@ export async function refreshContactProfile(
     options.canonicalContactId,
     options.config.sourceMemoryLimit,
   );
-  const sourceMemories = rawSourceMemories.filter(memory => (
+  let sourceMemories = rawSourceMemories.filter(memory => (
     !memory.contactId || memory.contactId === options.canonicalContactId
   ));
   if (rawSourceMemories.length !== sourceMemories.length && options.telemetryEnabled) {
-    log.debug('Excluded non-target memories from profile synthesis source set', {
+    log.debug('Excluded non-target memories from Recent Contact Shape source set', {
       channelId: options.channelId,
       canonicalContactId: options.canonicalContactId,
       excludedCount: rawSourceMemories.length - sourceMemories.length,
     });
   }
+  const contactSubject: BiographicalSubjectRef = {
+    kind: 'contact',
+    contactId: options.canonicalContactId,
+    subjectVersion: 1,
+  };
+  const liveBiographicalEvidence = options.biographicalRebuild
+    ? await discoverLiveBiographicalMemoryEvidence({
+        memoryStore: options.memoryStore,
+        memoryIds: sourceMemories.map(memory => memory.id),
+        subject: contactSubject,
+      })
+    : [];
+  if (options.biographicalRebuild) {
+    sourceMemories = liveBiographicalEvidence.map(evidence => evidence.memory);
+  }
   if (sourceMemories.length < options.config.minSourceMemories) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to insufficient source memories', {
+      log.debug('Skipped Recent Contact Shape refresh due to insufficient source memories', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         sourceMemoryCount: sourceMemories.length,
@@ -170,7 +204,7 @@ export async function refreshContactProfile(
     / sourceMemories.length;
   if (averageSourceConfidence < options.config.minConfidence) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to low source confidence', {
+      log.debug('Skipped Recent Contact Shape refresh due to low source confidence', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         averageSourceConfidence,
@@ -190,8 +224,8 @@ export async function refreshContactProfile(
     .map(memory => formatProfileSourceMemory(memory, targetContext, acceptedWriteByMemoryId.get(memory.id)))
     .join('\n');
 
-  const profilePrompt = options.promptRegistry?.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)
-    ?? getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
+  const profilePrompt = options.promptRegistry?.getPrompt(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY)
+    ?? getDefaultPromptText(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY);
   const renderedPrompt = injectPromptRuntimeTokens(profilePrompt)
     .replace('{contact_id}', options.canonicalContactId)
     .replace('{target_contact}', formatTargetContactBlock(targetContext))
@@ -199,7 +233,13 @@ export async function refreshContactProfile(
     .replace('{contact_nickname}', targetContext.nickname ?? '(none)')
     .replace('{contact_trust_level}', targetContext.trustLevel ?? '(unknown)')
     .replace('{contact_relationship_type}', targetContext.relationshipType ?? '(unknown)')
-    .replace('{existing_profile}', existingProfile?.summary ?? '(none yet)')
+    .replace('{existing_recent_contact_shape}', existingShape?.summary ?? '(none yet)')
+    .replace(
+      '{biographical_candidate_limit}',
+      String(options.biographicalRebuild
+        ? options.biographicalRebuild.policy[options.biographicalRebuild.depth].candidateLimitPerRefresh
+        : 0),
+    )
     .replace('{memory_facts}', memoryFacts);
   const taskPrompt = ensureTargetContextInPrompt(profilePrompt, renderedPrompt, targetContext);
   // E6.1: soft persona framing precedes the strict task instructions and XML
@@ -212,24 +252,27 @@ export async function refreshContactProfile(
     options.llmClient,
     {
       systemPrompt: prompt,
-      messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
+      messages: [{
+        role: 'user',
+        content: 'Synthesize the Recent Contact Shape and structured biography candidates now.',
+      }],
     },
     buildLLMWorkSpec({
       purpose: 'memory',
       durable: true,
       correlation: {
-        requestId: `profile-synthesis:${options.canonicalContactId}:${now}`,
+        requestId: `recent-contact-shape-synthesis:${options.canonicalContactId}:${now}`,
         channelId: options.channelId,
         callType: 'memory',
-        purpose: 'memory.profile_synthesis',
+        purpose: 'memory.recent_contact_shape_synthesis',
       },
     }),
   );
 
-  const parsedSummary = normalizeProfileSummary(parseProfileSummary(response.content));
+  const parsedSummary = normalizeProfileSummary(parseRecentContactShapeSummary(response.content));
   if (!parsedSummary) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to empty summary output', {
+      log.debug('Skipped Recent Contact Shape refresh due to empty summary output', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
       });
@@ -244,7 +287,7 @@ export async function refreshContactProfile(
   const summaryHygiene = normalizeDurableMemoryText(parsedSummary, {});
   if (!summaryHygiene.accepted) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to profile text hygiene rejection', {
+      log.debug('Skipped Recent Contact Shape refresh due to text hygiene rejection', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         reason: summaryHygiene.reason,
@@ -258,9 +301,9 @@ export async function refreshContactProfile(
   }
   const summary = summaryHygiene.text;
 
-  if (profileSummaryAliasesTargetToMentionedName(summary, targetContext)) {
+  if (recentShapeSummaryAliasesTargetToMentionedName(summary, targetContext)) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to target alias attribution risk', {
+      log.debug('Skipped Recent Contact Shape refresh due to target alias attribution risk', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         displayName: targetContext.displayName,
@@ -274,12 +317,12 @@ export async function refreshContactProfile(
     };
   }
 
-  const noveltyScore = existingProfile
-    ? computeProfileNovelty(summary, existingProfile.summary)
+  const noveltyScore = existingShape
+    ? computeProfileNovelty(summary, existingShape.summary)
     : 1;
-  if (existingProfile && noveltyScore < options.config.minNovelty) {
+  if (existingShape && noveltyScore < options.config.minNovelty) {
     if (options.telemetryEnabled) {
-      log.debug('Skipped profile refresh due to low novelty', {
+      log.debug('Skipped Recent Contact Shape refresh due to low novelty', {
         channelId: options.channelId,
         canonicalContactId: options.canonicalContactId,
         noveltyScore,
@@ -299,17 +342,34 @@ export async function refreshContactProfile(
       ? 'memory_update'
       : 'interval';
 
-  await options.memoryStore.upsertContactProfile({
+  const biographicalRebuild = options.biographicalRebuild
+    ? await rebuildBiographicalClaimsFromLiveSources({
+        responseContent: response.content,
+        memoryStore: options.memoryStore,
+        profileStore: options.biographicalRebuild.profileStore,
+        subject: contactSubject,
+        companionSubject: options.biographicalRebuild.companionSubject,
+        availableEvidence: liveBiographicalEvidence,
+        depth: options.biographicalRebuild.depth,
+        candidateLimit:
+          options.biographicalRebuild.policy[options.biographicalRebuild.depth].candidateLimitPerRefresh,
+        now: new Date(now),
+      })
+    : { emittedCount: 0, admittedClaimIds: [], withheld: [] };
+
+  await options.memoryStore.upsertRecentContactShape({
+    schemaVersion: 1,
     contactId: options.canonicalContactId,
     summary,
     sourceMemoryIds: sourceMemories.map(memory => memory.id),
     confidenceScore: averageSourceConfidence,
     noveltyScore,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    freshUntil: now + options.config.refreshIntervalMs,
   });
 
   if (options.telemetryEnabled) {
-    log.info('Contact profile refreshed', {
+    log.info('Recent Contact Shape refreshed', {
       channelId: options.channelId,
       canonicalContactId: options.canonicalContactId,
       triggerReason: options.triggerReason,
@@ -317,6 +377,9 @@ export async function refreshContactProfile(
       sourceMemoryCount: sourceMemories.length,
       averageSourceConfidence,
       noveltyScore,
+      biographicalCandidateCount: biographicalRebuild.emittedCount,
+      biographicalAdmittedCount: biographicalRebuild.admittedClaimIds.length,
+      biographicalWithheldCount: biographicalRebuild.withheld.length,
     });
   }
 
@@ -326,23 +389,19 @@ export async function refreshContactProfile(
     sourceMemoryCount: sourceMemories.length,
     averageSourceConfidence,
     noveltyScore,
+    biographicalCandidateCount: biographicalRebuild.emittedCount,
+    biographicalAdmittedCount: biographicalRebuild.admittedClaimIds.length,
+    biographicalWithheldCount: biographicalRebuild.withheld.length,
   };
 }
 
-function parseProfileSummary(response: string): string {
-  const summaryTag = response.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1]?.trim();
-  if (summaryTag && summaryTag.length > 0) {
-    return summaryTag;
-  }
-
-  const profileTag = response.match(/<profile>([\s\S]*?)<\/profile>/i)?.[1]?.trim();
-  if (profileTag && profileTag.length > 0) {
-    return profileTag
-      .replace(/<\/?[^>]+>/g, ' ')
-      .trim();
-  }
-
-  return response.replace(/<\/?[^>]+>/g, ' ').trim();
+function parseRecentContactShapeSummary(response: string): string {
+  const shape = response.match(
+    /<recent_contact_shape>([\s\S]*?)<\/recent_contact_shape>/i,
+  )?.[1];
+  const summaryTag = shape?.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1]?.trim();
+  if (!summaryTag || summaryTag.length === 0) return '';
+  return summaryTag;
 }
 
 function normalizeProfileSummary(summary: string): string {
@@ -378,7 +437,7 @@ function normalizeOptional(value: string | undefined): string | undefined {
 
 function buildTargetContactContext(
   contactId: string,
-  contact: ProfileSynthesisTargetContact | undefined,
+  contact: RecentContactShapeSynthesisTargetContact | undefined,
 ): TargetContactContext {
   return {
     contactId,
@@ -482,7 +541,7 @@ function extractCapitalizedNameCandidates(text: string): string[] {
     .filter(match => !['This', 'The', 'Contact', 'They', 'He', 'She'].includes(match));
 }
 
-function profileSummaryAliasesTargetToMentionedName(
+function recentShapeSummaryAliasesTargetToMentionedName(
   summary: string,
   target: TargetContactContext,
 ): boolean {

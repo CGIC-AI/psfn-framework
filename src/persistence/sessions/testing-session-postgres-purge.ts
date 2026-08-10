@@ -9,7 +9,7 @@ export interface SessionDatabasePurgeInput {
 export interface SessionDatabasePurgeReport {
   removedProjectionRows: number;
   removedMemoryRows: number;
-  removedContactProfileRows: number;
+  removedRecentContactShapeRows: number;
   removedMemoryLinkRows: number;
   removedMaintenanceReviewRows: number;
 }
@@ -20,7 +20,7 @@ export interface SessionDatabasePurgePort {
 
 interface DurableMemoryTableAvailability {
   memories: string | null;
-  profiles: string | null;
+  recentContactShapes: string | null;
 }
 
 async function resolveDurableMemoryTables(
@@ -29,15 +29,15 @@ async function resolveDurableMemoryTables(
   const result = await client.query<DurableMemoryTableAvailability>(`
     SELECT
       to_regclass('l2_memories')::text AS memories,
-      to_regclass('contact_profiles')::text AS profiles
+      to_regclass('recent_contact_shapes')::text AS "recentContactShapes"
   `);
-  return result.rows[0] ?? { memories: null, profiles: null };
+  return result.rows[0] ?? { memories: null, recentContactShapes: null };
 }
 
 /**
  * Atomically remove the transcript projection and every durable memory row
- * carrying the exact logical session id. Contact profiles are derived
- * artifacts, so a profile referencing any removed memory is removed as a
+ * carrying the exact logical session id. Recent Contact Shapes are derived
+ * artifacts, so a shape referencing any removed memory is removed as a
  * whole instead of retaining a summary synthesized from testing content.
  */
 export async function purgeTestingSessionPostgresData(
@@ -46,18 +46,18 @@ export async function purgeTestingSessionPostgresData(
 ): Promise<SessionDatabasePurgeReport> {
   return await withPostgresClient(pool, async (client) => {
     const tables = await resolveDurableMemoryTables(client);
-    if (Boolean(tables.memories) !== Boolean(tables.profiles)) {
+    if (Boolean(tables.memories) !== Boolean(tables.recentContactShapes)) {
       throw new Error(
         'Session purge found an incomplete durable-memory schema; '
-        + 'l2_memories and contact_profiles must either both exist or both be absent',
+        + 'l2_memories and recent_contact_shapes must either both exist or both be absent',
       );
     }
 
     let removedMemoryRows = 0;
-    let removedContactProfileRows = 0;
+    let removedRecentContactShapeRows = 0;
     let removedMemoryLinkRows = 0;
     let removedMaintenanceReviewRows = 0;
-    if (tables.memories && tables.profiles) {
+    if (tables.memories && tables.recentContactShapes) {
       const memoryIdsResult = await client.query<{ id: string }>(`
         SELECT id
         FROM l2_memories
@@ -66,15 +66,15 @@ export async function purgeTestingSessionPostgresData(
       `, [input.sessionId]);
       const memoryIds = memoryIdsResult.rows.map(row => row.id);
       if (memoryIds.length > 0) {
-        const profiles = await client.query(`
-          DELETE FROM contact_profiles AS profile
+        const shapes = await client.query(`
+          DELETE FROM recent_contact_shapes AS shape
           WHERE EXISTS (
             SELECT 1
-            FROM jsonb_array_elements_text(profile.source_memory_ids) AS source_memory_id
+            FROM jsonb_array_elements_text(shape.source_memory_ids) AS source_memory_id
             WHERE source_memory_id = ANY($1::text[])
           )
         `, [memoryIds]);
-        removedContactProfileRows = profiles.rowCount ?? 0;
+        removedRecentContactShapeRows = shapes.rowCount ?? 0;
 
         const memoryLinks = await client.query(`
           DELETE FROM memory_links
@@ -109,7 +109,7 @@ export async function purgeTestingSessionPostgresData(
     return {
       removedProjectionRows: (projection.rowCount ?? 0) + (drift.rowCount ?? 0),
       removedMemoryRows,
-      removedContactProfileRows,
+      removedRecentContactShapeRows,
       removedMemoryLinkRows,
       removedMaintenanceReviewRows,
     };

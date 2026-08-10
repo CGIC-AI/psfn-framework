@@ -61,6 +61,7 @@ export const DEFAULT_RESTORE_CRITICAL_TABLES = [
   'reflections',
   'session_messages_projection',
   'model_usage_events',
+  'recent_contact_shapes',
   'biographical_claims',
   'biographical_grants',
   'biographical_rebuild_queue',

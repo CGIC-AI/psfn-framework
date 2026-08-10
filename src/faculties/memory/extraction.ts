@@ -7,11 +7,13 @@ import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-pro
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../core/contacts/types.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import { isTestingSessionId } from '../../core/session/session-id.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { BiographicalDepthPolicy } from '../../system/config/biographical-depth-policy.js';
 import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
@@ -57,7 +59,7 @@ import {
   type ExtractionRunOptions,
 } from './extraction/orchestrator.js';
 import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
-import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
+import { refreshRecentContactShape as runRecentContactShapeRefresh } from './extraction/recent-contact-shape-synthesis.js';
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
 import {
   resolveInterlocutorRelationshipRatchet,
@@ -87,8 +89,46 @@ import {
 import { parseFactsXml } from './extraction/parser.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
 import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
+import type { BiographicalProfileStorePort } from './biographical/store-port.js';
+import type { BiographicalSubjectRef } from './biographical/types.js';
+import { deriveBiographicalCollectionDepth } from './biographical/depth-policy.js';
 
 const log = createComponentLogger('Extraction');
+
+function resolveContactBiographicalDepth(
+  contactId: string,
+  contact: Contact | undefined,
+  policy: BiographicalDepthPolicy,
+) {
+  const subject = { kind: 'contact' as const, contactId, subjectVersion: 1 };
+  if (!contact || contact.id !== contactId || contact.archivedAt) {
+    return deriveBiographicalCollectionDepth({ subject, policy });
+  }
+  const relationshipType = contact.relationshipType === 'partner'
+    || contact.relationshipType === 'friend'
+    || contact.relationshipType === 'family'
+    ? contact.relationshipType
+    : 'other';
+  return deriveBiographicalCollectionDepth({
+    subject,
+    policy,
+    contactEvidence: {
+      subject,
+      canonicalContactVerified: true,
+      trust: {
+        verified: true,
+        level: contact.trustLevel,
+        authorityRef: `contact-store:${contact.id}:trust`,
+      },
+      relationship: {
+        verified: true,
+        type: relationshipType,
+        authorityRef: `contact-store:${contact.id}:relationship`,
+      },
+      governedContexts: [],
+    },
+  });
+}
 
 export interface MemoryExtractorFormationOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
@@ -104,10 +144,15 @@ export interface MemoryExtractorFormationOptions {
   isAutoContactCreationAllowed?: (channelId: string) => boolean;
   /**
    * Shared persona preamble service (E6.1). When present, extraction and
-   * profile-synthesis prompts are prefixed with the companion's soft persona
+   * recent-contact-shape-synthesis prompts are prefixed with the companion's soft persona
    * framing before their strict schema-bound instructions.
    */
   personaPreamble?: PersonaPreamblePort | null;
+  biographicalRebuild?: {
+    profileStore: BiographicalProfileStorePort;
+    companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
+    policy: BiographicalDepthPolicy;
+  };
 }
 
 export interface ObservedGroupExtractionOptions {
@@ -160,6 +205,7 @@ export class MemoryExtractor {
   private emitConcernCandidates: ConcernCandidateExtractionSink | null = null;
   private isAutoContactCreationAllowed: ((channelId: string) => boolean) | null = null;
   private personaPreamble: PersonaPreamblePort | null = null;
+  private biographicalRebuild: MemoryExtractorFormationOptions['biographicalRebuild'] = undefined;
 
   constructor(
     llmClient: LLMProviderPort,
@@ -220,6 +266,7 @@ export class MemoryExtractor {
     this.emitConcernCandidates = formationOptions?.emitConcernCandidates ?? null;
     this.isAutoContactCreationAllowed = formationOptions?.isAutoContactCreationAllowed ?? null;
     this.personaPreamble = formationOptions?.personaPreamble ?? null;
+    this.biographicalRebuild = formationOptions?.biographicalRebuild;
   }
 
   async queueRetroactiveExtraction(
@@ -761,12 +808,12 @@ export class MemoryExtractor {
           recentEntries,
         )
       ),
-      maybeRefreshContactProfile: (
+      maybeRefreshRecentContactShape: (
         extractionChannelId,
         reason,
         contactId,
         acceptedWrites,
-      ) => this.maybeRefreshContactProfile(
+      ) => this.maybeRefreshRecentContactShape(
         logicalSessionId,
         extractionChannelId,
         reason,
@@ -1049,7 +1096,7 @@ export class MemoryExtractor {
     };
   }
 
-  private maybeRefreshContactProfile(
+  private maybeRefreshRecentContactShape(
     sourceSessionId: string,
     channelId: string,
     triggerReason: ExtractionTriggerReason,
@@ -1070,7 +1117,7 @@ export class MemoryExtractor {
       inFlightProfileByContact: this.inFlightProfileByContact,
       inFlightProfileRefreshes: this.inFlightProfileRefreshes,
       startRefresh: (refreshChannelId, refreshReason, contactId, writes, config) => (
-        this.refreshContactProfile(
+        this.refreshRecentContactShape(
           sourceSessionId,
           refreshChannelId,
           refreshReason,
@@ -1082,7 +1129,7 @@ export class MemoryExtractor {
     });
   }
 
-  private async refreshContactProfile(
+  private async refreshRecentContactShape(
     sourceSessionId: string,
     channelId: string,
     triggerReason: ExtractionTriggerReason,
@@ -1093,7 +1140,17 @@ export class MemoryExtractor {
     const targetContact = this.contactStore && typeof this.contactStore.getById === 'function'
       ? await this.contactStore.getById(canonicalContactId)
       : undefined;
-    await runProfileRefresh({
+    const biographicalRebuild = this.biographicalRebuild
+      ? {
+          ...this.biographicalRebuild,
+          depth: resolveContactBiographicalDepth(
+            canonicalContactId,
+            targetContact,
+            this.biographicalRebuild.policy,
+          ),
+        }
+      : undefined;
+    await runRecentContactShapeRefresh({
       llmClient: this.llmClient,
       promptRegistry: this.promptRegistry,
       personaPreamble: this.personaPreamble,
@@ -1106,6 +1163,7 @@ export class MemoryExtractor {
       acceptedWrites,
       config,
       telemetryEnabled: this.isTelemetryEnabled(),
+      ...(biographicalRebuild ? { biographicalRebuild } : {}),
     });
   }
 

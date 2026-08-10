@@ -19,7 +19,7 @@
     ContactIdentityLinkVerification,
     ContactMutationAuditEntry,
     ContactConversationChannelView,
-    ContactProfileArtifact,
+    RecentContactShapeArtifact,
     AdminContactRelationshipScoreView,
     RelationshipType,
     TrustLevel,
@@ -159,8 +159,8 @@
     return data?.relatedChannelMap[contactId] ?? [];
   }
 
-  function getProfile(contactId: string): ContactProfileArtifact | undefined {
-    return data?.profileMap[contactId];
+  function getRecentContactShape(contactId: string): RecentContactShapeArtifact | undefined {
+    return data?.recentContactShapeMap[contactId];
   }
 
   function getSocialGraph(contactId: string): AdminContactSocialGraphView | undefined {
@@ -930,7 +930,7 @@
       <section class="min-w-0">
       {#each selectedContact ? [selectedContact] : [] as contact (contact.id)}
         {@const channels = getChannels(contact.id)}
-        {@const profile = getProfile(contact.id)}
+        {@const recentContactShape = getRecentContactShape(contact.id)}
         {@const graph = getSocialGraph(contact.id)}
         {@const relationshipScore = getRelationshipScore(contact.id)}
         {@const badge = trustBadge(contact.trustLevel)}
@@ -1158,29 +1158,29 @@
           </div>
 
           <!-- Profile + Memory count -->
-          {#if profile}
+          {#if recentContactShape}
             <div class="border-t border-bark-200 pt-2">
-              {#if profile.summary}
-                <p class="text-sm text-shadow-600 italic mb-1">AI-synthesized profile</p>
-                <p class="text-sm text-shadow-700 leading-relaxed mb-1.5">{profile.summary}</p>
+              {#if recentContactShape.summary}
+                <p class="text-sm text-shadow-600 italic mb-1">Freshness-bound recent contact shape</p>
+                <p class="text-sm text-shadow-700 leading-relaxed mb-1.5">{recentContactShape.summary}</p>
               {/if}
               <div class="flex items-center gap-3 text-sm text-shadow-600">
                 <span class="inline-flex items-center gap-1">
                   <span class="inline-block w-1.5 h-1.5 rounded-full bg-gold-400"></span>
-                  {profile.sourceMemoryIds.length} memories
+                  {recentContactShape.sourceMemoryIds.length} memories
                 </span>
-                {#if profile.updatedAt}
-                  <span>Updated {formatTimestamp(profile.updatedAt)}</span>
+                {#if recentContactShape.updatedAt}
+                  <span>Updated {formatTimestamp(recentContactShape.updatedAt)}</span>
                 {/if}
               </div>
-              {#if profile.sourceMemoryIds && profile.sourceMemoryIds.length > 0}
+              {#if recentContactShape.sourceMemoryIds && recentContactShape.sourceMemoryIds.length > 0}
                 <details class="mt-1.5">
                   <summary class="text-sm text-shadow-600 cursor-pointer
                                   hover:text-gold-600 transition-colors">
-                    {profile.sourceMemoryIds.length} source memor{profile.sourceMemoryIds.length === 1 ? 'y' : 'ies'}
+                    {recentContactShape.sourceMemoryIds.length} source memor{recentContactShape.sourceMemoryIds.length === 1 ? 'y' : 'ies'}
                   </summary>
                   <div class="mt-1 flex flex-wrap gap-1">
-                    {#each profile.sourceMemoryIds as memId}
+                    {#each recentContactShape.sourceMemoryIds as memId}
                       <a
                         href={scopeGardenPath(`/memory?id=${encodeURIComponent(memId)}`)}
                         class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-gold-700
@@ -1194,7 +1194,7 @@
             </div>
           {:else}
             <div class="border-t border-bark-200 pt-2">
-              <span class="text-sm text-shadow-600 italic">No synthesized profile</span>
+              <span class="text-sm text-shadow-600 italic">No current recent contact shape</span>
             </div>
           {/if}
 

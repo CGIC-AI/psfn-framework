@@ -146,7 +146,7 @@ export type {
   AdminGroupMemoryCandidateSpanView,
   AdminGroupMemorySalienceView,
   AdminGroupMemoryExtractionTelemetry,
-  AdminGroupMemoryContactProfileStatus,
+  AdminGroupMemoryRecentContactShapeStatus,
   AdminGroupMemoryContactCoverage,
   AdminGroupMemoryCoverageView,
   AdminGroupMemoryChannelDiagnostics,

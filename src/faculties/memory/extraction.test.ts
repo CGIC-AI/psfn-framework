@@ -395,7 +395,7 @@ describe('MemoryExtractor telemetry payloads', () => {
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       insertMemory: vi.fn(),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
     const contactStore = fromAny({
       updateEmotionalBaseline: vi.fn(),
@@ -426,7 +426,7 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(llmClient.complete).not.toHaveBeenCalled();
     expect(memoryStore.getMemoriesByChannel).not.toHaveBeenCalled();
     expect(memoryStore.insertMemory).not.toHaveBeenCalled();
-    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
     expect(contactStore.updateEmotionalBaseline).not.toHaveBeenCalled();
     expect(eventBus.emit).not.toHaveBeenCalled();
   });
@@ -594,9 +594,9 @@ describe('MemoryExtractor telemetry payloads', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -675,9 +675,9 @@ describe('MemoryExtractor telemetry payloads', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -766,9 +766,9 @@ describe('MemoryExtractor telemetry payloads', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2041,9 +2041,9 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue(options.sourceMemories),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2097,7 +2097,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>PrimaryUser is a direct communicator and primary partner.</summary></profile>',
+          content: '<recent_contact_shape><summary>PrimaryUser is a direct communicator and primary partner.</summary></recent_contact_shape>',
         }),
     });
 
@@ -2110,7 +2110,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
@@ -2129,7 +2129,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
           salience: 0.8,
         },
       ]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2164,7 +2164,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       .map(([, purpose]) => purpose);
     expect(completePurposes).toEqual(['extraction', 'memory']);
     expect(memoryStore.getMemoriesByContact).toHaveBeenCalledWith('contact-canonical-1', 16);
-    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+    expect(memoryStore.upsertRecentContactShape).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',
       summary: 'PrimaryUser is a direct communicator and primary partner.',
       sourceMemoryIds: ['m1', 'm2'],
@@ -2177,7 +2177,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Lyra Lyra keeps livestream guardrails explicit.</summary></profile>',
+          content: '<recent_contact_shape><summary>Lyra Lyra keeps livestream guardrails explicit.</summary></recent_contact_shape>',
         }),
     });
 
@@ -2190,7 +2190,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
@@ -2209,7 +2209,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
           salience: 0.8,
         },
       ]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2240,7 +2240,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.maybeExtract('api:profile-duplicate-test', 'contact-canonical-1');
     await extractor.drain({ timeoutMs: 2_000 });
 
-    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+    expect(memoryStore.upsertRecentContactShape).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',
       summary: 'Lyra keeps livestream guardrails explicit.',
       sourceMemoryIds: ['m1', 'm2'],
@@ -2253,7 +2253,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>{{char}} keeps livestream guardrails explicit.</summary></profile>',
+          content: '<recent_contact_shape><summary>{{char}} keeps livestream guardrails explicit.</summary></recent_contact_shape>',
         }),
     });
 
@@ -2266,7 +2266,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
@@ -2285,7 +2285,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
           salience: 0.8,
         },
       ]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2317,7 +2317,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.drain({ timeoutMs: 2_000 });
 
     expect(llmClient.complete).toHaveBeenCalledTimes(2);
-    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
   });
 
   it('passes target contact context and skips aliasing the target to mentioned people', async () => {
@@ -2355,7 +2355,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<profile><summary>This contact, known as MrDragonFox and also by the name Lyra, cares about streaming guardrails.</summary></profile>';
+        return '<recent_contact_shape><summary>This contact, known as MrDragonFox and also by the name Lyra, cares about streaming guardrails.</summary></recent_contact_shape>';
       },
     });
 
@@ -2366,7 +2366,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     expect(profilePrompt).toContain('Target contact trust level: regular');
     expect(profilePrompt).toContain('Do not infer aliases for the target from names merely mentioned');
     expect(profilePrompt).toContain('target_contact_id=contact-iki');
-    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
   });
 
   it('allows scoped summaries that the target discussed another named person', async () => {
@@ -2405,7 +2405,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<profile><summary>Vega discussed Lyra streaming guardrails and prefers concise launch notes.</summary></profile>';
+        return '<recent_contact_shape><summary>Vega discussed Lyra streaming guardrails and prefers concise launch notes.</summary></recent_contact_shape>';
       },
     });
 
@@ -2414,7 +2414,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     expect(profilePrompt).toContain('Target contact display name: Vega');
     expect(profilePrompt).toContain('Target contact nickname: V');
-    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+    expect(memoryStore.upsertRecentContactShape).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-vega',
       summary: 'Vega discussed Lyra streaming guardrails and prefers concise launch notes.',
       sourceMemoryIds: ['m1', 'm2'],
@@ -2427,7 +2427,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>PrimaryUser prefers concise updates.</summary></profile>',
+          content: '<recent_contact_shape><summary>PrimaryUser prefers concise updates.</summary></recent_contact_shape>',
         }),
     });
 
@@ -2440,7 +2440,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue({
+      getRecentContactShape: vi.fn().mockReturnValue({
         summary: 'PrimaryUser prefers concise updates.',
         updatedAt: Date.now() - (24 * 60 * 60 * 1000),
       }),
@@ -2462,7 +2462,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
           salience: 0.9,
         },
       ]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2493,7 +2493,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.maybeExtract('api:profile-test', 'contact-canonical-1');
     await extractor.drain({ timeoutMs: 2_000 });
 
-    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
   });
 
   it('drains cleanly when fire-and-forget profile refresh rejects', async () => {
@@ -2513,7 +2513,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
-      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getRecentContactShape: vi.fn().mockReturnValue(undefined),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
@@ -2532,7 +2532,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
           salience: 0.8,
         },
       ]),
-      upsertContactProfile: vi.fn(),
+      upsertRecentContactShape: vi.fn(),
     });
 
     const embeddingService = fromAny({
@@ -2564,7 +2564,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     await expect(extractor.drain({ timeoutMs: 2_000 })).resolves.toBe(true);
     expect(llmClient.complete).toHaveBeenCalledTimes(2);
-    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.upsertRecentContactShape).not.toHaveBeenCalled();
   });
 });
 

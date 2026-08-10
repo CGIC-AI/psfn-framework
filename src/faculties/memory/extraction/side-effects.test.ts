@@ -44,7 +44,7 @@ function buildInput(
     acceptedFactsByContact: new Map(),
     emitConcernCandidates: undefined,
     maybePersistEmotionalState: vi.fn().mockResolvedValue(undefined),
-    maybeRefreshContactProfile: vi.fn().mockResolvedValue(undefined),
+    maybeRefreshRecentContactShape: vi.fn().mockResolvedValue(undefined),
     assertEffectAllowed: undefined,
     ...overrides,
   };
@@ -117,24 +117,24 @@ describe('runExtractionSideEffects', () => {
   });
 
   it('refreshes the trigger-contact profile with an empty write set when nothing was written', async () => {
-    const maybeRefreshContactProfile = vi.fn().mockResolvedValue(undefined);
-    await runExtractionSideEffects(buildInput({ maybeRefreshContactProfile }));
-    expect(maybeRefreshContactProfile).toHaveBeenCalledTimes(1);
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith('api:test', 'manual', 'contact-alex', []);
+    const maybeRefreshRecentContactShape = vi.fn().mockResolvedValue(undefined);
+    await runExtractionSideEffects(buildInput({ maybeRefreshRecentContactShape }));
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledTimes(1);
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith('api:test', 'manual', 'contact-alex', []);
   });
 
   it('refreshes one profile per routed contact and subject contact', async () => {
-    const maybeRefreshContactProfile = vi.fn().mockResolvedValue(undefined);
+    const maybeRefreshRecentContactShape = vi.fn().mockResolvedValue(undefined);
     const routedWrite = write({ contactId: 'contact-sam', subjectContactId: 'contact-kim' });
     await runExtractionSideEffects(buildInput({
       acceptedWrites: [routedWrite],
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
     }));
-    expect(maybeRefreshContactProfile).toHaveBeenCalledTimes(2);
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledTimes(2);
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'api:test', 'manual', 'contact-sam', [routedWrite],
     );
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'api:test', 'manual', 'contact-kim', [{ ...routedWrite, contactId: 'contact-kim' }],
     );
   });
@@ -147,19 +147,19 @@ describe('runExtractionSideEffects', () => {
       acceptedFactsByContact: new Map([['contact-alex', [fact('Alex enjoys board games')]]]),
       emitConcernCandidates: vi.fn(async () => { order.push('concerns'); return []; }),
       maybePersistEmotionalState: vi.fn(async () => { order.push('emotional'); return undefined; }),
-      maybeRefreshContactProfile: vi.fn(async () => { order.push('profile'); }),
+      maybeRefreshRecentContactShape: vi.fn(async () => { order.push('profile'); }),
       assertEffectAllowed,
     }));
     expect(order).toEqual(['fence', 'concerns', 'fence', 'emotional', 'fence', 'profile']);
   });
 
   it('propagates a denied effect fence instead of running the remaining children', async () => {
-    const maybeRefreshContactProfile = vi.fn();
+    const maybeRefreshRecentContactShape = vi.fn();
     await expect(runExtractionSideEffects(buildInput({
       assertEffectAllowed: vi.fn().mockRejectedValue(new Error('fence lost')),
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
     }))).rejects.toThrow('fence lost');
-    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(maybeRefreshRecentContactShape).not.toHaveBeenCalled();
   });
 });
 

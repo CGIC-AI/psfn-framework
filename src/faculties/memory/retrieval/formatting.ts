@@ -13,7 +13,7 @@ import {
 import { formatActiveDate, resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { isBoundaryMemory } from '../boundary-log.js';
 import type {
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   MemoryEvolutionRelation,
 } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
@@ -32,7 +32,7 @@ import type {
 } from './types.js';
 
 export function renderPromptBlock(
-  profile: ContactProfileArtifact | undefined,
+  recentContactShape: RecentContactShapeArtifact | undefined,
   scored: ScoredMemory[] = [],
   options?: {
     emotionalSnapshot?: EmotionalSnapshot;
@@ -51,10 +51,10 @@ export function renderPromptBlock(
   // then emit in the configured order. Missing/empty slots are skipped, so the
   // default section order reproduces the historical fixed ordering byte-for-byte.
   const rendered = new Map<string, string>();
-  if (profile && profile.summary.trim().length > 0) {
-    rendered.set('core_profile', wrapPromptSectionXml({
-      id: 'core_profile',
-      content: `Core profile for this person:\n${profile.summary.trim()}`,
+  if (recentContactShape && recentContactShape.summary.trim().length > 0) {
+    rendered.set('recent_contact_shape', wrapPromptSectionXml({
+      id: 'recent_contact_shape',
+      content: `Recent contact shape (freshness-bound; not durable biography):\n${recentContactShape.summary.trim()}`,
     }));
   }
   if ((socialContext?.relatedContactsById.size ?? 0) > 0 && socialContext) {

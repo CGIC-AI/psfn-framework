@@ -1006,7 +1006,7 @@ Low-yield triage:
 3. Check watermark lag. Lag with no extraction usually means thresholds/cooldowns are too conservative or a prior in-flight extraction is blocking.
 4. Check salience telemetry. High `low_signal`, `duplicate_repetition`, or `below_threshold` counts mean the room is mostly chatter or the threshold is too strict.
 5. Check `rejectionBreakdown`, `writeCapSkips`, and `ambiguousSpeakerSkippedCount`. Cap skips mean writes are being intentionally throttled; ambiguous skips mean the LLM output did not provide enough structured source/subject attribution.
-6. Check per-contact profile coverage. A contact with activity but no profile usually lacks enough accepted source memories or is inside profile cooldown.
+6. Check per-contact Recent Contact Shape coverage. A contact with activity but no shape usually lacks enough accepted source memories or is inside the refresh cooldown; durable biography coverage is inspected separately through typed claims.
 
 Safe group-history backfill:
 

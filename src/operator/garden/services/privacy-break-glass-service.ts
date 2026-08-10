@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type {
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
@@ -72,7 +72,7 @@ function journalStream(value: string): PrivacyBreakGlassJournalStream | null {
 
 export type PrivacyBreakGlassDisclosure =
   | { kind: 'memory'; memory: PurrMemory }
-  | { kind: 'profile'; profile: ContactProfileArtifact }
+  | { kind: 'recent_contact_shape'; recentContactShape: RecentContactShapeArtifact }
   | { kind: 'journal'; journal: PrivacyBreakGlassJournalDisclosure };
 
 export interface PrivacyBreakGlassAuditEvidence {
@@ -146,7 +146,7 @@ function authorityBinding(context: FleetGardenRequestContext): string {
 }
 
 interface ExactNonSubjectResource {
-  resource: PurrMemory | ContactProfileArtifact | PrivacyBreakGlassJournalDisclosure;
+  resource: PurrMemory | RecentContactShapeArtifact | PrivacyBreakGlassJournalDisclosure;
   subjectScopeDigest: string;
 }
 
@@ -155,7 +155,8 @@ function snapshotDigest(value: ExactNonSubjectResource, kind: PrivacyBreakGlassR
 }
 
 function expectedRoute(kind: PrivacyBreakGlassResourceKind, phase: 'confirm' | 'decide'): string {
-  return `POST /api/admin/privacy-break-glass/${kind}/:id/${phase}`;
+  const routeSegment = kind === 'recent_contact_shape' ? 'profile' : kind;
+  return `POST /api/admin/privacy-break-glass/${routeSegment}/:id/${phase}`;
 }
 
 export class AdminPrivacyBreakGlassService {
@@ -163,7 +164,7 @@ export class AdminPrivacyBreakGlassService {
 
   constructor(private readonly options: {
     memoryStore: Pick<MemoryStorePort,
-      'getById' | 'getContactProfile' | 'getMemorySubjectClassification'>;
+      'getById' | 'getRecentContactShape' | 'getMemorySubjectClassification'>;
     journalReader?: PrivacyBreakGlassJournalReader;
     confirmTtlMs: number;
     now?: () => number;
@@ -289,8 +290,11 @@ export class AdminPrivacyBreakGlassService {
     let disclosure: PrivacyBreakGlassDisclosure;
     if (input.resourceKind === 'memory') {
       disclosure = { kind: 'memory', memory: current.resource as PurrMemory };
-    } else if (input.resourceKind === 'profile') {
-      disclosure = { kind: 'profile', profile: current.resource as ContactProfileArtifact };
+    } else if (input.resourceKind === 'recent_contact_shape') {
+      disclosure = {
+        kind: 'recent_contact_shape',
+        recentContactShape: current.resource as RecentContactShapeArtifact,
+      };
     } else {
       disclosure = {
         kind: 'journal',
@@ -323,16 +327,16 @@ export class AdminPrivacyBreakGlassService {
         })),
       };
     }
-    if (kind === 'profile') {
+    if (kind === 'recent_contact_shape') {
       if (timingSafeStringEqual(resourceId, actorContactId)) return null;
-      const profile = await this.options.memoryStore.getContactProfile(resourceId);
-      if (!profile || profile.contactId !== resourceId) return null;
+      const shape = await this.options.memoryStore.getRecentContactShape(resourceId);
+      if (!shape || shape.contactId !== resourceId) return null;
       return {
-        resource: profile,
+        resource: shape,
         subjectScopeDigest: digest(JSON.stringify({
           schemaVersion: 1,
-          resourceKind: 'profile',
-          subjectContactId: profile.contactId,
+          resourceKind: 'recent_contact_shape',
+          subjectContactId: shape.contactId,
         })),
       };
     }

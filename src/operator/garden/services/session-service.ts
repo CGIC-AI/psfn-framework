@@ -1071,7 +1071,7 @@ export class AdminSessionDataService implements AdminSessionService {
   /**
    * Scrub one turn snapshot's memory candidate lists for a fleet read. Every
    * item must pass the viewer subject-classification check. Categories with no
-   * clean per-item attribution (contact profile artifact, episodic chains) are
+   * clean per-item attribution (Recent Contact Shape artifact, episodic chains) are
    * dropped entirely for fleet reads.
    */
   private async scrubSnapshotForFleetViewer(
@@ -1084,7 +1084,7 @@ export class AdminSessionDataService implements AdminSessionService {
       return items.filter((_, index) => decisions[index] === true);
     };
     const {
-      profile: _profile,
+      recentContactShape: _recentContactShape,
       episodicChains: _episodicChains,
       ...memoryRest
     } = snapshot.memory;

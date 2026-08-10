@@ -116,7 +116,7 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
     recordExtractionMarker: vi.fn(),
     maybePersistEmotionalState: vi.fn(),
-    maybeRefreshContactProfile: vi.fn(),
+    maybeRefreshRecentContactShape: vi.fn(),
     ...overrides,
   };
 }
@@ -249,7 +249,7 @@ describe('runExtractionOrchestration durable children', () => {
     expect(options.memoryStore.getMemoriesByChannel).not.toHaveBeenCalled();
     expect(options.processFact).not.toHaveBeenCalled();
     expect(options.maybePersistEmotionalState).not.toHaveBeenCalled();
-    expect(options.maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(options.maybeRefreshRecentContactShape).not.toHaveBeenCalled();
     expect(options.emitExtractionStart).not.toHaveBeenCalled();
     expect(options.recordExtractionMarker).not.toHaveBeenCalled();
   });
@@ -291,11 +291,11 @@ describe('runExtractionOrchestration durable children', () => {
     const emotionalSettled = new Promise<void>((resolve) => { releaseEmotional = resolve; });
     const profileSettled = new Promise<void>((resolve) => { releaseProfile = resolve; });
     const maybePersistEmotionalState = vi.fn(() => emotionalSettled);
-    const maybeRefreshContactProfile = vi.fn(() => profileSettled);
+    const maybeRefreshRecentContactShape = vi.fn(() => profileSettled);
     const options = buildOptions({
       canonicalContactId: 'contact-1',
       maybePersistEmotionalState,
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
     });
 
     const runPromise = runExtractionOrchestration(options);
@@ -307,13 +307,13 @@ describe('runExtractionOrchestration durable children', () => {
     // the profile child.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(maybePersistEmotionalState).toHaveBeenCalledTimes(1);
-    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(maybeRefreshRecentContactShape).not.toHaveBeenCalled();
     expect(resolved).toBe(false);
 
     releaseEmotional();
     await new Promise((resolve) => setTimeout(resolve, 0));
     // The profile child is now awaited in turn; still not resolved.
-    expect(maybeRefreshContactProfile).toHaveBeenCalledTimes(1);
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledTimes(1);
     expect(resolved).toBe(false);
 
     releaseProfile();
@@ -1320,7 +1320,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
     });
     const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
     const maybePersistEmotionalState = vi.fn();
-    const maybeRefreshContactProfile = vi.fn();
+    const maybeRefreshRecentContactShape = vi.fn();
     const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
       if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
       if (speaker.authorId === 'discord-vega') return 'contact-vega';
@@ -1368,7 +1368,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       processFact,
       emitExtractionEnd,
       maybePersistEmotionalState,
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
       resolveSourceSpeakerContactId,
       resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
     });
@@ -1389,7 +1389,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       [expect.objectContaining({ text: expect.stringContaining('MrDragonFox believes') })],
       expect.any(Array),
     );
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'discord:kube',
       'manual',
       'contact-mrdragonfox',
@@ -1399,7 +1399,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         sourceSpeakerName: 'MrDragonFox',
       })],
     );
-    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2])).not.toContain('contact-vega');
+    expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2])).not.toContain('contact-vega');
     expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
       triggerContactId: 'contact-vega',
       routedContactIds: ['contact-mrdragonfox'],
@@ -1502,7 +1502,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         action: 'created',
         memory: { id: 'mem-briar' },
       });
-    const maybeRefreshContactProfile = vi.fn();
+    const maybeRefreshRecentContactShape = vi.fn();
     const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
       if (speaker.authorId === 'discord-aster') return 'contact-aster';
       if (speaker.authorId === 'discord-briar') return 'contact-briar';
@@ -1558,21 +1558,21 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         }),
       } as ExtractionRunOptions['llmClient'],
       processFact,
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
       resolveSourceSpeakerContactId,
       resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
     });
 
     await runExtractionOrchestration(options);
 
-    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2]).sort()).toEqual([
+    expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2]).sort()).toEqual([
       'contact-aster',
       'contact-briar',
     ]);
-    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2])).not.toContain(
+    expect(maybeRefreshRecentContactShape.mock.calls.map(call => call[2])).not.toContain(
       'contact-trigger',
     );
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'discord:kube',
       'manual',
       'contact-aster',
@@ -1582,7 +1582,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         sourceContactId: 'contact-aster',
       })],
     );
-    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+    expect(maybeRefreshRecentContactShape).toHaveBeenCalledWith(
       'discord:kube',
       'manual',
       'contact-briar',
@@ -1599,7 +1599,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       action: 'created',
       memory: { id: 'mem-room' },
     });
-    const maybeRefreshContactProfile = vi.fn();
+    const maybeRefreshRecentContactShape = vi.fn();
     const options = buildOptions({
       channelId: 'discord:kube',
       canonicalContactId: 'contact-vega',
@@ -1639,7 +1639,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         }),
       } as ExtractionRunOptions['llmClient'],
       processFact,
-      maybeRefreshContactProfile,
+      maybeRefreshRecentContactShape,
       resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => {
         if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
         if (speaker.authorId === 'discord-vega') return 'contact-vega';
@@ -1668,7 +1668,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         routingReason: 'structured_room_context',
       }),
     );
-    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(maybeRefreshRecentContactShape).not.toHaveBeenCalled();
   });
 
   it('skips ambiguous mixed-speaker facts instead of defaulting them to the trigger contact', async () => {

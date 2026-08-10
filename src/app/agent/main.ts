@@ -1398,6 +1398,7 @@ async function main(): Promise<void> {
       await icpLocalPolicyAuthority?.close();
       await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
+      await coreRuntime.closeBiographicalProjection();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();

@@ -1,6 +1,6 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type {
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import {
@@ -218,7 +218,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
   private async buildSocialGraphMap(
     contacts: Contact[],
-    profileMap: Map<string, ContactProfileArtifact>,
+    recentContactShapeMap: Map<string, RecentContactShapeArtifact>,
   ): Promise<Map<string, AdminContactSocialGraphView>> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
@@ -265,7 +265,9 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!neighborEntity) return null;
 
       const neighborContact = neighborEntity.contactId ? contactById.get(neighborEntity.contactId) : undefined;
-      const neighborProfile = neighborContact ? profileMap.get(neighborContact.id) : undefined;
+      const neighborShape = neighborContact
+        ? recentContactShapeMap.get(neighborContact.id)
+        : undefined;
       const direction = edge.directional
         ? (edge.sourceEntityId === entity.id ? 'outgoing' : 'incoming')
         : 'undirected';
@@ -292,8 +294,8 @@ export class AdminContactsDataService implements AdminContactsService {
           mentionOnly: isMentionOnlyContact(neighborContact),
           trustLevel: neighborContact?.trustLevel,
           relationshipType: neighborContact?.relationshipType,
-          profileSummary: neighborProfile?.summary,
-          profileUpdatedAt: neighborProfile?.updatedAt,
+          recentContactShapeSummary: neighborShape?.summary,
+          recentContactShapeUpdatedAt: neighborShape?.updatedAt,
         },
       };
     };
@@ -370,7 +372,7 @@ export class AdminContactsDataService implements AdminContactsService {
     if (!contactStore) {
       return {
         contacts: [],
-        profileMap: new Map(),
+        recentContactShapeMap: new Map(),
         relatedChannelMap: new Map(),
         socialGraphMap: new Map(),
         relationshipScoreMap: new Map(),
@@ -388,10 +390,10 @@ export class AdminContactsDataService implements AdminContactsService {
       !fleetContactId || contact.id === fleetContactId
     ));
     const allowedContactIds = new Set(contacts.map(contact => contact.id));
-    const profileMap = new Map(
-      (await this.profileStore(context).listContactProfiles())
-        .filter(profile => allowedContactIds.has(profile.contactId))
-        .map(profile => [profile.contactId, profile] as const),
+    const recentContactShapeMap = new Map(
+      (await this.profileStore(context).listRecentContactShapes())
+        .filter(shape => allowedContactIds.has(shape.contactId))
+        .map(shape => [shape.contactId, shape] as const),
     );
     const relatedChannelMap = buildRelatedConversationChannelMap({
       contacts,
@@ -402,7 +404,7 @@ export class AdminContactsDataService implements AdminContactsService {
     // current contact and never a graph-derived cross-subject side channel.
     const socialGraphMap = fleetContactId
       ? new Map()
-      : await this.buildSocialGraphMap(contacts, profileMap);
+      : await this.buildSocialGraphMap(contacts, recentContactShapeMap);
     const relationshipScoreMap = await this.buildRelationshipScoreMap(contacts);
 
     const verifications = fleetContactId
@@ -415,7 +417,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
     return {
       contacts,
-      profileMap,
+      recentContactShapeMap,
       relatedChannelMap,
       socialGraphMap,
       relationshipScoreMap,
@@ -442,7 +444,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
     return {
       contact,
-      profile: await this.profileStore(context).getContactProfile(contact.id),
+      recentContactShape: await this.profileStore(context).getRecentContactShape(contact.id),
       relatedChannels,
     };
   }

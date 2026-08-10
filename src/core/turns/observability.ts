@@ -2,7 +2,7 @@ import type { EventMap } from '../../shared/event-bus.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import { cloneMemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
 import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
-import type { ContactProfileArtifact } from '../../faculties/memory/memory-store-port.js';
+import type { RecentContactShapeArtifact } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
 import {
   cloneEpisodicRetrievalChain,
@@ -68,7 +68,7 @@ export interface TurnSessionContextSnapshotRecord {
 
 export interface TurnMemorySnapshotRecord {
   channelId: string;
-  profile?: ContactProfileArtifact;
+  recentContactShape?: RecentContactShapeArtifact;
   emotionalSnapshot?: EmotionalSnapshot;
   contactEmotionalMemories: ObservedMemory[];
   semanticCandidates: ObservedScoredMemory[];
@@ -93,6 +93,11 @@ export interface TurnSnapshotRecord {
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
   memory?: TurnMemorySnapshotRecord;
+  biographicalProjection?: {
+    admittedClaimIds: string[];
+    withheldCount: number;
+    contextChars: number;
+  };
   fatigue?: FatigueEnforcementMetadata;
 }
 
@@ -131,10 +136,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function cloneContactProfileArtifact(profile: ContactProfileArtifact): ContactProfileArtifact {
+function cloneRecentContactShapeArtifact(
+  shape: RecentContactShapeArtifact,
+): RecentContactShapeArtifact {
   return {
-    ...profile,
-    sourceMemoryIds: [...profile.sourceMemoryIds],
+    ...shape,
+    sourceMemoryIds: [...shape.sourceMemoryIds],
   };
 }
 
@@ -321,7 +328,13 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
       ? {
         memory: {
           channelId: snapshot.memory.channelId,
-          ...(snapshot.memory.profile ? { profile: cloneContactProfileArtifact(snapshot.memory.profile) } : {}),
+          ...(snapshot.memory.recentContactShape
+            ? {
+              recentContactShape: cloneRecentContactShapeArtifact(
+                snapshot.memory.recentContactShape,
+              ),
+            }
+            : {}),
           ...(snapshot.memory.emotionalSnapshot ? { emotionalSnapshot: { ...snapshot.memory.emotionalSnapshot } } : {}),
           contactEmotionalMemories: filterObservedMemories(
             snapshot.memory.contactEmotionalMemories,
@@ -346,6 +359,14 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
             ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
             : {}),
           versionPointer: snapshot.memory.versionPointer,
+        },
+      }
+      : {}),
+    ...(snapshot.biographicalProjection
+      ? {
+        biographicalProjection: {
+          ...snapshot.biographicalProjection,
+          admittedClaimIds: [...snapshot.biographicalProjection.admittedClaimIds],
         },
       }
       : {}),
@@ -460,7 +481,13 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
       ? {
         memory: {
           channelId: snapshot.memory.channelId,
-          ...(snapshot.memory.profile ? { profile: cloneContactProfileArtifact(snapshot.memory.profile) } : {}),
+          ...(snapshot.memory.recentContactShape
+            ? {
+              recentContactShape: cloneRecentContactShapeArtifact(
+                snapshot.memory.recentContactShape,
+              ),
+            }
+            : {}),
           ...(snapshot.memory.emotionalSnapshot ? { emotionalSnapshot: { ...snapshot.memory.emotionalSnapshot } } : {}),
           contactEmotionalMemories: snapshot.memory.contactEmotionalMemories.map(cloneObservedMemory),
           semanticCandidates: snapshot.memory.semanticCandidates.map(cloneObservedScoredMemory),
@@ -473,6 +500,14 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
             : {}),
           versionPointer: snapshot.memory.versionPointer,
+        },
+      }
+      : {}),
+    ...(snapshot.biographicalProjection
+      ? {
+        biographicalProjection: {
+          ...snapshot.biographicalProjection,
+          admittedClaimIds: [...snapshot.biographicalProjection.admittedClaimIds],
         },
       }
       : {}),

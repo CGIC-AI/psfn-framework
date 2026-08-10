@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
-  type ContactProfileArtifact,
+  type RecentContactShapeArtifact,
   type MemoryAdminListOptions,
   type MemoryAdminListResult,
   type MemoryAdminPrivacySummary,
@@ -65,7 +65,7 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
   private readonly abstractionLinks: MemoryAbstractionLink[] = [];
   private readonly evolutionLinks: MemoryEvolutionLink[] = [];
   private readonly linkedMemories: MemoryLink[] = [];
-  private readonly profiles = new Map<string, ContactProfileArtifact>();
+  private readonly profiles = new Map<string, RecentContactShapeArtifact>();
   private readonly scratchpad = new Map<string, ScratchpadEntry>();
   private readonly patchEvents: MemoryPatchEvent[] = [];
 
@@ -424,16 +424,16 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     return count;
   }
 
-  upsertContactProfile(profile: ContactProfileArtifact): void {
+  upsertRecentContactShape(profile: RecentContactShapeArtifact): void {
     this.profiles.set(profile.contactId, { ...profile });
   }
 
-  getContactProfile(contactId: string): ContactProfileArtifact | undefined {
+  getRecentContactShape(contactId: string): RecentContactShapeArtifact | undefined {
     const profile = this.profiles.get(contactId);
     return profile ? { ...profile } : undefined;
   }
 
-  listContactProfiles(): ContactProfileArtifact[] {
+  listRecentContactShapes(): RecentContactShapeArtifact[] {
     return [...this.profiles.values()].map(profile => ({ ...profile }));
   }
 

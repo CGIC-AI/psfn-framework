@@ -31,13 +31,20 @@ export type {
 } from '../core-memory/store.js';
 export type { ScratchpadEntry } from './scratchpad-types.js';
 
-export interface ContactProfileArtifact {
+/**
+ * A short, freshness-bound synthesis of recent authorized contact memories.
+ * This is presentation context, not durable biographical authority: it cannot
+ * grant cross-channel portability or substitute for an atomic claim.
+ */
+export interface RecentContactShapeArtifact {
+  readonly schemaVersion: 1;
   contactId: string;
   summary: string;
   sourceMemoryIds: string[];
   confidenceScore: number;
   noveltyScore: number;
   updatedAt: number;
+  freshUntil: number;
 }
 
 export interface MemoryDeleteVersion {
@@ -588,9 +595,9 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   bulkDelete(ids: string[]): Awaitable<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Awaitable<number>;
   bulkUpdateSalience(updates: MemorySalienceUpdate[]): Awaitable<number>;
-  upsertContactProfile(profile: ContactProfileArtifact): Awaitable<void>;
-  getContactProfile(contactId: string): Awaitable<ContactProfileArtifact | undefined>;
-  listContactProfiles(): Awaitable<ContactProfileArtifact[]>;
+  upsertRecentContactShape(shape: RecentContactShapeArtifact): Awaitable<void>;
+  getRecentContactShape(contactId: string): Awaitable<RecentContactShapeArtifact | undefined>;
+  listRecentContactShapes(): Awaitable<RecentContactShapeArtifact[]>;
   addScratchpadEntry(
     content: string,
     options?: ScratchpadEntryCreateOptions,
@@ -702,9 +709,9 @@ export interface MemoryStorePort extends ScratchpadProvider {
   bulkDelete(ids: string[]): Promise<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number>;
   bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number>;
-  upsertContactProfile(profile: ContactProfileArtifact): Promise<void>;
-  getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined>;
-  listContactProfiles(): Promise<ContactProfileArtifact[]>;
+  upsertRecentContactShape(shape: RecentContactShapeArtifact): Promise<void>;
+  getRecentContactShape(contactId: string): Promise<RecentContactShapeArtifact | undefined>;
+  listRecentContactShapes(): Promise<RecentContactShapeArtifact[]>;
   addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
@@ -823,11 +830,11 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     bulkDelete: async (ids) => await store.bulkDelete(ids),
     bulkUpdate: async (ids, fields) => await store.bulkUpdate(ids, fields),
     bulkUpdateSalience: async (updates) => await store.bulkUpdateSalience(updates),
-    upsertContactProfile: async (profile) => {
-      await store.upsertContactProfile(profile);
+    upsertRecentContactShape: async (shape) => {
+      await store.upsertRecentContactShape(shape);
     },
-    getContactProfile: async (contactId) => await store.getContactProfile(contactId),
-    listContactProfiles: async () => await store.listContactProfiles(),
+    getRecentContactShape: async (contactId) => await store.getRecentContactShape(contactId),
+    listRecentContactShapes: async () => await store.listRecentContactShapes(),
     addScratchpadEntry: async (content, options) => await store.addScratchpadEntry(content, options),
     replaceScratchpadEntry: async (id, content, options) => (
       await store.replaceScratchpadEntry(id, content, options)

@@ -107,7 +107,7 @@ export interface RetrievalTelemetry {
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
   operatorApproval: boolean;
   provenanceRefs: string[];
-  profileIncluded?: boolean;
+  recentContactShapeIncluded?: boolean;
   emotionalSnapshotIncluded?: boolean;
   emotionalContinuityCount?: number;
   topSimilarity?: number;

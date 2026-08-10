@@ -10,6 +10,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
+import { createPostgresMemoryStoreFromPool } from '../../faculties/memory/postgres-store.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from './migrations.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
@@ -174,6 +175,78 @@ async function exerciseSubjectEvidenceTransitions(
 }
 
 describe('Postgres pgvector extension schema targeting', () => {
+  it('quarantines legacy contact profile prose until a live Recent Contact Shape rebuild', async () => {
+    if (!harness) throw new Error('Postgres integration harness is not available');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'psfn-recent-contact-shape-cutover',
+      max: 1,
+    });
+    try {
+      await pool.query(`
+        CREATE TABLE contact_profiles (
+          contact_id TEXT PRIMARY KEY,
+          summary_text TEXT NOT NULL,
+          source_memory_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+          confidence_score DOUBLE PRECISION NOT NULL,
+          novelty_score DOUBLE PRECISION NOT NULL,
+          updated_at BIGINT NOT NULL
+        )
+      `);
+      await pool.query(`
+        INSERT INTO contact_profiles (
+          contact_id, summary_text, source_memory_ids,
+          confidence_score, novelty_score, updated_at
+        ) VALUES (
+          'contact-legacy', 'Unverified legacy prose', '["memory-legacy"]'::jsonb,
+          0.9, 0.8, 1000
+        )
+      `);
+
+      await runPostgresMigrations(pool, POSTGRES_MEMORY_MIGRATIONS);
+
+      await expect(pool.query(`
+        SELECT
+          to_regclass('contact_profiles')::text AS legacy_table,
+          to_regclass('recent_contact_shapes')::text AS current_table,
+          schema_version,
+          updated_at,
+          fresh_until
+        FROM recent_contact_shapes
+        WHERE contact_id = 'contact-legacy'
+      `)).resolves.toMatchObject({
+        rows: [{
+          legacy_table: null,
+          current_table: 'recent_contact_shapes',
+          schema_version: 0,
+          updated_at: '1000',
+          fresh_until: '1000',
+        }],
+      });
+
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
+      await expect(store.getRecentContactShape('contact-legacy')).resolves.toBeUndefined();
+
+      const rebuilt = {
+        schemaVersion: 1 as const,
+        contactId: 'contact-legacy',
+        summary: 'Current source-grounded interaction shape',
+        sourceMemoryIds: ['memory-current'],
+        confidenceScore: 0.9,
+        noveltyScore: 0.8,
+        updatedAt: 2000,
+        freshUntil: 3000,
+      };
+      await store.upsertRecentContactShape(rebuilt);
+      await expect(store.getRecentContactShape('contact-legacy')).resolves.toEqual(rebuilt);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('migrates an unprovisioned legacy database with pgvector in public', async () => {
     if (!harness) throw new Error('Postgres integration harness is not available');
     const database = await harness.createDatabase({ provisionExtensionSchema: false });

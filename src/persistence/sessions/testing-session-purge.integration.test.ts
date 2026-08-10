@@ -78,13 +78,15 @@ describe('testing-session purge with PostgreSQL projection', () => {
           sensitivity TEXT NOT NULL,
           consent_flags JSONB NOT NULL
         );
-        CREATE TABLE contact_profiles (
+        CREATE TABLE recent_contact_shapes (
+          schema_version INTEGER NOT NULL,
           contact_id TEXT PRIMARY KEY,
           summary_text TEXT NOT NULL,
           source_memory_ids JSONB NOT NULL,
           confidence_score DOUBLE PRECISION NOT NULL,
           novelty_score DOUBLE PRECISION NOT NULL,
-          updated_at BIGINT NOT NULL
+          updated_at BIGINT NOT NULL,
+          fresh_until BIGINT NOT NULL
         );
         CREATE TABLE memory_links (
           id1 TEXT NOT NULL,
@@ -171,12 +173,12 @@ describe('testing-session purge with PostgreSQL projection', () => {
         JSON.stringify({ channelId: neighboringSessionId, sessionId: neighboringSessionId }),
       ]);
       await companionPool.query(`
-        INSERT INTO contact_profiles (
-          contact_id, summary_text, source_memory_ids,
-          confidence_score, novelty_score, updated_at
+        INSERT INTO recent_contact_shapes (
+          schema_version, contact_id, summary_text, source_memory_ids,
+          confidence_score, novelty_score, updated_at, fresh_until
         ) VALUES
-          ('contact-testing', 'derived from testing', '["memory-testing-session"]'::jsonb, 0.9, 1, 1000),
-          ('contact-neighbor', 'derived from neighbor', '["memory-neighbor-session"]'::jsonb, 0.9, 1, 1000)
+          (1, 'contact-testing', 'derived from testing', '["memory-testing-session"]'::jsonb, 0.9, 1, 1000, 2000),
+          (1, 'contact-neighbor', 'derived from neighbor', '["memory-neighbor-session"]'::jsonb, 0.9, 1, 1000, 2000)
       `);
       await companionPool.query(`
         INSERT INTO memory_links (id1, id2, link_type, created_at)
@@ -246,7 +248,7 @@ describe('testing-session purge with PostgreSQL projection', () => {
         'SELECT id FROM l2_memories ORDER BY id',
       )).rows).toEqual([{ id: 'memory-neighbor-session' }]);
       expect((await companionPool.query<{ contact_id: string }>(
-        'SELECT contact_id FROM contact_profiles ORDER BY contact_id',
+        'SELECT contact_id FROM recent_contact_shapes ORDER BY contact_id',
       )).rows).toEqual([{ contact_id: 'contact-neighbor' }]);
       expect((await companionPool.query<{ count: string }>(
         'SELECT COUNT(*)::text AS count FROM memory_links',

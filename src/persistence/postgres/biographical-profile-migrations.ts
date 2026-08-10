@@ -7,9 +7,10 @@
  * envelopes are stored as JSONB; indexed columns support subject, kind, status,
  * and digest lookups without hydrating the envelope. Claims are never deleted:
  * supersession and revocation update `status` (and the cached
- * effective_sensitivity inside `claim_json`) and preserve history. Legacy
- * `contact_profiles` cutover criteria are recorded in `docs/specifications.md`
- * (Live Alpha Migration Boundary).
+ * effective_sensitivity inside `claim_json`) and preserve history. The former
+ * `contact_profiles` prose authority is cut over by the memory migration to a
+ * freshness-bound `recent_contact_shapes` projection; version-0 legacy rows
+ * are not read by runtime prompt assembly.
  */
 export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATION_ADVISORY_LOCK = [
   1_297_431_347,

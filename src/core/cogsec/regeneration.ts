@@ -25,7 +25,7 @@ type Awaitable<T> = T | Promise<T>;
 export type CogSecRegenerationArtifactClass =
   | CogSecArtifactClass
   | 'focus_knowledge'
-  | 'contact_profiles';
+  | 'recent_contact_shapes';
 
 export interface CogSecRegenerationFailure {
   artifactClass: CogSecRegenerationArtifactClass;

@@ -108,8 +108,8 @@ function createService(contactStore: ContactStorePort): AdminContactsDataService
   return new AdminContactsDataService({
     contactStore,
     memoryStore: {
-      listContactProfiles: () => [],
-      getContactProfile: () => undefined,
+      listRecentContactShapes: () => [],
+      getRecentContactShape: () => undefined,
     } as unknown as MemoryStorePort,
     sessionStore: {
       listChannels: () => [],

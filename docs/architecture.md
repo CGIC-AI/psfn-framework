@@ -112,7 +112,7 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 - `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
 - `EpisodicSynthesizer` runs from the gated episode-synthesis lane (scheduler timer or turn threshold, then a deterministic new-messages + relevance-minimum gate). It can create multiple candidate episodes for one day and links longer themes as graph arcs; nightly rest-window sleeptime consolidates them.
 - `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
-- `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, and profile refresh flows.
+- `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, Recent Contact Shape refresh, and typed biographical-candidate admission flows.
 - Garden exposes episodic memory through a dedicated operator page for episode, provenance, arc, and thread inspection.
 
 See [`docs/memory.md`](./memory.md) for the memory contract.

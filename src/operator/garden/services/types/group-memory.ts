@@ -73,9 +73,9 @@ export interface AdminGroupMemorySalienceView {
 
 export type AdminGroupMemoryExtractionTelemetry = EventMap['memory.extraction.end'];
 
-export type AdminGroupMemoryContactProfileStatus =
-  | 'profile_ready'
-  | 'profile_missing'
+export type AdminGroupMemoryRecentContactShapeStatus =
+  | 'recent_contact_shape_ready'
+  | 'recent_contact_shape_missing'
   | 'insufficient_source_memories'
   | 'no_activity';
 
@@ -87,9 +87,9 @@ export interface AdminGroupMemoryContactCoverage {
   subjectMemoryCount: number;
   routedMemoryCount: number;
   totalAttributedMemoryCount: number;
-  profileStatus: AdminGroupMemoryContactProfileStatus;
-  profileSourceMemoryCount?: number;
-  profileUpdatedAt?: number;
+  recentContactShapeStatus: AdminGroupMemoryRecentContactShapeStatus;
+  recentContactShapeSourceMemoryCount?: number;
+  recentContactShapeUpdatedAt?: number;
   skipReason?: string;
 }
 

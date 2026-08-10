@@ -52,7 +52,7 @@ import type {
   ModelRegistrySourceMetadata as RuntimeModelRegistrySourceMetadata,
   ModelRegistryTuningMetadata as RuntimeModelRegistryTuningMetadata,
 } from '../../../../src/shared/contracts/runtime.js';
-import type { ContactProfileArtifact as CanonicalContactProfileArtifact } from '../../../../src/faculties/memory/memory-store-port.js';
+import type { RecentContactShapeArtifact as CanonicalRecentContactShapeArtifact } from '../../../../src/faculties/memory/memory-store-port.js';
 import type { MemoryWithheldSummary as CanonicalMemoryWithheldSummary } from '../../../../src/faculties/memory/withheld-summary.js';
 import type {
   ContactConversationChannelView as CanonicalContactConversationChannelView,
@@ -149,7 +149,7 @@ import type {
   ContactConversationChannelView,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
-  ContactProfileArtifact,
+  RecentContactShapeArtifact,
   ContactUpdateResult,
   DiscoveredModel,
   MemoryWithheldSummary,
@@ -207,7 +207,7 @@ describe('admin canonical type aliases', () => {
   it('keeps contact Garden views identical to their backend contracts', () => {
     expectTypeOf<ContactChannelIdentity>().toEqualTypeOf<CanonicalContactChannelIdentity>();
     expectTypeOf<ContactChannelLink>().toEqualTypeOf<CanonicalContactChannelLink>();
-    expectTypeOf<ContactProfileArtifact>().toEqualTypeOf<CanonicalContactProfileArtifact>();
+    expectTypeOf<RecentContactShapeArtifact>().toEqualTypeOf<CanonicalRecentContactShapeArtifact>();
     expectTypeOf<ContactConversationChannelView>()
       .toEqualTypeOf<CanonicalContactConversationChannelView>();
     expectTypeOf<ContactUpdateResult>().toEqualTypeOf<CanonicalContactUpdateResult>();

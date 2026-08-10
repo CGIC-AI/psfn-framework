@@ -45,7 +45,7 @@ export const PROMPT_SECTION_SCOPE_REGISTRY: Record<
   // Memory context producers (contact/room scoped)
   memory_context: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'volatile' },
   core_memory: { producer: 'core-memory.store', scopeClass: 'dm', volatility: 'session_stable' },
-  core_profile: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'session_stable' },
+  recent_contact_shape: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'volatile' },
   relationship_context: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'volatile' },
   emotional_continuity_snapshot: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'volatile' },
   cross_session_emotional_continuity: { producer: 'memory.retrieval.formatting', scopeClass: 'dm', volatility: 'volatile' },

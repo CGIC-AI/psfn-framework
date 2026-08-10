@@ -16,9 +16,9 @@ const CORE_MEMORY_BLOCK = [
   'human: Raul, the operator.',
   '</core_memory>',
   '',
-  '<core_profile>',
-  'Distilled semantic profile for the current contact.',
-  '</core_profile>',
+  '<recent_contact_shape>',
+  'Freshness-bound recent shape for the current contact.',
+  '</recent_contact_shape>',
 ].join('\n');
 
 describe('prompt section scope provenance labels', () => {
@@ -37,9 +37,9 @@ describe('prompt section scope provenance labels', () => {
     expect(coreMemory?.scopeProvenance?.scopeClass).toBe('dm');
     expect(coreMemory?.scopeProvenance?.producer).toBe('core-memory.store');
 
-    const coreProfile = sections.find(section => section.id === 'core_profile');
-    expect(coreProfile?.scopeProvenance?.scopeKey).toBe('dm:contact-42');
-    expect(coreProfile?.scopeProvenance?.producer).toBe('memory.retrieval.formatting');
+    const recentShape = sections.find(section => section.id === 'recent_contact_shape');
+    expect(recentShape?.scopeProvenance?.scopeKey).toBe('dm:contact-42');
+    expect(recentShape?.scopeProvenance?.producer).toBe('memory.retrieval.formatting');
   });
 
   it('labels a core-memory block with the room scope key on a group turn', () => {

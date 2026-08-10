@@ -170,6 +170,8 @@ describe('verifyPostgresDumpRestore', () => {
     expect(result.vectorColumnChecked).toBe('l2_memories.embedding');
     const memories = result.tableCounts.find(entry => entry.table === 'l2_memories');
     expect(memories).toEqual({ table: 'l2_memories', restored: 1200, source: 1250 });
+    expect(result.tableCounts.find(entry => entry.table === 'recent_contact_shapes'))
+      .toEqual({ table: 'recent_contact_shapes', restored: 5, source: 5 });
     expect(result.tableCounts.filter(entry => entry.table.startsWith('biographical_')))
       .toEqual([
         { table: 'biographical_claims', restored: 5, source: 5 },

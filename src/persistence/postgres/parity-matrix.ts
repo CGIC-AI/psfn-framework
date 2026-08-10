@@ -230,7 +230,7 @@ export const POSTGRES_PARITY_MATRIX = [
       'l2_memory_abstraction_links',
       'l2_memory_maintenance_reviews',
       'memory_links',
-      'contact_profiles',
+      'recent_contact_shapes',
     ],
     codeReferences: [
       'src/faculties/memory/postgres-store.ts',

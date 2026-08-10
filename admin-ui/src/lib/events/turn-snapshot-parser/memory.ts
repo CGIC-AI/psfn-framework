@@ -296,20 +296,24 @@ function parseMemory(
   };
 }
 
-function parseContactProfile(
+function parseRecentContactShape(
   value: unknown,
   path: string,
-): NonNullable<AdminTurnMemorySnapshotData['profile']> {
+): NonNullable<AdminTurnMemorySnapshotData['recentContactShape']> {
   const source = requireExactRecord(value, path, [
-    'contactId', 'summary', 'sourceMemoryIds', 'confidenceScore', 'noveltyScore', 'updatedAt',
+    'schemaVersion', 'contactId', 'summary', 'sourceMemoryIds', 'confidenceScore',
+    'noveltyScore', 'updatedAt', 'freshUntil',
   ]);
+  if (source.schemaVersion !== 1) throw new Error(`${path}.schemaVersion must be 1`);
   return {
+    schemaVersion: 1,
     contactId: requireNonEmptyString(source.contactId, `${path}.contactId`),
     summary: requireString(source.summary, `${path}.summary`),
     sourceMemoryIds: parseStringArray(source.sourceMemoryIds, `${path}.sourceMemoryIds`),
     confidenceScore: requireUnitInterval(source.confidenceScore, `${path}.confidenceScore`),
     noveltyScore: requireUnitInterval(source.noveltyScore, `${path}.noveltyScore`),
     updatedAt: requireNonNegativeInteger(source.updatedAt, `${path}.updatedAt`),
+    freshUntil: requireNonNegativeInteger(source.freshUntil, `${path}.freshUntil`),
   };
 }
 
@@ -403,12 +407,12 @@ export function parseMemoryContext(
   path: string,
 ): AdminTurnMemorySnapshotData {
   const source = requireExactRecord(value, path, [
-    'channelId', 'profile', 'emotionalSnapshot', 'contactEmotionalMemories', 'semanticCandidates',
+    'channelId', 'recentContactShape', 'emotionalSnapshot', 'contactEmotionalMemories', 'semanticCandidates',
     'lexicalCandidates', 'episodicChains', 'proactiveCandidates', 'withheldSummary', 'versionPointer',
   ]);
-  const profile = source.profile === undefined
+  const recentContactShape = source.recentContactShape === undefined
     ? undefined
-    : parseContactProfile(source.profile, `${path}.profile`);
+    : parseRecentContactShape(source.recentContactShape, `${path}.recentContactShape`);
   const emotionalSnapshot = source.emotionalSnapshot === undefined
     ? undefined
     : parseEmotionalSnapshot(source.emotionalSnapshot, `${path}.emotionalSnapshot`);
@@ -420,7 +424,7 @@ export function parseMemoryContext(
     : parseWithheldSummary(source.withheldSummary, `${path}.withheldSummary`);
   return {
     channelId: requireNonEmptyString(source.channelId, `${path}.channelId`),
-    ...(profile !== undefined ? { profile } : {}),
+    ...(recentContactShape !== undefined ? { recentContactShape } : {}),
     ...(emotionalSnapshot !== undefined ? { emotionalSnapshot } : {}),
     contactEmotionalMemories: parseArray(
       source.contactEmotionalMemories,

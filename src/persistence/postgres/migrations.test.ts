@@ -130,6 +130,19 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb");
   });
 
+  it('cuts legacy contact profile prose over to versioned Recent Contact Shape rows', () => {
+    const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
+
+    expect(sql).toContain("to_regclass('contact_profiles')");
+    expect(sql).toContain('ALTER TABLE contact_profiles RENAME TO recent_contact_shapes');
+    expect(sql).toContain(
+      'ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 0',
+    );
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS fresh_until BIGINT');
+    expect(sql).toContain('SET fresh_until = updated_at');
+    expect(sql).toContain('CHECK (schema_version IN (0, 1))');
+  });
+
   it('creates the episode message-claim table with a one-live-claim-per-message unique index', () => {
     const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
 

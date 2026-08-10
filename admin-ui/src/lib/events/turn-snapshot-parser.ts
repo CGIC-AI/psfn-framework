@@ -10,6 +10,7 @@ import { parsePlan, parsePromptSnapshot } from './turn-snapshot-parser/plan';
 import { parsePromptContext } from './turn-snapshot-parser/provider';
 import {
   optionalString,
+  parseStringArray,
   reject,
   requireExactRecord,
   requireNonEmptyString,
@@ -40,6 +41,7 @@ const SNAPSHOT_KEYS = [
   'toolContext',
   'sessionContext',
   'memory',
+  'biographicalProjection',
   'fatigue',
 ];
 
@@ -93,6 +95,29 @@ function parseSnapshot(value: unknown): AdminTurnSnapshotData {
   const memory = source.memory === undefined
     ? undefined
     : parseMemoryContext(source.memory, 'snapshot.memory');
+  const biographicalProjection = source.biographicalProjection === undefined
+    ? undefined
+    : (() => {
+      const projection = requireExactRecord(
+        source.biographicalProjection,
+        'snapshot.biographicalProjection',
+        ['admittedClaimIds', 'withheldCount', 'contextChars'],
+      );
+      return {
+        admittedClaimIds: parseStringArray(
+          projection.admittedClaimIds,
+          'snapshot.biographicalProjection.admittedClaimIds',
+        ),
+        withheldCount: requireNonNegativeInteger(
+          projection.withheldCount,
+          'snapshot.biographicalProjection.withheldCount',
+        ),
+        contextChars: requireNonNegativeInteger(
+          projection.contextChars,
+          'snapshot.biographicalProjection.contextChars',
+        ),
+      };
+    })();
   const fatigue = source.fatigue === undefined
     ? undefined
     : parseFatigue(source.fatigue, 'snapshot.fatigue');
@@ -109,6 +134,7 @@ function parseSnapshot(value: unknown): AdminTurnSnapshotData {
     ...(toolContext !== undefined ? { toolContext } : {}),
     ...(sessionContext !== undefined ? { sessionContext } : {}),
     ...(memory !== undefined ? { memory } : {}),
+    ...(biographicalProjection !== undefined ? { biographicalProjection } : {}),
     ...(fatigue !== undefined ? { fatigue } : {}),
   };
 }

@@ -172,30 +172,36 @@ Supported until beta:
   the remaining move/warn paths before beta after every supported companion
   root no longer contains the legacy filenames or placement that the migrator
   recognizes.
-- Biographical profile typed-claim projection cutover for the legacy
-  `contact_profiles` summary (psfn-framework-o61vb). The new
-  `biographical_claims` and `biographical_grants` tables store versioned
-  companion/contact subjects, the closed `name`/`nickname`/`relationship`
-  kind registry, canonical claim and source-set digests, source snapshots,
-  effective sensitivity computed as the maximum of the kind floor, the
-  proposal, and every live source, exact digest-bound lowering grants,
-  lifecycle states, `validFrom`/`validTo` intervals, append-only supersession,
-  and audit-only recognition/developing/full collection-depth decisions. They
-  are added behind a separate persistence port with Postgres and in-memory
-  parity and do not change prompt behavior: no prompt path reads them yet, and
-  the legacy flat `contact_profiles` summary remains the prompt-resident recent
-  shape until a later tracer. Runtime must never fall back from a missing claim
-  to legacy summary prose; legacy summary text is not authority for structured
-  claims and must be rebuilt from live authorized sources. The schema enforces
-  the closed vocabularies and 64-hex digests with `CHECK` constraints, and
-  claims are append-only (no `DELETE`). Validate this boundary with the
-  biographical migration SQL assertions, the fail-closed contract tests, and
-  the Postgres roundtrip and adapter-parity tests. Remove the legacy
-  `contact_profiles` ambiguous refresh/rendering path before beta after the
-  biographical claim projection is the durable and portable authority, the
-  short summary is split into an explicitly freshness-bound Recent Contact
-  Shape, and a covered privacy-conformance run proves no fallback from missing
-  claims to summary prose remains (design: `working_docs/cross-channel-biographical-continuity-design.md`, delivery tickets o61vb.3 through o61vb.10).
+- Biographical typed-claim projection cutover for the legacy `contact_profiles`
+  summary (psfn-framework-o61vb). `biographical_claims`, grants, rebuild rows,
+  and review audits are the durable portable authority. Turn assembly obtains
+  typed claim rendering and its CogSec contributions through one atomic
+  projection result; a missing or mismatched contribution withholds the whole
+  projection, and no prompt path falls back to summary prose. Structured
+  candidates are synthesized only from live, current, exact-subject memory
+  rows, then rebound to runtime-owned subject and source snapshots before
+  admission. Legacy summary text is never an extraction source.
+
+  The memory migration renames `contact_profiles` to
+  `recent_contact_shapes`. Existing rows become `schema_version=0`, receive an
+  already-expired `fresh_until`, and are not loaded. Only a live-source rebuild
+  writes version-1 Recent Contact Shape rows. Their source memories must still
+  pass current source, subject, consent, room, destination, and Context Envelope
+  policy, and those sources contribute to outbound disclosure lineage. The
+  shape is therefore useful current interaction context, not durable biography
+  or portability authority.
+
+  This is a one-way schema cutover: no compatibility view, dual read/write, or
+  pre-cutover application rollback is supported after migration. Rollback
+  requires restoring the pre-cutover Postgres dump. Retain version-0 rows only
+  until an exact-head o61vb.10 privacy-conformance run and a scratch
+  backup/restore verification both pass and the operator confirms that no
+  pre-cutover image rollback is required; then delete those expired rows and
+  remove the migration-only `contact_profiles` rename branch before beta.
+  Validate the boundary with migration SQL assertions, source-rebuild and
+  atomic-projection tests, Postgres adapter/parity checks, and the restore
+  verifier (design: `working_docs/cross-channel-biographical-continuity-design.md`,
+  delivery tickets o61vb.3 through o61vb.10).
 - Forward-schema rollback bridges for the live-alpha Postgres memory and model
   usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
   default so an image from before the anchor column can insert a new live

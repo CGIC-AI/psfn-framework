@@ -72,6 +72,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   },
   observer_eval_sidecar: { label: 'observer eval sidecar', requirement: 'optional' },
   biographical_profile_garden: { label: 'biographical profile Garden', requirement: 'optional' },
+  biographical_projection: { label: 'biographical profile projection', requirement: 'required' },
   icp_admin_projection: { label: 'ICP admin projection', requirement: 'optional' },
   speaking_arbiter_admin_projection: {
     label: 'speaking arbiter admin projection',

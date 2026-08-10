@@ -50,7 +50,10 @@ import { HumanAttentionPressureLedger } from '../../../core/agent/fatigue/human-
 import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
-import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
+import {
+  MemoryExtractor,
+  type MemoryExtractorFormationOptions,
+} from '../../../faculties/memory/extraction.js';
 import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type {
@@ -94,7 +97,7 @@ import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/l
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort, MemoryProvider } from '../../../core/agent/contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
@@ -527,6 +530,8 @@ export interface MemoryRuntimeOptions {
   isAutoContactCreationAllowed?: ((channelId: string) => boolean) | null;
   /** Shared persona preamble service (E6.1); soft persona framing before extraction/profile prompts. */
   personaPreamble?: PersonaPreamblePort | null;
+  biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
+  biographicalRebuild?: MemoryExtractorFormationOptions['biographicalRebuild'];
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -542,6 +547,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.episodicStore ?? null,
 	      options.sessionManager,
 	      true,
+	      options.biographicalProjection ?? null,
 	    )
 	    : new MemoryRetriever(
 	      options.memoryStore,
@@ -553,6 +559,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.episodicStore ?? null,
 	      options.sessionManager,
 	      true,
+	      options.biographicalProjection ?? null,
 	    );
 
   const extractorFormationOptions = {
@@ -564,6 +571,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.personaPreamble
       ? { personaPreamble: options.personaPreamble }
+      : {}),
+    ...(options.biographicalRebuild
+      ? { biographicalRebuild: options.biographicalRebuild }
       : {}),
   };
   const memoryExtractor = options.config

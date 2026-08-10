@@ -931,6 +931,7 @@ export async function handleMessageForTurn(
         conversationScope,
         conversationChannelEpoch: currentChannelClassificationEpoch(conversationScope.channelId),
         memorySources: preTurnState.disclosureMemorySources,
+        biographicalSources: preTurnState.disclosureBiographicalSources,
         wikiSources: preTurnState.disclosureWikiSources,
         toolResultSources: [],
       }));
@@ -1209,6 +1210,7 @@ export async function handleMessageForTurn(
       // to undefined and the epoch gate stays inert (byte-identical).
       conversationChannelEpoch: currentChannelClassificationEpoch(conversationScope.channelId),
       memorySources: preTurnState.disclosureMemorySources,
+      biographicalSources: preTurnState.disclosureBiographicalSources,
       wikiSources: preTurnState.disclosureWikiSources,
       toolResultSources: toolResultDisclosureSources,
     });

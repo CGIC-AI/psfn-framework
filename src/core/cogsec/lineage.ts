@@ -103,7 +103,7 @@ export interface CogSecLineageGap {
     | 'active_memory_cache'
     | 'episodic_landmarks'
     | 'profile_artifacts'
-    | 'contact_profiles'
+    | 'recent_contact_shapes'
     | 'persona_artifacts';
   reason: string;
 }
@@ -539,7 +539,7 @@ export async function buildCogSecLineagePreview(
     gaps.push(gap('active_memory_cache', 'external_artifact_provider_not_provided'));
     gaps.push(gap('episodic_landmarks', 'external_artifact_provider_not_provided'));
     gaps.push(gap('profile_artifacts', 'external_artifact_provider_not_provided'));
-    gaps.push(gap('contact_profiles', 'external_artifact_provider_not_provided'));
+    gaps.push(gap('recent_contact_shapes', 'external_artifact_provider_not_provided'));
     gaps.push(gap('persona_artifacts', 'external_artifact_provider_not_provided'));
   }
   externalArtifacts.sort((left, right) => (

@@ -37,7 +37,7 @@ function makeStore(initialMemories: Array<PurrMemory & { similarity: number }>) 
     searchByEmbedding: vi.fn(async () => memories),
     searchByText: vi.fn(async () => []),
     updateMemory: vi.fn(async () => undefined),
-    getContactProfile: vi.fn(async () => undefined),
+    getRecentContactShape: vi.fn(async () => undefined),
     getById: vi.fn(async (id: string) => memories.find(memory => memory.id === id)),
     getMemoriesByContact: vi.fn(async () => []),
     getMemoriesByChannel: vi.fn(async () => []),

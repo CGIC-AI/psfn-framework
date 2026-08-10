@@ -60,7 +60,7 @@ export function buildAdminContactRoutes(options: {
               200,
               {
                 ...data,
-                profileMap: Object.fromEntries(data.profileMap.entries()),
+                recentContactShapeMap: Object.fromEntries(data.recentContactShapeMap.entries()),
                 relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
                 socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
                 relationshipScoreMap: Object.fromEntries(data.relationshipScoreMap?.entries() ?? []),

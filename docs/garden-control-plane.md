@@ -234,7 +234,7 @@ a `member` with the same contact binding would):
   snapshot memory candidates require a current single-contact subject
   classification naming the viewer, concern deltas require a matching
   contactId, contact deltas must be the viewer's own row, and categories
-  without per-item attribution (contact profile artifact, episodic chains)
+  without per-item attribution (Recent Contact Shape artifact, episodic chains)
   are dropped from fleet reads entirely. The service also re-asserts the
   Invariant 11 companion scope against its bound companion, so a context
   admitted for companion A can never read companion B's session stores even

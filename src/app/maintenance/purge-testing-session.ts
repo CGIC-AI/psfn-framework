@@ -170,7 +170,9 @@ export function runTestingSessionPurgeCli(
       console.log(`Projection channel: ${report.channelId}`);
       console.log(`Removed journal files: ${report.removedJournalFiles.join(', ')}`);
       console.log(`Removed durable memories: ${report.database.removedMemoryRows}`);
-      console.log(`Removed contact profiles: ${report.database.removedContactProfileRows}`);
+      console.log(
+        `Removed recent contact shapes: ${report.database.removedRecentContactShapeRows}`,
+      );
       console.log(`Tail cache: ${report.tailCache.message}`);
       return report;
     },

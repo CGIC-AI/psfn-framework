@@ -49,24 +49,24 @@ describe('subject-authorized memory store', () => {
     const rawList = vi.fn(() => {
       throw new Error('raw profile listing must not run');
     });
-    const getContactProfile = vi.fn(async (contactId: string) => profiles.get(contactId));
-    const upsertContactProfile = vi.fn(async () => undefined);
+    const getRecentContactShape = vi.fn(async (contactId: string) => profiles.get(contactId));
+    const upsertRecentContactShape = vi.fn(async () => undefined);
     const authorized = createSubjectAuthorizedMemoryStore({
-      getContactProfile,
-      listContactProfiles: rawList,
-      upsertContactProfile,
+      getRecentContactShape,
+      listRecentContactShapes: rawList,
+      upsertRecentContactShape,
     } as unknown as MemoryStorePort, { viewerContactId: 'contact-self' });
 
-    await expect(authorized.getContactProfile('contact-self')).resolves.toEqual(selfProfile);
-    await expect(authorized.getContactProfile('contact-other')).resolves.toBeUndefined();
-    await expect(authorized.listContactProfiles()).resolves.toEqual([selfProfile]);
-    await expect(authorized.upsertContactProfile(otherProfile))
+    await expect(authorized.getRecentContactShape('contact-self')).resolves.toEqual(selfProfile);
+    await expect(authorized.getRecentContactShape('contact-other')).resolves.toBeUndefined();
+    await expect(authorized.listRecentContactShapes()).resolves.toEqual([selfProfile]);
+    await expect(authorized.upsertRecentContactShape(otherProfile))
       .rejects.toThrow('trusted memory subject');
-    await expect(authorized.upsertContactProfile(selfProfile)).resolves.toBeUndefined();
+    await expect(authorized.upsertRecentContactShape(selfProfile)).resolves.toBeUndefined();
 
-    expect(getContactProfile).toHaveBeenCalledTimes(2);
+    expect(getRecentContactShape).toHaveBeenCalledTimes(2);
     expect(rawList).not.toHaveBeenCalled();
-    expect(upsertContactProfile).toHaveBeenCalledWith(selfProfile);
+    expect(upsertRecentContactShape).toHaveBeenCalledWith(selfProfile);
   });
 
   it('routes body, snippet, count, embedding, known-id, update, and bulk access through the SQL primitive', async () => {

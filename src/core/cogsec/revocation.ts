@@ -19,7 +19,7 @@ type Awaitable<T> = T | Promise<T>;
 export type CogSecRevocationArtifactClass =
   | CogSecArtifactClass
   | 'focus_knowledge'
-  | 'contact_profiles';
+  | 'recent_contact_shapes';
 
 export interface CogSecRevocationFailure {
   artifactClass: CogSecRevocationArtifactClass;

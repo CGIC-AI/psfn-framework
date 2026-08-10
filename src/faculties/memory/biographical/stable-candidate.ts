@@ -1,4 +1,5 @@
 import { hasExactKeys, isRecord } from '../../../shared/utils/types.js';
+import { BiographicalClaimValidationError } from './claim-kinds.js';
 import { prepareBiographicalClaim } from './store-port.js';
 import type { BiographicalClaimWriteInput } from './store-port.js';
 import type { BiographicalClaimKind } from './types.js';
@@ -34,7 +35,7 @@ export function parsePortableStableCandidate(
       ],
     )
   ) {
-    throw new Error(
+    throw new BiographicalClaimValidationError(
       'portable stable candidate has unknown or missing fields; status and free-form notes are forbidden',
     );
   }
@@ -42,7 +43,9 @@ export function parsePortableStableCandidate(
     typeof value.kind !== 'string'
     || !(PORTABLE_STABLE_KINDS as readonly string[]).includes(value.kind)
   ) {
-    throw new Error(`portable stable candidate kind must be one of: ${PORTABLE_STABLE_KINDS.join(', ')}`);
+    throw new BiographicalClaimValidationError(
+      `portable stable candidate kind must be one of: ${PORTABLE_STABLE_KINDS.join(', ')}`,
+    );
   }
 
   const prepared = prepareBiographicalClaim({

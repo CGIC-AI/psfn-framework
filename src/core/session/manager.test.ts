@@ -21,7 +21,7 @@ import { REDACTED_SESSION_ENTRY_PLACEHOLDER } from './continuity-redaction.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
-  PROFILE_SYNTHESIS_PROMPT_KEY,
+  RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
   PromptRegistryStore,
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
@@ -239,9 +239,9 @@ function createPromptRegistryFixture(dir: string): PromptRegistryStore {
       checksum: 'seed',
     },
     {
-      key: PROFILE_SYNTHESIS_PROMPT_KEY,
-      text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
-      description: 'Canonical contact profile synthesis prompt.',
+      key: RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY,
+      text: getDefaultPromptText(RECENT_CONTACT_SHAPE_SYNTHESIS_PROMPT_KEY),
+      description: 'Canonical Recent Contact Shape synthesis prompt.',
       consumers: ['src/faculties/memory/extraction.ts'],
       version: 1,
       updatedAt: new Date().toISOString(),

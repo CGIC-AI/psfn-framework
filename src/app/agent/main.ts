@@ -629,17 +629,13 @@ async function main(): Promise<void> {
     },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
-    ...(intakeQuarantineWriter
-      ? {
-        quarantine: {
-          hold: (input: Parameters<typeof intakeQuarantineWriter.hold>[0]) => {
-            const entry = intakeQuarantineWriter.hold(input);
-            emitGardenQueueChanged(eventBus, 'intake-quarantine');
-            return entry;
-          },
-        },
-      }
-      : {}),
+    quarantine: {
+      hold: (input: Parameters<typeof intakeQuarantineWriter.hold>[0]) => {
+        const entry = intakeQuarantineWriter.hold(input);
+        emitGardenQueueChanged(eventBus, 'intake-quarantine');
+        return entry;
+      },
+    },
   });
   sessionManager.intakeScreening = intakeScreening;
   agentLoop.cogSecMode = intakePolicy.mode;

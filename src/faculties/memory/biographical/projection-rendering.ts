@@ -88,7 +88,7 @@ function isCurrentAuthorSharedLanguage(claim: BiographicalClaim): boolean {
     && claim.value.kind === 'shared-language';
 }
 
-export function isBiographicalClaimCurrent(claim: BiographicalClaim, now: Date): boolean {
+function isBiographicalClaimCurrent(claim: BiographicalClaim, now: Date): boolean {
   if (claim.status !== 'active') return false;
   const nowMs = now.getTime();
   if (claim.validFrom !== undefined && Date.parse(claim.validFrom) > nowMs) return false;
@@ -243,7 +243,7 @@ export function presentBiographicalClaim(
     ?.present(claim);
 }
 
-export function compareBiographicalPresentations(
+function compareBiographicalPresentations(
   left: BiographicalClaimPresentation,
   right: BiographicalClaimPresentation,
 ): number {

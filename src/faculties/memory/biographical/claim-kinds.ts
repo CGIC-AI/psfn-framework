@@ -430,9 +430,9 @@ export function assertRelatedSubjectShape(
   }
 }
 
-export type BiographicalClaimValidityRule = 'durable' | 'temporal-role';
+type BiographicalClaimValidityRule = 'durable' | 'temporal-role';
 
-export function claimKindValidityRule(
+function claimKindValidityRule(
   kind: BiographicalClaimKind,
 ): BiographicalClaimValidityRule {
   return kind === 'role' ? 'temporal-role' : 'durable';

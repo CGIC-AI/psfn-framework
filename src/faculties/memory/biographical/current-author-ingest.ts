@@ -29,7 +29,7 @@ import {
   type BiographicalSubjectRef,
 } from './types.js';
 
-export type CurrentAuthorIdentityCandidate =
+type CurrentAuthorIdentityCandidate =
   | { readonly kind: 'name'; readonly name: string; readonly role: 'primary' | 'alias' }
   | { readonly kind: 'relationship'; readonly relationshipType: HumanRelationshipType }
   | { readonly kind: 'relational_nickname'; readonly nickname: string };

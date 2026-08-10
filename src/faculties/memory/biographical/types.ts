@@ -124,7 +124,7 @@ export const BIOGRAPHICAL_ROLE_TYPES = [
   'community',
   'creative',
 ] as const;
-export type BiographicalRoleType = (typeof BIOGRAPHICAL_ROLE_TYPES)[number];
+type BiographicalRoleType = (typeof BIOGRAPHICAL_ROLE_TYPES)[number];
 
 export interface RoleClaimValue {
   readonly kind: 'role';
@@ -141,7 +141,7 @@ export const BIOGRAPHICAL_PREFERENCE_DOMAINS = [
   'environment',
   'communication',
 ] as const;
-export type BiographicalPreferenceDomain = (typeof BIOGRAPHICAL_PREFERENCE_DOMAINS)[number];
+type BiographicalPreferenceDomain = (typeof BIOGRAPHICAL_PREFERENCE_DOMAINS)[number];
 
 export const BIOGRAPHICAL_PREFERENCE_POLARITIES = [
   'likes',
@@ -149,7 +149,7 @@ export const BIOGRAPHICAL_PREFERENCE_POLARITIES = [
   'prefers',
   'avoids',
 ] as const;
-export type BiographicalPreferencePolarity =
+type BiographicalPreferencePolarity =
   (typeof BIOGRAPHICAL_PREFERENCE_POLARITIES)[number];
 
 export interface StablePreferenceClaimValue {
@@ -166,7 +166,7 @@ export const BIOGRAPHICAL_SHARED_LANGUAGE_TYPES = [
   'reference',
   'signal',
 ] as const;
-export type BiographicalSharedLanguageType =
+type BiographicalSharedLanguageType =
   (typeof BIOGRAPHICAL_SHARED_LANGUAGE_TYPES)[number];
 
 export interface SharedLanguageClaimValue {

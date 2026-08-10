@@ -2,7 +2,7 @@ import type { BiographicalDepthPolicy } from '../../../system/config/biographica
 import { trustAtLeast, type TrustLevel } from '../../../system/trust/types.js';
 import type { BiographicalCollectionDepth, BiographicalSubjectRef } from './types.js';
 
-export interface VerifiedGovernedContextEvidence {
+interface VerifiedGovernedContextEvidence {
   readonly verified: boolean;
   readonly contextId: string;
   readonly governanceAuthorityRef: string;

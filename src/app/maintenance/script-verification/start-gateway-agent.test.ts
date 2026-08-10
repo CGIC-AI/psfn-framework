@@ -823,6 +823,7 @@ describe('start-gateway-agent launcher supervision', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
+          CONFIG_DIR: join(repoRoot, 'config'),
           COMPANION_ID: '22222222-2222-4222-8222-222222222222',
         },
       });

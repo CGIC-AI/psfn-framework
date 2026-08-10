@@ -103,4 +103,23 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_biographical_rebuild_pending ON biographical_rebuild_queue(status, queued_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_biographical_rebuild_claim ON biographical_rebuild_queue(claim_id);`,
+  `
+  CREATE TABLE IF NOT EXISTS biographical_review_audits (
+    id TEXT PRIMARY KEY,
+    claim_id TEXT NOT NULL,
+    claim_digest TEXT NOT NULL,
+    source_set_digest TEXT NOT NULL,
+    action TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    audit_json JSONB NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT biographical_review_claim_digest_check CHECK (claim_digest ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT biographical_review_source_set_digest_check CHECK (source_set_digest ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT biographical_review_action_check CHECK (action IN ('approve', 'deny', 'revoke', 'regrant')),
+    CONSTRAINT biographical_review_decision_check CHECK (decision IN ('allowed', 'denied')),
+    CONSTRAINT biographical_review_reason_check CHECK (reason IN ('approved', 'denied', 'grant-revoked', 'grant-recorded', 'malformed', 'unauthorized', 'claim-not-found', 'stale-claim-digest', 'stale-source-set-digest', 'grant-not-found', 'grant-digest-mismatch', 'invalid-state'))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_biographical_review_claim ON biographical_review_audits(claim_id, recorded_at, id);`,
 ];

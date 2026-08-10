@@ -49,6 +49,10 @@ import type {
   BiographicalRebuildListOptions,
   BiographicalRebuildRequest,
 } from './lifecycle.js';
+import type {
+  BiographicalReviewAuditInput,
+  BiographicalReviewAuditRecord,
+} from './review-audit.js';
 
 /**
  * Deep persistence module for the biographical profile projection. Both the
@@ -556,7 +560,7 @@ export interface BiographicalProfileStorePort {
   /** Lifecycle transition (candidate→active, active→contested, …). */
   transitionClaim(input: BiographicalTransitionInput): Promise<BiographicalClaim>;
   recordGrant(input: BiographicalGrantWriteInput): Promise<BiographicalSensitivityGrant>;
-  /** Grants whose digests match the claim's current digests. */
+  /** All grants for the exact claim digest; callers enforce source-set equality. */
   listGrantsForClaim(claimId: string): Promise<BiographicalSensitivityGrant[]>;
   revokeGrant(grantId: string, input: BiographicalGrantRevokeInput): Promise<BiographicalSensitivityGrant>;
   getGrant(grantId: string): Promise<BiographicalSensitivityGrant | undefined>;
@@ -567,6 +571,8 @@ export interface BiographicalProfileStorePort {
     completion: NonNullable<BiographicalRebuildRequest['completion']>,
     now: Date,
   ): Promise<BiographicalRebuildRequest>;
+  recordReviewAudit(input: BiographicalReviewAuditInput): Promise<BiographicalReviewAuditRecord>;
+  listReviewAudits(claimId: string, limit: number): Promise<BiographicalReviewAuditRecord[]>;
   /** Serializes one subject+kind admission and rolls every write back on error. */
   runClaimTransaction<T>(
     subject: BiographicalSubjectRef,

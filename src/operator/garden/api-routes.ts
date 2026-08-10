@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
 import { buildAdminMemoryRoutes } from './api-routes-memory.js';
+import { buildAdminBiographicalReviewRoutes } from './api-routes-biographical-review.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
 import {
@@ -12,6 +13,7 @@ import {
 import { buildAdminContactRoutes } from './routes/contact-routes.js';
 import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
+import type { AdminBiographicalReviewService } from './services/biographical-review-service.js';
 import { buildAdminRoomRoutes } from './api-routes-rooms.js';
 import { buildAdminPlacesRoutes } from './api-routes-places.js';
 import { buildAdminWikiScopeRoutes } from './api-routes-wiki-scopes.js';
@@ -302,6 +304,7 @@ export function buildAdminApiRoutes(options: {
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
+  biographicalReviewService?: AdminBiographicalReviewService | null;
   privacyBreakGlassService?: AdminPrivacyBreakGlassService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
@@ -362,6 +365,7 @@ export function buildAdminApiRoutes(options: {
     episodicMemoryService,
     groupMemoryService,
     memoryService,
+    biographicalReviewService,
     privacyBreakGlassService,
     sessionService,
     contactsService,
@@ -863,6 +867,11 @@ export function buildAdminApiRoutes(options: {
       },
     },
     ...buildAdminMemoryRoutes({ memoryService, subjectAuditService, withBody }),
+    ...buildAdminBiographicalReviewRoutes({
+      service: biographicalReviewService ?? null,
+      withBody,
+      appendAuditTimelineEntry,
+    }),
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
     {
       method: 'GET',

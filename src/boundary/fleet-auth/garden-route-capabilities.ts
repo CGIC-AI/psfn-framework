@@ -140,6 +140,7 @@ const requiredBodyPatterns = new Set([
   'POST /v1/fleet-auth/lifecycle/role/complete',
   'POST /login',
   'POST /api/admin/chat/bootstrap',
+  'POST /api/admin/biographical-claims/:claimId/review',
   'PATCH /api/admin/chat/bootstrap',
   'POST /api/admin/concerns/:concernId/transition',
   'POST /api/admin/confirmations/resolve',
@@ -216,6 +217,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/contact-approvals'], [['GET', 'POST'], '/api/admin/contacts'],
   ['GET', '/api/admin/dashboard'], ['GET', '/api/admin/dashboard/analysis-workbench-traces'],
   ['GET', '/api/admin/diagnostics'],
+  ['GET', '/api/admin/biographical-claims'],
   [['GET', 'POST'], '/api/admin/enrollments'],
   ['GET', '/api/admin/episodic-memory/episodes'], ['GET', '/api/admin/episodic-memory/threads'],
   ['GET', '/api/admin/evals/observer-sidecar/export'], ['GET', '/api/admin/evals/observer-sidecar/health'],
@@ -274,6 +276,8 @@ const fixedRoutes: readonly RouteTuple[] = [
 ];
 
 const dynamicRoutes: readonly RouteTuple[] = [
+  ['GET', '/api/admin/biographical-claims/:claimId'],
+  ['POST', '/api/admin/biographical-claims/:claimId/review'],
   [['GET', 'PUT', 'PATCH', 'DELETE'], '/api/admin/contacts/:id'],
   ['POST', '/api/admin/contacts/:id/merge'], ['POST', '/api/admin/contacts/:id/unlink'],
   ['POST', '/api/admin/contacts/:id/conversation-channel/delete'],
@@ -337,7 +341,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
-  '/values', '/wiki', '/wishlist',
+  '/values', '/wiki', '/wishlist', '/biographical-profile',
 ] as const);
 
 function bodyPolicy(method: GardenForwardMethod, pattern: string): GardenBodyPolicy {

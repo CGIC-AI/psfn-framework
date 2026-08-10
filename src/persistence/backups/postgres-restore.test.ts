@@ -175,6 +175,7 @@ describe('verifyPostgresDumpRestore', () => {
         { table: 'biographical_claims', restored: 5, source: 5 },
         { table: 'biographical_grants', restored: 5, source: 5 },
         { table: 'biographical_rebuild_queue', restored: 5, source: 5 },
+        { table: 'biographical_review_audits', restored: 5, source: 5 },
       ]);
   });
 

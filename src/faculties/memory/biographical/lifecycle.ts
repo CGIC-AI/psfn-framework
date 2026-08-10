@@ -83,6 +83,7 @@ export interface BiographicalRebuildEnqueueResult {
 
 export interface BiographicalRebuildListOptions {
   readonly status?: BiographicalRebuildRequest['status'];
+  readonly claimId?: string;
   readonly limit: number;
 }
 

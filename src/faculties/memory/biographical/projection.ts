@@ -508,7 +508,15 @@ export async function projectBiographicalContext(
       sources: currentSources,
       now,
     });
-    if (drifted) {
+    const grants = await deps.store.listGrantsForClaim(claim.id);
+    const { effectiveSensitivity, appliedGrant } = applyLoweringGrant({
+      claimDigest: claim.claimDigest,
+      sourceSetDigest: currentSourceSetDigest,
+      automaticSensitivity,
+      grants,
+      now,
+    });
+    if (drifted && appliedGrant === undefined) {
       const priorAutomatic = computeAutomaticSensitivity({
         kind: claim.kind,
         proposedSensitivity: claim.proposedSensitivity,
@@ -543,14 +551,6 @@ export async function projectBiographicalContext(
       });
       continue;
     }
-    const grants = await deps.store.listGrantsForClaim(claim.id);
-    const { effectiveSensitivity, appliedGrant } = applyLoweringGrant({
-      claimDigest: claim.claimDigest,
-      sourceSetDigest: currentSourceSetDigest,
-      automaticSensitivity,
-      grants,
-      now,
-    });
 
     const originChannelId = currentSources[0]?.sourceChannelId;
     const eligible = effectiveEligibleInDestination(

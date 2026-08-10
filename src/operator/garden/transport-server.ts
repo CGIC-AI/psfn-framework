@@ -173,6 +173,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       episodicMemoryService: config.services.episodicMemory,
       groupMemoryService: config.services.groupMemory,
       memoryService: config.services.memory,
+      biographicalReviewService: config.services.biographicalReview ?? null,
       privacyBreakGlassService: config.services.privacyBreakGlass,
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,
@@ -259,6 +260,7 @@ export class GardenAdminTransportServer implements Lifecycle {
 
   async stop(): Promise<void> {
     this.config.services.ownerFileReloadWatcher?.close();
+    await this.config.services.biographicalReview?.close();
     await this.config.services.icpAutonomy?.close?.();
     await this.config.services.roomArbiter?.close?.();
     const serverClosePromise = this.beginServerClose();

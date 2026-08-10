@@ -29,6 +29,11 @@ import {
 import { assertGrantRecord, BiographicalLifecycleError } from './kernel.js';
 import { assertKnownClaimKind } from './claim-kinds.js';
 import type { BiographicalSubjectRef } from './types.js';
+import {
+  prepareBiographicalReviewAudit,
+  type BiographicalReviewAuditInput,
+  type BiographicalReviewAuditRecord,
+} from './review-audit.js';
 
 interface StoredClaimRow {
   readonly id: string;
@@ -85,6 +90,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   private readonly claims = new Map<string, StoredClaimRow>();
   private readonly grants = new Map<string, StoredGrantRow>();
   private readonly rebuilds = new Map<string, StoredRebuildRow>();
+  private readonly reviewAudits = new Map<string, BiographicalReviewAuditRecord>();
   private transactionTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
@@ -108,6 +114,12 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       .filter(
         grant => grant.claimDigest === claimDigest && grant.sourceSetDigest === sourceSetDigest,
       );
+  }
+
+  private grantsByClaimDigest(claimDigest: string): BiographicalSensitivityGrant[] {
+    return [...this.grants.values()]
+      .map(row => deserializeGrant(row.grantJson))
+      .filter(grant => grant.claimDigest === claimDigest);
   }
 
   private projectClaimAtReadTime(claim: BiographicalClaim, now: Date): BiographicalClaim {
@@ -260,7 +272,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
 
   async listGrantsForClaim(claimId: string): Promise<BiographicalSensitivityGrant[]> {
     const claim = this.readClaim(claimId);
-    return this.grantsByDigests(claim.claimDigest, claim.sourceSetDigest);
+    return this.grantsByClaimDigest(claim.claimDigest);
   }
 
   async revokeGrant(
@@ -344,6 +356,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     return [...this.rebuilds.values()]
       .map(row => deserializeBiographicalRebuildRequest(JSON.parse(row.rebuildJson) as unknown))
       .filter(request => options.status === undefined || request.status === options.status)
+      .filter(request => options.claimId === undefined || request.claimId === options.claimId)
       .sort((left, right) => {
         const queuedOrder = left.queuedAt.localeCompare(right.queuedAt);
         return queuedOrder !== 0 ? queuedOrder : left.id.localeCompare(right.id);
@@ -382,15 +395,18 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     const claimSnapshot = new Map(this.claims);
     const grantSnapshot = new Map(this.grants);
     const rebuildSnapshot = new Map(this.rebuilds);
+    const reviewAuditSnapshot = new Map(this.reviewAudits);
     try {
       return await operation(this);
     } catch (error) {
       this.claims.clear();
       this.grants.clear();
       this.rebuilds.clear();
+      this.reviewAudits.clear();
       for (const [id, row] of claimSnapshot) this.claims.set(id, row);
       for (const [id, row] of grantSnapshot) this.grants.set(id, row);
       for (const [id, row] of rebuildSnapshot) this.rebuilds.set(id, row);
+      for (const [id, record] of reviewAuditSnapshot) this.reviewAudits.set(id, record);
       throw error;
     } finally {
       release();
@@ -403,6 +419,30 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     operation: (store: BiographicalProfileStorePort) => Promise<T>,
   ): Promise<T> {
     return await this.runTransaction(operation);
+  }
+
+  async recordReviewAudit(
+    input: BiographicalReviewAuditInput,
+  ): Promise<BiographicalReviewAuditRecord> {
+    const record = prepareBiographicalReviewAudit(input);
+    this.reviewAudits.set(record.id, record);
+    return record;
+  }
+
+  async listReviewAudits(
+    claimId: string,
+    limit: number,
+  ): Promise<BiographicalReviewAuditRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('biographical review audit limit must be a positive integer');
+    }
+    return [...this.reviewAudits.values()]
+      .filter(record => record.claimId === claimId)
+      .sort((left, right) => {
+        const timeOrder = left.recordedAt.localeCompare(right.recordedAt);
+        return timeOrder !== 0 ? timeOrder : left.id.localeCompare(right.id);
+      })
+      .slice(0, limit);
   }
 
   async runSubjectTransaction<T>(

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const routeSources = new Map(
   [
     ['memory', './+page.svelte'],
+    ['biographical-profile', '../biographical-profile/+page.svelte'],
     ['episodic-memory', '../episodic-memory/LazyPageContent.svelte'],
     ['wiki', '../wiki/+page.svelte'],
     ['wishlist', '../wishlist/+page.svelte'],
@@ -18,6 +19,7 @@ const routeSources = new Map(
     ['values', '../values/+page.svelte'],
   ].map(([route, path]) => [route, readFileSync(new URL(path, import.meta.url), 'utf8')]),
 );
+const biographyPanel = readFileSync(new URL('./BiographicalClaimsPanel.svelte', import.meta.url), 'utf8');
 
 describe('memory and identity Garden route composition', () => {
   it.each([...routeSources.entries()])('%s adopts the shared page shell and header', (_route, source) => {
@@ -44,5 +46,17 @@ describe('memory and identity Garden route composition', () => {
       expect(source).toContain('garden-table-scroll');
       expect(source).toContain('garden-table');
     }
+  });
+
+  it('keeps biography review redacted, exact-digest bound, and responsive', () => {
+    expect(routeSources.get('memory')).not.toContain('<BiographicalClaimsPanel />');
+    expect(routeSources.get('biographical-profile')).toContain('<BiographicalClaimsPanel />');
+    expect(biographyPanel).toContain('Source bodies never appear here');
+    expect(biographyPanel).toContain('garden-split-view');
+    expect(biographyPanel).toContain('garden-table-shell');
+    expect(biographyPanel).toContain('currentSourceSetDigest');
+    expect(biographyPanel).toContain('claimDigest: detail.claim.claimDigest');
+    expect(biographyPanel).toContain('hasActiveCurrentGrant()');
+    expect(biographyPanel).not.toContain('sourceBody');
   });
 });

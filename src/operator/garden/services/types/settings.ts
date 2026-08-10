@@ -10,6 +10,7 @@ import type { ChannelClassificationSource } from '../../../../system/trust/polic
 import type { CapabilityTierConfig } from '../../../../system/config/capability-tier-config.js';
 import type { ChargePolicyConfig } from '../../../../system/config/charge-policy-config.js';
 import type { SettingsContractData } from '../../../../system/config/settings-contract.js';
+import type { SettingsDomainGardenProjection } from '../../../../system/config/settings-domain-registry.js';
 import type { BackupJsonConfig } from '../../../../system/config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../../system/config/models-config.js';
 import type { ProvidersRuntimeConfig } from '../../../../system/config/providers-config.js';
@@ -229,7 +230,7 @@ export interface AdminIntakeSourceListMutationInput {
 
 export interface AdminSettingsService {
   getSettingsData(context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminSettingsData>;
-  getSettingsContractData(context?: import('../../garden-request-context.js').GardenRequestContext): SettingsContractData;
+  getSettingsContractData(context?: import('../../garden-request-context.js').GardenRequestContext): SettingsContractData & { domains: SettingsDomainGardenProjection };
   updateSettings(
     body: string,
     context?: import('../../garden-request-context.js').GardenRequestContext,

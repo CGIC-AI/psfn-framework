@@ -27,7 +27,12 @@ import {
   SETTINGS_BOOLEAN_FIELDS,
   SETTINGS_OWNER_FILE_BY_FIELD,
   SETTINGS_STRING_ARRAY_FIELDS,
+  type SettingsContractData,
 } from '../../../system/config/settings-contract.js';
+import {
+  buildSettingsDomainGardenProjection,
+  type SettingsDomainGardenProjection,
+} from '../../../system/config/settings-domain-registry.js';
 import {
   COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
   mergeCompanionSettingsOverlayPatch,
@@ -1206,11 +1211,17 @@ export class AdminSettingsDataService implements AdminSettingsService {
     };
   }
 
-  getSettingsContractData() {
-    return buildSettingsContractData({
+  getSettingsContractData(): SettingsContractData & { domains: SettingsDomainGardenProjection } {
+    const contractData = buildSettingsContractData({
       sttProviderIds: listStreamingSttProviders(),
       ttsProviderIds: listStreamingTtsProviders(),
     });
+    // Share one canonical domain projection with Garden so runtime resolution
+    // and UI rendering consult the same registry (psfn-framework-4ssd5.1).
+    return {
+      ...contractData,
+      domains: buildSettingsDomainGardenProjection(contractData.fields),
+    };
   }
 
   async updateSettings(body: string): Promise<ConfigUpdateResult> {

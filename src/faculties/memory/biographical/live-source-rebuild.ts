@@ -17,7 +17,7 @@ export interface LiveBiographicalMemoryEvidence {
   readonly source: BiographicalClaimSource;
 }
 
-export interface LiveSourceRebuildWithheld {
+interface LiveSourceRebuildWithheld {
   readonly candidateIndex: number;
   readonly reason: 'candidate_limit' | 'malformed_candidate' | 'source_mismatch' | 'source_drift';
 }

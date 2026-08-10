@@ -6,6 +6,8 @@
   import { base } from '$app/paths';
   import { navGroups } from '$lib/nav';
   import OperatorNavigation from '$lib/components/navigation/OperatorNavigation.svelte';
+  import FleetNavigation from '$lib/components/navigation/FleetNavigation.svelte';
+  import { resolveFleetView } from '$lib/fleet/fleet-views';
   import type { ConsoleNavigationGroup } from '$lib/nav/presentation';
   import {
     ATTENTION_SOURCES,
@@ -164,6 +166,7 @@
     $page.url.pathname === '/login' || companionScope?.innerPath === '/login',
   );
   let isFleetPage = $derived(isFleetOverviewPath($page.url.pathname));
+  const activeFleetView = $derived(resolveFleetView($page.url.search, $page.url.hash));
 
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
@@ -330,15 +333,29 @@
 {#if isLoginPage}
   {@render children()}
 {:else if isFleetPage}
-  <div class="relative">
-    <button
-      type="button"
-      onclick={handleLogout}
-      class="garden-action fixed bottom-4 right-4 z-30 bg-surface/95 shadow-lg backdrop-blur"
-    >
-      Sign out
-    </button>
-    {@render children()}
+  <div class="relative flex h-screen bg-bark-100">
+    <FleetNavigation
+      activeView={activeFleetView}
+      onLogout={handleLogout}
+      bind:mobileOpen={mobileNavOpen}
+    />
+
+    <main class="min-w-0 flex-1 overflow-y-auto">
+      {#if !isDesktop}
+        <button
+          type="button"
+          onclick={() => mobileNavOpen = true}
+          class="garden-action fixed bottom-4 left-4 z-20 rounded-full bg-surface/95 shadow-lg backdrop-blur lg:hidden"
+          aria-label="Open cluster navigation"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          Menu
+        </button>
+      {/if}
+      {@render children()}
+    </main>
   </div>
 {:else}
   <div class="relative flex h-screen bg-bark-100">

@@ -351,25 +351,3 @@
     </div>
   </div>
 {/if}
-
-<style>
-  :global(.rail-tip) {
-    pointer-events: none;
-    position: absolute;
-    left: 3rem;
-    z-index: 80;
-    display: none;
-    white-space: nowrap;
-    border-radius: 0.375rem;
-    background: var(--color-shadow-900);
-    padding: 0.3rem 0.5rem;
-    color: var(--color-bark-50);
-    font-size: 0.72rem;
-    line-height: 1rem;
-    box-shadow: 0 8px 20px rgba(38, 35, 30, 0.16);
-  }
-
-  :global(.group:hover > .rail-tip) {
-    display: block;
-  }
-</style>

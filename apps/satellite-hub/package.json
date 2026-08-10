@@ -1,0 +1,46 @@
+{
+  "name": "psfn-satellite-hub",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@11.17.0",
+  "scripts": {
+    "build": "npm run build:ts",
+    "test": "npm run test:ts",
+    "build:ts": "node scripts/clean-ts-dist.mjs && tsc -p tsconfig.json",
+    "firmware:compile:waveshare-bedroom": "npm run firmware:prepare:waveshare-bedroom && uvx --from esphome==2026.6.5 esphome compile satellites/waveshare-bedroom/esphome/bedroom-satellite.yaml",
+    "firmware:prepare:waveshare-bedroom": "node scripts/prepare-waveshare-bedroom-firmware.mjs",
+    "firmware:validate:waveshare-bedroom": "npm run firmware:prepare:waveshare-bedroom && uvx --from esphome==2026.6.5 esphome config satellites/waveshare-bedroom/esphome/bedroom-satellite.yaml",
+    "hub:ts": "tsx src/ts/hub/main.ts",
+    "lint": "npm run check:ts",
+    "pi:ts": "tsx src/ts/pi-client/main.ts",
+    "smoke:ts": "node scripts/smoke-ts-hub.mjs",
+    "shell:psfn": "node scripts/psfn-thin-shell.mjs",
+    "studio:build": "npm run build:ts && node scripts/build-device-studio.mjs",
+    "studio:dev": "npm run studio:build && node scripts/serve-device-studio.mjs",
+    "studio:smoke:sprites": "npm run studio:build && node scripts/smoke-device-studio-sprite-editor.mjs",
+    "studio:sprites": "npm run build:ts && node dist/ts/device-studio/sprite-cli.js",
+    "test:firmware": "npm run firmware:prepare:waveshare-bedroom && node --test satellites/waveshare-bedroom/tests/firmware_wiring.test.mjs && c++ -std=c++17 -Wall -Wextra -Werror -pedantic satellites/waveshare-bedroom/tests/ui_state_test.cpp -o /tmp/psfn-waveshare-ui-state-test && /tmp/psfn-waveshare-ui-state-test",
+    "test:ts": "npm run build:ts && node --test dist/ts/**/*.test.js",
+    "check:ts": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.10.1",
+    "dotenv": "^16.6.1",
+    "openai": "^5.20.2",
+    "three": "^0.184.0",
+    "ws": "^8.18.3",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/three": "^0.184.1",
+    "@types/ws": "^8.18.1",
+    "playwright": "^1.60.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=24.19.0 <25"
+  }
+}

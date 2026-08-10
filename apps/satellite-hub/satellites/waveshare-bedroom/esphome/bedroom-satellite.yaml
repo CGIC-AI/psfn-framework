@@ -1,0 +1,79 @@
+# Prepared from the immutable upstream profile recorded in ../source-lock.json.
+# Run `npm run firmware:prepare:waveshare-bedroom` before validation or build.
+packages:
+  hardware_baseline: !include ../.generated/upstream-profile.yaml
+
+substitutions:
+  name: purrsephone-bedroom
+  friendly_name: Purrsephone Bedroom
+
+esphome:
+  includes:
+    - includes/ui_state.h
+
+# The upstream full profile enables copying executable code and read-only
+# assets into PSRAM. Its embedded UI assets alone exceed this board's 8 MB
+# PSRAM, causing an abort before setup(). Leave them mapped in 16 MB flash and
+# reserve PSRAM for the audio pipelines and display buffers.
+esp32:
+  framework:
+    sdkconfig_options:
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "n"
+      CONFIG_SPIRAM_RODATA: "n"
+
+image:
+  - file: ../assets/sprites/purrsephone-idle-360.png
+    id: purrsephone_idle
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-thinking-360.png
+    id: purrsephone_thinking
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-sleeping-360.png
+    id: purrsephone_sleeping
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-tool-use-360.png
+    id: purrsephone_tool_use
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-talking-360.png
+    id: purrsephone_talking
+    type: RGB565
+    transparency: alpha_channel
+
+binary_sensor:
+  - platform: template
+    id: headpat_signal
+    name: Headpat
+
+script:
+  - id: headpat_feedback
+    mode: restart
+    then:
+      - lvgl.widget.show: headpat_feedback_label
+      - delay: 100ms
+      - lambda: id(headpat_signal).publish_state(false);
+      - delay: 600ms
+      - lvgl.widget.hide: headpat_feedback_label
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  actions:
+    # Native push-to-talk seam used by the Purrsephone face and by transport
+    # diagnostics. This intentionally bypasses the borrowed intercom runtime
+    # controller while retaining ESPHome's on-device silence detection.
+    - action: start_voice_turn
+      then:
+        - voice_assistant.start:
+            silence_detection: true
+    - action: stop_voice_turn
+      then:
+        - voice_assistant.stop:
+
+ota:
+  - platform: esphome
+    id: !extend ota_esphome
+    password: !secret ota_password

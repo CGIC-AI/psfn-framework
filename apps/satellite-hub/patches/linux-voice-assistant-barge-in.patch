@@ -1,0 +1,192 @@
+diff --git a/docker-entrypoint.sh b/docker-entrypoint.sh
+index 4d7b023..86bb7a4 100755
+--- a/docker-entrypoint.sh
++++ b/docker-entrypoint.sh
+@@ -80,6 +80,18 @@ if [ -n "${UNMUTE_SOUND}" ]; then
+   EXTRA_ARGS+=( "--unmute-sound" "$UNMUTE_SOUND" )
+ fi
+ 
++if [ -n "${BARGE_IN_RMS_THRESHOLD}" ]; then
++  EXTRA_ARGS+=( "--barge-in-rms-threshold" "$BARGE_IN_RMS_THRESHOLD" )
++fi
++
++if [ -n "${BARGE_IN_HOLD_CHUNKS}" ]; then
++  EXTRA_ARGS+=( "--barge-in-hold-chunks" "$BARGE_IN_HOLD_CHUNKS" )
++fi
++
++if [ -n "${BARGE_IN_DUCK_FACTOR}" ]; then
++  EXTRA_ARGS+=( "--barge-in-duck-factor" "$BARGE_IN_DUCK_FACTOR" )
++fi
++
+ 
+ # Add cookie file for pulseaudio to prevent errors
+ PULSE_COOKIE=${PULSE_COOKIE:-"/run/user/1000/pulse/cookie"}
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index ba1d2a8..432255c 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -150,6 +150,24 @@ async def main() -> None:
+         action="store_true",
+         help="Add this to enable debug logging",
+     )
++    parser.add_argument(
++        "--barge-in-rms-threshold",
++        type=float,
++        default=0.08,
++        help="RMS threshold for speech-first interruption while TTS is playing",
++    )
++    parser.add_argument(
++        "--barge-in-hold-chunks",
++        type=int,
++        default=3,
++        help="Consecutive audio chunks above threshold before interrupting TTS",
++    )
++    parser.add_argument(
++        "--barge-in-duck-factor",
++        type=float,
++        default=0.35,
++        help="Temporary TTS ducking factor applied while confirming a barge-in",
++    )
+     args = parser.parse_args()
+ 
+     if args.list_input_devices:
+@@ -379,7 +397,14 @@ async def main() -> None:
+ 
+     process_audio_thread = threading.Thread(
+         target=process_audio,
+-        args=(state, mic, args.audio_input_block_size),
++        args=(
++            state,
++            mic,
++            args.audio_input_block_size,
++            args.barge_in_rms_threshold,
++            args.barge_in_hold_chunks,
++            args.barge_in_duck_factor,
++        ),
+         daemon=True,
+     )
+     process_audio_thread.start()
+@@ -404,7 +429,14 @@ async def main() -> None:
+ # -----------------------------------------------------------------------------
+ 
+ 
+-def process_audio(state: ServerState, mic, block_size: int):
++def process_audio(
++    state: ServerState,
++    mic,
++    block_size: int,
++    barge_in_rms_threshold: float,
++    barge_in_hold_chunks: int,
++    barge_in_duck_factor: float,
++):
+     """Process audio chunks from the microphone."""
+ 
+     wake_words: List[Union[MicroWakeWord, OpenWakeWord]] = []
+@@ -423,10 +455,18 @@ def process_audio(state: ServerState, mic, block_size: int):
+             while True:
+                 audio_chunk_array = mic_in.record(block_size).reshape(-1)
+                 audio_chunk = (np.clip(audio_chunk_array, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()  # little-endian 16-bit signed
++                rms = float(np.sqrt(np.mean(np.square(audio_chunk_array, dtype=np.float32))))
+ 
+                 if state.satellite is None:
+                     continue
+ 
++                state.satellite.handle_barge_in_signal(
++                    rms,
++                    threshold=barge_in_rms_threshold,
++                    hold_chunks=barge_in_hold_chunks,
++                    duck_factor=barge_in_duck_factor,
++                )
++
+                 if (not wake_words) or (state.wake_words_changed and state.wake_words):
+                     # Update list of wake word models to process
+                     state.wake_words_changed = False
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 8782eb6..fa04ed1 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -156,6 +156,8 @@ class VoiceSatelliteProtocol(APIServer):
+         self._pipeline_active = False
+         self._external_wake_words: Dict[str, VoiceAssistantExternalWakeWord] = {}
+         self._disconnect_event = asyncio.Event()
++        self._barge_in_chunks = 0
++        self._barge_in_ducked = False
+ 
+     def _set_thinking_sound_enabled(self, new_state: bool) -> None:
+         self.state.thinking_sound_enabled = bool(new_state)
+@@ -194,6 +196,7 @@ class VoiceSatelliteProtocol(APIServer):
+             self._tts_played = False
+             self._continue_conversation = False
+             self._pipeline_active = True
++            self._clear_barge_in()
+         elif event_type == VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_START and self.state.thinking_sound_enabled:
+             # Play short "thinking/processing" sound if configured
+             processing = getattr(self.state, "processing_sound", None)
+@@ -408,6 +411,7 @@ class VoiceSatelliteProtocol(APIServer):
+         self._is_streaming_audio = True
+ 
+     def stop(self) -> None:
++        self._clear_barge_in()
+         self.state.active_wake_words.discard(self.state.stop_word.id)
+         self._pipeline_active = False
+ 
+@@ -425,6 +429,7 @@ class VoiceSatelliteProtocol(APIServer):
+         if (not self._tts_url) or self._tts_played:
+             return
+ 
++        self._clear_barge_in()
+         self._tts_played = True
+         _LOGGER.debug("Playing TTS response: %s", self._tts_url)
+ 
+@@ -439,7 +444,43 @@ class VoiceSatelliteProtocol(APIServer):
+         _LOGGER.debug("Unducking music")
+         self.state.music_player.unduck()
+ 
++    def _clear_barge_in(self) -> None:
++        self._barge_in_chunks = 0
++        if self._barge_in_ducked:
++            self.state.tts_player.unduck()
++            self._barge_in_ducked = False
++
++    def handle_barge_in_signal(
++        self,
++        rms: float,
++        *,
++        threshold: float,
++        hold_chunks: int,
++        duck_factor: float,
++    ) -> None:
++        if self.state.muted or self._is_streaming_audio or (not self._pipeline_active) or (not self.state.tts_player.is_playing):
++            self._clear_barge_in()
++            return
++
++        if rms < threshold:
++            self._clear_barge_in()
++            return
++
++        if not self._barge_in_ducked:
++            _LOGGER.debug("Barge-in speech detected; ducking TTS (rms=%.3f)", rms)
++            self.state.tts_player.duck(duck_factor)
++            self._barge_in_ducked = True
++
++        self._barge_in_chunks += 1
++        if self._barge_in_chunks < hold_chunks:
++            return
++
++        _LOGGER.info("Barge-in interrupt triggered (rms=%.3f, chunks=%s)", rms, self._barge_in_chunks)
++        self._clear_barge_in()
++        self.stop()
++
+     def _tts_finished(self) -> None:
++        self._clear_barge_in()
+         self._pipeline_active = False
+         self.state.active_wake_words.discard(self.state.stop_word.id)
+         self.send_messages([VoiceAssistantAnnounceFinished()])
+@@ -472,6 +513,7 @@ class VoiceSatelliteProtocol(APIServer):
+         super().connection_lost(exc)
+ 
+         self._disconnect_event.set()
++        self._clear_barge_in()
+         self._is_streaming_audio = False
+         self._tts_url = None
+         self._tts_played = False

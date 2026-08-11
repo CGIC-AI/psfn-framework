@@ -191,9 +191,9 @@ export interface HubStreamClientLike {
   disconnect(): void;
   sendUserText(text: string, options?: { interrupt?: boolean }): void;
   interrupt(): void;
-  startPcmAudioStream?(): Promise<void>;
-  sendPcmAudio?(pcm: Uint8Array): void;
-  stopPcmAudioStream?(): Promise<void>;
+  startPcmAudioStream(): Promise<void>;
+  sendPcmAudio(pcm: Uint8Array): Promise<void>;
+  stopPcmAudioStream(): Promise<void>;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
@@ -419,21 +419,15 @@ export class HubStreamStore {
   }
 
   startPcmAudioStream(): Promise<void> {
-    if (!this.client.startPcmAudioStream) {
-      throw new Error('Microphone audio is unavailable on this transport');
-    }
     return this.client.startPcmAudioStream();
   }
 
-  sendPcmAudio(pcm: Uint8Array): void {
-    if (!this.client.sendPcmAudio) {
-      throw new Error('Microphone audio is unavailable on this transport');
-    }
-    this.client.sendPcmAudio(pcm);
+  sendPcmAudio(pcm: Uint8Array): Promise<void> {
+    return this.client.sendPcmAudio(pcm);
   }
 
   stopPcmAudioStream(): Promise<void> {
-    return this.client.stopPcmAudioStream?.() ?? Promise.resolve();
+    return this.client.stopPcmAudioStream();
   }
 
   /**
@@ -789,7 +783,11 @@ function applyInboundMessage(
     case 'action':
       // A server-driven interrupt or pause stops in-flight speech (barge-in).
       if (message.data === 'interrupt' || message.data === 'pause-audio') {
-        return { ...base, voicePlayback: resetVoicePlayback(base.voicePlayback) };
+        return {
+          ...base,
+          phase: message.data === 'interrupt' ? 'interrupted' : 'listening',
+          voicePlayback: resetVoicePlayback(base.voicePlayback),
+        };
       }
       return base;
     case 'pong':

@@ -733,6 +733,9 @@ export async function startOptionalGatewayApiServer(
             });
             return screened.effectiveText;
           },
+          cancelAudioInteraction: async ({ interactionId }) => {
+            activeCompanionUiInteractions.get(interactionId)?.abort();
+          },
         } : {}),
         actionBroker: new GatewayCompanionUiActionBroker({
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),

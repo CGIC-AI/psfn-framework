@@ -126,6 +126,7 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
   const screenAudioTranscript = vi.fn(async (input: { transcript: string }) => (
     input.transcript === 'hello there' ? 'screened speech' : input.transcript
   ));
+  const cancelAudioInteraction = vi.fn(async () => undefined);
   const adapter = new CompanionUiWebSocketAdapter({
     canonicalOrigin: 'https://fleet.example.test',
     satelliteApiKeys: [satelliteKey],
@@ -155,7 +156,11 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
     }),
     hubDeviceIngress: { admit } as never,
     actionBroker: { execute } as never,
-    ...(audioIngress ? { audioIngress, screenAudioTranscript } : {}),
+    ...(audioIngress ? {
+      audioIngress,
+      screenAudioTranscript,
+      cancelAudioInteraction,
+    } : {}),
     eventRelay,
     ...(options.guest ? {
       guestMode: 'explicit' as const,
@@ -177,6 +182,7 @@ function fixture(options: { guest?: boolean; audio?: boolean } = {}) {
     webSocket,
     audioIngress,
     screenAudioTranscript,
+    cancelAudioInteraction,
   };
 }
 
@@ -565,6 +571,112 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
     expect(built.webSocket.closeArgs[0]).toBe(4403);
     expect(built.execute).not.toHaveBeenCalled();
+    await built.adapter.stop();
+  });
+
+  it('interrupts the server-owned active audio turn without accepting an interaction id', async () => {
+    const built = fixture({ audio: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-stream-interrupt',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+
+    let finishAction!: () => void;
+    built.execute.mockImplementationOnce(() => new Promise(resolve => {
+      finishAction = () => resolve({
+        content: '',
+        channelId: 'server-owned-channel',
+        inputTokens: 1,
+        outputTokens: 0,
+      });
+    }));
+    const delivering = built.audioIngress?.callbacks?.onUtterance('interrupt me');
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.turn.started',
+        requestId: 'z02-stream-interrupt',
+      }),
+    ));
+
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'z02-stream-interrupt',
+    })), false);
+    await vi.waitFor(() => expect(built.cancelAudioInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companionId,
+        attachment: expect.objectContaining({ channel: expect.objectContaining({ companionId }) }),
+        interactionId: expect.any(String),
+      }),
+    ));
+    expect(built.cancelAudioInteraction.mock.calls[0]?.[0])
+      .not.toHaveProperty('browserInteractionId');
+    finishAction();
+    await delivering;
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: 'audio.turn.ended',
+        requestId: 'z02-stream-interrupt',
+      }),
+    ));
+    expect(built.webSocket.sent).toContainEqual(JSON.stringify({
+      schemaVersion: 1,
+      type: 'event',
+      event: { type: 'action', data: 'interrupt' },
+    }));
+    await built.adapter.stop();
+  });
+
+  it('reserves audio startup synchronously so concurrent starts cannot orphan an STT session', async () => {
+    const built = fixture({ audio: true });
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-capabilities'] = 'text,audio_input,speech_to_text';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    let releaseStart!: () => void;
+    built.audioIngress?.start.mockImplementationOnce(() => new Promise(resolve => {
+      releaseStart = () => resolve({
+        writePcm: built.audioIngress!.writePcm,
+        stop: built.audioIngress!.stop,
+        cancel: built.audioIngress!.cancel,
+      });
+    }));
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-start-a',
+    })), false);
+    await vi.waitFor(() => expect(built.audioIngress?.start).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.start',
+      requestId: 'z02-start-b',
+    })), false);
+
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    releaseStart();
+    await vi.waitFor(() => expect(built.audioIngress?.cancel).toHaveBeenCalled());
+    expect(built.webSocket.sent).not.toContainEqual(expect.stringContaining('"type":"audio.ready"'));
     await built.adapter.stop();
   });
 });

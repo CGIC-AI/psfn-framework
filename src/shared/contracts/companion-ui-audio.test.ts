@@ -25,6 +25,11 @@ describe('Companion UI audio wire contract', () => {
     }))).toEqual({ schemaVersion: 1, type: 'audio.start', requestId: 'z02-stream-1' });
     expect(parseCompanionUiAudioControlFrame(JSON.stringify({
       schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'z02-stream-1',
+    }))).toEqual({ schemaVersion: 1, type: 'audio.interrupt', requestId: 'z02-stream-1' });
+    expect(parseCompanionUiAudioControlFrame(JSON.stringify({
+      schemaVersion: 1,
       type: 'audio.stop',
       requestId: 'z02-stream-1',
     }))).toEqual({ schemaVersion: 1, type: 'audio.stop', requestId: 'z02-stream-1' });

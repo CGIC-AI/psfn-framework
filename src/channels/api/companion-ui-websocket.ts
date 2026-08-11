@@ -90,6 +90,13 @@ export interface CompanionUiWebSocketConfig {
       transcript: string;
     }>,
   ) => Promise<string>;
+  readonly cancelAudioInteraction?: (
+    input: Readonly<{
+      companionId: CompanionId;
+      attachment: HubDeviceAttachmentSnapshot;
+      interactionId: string;
+    }>,
+  ) => Promise<void>;
   readonly eventRelay: CompanionEventRelay;
   readonly guestMode?: 'disabled' | 'explicit';
   readonly guestActionBroker?: Readonly<{
@@ -128,6 +135,9 @@ interface ActiveAudioStream {
   nextSequence: number;
   pendingWrites: number;
   writeChain: Promise<void>;
+  interactionId?: string;
+  interruptedInteractionId?: string;
+  stopping: boolean;
 }
 
 function rawHeaderCount(request: IncomingMessage, name: string): number {
@@ -195,6 +205,12 @@ function companionResponseContent(result: unknown): string {
     throw new Error('Companion audio response was malformed');
   }
   return result.content;
+}
+
+function reportAudioCancellationFailure(error: unknown): void {
+  log.warn('Companion UI audio cancellation failed', {
+    errorType: error instanceof Error ? error.name : typeof error,
+  });
 }
 
 function projectCompanionEventFrame(
@@ -269,8 +285,9 @@ export class CompanionUiWebSocketAdapter {
     if (config.satelliteApiKeys.length === 0 || !config.satelliteRegistry.enabled) {
       throw new Error('Companion UI requires authenticated Satellite Hub registry authority');
     }
-    if (Boolean(config.audioIngress) !== Boolean(config.screenAudioTranscript)) {
-      throw new Error('Companion UI audio ingress requires transcript screening');
+    if (Boolean(config.audioIngress) !== Boolean(config.screenAudioTranscript)
+      || Boolean(config.audioIngress) !== Boolean(config.cancelAudioInteraction)) {
+      throw new Error('Companion UI audio ingress requires screening and interruption');
     }
     this.expectedOrigin = origin.origin;
     this.expectedHost = origin.host;
@@ -439,6 +456,7 @@ export class CompanionUiWebSocketAdapter {
     let attachment = initialAttachment;
     let closed = false;
     let configured = false;
+    let startingAudioRequestId: string | null = null;
     let activeAudio: ActiveAudioStream | null = null;
     let unsubscribeEvents: (() => void) | null = null;
     let eventDelivery = Promise.resolve();
@@ -447,6 +465,7 @@ export class CompanionUiWebSocketAdapter {
     const audioCapable = Boolean(
       this.config.audioIngress
       && this.config.screenAudioTranscript
+      && this.config.cancelAudioInteraction
       && authority.physicalCeiling.capabilities.includes('audio_input')
       && authority.physicalCeiling.capabilities.includes('speech_to_text'),
     );
@@ -461,9 +480,19 @@ export class CompanionUiWebSocketAdapter {
       clearInterval(watch);
       unsubscribeEvents?.();
       unsubscribeEvents = null;
+      startingAudioRequestId = null;
       const audio = activeAudio;
       activeAudio = null;
-      if (audio) void audio.session.cancel(reason).catch(() => undefined);
+      if (audio) {
+        if (audio.interactionId && this.config.cancelAudioInteraction) {
+          void this.config.cancelAudioInteraction({
+            companionId: authority.companionId,
+            attachment,
+            interactionId: audio.interactionId,
+          }).catch(reportAudioCancellationFailure);
+        }
+        void audio.session.cancel(reason).catch(reportAudioCancellationFailure);
+      }
       this.activeSockets.delete(socket);
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close(code, reason);
@@ -520,7 +549,19 @@ export class CompanionUiWebSocketAdapter {
           data: { message: 'Companion audio relay failed' },
         },
       });
-      void audio.session.cancel(reason).catch(() => undefined);
+      void audio.session.cancel(reason).catch(reportAudioCancellationFailure);
+    };
+    const interruptAudioInteraction = async (audio: ActiveAudioStream): Promise<void> => {
+      const interactionId = audio.interactionId;
+      const cancelAudioInteraction = this.config.cancelAudioInteraction;
+      if (!interactionId || !cancelAudioInteraction) return;
+      audio.interruptedInteractionId = interactionId;
+      await refreshAuthority();
+      await cancelAudioInteraction({
+        companionId: authority.companionId,
+        attachment,
+        interactionId,
+      });
     };
     const deliverAudioUtterance = async (requestId: string, transcript: string): Promise<void> => {
       const screenAudioTranscript = this.config.screenAudioTranscript;
@@ -543,11 +584,37 @@ export class CompanionUiWebSocketAdapter {
         resource: 'conversation.audio',
         body: { transcript: effectiveTranscript },
       }));
+      const audio = activeAudio;
+      if (!audio || audio.requestId !== requestId) return;
+      audio.interactionId = actionRequestId;
+      sendJson(socket, {
+        schemaVersion: 1,
+        type: 'audio.turn.started',
+        requestId,
+      });
       sendConversationMessage(socket, 'user', effectiveTranscript, { final: true });
-      const result = await dispatchAction(body);
-      const content = companionResponseContent(result);
-      if (streamIsActive() && content) {
-        sendConversationMessage(socket, 'assistant', content, { final: true });
+      try {
+        const result = await dispatchAction(body);
+        const content = companionResponseContent(result);
+        if (streamIsActive()
+          && audio.interruptedInteractionId !== actionRequestId
+          && content) {
+          sendConversationMessage(socket, 'assistant', content, { final: true });
+        }
+      } catch (error) {
+        if (audio.interruptedInteractionId !== actionRequestId) throw error;
+      } finally {
+        if (audio.interactionId === actionRequestId) delete audio.interactionId;
+        if (audio.interruptedInteractionId === actionRequestId) {
+          delete audio.interruptedInteractionId;
+        }
+        if (streamIsActive()) {
+          sendJson(socket, {
+            schemaVersion: 1,
+            type: 'audio.turn.ended',
+            requestId,
+          });
+        }
       }
     };
     const watch = setInterval(() => {
@@ -631,33 +698,68 @@ export class CompanionUiWebSocketAdapter {
         }
         const audioControl = tryParseAudioControl(body);
         if (audioControl?.type === 'audio.start') {
-          if (!audioCapable || !this.config.audioIngress || activeAudio) {
+          if (!audioCapable || !this.config.audioIngress
+            || startingAudioRequestId || activeAudio) {
             throw new Error('audio stream denied');
           }
           reserveRequestId(audioControl.requestId);
-          await refreshAuthority();
           const requestId = audioControl.requestId;
-          const session = await this.config.audioIngress.start({
-            companionId: authority.companionId,
-            onPartial: (text) => {
-              if (!closed && activeAudio?.requestId === requestId) {
-                sendConversationMessage(socket, 'user', text, { live: true });
-              }
-            },
-            onUtterance: async (text) => deliverAudioUtterance(requestId, text),
-            onError: () => { failAudio(requestId, 'STT stream failed'); },
-          });
-          activeAudio = {
-            requestId,
-            session,
-            nextSequence: 0,
-            pendingWrites: 0,
-            writeChain: Promise.resolve(),
-          };
+          startingAudioRequestId = requestId;
+          const startState = { failed: false };
+          const startIsCurrent = () => !closed && startingAudioRequestId === requestId;
+          try {
+            await refreshAuthority();
+            if (!startIsCurrent()) return;
+            const session = await this.config.audioIngress.start({
+              companionId: authority.companionId,
+              onPartial: (text) => {
+                if (!closed && activeAudio?.requestId === requestId) {
+                  sendConversationMessage(socket, 'user', text, { live: true });
+                }
+              },
+              onUtterance: async (text) => deliverAudioUtterance(requestId, text),
+              onError: () => {
+                if (activeAudio?.requestId === requestId) {
+                  failAudio(requestId, 'STT stream failed');
+                } else if (startingAudioRequestId === requestId) {
+                  startState.failed = true;
+                }
+              },
+            });
+            if (!startIsCurrent() || startState.failed) {
+              await session.cancel('audio start superseded')
+                .catch(reportAudioCancellationFailure);
+              if (startState.failed) throw new Error('audio stream failed during startup');
+              return;
+            }
+            activeAudio = {
+              requestId,
+              session,
+              nextSequence: 0,
+              pendingWrites: 0,
+              writeChain: Promise.resolve(),
+              stopping: false,
+            };
+            sendJson(socket, {
+              schemaVersion: 1,
+              type: 'audio.ready',
+              requestId,
+            });
+          } finally {
+            if (startingAudioRequestId === requestId) startingAudioRequestId = null;
+          }
+          return;
+        }
+        if (audioControl?.type === 'audio.interrupt') {
+          const audio = activeAudio;
+          if (!audio || audio.requestId !== audioControl.requestId || audio.stopping) {
+            throw new Error('audio stream mismatch');
+          }
+          await interruptAudioInteraction(audio);
           sendJson(socket, {
             schemaVersion: 1,
-            type: 'audio.ready',
-            requestId,
+            type: 'event',
+            event: { type: 'action', data: 'interrupt' },
           });
           return;
         }
@@ -666,6 +768,8 @@ export class CompanionUiWebSocketAdapter {
           if (!audio || audio.requestId !== audioControl.requestId) {
             throw new Error('audio stream mismatch');
           }
+          audio.stopping = true;
+          await interruptAudioInteraction(audio);
           await audio.writeChain;
           await audio.session.stop('client stop');
           if (activeAudio === audio) activeAudio = null;

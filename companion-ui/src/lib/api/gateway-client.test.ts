@@ -93,7 +93,7 @@ describe('CompanionGatewayClient', () => {
     await starting;
     socket.sent.length = 0;
 
-    client.sendPcmAudio(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
+    const delivered = client.sendPcmAudio(Uint8Array.of(0x00, 0x01, 0x02, 0x03));
     const binary = socket.sent[0];
     expect(binary).toBeInstanceOf(Uint8Array);
     expect(parseCompanionUiAudioChunk(binary as Uint8Array)).toEqual({
@@ -106,7 +106,7 @@ describe('CompanionGatewayClient', () => {
       requestId: 'audio-request-1',
       sequence: 0,
     });
-    await flushAsyncMessage();
+    await delivered;
 
     const stopping = client.stopPcmAudioStream();
     expect(socket.sent.at(-1)).toBe(JSON.stringify({
@@ -143,6 +143,36 @@ describe('CompanionGatewayClient', () => {
     socket.serverClose(1006);
 
     await expect(starting).rejects.toThrow(/closed during audio startup/u);
+  });
+
+  it('interrupts only a server-confirmed audio turn without browser-supplied authority', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['audio-request-1']);
+    const starting = client.startPcmAudioStream();
+    socket.message({ schemaVersion: 1, type: 'audio.ready', requestId: 'audio-request-1' });
+    await starting;
+    socket.sent.length = 0;
+
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.started',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+
+    expect(socket.sent).toEqual([JSON.stringify({
+      schemaVersion: 1,
+      type: 'audio.interrupt',
+      requestId: 'audio-request-1',
+    })]);
+    expect(String(socket.sent[0])).not.toMatch(/interactionId|channelId|sessionId|deviceId/u);
+    socket.message({
+      schemaVersion: 1,
+      type: 'audio.turn.ended',
+      requestId: 'audio-request-1',
+    });
+    await flushAsyncMessage();
   });
 
   it('waits for exact server attachment metadata and emits no legacy hello or browser authority', async () => {

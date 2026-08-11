@@ -42,6 +42,7 @@ const SOCKET_OPEN = 1;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
 const DEFAULT_MAX_BUFFERED_AUDIO_BYTES = 1_048_576;
+const DEFAULT_MAX_PENDING_AUDIO_FRAMES = 32;
 
 interface Deferred {
   readonly promise: Promise<void>;
@@ -55,6 +56,8 @@ interface ActiveAudioStream {
   phase: 'starting' | 'ready' | 'stopping';
   nextSequence: number;
   nextAckSequence: number;
+  readonly pendingAcks: Map<number, Deferred>;
+  turnActive: boolean;
   stopped?: Deferred;
 }
 interface PendingAction {
@@ -83,6 +86,7 @@ export interface CompanionGatewayClientOptions {
   readonly requestIdFactory?: () => string;
   readonly handshakeTimeoutMs?: number;
   readonly maxBufferedAudioBytes?: number;
+  readonly maxPendingAudioFrames?: number;
 }
 
 type Listener = (event: SatelliteHubClientEventMap[keyof SatelliteHubClientEventMap]) => void;
@@ -100,6 +104,7 @@ export class CompanionGatewayClient {
   private readonly requestIdFactory: () => string;
   private readonly handshakeTimeoutMs: number;
   private readonly maxBufferedAudioBytes: number;
+  private readonly maxPendingAudioFrames: number;
   private socket: SatelliteHubWebSocketLike | null = null;
   private state: SatelliteHubConnectionState = 'idle';
   private ready = false;
@@ -114,8 +119,12 @@ export class CompanionGatewayClient {
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
     this.maxBufferedAudioBytes = options.maxBufferedAudioBytes
       ?? DEFAULT_MAX_BUFFERED_AUDIO_BYTES;
+    this.maxPendingAudioFrames = options.maxPendingAudioFrames
+      ?? DEFAULT_MAX_PENDING_AUDIO_FRAMES;
     if (!Number.isSafeInteger(this.maxBufferedAudioBytes)
-      || this.maxBufferedAudioBytes < 1) {
+      || this.maxBufferedAudioBytes < 1
+      || !Number.isSafeInteger(this.maxPendingAudioFrames)
+      || this.maxPendingAudioFrames < 1) {
       throw new Error('Companion audio backpressure limit is invalid');
     }
   }
@@ -261,6 +270,8 @@ export class CompanionGatewayClient {
       phase: 'starting',
       nextSequence: 0,
       nextAckSequence: 0,
+      pendingAcks: new Map(),
+      turnActive: false,
     };
     this.activeAudio = audio;
     try {
@@ -274,7 +285,7 @@ export class CompanionGatewayClient {
     return started.promise;
   }
 
-  sendPcmAudio(pcm: Uint8Array): void {
+  sendPcmAudio(pcm: Uint8Array): Promise<void> {
     const socket = this.socket;
     const audio = this.activeAudio;
     if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN
@@ -282,15 +293,23 @@ export class CompanionGatewayClient {
       throw this.emitLocalError('Companion audio stream is not ready', true);
     }
     const frame = encodeCompanionUiAudioChunk(audio.nextSequence, pcm);
+    if (audio.pendingAcks.size >= this.maxPendingAudioFrames) {
+      throw this.emitLocalError('Companion audio backpressure limit was reached', true);
+    }
     if ((socket.bufferedAmount ?? 0) + frame.byteLength > this.maxBufferedAudioBytes) {
       throw this.emitLocalError('Companion audio backpressure limit was reached', true);
     }
+    const sequence = audio.nextSequence;
+    const acknowledged = createDeferred();
+    audio.pendingAcks.set(sequence, acknowledged);
     try {
       socket.send(frame);
       audio.nextSequence = (audio.nextSequence + 1) >>> 0;
     } catch (error) {
+      audio.pendingAcks.delete(sequence);
       throw this.emitLocalError('Companion audio chunk could not be sent', true, error);
     }
+    return acknowledged.promise;
   }
 
   stopPcmAudioStream(): Promise<void> {
@@ -323,6 +342,21 @@ export class CompanionGatewayClient {
   }
 
   interrupt(): void {
+    const audio = this.activeAudio;
+    const socket = this.socket;
+    if (audio?.phase === 'ready' && audio.turnActive
+      && socket?.readyState === SOCKET_OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          schemaVersion: 1,
+          type: 'audio.interrupt',
+          requestId: audio.requestId,
+        }));
+      } catch (error) {
+        throw this.emitLocalError('Companion audio turn could not be interrupted', true, error);
+      }
+      return;
+    }
     const interaction = this.activeInteraction;
     if (!interaction) return;
     const { requestId: interactionId, shardId } = interaction;
@@ -413,7 +447,8 @@ export class CompanionGatewayClient {
       throw this.emitLocalError('Companion gateway is not ready', false);
     }
     const requestId = options.requestId ?? this.requestIdFactory();
-    if (!validCompanionRequestId(requestId) || this.pending.has(requestId)) {
+    if (!validCompanionRequestId(requestId) || this.pending.has(requestId)
+      || this.activeAudio?.requestId === requestId) {
       throw this.emitLocalError('Companion request identifier is invalid', false);
     }
     const frame = { schemaVersion: 1, requestId, action, resource, body };
@@ -504,7 +539,28 @@ export class CompanionGatewayClient {
         || frame.sequence >= audio.nextSequence) {
         return this.failProtocol('Companion audio acknowledgement was out of order');
       }
+      const acknowledged = audio.pendingAcks.get(frame.sequence);
+      if (!acknowledged) {
+        return this.failProtocol('Companion audio acknowledgement was not pending');
+      }
+      audio.pendingAcks.delete(frame.sequence);
       audio.nextAckSequence = (audio.nextAckSequence + 1) >>> 0;
+      acknowledged.resolve();
+      return false;
+    }
+    if (frame.type === 'audio.turn.started') {
+      if (audio.phase !== 'ready' || audio.turnActive) {
+        return this.failProtocol('Companion audio turn started out of order');
+      }
+      audio.turnActive = true;
+      return false;
+    }
+    if (frame.type === 'audio.turn.ended') {
+      if (audio.phase !== 'ready' || !audio.turnActive) {
+        return this.failProtocol('Companion audio turn ended out of order');
+      }
+      audio.turnActive = false;
+      this.emitInbound({ type: 'action', data: 'pause-audio' });
       return false;
     }
     if (audio.phase !== 'stopping' || !audio.stopped) {
@@ -521,6 +577,8 @@ export class CompanionGatewayClient {
     if (!audio) return;
     if (audio.phase === 'starting') audio.started.reject(error);
     if (audio.phase === 'stopping') audio.stopped?.reject(error);
+    for (const pending of audio.pendingAcks.values()) pending.reject(error);
+    audio.pendingAcks.clear();
   }
 
   private consumeResult(requestId: string, pending: PendingAction, result: unknown): void {

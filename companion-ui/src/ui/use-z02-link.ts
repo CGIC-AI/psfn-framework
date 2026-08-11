@@ -34,7 +34,7 @@ type OmiDecoder = Pick<WebCodecsOmiOpusDecoder, 'close' | 'decode'>;
 
 export interface Z02AudioRelay {
   start(): Promise<void>;
-  write(pcm: Uint8Array): void;
+  write(pcm: Uint8Array): Promise<void>;
   stop(): Promise<void> | void;
 }
 
@@ -74,15 +74,21 @@ export function useZ02Link(
   createOmiDecoderRef.current = options.createOmiDecoder ?? createBrowserOmiDecoder;
   audioRelayRef.current = options.audioRelay;
 
-  const stopAudioRelay = useCallback(() => {
+  const stopAudioRelay = useCallback((reportFailure = true) => {
     const relay = activeAudioRelayRef.current;
     activeAudioRelayRef.current = null;
     if (!relay) return;
-    try {
-      void Promise.resolve(relay.stop()).catch(() => undefined);
-    } catch {
-      // The Bluetooth teardown must still complete when the backend is gone.
-    }
+    const attempt = attemptRef.current;
+    void Promise.resolve()
+      .then(() => relay.stop())
+      .catch(() => {
+        if (reportFailure && attemptRef.current === attempt) {
+          setState({
+            phase: 'error',
+            detail: 'The badge disconnected, but the Companion audio stream did not stop cleanly.',
+          });
+        }
+      });
   }, []);
 
   const link = useCallback(async () => {
@@ -117,11 +123,17 @@ export function useZ02Link(
       const relayPcm = (pcm: Uint8Array) => {
         const relay = activeAudioRelayRef.current;
         if (!relay) return;
-        try {
-          relay.write(pcm);
-          relayedFramesRef.current += 1;
-        } catch {
+        const reportRelayFailure = () => {
           reportAudioError('The Companion audio relay could not accept badge audio.');
+        };
+        try {
+          void relay.write(pcm).then(() => {
+            if (attemptRef.current !== attempt || activeAudioRelayRef.current !== relay) return;
+            relayedFramesRef.current += 1;
+            publishAudioState();
+          }).catch(reportRelayFailure);
+        } catch {
+          reportRelayFailure();
         }
       };
       const connection = await connector.connect({
@@ -219,7 +231,7 @@ export function useZ02Link(
     attemptRef.current += 1;
     connectionRef.current?.disconnect();
     connectionRef.current = null;
-    stopAudioRelay();
+    stopAudioRelay(false);
     closeOmiDecoder(omiDecoderRef.current);
     omiDecoderRef.current = null;
   }, [stopAudioRelay]);

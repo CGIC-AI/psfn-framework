@@ -456,7 +456,7 @@ describe('hub stream store control + artifact wiring', () => {
     const pcm = Uint8Array.of(0x00, 0x01);
 
     await store.startPcmAudioStream();
-    store.sendPcmAudio(pcm);
+    await store.sendPcmAudio(pcm);
     await store.stopPcmAudioStream();
 
     expect(start).toHaveBeenCalledOnce();
@@ -629,8 +629,8 @@ class FakeHubClient implements HubStreamClientLike {
     return Promise.resolve();
   }
 
-  sendPcmAudio(): void {
-    return;
+  sendPcmAudio(): Promise<void> {
+    return Promise.resolve();
   }
 
   stopPcmAudioStream(): Promise<void> {

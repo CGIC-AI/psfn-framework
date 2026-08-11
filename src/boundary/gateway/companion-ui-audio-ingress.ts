@@ -70,7 +70,11 @@ export class GatewayCompanionUiAudioIngress implements CompanionUiAudioIngressPo
         state.failure = resolved;
         callbacks.onError(resolved);
         controller.abort(resolved);
-        void stream.cancel('companion audio ingress failed').catch(() => undefined);
+        void stream.cancel('companion audio ingress failed').catch(cancelError => {
+          callbacks.onError(cancelError instanceof Error
+            ? cancelError
+            : new Error('Companion audio ingress cancellation failed'));
+        });
       }
       return resolved;
     };

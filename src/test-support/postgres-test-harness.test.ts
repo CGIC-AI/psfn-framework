@@ -1,11 +1,17 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  acquirePostgresTestHarnessLease,
   DEFAULT_POSTGRES_TEST_IMAGE,
+  formatPostgresTestHarnessQuarantineDiagnostic,
   PGVECTOR_POSTGRES_TEST_IMAGE,
   postgresTestContainerNameForImage,
   postgresTestDockerRunArgs,
   resolveMaxConcurrentHarnesses,
+  resolvePostgresTestCleanupPlan,
   resolvePostgresTestTmpfsSize,
   shouldStopContainerBetweenFiles,
 } from './postgres-test-harness.js';
@@ -143,5 +149,63 @@ describe('RAM-backed Postgres test containers', () => {
         resolvePostgresTestTmpfsSize({ PSFN_POSTGRES_TEST_TMPFS_SIZE: value }),
       ).toThrow(/Docker size/);
     }
+  });
+
+  it('quarantines a lease when client backends do not drain', () => {
+    expect(resolvePostgresTestCleanupPlan({
+      clientBackendsDrained: false,
+      databaseCount: 4,
+    })).toEqual({
+      action: 'quarantine',
+      releaseLease: false,
+    });
+    expect(formatPostgresTestHarnessQuarantineDiagnostic('test-postgres-fixture')).toBe(
+      'Postgres test harness lifecycle=quarantined reason=client_backend_drain_failed '
+      + 'possible_cause=suite_cancellation_or_connection_leak container=test-postgres-fixture '
+      + 'cleanup=deferred_until_worker_exit; reset/recycle/stop were withheld and the lease '
+      + 'was retained. A later worker may reap the stale lease and reset only after this '
+      + 'worker exits.',
+    );
+  });
+
+  it('lets a later worker reap a quarantined lease only after its owner exits', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-postgres-lease-reaper-'));
+    const lockBasePath = join(root, 'harness');
+    const lockPath = `${lockBasePath}.0.lock`;
+    const exitedOwnerPid = 4_242_424;
+    writeFileSync(lockPath, JSON.stringify({ pid: exitedOwnerPid, token: 'quarantined-owner' }));
+
+    try {
+      const lease = await acquirePostgresTestHarnessLease({
+        isOwnerRunning: pid => pid !== exitedOwnerPid,
+        lockBasePath,
+        maxConcurrentHarnesses: 1,
+        ownerPid: process.pid,
+      });
+
+      expect(lease.slot).toBe(0);
+      expect(JSON.parse(readFileSync(lockPath, 'utf8'))).toMatchObject({ pid: process.pid });
+      lease.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('hands a drained lease back only after choosing a safe reset boundary', () => {
+    expect(resolvePostgresTestCleanupPlan({
+      clientBackendsDrained: true,
+      databaseCount: 4,
+    })).toEqual({
+      action: 'reset',
+      releaseLease: true,
+    });
+    expect(resolvePostgresTestCleanupPlan({
+      clientBackendsDrained: true,
+      databaseCount: 17,
+    })).toEqual({
+      action: 'recycle',
+      releaseLease: true,
+    });
   });
 });

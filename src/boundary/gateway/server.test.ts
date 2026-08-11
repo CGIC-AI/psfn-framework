@@ -1155,6 +1155,21 @@ describe('GatewayServer', () => {
       }
     });
 
+    it('reports approval notifications degraded when an explicit topic has no ntfy notifier', async () => {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        confirmation: {
+          ntfyTopic: 'approval-explicit',
+        },
+      });
+
+      const health = await invokeRpc(conn, 17, 'runtime.health', {});
+      expect(health.result.services).toContainEqual(expect.objectContaining({
+        serviceId: 'approval_notifications',
+        status: 'degraded',
+      }));
+    });
+
     it('executes modify decision with operator-provided params', async () => {
       const originalPath = join(tempDir, 'original.txt');
       const modifiedPath = join(tempDir, 'modified.txt');

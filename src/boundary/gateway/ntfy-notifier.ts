@@ -38,7 +38,7 @@ export class GatewayNtfyNotifier {
   }
 
   hasConfiguredTopic(topic?: string): boolean {
-    return this.resolveTopic(topic) !== undefined;
+    return this.config !== undefined && this.resolveTopic(topic) !== undefined;
   }
 
   async send(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {

@@ -11,7 +11,9 @@ Load detailed workflow documents only when the task needs them:
 - Multi-bead or multi-PR implementation wave: [`docs/orchestration-process.md`](./docs/orchestration-process.md)
 - Portable gate/reviewer setup: [`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md)
 - High-risk review practices: [`docs/adversarial-review-and-bugfixing-practices.md`](./docs/adversarial-review-and-bugfixing-practices.md)
-- Live operations: [`docs/operations.md`](./docs/operations.md)
+- Runtime and framework operations: [`docs/operations.md`](./docs/operations.md);
+  deployment-specific live operations use the explicitly supplied external
+  configuration location
 
 ## Implementation first: process must earn its cost
 

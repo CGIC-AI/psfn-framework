@@ -1,5 +1,5 @@
 import { Bluetooth, CircleStop, Loader2, ShieldCheck } from 'lucide-react';
-import type { Z02LinkState } from './use-z02-link.js';
+import { isZ02LinkBusy, type Z02LinkState } from './use-z02-link.js';
 
 export function Z02LinkSection({
   state,
@@ -10,9 +10,7 @@ export function Z02LinkSection({
   onDisconnect: () => void;
   onLink: () => void;
 }) {
-  const busy = state.phase === 'selecting'
-    || state.phase === 'connecting'
-    || state.phase === 'authenticating';
+  const busy = isZ02LinkBusy(state.phase);
   const linked = state.phase === 'linked';
 
   return (

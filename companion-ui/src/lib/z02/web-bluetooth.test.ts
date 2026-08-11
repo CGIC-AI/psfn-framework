@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeStockAuthProof } from './rcsp-auth.js';
 import {
   Z02_NOTIFY_CHARACTERISTIC_UUID,
@@ -8,6 +8,10 @@ import {
   type Z02Bluetooth,
   type Z02BluetoothCharacteristic,
 } from './web-bluetooth.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('Web Bluetooth Z02 connector', () => {
   it('selects the stock service, discovers AE01/AE02, and authenticates before linking', async () => {
@@ -20,8 +24,10 @@ describe('Web Bluetooth Z02 connector', () => {
 
     expect(fixture.requestDevice).toHaveBeenCalledWith({
       filters: [
-        { services: [Z02_RCSP_SERVICE_UUID] },
-        { namePrefix: 'ZNP Z02' },
+        {
+          namePrefix: 'ZNP Z02',
+          services: [Z02_RCSP_SERVICE_UUID],
+        },
       ],
       optionalServices: [Z02_RCSP_SERVICE_UUID],
     });
@@ -50,6 +56,40 @@ describe('Web Bluetooth Z02 connector', () => {
       .rejects.toThrow('Z02 authentication failed');
     expect(fixture.disconnect).toHaveBeenCalledOnce();
   });
+
+  it('tears down a GATT connection that resolves after the visible timeout', async () => {
+    vi.useFakeTimers();
+    let resolveConnect!: (server: { getPrimaryService(): Promise<never> }) => void;
+    const disconnect = vi.fn();
+    const gatt = {
+      connected: false,
+      connect: vi.fn(() => new Promise<{ getPrimaryService(): Promise<never> }>(resolve => {
+        resolveConnect = resolve;
+      })),
+      disconnect,
+    };
+    const bluetooth = {
+      async requestDevice() {
+        return {
+          name: 'Z02 Test Badge',
+          gatt,
+          addEventListener() {},
+          removeEventListener() {},
+        };
+      },
+    } as Z02Bluetooth;
+    const linking = new WebBluetoothZ02Connector(bluetooth).connect({ disconnected: vi.fn() });
+    const timedOut = expect(linking).rejects.toThrow('Z02 connection timed out');
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await timedOut;
+
+    gatt.connected = true;
+    resolveConnect({ getPrimaryService: async () => new Promise<never>(() => undefined) });
+    await Promise.resolve();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
 });
 
 function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
@@ -73,7 +113,6 @@ function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
       }
     },
     async startNotifications() { return notifyCharacteristic; },
-    async stopNotifications() { return notifyCharacteristic; },
     addEventListener() {},
     removeEventListener() {},
   };
@@ -81,7 +120,6 @@ function createBluetoothFixture(options: { rejectProof?: boolean } = {}) {
   notifyCharacteristic = {
     value: null,
     async startNotifications() { return notifyCharacteristic; },
-    async stopNotifications() { return notifyCharacteristic; },
     async writeValueWithoutResponse() {},
     addEventListener(_type, listener) { listeners.add(listener); },
     removeEventListener(_type, listener) { listeners.delete(listener); },

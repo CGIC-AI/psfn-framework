@@ -38,7 +38,7 @@ export function useZ02Link(connectorOverride?: Z02LinkConnector | null) {
   const attemptRef = useRef(0);
 
   const link = useCallback(async () => {
-    if (!connector || connectionRef.current || isBusy(state.phase)) return;
+    if (!connector || connectionRef.current || isZ02LinkBusy(state.phase)) return;
     const attempt = ++attemptRef.current;
     let disconnectedBeforeReady = false;
     setState(progressState('selecting'));
@@ -69,6 +69,10 @@ export function useZ02Link(connectorOverride?: Z02LinkConnector | null) {
     } catch (error) {
       if (attemptRef.current !== attempt) return;
       connectionRef.current = null;
+      if (disconnectedBeforeReady) {
+        setState({ phase: 'idle', detail: 'Badge disconnected.' });
+        return;
+      }
       setState({ phase: 'error', detail: describeLinkError(error) });
     }
   }, [connector, state.phase]);
@@ -101,7 +105,7 @@ function progressState(phase: Z02LinkProgress): Z02LinkState {
   }
 }
 
-function isBusy(phase: Z02LinkPhase): boolean {
+export function isZ02LinkBusy(phase: Z02LinkPhase): boolean {
   return phase === 'selecting' || phase === 'connecting' || phase === 'authenticating';
 }
 
@@ -114,6 +118,9 @@ function describeLinkError(error: unknown): string {
   }
   if (error instanceof Error && error.message === 'Z02 authentication failed') {
     return 'The badge rejected stock authentication.';
+  }
+  if (error instanceof Error && error.message.includes('timed out')) {
+    return 'The badge stopped responding before the link completed. Tap Link Z02 to retry.';
   }
   return 'Could not link the Z02. Make sure it is on, nearby, and not connected to BagiBagi.';
 }

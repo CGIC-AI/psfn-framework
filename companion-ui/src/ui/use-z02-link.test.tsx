@@ -50,6 +50,34 @@ describe('useZ02Link', () => {
     });
   });
 
+  it('preserves an authentication-time disconnect as the visible reason', async () => {
+    const connector: Z02LinkConnector = {
+      connect: vi.fn(async callbacks => {
+        callbacks.disconnected();
+        throw new Error('Z02 link failed');
+      }),
+    };
+    const { result } = renderHook(() => useZ02Link(connector));
+
+    await act(async () => { await result.current.link(); });
+
+    expect(result.current.state).toEqual({ phase: 'idle', detail: 'Badge disconnected.' });
+  });
+
+  it('turns transport timeouts into a useful non-secret retry state', async () => {
+    const connector: Z02LinkConnector = {
+      connect: vi.fn(async () => { throw new Error('Z02 notification subscription timed out'); }),
+    };
+    const { result } = renderHook(() => useZ02Link(connector));
+
+    await act(async () => { await result.current.link(); });
+
+    expect(result.current.state).toEqual({
+      phase: 'error',
+      detail: 'The badge stopped responding before the link completed. Tap Link Z02 to retry.',
+    });
+  });
+
   it('reports unsupported browsers without starting discovery', async () => {
     const { result } = renderHook(() => useZ02Link(null));
 

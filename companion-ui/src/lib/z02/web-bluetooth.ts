@@ -5,6 +5,7 @@ export const Z02_WRITE_CHARACTERISTIC_UUID = '0000ae01-0000-1000-8000-00805f9b34
 export const Z02_NOTIFY_CHARACTERISTIC_UUID = '0000ae02-0000-1000-8000-00805f9b34fb';
 
 const CONNECTION_TIMEOUT_MS = 10_000;
+const OPERATION_TIMEOUT_MS = 6_000;
 const MAX_QUEUED_NOTIFICATIONS = 32;
 
 export type Z02LinkProgress = 'selecting' | 'connecting' | 'authenticating';
@@ -52,7 +53,6 @@ interface Z02BluetoothService {
 export interface Z02BluetoothCharacteristic {
   value?: DataView | null;
   startNotifications(): Promise<Z02BluetoothCharacteristic>;
-  stopNotifications?(): Promise<Z02BluetoothCharacteristic>;
   writeValueWithoutResponse?(value: Uint8Array): Promise<void>;
   writeValue?(value: Uint8Array): Promise<void>;
   addEventListener(type: 'characteristicvaluechanged', listener: (event: Event) => void): void;
@@ -69,8 +69,10 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
     callbacks.progress?.('selecting');
     const device = await this.bluetooth.requestDevice({
       filters: [
-        { services: [Z02_RCSP_SERVICE_UUID] },
-        { namePrefix: 'ZNP Z02' },
+        {
+          namePrefix: 'ZNP Z02',
+          services: [Z02_RCSP_SERVICE_UUID],
+        },
       ],
       optionalServices: [Z02_RCSP_SERVICE_UUID],
     });
@@ -95,16 +97,27 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
 
     try {
       callbacks.progress?.('connecting');
-      const server = await withTimeout(gatt.connect(), CONNECTION_TIMEOUT_MS, 'Z02 connection timed out');
+      const server = await withTimeout(
+        gatt.connect(),
+        CONNECTION_TIMEOUT_MS,
+        'Z02 connection timed out',
+        () => {
+          if (gatt.connected) gatt.disconnect();
+        },
+      );
       const service = await withTimeout(
         server.getPrimaryService(Z02_RCSP_SERVICE_UUID),
         CONNECTION_TIMEOUT_MS,
-        'Z02 RCSP service was not found',
+        'Z02 service discovery timed out',
       );
-      const [writeCharacteristic, notifications] = await Promise.all([
-        service.getCharacteristic(Z02_WRITE_CHARACTERISTIC_UUID),
-        service.getCharacteristic(Z02_NOTIFY_CHARACTERISTIC_UUID),
-      ]);
+      const [writeCharacteristic, notifications] = await withTimeout(
+        Promise.all([
+          service.getCharacteristic(Z02_WRITE_CHARACTERISTIC_UUID),
+          service.getCharacteristic(Z02_NOTIFY_CHARACTERISTIC_UUID),
+        ]),
+        CONNECTION_TIMEOUT_MS,
+        'Z02 characteristic discovery timed out',
+      );
       notifyCharacteristic = notifications;
       notificationListener = (event: Event) => {
         const source = event.target as Z02BluetoothCharacteristic | null;
@@ -113,7 +126,11 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
         inbox.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
       };
       notifications.addEventListener('characteristicvaluechanged', notificationListener);
-      await notifications.startNotifications();
+      await withTimeout(
+        notifications.startNotifications(),
+        OPERATION_TIMEOUT_MS,
+        'Z02 notification subscription timed out',
+      );
 
       disconnectedListener = () => {
         cleanUpListeners();
@@ -124,7 +141,11 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
 
       callbacks.progress?.('authenticating');
       const io: Z02AuthIo = {
-        write: value => writeCharacteristicValue(writeCharacteristic, value),
+        write: value => withTimeout(
+          writeCharacteristicValue(writeCharacteristic, value),
+          OPERATION_TIMEOUT_MS,
+          'Z02 authentication write timed out',
+        ),
         nextNotification: timeoutMs => inbox.next(timeoutMs),
       };
       await authenticateStockZ02(io);
@@ -138,9 +159,6 @@ export class WebBluetoothZ02Connector implements Z02LinkConnector {
           cleanUpListeners();
           inbox.close(new Error('Z02 link closed'));
           if (gatt.connected) gatt.disconnect();
-          if (notifyCharacteristic?.stopNotifications) {
-            void notifyCharacteristic.stopNotifications().catch(() => undefined);
-          }
         },
       };
     } catch (error) {
@@ -224,13 +242,26 @@ class NotificationInbox {
   }
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onLateResolution?: (value: T) => void,
+): Promise<T> {
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let expired = false;
+  const observed = promise.then(value => {
+    if (expired) onLateResolution?.(value);
+    return value;
+  });
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer = globalThis.setTimeout(() => {
+      expired = true;
+      reject(new Error(message));
+    }, timeoutMs);
   });
   try {
-    return await Promise.race([promise, timeout]);
+    return await Promise.race([observed, timeout]);
   } finally {
     if (timer !== undefined) globalThis.clearTimeout(timer);
   }

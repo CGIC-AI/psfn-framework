@@ -109,6 +109,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   intakeScreeningFailureAlertThreshold: { sectionId: 'trust', surface: 'advanced' },
   groupMemory: { sectionId: 'extraction-tuning', surface: 'advanced' },
   emotionScoping: { sectionId: 'memory', surface: 'advanced' },
+  narrativeEmotionAppraisal: { sectionId: 'memory', surface: 'advanced' },
   embeddingProvider: { sectionId: 'memory', surface: 'advanced' },
   embeddingModel: { sectionId: 'memory', surface: 'advanced' },
   embeddingDims: { sectionId: 'memory', surface: 'advanced' },

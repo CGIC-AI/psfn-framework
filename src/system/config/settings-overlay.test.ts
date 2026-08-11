@@ -328,6 +328,7 @@ describe('COMPANION_SETTINGS_OVERLAY_WHITELIST', () => {
     expect(isCompanionSettingsOverlayKey('activeTimezone')).toBe(true);
     expect(isCompanionSettingsOverlayKey('observerEvalSidecar')).toBe(true);
     expect(isCompanionSettingsOverlayKey('emotionScoping')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('narrativeEmotionAppraisal')).toBe(true);
     expect(isCompanionSettingsOverlayKey('uiThemeId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('voiceTargetGuildId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('discordTriggerReactions')).toBe(true);

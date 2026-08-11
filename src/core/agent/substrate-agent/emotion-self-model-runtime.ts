@@ -61,6 +61,8 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { LLMProviderPort } from '../contracts.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 import type { CompanionEmotionSnapshotTrigger } from '../../../shared/contracts/companion-relay.js';
+import type { NarrativeEmotionAppraisalSettings } from '../../../system/config/narrative-emotion-appraisal-config.js';
+import type { NarrativeAppraisalDriftDecision } from '../../emotion/narrative-appraisal-drift.js';
 
 /**
  * A content-free emotion projection handed to the companion emotion relay
@@ -115,6 +117,8 @@ export interface EmotionSelfModelRuntimeOptions {
    * heartbeat) keep working; production wires it from runtime config.
    */
   emotionScopingConfig?: EmotionScopingSettings;
+  /** settings.json-owned policy for the expensive narrative layer. */
+  narrativeEmotionAppraisalConfig?: NarrativeEmotionAppraisalSettings;
   /**
    * E6.3 per-participant trend store (Postgres in production). Optional so
    * single-scope callers and tests can run without persistence; when omitted,
@@ -232,6 +236,9 @@ export class EmotionSelfModelRuntime {
       ?? ((this.emotionState && this.emotionObserver)
         ? new EmotionAppraisal({
           llmProvider: options.llmProvider,
+          ...(options.narrativeEmotionAppraisalConfig
+            ? options.narrativeEmotionAppraisalConfig
+            : {}),
           ...(options.companionId ? { companionId: options.companionId } : {}),
           ...(options.onEmotionAppraisalGateEvent
             ? { onGateEvent: options.onEmotionAppraisalGateEvent }
@@ -522,6 +529,17 @@ export class EmotionSelfModelRuntime {
     return this.emotionAppraisal.getChain(sessionChannelId);
   }
 
+  reserveNarrativeEmotionAppraisal(input: {
+    sessionChannelId: string;
+    appraisalState: EmotionAppraisalStateSnapshot;
+  }): NarrativeAppraisalDriftDecision | null {
+    if (!this.emotionAppraisal) return null;
+    return this.emotionAppraisal.reserveNarrativeAppraisal({
+      sessionId: input.sessionChannelId,
+      appraisalState: input.appraisalState,
+    });
+  }
+
   async triggerEmotionAppraisal(params: {
     sessionChannelId: string;
     turnId: TurnID;
@@ -539,6 +557,7 @@ export class EmotionSelfModelRuntime {
     preemptionProtected?: boolean;
     /** fxt1: the granting welfare job id, re-verified gateway-side. */
     welfareGrantJobId?: string;
+    driftDecision?: NarrativeAppraisalDriftDecision;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -584,6 +603,7 @@ export class EmotionSelfModelRuntime {
       ...(params.preemptionProtected ? { preemptionProtected: true } : {}),
       ...(params.welfareGrantJobId ? { welfareGrantJobId: params.welfareGrantJobId } : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
+      ...(params.driftDecision ? { driftDecision: params.driftDecision } : {}),
     });
     if (result.appraised) {
       this.logger.debug('Post-turn emotion appraisal completed', {

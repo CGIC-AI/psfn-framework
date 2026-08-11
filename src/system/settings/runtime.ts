@@ -14,6 +14,10 @@ import {
   createDefaultEmotionScopingSettings,
 } from '../config/emotion-scoping-config.js';
 import {
+  cloneNarrativeEmotionAppraisalSettings,
+  createDefaultNarrativeEmotionAppraisalSettings,
+} from '../config/narrative-emotion-appraisal-config.js';
+import {
   cloneMemoryRetrievalPolicy,
   createDefaultMemoryRetrievalPolicy,
 } from '../config/memory-retrieval-policy.js';
@@ -127,6 +131,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'intakeScreeningFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
+  'narrativeEmotionAppraisal',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -294,6 +299,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     emotionScoping: cloneEmotionScopingSettings(
       config.emotionScoping ?? createDefaultEmotionScopingSettings(),
     ),
+    narrativeEmotionAppraisal: cloneNarrativeEmotionAppraisalSettings(
+      config.narrativeEmotionAppraisal ?? createDefaultNarrativeEmotionAppraisalSettings(),
+    ),
     profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
     profileSynthesisRefreshIntervalMs:
       config.profileSynthesisRefreshIntervalMs ?? null,
@@ -336,6 +344,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryRefreshFailureAlertThreshold'
     | 'groupMemory'
     | 'emotionScoping'
+    | 'narrativeEmotionAppraisal'
     | 'profileSynthesisEnabled'
     | 'profileSynthesisRefreshIntervalMs'
     | 'profileSynthesisCooldownMs'
@@ -735,6 +744,11 @@ function applyCoreSettings(
   if ('emotionScoping' in settings) {
     config.emotionScoping = cloneEmotionScopingSettings(
       settings.emotionScoping ?? createDefaultEmotionScopingSettings(),
+    );
+  }
+  if ('narrativeEmotionAppraisal' in settings) {
+    config.narrativeEmotionAppraisal = cloneNarrativeEmotionAppraisalSettings(
+      settings.narrativeEmotionAppraisal ?? createDefaultNarrativeEmotionAppraisalSettings(),
     );
   }
   if ('memoryRetrievalPolicy' in settings) {

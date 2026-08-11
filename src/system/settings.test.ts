@@ -22,6 +22,7 @@ import {
   type SubstrateConfig,
 } from './config/runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './config/group-memory-config.js';
+import { createDefaultNarrativeEmotionAppraisalSettings } from './config/narrative-emotion-appraisal-config.js';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import { registerStreamingSttProvider } from '../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../primitives/voice/connectors/tts/index.js';
@@ -772,6 +773,24 @@ describe('settings', () => {
       });
     });
 
+    it('normalizes narrative emotion appraisal as settings.json-owned drift policy', () => {
+      expect(normalizeEditableSettings({
+        narrativeEmotionAppraisal: fromAny({
+          mode: 'drift_only',
+          vadDeltaThreshold: 0.6,
+        }),
+      }).narrativeEmotionAppraisal).toEqual({
+        mode: 'drift_only',
+        vadDeltaThreshold: 0.6,
+      });
+      expect(() => normalizeEditableSettings({
+        narrativeEmotionAppraisal: fromAny({
+          mode: 'periodic',
+          vadDeltaThreshold: 0.6,
+        }),
+      })).toThrow('narrativeEmotionAppraisal.mode');
+    });
+
     it('fails closed for malformed group memory settings', () => {
       expect(() => normalizeEditableSettings({
         groupMemory: fromAny({
@@ -1262,6 +1281,22 @@ describe('settings', () => {
 
       expect(config.groupMemory?.memoryMode).toBe('group');
       expect(config.groupMemory?.onlineExtraction.maxMessagesPerChunk).toBe(60);
+    });
+
+    it('applies narrative emotion appraisal policy by value', () => {
+      const config = makeConfig();
+      const narrativeEmotionAppraisal = {
+        mode: 'disabled' as const,
+        vadDeltaThreshold: 0.6,
+      };
+
+      applySettings(config, { narrativeEmotionAppraisal });
+      narrativeEmotionAppraisal.vadDeltaThreshold = 0.9;
+
+      expect(config.narrativeEmotionAppraisal).toEqual({
+        mode: 'disabled',
+        vadDeltaThreshold: 0.6,
+      });
     });
 
     it('applies import-processing routing controls', () => {
@@ -2019,6 +2054,8 @@ describe('settings', () => {
       expect(snapshot.analysisWorkbenchMaxIterations).toBeNull();
       expect(snapshot.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
       expect(snapshot.groupMemory).toEqual(createDefaultGroupMemorySettings());
+      expect(snapshot.narrativeEmotionAppraisal)
+        .toEqual(createDefaultNarrativeEmotionAppraisalSettings());
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);

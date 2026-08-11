@@ -53,10 +53,10 @@ export interface PostTurnBackgroundRuntimeDependencies {
   tuning: BackgroundWorkPostTurnTuning;
   /**
    * Social-desire accumulation writer (psfn-framework-hrmrq.85). When composed,
-   * every emotion_appraisal job records the turn's deterministic felt social
-   * signal BEFORE the LLM appraisal call, so accumulation survives appraisal
-   * gate closes and model-call preemption. Absent only when the social-desire
-   * lane is disabled (lane registration fails closed on the mismatch).
+   * every bounded-turn intention job records the deterministic felt social
+   * signal before intention hooks. This keeps accumulation independent of the
+   * drift-only narrative lane. Absent only when the social-desire lane is
+   * disabled (lane registration fails closed on the mismatch).
    */
   socialDesireFeltSignals?: SocialDesireFeltSignalWriter;
 }
@@ -380,22 +380,6 @@ async function runPostTurnBackgroundWork(
         ) {
           throw new BackgroundWorkPermanentError('source_mismatch');
         }
-        // Social-desire accumulation (psfn-framework-hrmrq.85): the payload's
-        // appraisal state IS the turn's felt state, so record the deterministic
-        // felt signal first — the LLM appraisal below may gate closed or be
-        // preempted, and neither may starve relational pressure. nowMs is the
-        // turn's completion instant, so a job retry replays the same
-        // accumulation decision (the tier tick-gap absorbs the duplicate).
-        if (dependencies.socialDesireFeltSignals) {
-          const feltSignalWriter = dependencies.socialDesireFeltSignals;
-          await input.effects.run('social-desire-felt-signal', async (assertOwned) => {
-            await assertOwned();
-            await feltSignalWriter.record(payload.appraisalState, {
-              sourceRef: `emotion_appraisal:${payload.source.channelId}:${payload.source.turnId}`,
-              nowMs: payload.source.createdAtMs,
-            });
-          });
-        }
         await runWithPostTurnUsageAttribution(
           record,
           payload.source,
@@ -409,6 +393,7 @@ async function runPostTurnBackgroundWork(
               templateVariables: canonicalTemplateVariables,
               assertEffectAllowed: assertOwned,
               recentEntries,
+              driftDecision: payload.driftDecision,
               // mmo9.7.4: protect the welfare-escalated appraisal model call.
               // fxt1: pair the flag with the granting job id for gateway re-verify.
               preemptionProtected: job.welfareClaimed,
@@ -467,6 +452,19 @@ async function runPostTurnBackgroundWork(
       // proved only after it is held, and raw content never leaves its scope.
       await input.effects.assertOwned();
       const record = await requireCanonicalTurnRecord(payload.source, dependencies);
+      // Social desire consumes the cheap, content-free felt-state projection
+      // on every bounded turn. It stays on the always-enqueued intention job so
+      // drift-only narrative scheduling cannot starve accumulation.
+      if (payload.appraisalState && dependencies.socialDesireFeltSignals) {
+        const feltSignalWriter = dependencies.socialDesireFeltSignals;
+        await input.effects.run('social-desire-felt-signal', async (assertOwned) => {
+          await assertOwned();
+          await feltSignalWriter.record(payload.appraisalState, {
+            sourceRef: `emotion_appraisal:${payload.source.channelId}:${payload.source.turnId}`,
+            nowMs: payload.source.createdAtMs,
+          });
+        });
+      }
       // Source-only audit: the sole production hook records a behavioral
       // pattern from this canonical message/response pair; it does not read a
       // session window. Keep it on the one-source fence unless that hook

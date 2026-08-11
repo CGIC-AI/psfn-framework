@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse } from '../../shared/contracts/runtime.js';
 import { EmotionAppraisal } from './appraisal.js';
+import { projectEmotionAppraisalState } from './appraisal-state.js';
 import type { EmotionStateSnapshot } from './state.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import {
   buildSystemPromptCacheBoundaries,
   verifySystemPromptCacheBoundaries,
 } from '../../primitives/llm/prompt-cache.js';
+
+const TEST_NOW_MS = 1_780_000_000_000;
 
 function makeSnapshot(
   overrides?: Partial<EmotionStateSnapshot>,
@@ -84,98 +87,60 @@ function makeInternalState() {
 }
 
 describe('EmotionAppraisal', () => {
-  it('triggers periodic appraisal at configured turn cadence', async () => {
-    const { provider, complete } = makeMockProvider(['Periodic appraisal summary']);
+  it('never appraises stable state merely because more turns elapsed', async () => {
+    const { provider, complete } = makeMockProvider(['Unexpected periodic appraisal']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 2,
-      vadDeltaThreshold: 0.9,
+      vadDeltaThreshold: 0.2,
     });
 
-    const first = await appraisal.maybeAppraise({
-      sessionId: 'session-a',
-      currentEmotion: makeSnapshot({
-        vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 },
-      }),
-      recentMessages: [{ role: 'user', content: 'hello' }],
-      personalityTraits: { 'character.personality': 'steady and warm' },
-    });
-    const icpCorrelation = {
-      conversationId: '44444444-4444-4444-8444-444444444444',
-      rootInitiationId: '99999999-9999-4999-8999-999999999999',
-      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      peerContactId: 'contact-nova',
-      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
-      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
-      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
-      chargeLane: 'companion_social' as const,
-      surface: 'companion_dm' as const,
-      costPurpose: 'conversation_turn' as const,
-      costOriginStage: 'initiation' as const,
-      fatigueDecision: 'not_evaluated' as const,
-    };
-    const second = await appraisal.maybeAppraise({
-      sessionId: 'session-a',
-      currentEmotion: makeSnapshot({
-        vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 },
-      }),
-      recentMessages: [{ role: 'user', content: 'hello again' }],
-      personalityTraits: { 'character.personality': 'steady and warm' },
-      icpCorrelation,
-    });
+    const results = [];
+    for (let turn = 0; turn < 6; turn += 1) {
+      results.push(await appraisal.maybeAppraise({
+        sessionId: 'session-a',
+        currentEmotion: makeSnapshot({
+          vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 },
+        }),
+        recentMessages: [{ role: 'user', content: `stable turn ${turn}` }],
+      }));
+    }
 
-    expect(first.appraised).toBe(false);
-    expect(second.appraised).toBe(true);
-    expect(second.trigger).toBe('periodic');
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete.mock.calls[0]?.[1]).toBe('background');
-    expect(complete.mock.calls[0]?.[2]).toMatchObject({
-      correlation: {
-        requestId: `${icpCorrelation.requestId}:emotion-appraisal`,
-        icpCorrelation: {
-          ...icpCorrelation,
-          requestId: `${icpCorrelation.requestId}:emotion-appraisal`,
-          costPurpose: 'sidecar',
-          costOriginStage: 'post_turn',
-        },
-      },
-    });
-    expect(appraisal.getChain('session-a')).toHaveLength(1);
+    expect(results.every(result => result.appraised === false)).toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    expect(appraisal.getChain('session-a')).toHaveLength(0);
   });
 
   it('emits a typed appraisal gate event on skip and on run (jpvd.4)', async () => {
-    const { provider } = makeMockProvider(['Periodic appraisal summary']);
+    const { provider } = makeMockProvider(['Drift appraisal summary']);
     const events: Array<{ outcome: string; reason: string; inputs: Record<string, number | string> }> = [];
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 2,
-      vadDeltaThreshold: 0.9,
+      vadDeltaThreshold: 0.2,
       onGateEvent: (event) => events.push({
         outcome: event.outcome,
         reason: event.reason,
         inputs: event.inputs,
       }),
     });
-    const snapshot = () => makeSnapshot({ vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 } });
-
     await appraisal.maybeAppraise({
       sessionId: 'session-g',
-      currentEmotion: snapshot(),
+      currentEmotion: makeSnapshot({
+        vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 },
+      }),
       recentMessages: [{ role: 'user', content: 'hi' }],
     });
     await appraisal.maybeAppraise({
       sessionId: 'session-g',
-      currentEmotion: snapshot(),
+      currentEmotion: makeSnapshot({
+        vad: { valence: 0.5, arousal: 0.1, dominance: 0.1 },
+      }),
       recentMessages: [{ role: 'user', content: 'hi again' }],
     });
 
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({ outcome: 'skipped', reason: 'no_movement' });
+    expect(events[0]).toMatchObject({ outcome: 'skipped', reason: 'baseline_seeded' });
     expect(events[0].inputs.turnsSinceLast).toBe(1);
-    expect(events[1]).toMatchObject({ outcome: 'ran', reason: 'periodic' });
+    expect(events[1]).toMatchObject({ outcome: 'ran', reason: 'vad_shift' });
     expect(events[1].inputs.turnsSinceLast).toBe(2);
   });
 
@@ -183,7 +148,6 @@ describe('EmotionAppraisal', () => {
     const { provider } = makeMockProvider(['Shift appraisal summary']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 10,
       vadDeltaThreshold: 0.2,
     });
 
@@ -206,6 +170,102 @@ describe('EmotionAppraisal', () => {
     expect(second.delta).toBeGreaterThanOrEqual(0.45);
   });
 
+  it('fails closed after restart by seeding a reference snapshot without an appraisal', async () => {
+    const { provider, complete } = makeMockProvider(['Unexpected restart appraisal']);
+    const restarted = new EmotionAppraisal({
+      llmProvider: provider,
+      vadDeltaThreshold: 0.2,
+    });
+
+    const result = await restarted.maybeAppraise({
+      sessionId: 'session-restart',
+      currentEmotion: makeSnapshot({
+        vad: { valence: 0.9, arousal: 0.8, dominance: 0.7 },
+      }),
+      recentMessages: [{ role: 'user', content: 'first turn after restart' }],
+    });
+
+    expect(result.appraised).toBe(false);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('persists one qualifying drift decision and deduplicates it across worker restart', async () => {
+    const schedulerProvider = makeMockProvider(['Unexpected scheduler call']);
+    const scheduler = new EmotionAppraisal({
+      llmProvider: schedulerProvider.provider,
+      vadDeltaThreshold: 0.2,
+    });
+    const baseline = projectEmotionAppraisalState(makeInternalState());
+    baseline.emotional.vad = { valence: 0, arousal: 0, dominance: 0 };
+    const target = structuredClone(baseline);
+    target.emotional.vad = { valence: 0.5, arousal: 0.1, dominance: 0 };
+
+    expect(scheduler.reserveNarrativeAppraisal({
+      sessionId: 'session-durable-drift',
+      appraisalState: baseline,
+      now: TEST_NOW_MS,
+    })).toBeNull();
+    const decision = scheduler.reserveNarrativeAppraisal({
+      sessionId: 'session-durable-drift',
+      appraisalState: target,
+      now: TEST_NOW_MS + 1,
+    });
+    expect(decision).toMatchObject({
+      mode: 'drift_only',
+      baselineVad: baseline.emotional.vad,
+      targetVad: target.emotional.vad,
+      vadDelta: 0.5,
+      threshold: 0.2,
+    });
+    expect(scheduler.reserveNarrativeAppraisal({
+      sessionId: 'session-durable-drift',
+      appraisalState: target,
+      now: TEST_NOW_MS + 2,
+    })).toBeNull();
+    expect(schedulerProvider.complete).not.toHaveBeenCalled();
+
+    const workerProvider = makeMockProvider(['Durable drift appraisal']);
+    const restartedWorker = new EmotionAppraisal({
+      llmProvider: workerProvider.provider,
+      vadDeltaThreshold: 0.2,
+    });
+    const run = () => restartedWorker.maybeAppraise({
+      sessionId: 'session-durable-drift',
+      appraisalState: target,
+      driftDecision: decision!,
+      recentMessages: [{ role: 'user' as const, content: 'bounded source turn' }],
+      now: TEST_NOW_MS + 3,
+    });
+
+    await expect(run()).resolves.toMatchObject({ appraised: true, trigger: 'vad_shift' });
+    await expect(run()).resolves.toMatchObject({ appraised: false });
+    expect(workerProvider.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('spends no narrative model calls when the owner-file mode is disabled', async () => {
+    const { provider, complete } = makeMockProvider(['Unexpected disabled appraisal']);
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      mode: 'disabled',
+      vadDeltaThreshold: 0.2,
+    });
+
+    await appraisal.maybeAppraise({
+      sessionId: 'session-disabled',
+      currentEmotion: makeSnapshot(),
+      recentMessages: [],
+    });
+    await appraisal.maybeAppraise({
+      sessionId: 'session-disabled',
+      currentEmotion: makeSnapshot({
+        vad: { valence: 0.8, arousal: 0.8, dominance: 0.8 },
+      }),
+      recentMessages: [],
+    });
+
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it('bounds prompt history input and trims chain length', async () => {
     const { provider, complete } = makeMockProvider([
       'first summary',
@@ -214,8 +274,7 @@ describe('EmotionAppraisal', () => {
     ]);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 1,
-      vadDeltaThreshold: 1.5,
+      vadDeltaThreshold: 0.2,
       recentMessageCount: 2,
       maxChainEntries: 2,
     });
@@ -228,12 +287,17 @@ describe('EmotionAppraisal', () => {
 
     await appraisal.maybeAppraise({
       sessionId: 'session-bounded',
-      currentEmotion: makeSnapshot(),
+      currentEmotion: makeSnapshot({ vad: { valence: 0.5, arousal: 0, dominance: 0 } }),
       recentMessages,
     });
     await appraisal.maybeAppraise({
       sessionId: 'session-bounded',
       currentEmotion: makeSnapshot(),
+      recentMessages,
+    });
+    await appraisal.maybeAppraise({
+      sessionId: 'session-bounded',
+      currentEmotion: makeSnapshot({ vad: { valence: 0.5, arousal: 0, dominance: 0 } }),
       recentMessages,
     });
     await appraisal.maybeAppraise({
@@ -256,13 +320,17 @@ describe('EmotionAppraisal', () => {
     const { provider } = makeMockProvider(['   ']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 1,
-      vadDeltaThreshold: 1.5,
+      vadDeltaThreshold: 0.2,
     });
 
-    await expect(appraisal.maybeAppraise({
+    await appraisal.maybeAppraise({
       sessionId: 'session-empty',
       currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'baseline' }],
+    });
+    await expect(appraisal.maybeAppraise({
+      sessionId: 'session-empty',
+      currentEmotion: makeSnapshot({ vad: { valence: 0.5, arousal: 0, dominance: 0 } }),
       recentMessages: [{ role: 'user', content: 'hello' }],
     })).rejects.toThrow('non-empty');
   });
@@ -271,10 +339,14 @@ describe('EmotionAppraisal', () => {
     const { provider, complete } = makeMockProvider(['Internal-state appraisal summary']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 1,
-      vadDeltaThreshold: 1.5,
+      vadDeltaThreshold: 0.1,
     });
 
+    await appraisal.maybeAppraise({
+      sessionId: 'session-internal-state',
+      currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'baseline' }],
+    });
     const result = await appraisal.maybeAppraise({
       sessionId: 'session-internal-state',
       internalState: makeInternalState(),
@@ -294,15 +366,19 @@ describe('EmotionAppraisal', () => {
     const { provider, complete } = makeMockProvider(['Cache-plan appraisal summary']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 1,
-      vadDeltaThreshold: 1.5,
+      vadDeltaThreshold: 0.2,
       companionId: '  companion-companion  ',
       systemPrompt,
     });
 
-    const result = await appraisal.maybeAppraise({
+    await appraisal.maybeAppraise({
       sessionId: 'session-cache',
       currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'baseline' }],
+    });
+    const result = await appraisal.maybeAppraise({
+      sessionId: 'session-cache',
+      currentEmotion: makeSnapshot({ vad: { valence: 0.5, arousal: 0, dominance: 0 } }),
       recentMessages: [{ role: 'user', content: 'hello' }],
     });
     expect(result.appraised).toBe(true);
@@ -336,13 +412,17 @@ describe('EmotionAppraisal', () => {
     const { provider, complete } = makeMockProvider(['No-plan appraisal summary']);
     const appraisal = new EmotionAppraisal({
       llmProvider: provider,
-      turnCadence: 1,
-      vadDeltaThreshold: 1.5,
+      vadDeltaThreshold: 0.2,
     });
 
-    const result = await appraisal.maybeAppraise({
+    await appraisal.maybeAppraise({
       sessionId: 'session-no-companion',
       currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'baseline' }],
+    });
+    const result = await appraisal.maybeAppraise({
+      sessionId: 'session-no-companion',
+      currentEmotion: makeSnapshot({ vad: { valence: 0.5, arousal: 0, dominance: 0 } }),
       recentMessages: [{ role: 'user', content: 'hello' }],
     });
     expect(result.appraised).toBe(true);

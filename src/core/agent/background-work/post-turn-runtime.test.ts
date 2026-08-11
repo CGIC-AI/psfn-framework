@@ -182,6 +182,14 @@ function makeEmotionExecution(
       },
       relational: { contactId: 'contact-1', trustLevel: 'regular', moodDrift: 0.1 },
     },
+    driftDecision: {
+      schemaVersion: 1,
+      mode: 'drift_only',
+      baselineVad: { valence: -0.3, arousal: 0.3, dominance: 0.4 },
+      targetVad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
+      vadDelta: 0.5,
+      threshold: 0.35,
+    },
     personalityOwnerRef: 'character-card',
     personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection({
       personality: 'old queued personality',
@@ -1205,7 +1213,7 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
-  it('records the social-desire felt signal before the appraisal call (psfn-framework-hrmrq.85)', async () => {
+  it('records the social-desire felt signal on the always-enqueued intention job', async () => {
     const selfSnapshotRef = 'internal-state-v1:felt-signal';
     const record = makeTurnRecord({
       internalStateSnapshotRef: [
@@ -1217,24 +1225,31 @@ describe('executePostTurnBackgroundWork', () => {
         `self:${selfSnapshotRef}`,
       ].join('|'),
     });
-    const execution = makeEmotionExecution(record, selfSnapshotRef);
-    const appraisalEntry: SessionEntry = {
-      id: 2,
-      channelId: record.sessionId!,
-      role: 'assistant',
-      content: record.assistantMessage!.content,
-      timestamp: record.completedAt,
-      metadata: buildSessionMetadataWithTurn(undefined, {
-        turnId: record.turnId,
-        requestId: record.requestId,
-        role: 'assistant',
-        actorKind: 'machine_intelligence',
-      }),
+    const appraisalState = makeEmotionExecution(record, selfSnapshotRef).payload.appraisalState;
+    const base = makeExecution(record);
+    const payload = {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source: base.payload.source,
+      appraisalState,
+    } as const;
+    const execution = {
+      payload,
+      effects: base.effects,
+      signal: base.signal,
+      job: {
+        ...base.job,
+        kind: payload.kind,
+        payload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      },
     };
-    const fixture = makeDependencies({ record, recentEntries: [appraisalEntry] });
     const callOrder: string[] = [];
-    fixture.triggerEmotionAppraisal.mockImplementation(async () => {
-      callOrder.push('appraisal');
+    const fixture = makeDependencies({
+      record,
+      runIntentionPostTurnHooks: vi.fn(async () => {
+        callOrder.push('intention-hooks');
+      }),
     });
     const feltSignalRecord = vi.fn(async () => {
       callOrder.push('felt-signal');
@@ -1246,15 +1261,15 @@ describe('executePostTurnBackgroundWork', () => {
       socialDesireFeltSignals: { record: feltSignalRecord },
     });
 
-    // The deterministic accumulation write runs FIRST, with the exact per-turn
-    // appraisal state and the turn's completion instant, so an appraisal gate
-    // close or model-call preemption can never starve social-desire pressure.
+    // The deterministic accumulation write runs before intention effects, with
+    // the exact per-turn state and completion instant. Narrative appraisal can
+    // remain entirely absent on stable turns without starving this pressure.
     expect(feltSignalRecord).toHaveBeenCalledTimes(1);
-    expect(feltSignalRecord).toHaveBeenCalledWith(execution.payload.appraisalState, {
+    expect(feltSignalRecord).toHaveBeenCalledWith(appraisalState, {
       sourceRef: `emotion_appraisal:${execution.payload.source.channelId}:${execution.payload.source.turnId}`,
       nowMs: execution.payload.source.createdAtMs,
     });
-    expect(callOrder).toEqual(['felt-signal', 'appraisal']);
+    expect(callOrder).toEqual(['felt-signal', 'intention-hooks']);
   });
 
   it('runs auto-compaction from the exact bounded source-turn snapshot', async () => {
@@ -1683,6 +1698,14 @@ describe('executePostTurnBackgroundWork', () => {
             conversationTrajectory: 'stable',
           },
           relational: { contactId: 'contact-peer', trustLevel: 'regular', moodDrift: 0 },
+        },
+        driftDecision: {
+          schemaVersion: 1,
+          mode: 'drift_only',
+          baselineVad: { valence: -0.3, arousal: 0.3, dominance: 0.4 },
+          targetVad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
+          vadDelta: 0.5,
+          threshold: 0.35,
         },
         personalityOwnerRef: 'character-card',
         personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection({

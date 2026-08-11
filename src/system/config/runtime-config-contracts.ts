@@ -17,6 +17,7 @@ import type {
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
+import type { NarrativeEmotionAppraisalSettings } from './narrative-emotion-appraisal-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from './memory-presentation-profile.js';
 import type { MemoryDeletionPolicy } from './memory-deletion-policy.js';
@@ -283,6 +284,8 @@ export interface SubstrateConfig {
   intakeScreeningFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
+  /** settings.json-owned gate for expensive narrative emotion appraisal. */
+  narrativeEmotionAppraisal?: NarrativeEmotionAppraisalSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;

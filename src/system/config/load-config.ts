@@ -34,6 +34,7 @@ import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem
 import { createEmptySubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
+import { createDefaultNarrativeEmotionAppraisalSettings } from './narrative-emotion-appraisal-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import { createDefaultBiographicalDepthPolicy } from './biographical-depth-policy.js';
 import { createDefaultMemoryPresentationProfile } from './memory-presentation-profile.js';
@@ -518,6 +519,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     intakeScreeningFailureAlertThreshold: DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),
     emotionScoping: createDefaultEmotionScopingSettings(),
+    narrativeEmotionAppraisal: createDefaultNarrativeEmotionAppraisalSettings(),
     profileSynthesisEnabled: true,
     profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
     profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,

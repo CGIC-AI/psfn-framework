@@ -20,6 +20,10 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
+import {
+  createDefaultNarrativeEmotionAppraisalSettings,
+  type NarrativeEmotionAppraisalMode,
+} from '../../system/config/narrative-emotion-appraisal-config.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
 import {
@@ -27,13 +31,16 @@ import {
   projectEmotionAppraisalState,
   type EmotionAppraisalStateSnapshot,
 } from './appraisal-state.js';
+import {
+  maxAbsoluteNarrativeVadDelta,
+  parseNarrativeAppraisalDriftDecision,
+  type NarrativeAppraisalDriftDecision,
+} from './narrative-appraisal-drift.js';
 
 const EMOTION_APPRAISAL_GATE_LANE = 'emotion_appraisal';
 
 const log = createComponentLogger('EmotionAppraisal');
 
-const DEFAULT_TURN_CADENCE = 5;
-const DEFAULT_VAD_DELTA_THRESHOLD = 0.35;
 const DEFAULT_RECENT_MESSAGE_COUNT = 8;
 const DEFAULT_MAX_CHAIN_ENTRIES = 20;
 const DEFAULT_MAX_MESSAGE_CHARS = 240;
@@ -65,7 +72,7 @@ export interface EmotionAppraisalMessage {
   timestamp?: number;
 }
 
-export type EmotionAppraisalTrigger = 'periodic' | 'vad_shift';
+export type EmotionAppraisalTrigger = 'vad_shift';
 
 export interface EmotionAppraisalEntry {
   timestamp: number;
@@ -97,6 +104,8 @@ export interface EmotionAppraisalInput {
    * `preemptionProtected`. Set only alongside it.
    */
   welfareGrantJobId?: string;
+  /** Durable scheduling decision; present on the background execution path. */
+  driftDecision?: NarrativeAppraisalDriftDecision;
 }
 
 export interface EmotionAppraisalResult {
@@ -109,7 +118,7 @@ export interface EmotionAppraisalResult {
 
 export interface EmotionAppraisalConfig {
   llmProvider?: LLMProviderPort;
-  turnCadence?: number;
+  mode?: NarrativeEmotionAppraisalMode;
   vadDeltaThreshold?: number;
   recentMessageCount?: number;
   maxChainEntries?: number;
@@ -133,19 +142,17 @@ interface SessionAppraisalState {
   chain: EmotionAppraisalEntry[];
   turnsSinceLast: number;
   lastAppraisedVad: VADVector | null;
+  pendingDecision: NarrativeAppraisalDriftDecision | null;
 }
 
-
-function normalizeTurnCadence(value: number | undefined): number {
-  const normalized = value ?? DEFAULT_TURN_CADENCE;
-  if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`Emotion appraisal turn cadence must be a positive integer, received ${String(value)}`);
-  }
-  return normalized;
+interface NarrativeAppraisalReservation {
+  decision: NarrativeAppraisalDriftDecision | null;
+  turnsSinceLast: number;
+  delta: number;
 }
 
-function normalizeVadDeltaThreshold(value: number | undefined): number {
-  const normalized = value ?? DEFAULT_VAD_DELTA_THRESHOLD;
+function normalizeVadDeltaThreshold(value: number): number {
+  const normalized = value;
   if (!Number.isFinite(normalized) || normalized <= 0 || normalized > 2) {
     throw new Error(`Emotion appraisal VAD delta threshold must be in range (0, 2], received ${String(value)}`);
   }
@@ -288,20 +295,10 @@ function normalizePersonalityTraits(
   return Object.fromEntries(normalizedEntries.slice(0, MAX_TRAIT_COUNT));
 }
 
-function maxAbsoluteVadDelta(left: VADVector, right: VADVector): number {
-  return Math.max(
-    Math.abs(left.valence - right.valence),
-    Math.abs(left.arousal - right.arousal),
-    Math.abs(left.dominance - right.dominance),
-  );
-}
-
-function maxAbsoluteVadComponent(vad: VADVector): number {
-  return Math.max(
-    Math.abs(vad.valence),
-    Math.abs(vad.arousal),
-    Math.abs(vad.dominance),
-  );
+function sameVad(left: VADVector, right: VADVector): boolean {
+  return left.valence === right.valence
+    && left.arousal === right.arousal
+    && left.dominance === right.dominance;
 }
 
 function topDiscrete(discrete: Record<string, number>, limit: number): string {
@@ -351,7 +348,7 @@ interface LLMContextLike {
 
 export class EmotionAppraisal {
   private readonly llmProvider: CompletionProviderWithOptions;
-  private readonly turnCadence: number;
+  private readonly mode: NarrativeEmotionAppraisalMode;
   private readonly vadDeltaThreshold: number;
   private readonly recentMessageCount: number;
   private readonly maxChainEntries: number;
@@ -376,15 +373,18 @@ export class EmotionAppraisal {
       throw new Error('Emotion appraisal requires an llmProvider');
     }
     this.llmProvider = config.llmProvider as CompletionProviderWithOptions;
-    this.turnCadence = normalizeTurnCadence(config.turnCadence);
-    this.vadDeltaThreshold = normalizeVadDeltaThreshold(config.vadDeltaThreshold);
+    const defaults = createDefaultNarrativeEmotionAppraisalSettings();
+    this.mode = config.mode ?? defaults.mode;
+    this.vadDeltaThreshold = normalizeVadDeltaThreshold(
+      config.vadDeltaThreshold ?? defaults.vadDeltaThreshold,
+    );
     this.onGateEvent = config.onGateEvent ?? null;
-    // Appraisal fires on either the turn cadence OR a large enough VAD movement
-    // (jpvd.4). Deterministic and free; a closed gate spends zero LLM tokens.
+    // Narrative appraisal is drift-only. GoEmotion observation remains on the
+    // inline turn path; this gate decides whether expensive background prose
+    // is worth scheduling at all.
     this.appraisalGate = {
       lane: EMOTION_APPRAISAL_GATE_LANE,
       openWhenAny: [
-        { input: 'turnsSinceLast', comparator: 'gte', threshold: this.turnCadence },
         { input: 'vadDelta', comparator: 'gte', threshold: this.vadDeltaThreshold },
       ],
       closedReason: 'no_movement',
@@ -432,6 +432,27 @@ export class EmotionAppraisal {
     }));
   }
 
+  /**
+   * Foreground scheduling gate. A qualifying decision is reserved so stable
+   * turns and turns arriving while its durable job is pending enqueue no
+   * narrative work. The decision itself is content-free and safe to persist in
+   * the background payload.
+   */
+  reserveNarrativeAppraisal(input: {
+    sessionId: string;
+    appraisalState: EmotionAppraisalStateSnapshot;
+    now?: number;
+  }): NarrativeAppraisalDriftDecision | null {
+    const sessionId = normalizeSessionId(input.sessionId);
+    const appraisalState = parseEmotionAppraisalStateSnapshot(input.appraisalState);
+    const snapshot = toEmotionSnapshotFromAppraisalState(appraisalState);
+    const now = input.now ?? Date.now();
+    if (!Number.isFinite(now) || now <= 0) {
+      throw new Error(`Emotion appraisal now must be a positive finite timestamp, received ${String(input.now)}`);
+    }
+    return this.reserveFromSnapshot(sessionId, snapshot, appraisalState, now).decision;
+  }
+
   async maybeAppraise(input: EmotionAppraisalInput): Promise<EmotionAppraisalResult> {
     const sessionId = normalizeSessionId(input.sessionId);
     if (input.internalState && input.appraisalState) {
@@ -460,37 +481,26 @@ export class EmotionAppraisal {
       throw new Error(`Emotion appraisal now must be a positive finite timestamp, received ${String(input.now)}`);
     }
 
-    const state = this.getOrCreateSessionState(sessionId);
-    const currentVad = snapshot.vad;
-    const delta = state.lastAppraisedVad
-      ? maxAbsoluteVadDelta(state.lastAppraisedVad, currentVad)
-      : maxAbsoluteVadComponent(currentVad);
-    const turnsSinceLast = state.turnsSinceLast + 1;
-
-    const telemetryTrusted = !appraisalState
-      || appraisalState.emotional.telemetry.status === 'trusted';
-    const shouldTriggerVadShift = telemetryTrusted && delta >= this.vadDeltaThreshold;
-    // Route the periodic/vad-shift decision through the shared primitive
-    // (jpvd.4). Untrusted telemetry can never trigger the vad-shift signal, so
-    // feed a sub-threshold sentinel; the emitted input carries the real delta.
-    const roundedDelta = Number(delta.toFixed(4));
-    const gateInputs = { turnsSinceLast, vadDelta: roundedDelta };
-    const gate = evaluateDeterministicGate(this.appraisalGate, {
-      turnsSinceLast,
-      vadDelta: telemetryTrusted ? delta : -1,
-    });
-    if (!gate.open) {
+    const reservation = input.driftDecision
+      ? this.admitDurableDecision(sessionId, snapshot, appraisalState, input.driftDecision, now)
+      : this.reserveFromSnapshot(sessionId, snapshot, appraisalState, now);
+    if (!reservation.decision) {
       await input.assertEffectAllowed?.();
-      state.turnsSinceLast = turnsSinceLast;
-      this.emitGateEvent(sessionId, 'skipped', gate.reason, gateInputs, now);
       return {
         appraised: false,
-        turnsSinceLast,
-        delta,
+        turnsSinceLast: reservation.turnsSinceLast,
+        delta: reservation.delta,
       };
     }
 
-    const trigger: EmotionAppraisalTrigger = shouldTriggerVadShift ? 'vad_shift' : 'periodic';
+    const state = this.getOrCreateSessionState(sessionId);
+    const currentVad = snapshot.vad;
+    const delta = reservation.delta;
+    const gateInputs = {
+      turnsSinceLast: reservation.turnsSinceLast,
+      vadDelta: Number(delta.toFixed(4)),
+    };
+    const trigger: EmotionAppraisalTrigger = 'vad_shift';
     const context: LLMContextLike = {
       systemPrompt: this.systemPrompt,
       // Fail closed: only attach the static-prefix cache plan when the
@@ -561,6 +571,7 @@ export class EmotionAppraisal {
     await input.assertEffectAllowed?.();
     state.chain = [...state.chain, entry].slice(-this.maxChainEntries);
     state.lastAppraisedVad = { ...currentVad };
+    state.pendingDecision = null;
     state.turnsSinceLast = 0;
     this.emitGateEvent(sessionId, 'ran', trigger, gateInputs, now);
     log.debug('Emotion appraisal updated', {
@@ -581,6 +592,99 @@ export class EmotionAppraisal {
       turnsSinceLast: 0,
       delta,
     };
+  }
+
+  private reserveFromSnapshot(
+    sessionId: string,
+    snapshot: EmotionStateSnapshot,
+    appraisalState: EmotionAppraisalStateSnapshot | null,
+    now: number,
+  ): NarrativeAppraisalReservation {
+    const state = this.getOrCreateSessionState(sessionId);
+    const turnsSinceLast = state.turnsSinceLast + 1;
+    const baselineVad = state.lastAppraisedVad;
+    const delta = baselineVad
+      ? maxAbsoluteNarrativeVadDelta(baselineVad, snapshot.vad)
+      : 0;
+    const gateInputs = { turnsSinceLast, vadDelta: Number(delta.toFixed(4)) };
+    const skip = (reason: string): NarrativeAppraisalReservation => {
+      state.turnsSinceLast = turnsSinceLast;
+      this.emitGateEvent(sessionId, 'skipped', reason, gateInputs, now);
+      return { decision: null, turnsSinceLast, delta };
+    };
+    if (this.mode === 'disabled') return skip('disabled');
+    if (appraisalState && appraisalState.emotional.telemetry.status !== 'trusted') {
+      return skip('untrusted_telemetry');
+    }
+    if (!baselineVad) {
+      // A restart or first observation has no trustworthy prior narrative
+      // snapshot. Seed the reference without paying for a synthetic
+      // neutral-to-current movement.
+      state.lastAppraisedVad = { ...snapshot.vad };
+      return skip('baseline_seeded');
+    }
+    if (state.pendingDecision) return skip('appraisal_pending');
+    const gate = evaluateDeterministicGate(this.appraisalGate, { vadDelta: delta });
+    if (!gate.open) return skip(gate.reason);
+    const decision: NarrativeAppraisalDriftDecision = {
+      schemaVersion: 1,
+      mode: 'drift_only',
+      baselineVad: { ...baselineVad },
+      targetVad: { ...snapshot.vad },
+      vadDelta: delta,
+      threshold: this.vadDeltaThreshold,
+    };
+    state.pendingDecision = decision;
+    return { decision, turnsSinceLast, delta };
+  }
+
+  private admitDurableDecision(
+    sessionId: string,
+    snapshot: EmotionStateSnapshot,
+    appraisalState: EmotionAppraisalStateSnapshot | null,
+    input: NarrativeAppraisalDriftDecision,
+    now: number,
+  ): NarrativeAppraisalReservation {
+    const decision = parseNarrativeAppraisalDriftDecision(input);
+    const state = this.getOrCreateSessionState(sessionId);
+    const turnsSinceLast = state.turnsSinceLast + 1;
+    const gateInputs = {
+      turnsSinceLast,
+      vadDelta: Number(decision.vadDelta.toFixed(4)),
+    };
+    const skip = (reason: string): NarrativeAppraisalReservation => {
+      state.turnsSinceLast = turnsSinceLast;
+      this.emitGateEvent(sessionId, 'skipped', reason, gateInputs, now);
+      return { decision: null, turnsSinceLast, delta: decision.vadDelta };
+    };
+    if (this.mode === 'disabled') return skip('disabled');
+    if (appraisalState && appraisalState.emotional.telemetry.status !== 'trusted') {
+      return skip('untrusted_telemetry');
+    }
+    if (!sameVad(snapshot.vad, decision.targetVad)) {
+      throw new Error('Narrative appraisal drift target does not match the queued appraisal state');
+    }
+    if (decision.vadDelta < this.vadDeltaThreshold) return skip('no_movement');
+    if (state.pendingDecision) {
+      const pending = state.pendingDecision;
+      if (!sameVad(pending.baselineVad, decision.baselineVad)
+        || !sameVad(pending.targetVad, decision.targetVad)) {
+        return skip('appraisal_pending');
+      }
+    } else if (state.lastAppraisedVad) {
+      if (sameVad(state.lastAppraisedVad, decision.targetVad)) {
+        return skip('decision_deduplicated');
+      }
+      if (!sameVad(state.lastAppraisedVad, decision.baselineVad)) {
+        return skip('stale_decision');
+      }
+      state.pendingDecision = decision;
+    } else {
+      // Restart recovery: the durable decision carries both validated VAD
+      // snapshots, so it can run without inventing a neutral baseline.
+      state.pendingDecision = decision;
+    }
+    return { decision, turnsSinceLast, delta: decision.vadDelta };
   }
 
   private emitGateEvent(
@@ -607,6 +711,7 @@ export class EmotionAppraisal {
       chain: [],
       turnsSinceLast: 0,
       lastAppraisedVad: null,
+      pendingDecision: null,
     };
     this.sessionState.set(sessionId, created);
     return created;

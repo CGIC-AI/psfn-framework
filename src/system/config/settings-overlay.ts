@@ -64,6 +64,7 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'activeTimezone',
   'observerEvalSidecar',
   'emotionScoping',
+  'narrativeEmotionAppraisal',
   'cogSecPersonaConformance',
   'uiThemeId',
   // voice* — target guild/user/channel, cue text, and TTS/STT identity

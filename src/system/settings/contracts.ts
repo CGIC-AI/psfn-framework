@@ -1,6 +1,7 @@
 import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelPurposeSelection, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
+import type { NarrativeEmotionAppraisalSettings } from '../config/narrative-emotion-appraisal-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import type { MemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import type { MemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
@@ -182,6 +183,7 @@ export interface EditableSettings {
   intakeScreeningFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
+  narrativeEmotionAppraisal?: NarrativeEmotionAppraisalSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;
@@ -357,6 +359,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'intakeScreeningFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
+  'narrativeEmotionAppraisal',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',

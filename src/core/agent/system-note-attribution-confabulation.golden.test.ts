@@ -323,10 +323,20 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
       const { provider, complete } = makeCapturingProvider('appraisal summary');
       const appraisal = new EmotionAppraisal({
         llmProvider: provider,
-        turnCadence: 1,
-        vadDeltaThreshold: 0.9,
+        vadDeltaThreshold: 0.2,
       });
 
+      await appraisal.maybeAppraise({
+        sessionId: 'discord:room',
+        currentEmotion: {
+          vad: { valence: -0.5, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discrete: {},
+          confidence: 0.5,
+        },
+        recentMessages: [],
+        personalityTraits: {},
+      });
       const result = await appraisal.maybeAppraise({
         sessionId: 'discord:room',
         currentEmotion: {

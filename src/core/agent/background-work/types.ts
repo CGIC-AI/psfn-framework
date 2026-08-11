@@ -23,6 +23,10 @@ import {
   parseEmotionAppraisalStateSnapshot,
   type EmotionAppraisalStateSnapshot,
 } from '../../emotion/appraisal-state.js';
+import {
+  parseNarrativeAppraisalDriftDecision,
+  type NarrativeAppraisalDriftDecision,
+} from '../../emotion/narrative-appraisal-drift.js';
 
 export const BACKGROUND_WORK_KINDS = [
   'memory_extraction',
@@ -104,6 +108,8 @@ export interface IntentionPostTurnBackgroundPayload {
   kind: 'intention_post_turn_hooks';
   source: BackgroundWorkSourceRef;
   canonicalContactKey?: string;
+  /** Content-free felt state used by the always-on social-desire accumulator. */
+  appraisalState?: EmotionAppraisalStateSnapshot;
 }
 
 export interface EmotionAppraisalBackgroundPayload {
@@ -113,6 +119,7 @@ export interface EmotionAppraisalBackgroundPayload {
   emotionSessionId: string;
   internalStateSnapshotRef: string;
   appraisalState: EmotionAppraisalStateSnapshot;
+  driftDecision: NarrativeAppraisalDriftDecision;
   /** Stable owner reference; personality prose is re-read from canonical identity config. */
   personalityOwnerRef: 'character-card';
   /** Audit binding only. The queue never persists the underlying personality prose. */
@@ -491,7 +498,7 @@ export function parseBackgroundWorkPayload(
       };
     case 'intention_post_turn_hooks':
       assertOnlyKeys(value, [
-        'schemaVersion', 'kind', 'source', 'canonicalContactKey',
+        'schemaVersion', 'kind', 'source', 'canonicalContactKey', 'appraisalState',
       ], 'intention post-turn payload');
       return {
         schemaVersion: 1,
@@ -500,11 +507,15 @@ export function parseBackgroundWorkPayload(
         ...(optionalString(value.canonicalContactKey, 'intention canonicalContactKey')
           ? { canonicalContactKey: optionalString(value.canonicalContactKey, 'intention canonicalContactKey') }
           : {}),
+        ...(value.appraisalState !== undefined
+          ? { appraisalState: parseEmotionAppraisalStateSnapshot(value.appraisalState) }
+          : {}),
       };
     case 'emotion_appraisal':
       assertOnlyKeys(value, [
         'schemaVersion', 'kind', 'source', 'emotionSessionId', 'internalStateSnapshotRef',
-        'appraisalState', 'personalityOwnerRef', 'personalityProjectionHash', 'icpCorrelation',
+        'appraisalState', 'driftDecision', 'personalityOwnerRef',
+        'personalityProjectionHash', 'icpCorrelation',
       ], 'emotion appraisal payload');
       return {
         schemaVersion: 1,
@@ -516,6 +527,7 @@ export function parseBackgroundWorkPayload(
           'emotion internalStateSnapshotRef',
         ),
         appraisalState: parseEmotionAppraisalStateSnapshot(value.appraisalState),
+        driftDecision: parseNarrativeAppraisalDriftDecision(value.driftDecision),
         personalityOwnerRef: requirePersonalityOwnerRef(value.personalityOwnerRef),
         personalityProjectionHash: requireSha256(
           value.personalityProjectionHash,

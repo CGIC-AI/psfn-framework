@@ -8,7 +8,12 @@ import {
 import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EpisodicStorePort } from '../episodic/store-port.js';
+import type { RetrievalAccessScope } from '../types.js';
 import { resolveEpisodeSessionEntryTurnId } from '../episodic/turn-reference.js';
+import {
+  isEpisodeQuarantined,
+  type MemorySessionQuarantineFilter,
+} from './session-quarantine.js';
 import {
   isEpisodeVisibleForTurn,
   listEpisodeArcMemberships,
@@ -30,6 +35,8 @@ export interface EpisodeDrilldownInput {
   trustLevel: TrustLevel;
   channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
+  accessScope?: RetrievalAccessScope;
+  sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
   siblingLimit: number;
 }
 
@@ -173,12 +180,14 @@ export async function retrieveEpisodeDrilldown(
   if (!storedEpisode) return null;
 
   const episode = parseEpisode(storedEpisode);
+  if (isEpisodeQuarantined(input.sessionQuarantineFilter ?? null, episode)) return null;
   const visibilityInput = {
     contextText: '',
     channelId: input.channelId,
     trustLevel: input.trustLevel,
     channelDisclosure: input.channelDisclosure,
     ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    ...(input.accessScope ? { accessScope: input.accessScope } : {}),
   };
   if (!isEpisodeVisibleForTurn(episode, visibilityInput)) return null;
 
@@ -186,7 +195,10 @@ export async function retrieveEpisodeDrilldown(
     limit: input.siblingLimit,
   });
   const visibleMemberships = memberships.filter(membership => (
-    membership.members.every(member => isEpisodeVisibleForTurn(member, visibilityInput))
+    membership.members.every(member => (
+      isEpisodeVisibleForTurn(member, visibilityInput)
+      && !isEpisodeQuarantined(input.sessionQuarantineFilter ?? null, member)
+    ))
   ));
 
   const threadSiblings = episode.threadId
@@ -197,13 +209,19 @@ export async function retrieveEpisodeDrilldown(
       .filter(candidate => (
         candidate.id !== episode.id
         && isEpisodeVisibleForTurn(candidate, visibilityInput)
+        && !isEpisodeQuarantined(input.sessionQuarantineFilter ?? null, candidate)
       ))
       .slice(0, input.siblingLimit)
     : [];
 
   return {
     episode,
-    spans: expandEpisodeSpans(sessionReader, episode.spanRefs, input.channelId),
+    spans: expandEpisodeSpans(
+      sessionReader,
+      episode.spanRefs,
+      input.channelId,
+      input.accessScope === 'companion_self_reflection',
+    ),
     arcSiblings: toArcSiblings(episode.id, visibleMemberships),
     threadSiblings,
   };
@@ -235,6 +253,7 @@ function expandEpisodeSpans(
   sessionReader: EpisodeDrilldownSessionReader,
   spanRefs: readonly EpisodeSpanRef[],
   authorizedChannelId: string,
+  allowCrossChannel: boolean,
 ): ExpandedEpisodeSpan[] {
   const entriesBySession = new Map<string, SessionEntry[]>();
 
@@ -279,7 +298,7 @@ function expandEpisodeSpans(
     const spanChannels = new Set(roleEntries.map(({ entry }) => entry.channelId));
     const belongsToAuthorizedChannel = [...spanChannels]
       .every(channel => channel === authorizedChannelId);
-    if (!belongsToAuthorizedChannel) {
+    if (!allowCrossChannel && !belongsToAuthorizedChannel) {
       return unavailableSpan(spanRef, 'cross_channel');
     }
 

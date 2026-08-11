@@ -1,4 +1,5 @@
 import type { PurrMemory } from '../types.js';
+import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import {
   createEmptyMemoryWithheldSummary,
   incrementMemoryWithheldReason,
@@ -108,6 +109,17 @@ export function filterQuarantinedEpisodicChains(
     .map(cloneEpisodicRetrievalChain);
 }
 
+export function isEpisodeQuarantined(
+  filter: MemorySessionQuarantineFilter | null,
+  episode: Episode,
+): boolean {
+  if (!filter) return false;
+  if (episode.spanRefs.some(ref => isRetiredSessionId(filter, ref.sessionId))) return true;
+  return episode.provenanceRefs.some(ref => (
+    ref.kind === 'session' && isRetiredSessionId(filter, ref.refId)
+  ));
+}
+
 function getRetiredLogicalSessionIds(
   filter: MemorySessionQuarantineFilter | null,
 ): ReadonlySet<string> {
@@ -146,12 +158,7 @@ function isEpisodicChainQuarantined(
   chain: EpisodicRetrievalChain,
 ): boolean {
   for (const episode of chain.episodes) {
-    if (episode.spanRefs.some(ref => isRetiredSessionId(filter, ref.sessionId))) return true;
-    if (episode.provenanceRefs.some(ref => (
-      ref.kind === 'session' && isRetiredSessionId(filter, ref.refId)
-    ))) {
-      return true;
-    }
+    if (isEpisodeQuarantined(filter, episode)) return true;
   }
   for (const arc of chain.arcs) {
     if (arc.spanRefs.some(ref => isRetiredSessionId(filter, ref.sessionId))) return true;

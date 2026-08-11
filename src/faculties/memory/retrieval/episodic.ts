@@ -102,7 +102,9 @@ export interface EpisodicTimelineInput {
   trustLevel: TrustLevel;
   channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
+  accessScope?: RetrievalAccessScope;
   scopeQuery?: MemoryScopeQuery;
+  includeEpisode?: (episode: Episode) => boolean;
   limit?: number;
   scanLimit?: number;
   maxDepth?: number;
@@ -391,6 +393,7 @@ export async function retrieveEpisodicTimeline(
     trustLevel: input.trustLevel,
     channelDisclosure: input.channelDisclosure,
     ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    ...(input.accessScope ? { accessScope: input.accessScope } : {}),
     ...(input.scopeQuery ? { scopeQuery: input.scopeQuery } : {}),
   };
 
@@ -409,6 +412,7 @@ export async function retrieveEpisodicTimeline(
 
   const visibleRoots = scannedEpisodes
     .filter(episode => isEpisodeVisibleForTurn(episode, visibilityInput))
+    .filter(episode => input.includeEpisode?.(episode) !== false)
     .slice(0, limit);
   const inRangeEpisodeIds = new Set(visibleRoots.map(episode => episode.id));
   const entriesById = new Map<string, EpisodicTimelineEntry>();
@@ -441,6 +445,7 @@ export async function retrieveEpisodicTimeline(
     });
 
     for (const episode of chain.episodes.slice(1).sort(compareEpisodesChronological)) {
+      if (input.includeEpisode?.(episode) === false) continue;
       if (entriesById.has(episode.id)) continue;
       if (entriesById.size >= limit) break;
       const arc = findTimelineArcForEpisode(episode.id, chain.arcs);

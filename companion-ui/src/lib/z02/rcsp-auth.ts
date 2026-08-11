@@ -214,41 +214,43 @@ function diffuse(state: Uint8Array): Uint8Array {
   const p1415x2 = byteAt(state, 15) + 2 * byteAt(state, 14);
   const p1415 = byteAt(state, 15) + byteAt(state, 14);
 
-  const a = p23 + 2 * p45x2;
-  const b = p1415 + 2 * p1213x2;
-  const c = p1011 + 2 * p89x2;
-  const d = p1011 + p89x2;
-  const e = p1415 + p1213x2;
-  const f = p1213 + 2 * p1415x2;
-  const g = p1011x2 + p89;
-  const h = p45 + 2 * p67x2;
-  const i = p67x2 + p45;
-  const j = p67 + p01x2;
-  const k = p01 + 2 * p23x2;
-  const l = g + 2 * f;
-  const m = p67 + 2 * p01x2;
-  const n = j + a;
-  const o = p89 + 2 * p1011x2;
-  const p = p45x2 + p23;
-  const q = p1415x2 + p1213;
+  // This is the native routine's straight-line diffusion graph. Names retain
+  // the contributing byte lanes; `x2` identifies its asymmetric coefficient.
+  const mix23From45 = p23 + 2 * p45x2;
+  const mix1415From1213 = p1415 + 2 * p1213x2;
+  const mix1011From89 = p1011 + 2 * p89x2;
+  const sum1011And89x2 = p1011 + p89x2;
+  const sum1415And1213x2 = p1415 + p1213x2;
+  const mix1213From1415 = p1213 + 2 * p1415x2;
+  const sum1011x2And89 = p1011x2 + p89;
+  const mix45From67 = p45 + 2 * p67x2;
+  const sum67x2And45 = p67x2 + p45;
+  const sum67And01x2 = p67 + p01x2;
+  const mix01From23 = p01 + 2 * p23x2;
+  const upperCrossMix = sum1011x2And89 + 2 * mix1213From1415;
+  const mix67From01 = p67 + 2 * p01x2;
+  const lowerCrossSum = sum67And01x2 + mix23From45;
+  const mix89From1011 = p89 + 2 * p1011x2;
+  const sum45x2And23 = p45x2 + p23;
+  const sum1415x2And1213 = p1415x2 + p1213;
 
   return Uint8Array.from([
-    n + 2 * l,
-    l + n,
-    e + k + 2 * (i + 2 * c),
-    e + k + i + 2 * c,
-    q + o + 2 * (p + 2 * m),
-    q + o + p + 2 * m,
-    b + d + 2 * (p23x2 + p01 + 2 * h),
-    b + d + p23x2 + p01 + 2 * h,
-    f + g + 2 * (j + 2 * a),
-    f + g + j + 2 * a,
-    c + i + 2 * (e + 2 * k),
-    e + 2 * k + c + i,
-    h + p23x2 + p01 + 2 * (q + 2 * o),
-    q + 2 * o + h + p23x2 + p01,
-    m + p + 2 * (d + 2 * b),
-    d + 2 * b + m + p,
+    lowerCrossSum + 2 * upperCrossMix,
+    upperCrossMix + lowerCrossSum,
+    sum1415And1213x2 + mix01From23 + 2 * (sum67x2And45 + 2 * mix1011From89),
+    sum1415And1213x2 + mix01From23 + sum67x2And45 + 2 * mix1011From89,
+    sum1415x2And1213 + mix89From1011 + 2 * (sum45x2And23 + 2 * mix67From01),
+    sum1415x2And1213 + mix89From1011 + sum45x2And23 + 2 * mix67From01,
+    mix1415From1213 + sum1011And89x2 + 2 * (p23x2 + p01 + 2 * mix45From67),
+    mix1415From1213 + sum1011And89x2 + p23x2 + p01 + 2 * mix45From67,
+    mix1213From1415 + sum1011x2And89 + 2 * (sum67And01x2 + 2 * mix23From45),
+    mix1213From1415 + sum1011x2And89 + sum67And01x2 + 2 * mix23From45,
+    mix1011From89 + sum67x2And45 + 2 * (sum1415And1213x2 + 2 * mix01From23),
+    sum1415And1213x2 + 2 * mix01From23 + mix1011From89 + sum67x2And45,
+    mix45From67 + p23x2 + p01 + 2 * (sum1415x2And1213 + 2 * mix89From1011),
+    sum1415x2And1213 + 2 * mix89From1011 + mix45From67 + p23x2 + p01,
+    mix67From01 + sum45x2And23 + 2 * (sum1011And89x2 + 2 * mix1415From1213),
+    sum1011And89x2 + 2 * mix1415From1213 + mix67From01 + sum45x2And23,
   ], value => value & 0xff);
 }
 

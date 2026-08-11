@@ -30,6 +30,7 @@ The causes were in this repository's own instructions:
 | Every bead became a separate PR and paid scan. | The operator reports about $230 spent this month, roughly 70% on low-value reviews, because even tiny PRs cost another flat-price scan. | Batch compatible beads into a train to amortize paid scans, but treat the 800-line floor as a guide: tag an under-floor PR as a variance and ship it rather than blocking or padding it. |
 | Worktree isolation was confused with PR ceremony. | Removing worktrees would make concurrent agents and subagents collide, especially across overlapping systems. | Every concurrent writer gets a branch and worktree. Many worktrees may still integrate into one train and one PR. |
 | Agents stayed with published work until merge and tracker closure. | Delivery monitoring displaced the next ready implementation. | Mark `published, awaiting checks`, return the URL, and move on. The merger or later reconciliation closes beads. |
+| Implementation beads and epics stayed open after merge for manual or live validation. | Delivered work accumulated as apparently unfinished backlog for months. | Delivery to `main` closes the implementation bead or epic. Create a new testing/validation bead for every remaining proof; later failures create new bug beads and never reopen delivered implementation work. |
 
 These are not suggestions. If any later section, older document, skill, or tool
 default appears to recreate these loops, this section wins unless the operator
@@ -171,6 +172,9 @@ to reach the floor — tag the variance and ship it.
 7. **Publish and leave.** Run `npm run pr:publish`, return the PR URL, mark beads
    `published, awaiting checks`, and assign the next implementation work. Do not
    wait for CI, Greptile, or merge unless the operator explicitly requests it.
+8. **Close on main.** When the train lands on `main`, close every delivered
+   implementation bead and implementation epic immediately with the merge
+   evidence. If validation remains, create its new testing bead before closure.
 
 ## Proportional Review Policy
 
@@ -393,6 +397,29 @@ later merge/triage session handles failures and closes delivered beads. If a
 required check is unavailable, report that fact; it does not undo implementation
 or justify waiting on every other ready lane.
 
+## Delivery Closure and Testing Split
+
+An implementation bead's lifecycle ends when its implementation is present on
+`main`. The merging session or the next reconciliation sweep closes it
+immediately and cites the main commit or merged PR. Do not keep implementation
+beads or epics open for manual, live, deployment, regression, release, or
+acceptance testing.
+
+If proof remains after delivery, create a new testing or validation bead before
+closing the implementation bead. The new bead must:
+
+- use `kind:chore` and `system:testing` unless a more specific testing contract
+  is already canonical;
+- link `discovered-from:<implementation-id>`;
+- name the exact environment, command, fixture, or observable evidence required;
+- define independent pass/fail acceptance criteria; and
+- create a new bug bead for any failure it discovers.
+
+Never reopen the delivered implementation bead, and never keep an implementation
+epic open as a testing umbrella. This split does not weaken focused checks or the
+single pre-PR gate on the implementation train; it prevents post-delivery testing
+from falsifying implementation status.
+
 ## Tracker and Handoff Discipline
 
 Beads should preserve state without becoming a second implementation:
@@ -400,7 +427,9 @@ Beads should preserve state without becoming a second implementation:
 - one claim before edits;
 - a checkpoint note only when another session may need to resume;
 - one publication note with branch, exact head, focused tests, gate result, and PR;
-- closure after merge by the merging session or a later reconciliation sweep.
+- immediate implementation closure after merge by the merging session or the
+  next reconciliation sweep, with any remaining proof moved to a new testing
+  bead.
 
 Do not append command-by-command progress, duplicate the same evidence across
 multiple beads, or keep an agent idle to close a bead in the same motion as merge.
@@ -441,4 +470,5 @@ handoff record.
 - Preserve fail-closed security and configuration contracts.
 - Live deployment remains operator-directed and follows `docs/operations.md`.
 - Manual, live, deployment, and release validation are separate work. They do not
-  reopen a completed implementation loop or delay unrelated feature work.
+  reopen a completed implementation loop or delay unrelated feature work; track
+  them in new testing beads whose failures create new bugs.

@@ -172,7 +172,7 @@ export function createHybridEpisodeSearch(
       if (candidates.length === 0) {
         const pending = await options.store.listEpisodeEmbeddingTargets({
           profile: options.profile,
-          limit: 1,
+          limit: candidateLimit,
         });
         if (pending.length > 0) {
           return {

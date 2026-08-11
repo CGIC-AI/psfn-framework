@@ -3,9 +3,14 @@ import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-
 import { parseEpisode, type Episode } from '../../../shared/contracts/episodic-memory.js';
 import {
   buildEpisodeSearchDocument,
+  EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID,
   EpisodeSemanticIndexer,
+  wireEpisodeSemanticIndexRuntime,
 } from './episode-index.js';
-import type { EpisodeEmbeddingIndexStorePort } from './store-port.js';
+import type {
+  EpisodeEmbeddingIndexStorePort,
+  EpisodeEmbeddingRuntimeStorePort,
+} from './store-port.js';
 
 function episode(overrides: Partial<Episode> = {}): Episode {
   return parseEpisode({
@@ -163,5 +168,62 @@ describe('EpisodeSemanticIndexer', () => {
       attemptedAt: '2026-08-10T12:00:00.000Z',
     });
     expect(writeEpisodeEmbedding).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wireEpisodeSemanticIndexRuntime', () => {
+  it('attaches live indexing and runs bounded startup plus recurring repair batches', async () => {
+    const listEpisodeEmbeddingTargets = vi.fn(async () => []);
+    const attachEpisodeEmbeddingIndexer = vi.fn();
+    const store: EpisodeEmbeddingRuntimeStorePort = {
+      listEpisodeEmbeddingTargets,
+      writeEpisodeEmbedding: vi.fn(async () => true),
+      recordEpisodeEmbeddingFailure: vi.fn(async () => true),
+      searchEpisodesByEmbedding: vi.fn(async () => []),
+      getEpisodeEmbeddingIndexHealth: vi.fn(async () => ({
+        total: 0,
+        current: 0,
+        missing: 0,
+        stale: 0,
+        failed: 0,
+      })),
+      attachEpisodeEmbeddingIndexer,
+    };
+    const embedding: EmbeddingProviderPort = {
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(),
+    };
+    let scheduledHandler: (() => Promise<void>) | undefined;
+    const registerOperation = vi.fn((operation: { handler: () => Promise<void> }) => {
+      scheduledHandler = operation.handler;
+    });
+    const onBatch = vi.fn();
+
+    const runtime = wireEpisodeSemanticIndexRuntime({
+      store,
+      embedding,
+      provider: 'transformers',
+      model: 'test-model',
+      backfillLimit: 7,
+      backgroundMaintenance: { registerOperation },
+      onBatch,
+    });
+
+    await expect(runtime.startupBackfill).resolves.toMatchObject({ selected: 0, indexed: 0 });
+    expect(attachEpisodeEmbeddingIndexer).toHaveBeenCalledWith(runtime.indexer, expect.any(Object));
+    expect(registerOperation).toHaveBeenCalledWith(expect.objectContaining({
+      id: EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID,
+      eligibility: { requiredTokens: ['memory.write'] },
+    }));
+    if (!scheduledHandler) throw new Error('expected scheduled handler');
+    await scheduledHandler();
+    expect(listEpisodeEmbeddingTargets).toHaveBeenCalledTimes(2);
+    expect(listEpisodeEmbeddingTargets).toHaveBeenLastCalledWith({
+      profile: runtime.indexer.profile,
+      limit: 7,
+    });
+    expect(onBatch).toHaveBeenNthCalledWith(1, 'startup', expect.objectContaining({ selected: 0 }));
+    expect(onBatch).toHaveBeenNthCalledWith(2, 'scheduled', expect.objectContaining({ selected: 0 }));
   });
 });

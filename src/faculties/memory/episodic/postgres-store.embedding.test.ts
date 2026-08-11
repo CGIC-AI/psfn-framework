@@ -35,7 +35,7 @@ function queryResult(rows: unknown[], rowCount = rows.length): QueryResult {
 }
 
 describe('PostgresEpisodicStore episode embedding index', () => {
-  it('attempts live indexing after a new episode commits without blocking authorship writes', async () => {
+  it('attempts live indexing after episode creates and material updates commit', async () => {
     const pool = new FakeEpisodicPool();
     const store = new PostgresEpisodicStore(pool as unknown as Pool);
     const indexEpisode = vi.fn(async () => ({
@@ -51,9 +51,17 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     } = EPISODE;
 
     const created = await store.createEpisode(input);
+    const {
+      schemaVersion: _createdSchemaVersion,
+      createdAt: _createdCreatedAt,
+      updatedAt: _createdUpdatedAt,
+      ...update
+    } = created;
+    const updated = await store.updateEpisode({ ...update, title: 'Updated episode' });
 
-    expect(indexEpisode).toHaveBeenCalledWith(created);
-    expect(pool.episodes.get(EPISODE.id)?.episode_json).toBe(serializeEpisode(created));
+    expect(indexEpisode).toHaveBeenNthCalledWith(1, created);
+    expect(indexEpisode).toHaveBeenNthCalledWith(2, updated);
+    expect(pool.episodes.get(EPISODE.id)?.episode_json).toBe(serializeEpisode(updated));
   });
 
   it('selects a bounded deterministic batch of missing, stale, or failed live episodes', async () => {
@@ -203,6 +211,8 @@ describe('PostgresEpisodicStore episode embedding index', () => {
     });
     const [sql] = query.mock.calls[0] ?? [];
     expect(String(sql)).toContain("status IN ('canonical', 'candidate')");
+    expect(String(sql)).toContain('embedding_document_schema IS DISTINCT FROM $1');
+    expect(String(sql)).toContain('embedding_source_updated_at IS DISTINCT FROM updated_at');
     expect(String(sql)).not.toContain('episode_json');
   });
 });

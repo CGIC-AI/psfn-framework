@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
+import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type {
-  EpisodeEmbeddingIndexStorePort,
   EpisodeEmbeddingIndexAttempt,
+  EpisodeEmbeddingIndexStorePort,
   EpisodeEmbeddingProfile,
+  EpisodeEmbeddingRuntimeStorePort,
 } from './store-port.js';
 
 export const EPISODE_SEARCH_DOCUMENT_SCHEMA = 'l01-episode-search/1';
+export const EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID = 'episode-semantic-index';
 
 /**
  * Canonical text projected into the semantic episode index. The projection is
@@ -121,4 +124,75 @@ export class EpisodeSemanticIndexer {
       throw new Error('Episode embedding provider returned non-finite values');
     }
   }
+}
+
+interface EpisodeEmbeddingMaintenanceRegistrar {
+  registerOperation(operation: {
+    id: string;
+    name: string;
+    description: string;
+    eligibility?: { requiredTokens: readonly CapabilityToken[] };
+    handler: () => void | Promise<void>;
+  }): void;
+}
+
+export interface EpisodeSemanticIndexRuntimeOptions {
+  store: EpisodeEmbeddingRuntimeStorePort;
+  embedding: EmbeddingProviderPort;
+  provider: string;
+  model: string;
+  backfillLimit: number;
+  backgroundMaintenance: EpisodeEmbeddingMaintenanceRegistrar;
+  onBatch?: (
+    source: 'startup' | 'scheduled',
+    result: EpisodeBackfillResult,
+  ) => void | Promise<void>;
+  onLiveResult?: (result: EpisodeEmbeddingIndexAttempt) => void;
+  onLiveError?: (error: unknown, episode: Episode) => void;
+}
+
+export interface EpisodeSemanticIndexRuntime {
+  indexer: EpisodeSemanticIndexer;
+  startupBackfill: Promise<EpisodeBackfillResult>;
+}
+
+/** Attach write-through indexing and the bounded repair lane to one live store. */
+export function wireEpisodeSemanticIndexRuntime(
+  options: EpisodeSemanticIndexRuntimeOptions,
+): EpisodeSemanticIndexRuntime {
+  if (!Number.isInteger(options.backfillLimit) || options.backfillLimit < 1) {
+    throw new Error('episode embedding backfillLimit must be a positive integer');
+  }
+  const indexer = new EpisodeSemanticIndexer(options.store, options.embedding, {
+    provider: options.provider,
+    model: options.model,
+  });
+  options.store.attachEpisodeEmbeddingIndexer(indexer, {
+    ...(options.onLiveResult ? { onResult: options.onLiveResult } : {}),
+    ...(options.onLiveError ? { onError: options.onLiveError } : {}),
+  });
+
+  const runBatch = async (source: 'startup' | 'scheduled'): Promise<EpisodeBackfillResult> => {
+    const result = await indexer.runBackfill({ limit: options.backfillLimit });
+    await options.onBatch?.(source, result);
+    if (result.failed.length > 0) {
+      throw new Error(
+        `Episode semantic indexing failed for ${result.failed.length} of ${result.selected} episodes`,
+      );
+    }
+    return result;
+  };
+  options.backgroundMaintenance.registerOperation({
+    id: EPISODE_EMBEDDING_MAINTENANCE_OPERATION_ID,
+    name: 'Episode Semantic Index',
+    description: 'Indexes a bounded repair batch of active canonical episodes for semantic search.',
+    eligibility: { requiredTokens: ['memory.write'] },
+    handler: async () => {
+      await runBatch('scheduled');
+    },
+  });
+  return {
+    indexer,
+    startupBackfill: runBatch('startup'),
+  };
 }

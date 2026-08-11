@@ -149,6 +149,10 @@ describe('agent core runtime builder', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(agentMainSource).toContain('episodicStore: companionEpisodicStore');
     expect(agentMainSource).not.toContain('db ? new EpisodicStore(db) : null');
+    expect(agentMainSource).toContain('wireEpisodeSemanticIndexRuntime({');
+    expect(agentMainSource).toContain('resolveEmbeddingProviderProvenanceFromConfig(');
+    expect(agentMainSource).toContain('backgroundMaintenance,');
+    expect(agentMainSource).toContain('episodeEmbeddingRuntime.startupBackfill.catch(');
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected episodic store');
     expect(coreRuntimeSource).not.toContain('episodicStore: db ? new EpisodicStore(db) : null');
   });

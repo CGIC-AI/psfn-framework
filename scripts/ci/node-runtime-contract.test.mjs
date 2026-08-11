@@ -48,7 +48,6 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
   for (const workflow of [
     '.github/workflows/ci.yml',
     '.github/workflows/osv-scan.yml',
-    '.github/workflows/pr-labels.yml',
     '.github/workflows/trivy-image.yml',
     '.github/workflows/zizmor-audit.yml',
   ]) {

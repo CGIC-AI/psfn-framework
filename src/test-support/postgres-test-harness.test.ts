@@ -17,7 +17,7 @@ describe('RAM-backed Postgres test containers', () => {
     expect(postgresTestContainerNameForImage(DEFAULT_POSTGRES_TEST_IMAGE, 'vitest-pool-1')).toBe(
       name,
     );
-    expect(name).toMatch(/^local-gate-test-postgres-[a-f0-9]{8}-[a-f0-9]{16}$/);
+    expect(name).toMatch(/^test-postgres-[a-f0-9]{8}-[a-f0-9]{16}$/);
   });
 
   it('keeps images and parallel worker pools in separate containers', () => {
@@ -65,7 +65,7 @@ describe('RAM-backed Postgres test containers', () => {
     // Bumped with the tmpfs/memory raise: the profile is part of the container
     // name and the reuse check, so warm containers built on the old shape are
     // rotated out instead of silently reused at the old size.
-    expect(args).toContain('io.local-gate.test-postgres.profile=tmpfs-v2');
+    expect(args).toContain('io.test-harness.postgres.profile=tmpfs-v2');
     expect(args).toContain('POSTGRES_INITDB_ARGS=--nosync');
 
     const imageIndex = args.lastIndexOf(DEFAULT_POSTGRES_TEST_IMAGE);

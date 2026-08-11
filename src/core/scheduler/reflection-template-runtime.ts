@@ -927,7 +927,8 @@ export function createReflectionTemplateRuntime(
             reflectionPrompt,
             '[Read-only Tool Grounding Task]\n'
               + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
-              + '- Most useful tools: memory action=search for companion memory, then session action=list, search, or grep for conversation evidence.\n'
+              + '- Start from the supplied reflection starter. Search canonical episodes by theme with memory action=episode_search, use memory action=timeline for the review window, and use memory action=get to inspect selected source turns.\n'
+              + '- Use memory action=search for durable companion memory, then session action=search only when episode evidence needs direct conversation follow-up.\n'
               + '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries.\n'
               + '- Keep routine reflection recall in this turn; do not delegate it to another analysis loop.\n'
               + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'

@@ -909,10 +909,14 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.state.tools;
     expect(tools.map(tool => tool.name)).toEqual(['memory', 'session']);
-    await tools.find(tool => tool.name === 'memory')?.execute('memory-recall-1', {
-      action: 'search',
-      query: 'today',
-    });
+    for (const [toolCallId, params] of [
+      ['memory-recall-1', { action: 'search', query: 'today' }],
+      ['episode-recall-1', { action: 'episode_search', query: 'recovery plan' }],
+      ['episode-timeline-1', { action: 'timeline', from: '2026-04-22', to: '2026-04-23' }],
+      ['episode-get-1', { action: 'get', episodeId: 'episode-1' }],
+    ] as const) {
+      await tools.find(tool => tool.name === 'memory')?.execute(toolCallId, params);
+    }
     await tools.find(tool => tool.name === 'session')?.execute('session-recall-1', {
       action: 'search',
       query: 'today',
@@ -921,7 +925,13 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'memory-write-1',
       { action: 'write', text: 'do not write during reflection' },
     );
-    expect(memoryExecute).toHaveBeenCalledOnce();
+    expect(memoryExecute).toHaveBeenCalledTimes(4);
+    expect(memoryExecute.mock.calls.map(([, params]) => params)).toEqual([
+      { action: 'search', query: 'today' },
+      { action: 'episode_search', query: 'recovery plan' },
+      { action: 'timeline', from: '2026-04-22', to: '2026-04-23' },
+      { action: 'get', episodeId: 'episode-1' },
+    ]);
     expect(sessionExecute).toHaveBeenCalledOnce();
     expect(workbenchExecute).not.toHaveBeenCalled();
     expect(deniedMutation).toMatchObject({ details: { isError: true } });
